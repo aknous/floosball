@@ -3271,6 +3271,36 @@ class PlayerManager:
                             logFa(f"  BEST AVAILABLE: {team.name} signs {ev['player']} at {ev.get('slot', '?')}")
                         yield ev
 
+                    # Last resort: the team has open slots but _attemptRosterFill
+                    # signed NOTHING (no pick events) — the pool is genuinely empty
+                    # at every open position. Generate a replacement FA into the
+                    # working lists and retry so the draft can never leave a hole.
+                    # (rosterComplete=False alone is the normal mid-draft state —
+                    # only an empty pickEvents means nothing was signable.)
+                    if not rosterComplete and not pickEvents:
+                        slotToPos = {'qb': 1, 'rb': 2, 'wr1': 3, 'wr2': 3, 'te': 4, 'k': 5}
+                        posToList = {1: freeAgentQbList, 2: freeAgentRbList, 3: freeAgentWrList,
+                                     4: freeAgentTeList, 5: freeAgentKList}
+                        openSlots = [k for k, v in team.rosterDict.items()
+                                     if v is None and k in slotToPos]
+                        generatedAny = False
+                        for slot in openSlots:
+                            pv = slotToPos[slot]
+                            newP = self.generateLastResortFreeAgent(pv)
+                            if newP:
+                                posToList[pv].insert(0, newP)  # into the draft's working list
+                                generatedAny = True
+                        if generatedAny:
+                            retryEvents = []
+                            rosterComplete = self._attemptRosterFill(
+                                team, teams, freeAgentQbList, freeAgentRbList, freeAgentWrList,
+                                freeAgentTeList, freeAgentKList, freeAgencyDict, leagueHighlights,
+                                eventLog=retryEvents,
+                            )
+                            for ev in retryEvents:
+                                logFa(f"  LAST-RESORT SIGN: {team.name} signs {ev['player']} at {ev.get('slot', '?')}")
+                                yield ev
+
                     if rosterComplete:
                         teamsComplete += 1
                         team.freeAgencyComplete = True
@@ -3491,6 +3521,37 @@ class PlayerManager:
         # Count high-tier players for logging (after tiers are assigned)
         highTierCount = sum(1 for p in self.freeAgents[-numOfPlayers:] if p.playerTier.name in ['TierA', 'TierS'])
         logger.info(f"Generated {numOfPlayers} replacement players ({numRetired} retired, {max(0, minNewPlayers - numRetired)} additional, {highTierCount} tier A/S)")
+
+    def generateLastResortFreeAgent(self, posValue: int):
+        """Create a single signable free agent at a position, fully initialized
+        (tier + added to the FA/active/position pools). Last-resort safety used
+        by the live FA draft when a team is on the clock with an open slot and
+        the pool at that position is genuinely empty — guarantees the draft can
+        never leave a roster hole. Returns the new player (or None on failure)."""
+        import numpy as np
+        try:
+            pos = FloosPlayer.Position(posValue)
+        except Exception:
+            return None
+        phys = int(np.clip(np.random.normal(78, 7), 60, 100))
+        ment = int(np.clip(np.random.normal(78, 7), 60, 100))
+        newPlayer = self.createPlayer(pos, phys, ment)
+        if not newPlayer:
+            return None
+        newPlayer.id = max([p.id for p in self.activePlayers], default=0) + 1
+        newPlayer.team = 'Free Agent'
+        newPlayer.freeAgentYears = 0
+        self.freeAgents.append(newPlayer)
+        if newPlayer not in self.activePlayers:
+            self.activePlayers.append(newPlayer)
+        self.addToPositionList(newPlayer)
+        # Assigns playerTier (needed by the pick event) + a default contract.
+        self.sortPlayersByPosition()
+        logger.warning(
+            f"FA draft last-resort: generated {newPlayer.name} ({pos.name}) — "
+            f"the {pos.name} pool was empty for a team on the clock"
+        )
+        return newPlayer
 
     def ensurePositionSupply(self, numTeams: int, buffer: int = None) -> dict:
         """Guarantee enough living players AT EACH POSITION to fill every roster
