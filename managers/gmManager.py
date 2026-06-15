@@ -11,6 +11,7 @@ from constants import (
     GM_VOTE_WEIGHT,
     GM_VOTE_BASE_MIN,
     GM_THRESHOLD_USER_FACTOR,
+    GM_PASS_FRACTION,
     GM_PROB_BASE,
     GM_PROB_RANGE,
     GM_PROB_CAP,
@@ -32,18 +33,19 @@ class GmManager:
     # ── Threshold & Probability ─────────────────────────────────────────
 
     def calculateThreshold(self, teamFanCount: int, voteType: str = None) -> int:
-        """Threshold = the team's total fan count.
+        """Threshold = a majority of the team's active fanbase.
 
-        A fire / resign / cut directive passes when its vote tally meets or
-        exceeds the number of fans that team has. The bar moves with the
-        size of the fanbase, not with how actively those fans vote — that
-        keeps the math from punishing participation. A small turnout that
-        spends a few votes each can pass; a large turnout doesn't suddenly
-        need a mountain of votes just because more people showed up.
+        A fire / resign / cut directive passes when its net vote tally
+        (yea − nay) reaches ``ceil(teamFanCount × GM_PASS_FRACTION)`` — a
+        majority of the fanbase, not the whole of it. The bar moves with the
+        size of the fanbase, not with how actively those fans vote, so it
+        never punishes participation: a large turnout doesn't suddenly need a
+        mountain of votes just because more people showed up.
 
         Under single-vote each fan contributes at most one net vote per
-        target (yea or nay, withdraw to change), so clearing the bar means
-        close to the whole fanbase is pulling the same direction.
+        target (yea or nay, withdraw to change), so clearing the bar means a
+        clear majority of the fanbase is pulling the same direction. (At
+        GM_PASS_FRACTION = 1.0 this collapses back to near-unanimity.)
 
         Low-quorum / test mode keeps the threshold at 1.
 
@@ -51,7 +53,7 @@ class GmManager:
         """
         if self._lowQuorum:
             return 1
-        return max(1, teamFanCount)
+        return max(1, math.ceil(teamFanCount * GM_PASS_FRACTION))
 
     def calculateBallotThreshold(self, engagedFanCount: int) -> int:
         """Threshold for sign_fa ballots (ranked-choice).

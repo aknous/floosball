@@ -381,7 +381,8 @@ class SeasonManager:
         # Simulate regular season
         await self._simulateRegularSeason(resumeFromWeek=resumeFromWeek)
 
-        # Select MVP and All-Pro based on regular season performance
+        # Select MVP and the combined All-Pro team (offense + defense) based on
+        # regular-season value.
         await self._selectSeasonMVP()
         await self._selectSeasonAllPro()
 
@@ -496,10 +497,13 @@ class SeasonManager:
 
             logger.info(f"Simulating {nextWeekText} in {self.timingManager.getModeString()} mode")
 
-            # Select weekly modifier
+            # Select weekly modifier (and pre-roll the rest of this calendar
+            # day's slot modifiers so the day's full slate can be announced
+            # ahead of time — see getDayModifierSchedule).
             weeklyModifier = self._selectWeeklyModifier(
                 self.currentSeason.seasonNumber, nextWeek
             )
+            self._ensureDayModifiers(self.currentSeason.seasonNumber, nextWeek)
 
             # Notify users whose power-ups (Accession / Conscription) just expired
             self._notifyExpiredPowerups(
@@ -849,6 +853,19 @@ class SeasonManager:
             from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
             if self.currentSeason.currentWeek == _GM_ACTIVE_WEEK:
                 self._evaluateRetirementCandidates()
+                # Retire long-tenured free agents now too (preIncrement=True
+                # anticipates the offseason FA-years bump) so the FA pool is
+                # FINALIZED by week 22 — retirees gone, not just flagged. With
+                # rostered retirements flagged and the rookie class known since
+                # season start, the supply picture is now complete.
+                faHighlights = self.currentSeason.leagueHighlights if hasattr(self.currentSeason, 'leagueHighlights') else []
+                self.playerManager._processFreeAgentRetirements(
+                    self.currentSeason.seasonNumber, faHighlights, preIncrement=True
+                )
+                # With all retirements accounted for, top up any thin position
+                # into the FA pool now so the gaps are filled BEFORE fans ballot
+                # the FA draft (they can rank the new players).
+                self._ensurePositionSupply(reason='week-22 supply check')
                 # Snapshot per-team active fan counts at this moment so
                 # the GM vote threshold doesn't shift if new fans log in
                 # for the first time after the front office opens.
@@ -3003,6 +3020,12 @@ class SeasonManager:
                         'fantasyPoints': gameFP,
                         'q4FantasyPoints': q4FP,
                         'q4ScoringPlays': q4Scores,
+                        # Per-game WPA value (preserved on the player at postgame,
+                        # like _lastGameFantasyPoints — gameStatsDict is regenerated)
+                        'wpa': float(getattr(player, '_lastGameWpa', 0.0)),
+                        'defWpa': float(getattr(player, '_lastGameDefWpa', 0.0)),
+                        'wpaSnaps': int(getattr(player, '_lastGameWpaSnaps', 0)),
+                        'defSnaps': int(getattr(player, '_lastGameDefWpaSnaps', 0)),
                         'passing': gd.get('passing'),
                         'rushing': gd.get('rushing'),
                         'receiving': gd.get('receiving'),
@@ -3023,6 +3046,10 @@ class SeasonManager:
                         fantasy_points=stats.get('fantasyPoints', 0),
                         q4_fantasy_points=stats.get('q4FantasyPoints', 0),
                         q4_scoring_plays=stats.get('q4ScoringPlays', 0),
+                        wpa=stats.get('wpa', 0.0),
+                        def_wpa=stats.get('defWpa', 0.0),
+                        wpa_snaps=stats.get('wpaSnaps', 0),
+                        def_snaps=stats.get('defSnaps', 0),
                         passing_stats=stats.get('passing'),
                         rushing_stats=stats.get('rushing'),
                         receiving_stats=stats.get('receiving'),
@@ -4904,13 +4931,13 @@ class SeasonManager:
         if faOrderForPredraft:
             await self._runPreDraftPass(faOrderForPredraft, gmResults)
 
-        # STEP 3.80: Process FA retirements + harvest rookie pool, broadcast
-        # the rookie pool BEFORE the noon-ET wait. This populates the right-
-        # panel rookie list during the wait so users can browse prospects in
-        # advance instead of seeing an empty board until picks start.
-        logger.info("Step 3.80: FA retirements + rookie pool preview broadcast")
+        # STEP 3.80: Harvest rookie pool + broadcast it BEFORE the noon-ET wait.
+        # This populates the right-panel rookie list during the wait so users can
+        # browse prospects in advance instead of seeing an empty board until picks
+        # start. (FA retirements already ran at week GM_ACTIVE_WEEK so the FA pool
+        # was finalized before ballots — see the week-22 hook.)
+        logger.info("Step 3.80: rookie pool preview broadcast")
         seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 1
-        self.playerManager._processFreeAgentRetirements(seasonNum, [])
 
         rookies = [p for p in self.playerManager.activePlayers
                    if getattr(p, 'is_upcoming_rookie', False)]
@@ -5149,6 +5176,12 @@ class SeasonManager:
             logger.info("Step 5.75: Apply fan-voted prospect promotions")
             await self._applyFanVotedPromotions()
 
+            # STEP 5.9: Final supply guarantee — now that FA retirements, cuts,
+            # expiries and the rookie draft are all resolved, top up any position
+            # still short of filling every roster slot. Catches FA retirements
+            # decided after the week-22 check. Idempotent with that earlier pass.
+            self._ensurePositionSupply(reason='pre-FA-draft guarantee')
+
             # STEP 6: FA Draft
             logger.info("Step 6: Free agency draft")
             await self._processFreeAgency()
@@ -5215,11 +5248,15 @@ class SeasonManager:
                 logger.info(f"Step 8: Handling {len(retiredPlayerIds)} retired players on fantasy rosters")
                 self._handleRetiredPlayerRosters(retiredPlayerIds, nextSeason)
 
-            # STEP 9: Reset season performance ratings
+            # STEP 9: Reset season performance ratings + season WPA value totals
             logger.info("Step 9: Reset season performance ratings")
             for player in self.playerManager.activePlayers:
                 if hasattr(player, 'seasonPerformanceRating'):
                     player.seasonPerformanceRating = 0
+                player.seasonWpa = 0.0
+                player.seasonDefWpa = 0.0
+                player.seasonWpaSnaps = 0
+                player.seasonDefWpaSnaps = 0
 
             # STEP 10: Update team ratings and defenses after roster changes
             logger.info("Step 10: Update team ratings")
@@ -5970,9 +6007,11 @@ class SeasonManager:
         """Decide which players will retire after this season.
 
         Runs late in the regular season so users see retirements coming and
-        can plan replacements via FA ballots. Only flags players whose
-        contracts expire this offseason (termRemaining == 1) — no mid-contract
-        retirements. Probability bands match the prior expired-contract logic.
+        can plan replacements via FA ballots. Eligibility + probability come
+        from playerManager.computeRetirementOdds (shared with the displayed
+        risk tier so they never drift): bands key off yearsPast = seasonsPlayed
+        - longevity, gated to walk seasons until a player is well past longevity,
+        at which point they retire mid-contract too.
         Returns the list of players newly flagged as retiring.
         """
         from random import randint
@@ -5988,20 +6027,11 @@ class SeasonManager:
                     continue
                 if getattr(player, 'willRetire', False):
                     continue
-                if player.termRemaining != 1:
-                    continue
-                if player.seasonsPlayed <= player.attributes.longevity:
-                    continue
 
-                shouldRetire = False
-                if player.seasonsPlayed > 15:
-                    shouldRetire = randint(1, 100) > 10  # 90%
-                elif player.seasonsPlayed > 10:
-                    shouldRetire = randint(1, 100) > 35  # 65%
-                elif player.seasonsPlayed >= 7:
-                    shouldRetire = randint(1, 100) > 95  # 5%
-
-                if shouldRetire:
+                chancePct, eligible, _yearsPast = self.playerManager.computeRetirementOdds(player)
+                if not eligible:
+                    continue
+                if randint(1, 100) <= chancePct:
                     player.willRetire = True
                     flagged.append((player, team))
 
@@ -6016,6 +6046,27 @@ class SeasonManager:
                 logger.info(f"Retirement announced: {player.name} ({team.name}) — {player.seasonsPlayed} seasons")
 
         return flagged
+
+    def _ensurePositionSupply(self, reason: str = '') -> dict:
+        """Guarantee enough living players at each position to fill all roster
+        slots (see playerManager.ensurePositionSupply). No-op unless a position
+        is genuinely short. Surfaces a league-news note when it has to generate."""
+        teamManager = self.serviceContainer.getService('team_manager')
+        numTeams = len(teamManager.teams) if teamManager else 24
+        try:
+            generated = self.playerManager.ensurePositionSupply(numTeams)
+        except Exception as e:
+            logger.error(f"ensurePositionSupply failed ({reason}): {e}")
+            return {}
+        if generated:
+            total = sum(generated.values())
+            detail = ', '.join(f'{n} {pos}' for pos, n in generated.items())
+            logger.info(f"Position supply top-up ({reason}): +{total} FAs — {detail}")
+            if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+                self.currentSeason.leagueHighlights.insert(0, {
+                    'event': {'text': f'{total} free agent(s) entered the pool to cover thin positions ({detail})'}
+                })
+        return generated
 
     def _executePlayerRetirement(self, player, team, position, leagueHighlights):
         """Execute the retirement of a player from a team roster"""
@@ -7506,6 +7557,84 @@ class SeasonManager:
                 session.close()
         except ImportError:
             return "steady"
+
+    # Slot ET start hours within a calendar day, indexed by `week % 7`
+    # (mirrors getWeekStartTime). list[0] == 12pm is the day's first slot.
+    _SLOT_ET_HOURS = [12, 13, 14, 15, 16, 17, 18]
+
+    @staticmethod
+    def _dayOfWeek(week: int) -> int:
+        """Calendar day index a sim-week belongs to. Slots in the same calendar
+        day share `week // 7` (matches getWeekStartTime's dayNumber). Robust to
+        the day-0 quirk (weeks 1-6) and week 28 spilling to day 4."""
+        return week // 7
+
+    def _slotWeeksForDay(self, week: int) -> list:
+        """All regular-season sim-weeks that play on the same calendar day as
+        `week`, ordered by kickoff (ET hour ascending)."""
+        dayNum = self._dayOfWeek(week)
+        slots = [w for w in range(1, 29) if self._dayOfWeek(w) == dayNum]
+        slots.sort(key=lambda w: self._SLOT_ET_HOURS[w % 7])
+        return slots
+
+    def _ensureDayModifiers(self, season: int, anchorWeek: int) -> None:
+        """Pre-select weekly modifiers for every slot in anchorWeek's calendar
+        day so the whole day can be announced ahead of time. Idempotent — rolls
+        only missing slots, in kickoff order so within-day repeats are avoided
+        by _selectWeeklyModifier's look-back. No-op outside the regular season."""
+        if not anchorWeek or anchorWeek < 1 or anchorWeek > 28:
+            return
+        for w in self._slotWeeksForDay(anchorWeek):
+            self._selectWeeklyModifier(season, w)
+
+    def getDayModifierSchedule(self, currentWeek: int) -> dict:
+        """The current calendar day's modifier slate (all slots), with the
+        active slot and the 'next up' slot flagged. Pre-selects any unrolled
+        slots for the day. Regular season only — returns empty during playoffs/
+        offseason (no per-slot modifiers there)."""
+        if self.currentSeason is None or not currentWeek or currentWeek < 1 or currentWeek > 28:
+            return {"day": None, "slots": []}
+        season = self.currentSeason.seasonNumber
+        self._ensureDayModifiers(season, currentWeek)
+
+        slotWeeks = self._slotWeeksForDay(currentWeek)
+        modByWeek = {}
+        try:
+            from database.connection import get_session
+            from database.models import WeeklyModifier
+            session = get_session()
+            try:
+                rows = (
+                    session.query(WeeklyModifier)
+                    .filter(WeeklyModifier.season == season)
+                    .filter(WeeklyModifier.week.in_(slotWeeks))
+                    .all()
+                )
+                modByWeek = {r.week: r.modifier for r in rows}
+            finally:
+                session.close()
+        except Exception as e:
+            logger.error(f"getDayModifierSchedule lookup failed: {e}")
+
+        nextWeek = next((w for w in slotWeeks if w > currentWeek), None)
+        slots = []
+        for w in slotWeeks:
+            mod = modByWeek.get(w, "steady")
+            etHour = self._SLOT_ET_HOURS[w % 7]
+            display = (etHour - 12) if etHour > 12 else 12
+            ampm = "PM" if etHour >= 12 else "AM"
+            slots.append({
+                "week": w,
+                "etHour": etHour,
+                "label": f"{display if display != 0 else 12}:00 {ampm}",
+                "modifier": mod,
+                "displayName": self.MODIFIER_DISPLAY.get(mod, mod.title()),
+                "description": self.MODIFIER_DESCRIPTIONS.get(mod, ""),
+                "isActive": (w == currentWeek),
+                "isPast": (w < currentWeek),
+                "isNext": (w == nextWeek),
+            })
+        return {"day": self._dayOfWeek(currentWeek), "slots": slots}
 
     # ─── Floobits Economy ─────────────────────────────────────────────────────
 
@@ -9807,61 +9936,99 @@ class SeasonManager:
     # ─── Awards ────────────────────────────────────────────────────────────────
 
     async def _selectSeasonAllPro(self) -> None:
-        """Select All-Pro players — top performer at each position from the current season."""
+        """Select the combined All-Pro team for the current season: an offensive
+        squad (top value per offensive slot QB/RB/WR/WR/TE/K) plus a defensive
+        squad (top defensive value per group S/LB/CB/CB/DE). The roster plays
+        both ways, so a dominant two-way star can hold both an offense and a
+        defense slot — they're listed in each."""
         candidates = self.playerManager._computeMvpCandidates()
         if not candidates:
             logger.warning("Could not determine All-Pro — not enough eligible players")
             return
+        seasonNum = self.currentSeason.seasonNumber
 
-        # Group by position, take the top candidate(s) per position
-        # WR gets 2 slots to match team roster composition
+        # ── Offense: top value per offensive slot (WR gets 2) ──
         positionOrder = ['QB', 'RB', 'WR', 'WR', 'TE', 'K']
         positionSlots = {'QB': 1, 'RB': 1, 'WR': 2, 'TE': 1, 'K': 1}
         bestByPosition: dict = {}
         for c in candidates:
             pos = c['position']
-            if pos not in bestByPosition:
-                bestByPosition[pos] = []
+            bestByPosition.setdefault(pos, [])
             if len(bestByPosition[pos]) < positionSlots.get(pos, 1):
                 bestByPosition[pos].append(c)
 
-        allProIds = {c['id'] for picks in bestByPosition.values() for c in picks}
-        self.currentSeason.allProPlayerIds = allProIds
-
-        # Store All-Pro award on each player object (persists across restarts)
-        seasonNum = self.currentSeason.seasonNumber
-        for picks in bestByPosition.values():
-            for pick in picks:
-                playerObj = pick.get('player')
-                if playerObj:
-                    if not hasattr(playerObj, 'allProSeasons'):
-                        playerObj.allProSeasons = []
-                    if seasonNum not in playerObj.allProSeasons:
-                        playerObj.allProSeasons.append(seasonNum)
-
-        # Build broadcast-safe list (no player objects), ordered by position
         allProList = []
         for pos in dict.fromkeys(positionOrder):
             for pick in bestByPosition.get(pos, []):
-                entry = dict(pick)
-                entry.pop('player', None)
-                allProList.append(entry)
+                allProList.append({
+                    'id': pick['id'], 'name': pick['name'],
+                    'position': pick['position'], 'side': 'offense',
+                    'value': round(float(pick.get('mvpScore', 0.0)), 2),
+                    'team': pick['team'], 'teamAbbr': pick['teamAbbr'],
+                    'teamColor': pick['teamColor'], 'teamId': pick['teamId'],
+                    'ratingStars': pick['ratingStars'],
+                    'seasonPerformanceRating': pick.get('seasonPerformanceRating'),
+                    'mvpScore': pick.get('mvpScore'), 'zScore': pick.get('zScore'),
+                })
+
+        # ── Defense: top defensive value per group (S/LB/CB/CB/DE) ──
+        for d in self.playerManager.selectAllDefense():
+            allProList.append({
+                'id': d['id'], 'name': d['name'],
+                'position': d.get('defGroup'), 'side': 'defense',
+                'value': round(float(d.get('defValue', 0.0)), 2),
+                'defGroup': d.get('defGroup'),
+                'team': d['team'], 'teamAbbr': d['teamAbbr'],
+                'teamColor': d['teamColor'], 'teamId': d['teamId'],
+                'ratingStars': d['ratingStars'],
+                'seasonDefWpa': d.get('seasonDefWpa'),
+            })
+
+        # Credit the All-Pro season on every unique honoree (offense or defense)
+        # so the player profile shows a single All-Pro accolade.
+        for pid in {e['id'] for e in allProList}:
+            playerObj = self._defenderById(pid)
+            if playerObj is not None:
+                if not getattr(playerObj, 'allProSeasons', None):
+                    playerObj.allProSeasons = []
+                if seasonNum not in playerObj.allProSeasons:
+                    playerObj.allProSeasons.append(seasonNum)
+
+        # Flat id union (cards/classification + resume) and the rich team
+        # (offense/defense split) for durable recap rebuild.
+        self.currentSeason.allProPlayerIds = {e['id'] for e in allProList}
         self.currentSeason.allPro = allProList
+        self.currentSeason.allProTeam = [
+            {'id': e['id'], 'side': e['side'], 'position': e['position'], 'value': e['value']}
+            for e in allProList
+        ]
 
         allProNames = [f"{c['name']} ({c['position']})" for c in allProList]
-        logger.info(f"Season {self.currentSeason.seasonNumber} All-Pro: {', '.join(allProNames)}")
+        logger.info(f"Season {seasonNum} All-Pro: {', '.join(allProNames)}")
 
-        # Add to league highlight feed and broadcast
-        allProText = f"Season {self.currentSeason.seasonNumber} All-Pro Team: {', '.join(allProNames)}"
+        allProText = f"Season {seasonNum} All-Pro Team: {', '.join(allProNames)}"
         self.currentSeason.leagueHighlights.insert(0, {'event': {'text': allProText}})
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
             if LeagueNewsEvent:
                 await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(allProText))
             if SeasonEvent:
                 await broadcaster.broadcast_season_event(
-                    SeasonEvent.allProAnnouncement(allProList, self.currentSeason.seasonNumber)
+                    SeasonEvent.allProAnnouncement(allProList, seasonNum)
                 )
-    
+
+    def _defenderById(self, playerId: int):
+        """Resolve an active player object by id across every roster position
+        (QB/RB/WR/TE/K — the offense, which also doubles as the defense). Used
+        to credit All-Pro honors after selection; kickers are All-Pro-eligible
+        on offense even though they have no defensive position."""
+        for grp in (self.playerManager.activeQbs, self.playerManager.activeRbs,
+                    self.playerManager.activeWrs, self.playerManager.activeTes,
+                    self.playerManager.activeKs):
+            for p in grp:
+                if p.id == playerId:
+                    return p
+        return None
+
     def _updateStandings(self) -> None:
         """Update league standings"""
         for league in self.leagueManager.leagues:
@@ -10000,6 +10167,10 @@ class SeasonManager:
             if allProIds:
                 import json
                 db_season.all_pro_player_ids = json.dumps(list(allProIds))
+            allProTeam = getattr(self.currentSeason, 'allProTeam', None)
+            if allProTeam:
+                import json
+                db_season.all_pro_team = json.dumps(allProTeam)
 
             self.db_session.add(db_season)
             self.db_session.commit()

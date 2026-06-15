@@ -388,6 +388,7 @@ class PlayerManager:
             player.is_upcoming_rookie = bool(getattr(db_player, 'is_upcoming_rookie', False))
             player.willRetire = bool(getattr(db_player, 'will_retire', False))
             player.is_hof = bool(getattr(db_player, 'is_hof', False))
+            player.hof_season = getattr(db_player, 'hof_season', None)
             player.mvpAwards = list(getattr(db_player, 'mvp_awards', None) or [])
             player.allProSeasons = list(getattr(db_player, 'all_pro_seasons', None) or [])
             player.leagueChampionships = list(getattr(db_player, 'league_championships', None) or [])
@@ -1119,48 +1120,93 @@ class PlayerManager:
         self.retiredPlayers.append(player)
         self.newlyRetiredPlayers.append(player)
 
-    def computeRetirementRisk(self, player) -> str:
-        """Classify a player's end-of-season retirement risk.
+    def computeRetirementOdds(self, player):
+        """Single source of truth for whether a rostered player is eligible to
+        retire THIS offseason and at what probability. Used by both the actual
+        roll (seasonManager._evaluateRetirementCandidates) and the displayed
+        risk tier (computeRetirementRisk), so the two never drift.
 
-        Retirements only fire for players whose contract expires this offseason
-        (termRemaining == 1) — mid-contract aging players are NOT eligible and
-        return 'safe'. Once Front Office opens and the retirement roll happens,
-        flagged players return 'retiring' (locked-in). Returns:
-          - 'retiring'    — decision is locked, player WILL retire this offseason
-          - 'very_likely' — age 15+ past longevity on walk year (90% to retire)
-          - 'likely'      — age 10+ past longevity on walk year (65%)
-          - 'possible'    — age 7+ past longevity on walk year (5%)
-          - 'safe'        — not yet eligible, or contract doesn't expire this offseason
+        Bands key off `yearsPast = seasonsPlayed - longevity` (longevity is the
+        intended retirement clock; absolute seasonsPlayed can't grow past league
+        age). Phased contract gate: a player only enters retirement territory on
+        their walk season (termRemaining == 1), but once they're
+        RETIREMENT_MIDCONTRACT_YEARS_PAST seasons past longevity they retire even
+        mid-contract.
+
+        Returns (chancePct: int, eligible: bool, yearsPast: int). When not
+        eligible this offseason, chancePct is 0.
         """
         from constants import (
-            RETIREMENT_HIGH_AGE_SEASONS,
-            RETIREMENT_MID_AGE_SEASONS, RETIREMENT_EARLY_AGE_SEASONS,
+            RETIREMENT_YEARS_PAST_HIGH, RETIREMENT_YEARS_PAST_MID,
+            RETIREMENT_YEARS_PAST_EARLY, RETIREMENT_CHANCE_HIGH,
+            RETIREMENT_CHANCE_MID, RETIREMENT_CHANCE_EARLY,
+            RETIREMENT_MIDCONTRACT_YEARS_PAST,
+        )
+        seasons = getattr(player, 'seasonsPlayed', 0) or 0
+        attrs = getattr(player, 'attributes', None)
+        longevity = getattr(attrs, 'longevity', 99) if attrs else 99
+        termRemaining = getattr(player, 'termRemaining', 1) or 0
+        yearsPast = seasons - longevity
+
+        # Not yet at end of longevity → not a candidate.
+        if yearsPast < RETIREMENT_YEARS_PAST_EARLY:
+            return 0, False, yearsPast
+
+        # Phased contract gate: walk-season only until deep past longevity.
+        isWalkSeason = (termRemaining == 1)
+        midContractOk = yearsPast >= RETIREMENT_MIDCONTRACT_YEARS_PAST
+        if not isWalkSeason and not midContractOk:
+            return 0, False, yearsPast
+
+        if yearsPast >= RETIREMENT_YEARS_PAST_HIGH:
+            return RETIREMENT_CHANCE_HIGH, True, yearsPast
+        if yearsPast >= RETIREMENT_YEARS_PAST_MID:
+            return RETIREMENT_CHANCE_MID, True, yearsPast
+        return RETIREMENT_CHANCE_EARLY, True, yearsPast
+
+    def computeRetirementRisk(self, player) -> str:
+        """Classify a player's end-of-season retirement risk (display tier).
+
+        Two distinct ideas are surfaced here. The lowest tier ('possible') is an
+        intrinsic AGE signal — the player is past their personal longevity clock
+        — and is NOT contract-gated, so it survives a re-sign (re-signing a vet
+        doesn't make them younger). The louder tiers ('likely' / 'very_likely' /
+        'retiring') are RETIREMENT-IMMINENCE signals: they only fire when the
+        player is actually eligible to retire this offseason (walk season, or
+        deep past longevity — see computeRetirementOdds), so re-signing a
+        walk-year vet correctly steps them back down to the plain AGE signal.
+
+        Returns:
+          - 'retiring'    — decision is locked, player WILL retire this offseason
+          - 'very_likely' — 3+ past longevity & retirement-eligible (90%)
+          - 'likely'      — 1-2 past & retirement-eligible (65%)
+          - 'possible'    — past longevity (aging); not retirement-eligible yet,
+                            OR eligible but only just reached longevity
+          - 'safe'        — still before their longevity clock
+        """
+        from constants import (
+            RETIREMENT_YEARS_PAST_HIGH, RETIREMENT_YEARS_PAST_MID,
+            RETIREMENT_YEARS_PAST_EARLY,
         )
         # Locked-in retirement (set during _evaluateRetirementCandidates when
         # the GM window opens) overrides any predictive tier.
         if getattr(player, 'willRetire', False):
             return 'retiring'
 
-        seasons = getattr(player, 'seasonsPlayed', 0) or 0
-        attrs = getattr(player, 'attributes', None)
-        longevity = getattr(attrs, 'longevity', 99) if attrs else 99
-        termRemaining = getattr(player, 'termRemaining', 1) or 0
-
-        # Must be past longevity before any retirement check fires
-        if seasons <= longevity:
+        _chance, eligible, yearsPast = self.computeRetirementOdds(player)
+        # Still in their prime — before the longevity clock — no age signal.
+        if yearsPast < RETIREMENT_YEARS_PAST_EARLY:
             return 'safe'
-        # Retirements only happen at end of contract — mid-contract aging vets
-        # are locked in for another year, so don't surface them as at-risk.
-        if termRemaining > 1:
-            return 'safe'
-
-        if seasons > RETIREMENT_HIGH_AGE_SEASONS:
-            return 'very_likely'   # 90%
-        if seasons > RETIREMENT_MID_AGE_SEASONS:
-            return 'likely'        # 65%
-        if seasons >= RETIREMENT_EARLY_AGE_SEASONS:
-            return 'possible'      # 5%
-        return 'safe'
+        # Past longevity but locked into a contract this offseason (mid-deal /
+        # just re-signed): intrinsically aging, but not up for retirement yet.
+        if not eligible:
+            return 'possible'
+        # Retirement-eligible this offseason → escalate by how far past longevity.
+        if yearsPast >= RETIREMENT_YEARS_PAST_HIGH:
+            return 'very_likely'
+        if yearsPast >= RETIREMENT_YEARS_PAST_MID:
+            return 'likely'
+        return 'possible'
 
     def promoteToHallOfFame(self, player: FloosPlayer.Player) -> None:
         """Promote retired player to Hall of Fame. HoFers stay on the
@@ -1322,6 +1368,13 @@ class PlayerManager:
                 }
                 # Restore the direct gamesPlayed attribute used by MVP/All-Pro eligibility
                 player.gamesPlayed = row.games_played or 0
+                # Restore the season WPA value totals (plain attributes, not in the
+                # stats dict) so mid-season resume continues accumulating from the
+                # persisted total instead of restarting at 0.
+                player.seasonWpa = float(getattr(row, 'wpa', 0.0) or 0.0)
+                player.seasonDefWpa = float(getattr(row, 'def_wpa', 0.0) or 0.0)
+                player.seasonWpaSnaps = int(getattr(row, 'wpa_snaps', 0) or 0)
+                player.seasonDefWpaSnaps = int(getattr(row, 'def_snaps', 0) or 0)
                 # Keep StatTracker pointing at the restored dict so stats accumulated
                 # during subsequent games go to the right place.
                 player.stat_tracker.season_stats_dict = player.seasonStatsDict
@@ -1426,6 +1479,11 @@ class PlayerManager:
                         drafting_team_id=getattr(player, 'drafting_team_id', None),
                         is_upcoming_rookie=bool(getattr(player, 'is_upcoming_rookie', False)),
                         will_retire=bool(getattr(player, 'willRetire', False)),
+                        is_hof=bool(getattr(player, 'is_hof', False)),
+                        hof_season=getattr(player, 'hof_season', None),
+                        mvp_awards=list(getattr(player, 'mvpAwards', None) or []),
+                        all_pro_seasons=list(getattr(player, 'allProSeasons', None) or []),
+                        league_championships=list(getattr(player, 'leagueChampionships', None) or []),
                     )
                     self.db_session.add(db_player)
                 else:
@@ -1453,6 +1511,7 @@ class PlayerManager:
                     db_player.is_upcoming_rookie = bool(getattr(player, 'is_upcoming_rookie', False))
                     db_player.will_retire = bool(getattr(player, 'willRetire', False))
                     db_player.is_hof = bool(getattr(player, 'is_hof', False))
+                    db_player.hof_season = getattr(player, 'hof_season', None)
                     db_player.mvp_awards = list(getattr(player, 'mvpAwards', None) or [])
                     db_player.all_pro_seasons = list(getattr(player, 'allProSeasons', None) or [])
                     db_player.league_championships = list(getattr(player, 'leagueChampionships', None) or [])
@@ -1675,6 +1734,11 @@ class PlayerManager:
                                     sacks=s_defense.get('sacks', 0),
                                     interceptions=s_defense.get('ints', 0),
                                     tackles=s_defense.get('tackles', 0),
+                                    # Season WPA value totals (on the player object, not season_dict)
+                                    wpa=float(getattr(player, 'seasonWpa', 0.0)),
+                                    def_wpa=float(getattr(player, 'seasonDefWpa', 0.0)),
+                                    wpa_snaps=int(getattr(player, 'seasonWpaSnaps', 0)),
+                                    def_snaps=int(getattr(player, 'seasonDefWpaSnaps', 0)),
                                     # JSON for detailed stats
                                     passing_stats=season_dict.get('passing'),
                                     rushing_stats=season_dict.get('rushing'),
@@ -1705,6 +1769,10 @@ class PlayerManager:
                                 db_season_stats.sacks = s_defense.get('sacks', 0)
                                 db_season_stats.interceptions = s_defense.get('ints', 0)
                                 db_season_stats.tackles = s_defense.get('tackles', 0)
+                                db_season_stats.wpa = float(getattr(player, 'seasonWpa', 0.0))
+                                db_season_stats.def_wpa = float(getattr(player, 'seasonDefWpa', 0.0))
+                                db_season_stats.wpa_snaps = int(getattr(player, 'seasonWpaSnaps', 0))
+                                db_season_stats.def_snaps = int(getattr(player, 'seasonDefWpaSnaps', 0))
                                 # Update JSON — wrap with dict() AND use
                                 # flag_modified() because the in-memory dict
                                 # we mutate IS the same object SQLAlchemy
@@ -1954,14 +2022,29 @@ class PlayerManager:
         }
 
     def inductHallOfFame(self) -> None:
-        """Score each newly-retired player against the HoF criteria. Induct
-        anyone clearing HOF_INDUCT_THRESHOLD. The signature legacy criteria
-        (TierS auto / TierA with championship) are now subsumed by the
-        points system."""
-        if not self.newlyRetiredPlayers:
-            return
+        """Score retired players against the HoF criteria and induct anyone
+        clearing HOF_INDUCT_THRESHOLD.
 
-        for player in self.newlyRetiredPlayers:
+        Scans the union of this session's newly-retired players AND all
+        persisted retirees, skipping anyone already inducted (`is_hof`). Career
+        awards and `is_hof` both persist, so this is self-healing: a worthy
+        retiree is never permanently missed just because the sim restarted
+        between their retirement and this end-of-offseason step (which would
+        wipe the in-memory `newlyRetiredPlayers` list). The signature legacy
+        criteria (TierS auto / TierA with a ring) are subsumed by the points
+        system.
+        """
+        seen: set = set()
+        candidates = []
+        for player in [*self.newlyRetiredPlayers, *self.retiredPlayers]:
+            pid = getattr(player, 'id', None)
+            if pid in seen or getattr(player, 'is_hof', False):
+                continue
+            seen.add(pid)
+            candidates.append(player)
+
+        inducted = []
+        for player in candidates:
             pts, breakdown = self._computeHofPoints(player)
             if pts < self.HOF_INDUCT_THRESHOLD:
                 logger.debug(
@@ -1971,6 +2054,15 @@ class PlayerManager:
 
             self.hallOfFame.append(player)
             player.is_hof = True
+            # Stamp the induction class (the just-ended season). Guarded so a
+            # missing season manager never blocks the induction itself.
+            try:
+                sm = self.serviceContainer.getService('season_manager')
+                if sm and getattr(sm, 'currentSeason', None) is not None:
+                    player.hof_season = sm.currentSeason.seasonNumber
+            except Exception:
+                pass
+            inducted.append(player)
             logger.info(
                 f"HoF induction: {player.name} ({pts}pts) — {breakdown}"
             )
@@ -1989,6 +2081,16 @@ class PlayerManager:
                         teamName=getattr(player, 'previousTeam', None), detail=f"{pts} pts")
 
         self.newlyRetiredPlayers.clear()
+
+        # Persist immediately so the is_hof flag (and career awards) reach the
+        # DB this offseason. The HoF UI reads is_hof, and there's otherwise no
+        # guaranteed player save between here and the next season's games, so
+        # without this a restart could drop the inductions from storage.
+        if inducted:
+            try:
+                self.savePlayerData()
+            except Exception as e:
+                logger.error(f"Failed to persist Hall of Fame inductions: {e}")
     
     def calculatePerformanceRatings(self, currentWeek: int) -> None:
         """
@@ -2425,18 +2527,19 @@ class PlayerManager:
         return ratings
 
     def _computeMvpCandidates(self) -> List[Dict[str, Any]]:
-        """Compute MVP scores using pooled-std z-scores of performance rating.
+        """Compute MVP value: total contribution = offense + defense.
 
-        Each position uses its own mean (comparing within peers) but all
-        positions share a pooled standard deviation.  This prevents small
-        position groups (TE, K) from producing inflated z-scores due to
-        tight within-group variance, while staying position-neutral
-        (no FP-based weighting that would favour scoring-formula advantages).
-
-        Returns all eligible candidates sorted by zScore descending.
+        offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ, where
+        perfZ/offenseWpaZ are pooled-std z-scores of the season performance rating
+        and the season offensive WPA, each measured against the player's own
+        position mean (position-neutral). mvpScore = offenseScore + defValue, where
+        defValue is the defensive blend from _computeDefValues (0.7 def-WPA-z +
+        0.3 box-z, pooled within defensive group). A pure-offense star has
+        defValue ~ 0; a dominant two-way player gets both. Sorted by mvpScore desc.
         """
         import numpy as np
         from api_response_builders import PlayerResponseBuilder
+        from constants import MVP_PERF_WEIGHT, MVP_WPA_WEIGHT
 
         positionGroups = {
             'QB': self.activeQbs,
@@ -2445,11 +2548,12 @@ class PlayerManager:
             'TE': self.activeTes,
             'K': self.activeKs,
         }
+        defValues = self._computeDefValues()
 
-        # First pass: collect eligible players and per-position means
-        positionData = {}  # position -> (eligible, mean)
+        # First pass: eligible players + per-position rating & offensive-WPA means
+        positionData = {}  # position -> (eligible, ratingMean, wpaMean)
         allRatings = []
-
+        allWpas = []
         for position, players in positionGroups.items():
             eligible = [p for p in players
                         if getattr(p, 'seasonPerformanceRating', 0) > 0
@@ -2457,21 +2561,28 @@ class PlayerManager:
             if len(eligible) < 2:
                 continue
             ratings = [p.seasonPerformanceRating for p in eligible]
-            positionData[position] = (eligible, float(np.mean(ratings)))
+            wpas = [float(getattr(p, 'seasonWpa', 0.0)) for p in eligible]
+            positionData[position] = (eligible, float(np.mean(ratings)), float(np.mean(wpas)))
             allRatings.extend(ratings)
+            allWpas.extend(wpas)
 
         if not allRatings:
             return []
 
-        # Pooled std across all positions — same yardstick for everyone
+        # Pooled stds across all positions — same yardstick for everyone
         pooledStd = float(np.std(allRatings))
         if pooledStd == 0:
             return []
+        pooledWpaStd = float(np.std(allWpas)) or 1.0
 
         candidates = []
-        for position, (eligible, posMean) in positionData.items():
+        for position, (eligible, posMean, posWpaMean) in positionData.items():
             for player in eligible:
-                zScore = (player.seasonPerformanceRating - posMean) / pooledStd
+                perfZ = (player.seasonPerformanceRating - posMean) / pooledStd
+                wpaZ = (float(getattr(player, 'seasonWpa', 0.0)) - posWpaMean) / pooledWpaStd
+                offenseScore = MVP_PERF_WEIGHT * perfZ + MVP_WPA_WEIGHT * wpaZ
+                defValue = defValues.get(player.id, {}).get('defValue', 0.0)
+                mvpScore = offenseScore + defValue
                 hasTeamObj = hasattr(player.team, 'name')
                 candidates.append({
                     'player': player,
@@ -2483,14 +2594,142 @@ class PlayerManager:
                     'teamColor': getattr(player.team, 'color', '#334155') if hasTeamObj else '#334155',
                     'teamId': player.team.id if hasTeamObj else None,
                     'seasonPerformanceRating': player.seasonPerformanceRating,
-                    'zScore': round(zScore, 3),
+                    'zScore': round(perfZ, 3),            # kept: _selectSeasonMVP logs it + frontend
+                    'wpaScore': round(wpaZ, 3),
+                    'offenseScore': round(offenseScore, 3),
+                    'defValue': round(defValue, 3),
+                    'mvpScore': round(mvpScore, 3),
+                    'seasonWpa': round(float(getattr(player, 'seasonWpa', 0.0)), 2),
                     'gamesPlayed': getattr(player, 'gamesPlayed', 0),
                     'fantasyPoints': player.seasonStatsDict.get('fantasyPoints', 0),
                     'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating),
                 })
 
-        candidates.sort(key=lambda x: x['zScore'], reverse=True)
-        return candidates
+        candidates.sort(key=lambda x: x['mvpScore'], reverse=True)
+        # Dedup by player id — the active position lists can transiently hold a
+        # player twice; keep the (already top-sorted) first occurrence.
+        seen, deduped = set(), []
+        for c in candidates:
+            if c['id'] in seen:
+                continue
+            seen.add(c['id'])
+            deduped.append(c)
+        return deduped
+
+    def _computeDefValues(self) -> Dict[int, Dict[str, Any]]:
+        """Per-player defensive value, pooled within defensive position group
+        (S/LB/CB/DE). Blends season defensive WPA (z) with a position-weighted
+        box-stat composite (z): defValue = MVP_DEF_WPA_WEIGHT*defWpaZ +
+        MVP_DEF_BOX_WEIGHT*defBoxZ. The within-group z-score re-centers the
+        leaguewide-negative raw def WPA, so a defender above their group's mean
+        scores positive. Returns {playerId: {defValue, defWpaZ, defBoxZ,
+        defGroup, seasonDefWpa, boxScore}}."""
+        import numpy as np
+        from constants import MVP_DEF_WPA_WEIGHT, MVP_DEF_BOX_WEIGHT, DEF_BOX_WEIGHTS
+
+        # The roster's offensive players double as the defense (K excluded).
+        defenders = []  # (player, group, defWpa, boxScore)
+        seenDef = set()
+        for players in (self.activeQbs, self.activeRbs, self.activeWrs, self.activeTes):
+            for p in players:
+                if p.id in seenDef:   # active lists can transiently hold a player twice
+                    continue
+                dpos = getattr(p, 'defensivePosition', None)
+                if dpos is None:
+                    continue
+                if not (hasattr(p, 'team') and p.team != 'Free Agent'):
+                    continue
+                if int(getattr(p, 'seasonDefWpaSnaps', 0)) <= 0:
+                    continue
+                seenDef.add(p.id)
+                grp = dpos.name if hasattr(dpos, 'name') else str(dpos)
+                defWpa = float(getattr(p, 'seasonDefWpa', 0.0))
+                box = (p.seasonStatsDict.get('defense', {}) or {}) if hasattr(p, 'seasonStatsDict') else {}
+                w = DEF_BOX_WEIGHTS.get(grp, {})
+                boxScore = sum(wt * float(box.get(k, 0) or 0) for k, wt in w.items())
+                defenders.append((p, grp, defWpa, boxScore))
+
+        if len(defenders) < 2:
+            return {}
+
+        # Pooled stds across all defenders; means per defensive group
+        pooledWpaStd = float(np.std([d for _, _, d, _ in defenders])) or 1.0
+        pooledBoxStd = float(np.std([b for _, _, _, b in defenders])) or 1.0
+        groupWpaMean, groupBoxMean = {}, {}
+        for grp in set(g for _, g, _, _ in defenders):
+            vals = [(d, b) for _, g, d, b in defenders if g == grp]
+            groupWpaMean[grp] = float(np.mean([d for d, _ in vals]))
+            groupBoxMean[grp] = float(np.mean([b for _, b in vals]))
+
+        out: Dict[int, Dict[str, Any]] = {}
+        for p, grp, defWpa, boxScore in defenders:
+            defWpaZ = (defWpa - groupWpaMean[grp]) / pooledWpaStd
+            defBoxZ = (boxScore - groupBoxMean[grp]) / pooledBoxStd
+            defValue = MVP_DEF_WPA_WEIGHT * defWpaZ + MVP_DEF_BOX_WEIGHT * defBoxZ
+            out[p.id] = {
+                'defValue': round(defValue, 3),
+                'defWpaZ': round(defWpaZ, 3),
+                'defBoxZ': round(defBoxZ, 3),
+                'defGroup': grp,
+                'seasonDefWpa': round(defWpa, 2),
+                'boxScore': round(boxScore, 1),
+            }
+        return out
+
+    def _computeDefensiveCandidates(self) -> List[Dict[str, Any]]:
+        """Defensive-value rankings (feed the All-Pro defense slots), sorted by defValue desc."""
+        from api_response_builders import PlayerResponseBuilder
+        defValues = self._computeDefValues()
+        if not defValues:
+            return []
+        byId = {}
+        for players in (self.activeQbs, self.activeRbs, self.activeWrs, self.activeTes):
+            for p in players:
+                byId[p.id] = p
+        out = []
+        for pid, dv in defValues.items():
+            p = byId.get(pid)
+            if p is None:
+                continue
+            hasTeamObj = hasattr(p.team, 'name')
+            out.append({
+                'player': p,
+                'name': p.name,
+                'id': p.id,
+                'defGroup': dv['defGroup'],
+                'position': p.position.name if hasattr(getattr(p, 'position', None), 'name') else None,
+                'team': p.team.name if hasTeamObj else 'FA',
+                'teamAbbr': getattr(p.team, 'abbr', '') if hasTeamObj else '',
+                'teamColor': getattr(p.team, 'color', '#334155') if hasTeamObj else '#334155',
+                'teamId': p.team.id if hasTeamObj else None,
+                'defValue': dv['defValue'],
+                'defWpaScore': dv['defWpaZ'],
+                'defBoxScore': dv['defBoxZ'],
+                'seasonDefWpa': dv['seasonDefWpa'],
+                'gamesPlayed': getattr(p, 'gamesPlayed', 0),
+                'ratingStars': PlayerResponseBuilder.calculateStarRating(p.playerRating),
+            })
+        out.sort(key=lambda x: x['defValue'], reverse=True)
+        seen, deduped = set(), []
+        for c in out:
+            if c['id'] in seen:
+                continue
+            seen.add(c['id'])
+            deduped.append(c)
+        return deduped
+
+    def selectAllDefense(self) -> List[Dict[str, Any]]:
+        """Defensive half of the All-Pro team — top defValue per defensive group: S, LB, CB, CB, DE."""
+        cands = self._computeDefensiveCandidates()
+        chosen, used = [], set()
+        for grp, n in [('S', 1), ('LB', 1), ('CB', 2), ('DE', 1)]:
+            picks = [c for c in cands if c['defGroup'] == grp and c['id'] not in used][:n]
+            for c in picks:
+                used.add(c['id'])
+                d = dict(c)
+                d.pop('player', None)
+                chosen.append(d)
+        return chosen
 
     def selectMVP(self) -> Optional[Dict[str, Any]]:
         """Select the MVP — the candidate with the highest z-score."""
@@ -2511,6 +2750,32 @@ class PlayerManager:
             entry['rank'] = rank
             results.append(entry)
         return results
+
+    def getPlayerImpact(self, playerId: int) -> Optional[Dict[str, Any]]:
+        """This-season impact tiers for a player's offense and defense, from the
+        same pooled-z value metrics that drive MVP / All-Pro (offenseScore vs
+        defValue). Returns None if the player isn't an eligible active
+        contributor this season (e.g. retired / insufficient snaps)."""
+        def _tier(z):
+            if z is None:
+                return None
+            if z >= 1.0:
+                return 'Elite'
+            if z >= 0.3:
+                return 'Strong'
+            if z >= -0.3:
+                return 'Average'
+            return 'Quiet'
+        offScore = next((c.get('offenseScore') for c in self._computeMvpCandidates()
+                         if c['id'] == playerId), None)
+        defVal = (self._computeDefValues().get(playerId) or {}).get('defValue')
+        if offScore is None and defVal is None:
+            return None
+        return {
+            'offenseTier': _tier(offScore), 'defenseTier': _tier(defVal),
+            'offenseScore': round(offScore, 2) if offScore is not None else None,
+            'defenseValue': round(defVal, 2) if defVal is not None else None,
+        }
 
     def conductFreeAgencySimulation(self, freeAgencyOrder: List, currentSeason: int, leagueHighlights: List = None, eventLog: List = None, skipRetirements: bool = False) -> Dict[str, Any]:
         """
@@ -3013,13 +3278,22 @@ class PlayerManager:
             
         logger.info(f"Moved {len(expiredPlayers)} players with expired contracts to free agency")
     
-    def _processFreeAgentRetirements(self, currentSeason: int, leagueHighlights: List) -> None:
-        """Process retirements of long-term free agents"""
+    def _processFreeAgentRetirements(self, currentSeason: int, leagueHighlights: List,
+                                     preIncrement: bool = False) -> None:
+        """Process retirements of long-term free agents.
+
+        preIncrement=True: caller runs BEFORE the offseason free-agent-years
+        increment (i.e. at week GM_ACTIVE_WEEK), so tenure is evaluated as
+        freeAgentYears + 1 to match the post-increment eligibility the offseason
+        path used. This lets the FA pool be finalized by week 22 (retirees removed
+        up front) so the supply check + FA ballots see the real pool.
+        """
         retirements = []
-        
+        bump = 1 if preIncrement else 0
+
         for player in self.freeAgents[:]:  # Use slice copy for safe iteration
-            freeAgentYears = getattr(player, 'freeAgentYears', 0)
-            
+            freeAgentYears = getattr(player, 'freeAgentYears', 0) + bump
+
             if freeAgentYears >= 3:
                 # Base retirement chance by tier
                 baseTierChance = 0
@@ -3171,6 +3445,89 @@ class PlayerManager:
         # Count high-tier players for logging (after tiers are assigned)
         highTierCount = sum(1 for p in self.freeAgents[-numOfPlayers:] if p.playerTier.name in ['TierA', 'TierS'])
         logger.info(f"Generated {numOfPlayers} replacement players ({numRetired} retired, {max(0, minNewPlayers - numRetired)} additional, {highTierCount} tier A/S)")
+
+    def ensurePositionSupply(self, numTeams: int, buffer: int = None) -> dict:
+        """Guarantee enough living players AT EACH POSITION to fill every roster
+        slot, generating only the per-position deficit into the free-agent pool.
+
+        Supply = all active, non-retiring players (rostered + FAs + prospects +
+        upcoming rookies) by position; retiring players (`willRetire`) and
+        already-retired players are excluded. Demand = numTeams × slots-at-position
+        (WR is ×2) plus a small cushion (ROSTER_SUPPLY_BUFFER_PER_POSITION).
+
+        No-op in the normal case (the pool is far deeper than demand); only a
+        genuinely thinned position triggers generation. Idempotent: already-
+        generated FAs count toward supply, so re-running only fills what's still
+        short. Returns {positionName: countGenerated} for the positions topped up.
+        """
+        import numpy as np
+        from random import randint
+        from constants import ROSTER_SUPPLY_BUFFER_PER_POSITION
+        if buffer is None:
+            buffer = ROSTER_SUPPLY_BUFFER_PER_POSITION
+
+        slotsPerPosition = {
+            FloosPlayer.Position.QB: 1,
+            FloosPlayer.Position.RB: 1,
+            FloosPlayer.Position.WR: 2,
+            FloosPlayer.Position.TE: 1,
+            FloosPlayer.Position.K: 1,
+        }
+
+        # Living, non-retiring, slot-fillable supply by position.
+        supply = {pos: 0 for pos in slotsPerPosition}
+        for p in self.activePlayers:
+            if getattr(p, 'willRetire', False):
+                continue
+            pos = getattr(p, 'position', None)
+            if pos in supply:
+                supply[pos] += 1
+
+        deficits = {}
+        for pos, perTeam in slotsPerPosition.items():
+            demand = numTeams * perTeam + buffer
+            short = demand - supply[pos]
+            if short > 0:
+                deficits[pos] = short
+
+        if not deficits:
+            return {}
+
+        # Generate the shortfall as free agents (same seed/createPlayer idiom as
+        # _generateReplacementPlayers so the new players are valid, signable FAs).
+        total = sum(deficits.values())
+        meanPlayerSkill, stdDevPlayerSkill = 78, 7
+        physicalSeeds = np.clip(np.random.normal(meanPlayerSkill, stdDevPlayerSkill, total), 60, 100).tolist()
+        mentalSeeds = np.clip(np.random.normal(meanPlayerSkill, stdDevPlayerSkill, total), 60, 100).tolist()
+        nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
+
+        generated = {}
+        for pos, count in deficits.items():
+            for _ in range(count):
+                physicalSeed = int(physicalSeeds.pop()) if physicalSeeds else meanPlayerSkill
+                mentalSeed = int(mentalSeeds.pop()) if mentalSeeds else meanPlayerSkill
+                newPlayer = self.createPlayer(pos, physicalSeed, mentalSeed)
+                if not newPlayer:
+                    continue
+                newPlayer.id = nextPlayerId
+                nextPlayerId += 1
+                newPlayer.team = 'Free Agent'
+                newPlayer.freeAgentYears = 0
+                self.freeAgents.append(newPlayer)
+                if newPlayer not in self.activePlayers:
+                    self.activePlayers.append(newPlayer)
+                self.addToPositionList(newPlayer)
+                generated[pos.name] = generated.get(pos.name, 0) + 1
+
+        # Assign tiers/contracts to the new free agents.
+        self.sortPlayersByPosition()
+        if generated:
+            logger.info(
+                f"Roster supply top-up: generated {generated} "
+                f"(supply was {{ {', '.join(f'{k.name}:{v}' for k, v in supply.items())} }}, "
+                f"{numTeams} teams, buffer {buffer})"
+            )
+        return generated
 
     # ── Prospect Pipeline: rookie class generation + draft ──────────────
 

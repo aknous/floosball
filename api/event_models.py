@@ -44,7 +44,7 @@ class EventType(Enum):
     # Awards
     MVP_ANNOUNCEMENT = "mvp_announcement"
     ALL_PRO_ANNOUNCEMENT = "all_pro_announcement"
-    
+
     # Player events
     PLAYER_STAT_UPDATE = "player_stat_update"
     PLAYER_INJURY = "player_injury"
@@ -429,7 +429,7 @@ class SeasonEvent:
 
     @staticmethod
     def allProAnnouncement(allProData: List[Dict[str, Any]], seasonNumber: int) -> Dict[str, Any]:
-        """Broadcast All-Pro team announcement after regular season"""
+        """Broadcast the combined All-Pro team (offense + defense) after the regular season"""
         return {
             'event': EventType.ALL_PRO_ANNOUNCEMENT.value,
             'seasonNumber': seasonNumber,

@@ -72,6 +72,8 @@ def _runPendingMigrations():
         for col, colDef in [
             ('mvp_player_id', 'INTEGER REFERENCES players(id)'),
             ('all_pro_player_ids', 'TEXT'),
+            # Rich All-Pro team (offense+defense split) for durable recap rebuild.
+            ('all_pro_team', 'TEXT'),
             # GM threshold snapshot: per-team active fan count frozen at
             # the front-office open (week 22) so post-week-22 logins
             # don't inflate the threshold mid-vote.
@@ -161,6 +163,14 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()
 
+        # HoF induction season — drives the "Class of Season N" grouping.
+        try:
+            conn.execute(text("ALTER TABLE players ADD COLUMN hof_season INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added players.hof_season")
+        except Exception:
+            conn.rollback()
+
         # Team funding breakdown columns (v0.8) — clear old records and re-add columns
         try:
             # Check if new columns already exist
@@ -207,6 +217,20 @@ def _runPendingMigrations():
             logger.info("  Migration: added game_player_stats.q4_scoring_plays")
         except Exception:
             conn.rollback()
+
+        # Per-game WPA value (offense + defensive unit-share) + snaps on
+        # game_player_stats — feeds the season WPA MVP + All-Pro defense metric.
+        for _wpaCol, _wpaType in (
+            ("wpa", "REAL DEFAULT 0"),
+            ("def_wpa", "REAL DEFAULT 0"),
+            ("wpa_snaps", "INTEGER DEFAULT 0"),
+            ("def_snaps", "INTEGER DEFAULT 0"),
+        ):
+            try:
+                conn.execute(text(f"ALTER TABLE game_player_stats ADD COLUMN {_wpaCol} {_wpaType}"))
+                conn.commit()
+            except Exception:
+                conn.rollback()
 
         # Initial-player snapshot on fantasy_rosters — Loyalty card reads this
         try:
@@ -504,6 +528,8 @@ def _runPendingMigrations():
                 ('receptions', 'INTEGER DEFAULT 0'),
                 ('sacks', 'INTEGER DEFAULT 0'), ('interceptions', 'INTEGER DEFAULT 0'),
                 ('tackles', 'INTEGER DEFAULT 0'),
+                ('wpa', 'REAL DEFAULT 0'), ('def_wpa', 'REAL DEFAULT 0'),
+                ('wpa_snaps', 'INTEGER DEFAULT 0'), ('def_snaps', 'INTEGER DEFAULT 0'),
             ]),
             ('player_career_stats', [
                 ('passing_yards', 'INTEGER DEFAULT 0'), ('passing_tds', 'INTEGER DEFAULT 0'),
