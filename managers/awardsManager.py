@@ -21,11 +21,18 @@ logger = logging.getLogger("floosball.awards")
 
 class AwardsManager:
     def __init__(self, session, playerManager, lowQuorum: bool = False):
+        import os
         self.session = session
         self.playerManager = playerManager
         self.voteRepo = AwardVoteRepository(session)
         self.ballotRepo = HofBallotRepository(session)
-        self.lowQuorum = lowQuorum
+        # lowQuorum drops the turnout floor to 1 so a single vote decides — set
+        # in test/fast modes (caller passes _isTestMode) or forced for local
+        # testing via AWARDS_LOW_QUORUM=1 (lets you test voting in any mode).
+        self.lowQuorum = bool(lowQuorum) or os.environ.get('AWARDS_LOW_QUORUM') == '1'
+
+    def _quorum(self, default: int) -> int:
+        return 1 if self.lowQuorum else default
 
     # ── MVP ───────────────────────────────────────────────────────────────────
     def getMvpBallot(self) -> List[Dict]:
@@ -55,7 +62,7 @@ class AwardsManager:
         tally = {pid: n for pid, n in self.voteRepo.getTally(season, 'mvp').items()
                  if pid in eligibleIds}
 
-        if voters >= AWARD_MVP_QUORUM and tally:
+        if voters >= self._quorum(AWARD_MVP_QUORUM) and tally:
             # Most votes wins; ballot is mvpScore-sorted so iterating in order
             # with a strict '>' breaks ties toward the higher value metric.
             best = None
@@ -141,7 +148,7 @@ class AwardsManager:
         tally = self.voteRepo.getTally(season, 'hof')
 
         inducted: List[int] = []
-        if voters >= AWARD_HOF_QUORUM:
+        if voters >= self._quorum(AWARD_HOF_QUORUM):
             floor = math.ceil(voters * AWARD_HOF_APPROVAL_FRACTION)
             ranked = sorted(
                 active,
