@@ -2870,7 +2870,20 @@ class PlayerManager:
         # Get teams from service container
         teamManager = self.serviceContainer.getService('team_manager')
         teams = teamManager.teams if teamManager else []
-        
+
+        # Append any team missing from the draft order (short persisted faOrder on
+        # resume — see freeAgencyPickGenerator) so every roster gets drafted and
+        # the completion loop can actually finish.
+        if teams:
+            orderIds = {getattr(t, 'id', None) for t in freeAgencyOrder}
+            missing = [t for t in teams if getattr(t, 'id', None) not in orderIds]
+            if missing:
+                logger.warning(
+                    f"FA draft order was missing {len(missing)} team(s); appending: "
+                    f"{[t.name for t in missing]}"
+                )
+                freeAgencyOrder = list(freeAgencyOrder) + missing
+
         if not teams:
             logger.error("No teams available for free agency!")
             return freeAgencyDict
@@ -2925,7 +2938,7 @@ class PlayerManager:
         roundNum = 0
         maxRounds = 100  # Safety valve to prevent infinite loops
 
-        while teamsComplete < len(teams):
+        while teamsComplete < len(freeAgencyOrder):
             teamsComplete = 0  # Reset counter each round - original recounts each iteration!
             roundNum += 1
 
@@ -3043,6 +3056,22 @@ class PlayerManager:
         teamManager = self.serviceContainer.getService('team_manager')
         teams = teamManager.teams if teamManager else []
 
+        # The persisted playoff faOrder snapshot is taken at the League
+        # Championship round, BEFORE the two Floos Bowl finalists are appended,
+        # so on a resume the draft order can be short a couple teams. A team
+        # missing from the order would never pick AND would stall the completion
+        # loop (teamsComplete could never reach the team count) — append any
+        # missing teams so every roster is drafted.
+        if teams:
+            orderIds = {getattr(t, 'id', None) for t in freeAgencyOrder}
+            missing = [t for t in teams if getattr(t, 'id', None) not in orderIds]
+            if missing:
+                logger.warning(
+                    f"FA draft order was missing {len(missing)} team(s); appending: "
+                    f"{[t.name for t in missing]}"
+                )
+                freeAgencyOrder = list(freeAgencyOrder) + missing
+
         logFa("=== PRE-FREE AGENCY ROSTER STATE ===")
         for team in teams:
             rosterPlayers = [f"{pos}:{p.name if p else 'EMPTY'}" for pos, p in team.rosterDict.items()]
@@ -3095,13 +3124,23 @@ class PlayerManager:
         roundNum = 0
         maxRounds = 100
 
-        while teamsComplete < len(teams):
+        # Completion keys off freeAgencyOrder (the collection actually iterated),
+        # NOT len(teams) — otherwise an order short any teams can never satisfy
+        # the exit condition and spins straight to the safety valve.
+        while teamsComplete < len(freeAgencyOrder):
             teamsComplete = 0
             roundNum += 1
             if roundNum > maxRounds:
                 logger.warning(f"Free agency exceeded {maxRounds} rounds, ending")
                 for team in teams:
                     if not team.freeAgencyComplete:
+                        openPos = [k for k, v in team.rosterDict.items()
+                                   if v is None and k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')]
+                        if openPos:
+                            logger.error(
+                                f"FA draft force-ended with {team.name} still missing {openPos} "
+                                f"— a roster slot was left empty"
+                            )
                         team.freeAgencyComplete = True
                 break
 
