@@ -11649,6 +11649,34 @@ def _awardWindows():
     return season, mvpOpen, hofOpen
 
 
+def _mvpStatLine(player, position):
+    """A compact, position-specific season stat line for the MVP ballot, so
+    voters can compare candidates. Returns a list of {label, value} dicts."""
+    if player is None:
+        return []
+    s = getattr(player, 'seasonStatsDict', {}) or {}
+    p = s.get('passing', {}) or {}
+    r = s.get('rushing', {}) or {}
+    rc = s.get('receiving', {}) or {}
+    k = s.get('kicking', {}) or {}
+    if position == 'QB':
+        return [{"label": "Yds", "value": p.get('yards', 0)},
+                {"label": "TD", "value": p.get('tds', 0)},
+                {"label": "INT", "value": p.get('ints', 0)}]
+    if position == 'RB':
+        return [{"label": "Rush", "value": r.get('yards', 0)},
+                {"label": "TD", "value": r.get('tds', 0)},
+                {"label": "Rec", "value": rc.get('receptions', 0)}]
+    if position in ('WR', 'TE'):
+        return [{"label": "Rec", "value": rc.get('receptions', 0)},
+                {"label": "Yds", "value": rc.get('yards', 0)},
+                {"label": "TD", "value": rc.get('tds', 0)}]
+    if position == 'K':
+        return [{"label": "FG", "value": f"{k.get('fgs', 0)}/{k.get('fgAtt', 0)}"},
+                {"label": "Long", "value": k.get('longest', 0)}]
+    return []
+
+
 def _awardsManager(session):
     from managers.awardsManager import AwardsManager
     pm = floosball_app.playerManager if floosball_app else None
@@ -11680,8 +11708,13 @@ def get_mvp_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
     try:
         am = _awardsManager(session)
         ballot = am.getMvpBallot()
-        # Strip the non-serializable Player object from each candidate.
-        cleaned = [{k: v for k, v in c.items() if k != 'player'} for c in ballot]
+        # Strip the non-serializable Player object, attaching a position-specific
+        # season stat line so voters can compare candidates directly.
+        cleaned = []
+        for c in ballot:
+            entry = {k: v for k, v in c.items() if k != 'player'}
+            entry['stats'] = _mvpStatLine(c.get('player'), c.get('position'))
+            cleaned.append(entry)
         myVote = am.voteRepo.getMvpVote(user.id, season) if user else None
         # Hide the tally WHILE voting is open (no bandwagoning); reveal only once
         # the window has closed and the result is final.

@@ -125,7 +125,7 @@ class AwardsManager:
         active = self.ballotRepo.getActive()
         if not active:
             return []
-        byId = {getattr(p, 'id', None): p for p in self.playerManager.retiredPlayers}
+        byId = {e.player_id: self.playerManager.getPlayerById(e.player_id) for e in active}
         voters = self.voteRepo.getVoterCount(season, 'hof')
         tally = self.voteRepo.getTally(season, 'hof')
 
@@ -161,11 +161,13 @@ class AwardsManager:
 
     def getHofBallot(self) -> List[Dict]:
         """The active rolling ballot, enriched with each candidate's HoF case +
-        seasons remaining. Player lookup spans retired players."""
-        byId = {getattr(p, 'id', None): p for p in self.playerManager.retiredPlayers}
+        seasons remaining. Resolves players via getPlayerById (NOT just
+        retiredPlayers): the ballot opens at week 22 while these players are
+        STILL ACTIVE on rosters during their farewell run, so they haven't
+        moved to retiredPlayers yet."""
         out = []
         for entry in self.ballotRepo.getActive():
-            player = byId.get(entry.player_id)
+            player = self.playerManager.getPlayerById(entry.player_id)
             pts, breakdown = (self.playerManager._computeHofPoints(player)
                               if player is not None else (0, {}))
             out.append({
