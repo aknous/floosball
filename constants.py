@@ -552,6 +552,11 @@ RB_CHECKDOWN_PRESSURE_CHANCE = 45   # % of would-be sacks dumped to the RB inste
 RB_CHECKDOWN_OPEN_CHANCE = 55       # % of "no one open" dropbacks checked down to the RB
 RB_CHECKDOWN_BASE_YAC = 3.5         # mean YAC on a dump-off at RB speed pivot 78
 RB_CHECKDOWN_YAC_PER_SPEED = 0.12   # mean YAC added per RB speed point above 78
+# Designed RB screen — a called play (not a pressure reaction) on clean dropbacks.
+# Blockers set up out front, so screens carry more YAC upside than a dump-off.
+RB_SCREEN_ENABLED = True
+RB_SCREEN_CHANCE = 1                # % of clean (non-pressure) dropbacks that are a screen
+RB_SCREEN_BASE_YAC = 5.5           # mean YAC on a screen at RB speed pivot 78
 
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {

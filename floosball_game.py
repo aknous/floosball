@@ -3573,8 +3573,13 @@ class Game:
                     text = choice(sackList).format(self.play.passer.name, sackerName, self.play.yardage)
             elif self.play.isPassCompletion:
                 if getattr(self.play, 'isCheckdown', False):
-                    verb = ('dumps it off to' if getattr(self.play, 'checkdownReason', '') == 'pressure'
-                            else 'checks down to')
+                    reason = getattr(self.play, 'checkdownReason', '')
+                    if reason == 'screen':
+                        verb = 'throws a screen to'
+                    elif reason == 'pressure':
+                        verb = 'dumps it off to'
+                    else:
+                        verb = 'checks down to'
                     text = '{} {} {} for {} yards'.format(
                         self.play.passer.name, verb, self.play.receiver.name, self.play.yardage)
                 elif self.play.targetSideline:
@@ -3686,8 +3691,8 @@ class Game:
             punterName = punter.name if punter else 'Punter'
             if getattr(self.play, 'isPuntBlocked', False):
                 blockerName = getattr(getattr(self.play, 'blockedBy', None), 'name', None)
-                text = ('{} punt is BLOCKED by {}!'.format(punterName, blockerName)
-                        if blockerName else '{} punt is BLOCKED!'.format(punterName))
+                text = ("{}'s punt is BLOCKED by {}!".format(punterName, blockerName)
+                        if blockerName else "{}'s punt is BLOCKED!".format(punterName))
             else:
                 text = '{} punts'.format(punterName)
         elif self.play.playType is PlayType.Spike:
@@ -9127,7 +9132,8 @@ class Play():
         fantasy plumbing already support receiving). `chargeAttempt` adds the pass
         attempt — the pressure path hasn't booked one yet, the no-one-open path
         already has. Returns False (no-op) if there's no RB to dump to."""
-        from constants import RB_CHECKDOWN_BASE_YAC, RB_CHECKDOWN_YAC_PER_SPEED
+        from constants import (RB_CHECKDOWN_BASE_YAC, RB_CHECKDOWN_YAC_PER_SPEED,
+                               RB_SCREEN_BASE_YAC)
         rb = self.offense.rosterDict.get('rb')
         if rb is None:
             return False
@@ -9145,11 +9151,15 @@ class Play():
         rb.addRcvPassTarget(isReg)
         rb.addReception(isReg)
 
-        # Short dump-off near the line + RB run-after-catch (speed/agility driven).
+        # Short pass near the line + RB run-after-catch (speed/agility driven). A
+        # designed screen starts a touch behind the line but has blockers out front,
+        # so it carries more YAC upside than a hurried dump-off.
         spd = rb.gameAttributes.speed
         agi = rb.gameAttributes.agility
-        airYards = randint(-1, 4)
-        yacMean = max(1.0, RB_CHECKDOWN_BASE_YAC + (spd - 78) * RB_CHECKDOWN_YAC_PER_SPEED)
+        isScreen = reason == 'screen'
+        airYards = randint(-3, 1) if isScreen else randint(-1, 4)
+        baseYac = RB_SCREEN_BASE_YAC if isScreen else RB_CHECKDOWN_BASE_YAC
+        yacMean = max(1.0, baseYac + (spd - 78) * RB_CHECKDOWN_YAC_PER_SPEED)
         yac = max(0, int(round(np.random.exponential(yacMean))) + int((agi - 80) / 25))
         yards = max(-3, airYards + yac)
         yards = min(yards, self.yardsToEndzone)
@@ -9661,11 +9671,18 @@ class Play():
         # sacker (passRusher) becomes the tackler on the run.
         wouldBeSacked = sackRoll <= sackProbability
         qbScrambles = wouldBeSacked and self._qbEscapesSack()
-        from constants import RB_CHECKDOWN_ENABLED, RB_CHECKDOWN_PRESSURE_CHANCE
-        rbDumps = (wouldBeSacked and not qbScrambles and RB_CHECKDOWN_ENABLED
-                   and self.offense.rosterDict.get('rb') is not None
+        from constants import (RB_CHECKDOWN_ENABLED, RB_CHECKDOWN_PRESSURE_CHANCE,
+                               RB_SCREEN_ENABLED, RB_SCREEN_CHANCE)
+        hasRb = self.offense.rosterDict.get('rb') is not None
+        rbDumps = (wouldBeSacked and not qbScrambles and RB_CHECKDOWN_ENABLED and hasRb
                    and batched_random() * 100 < RB_CHECKDOWN_PRESSURE_CHANCE)
-        if qbScrambles:
+        # Designed screen: a called play on a clean dropback (no would-be sack).
+        screenCalled = (not wouldBeSacked and RB_SCREEN_ENABLED and hasRb
+                        and batched_random() * 100 < RB_SCREEN_CHANCE)
+        if screenCalled:
+            screenCov = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
+            self._resolveRbCheckdown(self._pickScrambleTackler(screenCov), reason='screen', chargeAttempt=True)
+        elif qbScrambles:
             self._resolveQbScramble(passRusher, reason='pressure')
         elif rbDumps:
             # Safety valve: dump it to the RB instead of taking the sack.
