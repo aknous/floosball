@@ -1784,11 +1784,18 @@ class CardManager:
     FEATURED_CARD_COUNT = 5
     # Markup over sell value for shop singles
     SHOP_MARKUP = {
-        'base': 5.0,
-        'holographic': 3.34,
-        'prismatic': 5.0,
-        'diamond': 5.0,
+        'base': 4.0,
+        'holographic': 2.7,
+        'prismatic': 4.0,
+        'diamond': 4.0,
     }
+
+    def _featuredBuyPrice(self, template) -> int:
+        """Shop price for a featured card: sell value × edition markup, floored
+        at 10 and rounded to the nearest 5. Single source of truth so the
+        displayed price and the charged price can never drift."""
+        markup = self.SHOP_MARKUP.get(template.edition, 2.7)
+        return max(10, int(round(template.sell_value * markup / 5.0)) * 5)
 
     def getFeaturedCards(self, session, userId: int, currentSeason: int,
                          currentWeek: int = 0, isScheduledMode: bool = False,
@@ -1929,8 +1936,7 @@ class CardManager:
         result = []
         for row in existing:
             t = row.card_template
-            markup = self.SHOP_MARKUP.get(t.edition, 3.0)
-            buyPrice = max(10, int(t.sell_value * markup))
+            buyPrice = self._featuredBuyPrice(t)
             effName = (t.effect_config or {}).get("effectName") or ""
             result.append({
                 "templateId": t.id,
@@ -2261,8 +2267,7 @@ class CardManager:
         if not template:
             raise ValueError("Card template not found")
 
-        markup = self.SHOP_MARKUP.get(template.edition, 3.0)
-        buyPrice = max(10, int(template.sell_value * markup))
+        buyPrice = self._featuredBuyPrice(template)
 
         result = currencyRepo.spendFunds(
             userId, buyPrice,

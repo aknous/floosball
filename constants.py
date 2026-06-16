@@ -177,8 +177,8 @@ WEEKLY_LEADERBOARD_TOP_PCT = 0.25
 # Floobits). A sim-season plays out in ~1 real week, so 14 days ≈ "sign in about
 # once every season or two" is enough to keep earning. Tunable.
 SUPPORTER_ACTIVITY_WINDOW_DAYS = 14
-SUPPORTER_BASE_DIVIDEND = 6           # flat Floobits/week while your team is active
-SUPPORTER_WIN_BONUS = 4               # base bonus the weeks your team wins
+SUPPORTER_BASE_DIVIDEND = 10          # flat Floobits/week while your team is active
+SUPPORTER_WIN_BONUS = 5               # base bonus the weeks your team wins
 # Win-quality add-ons, stacked onto the win bonus (the whole dividend is then
 # multiplied by Tenure × Funding, so great weeks for long-haul patrons pay big).
 # Most are read straight off the game (scores, quarter scores, playoff flag).
@@ -191,7 +191,7 @@ SUPPORTER_STREAK_BONUS_CAP = 6        # ...capped here (a 7+ win streak maxes it
 SUPPORTER_UNDERDOG_WIN_BONUS = 3      # added on an upset win (beat a higher-ELO opponent — same rule as the UPSET badge / house_money card)
 # Playoff wins pay more, scaled by round (1=Rd1, 2=Rd2, 3=League Championship,
 # 4=Floos Bowl). Keyed by round number = week - 28.
-SUPPORTER_PLAYOFF_WIN_BONUS = {1: 4, 2: 6, 3: 8, 4: 12}
+SUPPORTER_PLAYOFF_WIN_BONUS = {1: 5, 2: 10, 3: 15, 4: 25}
 SUPPORTER_TEAM_CHANGE_TENURE_KEEP = 0.5  # fraction of tenure kept on a team change (soft reset)
 # Patron rank — your share of your team's funding, applied ON TOP of loyalty.
 # Percentile thresholds (top X% of a team's contributors this season); the single
@@ -262,22 +262,24 @@ ROSTER_MIN_PLAYERS = 3
 #   SCALE     — overall payout scale (raises floor + ceiling together)
 #   EXPONENT  — taper aggressiveness (closer to 1.0 = less taper)
 # Curve tightened after card rebalance pushed typical hands to 1k-3k FP,
-# bumped ~33% in v0.16.1, then nudged up another ~12% next-season — payouts
-# still felt a touch thin against pack/upgrade prices. Shape (exponent)
-# unchanged so the high-end taper still prevents runaway whales while
-# floors and middle play benefit too. Sample profile (default):
-#   100 FP →  17 F
-#   500 FP →  61 F
-#  1000 FP → 105 F
-#  3000 FP → 247 F
-WEEKLY_FP_FLOOBIT_SCALE = 0.48
+# bumped ~33% in v0.16.1, then ~2.3x next-season: actually playing fantasy was
+# earning ~830 F/season vs ~5k from parking Floobit-output cards, so FP play
+# wasn't a viable income path. Shape (exponent) unchanged so the high-end taper
+# still prevents runaway whales while floors and middle play benefit too.
+# Floobit-output cards stay as-is (a deliberate earn-over-FP strategy); this
+# just makes FP play a real alternative. Sample profile (default):
+#   100 FP →  40 F
+#   500 FP → 140 F
+#  1000 FP → 241 F
+#  3000 FP → 565 F
+WEEKLY_FP_FLOOBIT_SCALE = 1.10
 WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
 # Endowment (income_boost powerup) replaces the curve with a flatter one.
 # Less taper = monster weeks pay more; low weeks pay roughly the same.
 # Same cost (100 F). Sits ~10% above standard at modest play, ~50% above
 # at heavy play, breaking even around 1k FP/week × 4 weeks. Bumped
 # proportionally with the standard curve.
-WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.30
+WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.65
 WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.87
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
@@ -623,13 +625,13 @@ POWERUP_CATALOG = {
 
 # Shop reroll (not a powerup — lives in the Daily Selection section)
 SHOP_REROLL_BASE_COST = 10
-SHOP_REROLL_COST_INCREMENT = 10  # Each reroll costs 10 more than the last
+SHOP_REROLL_COST_INCREMENT = 5   # Each reroll costs 5 more than the last
 
-# Themed pack rotation reroll — pricier than featured-card reroll because
-# the rotation pool now includes Grand (350F) and Exquisite (750F) packs.
-# Rerolling for an exquisite roll should be a real commitment.
-THEMED_PACK_REROLL_BASE_COST = 50
-THEMED_PACK_REROLL_COST_INCREMENT = 30
+# Themed pack rotation reroll — pricier than the featured-card reroll because
+# the rotation pool includes the higher pack tiers. Rerolling for a premium pack
+# should be a real commitment, but not a wall.
+THEMED_PACK_REROLL_BASE_COST = 35
+THEMED_PACK_REROLL_COST_INCREMENT = 20
 
 # ---- Card Upgrade Tiers (Level Up) ----
 # Cards level I->IV (tier 1->4) by feeding ONE same-effect duplicate + Floobits.
@@ -657,11 +659,13 @@ CARD_TIER_DIVIDEND_FLOOBITS = {
     "diamond":     {1: 0, 2: 18, 3: 34, 4: 50},
 }
 # Floobit cost to perform the upgrade INTO a tier (I->II uses [2], etc.), before
-# the edition multiplier. Steep + escalating so maxing is a multi-week sink, not
-# a day-one rush (the same-effect duplicate requirement is the primary gate).
-CARD_TIER_UPGRADE_COST = {2: 72, 3: 225, 4: 540}
+# the edition multiplier. Escalating so maxing is a multi-week sink (the
+# same-effect duplicate requirement is the primary gate), but cut next-season
+# alongside the broader economy pass — a Diamond T4 was ~1080 F. Mults chosen so
+# base×mult lands on a round 5 at every tier (e.g. Diamond: 80/240/560).
+CARD_TIER_UPGRADE_COST = {2: 50, 3: 150, 4: 350}
 CARD_TIER_EDITION_COST_MULT = {
-    "base": 1.0, "holographic": 1.25, "prismatic": 1.6, "diamond": 2.0,
+    "base": 1.0, "holographic": 1.2, "prismatic": 1.4, "diamond": 1.6,
 }
 
 # ─── Card Showcase (seasonal collection payout) ──────────────────────────────
