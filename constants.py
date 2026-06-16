@@ -541,6 +541,18 @@ FG_BLOCK_CHANCE = 0.25     # % of FG attempts blocked
 PUNT_BLOCK_ENABLED = True
 PUNT_BLOCK_CHANCE = 0.1    # % of punts blocked (punts are far more frequent than FGs)
 
+# ── RB pass option (safety-valve checkdown) ─────────────────────────────────
+# RBs catch passes: a dump-off to the back when the QB is about to be sacked, or
+# when no one downfield is open (instead of throwing it away). Resolves as a short
+# completion to the RB — the RB stat + fantasy plumbing already supports receiving,
+# so pass-catching backs get realistic receiving production. Keep volume modest (a
+# few catches a game). Flip RB_CHECKDOWN_ENABLED to disable.
+RB_CHECKDOWN_ENABLED = True
+RB_CHECKDOWN_PRESSURE_CHANCE = 45   # % of would-be sacks dumped to the RB instead
+RB_CHECKDOWN_OPEN_CHANCE = 55       # % of "no one open" dropbacks checked down to the RB
+RB_CHECKDOWN_BASE_YAC = 3.5         # mean YAC on a dump-off at RB speed pivot 78
+RB_CHECKDOWN_YAC_PER_SPEED = 0.12   # mean YAC added per RB speed point above 78
+
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {
     "slug": "extra_swap",

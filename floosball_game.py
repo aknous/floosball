@@ -3572,7 +3572,12 @@ class Game:
                 else:
                     text = choice(sackList).format(self.play.passer.name, sackerName, self.play.yardage)
             elif self.play.isPassCompletion:
-                if self.play.targetSideline:
+                if getattr(self.play, 'isCheckdown', False):
+                    verb = ('dumps it off to' if getattr(self.play, 'checkdownReason', '') == 'pressure'
+                            else 'checks down to')
+                    text = '{} {} {} for {} yards'.format(
+                        self.play.passer.name, verb, self.play.receiver.name, self.play.yardage)
+                elif self.play.targetSideline:
                     if self.play.passType is PassType.short:
                         text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineShortPassList), self.play.receiver.name, self.play.yardage)
                     elif self.play.passType is PassType.long:
@@ -9114,6 +9119,57 @@ class Play():
                 if tackler and hasattr(tackler, 'stat_tracker'):
                     tackler.stat_tracker.add_forced_fumble(isReg)
 
+    def _resolveRbCheckdown(self, tackler=None, reason='pressure', chargeAttempt=True) -> bool:
+        """The QB dumps a short pass to the RB — a safety valve when about to be
+        sacked ('pressure') or when no one downfield is open ('checkdown'),
+        instead of taking the sack or throwing it away. Resolves as a short
+        completion to the RB, reusing the receiving-credit methods (the RB stat +
+        fantasy plumbing already support receiving). `chargeAttempt` adds the pass
+        attempt — the pressure path hasn't booked one yet, the no-one-open path
+        already has. Returns False (no-op) if there's no RB to dump to."""
+        from constants import RB_CHECKDOWN_BASE_YAC, RB_CHECKDOWN_YAC_PER_SPEED
+        rb = self.offense.rosterDict.get('rb')
+        if rb is None:
+            return False
+        isReg = self.game.isRegularSeasonGame
+        self.passType = PassType.short
+        self.receiver = rb
+        self.isPassCompletion = True
+        self.isCheckdown = True
+        self.checkdownReason = reason
+        self.insights.setdefault('pass', {})['checkdown'] = reason
+
+        if chargeAttempt:
+            self.passer.addPassAttempt(isReg)
+        self.passer.addCompletion(isReg)
+        rb.addRcvPassTarget(isReg)
+        rb.addReception(isReg)
+
+        # Short dump-off near the line + RB run-after-catch (speed/agility driven).
+        spd = rb.gameAttributes.speed
+        agi = rb.gameAttributes.agility
+        airYards = randint(-1, 4)
+        yacMean = max(1.0, RB_CHECKDOWN_BASE_YAC + (spd - 78) * RB_CHECKDOWN_YAC_PER_SPEED)
+        yac = max(0, int(round(np.random.exponential(yacMean))) + int((agi - 80) / 25))
+        yards = max(-3, airYards + yac)
+        yards = min(yards, self.yardsToEndzone)
+        self.yardage = yards
+
+        # Reception credit (a TD, if it reaches the end zone, is credited by the
+        # game loop's pass-completion path like any other completion).
+        self.passer.addPassYards(yards, isReg)
+        rb.addReceiveYards(yards, isReg)
+        rb.addYAC(yac, isReg)
+        if yards >= 20:
+            rb.gameStatsDict['receiving']['20+'] += 1
+        if yards > rb.gameStatsDict['receiving']['longest']:
+            rb.gameStatsDict['receiving']['longest'] = yards
+        self.defense.gameDefenseStats['passYardsAlwd'] += yards
+        self.defense.gameDefenseStats['totalYardsAlwd'] += yards
+        if tackler and hasattr(tackler, 'stat_tracker'):
+            tackler.stat_tracker.add_tackle(isReg)
+        return True
+
     def calculatePressureImpact(self, rushDifferential: float) -> float:
         """
         Calculate throw quality degradation from defensive pressure.
@@ -9605,8 +9661,15 @@ class Play():
         # sacker (passRusher) becomes the tackler on the run.
         wouldBeSacked = sackRoll <= sackProbability
         qbScrambles = wouldBeSacked and self._qbEscapesSack()
+        from constants import RB_CHECKDOWN_ENABLED, RB_CHECKDOWN_PRESSURE_CHANCE
+        rbDumps = (wouldBeSacked and not qbScrambles and RB_CHECKDOWN_ENABLED
+                   and self.offense.rosterDict.get('rb') is not None
+                   and batched_random() * 100 < RB_CHECKDOWN_PRESSURE_CHANCE)
         if qbScrambles:
             self._resolveQbScramble(passRusher, reason='pressure')
+        elif rbDumps:
+            # Safety valve: dump it to the RB instead of taking the sack.
+            self._resolveRbCheckdown(passRusher, reason='pressure', chargeAttempt=True)
         elif wouldBeSacked:
             self.insights['pass']['wasSacked'] = True
             # Name the sacker based on blitz package
@@ -9816,12 +9879,21 @@ class Play():
                             self.targetSideline = False  # 30% chance to freelance
 
             # Handle throw away
+            from constants import RB_CHECKDOWN_ENABLED as _RBCK_EN, RB_CHECKDOWN_OPEN_CHANCE as _RBCK_OPEN
             if self.passType == PassType.throwAway and not mustThrow and self._qbTucksAndRuns():
                 # No one open: a mobile QB tucks and runs instead of throwing it
                 # away. The dropback became a rush, so un-charge the pass attempt
                 # booked at the top of this branch.
                 self.passer.stat_tracker.remove_pass_attempt(self.game.isRegularSeasonGame)
                 self._resolveQbScramble(self._pickScrambleTackler(coverageAssignments), reason='coverage')
+            elif (self.passType == PassType.throwAway and not mustThrow and _RBCK_EN
+                  and self.offense.rosterDict.get('rb') is not None
+                  and batched_random() * 100 < _RBCK_OPEN):
+                # No one open downfield: check it down to the RB rather than throw
+                # it away. The attempt was already booked at the top of this
+                # branch, so don't re-charge it.
+                self._resolveRbCheckdown(self._pickScrambleTackler(coverageAssignments),
+                                         reason='checkdown', chargeAttempt=False)
             elif self.passType == PassType.throwAway:
                 self.insights['pass']['wasSacked'] = False
                 self.insights['pass']['throwAway'] = True
