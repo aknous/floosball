@@ -11,7 +11,26 @@ import random
 from managers import showcaseManager
 
 random.seed(42)
-SEASON = 8
+SEASON = 9
+
+# Realistic vault age spread: most cards are recent (packs are opened every
+# season), with a thinning tail of older cards. Drives the recency decay so the
+# tuner reflects real collections, not an all-current best case.
+AGE_SPREAD = [(0, 0.40), (1, 0.24), (2, 0.15), (3, 0.10), (4, 0.06), (5, 0.03), (6, 0.02)]
+
+# Proposed grade thresholds to evaluate (independent of constants.py so we can
+# iterate before committing). Set to None to use the live constants.
+PROPOSED_THRESHOLDS = None
+
+
+def drawSeasonsOld():
+    r = random.random()
+    acc = 0.0
+    for old, p in AGE_SPREAD:
+        acc += p
+        if r <= acc:
+            return old
+    return AGE_SPREAD[-1][0]
 
 # Pack rarity weights (paid packs, from card seed) -> normalized probabilities.
 EDITION_WEIGHTS = {"base": 82, "holographic": 28, "prismatic": 5, "diamond": 1}
@@ -45,7 +64,7 @@ def drawCard(idx):
         "edition": edition,
         "classification": classification,
         "tier": 1,
-        "seasonCreated": SEASON,          # current-season cards (best-case recency)
+        "seasonCreated": SEASON - drawSeasonsOld(),   # realistic age spread
         "playerId": idx,
         "teamId": random.randint(1, NUM_TEAMS),
     }
@@ -89,7 +108,19 @@ LEVELS = [
 ]
 N = 4000
 
-print(f"Monte Carlo: {N} collectors per level, best-8 set-aware showcase, recency 1.0\n")
+def gradeFor(score, thresholds):
+    for g, t in thresholds:
+        if score >= t:
+            return g
+    return "F"
+
+
+LIVE_THRESHOLDS = showcaseManager.SHOWCASE_GRADE_THRESHOLDS
+THRESH = PROPOSED_THRESHOLDS or LIVE_THRESHOLDS
+label_thresh = "PROPOSED" if PROPOSED_THRESHOLDS else "live"
+
+print(f"Monte Carlo: {N} collectors per level, best-8 set-aware showcase, realistic age spread")
+print(f"Thresholds under test ({label_thresh}): {THRESH}\n")
 allScores = []
 for label, size in LEVELS:
     scores = []
@@ -98,13 +129,14 @@ for label, size in LEVELS:
         sc = buildShowcase(size)
         ev = showcaseManager.evaluate(sc, SEASON)
         scores.append(ev["score"])
-        grades[ev["grade"]] = grades.get(ev["grade"], 0) + 1
+        g = gradeFor(ev["score"], THRESH)
+        grades[g] = grades.get(g, 0) + 1
     scores.sort()
     allScores += scores
     gradeStr = " ".join(f"{g}:{grades.get(g,0)*100//N}%" for g in ["F", "D", "C", "B", "A", "S"])
     print(f"{label:>16}  p25={pct(scores,25):6.0f}  p50={pct(scores,50):6.0f}  "
           f"p75={pct(scores,75):6.0f}  p90={pct(scores,90):6.0f}  p99={pct(scores,99):6.0f}")
-    print(f"{'':>16}  grades (current thresholds): {gradeStr}")
+    print(f"{'':>16}  grades ({label_thresh}): {gradeStr}")
 
 allScores.sort()
 print("\nOverall score percentiles (all levels pooled):")

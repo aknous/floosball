@@ -623,19 +623,38 @@ SHOWCASE_SLOTS = 8
 # Per-card base = EDITION_POINTS × recency + Σ CLASSIFICATION_POINTS, ×tier mult.
 SHOWCASE_EDITION_POINTS = {"base": 1, "holographic": 4, "prismatic": 12, "diamond": 30}
 SHOWCASE_CLASSIFICATION_POINTS = {"rookie": 5, "all_pro": 10, "champion": 12, "mvp": 20}
-# Recency: newer cards pay more. recency = max(FLOOR, 1 − STEP × seasonsOld).
-SHOWCASE_RECENCY_FLOOR = 0.25
-SHOWCASE_RECENCY_STEP = 0.25
+# Recency: newer cards pay more, keyed by card age (seasons old). Gentle for the
+# first season, then a steep decline from two seasons on — a card gets ~2 prime
+# showcase seasons, after which it can't prop up a top grade. Ages past the table
+# use the floor. Non-linear on purpose (a flat per-season step can't do this).
+SHOWCASE_RECENCY_BY_AGE = {0: 1.0, 1: 0.85, 2: 0.45, 3: 0.25}
+SHOWCASE_RECENCY_FLOOR = 0.15   # 4+ seasons old
 # Upgrade tier lifts a card's showcase value: ×(1 + (tier−1) × THIS).
 SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
 # Set bonuses ADD into one multiplier: score = Σ cardPoints × (1 + Σ bonuses),
 # with the bonus sum capped here so stacked sets can't run away.
-SHOWCASE_MAX_SET_BONUS = 2.5
+SHOWCASE_MAX_SET_BONUS = 1.5
+# Sets are TIERED by the edition of the cards forming them: an All-Pro Line of
+# holos is worth a fraction of one made of diamonds. Each active set's bonus is
+# scaled by the mean edition-weight of its member cards. So the top grades demand
+# high-edition sets, not just any cards that happen to share a tag.
+SHOWCASE_SET_EDITION_WEIGHT = {"base": 0.15, "holographic": 0.35, "prismatic": 0.65, "diamond": 1.0}
 # Score → grade (first threshold the score meets, scanning high to low).
-# Calibrated via tune_showcase.py Monte Carlo (recency-1.0 best-8 showcases):
-# casual≈D, regular≈C, dedicated≈B, whale≈A, top-few-%-whale≈S.
+# Calibrated against target card-quality profiles + the real season-9 showcases.
+# The top grades demand QUALITY (fresh, high-edition, decorated cards), not
+# volume or holo set-stacking — edition-scaled sets + steep recency see to that:
+#   F/D/C  random accumulation (casual→F/D, regular→D, dedicated/whale→C)
+#   B      a deliberately curated showcase, even of holos (full sets)
+#   A      a strong fresh showcase (8 decorated prismatics, 8 bare diamonds,
+#          or a few decorated diamonds among prismatics)
+#   S      ~5-6+ fresh decorated diamonds (compound classifications) — the
+#          collector trophy, reached via the collectible shop over time
+# S is set so a strong-but-imperfect diamond showcase clears it (not a perfect
+# 8/8), since only ~18 players can ever be a decorated diamond — assembling 8
+# fresh would be unattainable. Re-featuring last season's diamonds (all 1 yr
+# old, ×0.85) still grades well; two seasons old falls off (the recency cliff).
 SHOWCASE_GRADE_THRESHOLDS = [
-    ("S", 270), ("A", 175), ("B", 115), ("C", 70), ("D", 35), ("F", 0),
+    ("S", 700), ("A", 480), ("B", 240), ("C", 120), ("D", 45), ("F", 0),
 ]
 # Grade → flat Floobit payout at season end.
 # Calibrated next-season to read as a strong second income against a season of

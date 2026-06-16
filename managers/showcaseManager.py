@@ -11,9 +11,10 @@ it's one or two cards away from ("Almost"). Curation reads as a hand of cards,
 not a spreadsheet.
 
 Scoring (all weights in constants.py, tune via /simcheck):
-  per-card  = (EDITION × recency + Σ CLASSIFICATION) × (1 + (tier−1) × tierStep)
-  recency   = max(FLOOR, 1 − STEP × seasonsOld)   # newer cards pay more
-  total     = Σ per-card × (1 + min(Σ set bonuses, MAX_SET_BONUS))
+  per-card  = (EDITION + Σ CLASSIFICATION) × recency × (1 + (tier−1) × tierStep)
+  recency   = max(FLOOR, 1 − STEP × seasonsOld)   # newer cards pay more (prestige decays too)
+  setBonus  = baseBonus × meanEditionWeight(set members)  # holo sets < diamond sets
+  total     = Σ per-card × (1 + min(Σ setBonus, MAX_SET_BONUS))
   grade     = first threshold the total meets (high→low) → flat payout
 
 SET_RULES is an extensible list: each rule is a detector that returns the number
@@ -24,10 +25,11 @@ from constants import (
     SHOWCASE_SLOTS,
     SHOWCASE_EDITION_POINTS,
     SHOWCASE_CLASSIFICATION_POINTS,
+    SHOWCASE_RECENCY_BY_AGE,
     SHOWCASE_RECENCY_FLOOR,
-    SHOWCASE_RECENCY_STEP,
     SHOWCASE_TIER_BONUS_PER_LEVEL,
     SHOWCASE_MAX_SET_BONUS,
+    SHOWCASE_SET_EDITION_WEIGHT,
     SHOWCASE_GRADE_THRESHOLDS,
     SHOWCASE_GRADE_PAYOUT,
 )
@@ -36,9 +38,9 @@ from constants import (
 # ─── Per-card value ──────────────────────────────────────────────────────────
 
 def _recency(seasonCreated: int, currentSeason: int) -> float:
-    """Newer cards are worth more; floored so old cards still count."""
+    """Newer cards are worth more; gentle for one season, then a steep cliff."""
     seasonsOld = max(0, (currentSeason or 0) - (seasonCreated or 0))
-    return max(SHOWCASE_RECENCY_FLOOR, 1.0 - SHOWCASE_RECENCY_STEP * seasonsOld)
+    return SHOWCASE_RECENCY_BY_AGE.get(seasonsOld, SHOWCASE_RECENCY_FLOOR)
 
 
 def _classificationPoints(classification) -> int:
@@ -52,65 +54,97 @@ def _cardPoints(card: dict, currentSeason: int) -> float:
     """card = {edition, classification, tier, seasonCreated}."""
     editionPts = SHOWCASE_EDITION_POINTS.get(card.get("edition"), 0)
     rec = _recency(card.get("seasonCreated", currentSeason), currentSeason)
-    base = editionPts * rec + _classificationPoints(card.get("classification"))
+    # Recency decays the WHOLE base — prestige (MVP/champ/all-pro) included — so an
+    # old trophy card doesn't let a collector coast; the showcase rewards hunting
+    # for new cards every season.
+    base = (editionPts + _classificationPoints(card.get("classification"))) * rec
     tier = card.get("tier", 1) or 1
     tierMult = 1.0 + (tier - 1) * SHOWCASE_TIER_BONUS_PER_LEVEL
     return base * tierMult
 
 
-# ─── Set detectors (return cards still needed; 0 = active) ───────────────────
+# ─── Set detectors (return (cards-still-needed, member-cards); 0 dist = active) ─
+# Each detector returns how many cards the set still needs AND the cards that form
+# it, so an active set's bonus can be scaled by the edition quality of its members
+# (a holo All-Pro Line is worth a fraction of a diamond one).
 
 def _hasTag(card: dict, tag: str) -> bool:
     c = card.get("classification")
     return bool(c) and tag in c
 
 
+def _editionQuality(members) -> float:
+    """Mean edition-weight of a set's member cards (0..1; all-diamond = 1.0)."""
+    if not members:
+        return 0.0
+    return sum(SHOWCASE_SET_EDITION_WEIGHT.get(c.get("edition"), 0.0)
+               for c in members) / len(members)
+
+
+def _qualityTier(quality: float) -> str:
+    """Qualitative edition tier of an active set, for display."""
+    if quality >= 0.85:
+        return "Diamond"
+    if quality >= 0.55:
+        return "Prismatic"
+    if quality >= 0.30:
+        return "Holo"
+    return "Base"
+
+
 def _distFullSpectrum(cards):
     byPlayer = {}
     for c in cards:
-        byPlayer.setdefault(c.get("playerId"), set()).add(c.get("edition"))
-    best = max((len(eds) for eds in byPlayer.values()), default=0)
-    return max(0, 4 - best)
+        byPlayer.setdefault(c.get("playerId"), {})[c.get("edition")] = c
+    bestCards, bestN = [], 0
+    for edMap in byPlayer.values():
+        if len(edMap) > bestN:
+            bestN, bestCards = len(edMap), list(edMap.values())
+    return max(0, 4 - bestN), bestCards
 
 
 def _distOneClub(cards):
-    counts = {}
+    byTeam = {}
     for c in cards:
         tid = c.get("teamId")
         if tid:
-            counts[tid] = counts.get(tid, 0) + 1
-    return max(0, 6 - max(counts.values(), default=0))
+            byTeam.setdefault(tid, []).append(c)
+    best = max(byTeam.values(), key=len, default=[])
+    return max(0, 6 - len(best)), best
 
 
 def _distChampionSquad(cards):
-    counts = {}
+    byTeam = {}
     for c in cards:
         tid = c.get("teamId")
         if tid and _hasTag(c, "champion"):
-            counts[tid] = counts.get(tid, 0) + 1
-    return max(0, 6 - max(counts.values(), default=0))
+            byTeam.setdefault(tid, []).append(c)
+    best = max(byTeam.values(), key=len, default=[])
+    return max(0, 6 - len(best)), best
 
 
 def _distAllProLine(cards):
-    n = sum(1 for c in cards if _hasTag(c, "all_pro"))
-    return max(0, 5 - n)
+    members = [c for c in cards if _hasTag(c, "all_pro")]
+    return max(0, 5 - len(members)), members
 
 
 def _distHallOfFame(cards):
-    n = sum(1 for c in cards
-            if _hasTag(c, "mvp") or _hasTag(c, "champion") or _hasTag(c, "all_pro"))
-    return max(0, SHOWCASE_SLOTS - n)
+    members = [c for c in cards
+               if _hasTag(c, "mvp") or _hasTag(c, "champion") or _hasTag(c, "all_pro")]
+    return max(0, SHOWCASE_SLOTS - len(members)), members
 
 
 def _distDiamondVault(cards):
-    n = sum(1 for c in cards if c.get("edition") == "diamond")
-    return max(0, SHOWCASE_SLOTS - n)
+    members = [c for c in cards if c.get("edition") == "diamond"]
+    return max(0, SHOWCASE_SLOTS - len(members)), members
 
 
 def _distRainbow(cards):
-    eds = {c.get("edition") for c in cards}
-    present = sum(1 for e in ("base", "holographic", "prismatic", "diamond") if e in eds)
-    return max(0, 4 - present)
+    byEd = {}
+    for c in cards:
+        byEd.setdefault(c.get("edition"), c)
+    present = [byEd[e] for e in ("base", "holographic", "prismatic", "diamond") if e in byEd]
+    return max(0, 4 - len(present)), present
 
 
 # key, name, bonus, detector, and singular/plural units for the "almost" hint
@@ -143,10 +177,15 @@ def evaluate(cards, currentSeason: int) -> dict:
     score = sum(_cardPoints(c, currentSeason) for c in cards)
     active, almost, totalBonus = [], [], 0.0
     for rule in SET_RULES:
-        dist = rule["fn"](cards)
+        dist, members = rule["fn"](cards)
         if dist == 0 and cards:
-            active.append({"key": rule["key"], "name": rule["name"]})
-            totalBonus += rule["bonus"]
+            quality = _editionQuality(members)
+            active.append({
+                "key": rule["key"],
+                "name": rule["name"],
+                "tier": _qualityTier(quality),   # edition tier of the set
+            })
+            totalBonus += rule["bonus"] * quality   # holo sets pay a fraction of diamond sets
         elif cards and 1 <= dist <= 2:
             unit = rule["one"] if dist == 1 else rule["many"]
             almost.append({
