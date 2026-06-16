@@ -3735,10 +3735,15 @@ class Game:
                 houseCall = returnYds >= self.yardsToSafety
             else:
                 houseCall = (self.yardsToSafety + self.play.yardage) <= 0
+            # Blocked-kick text already ends in '!', so start a new sentence rather
+            # than tack on a comma clause (avoids 'BLOCKED!, returned ...').
+            endsBang = text.rstrip().endswith('!')
             if houseCall:
-                text += '. Pick six!' if self.play.isInterception else '. Taken to the house!'
+                tdText = 'Pick six!' if self.play.isInterception else 'Taken to the house!'
+                text += (' ' + tdText) if endsBang else ('. ' + tdText)
             else:
-                text += ', returned {} yard{}'.format(returnYds, '' if returnYds == 1 else 's')
+                ydText = 'returned {} yard{}'.format(returnYds, '' if returnYds == 1 else 's')
+                text += (' Defense ' + ydText + '.') if endsBang else (', ' + ydText)
 
         self.play.playText = text
 
