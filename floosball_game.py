@@ -3283,6 +3283,46 @@ class Game:
         self.yardsToFirstDown = self.gameRules.firstDownDistance
 
 
+    def _resolveDefensiveReturn(self):
+        """After an interception or fumble recovery, the defender runs it back.
+
+        Adjusts self.play.yardage — a return moves the ball toward the giving
+        team's own goal, which is the NEGATIVE direction here (it reduces
+        yardsToSafety) — so the existing turnover branches naturally produce a
+        normal return, a long flip in field position, or a pick-six /
+        scoop-and-score when the return clears the field. SPEED drives the
+        return distance; a speed-scaled breakaway can take it the distance.
+        Sets play.returner / play.returnYardage for play-by-play + WPA. Called
+        once per turnover, before the outcome branches read play.yardage."""
+        from constants import (RETURN_ENABLED, RETURN_BASE_YARDS, RETURN_SPEED_PIVOT,
+                               RETURN_YARDS_PER_SPEED, RETURN_BREAKAWAY_BASE,
+                               RETURN_BREAKAWAY_PER_SPEED, RETURN_BREAKAWAY_MAX)
+        play = self.play
+        if not RETURN_ENABLED:
+            return
+        returner = play.interceptedBy if play.isInterception else (
+            play.forcedFumbleBy or play.tackledBy)
+        if returner is None:
+            return
+        spot = play.yardage  # recovery spot, net from the LOS in the offense's direction
+        gameAttrs = getattr(returner, 'gameAttributes', None)
+        spd = getattr(gameAttrs, 'speed', 75) if gameAttrs else 75
+        mean = max(1.0, RETURN_BASE_YARDS + (spd - RETURN_SPEED_PIVOT) * RETURN_YARDS_PER_SPEED)
+        returnYards = max(0, int(round(np.random.exponential(mean))))
+        # fieldAhead = full distance from the recovery spot to the giving team's
+        # goal line; a return of exactly this is a TD (the defensive-TD branch).
+        fieldAhead = spot + self.yardsToSafety
+        breakChance = min(RETURN_BREAKAWAY_MAX,
+                          RETURN_BREAKAWAY_BASE + max(0, spd - RETURN_SPEED_PIVOT) * RETURN_BREAKAWAY_PER_SPEED)
+        if fieldAhead > 0 and batched_randint(1, 100) <= breakChance:
+            # Breakaway: a long return that may go the distance (clamped → TD).
+            returnYards = randint(min(returnYards + 10, fieldAhead), fieldAhead + 4)
+        returnYards = max(0, min(returnYards, max(0, fieldAhead)))
+        play.returner = returner
+        play.returnYardage = returnYards
+        play.yardage = spot - returnYards
+
+
     def formatPlayText(self):
         self._evaluateClutchChoke()
 
@@ -3595,6 +3635,18 @@ class Game:
                 else:
                     blitzPrefix = 'Blitz! '
                 text = blitzPrefix + text
+
+        # Defensive return tail: append run-back yardage, or call the pick-six /
+        # scoop-and-score. The house-call test mirrors the turnover branch (the ball
+        # reaching the giving team's own goal line). Called before the TD branch sets
+        # play.isTd, so detect the score by field geometry here.
+        returnYds = getattr(self.play, 'returnYardage', 0)
+        if text and returnYds and (self.play.isInterception or self.play.isFumbleLost):
+            houseCall = (self.yardsToSafety + self.play.yardage) <= 0
+            if houseCall:
+                text += '. Pick six!' if self.play.isInterception else '. Taken to the house!'
+            else:
+                text += ', returned {} yard{}'.format(returnYds, '' if returnYds == 1 else 's')
 
         self.play.playText = text
 
@@ -4833,6 +4885,10 @@ class Game:
 
                 # Handle turnovers
                 if self.play.isFumbleLost or self.play.isInterception:
+                    # Defender runs it back — adjusts play.yardage so the outcome
+                    # branches below resolve a normal return, a field-position flip,
+                    # or a pick-six / scoop-and-score.
+                    self._resolveDefensiveReturn()
                     self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
                     self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 2
                     if self.offensiveTeam is self.homeTeam:
@@ -6656,7 +6712,8 @@ class Game:
             defenders = [p for p in defense.rosterDict.values()
                          if p is not None and getattr(p, 'defensivePosition', None) is not None]
             if defenders:
-                playMaker = (getattr(play, 'sackedBy', None) or getattr(play, 'interceptedBy', None)
+                playMaker = (getattr(play, 'returner', None) or getattr(play, 'sackedBy', None)
+                             or getattr(play, 'interceptedBy', None)
                              or getattr(play, 'forcedFumbleBy', None) or getattr(play, 'tackledBy', None))
                 weights = {}
                 for d in defenders:
@@ -9768,7 +9825,14 @@ class Play():
 
                 # Check for interception first (bad throw to covered receiver)
                 if outcomeRoll <= catchProbs['intProb']:
-                    self.yardage = randint(-5, 10)
+                    # Interception caught at the throw's depth (air yards), clamped to
+                    # the end zone (a pick at the goal line → touchback via the turnover
+                    # branch). The defender's run-back is applied later by
+                    # _resolveDefensiveReturn off this recovery spot.
+                    from constants import RETURN_INT_SPOT_BY_DEPTH
+                    _intDepthKey = getattr(self.passType, 'name', str(self.passType))
+                    _intLo, _intHi = RETURN_INT_SPOT_BY_DEPTH.get(_intDepthKey, (0, 8))
+                    self.yardage = min(randint(_intLo, _intHi), self.yardsToEndzone)
                     self.passer.addInterception(self.game.isRegularSeasonGame)
                     self.passer.addMissedPass(self.game.isRegularSeasonGame)
                     self.passer.updateInGameConfidence(-.02)

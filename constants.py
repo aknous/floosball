@@ -508,6 +508,24 @@ QB_SCRAMBLE_FUMBLE_CHANCE = 3         # % a scramble ends in a fumble
 QB_SCRAMBLE_OPEN_RUN_PER_AGILITY = 3.0  # % tuck-and-run chance per agility pt above the threshold
 QB_SCRAMBLE_OPEN_RUN_MAX = 75           # cap on the tuck-and-run chance (% of would-be throwaways)
 
+# ── Defensive returns (INT / fumble run-backs) ──────────────────────────────
+# After a turnover the recovering defender runs it back. Return distance is
+# SPEED-driven (small mean, exponential tail); a speed-scaled breakaway can take
+# it a long way and, if it clears the field, produces a pick-six / scoop-and-score
+# (the existing defensive-TD branch fires off the resulting field position). The
+# geometry self-limits TDs — a house-call needs a near-full-field return. Flip
+# RETURN_ENABLED to disable. Tune the breakaway constants to set the pick-six rate.
+RETURN_ENABLED = True
+RETURN_BASE_YARDS = 5.0          # mean return yards at the speed pivot
+RETURN_SPEED_PIVOT = 80          # speed at which base yards apply
+RETURN_YARDS_PER_SPEED = 0.3     # mean yards added per speed point above the pivot
+RETURN_BREAKAWAY_BASE = 3        # % base breakaway (long return) chance
+RETURN_BREAKAWAY_PER_SPEED = 0.3 # added breakaway % per speed point above the pivot
+RETURN_BREAKAWAY_MAX = 18        # cap on breakaway chance
+RETURN_INT_SPOT_BY_DEPTH = {     # where an INT is caught (air yards), by pass depth
+    'short': (0, 6), 'medium': (4, 14), 'long': (10, 28), 'hailMary': (15, 45),
+}
+
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {
     "slug": "extra_swap",
