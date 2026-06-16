@@ -3296,7 +3296,8 @@ class Game:
         once per turnover, before the outcome branches read play.yardage."""
         from constants import (RETURN_ENABLED, RETURN_BASE_YARDS, RETURN_SPEED_PIVOT,
                                RETURN_YARDS_PER_SPEED, RETURN_BREAKAWAY_BASE,
-                               RETURN_BREAKAWAY_PER_SPEED, RETURN_BREAKAWAY_MAX)
+                               RETURN_BREAKAWAY_PER_SPEED, RETURN_BREAKAWAY_MAX,
+                               RETURN_BREAKAWAY_MEAN)
         play = self.play
         if not RETURN_ENABLED:
             return
@@ -3315,12 +3316,77 @@ class Game:
         breakChance = min(RETURN_BREAKAWAY_MAX,
                           RETURN_BREAKAWAY_BASE + max(0, spd - RETURN_SPEED_PIVOT) * RETURN_BREAKAWAY_PER_SPEED)
         if fieldAhead > 0 and batched_randint(1, 100) <= breakChance:
-            # Breakaway: a long return that may go the distance (clamped → TD).
-            returnYards = randint(min(returnYards + 10, fieldAhead), fieldAhead + 4)
+            # Breakaway: a long return (exponential tail) added on top — only goes
+            # the distance when the recovery was already deep, so TDs stay rare.
+            returnYards += int(round(np.random.exponential(RETURN_BREAKAWAY_MEAN)))
         returnYards = max(0, min(returnYards, max(0, fieldAhead)))
         play.returner = returner
         play.returnYardage = returnYards
         play.yardage = spot - returnYards
+
+
+    def _resolveBlockedKick(self):
+        """A blocked FG or punt is a live ball the defense recovers at the line
+        and may run back. The defense's distance to the kicking team's goal is
+        yardsToSafety, so a punting team (backed up, small yardsToSafety) is far
+        likelier to be taken back for a scoop-and-score than a FG team. Mirrors
+        the defensive-TD path for the score case. Sets play.blockedBy / returner
+        / returnYardage for PBP + WPA, then scores or flips possession and
+        broadcasts; the caller breaks the play loop afterward."""
+        from constants import (RETURN_BASE_YARDS, RETURN_SPEED_PIVOT, RETURN_YARDS_PER_SPEED,
+                               RETURN_BREAKAWAY_BASE, RETURN_BREAKAWAY_PER_SPEED, RETURN_BREAKAWAY_MAX,
+                               RETURN_BREAKAWAY_MEAN)
+        play = self.play
+        self.clockRunning = False
+        self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
+        defenders = [p for p in self.defensiveTeam.rosterDict.values()
+                     if p is not None and getattr(p, 'defensivePosition', None) is not None]
+        play.blockedBy = max(defenders, key=lambda d: float(getattr(d, 'defensiveRating', 60) or 60),
+                             default=None) if defenders else None
+        returner = max(defenders, key=lambda d: getattr(getattr(d, 'gameAttributes', None), 'speed', 70),
+                       default=None) if defenders else None
+        play.returner = returner
+
+        # Recovered at the line; run it back toward the kicking team's own goal.
+        spd = getattr(getattr(returner, 'gameAttributes', None), 'speed', 72) if returner else 72
+        mean = max(1.0, RETURN_BASE_YARDS + (spd - RETURN_SPEED_PIVOT) * RETURN_YARDS_PER_SPEED)
+        returnYards = max(0, int(round(np.random.exponential(mean))))
+        fieldAhead = self.yardsToSafety
+        breakChance = min(RETURN_BREAKAWAY_MAX,
+                          RETURN_BREAKAWAY_BASE + max(0, spd - RETURN_SPEED_PIVOT) * RETURN_BREAKAWAY_PER_SPEED)
+        if fieldAhead > 0 and batched_randint(1, 100) <= breakChance:
+            returnYards += int(round(np.random.exponential(RETURN_BREAKAWAY_MEAN)))
+        returnYards = max(0, min(returnYards, max(0, fieldAhead)))
+        play.returnYardage = returnYards
+
+        self.formatPlayText()
+        self.gameFeed.insert(0, {'play': play})
+        self.highlights.insert(0, {'play': play})
+        self.leagueHighlights.insert(0, {'play': play})
+
+        if fieldAhead > 0 and returnYards >= fieldAhead:
+            # Scoop-and-score (mirrors the defensive-TD branch; receiving team
+            # starts at its own 20 → yardsToEndzone 80).
+            self._addScore(self.defensiveTeam, 6)
+            self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
+            play.playResult = PlayResult.Touchdown
+            self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 3
+            play.isTd = True
+            play.scoreChange = True
+            play.homeTeamScore = self.homeScore
+            play.awayTeamScore = self.awayScore
+            if self.checkOvertimeEnd():
+                self.broadcastGameState(includeLastPlay=True)
+                return
+            self.broadcastGameState(includeLastPlay=True)
+            if self._shouldGoForTwo(self.defensiveTeam):
+                self._simulate2PointConversionPlay(self.defensiveTeam, self.offensiveTeam)
+            else:
+                self._simulateExtraPointPlay(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
+            self.turnover(self.defensiveTeam, self.offensiveTeam, 80)
+        else:
+            self.broadcastGameState(includeLastPlay=True)
+            self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety - returnYards)
 
 
     def formatPlayText(self):
@@ -3596,7 +3662,11 @@ class Game:
                         text = choice(midIncompleteList).format(self.play.passer.name, self.play.receiver.name)
         elif self.play.playType == PlayType.FieldGoal:
             kickerName = self.play.kicker.name
-            if self.play.isFgGood:
+            if getattr(self.play, 'isFgBlocked', False):
+                blockerName = getattr(getattr(self.play, 'blockedBy', None), 'name', None)
+                text = (f'{self.play.fgDistance}yd Field Goal by {kickerName} is BLOCKED by {blockerName}!'
+                        if blockerName else f'{self.play.fgDistance}yd Field Goal by {kickerName} is BLOCKED!')
+            elif self.play.isFgGood:
                 text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is good'
             else:
                 text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is no good'
@@ -3609,7 +3679,12 @@ class Game:
         elif self.play.playType is PlayType.Punt:
             punter = self.play.offense.rosterDict.get('k')
             punterName = punter.name if punter else 'Punter'
-            text = '{} punts'.format(punterName)
+            if getattr(self.play, 'isPuntBlocked', False):
+                blockerName = getattr(getattr(self.play, 'blockedBy', None), 'name', None)
+                text = ('{} punt is BLOCKED by {}!'.format(punterName, blockerName)
+                        if blockerName else '{} punt is BLOCKED!'.format(punterName))
+            else:
+                text = '{} punts'.format(punterName)
         elif self.play.playType is PlayType.Spike:
             qb = self.play.offense.rosterDict.get('qb')
             qbName = qb.name if qb else 'QB'
@@ -3641,8 +3716,15 @@ class Game:
         # reaching the giving team's own goal line). Called before the TD branch sets
         # play.isTd, so detect the score by field geometry here.
         returnYds = getattr(self.play, 'returnYardage', 0)
-        if text and returnYds and (self.play.isInterception or self.play.isFumbleLost):
-            houseCall = (self.yardsToSafety + self.play.yardage) <= 0
+        isBlockReturn = getattr(self.play, 'isFgBlocked', False) or getattr(self.play, 'isPuntBlocked', False)
+        if text and returnYds and (self.play.isInterception or self.play.isFumbleLost or isBlockReturn):
+            # House-call test mirrors the resolving branch: for a turnover the ball
+            # reaches the giving team's goal (yardsToSafety + adjusted yardage ≤ 0);
+            # for a blocked kick the return covers yardsToSafety from the line.
+            if isBlockReturn:
+                houseCall = returnYds >= self.yardsToSafety
+            else:
+                houseCall = (self.yardsToSafety + self.play.yardage) <= 0
             if houseCall:
                 text += '. Pick six!' if self.play.isInterception else '. Taken to the house!'
             else:
@@ -4764,6 +4846,13 @@ class Game:
                     self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
                     self.checkTwoMinuteWarning()
 
+                    if getattr(self.play, 'isFgBlocked', False):
+                        # Loose ball — defense recovers, may run it back.
+                        self._resolveBlockedKick()
+                        self._pendingPossessionChange = True
+                        lastPlayFormatted = True
+                        break
+
                     if self.play.isFgGood:
                         self._addScore(self.offensiveTeam, 3)
                         self._applyMomentumEvent(MOMENTUM_FG_MADE, self.offensiveTeam)
@@ -4807,6 +4896,19 @@ class Game:
 
                 if self.play.playType is PlayType.Punt:
                     self.play.playResult = PlayResult.Punt
+                    from constants import PUNT_BLOCK_ENABLED, PUNT_BLOCK_CHANCE
+                    if PUNT_BLOCK_ENABLED and batched_random() * 100 < PUNT_BLOCK_CHANCE:
+                        # Blocked punt — never travels; defense recovers at the line
+                        # (a backed-up punting team is prime scoop-and-score territory).
+                        self.play.isPuntBlocked = True
+                        playDuration = self.calculatePlayDuration(PlayType.Punt, False)
+                        self.consumeGameTime(playDuration)
+                        self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                        self.checkTwoMinuteWarning()
+                        self._resolveBlockedKick()
+                        self._pendingPossessionChange = True
+                        lastPlayFormatted = True
+                        break
                     self._applyMomentumEvent(MOMENTUM_PUNT, self.defensiveTeam)
                     kicker = self.offensiveTeam.rosterDict['k']
                     if kicker is None:
@@ -8358,9 +8460,18 @@ class Play():
 
         probability = round(probability * 100)  # Convert to 5-96% integer range
 
+        # Rare block — the kick never gets off cleanly. Counts as a missed FG for
+        # the kicker; the game loop hands the loose ball to the defense (with a
+        # possible return) via _resolveBlockedKick.
+        from constants import FG_BLOCK_ENABLED, FG_BLOCK_CHANCE
+        self.isFgBlocked = FG_BLOCK_ENABLED and (batched_random() * 100 < FG_BLOCK_CHANCE)
+
         x = batched_randint(1,100)
 
-        if x <= probability:
+        if self.isFgBlocked:
+            self.isFgGood = False
+            self.kicker.addMissedFg(self.fgDistance, self.game.isRegularSeasonGame)
+        elif x <= probability:
             self.isFgGood = True
             self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
             if yardsToFG > self.kicker.gameStatsDict['kicking']['longest']:

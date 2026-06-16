@@ -516,15 +516,30 @@ QB_SCRAMBLE_OPEN_RUN_MAX = 75           # cap on the tuck-and-run chance (% of w
 # geometry self-limits TDs — a house-call needs a near-full-field return. Flip
 # RETURN_ENABLED to disable. Tune the breakaway constants to set the pick-six rate.
 RETURN_ENABLED = True
-RETURN_BASE_YARDS = 5.0          # mean return yards at the speed pivot
+RETURN_BASE_YARDS = 4.0          # mean return yards at the speed pivot
 RETURN_SPEED_PIVOT = 80          # speed at which base yards apply
 RETURN_YARDS_PER_SPEED = 0.3     # mean yards added per speed point above the pivot
-RETURN_BREAKAWAY_BASE = 3        # % base breakaway (long return) chance
-RETURN_BREAKAWAY_PER_SPEED = 0.3 # added breakaway % per speed point above the pivot
-RETURN_BREAKAWAY_MAX = 18        # cap on breakaway chance
+RETURN_BREAKAWAY_BASE = 1.5      # % base breakaway (long return) chance
+RETURN_BREAKAWAY_PER_SPEED = 0.15  # added breakaway % per speed point above the pivot
+RETURN_BREAKAWAY_MAX = 8         # cap on breakaway chance
+RETURN_BREAKAWAY_MEAN = 18       # mean EXTRA yards a breakaway adds (exponential tail);
+                                 # added on top of the base return, then clamped to the
+                                 # field — so a breakaway rarely reaches the end zone
+                                 # unless the recovery was already deep (keeps TDs rare)
 RETURN_INT_SPOT_BY_DEPTH = {     # where an INT is caught (air yards), by pass depth
     'short': (0, 6), 'medium': (4, 14), 'long': (10, 28), 'hailMary': (15, 45),
 }
+
+# ── Blocked kicks (FG / punt) ───────────────────────────────────────────────
+# Rare special-teams blocks. The defense recovers at the line of scrimmage and
+# can run it back (reuses the return model above). Geometry makes blocked-punt
+# scoop-and-scores likelier than blocked FGs — a punting team is backed up, so
+# the return to the end zone is short. Tuned for a handful of blocks per league
+# season; flip the ENABLED flags to disable.
+FG_BLOCK_ENABLED = True
+FG_BLOCK_CHANCE = 0.25     # % of FG attempts blocked
+PUNT_BLOCK_ENABLED = True
+PUNT_BLOCK_CHANCE = 0.1    # % of punts blocked (punts are far more frequent than FGs)
 
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {
