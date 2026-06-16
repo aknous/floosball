@@ -12997,6 +12997,34 @@ def listAchievements(user: _User = Depends(_getCurrentUser)):
         session.close()
 
 
+@app.get("/api/profile")
+@app.get("/api/profile/{userId}")
+def getUserProfile(userId: Optional[int] = None, user: _User = Depends(_getCurrentUser)):
+    """Player profile: permanent overall level (lifetime achievement score) + the
+    per-activity season ranks (primary tiered family's highest tier this season,
+    e.g. 'Oracle II') + a trophy case of capstone/secret unlocks. All derived from
+    achievement data. Own profile when userId is omitted; any user's when given."""
+    from database.connection import get_session
+    from database.models import User as _UserModel
+    from managers import progressionManager
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        targetId = userId if userId is not None else user.id
+        target = session.get(_UserModel, targetId)
+        if target is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        profile = progressionManager.getProfile(session, targetId, currentSeason)
+        profile["username"] = target.username
+        profile["favoriteTeamId"] = getattr(target, "favorite_team_id", None)
+        profile["isSelf"] = (targetId == user.id)
+        profile["season"] = currentSeason
+        return build_success_response(profile)
+    finally:
+        session.close()
+
+
 @app.get("/api/achievements/pending-rewards")
 def listPendingRewards(user: _User = Depends(_getCurrentUser)):
     """List unclaimed pack/powerup rewards the user has earned. Includes canDefer
