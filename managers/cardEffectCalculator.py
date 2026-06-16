@@ -935,6 +935,18 @@ def calculateWeekCardBonuses(
         for eq in firstPassCards
     }
 
+    # The amplifier pre-passes below mutate per-player stat dicts in place.
+    # ctx.weekPlayerStats holds references to caller-owned, shared stat dicts
+    # (built once per snapshot and reused across the live overlay pass and the
+    # week-end banking pass). Mutating them in place leaked the amped values
+    # into the *next* re-derivation of the count — e.g. Doubler stacking 2x
+    # onto an already-doubled count (6 TDs -> 12 live -> 24 at week end).
+    # Deep-copy before amplifying so we only ever mutate our own private copy;
+    # downstream cards still read the amplified values within this calculation.
+    if {"surveyor", "sharpshooter", "doubler"} & equippedNames:
+        import copy
+        ctx.weekPlayerStats = copy.deepcopy(ctx.weekPlayerStats or {})
+
     # Each amplifier's multiplier scales with its upgrade tier (strength, not a
     # flat dividend) — read the base mult from the card's primary, scale by tier.
     def _ampFactor(name, baseMult, paramKey):
