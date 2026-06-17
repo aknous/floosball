@@ -85,10 +85,13 @@ CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for
 
 # Interception model — three independent pick paths in calculateCatchProbability.
 # Each K scales one path's contribution before they combine as independent
-# risks. Tuned so league INT rate lands near the NFL ~2.3% per attempt.
-INT_BAD_READ_K = 0.22    # QB throws into coverage (actual openness × coverage)
-INT_BAD_THROW_K = 0.26   # errant ball (throw quality), gated by defender proximity
-INT_DEF_PLAY_K = 0.08    # above-average DB jumps a contested throw
+# risks. The combined league INT rate is ~linear in these. The prior values
+# (0.22/0.26/0.08) drifted the rate to ~2.9% per attempt (above the NFL ~2.3%
+# target); scaled down ~14% to land near ~2.5% — still a touch above NFL, but
+# back in a realistic band.
+INT_BAD_READ_K = 0.19    # QB throws into coverage (actual openness × coverage)
+INT_BAD_THROW_K = 0.22   # errant ball (throw quality), gated by defender proximity
+INT_DEF_PLAY_K = 0.07    # above-average DB jumps a contested throw
 
 # Clutch/Choke thresholds
 CLUTCH_PRESSURE_THRESHOLD = 50    # Min gamePressure (0-100) for clutch/choke consideration
