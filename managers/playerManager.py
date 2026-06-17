@@ -1208,6 +1208,48 @@ class PlayerManager:
             return 'likely'
         return 'possible'
 
+    def computeCareerStage(self, player) -> str:
+        """Where a player sits on their career arc — the FA-ballot / draft view.
+
+        Anchored to the SAME model that drives a player's actual rating arc
+        (player_development.peakSeason: a jittered ~0.55-0.65 x longevity), so
+        the displayed stage tracks reality rather than a parallel guess:
+
+          - 'developing'      — still climbing toward their peak (upside ahead)
+          - 'prime'           — at/around their peak season (DEV_PRIME_WINDOW
+                                either side); should hold or improve
+          - 'aging'           — past their prime plateau and declining (covers
+                                from just-past-peak through the early seasons
+                                past longevity, where retire odds are modest)
+          - 'near_retirement' — deep past longevity (RETIREMENT_YEARS_PAST_HIGH+,
+                                the ~90% retire-odds zone); runway nearly gone
+          - 'retiring'        — decision locked, will retire this offseason
+
+        The near_retirement boundary reuses RETIREMENT_YEARS_PAST_HIGH so it
+        lines up with computeRetirementOdds' loudest tier; this isn't contract-
+        gated because a signed FA gets a fresh term, so what matters is age, not
+        this-offseason eligibility.
+        """
+        from constants import RETIREMENT_YEARS_PAST_HIGH, DEV_PRIME_WINDOW
+        from player_development import PlayerDevelopment
+
+        if getattr(player, 'willRetire', False):
+            return 'retiring'
+        seasons = getattr(player, 'seasonsPlayed', 0) or 0
+        attrs = getattr(player, 'attributes', None)
+        longevity = getattr(attrs, 'longevity', 99) if attrs else 99
+
+        # Deep past the longevity clock → runway nearly gone, regardless of peak.
+        if seasons - longevity >= RETIREMENT_YEARS_PAST_HIGH:
+            return 'near_retirement'
+
+        peak = PlayerDevelopment.peakSeason(player)
+        if seasons < peak - DEV_PRIME_WINDOW:
+            return 'developing'
+        if seasons <= peak + DEV_PRIME_WINDOW:
+            return 'prime'
+        return 'aging'
+
     def promoteToHallOfFame(self, player: FloosPlayer.Player) -> None:
         """Promote retired player to Hall of Fame. HoFers stay on the
         retiredPlayers list too — load-from-DB routes them into both lists

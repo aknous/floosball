@@ -323,6 +323,41 @@ class Player:
     def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
         pass
 
+    def computeCeilingRating(self):
+        """Projected ceiling rating: what this player's rating would be with every
+        physical skill attribute developed to its potential. Only the physical
+        skill attributes grow via training (PlayerDevelopment develops those);
+        the mental attributes that feed playMaking/xFactor don't, so the ceiling
+        is obtained by re-running the real rating formula with skill attrs raised
+        to their potentials, then restoring live state. Returns an int playerRating
+        (or the current rating if no potential data exists)."""
+        attrs = getattr(self, 'attributes', None)
+        if attrs is None:
+            return int(round(getattr(self, 'playerRating', 0) or 0))
+        # (live attr, potential attr) pairs — the same set PlayerDevelopment grows.
+        pairs = [
+            ('speed', 'potentialSpeed'), ('power', 'potentialPower'),
+            ('agility', 'potentialAgility'), ('reach', 'potentialReach'),
+            ('hands', 'potentialHands'), ('armStrength', 'potentialArmStrength'),
+            ('accuracy', 'potentialAccuracy'), ('legStrength', 'potentialLegStrength'),
+        ]
+        saved = {}
+        try:
+            for base, pot in pairs:
+                cur = getattr(attrs, base, None)
+                potVal = getattr(attrs, pot, None)
+                if cur is not None and potVal and potVal > cur:
+                    saved[base] = cur
+                    setattr(attrs, base, potVal)
+            if not saved:
+                return int(round(getattr(self, 'playerRating', 0) or 0))
+            self.updateRating()
+            return int(round(getattr(self, 'playerRating', 0) or 0))
+        finally:
+            for base, val in saved.items():
+                setattr(attrs, base, val)
+            if saved:
+                self.updateRating()  # restore live ratings
 
     def addPassTd(self, yards, isRegularSeason):
         self.stat_tracker.add_pass_td(yards, isRegularSeason)

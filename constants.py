@@ -35,6 +35,7 @@ MAX_ATTRIBUTE_VALUE = 100
 DEV_PEAK_FRACTION_LOW = 0.55     # peak season ≈ this..HIGH × longevity, jittered per player
 DEV_PEAK_FRACTION_HIGH = 0.65
 DEV_PEAK_SEASON_MIN = 2          # even short-longevity players get a brief rise
+DEV_PRIME_WINDOW = 1             # seasons either side of peak still counted as "prime" (career-stage display)
 # Per-attribute change ranges (min, max) BEFORE devBias / ceiling cap / prospect spread.
 DEV_RISE_RANGE = (-1, 5)         # pre-peak: skews up (devBias added here)
 DEV_PEAK_RANGE = (-2, 2)         # at peak: roughly flat
