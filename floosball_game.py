@@ -3511,7 +3511,7 @@ class Game:
                             text += ', fumbles, {} recover'.format(self.play.defense.abbr)
                     else:
                         text += ', fumbles, {} recovers'.format(self.play.receiver.name)
-                elif self.play.tackledBy and not self.play.isTd:
+                elif self.play.tackledBy and not self.play.isTd and self.play.isInBounds:
                     text += ', tackled by {}'.format(self.play.tackledBy.name)
             elif self.play.playResult is PlayResult.Interception:
                 interceptor = self.play.interceptedBy
@@ -10007,8 +10007,10 @@ class Play():
                         primaryTackler = safetyPlayer  # Safety made the tackle on deep plays
                     # Surface tackler so play text can credit the defender
                     self.tackledBy = primaryTackler
-                    if primaryTackler and batched_randint(1, 100) > 97:
-                        # ~3% chance of fumble on catch
+                    if primaryTackler and self.isInBounds and batched_randint(1, 100) > 97:
+                        # ~3% chance of fumble on catch — only in bounds; a
+                        # receiver who steps out of bounds can't be stripped
+                        # (the play is dead at the boundary).
                         rcvFumbleResist = round(self.receiver.gameAttributes.power * 0.7 + self.receiver.gameAttributes.discipline * 0.3)
                         defStripAbility = 70
                         if hasattr(primaryTackler, 'attributes'):
