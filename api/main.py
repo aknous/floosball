@@ -6121,6 +6121,15 @@ def get_player_rating_history(player_id: int):
             ceiling = player.computeCeilingRating()
         except Exception:
             ceiling = None
+    # The projection is from CURRENT attribute potentials, so a past-peak vet can
+    # have earlier seasons above it (their attributes — and the playmaking/xFactor
+    # terms — were higher then). The ceiling must be at least what they've already
+    # achieved, so floor it at their max plotted rating; the line never sits below
+    # a point.
+    if ceiling is not None and history:
+        maxHist = max((h.get("rating") or 0) for h in history)
+        if maxHist > ceiling:
+            ceiling = maxHist
 
     return build_success_response({
         "playerId": player_id,
