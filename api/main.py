@@ -1012,6 +1012,12 @@ async def get_player(player_id: int, response: Response):
         player_dict['rank'] = player.serviceTime.value if hasattr(player.serviceTime, 'value') else player.serviceTime
         player_dict['number'] = player.currentNumber
         player_dict['ratingValue'] = player.playerRating
+        # Projected ceiling (rating at full skill potential) — drawn as a marker
+        # on the overall rating gauge. Always >= current rating.
+        try:
+            player_dict['ceiling'] = player.computeCeilingRating()
+        except Exception:
+            player_dict['ceiling'] = None
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
         player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
