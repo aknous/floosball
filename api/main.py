@@ -10950,6 +10950,16 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
         # current state (mood) when deciding who to sign; resilience and
         # pressure-handling matter on the margin. Skips missing fields
         # so generated rookies/prospects without personalities don't break.
+        # Two-way archetype (sword/shield icons) — identical logic to the player
+        # hover card, so the ballot only shows the icons for 4+ star offense/
+        # defense players (and never kickers), not for everyone.
+        def _archetype(pl):
+            return PlayerResponseBuilder.classifyArchetype(
+                PlayerResponseBuilder.calculateStarRating(getattr(pl, 'offensiveRating', 0) or 0),
+                PlayerResponseBuilder.calculateStarRating(getattr(pl, 'defensiveRating', 0) or 0),
+                getattr(pl, 'defensivePosition', None) is not None,
+            )
+
         def _mental(pl):
             attrs = getattr(pl, 'attributes', None)
             if attrs is None:
@@ -11012,6 +11022,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 # (an FA gets a fresh term on signing), anchored to the sim's
                 # real peakSeason.
                 "careerStage": pm.computeCareerStage(p),
+                "archetype": _archetype(p),
                 **_mental(p),
             })
 
@@ -11083,6 +11094,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "projectedReason": reason,  # 'walk_year' or 'cut_vote'
                     "currentTeam": team.abbr,
                     "careerStage": pm.computeCareerStage(rp),
+                    "archetype": _archetype(rp),
                     **_mental(rp),
                 })
 
@@ -11112,6 +11124,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "isRookie": False,
                     "isProspect": True,
                     "careerStage": pm.computeCareerStage(p),  # ~always 'developing'
+                    "archetype": _archetype(p),
                     **_mental(p),
                 })
 
