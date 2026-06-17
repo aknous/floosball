@@ -357,6 +357,11 @@ extraLongPassList = [
                     'chucks it into the end zone to',
                 ]
 
+# "into the end zone" asserts the ball reached the end zone — only true on a
+# score. For a hail mary that's caught short and tackled, use the pool without
+# any end-zone claim so the narration matches the result.
+extraLongNonScoringPassList = [p for p in extraLongPassList if 'end zone' not in p]
+
 # Sideline pass text — args: (passer.name, text, receiver.name, yardage)
 sidelineShortPassList = [
                     'quick out to',
@@ -3484,7 +3489,10 @@ class Game:
                 elif self.play.passType is PassType.long:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(longPassList), self.play.receiver.name, self.play.yardage)
                 elif self.play.passType is PassType.hailMary:
-                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(extraLongPassList), self.play.receiver.name, self.play.yardage)
+                    # End-zone phrasing only when it actually scores; a hail mary
+                    # caught short and tackled mustn't claim it reached the end zone.
+                    hmPool = extraLongPassList if self.play.isTd else extraLongNonScoringPassList
+                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(hmPool), self.play.receiver.name, self.play.yardage)
                 else:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(midPassList), self.play.receiver.name, self.play.yardage)
                 # Fumble after catch
