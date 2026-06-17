@@ -10733,6 +10733,27 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
             except Exception as e:
                 logger.warning(f"Coach candidate fetch failed for team {teamId}: {e}")
                 cands = []
+            # Backstop: if the slate is missing while the front office is open
+            # (week >= GM_ACTIVE_WEEK), generate it on demand. Covers a sim that
+            # advanced past week 22 without hitting the generation tick (resume /
+            # fast-catchup / deploy past 22) so the Hire Coach card isn't empty.
+            # Idempotent — only fills the gap, never reshuffles an existing slate.
+            if not cands:
+                try:
+                    from constants import GM_ACTIVE_WEEK
+                    if (sm.currentSeason.currentWeek or 0) >= GM_ACTIVE_WEEK:
+                        sm._generateCoachCandidatesForFA()
+                        cands = (
+                            session.query(CoachCandidate)
+                            .filter(
+                                CoachCandidate.team_id == team.id,
+                                CoachCandidate.season == sm.currentSeason.seasonNumber,
+                            )
+                            .order_by(CoachCandidate.slot.asc())
+                            .all()
+                        )
+                except Exception as e:
+                    logger.warning(f"Lazy coach candidate generation failed for team {teamId}: {e}")
             for cand in cands:
                 c = cand.coach
                 if c is None:

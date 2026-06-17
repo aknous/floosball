@@ -870,12 +870,6 @@ class SeasonManager:
                 # the GM vote threshold doesn't shift if new fans log in
                 # for the first time after the front office opens.
                 self._snapshotActiveFanCounts()
-                # Generate the per-team coach candidate slate so users can
-                # see + vote on potential replacements during the FA window
-                # rather than after the fire resolves. Names of unhired
-                # candidates return to the unused-name pool at hire
-                # resolution, so this isn't a net drain.
-                self._generateCoachCandidatesForFA()
 
             # Open the Hall of Fame ballot: the retiring set is final at week 22,
             # so fans get the longest window (farewell games, playoffs, drafts)
@@ -885,6 +879,12 @@ class SeasonManager:
             # the points safety net. See AWARDS_VOTING_PLAN.md.
             if self.currentSeason.currentWeek >= _GM_ACTIVE_WEEK:
                 self._seedHofBallot()
+                # Coach candidate slate for the hire vote — generate once and
+                # self-heal. Idempotent (skips teams that already have a slate),
+                # so running every week from 22 on means a resume / fast-catchup
+                # / deploy past wk22 still gets the slate instead of leaving the
+                # Hire Coach card empty. Mirrors the HoF ballot seeding above.
+                self._generateCoachCandidatesForFA()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
