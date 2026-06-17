@@ -2487,10 +2487,21 @@ async def get_standings(response: Response):
     try:
         standings_list = []
 
+        # Head-to-head game results for the tiebreaker, built once.
+        from seeding import buildH2HGames
+        from database.connection import get_session
+        sm = floosball_app.seasonManager
+        season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        _session = get_session()
+        try:
+            h2h = buildH2HGames(_session, season)
+        finally:
+            _session.close()
+
         for league in floosball_app.leagueManager.leagues:
             league_dict = {
                 'name': league.name,
-                'standings': LeagueResponseBuilder.buildStandingsResponse(league.teamList)['standings']
+                'standings': LeagueResponseBuilder.buildStandingsResponse(league.teamList, h2h)['standings']
             }
             standings_list.append(league_dict)
 

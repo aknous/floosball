@@ -823,23 +823,33 @@ class LeagueResponseBuilder(ResponseBuilder):
     """Builder for league-wide responses"""
     
     @staticmethod
-    def buildStandingsResponse(teams: List) -> Dict[str, Any]:
-        """Build league standings response"""
+    def buildStandingsResponse(teams: List, h2hGames=None) -> Dict[str, Any]:
+        """Build league standings response.
+
+        Ordered by the SAME tiebreaker chain the playoffs seed on (win% →
+        score differential → head-to-head point diff → points-for →
+        points-against) via seeding.orderTeams, so the board can't show an
+        order that doesn't match how playoffs would actually seed. `h2hGames`
+        (from seeding.buildH2HGames) is only consulted inside a real tie.
+        """
+        from seeding import orderTeams
+        orderedTeams = orderTeams(list(teams), h2hGames or [])
+
         team_standings = []
-        
-        for team in teams:
+        for team in orderedTeams:
             team_dict = TeamResponseBuilder.buildTeamWithRatings(team)
-            # Add standings-specific fields
+            # Surface score differential — it's the first tiebreaker, so it
+            # belongs on the board. Also include points for/against.
+            scoreDiff = team.seasonTeamStats.get('scoreDiff', 0)
+            pointsFor = (team.seasonTeamStats.get('Offense', {}) or {}).get('pts', 0)
             team_dict.update({
-                'pointsFor': team.seasonTeamStats.get('pointsFor', 0),
-                'pointsAgainst': team.seasonTeamStats.get('pointsAgainst', 0),
-                'streak': team.seasonTeamStats.get('streak', 0)
+                'scoreDiff': scoreDiff,
+                'pointsFor': pointsFor,
+                'pointsAgainst': pointsFor - scoreDiff,
+                'streak': team.seasonTeamStats.get('streak', 0),
             })
             team_standings.append(team_dict)
-        
-        # Sort by wins/losses
-        team_standings.sort(key=lambda x: (x['wins'], -x['losses']), reverse=True)
-        
+
         return {
             'standings': team_standings,
             'totalTeams': len(team_standings)
