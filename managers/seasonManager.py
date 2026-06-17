@@ -3848,6 +3848,19 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Failed to award showcase payouts: {e}")
 
+    def _seedTeams(self, teams):
+        """Order teams by the playoff-seeding tiebreaker chain — win% →
+        score differential → head-to-head point differential → points-for →
+        points-against. Shared with the standings board via seeding.orderTeams
+        so the two can't diverge."""
+        from seeding import orderTeams, buildH2HGames
+        season = self.currentSeason.seasonNumber if self.currentSeason else 0
+        try:
+            h2h = buildH2HGames(self.db_session, season)
+        except Exception:
+            h2h = []
+        return orderTeams(list(teams), h2h)
+
     async def _simulatePlayoffRounds(self, resumeFromRound: int = 1, restoredState: Optional[dict] = None) -> None:
         """Simulate all playoff rounds.
 
@@ -3876,14 +3889,14 @@ class SeasonManager:
             playoffTeamsList = []
             playoffsByeTeamList = []
             playoffsNonByeTeamList = []
-            list.sort(league.teamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            league.teamList[:] = self._seedTeams(league.teamList)
 
             playoffTeamsList.extend(league.teamList[:int(len(league.teamList)/2)])
             nonPlayoffTeamList.extend(league.teamList[int(len(league.teamList)/2):])
             playoffsByeTeamList.extend(playoffTeamsList[:2])
             playoffsNonByeTeamList.extend(playoffTeamsList[2:])
-            list.sort(playoffsByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
-            list.sort(playoffsNonByeTeamList, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+            playoffsByeTeamList[:] = self._seedTeams(playoffsByeTeamList)
+            playoffsNonByeTeamList[:] = self._seedTeams(playoffsNonByeTeamList)
 
             # Award top seed Floobits if not already clinched mid-season.
             # Skipped on resume — the bonus already fired and clinchedTopSeed is
@@ -4035,7 +4048,7 @@ class SeasonManager:
                             from managers.teamManager import logPressureDiag
                             logPressureDiag(team, f"playoff_r{currentRound}", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
-                    list.sort(teamsInRound, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+                    teamsInRound[:] = self._seedTeams(teamsInRound)
 
                     hiSeed = 0
                     lowSeed = len(teamsInRound) - 1
@@ -4082,7 +4095,7 @@ class SeasonManager:
                     floosbowlTeams.extend(playoffTeams[league.name])
                 for team in floosbowlTeams:
                     team.leagueChampion = True
-                list.sort(floosbowlTeams, key=lambda team: (team.seasonTeamStats['winPerc'],team.seasonTeamStats['scoreDiff']), reverse=True)
+                floosbowlTeams[:] = self._seedTeams(floosbowlTeams)
                 newGame = FloosGame.Game(
                     floosbowlTeams[0], floosbowlTeams[1],
                     timingManager=self.timingManager,
@@ -8247,13 +8260,10 @@ class SeasonManager:
                 playoffTeamIds = set()
                 leaderboardTop = []
                 if isDay4:
-                    # Determine playoff teams: top half of each league by (winPerc, scoreDiff)
+                    # Determine playoff teams: top half of each league by the
+                    # full seeding tiebreaker chain (win% → scoreDiff → H2H → …).
                     for league in self.leagueManager.leagues:
-                        sortedTeams = sorted(
-                            league.teamList,
-                            key=lambda t: (t.seasonTeamStats.get('winPerc', 0), t.seasonTeamStats.get('scoreDiff', 0)),
-                            reverse=True,
-                        )
+                        sortedTeams = self._seedTeams(league.teamList)
                         cutoff = len(sortedTeams) // 2
                         for t in sortedTeams[:cutoff]:
                             playoffTeamIds.add(t.id)

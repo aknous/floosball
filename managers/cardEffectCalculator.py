@@ -387,6 +387,14 @@ _TRADEOFF_EFFECTS = frozenset({
     "double_down", "last_resort",
 })
 
+# Pure marker / structural cards: they produce no FP of their own — they only
+# amplify or modify OTHER cards. They must never accrue a position-conditional
+# match bonus (which would fabricate a phantom FP row), and Lemons / Conductor
+# must never select or amplify them.
+_NO_OUTPUT_MARKERS = frozenset({
+    "doubler", "surveyor", "sharpshooter", "conductor", "double_down",
+})
+
 
 def _wouldSecondPassTrigger(eq, firstPassBreakdowns: List, ctx) -> bool:
     """Heuristic: would this second-pass card produce non-zero output given
@@ -732,10 +740,12 @@ def _computeCardPass(
         matchedFloobits *= 2
         if matchedMult > 1:
             matchedMult = 1 + (matchedMult - 1) * 2
-    # 3. Check position conditional if matched
+    # 3. Check position conditional if matched. Skip pure-marker cards: they
+    #    produce no output of their own, so a conditional bonus would fabricate
+    #    a phantom FP row (and make them a Lemons/Conductor target).
     conditionalBonus = 0.0
     conditionalLabel = None
-    if isMatch:
+    if isMatch and effectName not in _NO_OUTPUT_MARKERS:
         conditionals = POSITION_CONDITIONALS.get(position, [])
         cardPlayerStats = ctx.weekPlayerStats.get(cardPlayerId, {})
         for cond in conditionals:
@@ -1126,17 +1136,18 @@ def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:
     normalBreakdowns = [b for b in breakdowns if b.effectName not in _TRADEOFF_EFFECTS]
 
     if "double_down" in tradeoffNames and normalBreakdowns:
-        # Multiply the lowest non-zero card's FP payout. Pure upside at
-        # diamond tier. Restrict to flat-FP cards only — FPx and floobits
-        # cards can carry a non-zero totalFP from a match-conditional
-        # bonus, and Lemons grabbing them treated FPx output like FP
-        # (multiplying the conditional FP, ignoring the actual multiplier).
+        # Multiply the lowest-earning card's OWN effect output (primaryFP), not
+        # totalFP. The position-conditional match bonus is a reward for the
+        # depicted player's real-game performance, not part of the card's effect,
+        # so Lemons neither counts it when picking the lowest earner nor
+        # amplifies it. This also excludes pure markers (0 effect output) for
+        # free, and keeps flat-FP only so FPx/floobits cards aren't mistreated.
         ddBreakdown = next((b for b in breakdowns if b.effectName == "double_down"), None)
         multValue = float(ddBreakdown.primaryMult) if ddBreakdown and ddBreakdown.primaryMult else 2.5
-        nonZeroFP = [b for b in normalBreakdowns if b.totalFP > 0 and b.outputType == "fp"]
+        nonZeroFP = [b for b in normalBreakdowns if b.primaryFP > 0 and b.outputType == "fp"]
         if nonZeroFP:
-            lowest = min(nonZeroFP, key=lambda b: b.totalFP)
-            originalFP = lowest.totalFP
+            lowest = min(nonZeroFP, key=lambda b: b.primaryFP)
+            originalFP = lowest.primaryFP
             bonusFP = round(originalFP * (multValue - 1), 1)
             lowest.primaryFP = round(lowest.primaryFP + bonusFP, 1)
             lowest.totalFP = round(lowest.totalFP + bonusFP, 1)
@@ -1183,9 +1194,12 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
             continue
         if b.outputType != "fp":
             continue
-        if b.totalFP <= 0:
+        # Boost the card's own effect output (primaryFP), not totalFP — the
+        # position-conditional performance bonus isn't part of the effect, and
+        # this skips pure markers (0 effect output) for free.
+        if b.primaryFP <= 0:
             continue
-        bonus = round(b.totalFP * (factor - 1.0), 1)
+        bonus = round(b.primaryFP * (factor - 1.0), 1)
         b.primaryFP = round(b.primaryFP + bonus, 1)
         b.totalFP = round(b.totalFP + bonus, 1)
         b.equation = f"{b.equation} +{boostPct}% (Conductor)"

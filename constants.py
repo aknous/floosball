@@ -93,6 +93,13 @@ INT_BAD_READ_K = 0.19    # QB throws into coverage (actual openness × coverage)
 INT_BAD_THROW_K = 0.22   # errant ball (throw quality), gated by defender proximity
 INT_DEF_PLAY_K = 0.07    # above-average DB jumps a contested throw
 
+# Hail mary: a desperation end-zone heave into a crowd should connect only as a
+# rare miracle. The normal two-phase catch model lands a contested deep ball
+# well above that, so the hail-mary catch probability is scaled down to target
+# ~5% completion (a completion = TD, since the ball is thrown to the end zone).
+# Tune up for more forgiving, down for rarer. Calibrated via a multi-season sim.
+HAIL_MARY_COMPLETION_SCALE = 0.18
+
 # Clutch/Choke thresholds
 CLUTCH_PRESSURE_THRESHOLD = 50    # Min gamePressure (0-100) for clutch/choke consideration
 CLUTCH_MODIFIER_THRESHOLD = 2.0   # Min keyPressureMod for clutch

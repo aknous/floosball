@@ -1012,6 +1012,12 @@ async def get_player(player_id: int, response: Response):
         player_dict['rank'] = player.serviceTime.value if hasattr(player.serviceTime, 'value') else player.serviceTime
         player_dict['number'] = player.currentNumber
         player_dict['ratingValue'] = player.playerRating
+        # Projected ceiling (rating at full skill potential) — drawn as a marker
+        # on the overall rating gauge. Always >= current rating.
+        try:
+            player_dict['ceiling'] = player.computeCeilingRating()
+        except Exception:
+            player_dict['ceiling'] = None
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
         player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
@@ -2481,10 +2487,21 @@ async def get_standings(response: Response):
     try:
         standings_list = []
 
+        # Head-to-head game results for the tiebreaker, built once.
+        from seeding import buildH2HGames
+        from database.connection import get_session
+        sm = floosball_app.seasonManager
+        season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        _session = get_session()
+        try:
+            h2h = buildH2HGames(_session, season)
+        finally:
+            _session.close()
+
         for league in floosball_app.leagueManager.leagues:
             league_dict = {
                 'name': league.name,
-                'standings': LeagueResponseBuilder.buildStandingsResponse(league.teamList)['standings']
+                'standings': LeagueResponseBuilder.buildStandingsResponse(league.teamList, h2h)['standings']
             }
             standings_list.append(league_dict)
 
@@ -6155,9 +6172,14 @@ def get_team_retirement_watch(team_id: int):
         raise HTTPException(404, "Team not found")
 
     watch = []
+    # Career stage for every rostered player (developing → prime → aging → ...),
+    # so the roster can show the young end (Developing/Prime) alongside the
+    # retirement badges at the old end.
+    stages = {}
     for position, player in team.rosterDict.items():
         if player is None:
             continue
+        stages[player.id] = pm.computeCareerStage(player)
         risk = pm.computeRetirementRisk(player)
         if risk == 'safe':
             continue
@@ -6180,6 +6202,7 @@ def get_team_retirement_watch(team_id: int):
     return build_success_response({
         "teamId": team_id,
         "watch": watch,
+        "stages": stages,
     })
 
 
@@ -10950,6 +10973,16 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
         # current state (mood) when deciding who to sign; resilience and
         # pressure-handling matter on the margin. Skips missing fields
         # so generated rookies/prospects without personalities don't break.
+        # Two-way archetype (sword/shield icons) — identical logic to the player
+        # hover card, so the ballot only shows the icons for 4+ star offense/
+        # defense players (and never kickers), not for everyone.
+        def _archetype(pl):
+            return PlayerResponseBuilder.classifyArchetype(
+                PlayerResponseBuilder.calculateStarRating(getattr(pl, 'offensiveRating', 0) or 0),
+                PlayerResponseBuilder.calculateStarRating(getattr(pl, 'defensiveRating', 0) or 0),
+                getattr(pl, 'defensivePosition', None) is not None,
+            )
+
         def _mental(pl):
             attrs = getattr(pl, 'attributes', None)
             if attrs is None:
@@ -11012,6 +11045,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 # (an FA gets a fresh term on signing), anchored to the sim's
                 # real peakSeason.
                 "careerStage": pm.computeCareerStage(p),
+                "archetype": _archetype(p),
                 **_mental(p),
             })
 
@@ -11083,6 +11117,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "projectedReason": reason,  # 'walk_year' or 'cut_vote'
                     "currentTeam": team.abbr,
                     "careerStage": pm.computeCareerStage(rp),
+                    "archetype": _archetype(rp),
                     **_mental(rp),
                 })
 
@@ -11112,6 +11147,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "isRookie": False,
                     "isProspect": True,
                     "careerStage": pm.computeCareerStage(p),  # ~always 'developing'
+                    "archetype": _archetype(p),
                     **_mental(p),
                 })
 
