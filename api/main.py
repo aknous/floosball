@@ -6161,9 +6161,14 @@ def get_team_retirement_watch(team_id: int):
         raise HTTPException(404, "Team not found")
 
     watch = []
+    # Career stage for every rostered player (developing → prime → aging → ...),
+    # so the roster can show the young end (Developing/Prime) alongside the
+    # retirement badges at the old end.
+    stages = {}
     for position, player in team.rosterDict.items():
         if player is None:
             continue
+        stages[player.id] = pm.computeCareerStage(player)
         risk = pm.computeRetirementRisk(player)
         if risk == 'safe':
             continue
@@ -6186,6 +6191,7 @@ def get_team_retirement_watch(team_id: int):
     return build_success_response({
         "teamId": team_id,
         "watch": watch,
+        "stages": stages,
     })
 
 
