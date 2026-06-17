@@ -6112,9 +6112,29 @@ def get_player_rating_history(player_id: int):
                 "defensiveRating": getattr(player, 'defensiveRating', None),
             })
 
+    # Projected ceiling — the top rating this player could reach if every skill
+    # attribute developed to its potential. Drawn as a dotted reference line on
+    # the progression chart. Only available for active players (live attrs).
+    ceiling = None
+    if player is not None and hasattr(player, 'computeCeilingRating'):
+        try:
+            ceiling = player.computeCeilingRating()
+        except Exception:
+            ceiling = None
+    # The projection is from CURRENT attribute potentials, so a past-peak vet can
+    # have earlier seasons above it (their attributes — and the playmaking/xFactor
+    # terms — were higher then). The ceiling must be at least what they've already
+    # achieved, so floor it at their max plotted rating; the line never sits below
+    # a point.
+    if ceiling is not None and history:
+        maxHist = max((h.get("rating") or 0) for h in history)
+        if maxHist > ceiling:
+            ceiling = maxHist
+
     return build_success_response({
         "playerId": player_id,
         "history": history,
+        "ceiling": ceiling,
     })
 
 
@@ -10977,6 +10997,8 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 "name": p.name,
                 "position": posName,
                 "rating": round(p.playerRating, 1),
+                "offensiveRating": round(getattr(p, 'offensiveRating', 0) or 0, 1),
+                "defensiveRating": round(getattr(p, 'defensiveRating', 0) or 0, 1),
                 "tier": p.playerTier.name,
                 "performanceRating": perfRating,
                 "ratingDelta": perfRating - overallRating,
@@ -10984,6 +11006,12 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                 "isRookie": p.id in rookieIds,
                 "isProspect": False,
                 "isProjected": False,
+                # Career-arc stage (developing → prime → aging → near_retirement)
+                # so fans can weigh runway, not just rating — and avoid stacking
+                # an already-old roster with another vet near the end. Age-based
+                # (an FA gets a fresh term on signing), anchored to the sim's
+                # real peakSeason.
+                "careerStage": pm.computeCareerStage(p),
                 **_mental(p),
             })
 
@@ -11043,6 +11071,8 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "name": rp.name,
                     "position": posName,
                     "rating": round(rp.playerRating, 1),
+                    "offensiveRating": round(getattr(rp, 'offensiveRating', 0) or 0, 1),
+                    "defensiveRating": round(getattr(rp, 'defensiveRating', 0) or 0, 1),
                     "tier": rp.playerTier.name,
                     "performanceRating": perfRating,
                     "ratingDelta": perfRating - overallRating,
@@ -11052,6 +11082,7 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "isProjected": True,
                     "projectedReason": reason,  # 'walk_year' or 'cut_vote'
                     "currentTeam": team.abbr,
+                    "careerStage": pm.computeCareerStage(rp),
                     **_mental(rp),
                 })
 
@@ -11072,12 +11103,15 @@ def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
                     "name": p.name,
                     "position": posName,
                     "rating": round(p.playerRating, 1),
+                    "offensiveRating": round(getattr(p, 'offensiveRating', 0) or 0, 1),
+                    "defensiveRating": round(getattr(p, 'defensiveRating', 0) or 0, 1),
                     "tier": p.playerTier.name,
                     "performanceRating": perfRating,
                     "ratingDelta": perfRating - overallRating,
                     "stats": None,  # prospects haven't played — no season stats
                     "isRookie": False,
                     "isProspect": True,
+                    "careerStage": pm.computeCareerStage(p),  # ~always 'developing'
                     **_mental(p),
                 })
 
