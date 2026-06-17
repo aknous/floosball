@@ -1942,6 +1942,7 @@ class CardManager:
                 "edition": t.edition,
                 "seasonCreated": t.season_created,
                 "isRookie": t.is_rookie,
+                "classification": t.classification,
                 "effectConfig": t.effect_config,
                 "sellValue": t.sell_value,
                 "buyPrice": buyPrice,
