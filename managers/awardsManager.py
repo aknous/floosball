@@ -37,10 +37,12 @@ class AwardsManager:
     # ── MVP ───────────────────────────────────────────────────────────────────
     def getMvpBallot(self) -> List[Dict]:
         """The eligible MVP ballot: the top AWARD_MVP_BALLOT_SIZE players overall
-        by mvpScore (already the value metric), sorted by mvpScore desc."""
+        by mvpScore (already the value metric), sorted by mvpScore desc. Kickers
+        are excluded — they're All-Pro-eligible at their own slot but realistically
+        never the MVP, and the per-snap WPA rate over-rewards their few snaps."""
         from constants import AWARD_MVP_BALLOT_SIZE
         candidates = self.playerManager._computeMvpCandidates()
-        return candidates[:AWARD_MVP_BALLOT_SIZE]
+        return [c for c in candidates if c.get('position') != 'K'][:AWARD_MVP_BALLOT_SIZE]
 
     def resolveMvp(self, season: int) -> Optional[Dict]:
         """Fan winner if turnout clears quorum, else the top-mvpScore candidate.
