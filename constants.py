@@ -117,8 +117,8 @@ DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tag
 # MVP total value = offenseScore + defValue, where:
 #   offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ
 #   defValue     = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ
-MVP_PERF_WEIGHT = 0.6        # season performance rating (box-score percentile) share of offense score
-MVP_WPA_WEIGHT = 0.4         # offensive WPA share of offense score
+MVP_PERF_WEIGHT = 0.7        # season performance rating (box-score percentile) share of offense score
+MVP_WPA_WEIGHT = 0.3         # per-snap offensive WPA share of offense score
 MVP_DEF_WPA_WEIGHT = 0.7     # defensive WPA share of defensive value (carries coverage box can't see)
 MVP_DEF_BOX_WEIGHT = 0.3     # defensive box-stat share of defensive value (rewards splashy plays)
 
@@ -736,13 +736,19 @@ GM_ACTIVE_WEEK = 22
 # ── Fan-voted awards (MVP & Hall of Fame) — see docs/AWARDS_VOTING_PLAN.md ──
 # Voting is free. Below the quorum (and in fast/sim modes, where no one votes),
 # the awards fall back to the algorithm: value-metric MVP, HoF-points induction.
-AWARD_MVP_QUORUM = 3                # min distinct voters before the fan MVP stands
-AWARD_MVP_BALLOT_PER_POSITION = 3   # top N per position on the MVP ballot
-AWARD_HOF_QUORUM = 3                # min distinct voters before fan induction stands
+AWARD_MVP_QUORUM = 3                # FLOOR for distinct voters before the fan MVP stands
+AWARD_MVP_BALLOT_SIZE = 5   # top N players overall on the MVP ballot (by mvpScore)
+AWARD_HOF_QUORUM = 3                # FLOOR for distinct voters before fan induction stands
+# Quorum scales with engagement: required voters = max(floor, ceil(activeUsers ×
+# this fraction)), where active users = the recent-login + engaged base the
+# anomaly threshold uses (anomalyManager._countActiveUsers).
+AWARD_QUORUM_ACTIVE_FRACTION = 0.20
 AWARD_HOF_BALLOT_PREFILTER = 10     # _computeHofPoints needed to make the ballot (looser than the 22 auto-induct)
 AWARD_HOF_CLASS_CAP = 5             # max inductions per season
 AWARD_HOF_BALLOT_TENURE = 5         # seasons a candidate stays on the ballot before being dropped
 AWARD_HOF_APPROVAL_FRACTION = 0.5   # fraction of HoF voters who must approve to be induct-eligible
+AWARD_HOF_AUTO_INDUCT_POINTS = 40   # below quorum, only auto-induct slam-dunks at/above this _computeHofPoints
+                                    # (multiple MVPs/rings/records). Merely-qualified players (>=22) need fan votes.
 
 # FA ballot
 GM_FA_BALLOT_COST = 15

@@ -1573,7 +1573,6 @@ class TeamManager:
             # Persist as unassigned Coach row
             dbCoach = DBCoach(
                 name=coach.name,
-                team_id=None,
                 seasons_coached=0,
                 offensive_mind=coach.offensiveMind,
                 defensive_mind=coach.defensiveMind,

@@ -381,10 +381,11 @@ class SeasonManager:
         # Simulate regular season
         await self._simulateRegularSeason(resumeFromWeek=resumeFromWeek)
 
-        # Select MVP and the combined All-Pro team (offense + defense) based on
-        # regular-season value.
-        await self._selectSeasonMVP()
-        await self._selectSeasonAllPro()
+        # MVP + All-Pro selection moved to _finishSeasonAfterPlayoffs (after the
+        # bowl) so the fan-voted MVP counts votes cast through the playoffs AND
+        # it runs on the playoff/offseason resume paths too (this call site only
+        # ran on the uninterrupted full-season run). The value metric is
+        # regular-season-only, so the later timing doesn't change the result.
 
         # End-of-regular-season cleanup (unequip cards, etc.)
         self._processEndOfRegularSeason()
@@ -406,6 +407,17 @@ class SeasonManager:
         same tail after finishing the resumed bracket. All steps here run
         once per season (after the bowl), so they're safe on the resume path
         too — they never executed in the interrupted run."""
+        # Select MVP + the combined All-Pro team now that the playoffs are over
+        # and the fan-voted MVP window has closed (votes cast through the
+        # playoffs now count). The value metric is regular-season-only (playoff
+        # box stats / WPA are excluded in _accumulatePostgameStats), so the
+        # candidates are identical to the old regular-season-end timing. Running
+        # here also covers the playoff-resume path, so the Season row gets the
+        # MVP / All-Pro persisted by saveSeasonStats (in _completeSeasonSimulation
+        # below) instead of nulls.
+        await self._selectSeasonMVP()
+        await self._selectSeasonAllPro()
+
         # Award pick-em season prizes after playoffs so all rounds are included
         logger.info("Awarding pick-em season prizes")
         self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
@@ -870,12 +882,6 @@ class SeasonManager:
                 # the GM vote threshold doesn't shift if new fans log in
                 # for the first time after the front office opens.
                 self._snapshotActiveFanCounts()
-                # Generate the per-team coach candidate slate so users can
-                # see + vote on potential replacements during the FA window
-                # rather than after the fire resolves. Names of unhired
-                # candidates return to the unused-name pool at hire
-                # resolution, so this isn't a net drain.
-                self._generateCoachCandidatesForFA()
 
             # Open the Hall of Fame ballot: the retiring set is final at week 22,
             # so fans get the longest window (farewell games, playoffs, drafts)
@@ -885,6 +891,12 @@ class SeasonManager:
             # the points safety net. See AWARDS_VOTING_PLAN.md.
             if self.currentSeason.currentWeek >= _GM_ACTIVE_WEEK:
                 self._seedHofBallot()
+                # Coach candidate slate for the hire vote — generate once and
+                # self-heal. Idempotent (skips teams that already have a slate),
+                # so running every week from 22 on means a resume / fast-catchup
+                # / deploy past wk22 still gets the slate instead of leaving the
+                # Hire Coach card empty. Mirrors the HoF ballot seeding above.
+                self._generateCoachCandidatesForFA()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
@@ -4512,7 +4524,11 @@ class SeasonManager:
                 datetime.datetime.utcnow() + datetime.timedelta(seconds=postBowlWait),
             )
         else:
-            await self._setOffseasonFlow(None, None)
+            # No wait (fast modes / catch-up): still mark the post_bowl phase so
+            # downstream consumers (e.g. the awards HoF window) can tell the
+            # offseason has begun but not yet reached induction. A None target
+            # means _handleOffseason skips the wait and proceeds immediately.
+            await self._setOffseasonFlow('post_bowl', None)
 
         # Broadcast season_end so connected frontends know the season is over
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
@@ -4651,6 +4667,14 @@ class SeasonManager:
         teamManager = self.serviceContainer.getService('team_manager')
         if teamManager:
             teamManager.loadSeasonTeamStats(seasonNumber)
+        # Restore per-player regular-season stats + recompute seasonPerformanceRating
+        # (week 28 = end of the regular season). Without this the MVP/All-Pro ballot
+        # is empty on a playoff resume — every candidate is filtered out because its
+        # performance rating reads 0 — and the season-end MVP/All-Pro selection has
+        # nothing to pick from. Mirrors the mid-regular-season resume restore.
+        playerManager = self.serviceContainer.getService('player_manager')
+        if playerManager:
+            playerManager.loadCurrentSeasonStats(seasonNumber, currentWeek=28)
         if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
             try:
                 self._fillMissingScheduleWeeks(seasonNumber)
@@ -5885,11 +5909,15 @@ class SeasonManager:
     def _recordOffseasonEvent(self, eventType, *, player=None, team=None, detail=None,
                               teamId=None, teamAbbr=None, teamName=None,
                               playerId=None, playerName=None, position=None,
-                              rating=None, tier=None) -> None:
+                              rating=None, tier=None, session=None) -> None:
         """Persist one offseason transaction/announcement for the Season Recap.
         Best-effort + idempotent per (season, eventType, playerId|teamId) so an
         offseason resume/restart never duplicates or breaks the offseason.
-        Pass `player`/`team` objects to auto-extract fields."""
+        Pass `player`/`team` objects to auto-extract fields. Pass `session` to
+        write on an existing open transaction (the caller commits) instead of
+        opening a new one — opening a second SQLite session inside another open
+        write (e.g. HoF induction) self-deadlocks on the single-writer lock and
+        stalls the whole sim task for the 30s busy_timeout."""
         try:
             season = self.currentSeason.seasonNumber if self.currentSeason else 0
             if not season:
@@ -5910,7 +5938,8 @@ class SeasonManager:
                 tier = tier or (t.name if t is not None and hasattr(t, 'name') else tier)
             from database.connection import get_session
             from database.models import SeasonRecapEvent
-            s = get_session()
+            ownSession = session is None
+            s = get_session() if ownSession else session
             try:
                 q = s.query(SeasonRecapEvent).filter_by(season=season, event_type=eventType)
                 q = q.filter_by(player_id=playerId) if playerId is not None else q.filter_by(team_id=teamId)
@@ -5921,9 +5950,13 @@ class SeasonManager:
                     team_name=teamName, player_id=playerId, player_name=playerName,
                     position=position, rating=rating, tier=tier, detail=detail,
                 ))
-                s.commit()
+                if ownSession:
+                    s.commit()
+                else:
+                    s.flush()  # caller's transaction commits — no nested session
             finally:
-                s.close()
+                if ownSession:
+                    s.close()
         except Exception as e:
             logger.warning(f"recap event record failed ({eventType}): {e}")
 
@@ -7381,6 +7414,14 @@ class SeasonManager:
                 voted = am.resolveMvp(season)
                 if voted and voted.get('player') is not None:
                     winner = voted
+                # Freeze the ballot (top-5 candidates) at season end so the voting
+                # view and the post-announcement results show the same players,
+                # even after the offseason resets season stats. Strip the player
+                # object for JSON persistence; stats aren't needed for the results.
+                self.currentSeason.mvpBallot = [
+                    {**{k: v for k, v in c.items() if k != 'player'}, 'stats': []}
+                    for c in am.getMvpBallot()
+                ]
             finally:
                 _s.close()
         except Exception as e:
@@ -10024,11 +10065,10 @@ class SeasonManager:
     # ─── Awards ────────────────────────────────────────────────────────────────
 
     async def _selectSeasonAllPro(self) -> None:
-        """Select the combined All-Pro team for the current season: an offensive
-        squad (top value per offensive slot QB/RB/WR/WR/TE/K) plus a defensive
-        squad (top defensive value per group S/LB/CB/CB/DE). The roster plays
-        both ways, so a dominant two-way star can hold both an offense and a
-        defense slot — they're listed in each."""
+        """Select the All-Pro team for the current season: a single six-player
+        squad (QB/RB/WR/WR/TE/K), the best player at each offensive slot by
+        mvpScore — which already folds in their defensive value, since players
+        play both ways. No separate defensive squad."""
         candidates = self.playerManager._computeMvpCandidates()
         if not candidates:
             logger.warning("Could not determine All-Pro — not enough eligible players")
@@ -10059,21 +10099,8 @@ class SeasonManager:
                     'mvpScore': pick.get('mvpScore'), 'zScore': pick.get('zScore'),
                 })
 
-        # ── Defense: top defensive value per group (S/LB/CB/CB/DE) ──
-        for d in self.playerManager.selectAllDefense():
-            allProList.append({
-                'id': d['id'], 'name': d['name'],
-                'position': d.get('defGroup'), 'side': 'defense',
-                'value': round(float(d.get('defValue', 0.0)), 2),
-                'defGroup': d.get('defGroup'),
-                'team': d['team'], 'teamAbbr': d['teamAbbr'],
-                'teamColor': d['teamColor'], 'teamId': d['teamId'],
-                'ratingStars': d['ratingStars'],
-                'seasonDefWpa': d.get('seasonDefWpa'),
-            })
-
-        # Credit the All-Pro season on every unique honoree (offense or defense)
-        # so the player profile shows a single All-Pro accolade.
+        # Credit the All-Pro season on every honoree so the player profile shows
+        # a single All-Pro accolade.
         for pid in {e['id'] for e in allProList}:
             playerObj = self._defenderById(pid)
             if playerObj is not None:
@@ -10082,8 +10109,8 @@ class SeasonManager:
                 if seasonNum not in playerObj.allProSeasons:
                     playerObj.allProSeasons.append(seasonNum)
 
-        # Flat id union (cards/classification + resume) and the rich team
-        # (offense/defense split) for durable recap rebuild.
+        # Flat id union (cards/classification + resume) and the rich six-player
+        # team for durable recap rebuild.
         self.currentSeason.allProPlayerIds = {e['id'] for e in allProList}
         self.currentSeason.allPro = allProList
         self.currentSeason.allProTeam = [
@@ -10259,6 +10286,11 @@ class SeasonManager:
             if allProTeam:
                 import json
                 db_season.all_pro_team = json.dumps(allProTeam)
+
+            mvpBallot = getattr(self.currentSeason, 'mvpBallot', None)
+            if mvpBallot:
+                import json
+                db_season.mvp_ballot = json.dumps(mvpBallot)
 
             self.db_session.add(db_season)
             self.db_session.commit()

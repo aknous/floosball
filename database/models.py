@@ -805,6 +805,10 @@ class Season(Base):
     # Rich, durable All-Pro team: JSON list of {id, side, position, value} so the
     # recap can rebuild the offense/defense split (the flat id list above can't).
     all_pro_team: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # Frozen MVP ballot: JSON list of the top-5 candidate dicts (no player object)
+    # captured at season end, so the voting view and the post-announcement results
+    # show the same candidates even after the offseason resets season stats.
+    mvp_ballot: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     # Snapshot of per-team active fan counts taken when the Front Office
     # opens (week 22). JSON object: {teamId: activeFanCount}. Used as the
     # GM vote threshold so a fan who logs in for the first time after the

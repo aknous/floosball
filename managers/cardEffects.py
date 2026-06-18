@@ -810,7 +810,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "loyalty_bonus": "+{perStreakFP} FP per win in your favorite team's win streak",
     "windfall": "+{perPlayerFloobits}F per overperforming roster player",
     "rng": "Random +{minFP}–{maxFP} FP each week",
-    "snake_eyes": "FPx based on lowest roster FP: 0 FP=+1.50 · 1-4 FP=+1.05 · 5-9 FP=+0.70 · 10-14 FP=+0.40 · 15-19 FP=+0.15",
+    "snake_eyes": "FPx based on lowest roster FP: 0 FP=+0.75 · 1-4 FP=+0.53 · 5-9 FP=+0.35 · 10-14 FP=+0.20 · 15-19 FP=+0.08",
     "avalanche": "Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing",
     "hedge": "Starts with a {floorFP} FP pool. FP earned by your roster is subtracted from the pool. Pays out whatever remains. Needs a full 6-player roster.",
     "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged.",

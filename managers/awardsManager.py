@@ -32,23 +32,29 @@ class AwardsManager:
         self.lowQuorum = bool(lowQuorum) or os.environ.get('AWARDS_LOW_QUORUM') == '1'
 
     def _quorum(self, default: int) -> int:
-        return 1 if self.lowQuorum else default
+        """Required distinct voters before a fan award stands. Scales with the
+        engaged user base — max(floor, ceil(activeUsers × fraction)) — so a bigger
+        league needs more turnout, while `default` stays the small-league floor.
+        lowQuorum (test modes / AWARDS_LOW_QUORUM) collapses it to 1."""
+        if self.lowQuorum:
+            return 1
+        try:
+            from managers.anomalyManager import _countActiveUsers
+            from constants import AWARD_QUORUM_ACTIVE_FRACTION
+            active = _countActiveUsers(self.session)
+            return max(default, math.ceil(active * AWARD_QUORUM_ACTIVE_FRACTION))
+        except Exception:
+            return default
 
     # ── MVP ───────────────────────────────────────────────────────────────────
     def getMvpBallot(self) -> List[Dict]:
-        """The eligible MVP ballot: top N per position by mvpScore (already the
-        value metric). Candidates come back sorted by mvpScore desc."""
-        from constants import AWARD_MVP_BALLOT_PER_POSITION
+        """The eligible MVP ballot: the top AWARD_MVP_BALLOT_SIZE players overall
+        by mvpScore (already the value metric), sorted by mvpScore desc. Kickers
+        are excluded — they're All-Pro-eligible at their own slot but realistically
+        never the MVP, and the per-snap WPA rate over-rewards their few snaps."""
+        from constants import AWARD_MVP_BALLOT_SIZE
         candidates = self.playerManager._computeMvpCandidates()
-        perPos: Dict[str, int] = {}
-        ballot = []
-        for c in candidates:  # mvpScore-desc order preserved
-            pos = c.get('position')
-            if perPos.get(pos, 0) >= AWARD_MVP_BALLOT_PER_POSITION:
-                continue
-            perPos[pos] = perPos.get(pos, 0) + 1
-            ballot.append(c)
-        return ballot
+        return [c for c in candidates if c.get('position') != 'K'][:AWARD_MVP_BALLOT_SIZE]
 
     def resolveMvp(self, season: int) -> Optional[Dict]:
         """Fan winner if turnout clears quorum, else the top-mvpScore candidate.
@@ -111,13 +117,37 @@ class AwardsManager:
 
     def _induct(self, player, playerId: int, season: int) -> None:
         """Stamp a HoF induction (mirrors playerManager.inductHallOfFame) and
-        mark the ballot entry inducted."""
+        mark the ballot entry inducted. Records the hof_induction recap event so
+        ballot-path inductees show up in the Season Recap's Hall of Fame list +
+        the league feed (the non-ballot safety net already does this)."""
         if player is not None and not getattr(player, 'is_hof', False):
             if player not in self.playerManager.hallOfFame:
                 self.playerManager.hallOfFame.append(player)
             player.is_hof = True
             player.hof_season = season
+            self._recordInductionEvent(player)
         self.ballotRepo.markInducted(playerId, season)
+
+    def _recordInductionEvent(self, player) -> None:
+        """Surface a newly-inducted player in the league feed + Season Recap,
+        matching playerManager.inductHallOfFame's logging."""
+        try:
+            sc = getattr(self.playerManager, 'serviceContainer', None)
+            sm = sc.getService('season_manager') if sc else None
+            if not sm or getattr(sm, 'currentSeason', None) is None:
+                return
+            text = f'{player.name} has been inducted into the Floosball Hall of Fame'
+            if hasattr(sm.currentSeason, 'leagueHighlights'):
+                sm.currentSeason.leagueHighlights.insert(0, {'event': {'text': text}})
+            if hasattr(sm, '_recordOffseasonEvent'):
+                # Write on OUR session (the open HoF-resolution transaction) — a
+                # second session here self-deadlocks SQLite for the 30s timeout.
+                sm._recordOffseasonEvent(
+                    'hof_induction', player=player,
+                    teamName=getattr(player, 'previousTeam', None),
+                    detail=f"{self._pts(player)} pts", session=self.session)
+        except Exception:
+            pass
 
     def resolveHofInductions(self, season: int) -> List[int]:
         """Resolve this offseason's HoF class from the rolling ballot.
@@ -128,7 +158,7 @@ class AwardsManager:
         and drop the non-inducted ballot entries. Returns inducted player IDs.
         """
         from constants import (AWARD_HOF_QUORUM, AWARD_HOF_CLASS_CAP,
-                               AWARD_HOF_APPROVAL_FRACTION)
+                               AWARD_HOF_APPROVAL_FRACTION, AWARD_HOF_AUTO_INDUCT_POINTS)
         active = self.ballotRepo.getActive()
         if not active:
             return []
@@ -163,14 +193,18 @@ class AwardsManager:
                     inducted.append(entry.player_id)
             via = "fan vote"
         else:
-            thresh = self.playerManager.HOF_INDUCT_THRESHOLD
+            # Below quorum: do NOT auto-induct the merely-qualified. Only induct
+            # slam-dunks (>= AWARD_HOF_AUTO_INDUCT_POINTS) — multiple MVPs/rings/
+            # records. Everyone else stays on the rolling ballot for a future
+            # season's fan vote (tenure permitting) rather than getting a free pass.
+            thresh = AWARD_HOF_AUTO_INDUCT_POINTS
             scored = [(e, self._pts(byId.get(e.player_id))) for e in active]
             scored = [(e, pts) for e, pts in scored if pts >= thresh]
             scored.sort(key=lambda x: x[1], reverse=True)
             for entry, _pts in scored[:AWARD_HOF_CLASS_CAP]:
                 self._induct(byId.get(entry.player_id), entry.player_id, season)
                 inducted.append(entry.player_id)
-            via = f"algorithm fallback ({voters} voters < quorum)"
+            via = f"slam-dunk auto-induct ({voters} voters < quorum, pts >= {thresh})"
 
         self.ballotRepo.decrementAndDrop()
         logger.info(f"HoF inductions ({via}): {len(inducted)} inducted, "

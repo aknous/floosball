@@ -74,6 +74,9 @@ def _runPendingMigrations():
             ('all_pro_player_ids', 'TEXT'),
             # Rich All-Pro team (offense+defense split) for durable recap rebuild.
             ('all_pro_team', 'TEXT'),
+            # Frozen MVP ballot (top-5 candidate dicts) captured at season end so
+            # voting + results show the same candidates after stats reset.
+            ('mvp_ballot', 'TEXT'),
             # GM threshold snapshot: per-team active fan count frozen at
             # the front-office open (week 22) so post-week-22 logins
             # don't inflate the threshold mid-vote.

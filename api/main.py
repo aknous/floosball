@@ -2734,6 +2734,7 @@ def _recapAwards(session, sm, target, currentSeason):
     row = session.get(DBSeason, target)
     champion = mvp = None
     allPro = []
+    hofInductees = []
     # Offense slots first (QB/RB/WR/TE/K), then defense (S/LB/CB/DE).
     _ORDER = {'QB': 0, 'RB': 1, 'WR': 2, 'TE': 3, 'K': 4, 'S': 5, 'LB': 6, 'CB': 7, 'DE': 8}
     if row:
@@ -2772,7 +2773,15 @@ def _recapAwards(session, sm, target, currentSeason):
             except Exception:
                 allPro = []
 
-    return {"champion": champion, "mvp": mvp, "allPro": allPro}
+    # Hall of Fame class inducted this season (players stamped hof_season == target).
+    from database.models import Player as DBPlayer
+    for (pid,) in session.query(DBPlayer.id).filter(DBPlayer.hof_season == target).all():
+        stub = _recapPlayerStub(session, pid)
+        if stub:
+            hofInductees.append(stub)
+    hofInductees.sort(key=lambda s: _ORDER.get(s.get('position'), 9))
+
+    return {"champion": champion, "mvp": mvp, "allPro": allPro, "hofInductees": hofInductees}
 
 
 def _recapStandingsByLeague(session, target):
@@ -10733,6 +10742,27 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
             except Exception as e:
                 logger.warning(f"Coach candidate fetch failed for team {teamId}: {e}")
                 cands = []
+            # Backstop: if the slate is missing while the front office is open
+            # (week >= GM_ACTIVE_WEEK), generate it on demand. Covers a sim that
+            # advanced past week 22 without hitting the generation tick (resume /
+            # fast-catchup / deploy past 22) so the Hire Coach card isn't empty.
+            # Idempotent — only fills the gap, never reshuffles an existing slate.
+            if not cands:
+                try:
+                    from constants import GM_ACTIVE_WEEK
+                    if (sm.currentSeason.currentWeek or 0) >= GM_ACTIVE_WEEK:
+                        sm._generateCoachCandidatesForFA()
+                        cands = (
+                            session.query(CoachCandidate)
+                            .filter(
+                                CoachCandidate.team_id == team.id,
+                                CoachCandidate.season == sm.currentSeason.seasonNumber,
+                            )
+                            .order_by(CoachCandidate.slot.asc())
+                            .all()
+                        )
+                except Exception as e:
+                    logger.warning(f"Lazy coach candidate generation failed for team {teamId}: {e}")
             for cand in cands:
                 c = cand.coach
                 if c is None:
@@ -11706,14 +11736,20 @@ def _awardWindows():
     season = sm.currentSeason.seasonNumber
     cw = sm.currentSeason.currentWeek
     phase = getattr(sm, '_offseasonFlowPhase', None)
-    if isinstance(cw, int):
+    # isComplete flips the instant the Floos Bowl ends and is the reliable
+    # offseason signal — currentWeek is an unreliable leftover (32, 0, or the
+    # 'Offseason' text depending on the path), so don't key the offseason off
+    # its type.
+    if not bool(getattr(sm.currentSeason, 'isComplete', False)):
         # In-season: MVP votable from regular-season end through playoffs;
         # HoF votable from week 22 onward.
-        mvpOpen = cw >= REGULAR_SEASON_END_WEEK
-        hofOpen = cw >= GM_ACTIVE_WEEK
+        mvpOpen = isinstance(cw, int) and cw >= REGULAR_SEASON_END_WEEK
+        hofOpen = isinstance(cw, int) and cw >= GM_ACTIVE_WEEK
     else:
-        # Offseason: MVP is already resolved; HoF stays open until induction
-        # (the 'training' phase, last step) runs.
+        # Offseason: MVP is announced at season end (closed); HoF stays open
+        # until induction (the 'training' phase, last step) runs. post_bowl is
+        # set even in the no-wait fast modes so a bare None never reads here as
+        # "already past training" / closed.
         mvpOpen = False
         hofOpen = phase not in ('training', None)
     return season, mvpOpen, hofOpen
@@ -11779,18 +11815,36 @@ def get_mvp_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
     session = get_session()
     try:
         am = _awardsManager(session)
-        ballot = am.getMvpBallot()
-        # Strip the non-serializable Player object, attaching a position-specific
-        # season stat line so voters can compare candidates directly.
-        cleaned = []
-        for c in ballot:
-            entry = {k: v for k, v in c.items() if k != 'player'}
-            entry['stats'] = _mvpStatLine(c.get('player'), c.get('position'))
-            cleaned.append(entry)
+        # Once voting closes, return the FROZEN ballot persisted at season end so
+        # the results show exactly the candidates fans voted on — the live recompute
+        # would drift after the offseason resets season stats.
+        cleaned = None
+        if not mvpOpen:
+            from database.models import Season as _DBSeason
+            _row = session.get(_DBSeason, season)
+            if _row and getattr(_row, 'mvp_ballot', None):
+                try:
+                    import json as _json
+                    cleaned = _json.loads(_row.mvp_ballot)
+                except Exception:
+                    cleaned = None
+        if cleaned is None:
+            ballot = am.getMvpBallot()
+            # Strip the non-serializable Player object, attaching a position-specific
+            # season stat line so voters can compare candidates directly.
+            cleaned = []
+            for c in ballot:
+                entry = {k: v for k, v in c.items() if k != 'player'}
+                entry['stats'] = _mvpStatLine(c.get('player'), c.get('position'))
+                cleaned.append(entry)
         myVote = am.voteRepo.getMvpVote(user.id, season) if user else None
         # Hide the tally WHILE voting is open (no bandwagoning); reveal only once
         # the window has closed and the result is final.
         tally = None if mvpOpen else am.voteRepo.getTally(season, 'mvp')
+        # The resolved winner (set by _selectSeasonMVP after the Floos Bowl) — lets
+        # the UI flip from the voting view to a results view once voting concludes.
+        _sm = floosball_app.seasonManager if floosball_app else None
+        winner = getattr(_sm.currentSeason, 'mvp', None) if _sm and _sm.currentSeason else None
         return build_success_response({
             "season": season,
             "windowOpen": mvpOpen,
@@ -11798,6 +11852,7 @@ def get_mvp_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
             "tally": tally,
             "myVote": myVote,
             "voterCount": am.voteRepo.getVoterCount(season, 'mvp'),
+            "winner": winner,
         })
     finally:
         session.close()
