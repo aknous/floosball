@@ -140,10 +140,12 @@ class AwardsManager:
             if hasattr(sm.currentSeason, 'leagueHighlights'):
                 sm.currentSeason.leagueHighlights.insert(0, {'event': {'text': text}})
             if hasattr(sm, '_recordOffseasonEvent'):
+                # Write on OUR session (the open HoF-resolution transaction) — a
+                # second session here self-deadlocks SQLite for the 30s timeout.
                 sm._recordOffseasonEvent(
                     'hof_induction', player=player,
                     teamName=getattr(player, 'previousTeam', None),
-                    detail=f"{self._pts(player)} pts")
+                    detail=f"{self._pts(player)} pts", session=self.session)
         except Exception:
             pass
 

@@ -5901,11 +5901,15 @@ class SeasonManager:
     def _recordOffseasonEvent(self, eventType, *, player=None, team=None, detail=None,
                               teamId=None, teamAbbr=None, teamName=None,
                               playerId=None, playerName=None, position=None,
-                              rating=None, tier=None) -> None:
+                              rating=None, tier=None, session=None) -> None:
         """Persist one offseason transaction/announcement for the Season Recap.
         Best-effort + idempotent per (season, eventType, playerId|teamId) so an
         offseason resume/restart never duplicates or breaks the offseason.
-        Pass `player`/`team` objects to auto-extract fields."""
+        Pass `player`/`team` objects to auto-extract fields. Pass `session` to
+        write on an existing open transaction (the caller commits) instead of
+        opening a new one — opening a second SQLite session inside another open
+        write (e.g. HoF induction) self-deadlocks on the single-writer lock and
+        stalls the whole sim task for the 30s busy_timeout."""
         try:
             season = self.currentSeason.seasonNumber if self.currentSeason else 0
             if not season:
@@ -5926,7 +5930,8 @@ class SeasonManager:
                 tier = tier or (t.name if t is not None and hasattr(t, 'name') else tier)
             from database.connection import get_session
             from database.models import SeasonRecapEvent
-            s = get_session()
+            ownSession = session is None
+            s = get_session() if ownSession else session
             try:
                 q = s.query(SeasonRecapEvent).filter_by(season=season, event_type=eventType)
                 q = q.filter_by(player_id=playerId) if playerId is not None else q.filter_by(team_id=teamId)
@@ -5937,9 +5942,13 @@ class SeasonManager:
                     team_name=teamName, player_id=playerId, player_name=playerName,
                     position=position, rating=rating, tier=tier, detail=detail,
                 ))
-                s.commit()
+                if ownSession:
+                    s.commit()
+                else:
+                    s.flush()  # caller's transaction commits — no nested session
             finally:
-                s.close()
+                if ownSession:
+                    s.close()
         except Exception as e:
             logger.warning(f"recap event record failed ({eventType}): {e}")
 
