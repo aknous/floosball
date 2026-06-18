@@ -692,6 +692,21 @@ class SeasonManager:
             except Exception as _e:
                 logger.warning(f"Front Office open (retirements) failed: {_e}")
 
+            # HoF ballot seed + coach candidate slate also open at the START of
+            # week GM_ACTIVE_WEEK (with the retirements above), not at week's end —
+            # so the Hall of Fame voting list and the Hire Coach slate are present
+            # the MOMENT retirements are announced. Gated `>= week` (idempotent,
+            # NOT the once-only retirement marker) so a deploy after week 22 still
+            # seeds them; runs AFTER the retirement block so the willRetire set is
+            # already populated (willRetire is persisted, so it survives a redeploy).
+            try:
+                from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
+                if self.currentSeason.currentWeek >= _GM_ACTIVE_WEEK:
+                    self._seedHofBallot()
+                    self._generateCoachCandidatesForFA()
+            except Exception as _e:
+                logger.warning(f"Front Office open (HoF seed / coach slate) failed: {_e}")
+
             for game in range(0,len(self.currentSeason.activeGames)):
                 self.currentSeason.activeGames[game].leagueHighlights = self.currentSeason.leagueHighlights
                 # Refresh ELO from current team values (stale since schedule creation)
@@ -889,27 +904,6 @@ class SeasonManager:
             # current form state — feeds the regression-to-mean weakening
             # in _applyFormState.
             self._updateTeamFormHistory()
-
-            # GM_ACTIVE_WEEK alias for the HoF-seed gate below. Retirement
-            # announcements + the fan-count snapshot now fire at the START of
-            # week 22 (see the Front Office open block earlier in this loop body),
-            # not here at week's end.
-            from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
-
-            # Open the Hall of Fame ballot: the retiring set is final at week 22,
-            # so fans get the longest window (farewell games, playoffs, drafts)
-            # to vote. Runs every week from 22 on (idempotent) rather than only
-            # AT wk22, so a deploy AFTER week 22 still seeds the ballot before the
-            # offseason induction — otherwise the class would skip the cap via
-            # the points safety net. See AWARDS_VOTING_PLAN.md.
-            if self.currentSeason.currentWeek >= _GM_ACTIVE_WEEK:
-                self._seedHofBallot()
-                # Coach candidate slate for the hire vote — generate once and
-                # self-heal. Idempotent (skips teams that already have a slate),
-                # so running every week from 22 on means a resume / fast-catchup
-                # / deploy past wk22 still gets the slate instead of leaving the
-                # Hire Coach card empty. Mirrors the HoF ballot seeding above.
-                self._generateCoachCandidatesForFA()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
