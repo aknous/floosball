@@ -11818,6 +11818,10 @@ def get_mvp_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
         # Hide the tally WHILE voting is open (no bandwagoning); reveal only once
         # the window has closed and the result is final.
         tally = None if mvpOpen else am.voteRepo.getTally(season, 'mvp')
+        # The resolved winner (set by _selectSeasonMVP after the Floos Bowl) — lets
+        # the UI flip from the voting view to a results view once voting concludes.
+        _sm = floosball_app.seasonManager if floosball_app else None
+        winner = getattr(_sm.currentSeason, 'mvp', None) if _sm and _sm.currentSeason else None
         return build_success_response({
             "season": season,
             "windowOpen": mvpOpen,
@@ -11825,6 +11829,7 @@ def get_mvp_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
             "tally": tally,
             "myVote": myVote,
             "voterCount": am.voteRepo.getVoterCount(season, 'mvp'),
+            "winner": winner,
         })
     finally:
         session.close()
