@@ -440,8 +440,21 @@ FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
+# ---- Player career length (longevity = the retirement clock) ----
+# Longevity is a quality-weighted base: a random floor..ceiling plus a bonus that
+# scales with the player's talent, so better players (the ones who keep a roster
+# spot) last longer. Set in playerManager.createPlayer from the talent seed; the
+# flat randint in PlayerAttributes.__init__ is just a fallback. Career length is
+# roughly longevity + 1 (see the retirement bands below).
+LONGEVITY_BASE_MIN = 6              # floor of the random base (was a flat 4-10)
+LONGEVITY_BASE_MAX = 12             # ceiling of the random base
+LONGEVITY_QUALITY_PIVOT = 82       # talent (seed/rating) above which the bonus starts
+LONGEVITY_QUALITY_DIVISOR = 4      # +1 longevity per this many points above the pivot
+LONGEVITY_QUALITY_MAX_BONUS = 4    # cap on the quality bonus
+LONGEVITY_CEILING = 16             # hard cap on total longevity
+
 # ---- Retirement (keyed to yearsPast = seasonsPlayed - longevity) ----
-# `longevity` (randint 4-10 per player) is the intended retirement clock, so we
+# `longevity` (quality-weighted, see above) is the intended retirement clock, so we
 # band on how many seasons a player is PAST it — not absolute seasonsPlayed,
 # which can't grow past league age (a young league would otherwise never retire
 # its vets). These bands are the SINGLE SOURCE OF TRUTH for both the actual roll

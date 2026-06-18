@@ -832,8 +832,24 @@ class PlayerManager:
             except Exception as e:
                 logger.warning(f"Failed to assign personality to new {position.name}: {e}")
 
+            # Quality-weighted career length: a random base + a bonus that scales
+            # with the player's talent seed, so better players (the ones who keep
+            # a roster spot) last longer. Overrides the flat random longevity set
+            # in PlayerAttributes.__init__. See the LONGEVITY_* constants; the
+            # longevity migration script mirrors this formula.
+            attrs = getattr(player, 'attributes', None)
+            if attrs is not None:
+                from constants import (LONGEVITY_BASE_MIN, LONGEVITY_BASE_MAX,
+                                       LONGEVITY_QUALITY_PIVOT, LONGEVITY_QUALITY_DIVISOR,
+                                       LONGEVITY_QUALITY_MAX_BONUS, LONGEVITY_CEILING)
+                quality = (physicalSeed + mentalSeed) / 2.0
+                bonus = min(LONGEVITY_QUALITY_MAX_BONUS,
+                            max(0.0, (quality - LONGEVITY_QUALITY_PIVOT) / LONGEVITY_QUALITY_DIVISOR))
+                attrs.longevity = int(min(LONGEVITY_CEILING,
+                    randint(LONGEVITY_BASE_MIN, LONGEVITY_BASE_MAX) + bonus))
+
         return player
-    
+
     def addToPositionList(self, player: FloosPlayer.Player) -> None:
         """Add player to appropriate position list"""
         if player.position == FloosPlayer.Position.QB:
