@@ -4378,11 +4378,11 @@ def admin_search_players(q: str = Query(..., min_length=1),
     query = q.lower()
     results = []
     for team in floosball_app.teamManager.teams:
-        for p in team.roster:
-            if query in p.name.lower():
+        for p in team.rosterDict.values():
+            if p is not None and query in p.name.lower():
                 results.append({
                     "id": p.id, "name": p.name,
-                    "position": p.position.value if hasattr(p.position, 'value') else p.position,
+                    "position": p.position.name if hasattr(p.position, 'name') else p.position,
                     "positionNum": p.position.value if hasattr(p.position, 'value') else p.position,
                     "rating": round(p.playerRating),
                     "teamId": team.id, "teamName": team.name,
