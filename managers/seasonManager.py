@@ -7414,6 +7414,14 @@ class SeasonManager:
                 voted = am.resolveMvp(season)
                 if voted and voted.get('player') is not None:
                     winner = voted
+                # Freeze the ballot (top-5 candidates) at season end so the voting
+                # view and the post-announcement results show the same players,
+                # even after the offseason resets season stats. Strip the player
+                # object for JSON persistence; stats aren't needed for the results.
+                self.currentSeason.mvpBallot = [
+                    {**{k: v for k, v in c.items() if k != 'player'}, 'stats': []}
+                    for c in am.getMvpBallot()
+                ]
             finally:
                 _s.close()
         except Exception as e:
@@ -10278,6 +10286,11 @@ class SeasonManager:
             if allProTeam:
                 import json
                 db_season.all_pro_team = json.dumps(allProTeam)
+
+            mvpBallot = getattr(self.currentSeason, 'mvpBallot', None)
+            if mvpBallot:
+                import json
+                db_season.mvp_ballot = json.dumps(mvpBallot)
 
             self.db_session.add(db_season)
             self.db_session.commit()

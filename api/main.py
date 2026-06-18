@@ -11815,14 +11815,28 @@ def get_mvp_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
     session = get_session()
     try:
         am = _awardsManager(session)
-        ballot = am.getMvpBallot()
-        # Strip the non-serializable Player object, attaching a position-specific
-        # season stat line so voters can compare candidates directly.
-        cleaned = []
-        for c in ballot:
-            entry = {k: v for k, v in c.items() if k != 'player'}
-            entry['stats'] = _mvpStatLine(c.get('player'), c.get('position'))
-            cleaned.append(entry)
+        # Once voting closes, return the FROZEN ballot persisted at season end so
+        # the results show exactly the candidates fans voted on — the live recompute
+        # would drift after the offseason resets season stats.
+        cleaned = None
+        if not mvpOpen:
+            from database.models import Season as _DBSeason
+            _row = session.get(_DBSeason, season)
+            if _row and getattr(_row, 'mvp_ballot', None):
+                try:
+                    import json as _json
+                    cleaned = _json.loads(_row.mvp_ballot)
+                except Exception:
+                    cleaned = None
+        if cleaned is None:
+            ballot = am.getMvpBallot()
+            # Strip the non-serializable Player object, attaching a position-specific
+            # season stat line so voters can compare candidates directly.
+            cleaned = []
+            for c in ballot:
+                entry = {k: v for k, v in c.items() if k != 'player'}
+                entry['stats'] = _mvpStatLine(c.get('player'), c.get('position'))
+                cleaned.append(entry)
         myVote = am.voteRepo.getMvpVote(user.id, season) if user else None
         # Hide the tally WHILE voting is open (no bandwagoning); reveal only once
         # the window has closed and the result is final.
