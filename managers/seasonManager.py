@@ -381,10 +381,11 @@ class SeasonManager:
         # Simulate regular season
         await self._simulateRegularSeason(resumeFromWeek=resumeFromWeek)
 
-        # Select MVP and the combined All-Pro team (offense + defense) based on
-        # regular-season value.
-        await self._selectSeasonMVP()
-        await self._selectSeasonAllPro()
+        # MVP + All-Pro selection moved to _finishSeasonAfterPlayoffs (after the
+        # bowl) so the fan-voted MVP counts votes cast through the playoffs AND
+        # it runs on the playoff/offseason resume paths too (this call site only
+        # ran on the uninterrupted full-season run). The value metric is
+        # regular-season-only, so the later timing doesn't change the result.
 
         # End-of-regular-season cleanup (unequip cards, etc.)
         self._processEndOfRegularSeason()
@@ -406,6 +407,17 @@ class SeasonManager:
         same tail after finishing the resumed bracket. All steps here run
         once per season (after the bowl), so they're safe on the resume path
         too — they never executed in the interrupted run."""
+        # Select MVP + the combined All-Pro team now that the playoffs are over
+        # and the fan-voted MVP window has closed (votes cast through the
+        # playoffs now count). The value metric is regular-season-only (playoff
+        # box stats / WPA are excluded in _accumulatePostgameStats), so the
+        # candidates are identical to the old regular-season-end timing. Running
+        # here also covers the playoff-resume path, so the Season row gets the
+        # MVP / All-Pro persisted by saveSeasonStats (in _completeSeasonSimulation
+        # below) instead of nulls.
+        await self._selectSeasonMVP()
+        await self._selectSeasonAllPro()
+
         # Award pick-em season prizes after playoffs so all rounds are included
         logger.info("Awarding pick-em season prizes")
         self._awardPickEmSeasonPrizes(self.currentSeason.seasonNumber)
