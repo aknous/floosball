@@ -737,7 +737,7 @@ GM_ACTIVE_WEEK = 22
 # Voting is free. Below the quorum (and in fast/sim modes, where no one votes),
 # the awards fall back to the algorithm: value-metric MVP, HoF-points induction.
 AWARD_MVP_QUORUM = 3                # min distinct voters before the fan MVP stands
-AWARD_MVP_BALLOT_PER_POSITION = 3   # top N per position on the MVP ballot
+AWARD_MVP_BALLOT_SIZE = 5   # top N players overall on the MVP ballot (by mvpScore)
 AWARD_HOF_QUORUM = 3                # min distinct voters before fan induction stands
 AWARD_HOF_BALLOT_PREFILTER = 10     # _computeHofPoints needed to make the ballot (looser than the 22 auto-induct)
 AWARD_HOF_CLASS_CAP = 5             # max inductions per season

@@ -36,19 +36,11 @@ class AwardsManager:
 
     # ── MVP ───────────────────────────────────────────────────────────────────
     def getMvpBallot(self) -> List[Dict]:
-        """The eligible MVP ballot: top N per position by mvpScore (already the
-        value metric). Candidates come back sorted by mvpScore desc."""
-        from constants import AWARD_MVP_BALLOT_PER_POSITION
+        """The eligible MVP ballot: the top AWARD_MVP_BALLOT_SIZE players overall
+        by mvpScore (already the value metric), sorted by mvpScore desc."""
+        from constants import AWARD_MVP_BALLOT_SIZE
         candidates = self.playerManager._computeMvpCandidates()
-        perPos: Dict[str, int] = {}
-        ballot = []
-        for c in candidates:  # mvpScore-desc order preserved
-            pos = c.get('position')
-            if perPos.get(pos, 0) >= AWARD_MVP_BALLOT_PER_POSITION:
-                continue
-            perPos[pos] = perPos.get(pos, 0) + 1
-            ballot.append(c)
-        return ballot
+        return candidates[:AWARD_MVP_BALLOT_SIZE]
 
     def resolveMvp(self, season: int) -> Optional[Dict]:
         """Fan winner if turnout clears quorum, else the top-mvpScore candidate.
