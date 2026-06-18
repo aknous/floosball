@@ -32,7 +32,19 @@ class AwardsManager:
         self.lowQuorum = bool(lowQuorum) or os.environ.get('AWARDS_LOW_QUORUM') == '1'
 
     def _quorum(self, default: int) -> int:
-        return 1 if self.lowQuorum else default
+        """Required distinct voters before a fan award stands. Scales with the
+        engaged user base — max(floor, ceil(activeUsers × fraction)) — so a bigger
+        league needs more turnout, while `default` stays the small-league floor.
+        lowQuorum (test modes / AWARDS_LOW_QUORUM) collapses it to 1."""
+        if self.lowQuorum:
+            return 1
+        try:
+            from managers.anomalyManager import _countActiveUsers
+            from constants import AWARD_QUORUM_ACTIVE_FRACTION
+            active = _countActiveUsers(self.session)
+            return max(default, math.ceil(active * AWARD_QUORUM_ACTIVE_FRACTION))
+        except Exception:
+            return default
 
     # ── MVP ───────────────────────────────────────────────────────────────────
     def getMvpBallot(self) -> List[Dict]:

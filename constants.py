@@ -736,9 +736,13 @@ GM_ACTIVE_WEEK = 22
 # ── Fan-voted awards (MVP & Hall of Fame) — see docs/AWARDS_VOTING_PLAN.md ──
 # Voting is free. Below the quorum (and in fast/sim modes, where no one votes),
 # the awards fall back to the algorithm: value-metric MVP, HoF-points induction.
-AWARD_MVP_QUORUM = 3                # min distinct voters before the fan MVP stands
+AWARD_MVP_QUORUM = 3                # FLOOR for distinct voters before the fan MVP stands
 AWARD_MVP_BALLOT_SIZE = 5   # top N players overall on the MVP ballot (by mvpScore)
-AWARD_HOF_QUORUM = 3                # min distinct voters before fan induction stands
+AWARD_HOF_QUORUM = 3                # FLOOR for distinct voters before fan induction stands
+# Quorum scales with engagement: required voters = max(floor, ceil(activeUsers ×
+# this fraction)), where active users = the recent-login + engaged base the
+# anomaly threshold uses (anomalyManager._countActiveUsers).
+AWARD_QUORUM_ACTIVE_FRACTION = 0.20
 AWARD_HOF_BALLOT_PREFILTER = 10     # _computeHofPoints needed to make the ballot (looser than the 22 auto-induct)
 AWARD_HOF_CLASS_CAP = 5             # max inductions per season
 AWARD_HOF_BALLOT_TENURE = 5         # seasons a candidate stays on the ballot before being dropped
