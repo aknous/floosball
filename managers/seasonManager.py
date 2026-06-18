@@ -660,6 +660,38 @@ class SeasonManager:
             except Exception as _e:
                 logger.warning(f"Could not open FA window mid-season: {_e}")
 
+            # Retirement announcements fire at the START of week GM_ACTIVE_WEEK —
+            # the moment the Front Office opens — so fans don't burn resign votes
+            # on players who'll retire and have time to plan FA-ballot replacements.
+            # Gated `>= week` + a persisted once-per-season marker (the fan-count
+            # snapshot), NOT `== week`, so a restart/deploy at or after week 22
+            # still fires it (on the replayed week 22 or the next week) without
+            # re-rolling retirements. _evaluateRetirementCandidates re-rolls every
+            # not-yet-flagged player, so running it more than once per season would
+            # inflate the retiring set — the marker prevents that.
+            try:
+                from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
+                if self.currentSeason.currentWeek >= _GM_ACTIVE_WEEK and not self._frontOfficeProcessed():
+                    self._evaluateRetirementCandidates()
+                    # Retire long-tenured free agents now too (preIncrement=True
+                    # anticipates the offseason FA-years bump) so the FA pool is
+                    # FINALIZED at front-office open — retirees gone, not just
+                    # flagged. With rostered retirements flagged and the rookie
+                    # class known since season start, the supply picture is complete.
+                    faHighlights = self.currentSeason.leagueHighlights if hasattr(self.currentSeason, 'leagueHighlights') else []
+                    self.playerManager._processFreeAgentRetirements(
+                        self.currentSeason.seasonNumber, faHighlights, preIncrement=True
+                    )
+                    # Top up any thin position into the FA pool BEFORE fans ballot
+                    # the FA draft (so they can rank the new players).
+                    self._ensurePositionSupply(reason='week-22 supply check')
+                    # Snapshot per-team active fan counts at this moment (also the
+                    # once-per-season marker above) so the GM vote threshold doesn't
+                    # shift as new fans log in after the front office opens.
+                    self._snapshotActiveFanCounts()
+            except Exception as _e:
+                logger.warning(f"Front Office open (retirements) failed: {_e}")
+
             for game in range(0,len(self.currentSeason.activeGames)):
                 self.currentSeason.activeGames[game].leagueHighlights = self.currentSeason.leagueHighlights
                 # Refresh ELO from current team values (stale since schedule creation)
@@ -858,30 +890,11 @@ class SeasonManager:
             # in _applyFormState.
             self._updateTeamFormHistory()
 
-            # Retirement announcements fire when the Front Office opens
-            # (GM_ACTIVE_WEEK) so users don't burn resign votes on players
-            # who are ultimately going to retire — and have time to plan
-            # FA-ballot replacements before the offseason kicks in.
+            # GM_ACTIVE_WEEK alias for the HoF-seed gate below. Retirement
+            # announcements + the fan-count snapshot now fire at the START of
+            # week 22 (see the Front Office open block earlier in this loop body),
+            # not here at week's end.
             from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
-            if self.currentSeason.currentWeek == _GM_ACTIVE_WEEK:
-                self._evaluateRetirementCandidates()
-                # Retire long-tenured free agents now too (preIncrement=True
-                # anticipates the offseason FA-years bump) so the FA pool is
-                # FINALIZED by week 22 — retirees gone, not just flagged. With
-                # rostered retirements flagged and the rookie class known since
-                # season start, the supply picture is now complete.
-                faHighlights = self.currentSeason.leagueHighlights if hasattr(self.currentSeason, 'leagueHighlights') else []
-                self.playerManager._processFreeAgentRetirements(
-                    self.currentSeason.seasonNumber, faHighlights, preIncrement=True
-                )
-                # With all retirements accounted for, top up any thin position
-                # into the FA pool now so the gaps are filled BEFORE fans ballot
-                # the FA draft (they can rank the new players).
-                self._ensurePositionSupply(reason='week-22 supply check')
-                # Snapshot per-team active fan counts at this moment so
-                # the GM vote threshold doesn't shift if new fans log in
-                # for the first time after the front office opens.
-                self._snapshotActiveFanCounts()
 
             # Open the Hall of Fame ballot: the retiring set is final at week 22,
             # so fans get the longest window (farewell games, playoffs, drafts)
@@ -6275,6 +6288,29 @@ class SeasonManager:
                 logger.warning(f"Name pool save after candidate gen failed: {e}")
         except Exception as e:
             logger.warning(f"FA coach candidate pre-generation failed: {e}")
+
+    def _frontOfficeProcessed(self) -> bool:
+        """Has the week-GM_ACTIVE_WEEK Front Office open already run this season?
+
+        Keyed off the persisted per-team fan-count snapshot (the open block's
+        final step) on the season row, so a restart or deploy at/after week 22
+        won't re-run the block and re-roll retirements. Returns False (meaning
+        "run it") when the snapshot isn't set yet — including a zero-active-user
+        league, where the snapshot is still written as an empty JSON object.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE) or not self.currentSeason:
+            return False
+        try:
+            from database.connection import get_session as _getSession
+            from database.models import Season as DBSeason
+            session = _getSession()
+            try:
+                row = session.get(DBSeason, self.currentSeason.seasonNumber)
+                return bool(row and row.front_office_fan_snapshot)
+            finally:
+                session.close()
+        except Exception:
+            return False
 
     def _snapshotActiveFanCounts(self) -> None:
         """Freeze per-team active fan counts at front office open (week 22).
