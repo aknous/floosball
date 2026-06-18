@@ -4512,7 +4512,11 @@ class SeasonManager:
                 datetime.datetime.utcnow() + datetime.timedelta(seconds=postBowlWait),
             )
         else:
-            await self._setOffseasonFlow(None, None)
+            # No wait (fast modes / catch-up): still mark the post_bowl phase so
+            # downstream consumers (e.g. the awards HoF window) can tell the
+            # offseason has begun but not yet reached induction. A None target
+            # means _handleOffseason skips the wait and proceeds immediately.
+            await self._setOffseasonFlow('post_bowl', None)
 
         # Broadcast season_end so connected frontends know the season is over
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():

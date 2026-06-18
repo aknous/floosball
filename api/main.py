@@ -11727,14 +11727,20 @@ def _awardWindows():
     season = sm.currentSeason.seasonNumber
     cw = sm.currentSeason.currentWeek
     phase = getattr(sm, '_offseasonFlowPhase', None)
-    if isinstance(cw, int):
+    # isComplete flips the instant the Floos Bowl ends and is the reliable
+    # offseason signal — currentWeek is an unreliable leftover (32, 0, or the
+    # 'Offseason' text depending on the path), so don't key the offseason off
+    # its type.
+    if not bool(getattr(sm.currentSeason, 'isComplete', False)):
         # In-season: MVP votable from regular-season end through playoffs;
         # HoF votable from week 22 onward.
-        mvpOpen = cw >= REGULAR_SEASON_END_WEEK
-        hofOpen = cw >= GM_ACTIVE_WEEK
+        mvpOpen = isinstance(cw, int) and cw >= REGULAR_SEASON_END_WEEK
+        hofOpen = isinstance(cw, int) and cw >= GM_ACTIVE_WEEK
     else:
-        # Offseason: MVP is already resolved; HoF stays open until induction
-        # (the 'training' phase, last step) runs.
+        # Offseason: MVP is announced at season end (closed); HoF stays open
+        # until induction (the 'training' phase, last step) runs. post_bowl is
+        # set even in the no-wait fast modes so a bare None never reads here as
+        # "already past training" / closed.
         mvpOpen = False
         hofOpen = phase not in ('training', None)
     return season, mvpOpen, hofOpen
