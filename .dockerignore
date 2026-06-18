@@ -5,6 +5,14 @@ __pycache__
 *.pyc
 data/*.db*
 data/avatars/
+# Local test / backup / scratch data — never ship to the image. The prod DB
+# lives on the Fly volume mounted at /data (DATABASE_DIR=/data), not the build
+# context, so the repo data/ dir is dev-only. These dirs were ~1.5GB.
+data/backups/
+data/awardstest/
+data/simtest/
+data/**/*.db*
+**/.DS_Store
 logs/
 legacy/
 tests/
