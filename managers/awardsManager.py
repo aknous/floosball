@@ -105,13 +105,35 @@ class AwardsManager:
 
     def _induct(self, player, playerId: int, season: int) -> None:
         """Stamp a HoF induction (mirrors playerManager.inductHallOfFame) and
-        mark the ballot entry inducted."""
+        mark the ballot entry inducted. Records the hof_induction recap event so
+        ballot-path inductees show up in the Season Recap's Hall of Fame list +
+        the league feed (the non-ballot safety net already does this)."""
         if player is not None and not getattr(player, 'is_hof', False):
             if player not in self.playerManager.hallOfFame:
                 self.playerManager.hallOfFame.append(player)
             player.is_hof = True
             player.hof_season = season
+            self._recordInductionEvent(player)
         self.ballotRepo.markInducted(playerId, season)
+
+    def _recordInductionEvent(self, player) -> None:
+        """Surface a newly-inducted player in the league feed + Season Recap,
+        matching playerManager.inductHallOfFame's logging."""
+        try:
+            sc = getattr(self.playerManager, 'serviceContainer', None)
+            sm = sc.getService('season_manager') if sc else None
+            if not sm or getattr(sm, 'currentSeason', None) is None:
+                return
+            text = f'{player.name} has been inducted into the Floosball Hall of Fame'
+            if hasattr(sm.currentSeason, 'leagueHighlights'):
+                sm.currentSeason.leagueHighlights.insert(0, {'event': {'text': text}})
+            if hasattr(sm, '_recordOffseasonEvent'):
+                sm._recordOffseasonEvent(
+                    'hof_induction', player=player,
+                    teamName=getattr(player, 'previousTeam', None),
+                    detail=f"{self._pts(player)} pts")
+        except Exception:
+            pass
 
     def resolveHofInductions(self, season: int) -> List[int]:
         """Resolve this offseason's HoF class from the rolling ballot.
@@ -122,7 +144,7 @@ class AwardsManager:
         and drop the non-inducted ballot entries. Returns inducted player IDs.
         """
         from constants import (AWARD_HOF_QUORUM, AWARD_HOF_CLASS_CAP,
-                               AWARD_HOF_APPROVAL_FRACTION)
+                               AWARD_HOF_APPROVAL_FRACTION, AWARD_HOF_AUTO_INDUCT_POINTS)
         active = self.ballotRepo.getActive()
         if not active:
             return []
@@ -157,14 +179,18 @@ class AwardsManager:
                     inducted.append(entry.player_id)
             via = "fan vote"
         else:
-            thresh = self.playerManager.HOF_INDUCT_THRESHOLD
+            # Below quorum: do NOT auto-induct the merely-qualified. Only induct
+            # slam-dunks (>= AWARD_HOF_AUTO_INDUCT_POINTS) — multiple MVPs/rings/
+            # records. Everyone else stays on the rolling ballot for a future
+            # season's fan vote (tenure permitting) rather than getting a free pass.
+            thresh = AWARD_HOF_AUTO_INDUCT_POINTS
             scored = [(e, self._pts(byId.get(e.player_id))) for e in active]
             scored = [(e, pts) for e, pts in scored if pts >= thresh]
             scored.sort(key=lambda x: x[1], reverse=True)
             for entry, _pts in scored[:AWARD_HOF_CLASS_CAP]:
                 self._induct(byId.get(entry.player_id), entry.player_id, season)
                 inducted.append(entry.player_id)
-            via = f"algorithm fallback ({voters} voters < quorum)"
+            via = f"slam-dunk auto-induct ({voters} voters < quorum, pts >= {thresh})"
 
         self.ballotRepo.decrementAndDrop()
         logger.info(f"HoF inductions ({via}): {len(inducted)} inducted, "

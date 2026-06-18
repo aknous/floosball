@@ -743,6 +743,8 @@ AWARD_HOF_BALLOT_PREFILTER = 10     # _computeHofPoints needed to make the ballo
 AWARD_HOF_CLASS_CAP = 5             # max inductions per season
 AWARD_HOF_BALLOT_TENURE = 5         # seasons a candidate stays on the ballot before being dropped
 AWARD_HOF_APPROVAL_FRACTION = 0.5   # fraction of HoF voters who must approve to be induct-eligible
+AWARD_HOF_AUTO_INDUCT_POINTS = 40   # below quorum, only auto-induct slam-dunks at/above this _computeHofPoints
+                                    # (multiple MVPs/rings/records). Merely-qualified players (>=22) need fan votes.
 
 # FA ballot
 GM_FA_BALLOT_COST = 15
