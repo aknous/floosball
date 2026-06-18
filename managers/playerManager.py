@@ -2576,19 +2576,28 @@ class PlayerManager:
         return ratings
 
     def _computeMvpCandidates(self) -> List[Dict[str, Any]]:
-        """Compute MVP value: total contribution = offense + defense.
+        """Compute MVP value (offense-only): mvpScore = MVP_PERF_WEIGHT*perfZ +
+        MVP_WPA_WEIGHT*offenseWpaRateZ, where perfZ/offenseWpaRateZ are pooled-std
+        z-scores of the season performance rating and the *per-snap* offensive WPA
+        rate, each measured against the player's own position mean.
 
-        offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ, where
-        perfZ/offenseWpaZ are pooled-std z-scores of the season performance rating
-        and the season offensive WPA, each measured against the player's own
-        position mean (position-neutral). mvpScore = offenseScore + defValue, where
-        defValue is the defensive blend from _computeDefValues (0.7 def-WPA-z +
-        0.3 box-z, pooled within defensive group). A pure-offense star has
-        defValue ~ 0; a dominant two-way player gets both. Sorted by mvpScore desc.
+        Defense is intentionally NOT folded in: defValue is a player's share of
+        their TEAM's defensive WPA, spread across all five on-field defenders, so
+        adding it clustered a whole team's skill players onto the ballot by team
+        defense rather than individual production. WPA is normalized per snap so a
+        team in many high-leverage games can't bank raw volume for everyone.
+        defValue is still computed for the breakdown display but doesn't affect the
+        score. Sorted by mvpScore desc.
         """
         import numpy as np
         from api_response_builders import PlayerResponseBuilder
         from constants import MVP_PERF_WEIGHT, MVP_WPA_WEIGHT
+
+        def wpaRate(p):
+            # Per-snap offensive WPA — a rate, not an accumulated volume, so clutch
+            # play is rewarded without leverage/volume bias.
+            snaps = int(getattr(p, 'seasonWpaSnaps', 0) or 0)
+            return float(getattr(p, 'seasonWpa', 0.0)) / snaps if snaps > 0 else 0.0
 
         positionGroups = {
             'QB': self.activeQbs,
@@ -2610,7 +2619,7 @@ class PlayerManager:
             if len(eligible) < 2:
                 continue
             ratings = [p.seasonPerformanceRating for p in eligible]
-            wpas = [float(getattr(p, 'seasonWpa', 0.0)) for p in eligible]
+            wpas = [wpaRate(p) for p in eligible]
             positionData[position] = (eligible, float(np.mean(ratings)), float(np.mean(wpas)))
             allRatings.extend(ratings)
             allWpas.extend(wpas)
@@ -2628,10 +2637,10 @@ class PlayerManager:
         for position, (eligible, posMean, posWpaMean) in positionData.items():
             for player in eligible:
                 perfZ = (player.seasonPerformanceRating - posMean) / pooledStd
-                wpaZ = (float(getattr(player, 'seasonWpa', 0.0)) - posWpaMean) / pooledWpaStd
+                wpaZ = (wpaRate(player) - posWpaMean) / pooledWpaStd
                 offenseScore = MVP_PERF_WEIGHT * perfZ + MVP_WPA_WEIGHT * wpaZ
-                defValue = defValues.get(player.id, {}).get('defValue', 0.0)
-                mvpScore = offenseScore + defValue
+                defValue = defValues.get(player.id, {}).get('defValue', 0.0)  # display only
+                mvpScore = offenseScore
                 hasTeamObj = hasattr(player.team, 'name')
                 candidates.append({
                     'player': player,

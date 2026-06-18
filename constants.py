@@ -117,8 +117,8 @@ DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tag
 # MVP total value = offenseScore + defValue, where:
 #   offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ
 #   defValue     = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ
-MVP_PERF_WEIGHT = 0.6        # season performance rating (box-score percentile) share of offense score
-MVP_WPA_WEIGHT = 0.4         # offensive WPA share of offense score
+MVP_PERF_WEIGHT = 0.7        # season performance rating (box-score percentile) share of offense score
+MVP_WPA_WEIGHT = 0.3         # per-snap offensive WPA share of offense score
 MVP_DEF_WPA_WEIGHT = 0.7     # defensive WPA share of defensive value (carries coverage box can't see)
 MVP_DEF_BOX_WEIGHT = 0.3     # defensive box-stat share of defensive value (rewards splashy plays)
 
