@@ -10040,11 +10040,10 @@ class SeasonManager:
     # ─── Awards ────────────────────────────────────────────────────────────────
 
     async def _selectSeasonAllPro(self) -> None:
-        """Select the combined All-Pro team for the current season: an offensive
-        squad (top value per offensive slot QB/RB/WR/WR/TE/K) plus a defensive
-        squad (top defensive value per group S/LB/CB/CB/DE). The roster plays
-        both ways, so a dominant two-way star can hold both an offense and a
-        defense slot — they're listed in each."""
+        """Select the All-Pro team for the current season: a single six-player
+        squad (QB/RB/WR/WR/TE/K), the best player at each offensive slot by
+        mvpScore — which already folds in their defensive value, since players
+        play both ways. No separate defensive squad."""
         candidates = self.playerManager._computeMvpCandidates()
         if not candidates:
             logger.warning("Could not determine All-Pro — not enough eligible players")
@@ -10075,21 +10074,8 @@ class SeasonManager:
                     'mvpScore': pick.get('mvpScore'), 'zScore': pick.get('zScore'),
                 })
 
-        # ── Defense: top defensive value per group (S/LB/CB/CB/DE) ──
-        for d in self.playerManager.selectAllDefense():
-            allProList.append({
-                'id': d['id'], 'name': d['name'],
-                'position': d.get('defGroup'), 'side': 'defense',
-                'value': round(float(d.get('defValue', 0.0)), 2),
-                'defGroup': d.get('defGroup'),
-                'team': d['team'], 'teamAbbr': d['teamAbbr'],
-                'teamColor': d['teamColor'], 'teamId': d['teamId'],
-                'ratingStars': d['ratingStars'],
-                'seasonDefWpa': d.get('seasonDefWpa'),
-            })
-
-        # Credit the All-Pro season on every unique honoree (offense or defense)
-        # so the player profile shows a single All-Pro accolade.
+        # Credit the All-Pro season on every honoree so the player profile shows
+        # a single All-Pro accolade.
         for pid in {e['id'] for e in allProList}:
             playerObj = self._defenderById(pid)
             if playerObj is not None:
@@ -10098,8 +10084,8 @@ class SeasonManager:
                 if seasonNum not in playerObj.allProSeasons:
                     playerObj.allProSeasons.append(seasonNum)
 
-        # Flat id union (cards/classification + resume) and the rich team
-        # (offense/defense split) for durable recap rebuild.
+        # Flat id union (cards/classification + resume) and the rich six-player
+        # team for durable recap rebuild.
         self.currentSeason.allProPlayerIds = {e['id'] for e in allProList}
         self.currentSeason.allPro = allProList
         self.currentSeason.allProTeam = [
