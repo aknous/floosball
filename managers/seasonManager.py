@@ -685,6 +685,15 @@ class SeasonManager:
                     # Top up any thin position into the FA pool BEFORE fans ballot
                     # the FA draft (so they can rank the new players).
                     self._ensurePositionSupply(reason='week-22 supply check')
+                    # CRITICAL ordering: commit willRetire (set in-memory above) to
+                    # the DB BEFORE the fan snapshot. The snapshot is the once-per-
+                    # season marker and commits IMMEDIATELY on its own session, but
+                    # willRetire otherwise wouldn't reach the DB until the week-end
+                    # checkpoint (days later in scheduled mode). A redeploy in that
+                    # gap would load will_retire=False for everyone while the marker
+                    # survived and blocked re-rolling — leaving the season with no
+                    # retirements and no way to re-decide them. Persist first.
+                    self.playerManager.savePlayerData()
                     # Snapshot per-team active fan counts at this moment (also the
                     # once-per-season marker above) so the GM vote threshold doesn't
                     # shift as new fans log in after the front office opens.
