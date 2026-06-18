@@ -4667,6 +4667,14 @@ class SeasonManager:
         teamManager = self.serviceContainer.getService('team_manager')
         if teamManager:
             teamManager.loadSeasonTeamStats(seasonNumber)
+        # Restore per-player regular-season stats + recompute seasonPerformanceRating
+        # (week 28 = end of the regular season). Without this the MVP/All-Pro ballot
+        # is empty on a playoff resume — every candidate is filtered out because its
+        # performance rating reads 0 — and the season-end MVP/All-Pro selection has
+        # nothing to pick from. Mirrors the mid-regular-season resume restore.
+        playerManager = self.serviceContainer.getService('player_manager')
+        if playerManager:
+            playerManager.loadCurrentSeasonStats(seasonNumber, currentWeek=28)
         if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
             try:
                 self._fillMissingScheduleWeeks(seasonNumber)
