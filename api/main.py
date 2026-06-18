@@ -2734,6 +2734,7 @@ def _recapAwards(session, sm, target, currentSeason):
     row = session.get(DBSeason, target)
     champion = mvp = None
     allPro = []
+    hofInductees = []
     # Offense slots first (QB/RB/WR/TE/K), then defense (S/LB/CB/DE).
     _ORDER = {'QB': 0, 'RB': 1, 'WR': 2, 'TE': 3, 'K': 4, 'S': 5, 'LB': 6, 'CB': 7, 'DE': 8}
     if row:
@@ -2772,7 +2773,15 @@ def _recapAwards(session, sm, target, currentSeason):
             except Exception:
                 allPro = []
 
-    return {"champion": champion, "mvp": mvp, "allPro": allPro}
+    # Hall of Fame class inducted this season (players stamped hof_season == target).
+    from database.models import Player as DBPlayer
+    for (pid,) in session.query(DBPlayer.id).filter(DBPlayer.hof_season == target).all():
+        stub = _recapPlayerStub(session, pid)
+        if stub:
+            hofInductees.append(stub)
+    hofInductees.sort(key=lambda s: _ORDER.get(s.get('position'), 9))
+
+    return {"champion": champion, "mvp": mvp, "allPro": allPro, "hofInductees": hofInductees}
 
 
 def _recapStandingsByLeague(session, target):
