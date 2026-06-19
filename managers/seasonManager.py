@@ -4615,6 +4615,14 @@ class SeasonManager:
         """
         if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
             return
+        # Persist team season stats (streak/peakStreak now move during playoffs)
+        # so a mid-playoff resume — which reloads team stats from the DB via
+        # loadSeasonTeamStats — keeps the playoff-updated form instead of
+        # reverting to the regular-season-end streak.
+        try:
+            self._saveTeamSeasonStatsToDatabase()
+        except Exception as e:
+            logger.warning(f"Could not persist team season stats during playoffs: {e}")
         try:
             import json
             from database.connection import get_session as _gs
