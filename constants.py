@@ -35,6 +35,7 @@ MAX_ATTRIBUTE_VALUE = 100
 DEV_PEAK_FRACTION_LOW = 0.55     # peak season ≈ this..HIGH × longevity, jittered per player
 DEV_PEAK_FRACTION_HIGH = 0.65
 DEV_PEAK_SEASON_MIN = 2          # even short-longevity players get a brief rise
+DEV_PRIME_WINDOW = 1             # seasons either side of peak still counted as "prime" (career-stage display)
 # Per-attribute change ranges (min, max) BEFORE devBias / ceiling cap / prospect spread.
 DEV_RISE_RANGE = (-1, 5)         # pre-peak: skews up (devBias added here)
 DEV_PEAK_RANGE = (-2, 2)         # at peak: roughly flat
@@ -84,10 +85,20 @@ CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for
 
 # Interception model — three independent pick paths in calculateCatchProbability.
 # Each K scales one path's contribution before they combine as independent
-# risks. Tuned so league INT rate lands near the NFL ~2.3% per attempt.
-INT_BAD_READ_K = 0.22    # QB throws into coverage (actual openness × coverage)
-INT_BAD_THROW_K = 0.26   # errant ball (throw quality), gated by defender proximity
-INT_DEF_PLAY_K = 0.08    # above-average DB jumps a contested throw
+# risks. The combined league INT rate is ~linear in these. The prior values
+# (0.22/0.26/0.08) drifted the rate to ~2.9% per attempt (above the NFL ~2.3%
+# target); scaled down ~14% to land near ~2.5% — still a touch above NFL, but
+# back in a realistic band.
+INT_BAD_READ_K = 0.19    # QB throws into coverage (actual openness × coverage)
+INT_BAD_THROW_K = 0.22   # errant ball (throw quality), gated by defender proximity
+INT_DEF_PLAY_K = 0.07    # above-average DB jumps a contested throw
+
+# Hail mary: a desperation end-zone heave into a crowd should connect only as a
+# rare miracle. The normal two-phase catch model lands a contested deep ball
+# well above that, so the hail-mary catch probability is scaled down to target
+# ~5% completion (a completion = TD, since the ball is thrown to the end zone).
+# Tune up for more forgiving, down for rarer. Calibrated via a multi-season sim.
+HAIL_MARY_COMPLETION_SCALE = 0.18
 
 # Clutch/Choke thresholds
 CLUTCH_PRESSURE_THRESHOLD = 50    # Min gamePressure (0-100) for clutch/choke consideration
@@ -106,8 +117,8 @@ DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tag
 # MVP total value = offenseScore + defValue, where:
 #   offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ
 #   defValue     = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ
-MVP_PERF_WEIGHT = 0.6        # season performance rating (box-score percentile) share of offense score
-MVP_WPA_WEIGHT = 0.4         # offensive WPA share of offense score
+MVP_PERF_WEIGHT = 0.7        # season performance rating (box-score percentile) share of offense score
+MVP_WPA_WEIGHT = 0.3         # per-snap offensive WPA share of offense score
 MVP_DEF_WPA_WEIGHT = 0.7     # defensive WPA share of defensive value (carries coverage box can't see)
 MVP_DEF_BOX_WEIGHT = 0.3     # defensive box-stat share of defensive value (rewards splashy plays)
 
@@ -431,8 +442,21 @@ FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
+# ---- Player career length (longevity = the retirement clock) ----
+# Longevity is a quality-weighted base: a random floor..ceiling plus a bonus that
+# scales with the player's talent, so better players (the ones who keep a roster
+# spot) last longer. Set in playerManager.createPlayer from the talent seed; the
+# flat randint in PlayerAttributes.__init__ is just a fallback. Career length is
+# roughly longevity + 1 (see the retirement bands below).
+LONGEVITY_BASE_MIN = 6              # floor of the random base (was a flat 4-10)
+LONGEVITY_BASE_MAX = 12             # ceiling of the random base
+LONGEVITY_QUALITY_PIVOT = 82       # talent (seed/rating) above which the bonus starts
+LONGEVITY_QUALITY_DIVISOR = 4      # +1 longevity per this many points above the pivot
+LONGEVITY_QUALITY_MAX_BONUS = 4    # cap on the quality bonus
+LONGEVITY_CEILING = 16             # hard cap on total longevity
+
 # ---- Retirement (keyed to yearsPast = seasonsPlayed - longevity) ----
-# `longevity` (randint 4-10 per player) is the intended retirement clock, so we
+# `longevity` (quality-weighted, see above) is the intended retirement clock, so we
 # band on how many seasons a player is PAST it — not absolute seasonsPlayed,
 # which can't grow past league age (a young league would otherwise never retire
 # its vets). These bands are the SINGLE SOURCE OF TRUTH for both the actual roll
@@ -798,13 +822,19 @@ GM_ACTIVE_WEEK = 22
 # ── Fan-voted awards (MVP & Hall of Fame) — see docs/AWARDS_VOTING_PLAN.md ──
 # Voting is free. Below the quorum (and in fast/sim modes, where no one votes),
 # the awards fall back to the algorithm: value-metric MVP, HoF-points induction.
-AWARD_MVP_QUORUM = 3                # min distinct voters before the fan MVP stands
-AWARD_MVP_BALLOT_PER_POSITION = 3   # top N per position on the MVP ballot
-AWARD_HOF_QUORUM = 3                # min distinct voters before fan induction stands
+AWARD_MVP_QUORUM = 3                # FLOOR for distinct voters before the fan MVP stands
+AWARD_MVP_BALLOT_SIZE = 5   # top N players overall on the MVP ballot (by mvpScore)
+AWARD_HOF_QUORUM = 3                # FLOOR for distinct voters before fan induction stands
+# Quorum scales with engagement: required voters = max(floor, ceil(activeUsers ×
+# this fraction)), where active users = the recent-login + engaged base the
+# anomaly threshold uses (anomalyManager._countActiveUsers).
+AWARD_QUORUM_ACTIVE_FRACTION = 0.20
 AWARD_HOF_BALLOT_PREFILTER = 10     # _computeHofPoints needed to make the ballot (looser than the 22 auto-induct)
 AWARD_HOF_CLASS_CAP = 5             # max inductions per season
 AWARD_HOF_BALLOT_TENURE = 5         # seasons a candidate stays on the ballot before being dropped
 AWARD_HOF_APPROVAL_FRACTION = 0.5   # fraction of HoF voters who must approve to be induct-eligible
+AWARD_HOF_AUTO_INDUCT_POINTS = 40   # below quorum, only auto-induct slam-dunks at/above this _computeHofPoints
+                                    # (multiple MVPs/rings/records). Merely-qualified players (>=22) need fan votes.
 
 # FA ballot
 GM_FA_BALLOT_COST = 15

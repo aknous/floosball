@@ -863,6 +863,23 @@ class CardManager:
 
         sourceTemplate = random.choice(list(eligiblePlayers.values()))
 
+        # Recompute the classification for the RESULT edition. sourceTemplate is
+        # the first template found for the player (the base edition), whose
+        # classification is empty because MVP / champion / all-pro require
+        # holographic+ — copying it strips the CH/MVP/AP tag off a holo+ blend
+        # result. Derive this season's accolade sets from the classified
+        # templates and rebuild for resultEdition.
+        mvpPlayerId = next((t.player_id for t in allTemplates
+                            if t.classification and 'mvp' in t.classification), None)
+        championPlayerIds = {t.player_id for t in allTemplates
+                             if t.classification and 'champion' in t.classification}
+        allProPlayerIds = {t.player_id for t in allTemplates
+                           if t.classification and 'all_pro' in t.classification}
+        resultClassification = _buildClassification(
+            sourceTemplate.player_id, sourceTemplate.is_rookie,
+            mvpPlayerId, championPlayerIds, allProPlayerIds, resultEdition,
+        )
+
         # Create new template (random effect — no forceEffect)
         effectConfig = _buildEffectConfig(
             resultEdition, sourceTemplate.player_rating,
@@ -874,7 +891,7 @@ class CardManager:
             edition=resultEdition,
             season_created=currentSeason,
             is_rookie=sourceTemplate.is_rookie,
-            classification=sourceTemplate.classification,
+            classification=resultClassification,
             player_name=sourceTemplate.player_name,
             team_id=sourceTemplate.team_id,
             player_rating=sourceTemplate.player_rating,
@@ -1948,6 +1965,7 @@ class CardManager:
                 "edition": t.edition,
                 "seasonCreated": t.season_created,
                 "isRookie": t.is_rookie,
+                "classification": t.classification,
                 "effectConfig": t.effect_config,
                 "sellValue": t.sell_value,
                 "buyPrice": buyPrice,

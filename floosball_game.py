@@ -36,6 +36,7 @@ from constants import (
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K,
+    HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
     MOMENTUM_DECAY_RATE, MOMENTUM_BLOWOUT_DECAY_RATE, MOMENTUM_MIDGAP_DECAY_RATE,
@@ -356,6 +357,11 @@ extraLongPassList = [
                     'lets it fly to',
                     'chucks it into the end zone to',
                 ]
+
+# "into the end zone" asserts the ball reached the end zone — only true on a
+# score. For a hail mary that's caught short and tackled, use the pool without
+# any end-zone claim so the narration matches the result.
+extraLongNonScoringPassList = [p for p in extraLongPassList if 'end zone' not in p]
 
 # Sideline pass text — args: (passer.name, text, receiver.name, yardage)
 sidelineShortPassList = [
@@ -3186,9 +3192,14 @@ class Game:
                 and not self._isGarbageTime(scoreDiff)):
             fgCanHelp = (scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg)
             if not fgCanHelp:
-                isLastPlayByClock = self.gameClockSeconds <= 15
-                isLastPlayByDown = (self.down == 4 and self.gameClockSeconds <= 60)
-                if isLastPlayByClock or isLastPlayByDown:
+                # Only when it's guaranteed to be the last play. The hail mary
+                # itself burns ~8-12s (calculatePlayDuration), so if the clock is
+                # within that window the heave runs it out and nothing follows.
+                # With more time than that there are still real options (notably
+                # going for a first down and continuing to drive), so it's not a
+                # hail mary situation — normal offense / the 4th-down caller
+                # handles it.
+                if self.gameClockSeconds <= 12:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'hailMary',
                         'reason': 'Desperation — need a miracle score',
@@ -3600,7 +3611,10 @@ class Game:
                 elif self.play.passType is PassType.long:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(longPassList), self.play.receiver.name, self.play.yardage)
                 elif self.play.passType is PassType.hailMary:
-                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(extraLongPassList), self.play.receiver.name, self.play.yardage)
+                    # End-zone phrasing only when it actually scores; a hail mary
+                    # caught short and tackled mustn't claim it reached the end zone.
+                    hmPool = extraLongPassList if self.play.isTd else extraLongNonScoringPassList
+                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(hmPool), self.play.receiver.name, self.play.yardage)
                 else:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(midPassList), self.play.receiver.name, self.play.yardage)
                 # Fumble after catch
@@ -3613,7 +3627,7 @@ class Game:
                             text += ', fumbles, {} recover'.format(self.play.defense.abbr)
                     else:
                         text += ', fumbles, {} recovers'.format(self.play.receiver.name)
-                elif self.play.tackledBy and not self.play.isTd:
+                elif self.play.tackledBy and not self.play.isTd and self.play.isInBounds:
                     text += ', tackled by {}'.format(self.play.tackledBy.name)
             elif self.play.playResult is PlayResult.Interception:
                 interceptor = self.play.interceptedBy
@@ -9481,6 +9495,13 @@ class Play():
         # COMBINED: catch = contact AND secure
         catchProb = (contactProb * secureProb) / 100
 
+        # Hail mary: a contested end-zone heave should connect only as a rare
+        # miracle. Scale the catch probability down to the hail-mary target rate
+        # (a completion = TD). INT/drop paths are left intact — a heave can still
+        # be picked in the end zone.
+        if passType is PassType.hailMary:
+            catchProb *= HAIL_MARY_COMPLETION_SCALE
+
         # INT probability — three independent paths, any of which can pick a
         # pass (they don't have to co-occur the way the old single-gate model
         # required):
@@ -9542,6 +9563,18 @@ class Play():
         affects catch probability, not how far the ball travels — the QB throws
         to a target at the route's depth, quality is only about placement.
         """
+        # Hail mary: thrown AT the end zone, not a fixed depth. Air yards = the
+        # distance to the goal line, capped by how far this QB can physically
+        # heave it (arm strength). So a completed hail mary lands in the end zone
+        # (a touchdown); if the end zone is out of the QB's range the ball falls
+        # short of it (and is almost certainly incomplete / caught short).
+        if passType is PassType.hailMary:
+            arm = 75
+            if self.passer is not None:
+                arm = getattr(getattr(self.passer, 'gameAttributes', None), 'armStrength', 75)
+            maxHeave = 50 + (arm - 70) * 0.4   # ~46 yds (weak arm) → ~62 yds (elite)
+            return max(0, int(min(self.yardsToEndzone, maxHeave)))
+
         passTypeParams = {
             PassType.short:    {'mean': 3,    'stdDev': 1.0},
             PassType.medium:   {'mean': 6.5,  'stdDev': 2.0},
@@ -10243,8 +10276,10 @@ class Play():
                         primaryTackler = safetyPlayer  # Safety made the tackle on deep plays
                     # Surface tackler so play text can credit the defender
                     self.tackledBy = primaryTackler
-                    if primaryTackler and batched_randint(1, 100) > 97:
-                        # ~3% chance of fumble on catch
+                    if primaryTackler and self.isInBounds and batched_randint(1, 100) > 97:
+                        # ~3% chance of fumble on catch — only in bounds; a
+                        # receiver who steps out of bounds can't be stripped
+                        # (the play is dead at the boundary).
                         rcvFumbleResist = round(self.receiver.gameAttributes.power * 0.7 + self.receiver.gameAttributes.discipline * 0.3)
                         defStripAbility = 70
                         if hasattr(primaryTackler, 'attributes'):
