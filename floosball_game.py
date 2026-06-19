@@ -6837,25 +6837,28 @@ class Game:
             creditOff(getattr(play, 'kicker', None), offenseWpa)
         # Punt / Spike / Kneel / penalty: no single offensive actor — uncredited.
 
-        # ── Defense (unit-share) — scrimmage downs only ──
+        # ── Defense — scrimmage downs only ──
+        # Attribute the play's defensive swing to the PLAYER WHO MADE THE PLAY (the
+        # returner / sacker / interceptor / forced-fumbler / primary tackler), the
+        # same way offense credits the ball-handler — NOT split across the unit.
+        # Unit-sharing clustered the MVP ballot (every defender on a good-defense
+        # team inherited the swing regardless of individual production); per-player
+        # attribution doesn't. Every on-field defender still logs a SNAP so the
+        # "played defense" eligibility gate holds; only the playmaker banks the WPA.
+        # (A pass with no tackle and no turnover leaves the swing uncredited —
+        # per-defender coverage on an incompletion isn't tracked yet; box INT/PBU
+        # stats still capture coverage value.)
         if pt in (PlayType.Run, PlayType.Pass) and defense is not None:
             defWpa = -offenseWpa
             defenders = [p for p in defense.rosterDict.values()
                          if p is not None and getattr(p, 'defensivePosition', None) is not None]
-            if defenders:
-                playMaker = (getattr(play, 'returner', None) or getattr(play, 'sackedBy', None)
-                             or getattr(play, 'interceptedBy', None)
-                             or getattr(play, 'forcedFumbleBy', None) or getattr(play, 'tackledBy', None))
-                weights = {}
-                for d in defenders:
-                    w = max(1.0, float(getattr(d, 'defensiveRating', 60) or 60))
-                    if d is playMaker:
-                        w *= DEF_PLAYMAKER_BONUS
-                    weights[d] = w
-                totalW = sum(weights.values()) or 1.0
-                for d in defenders:
-                    d._gameDefWpa = float(getattr(d, '_gameDefWpa', 0.0)) + defWpa * (weights[d] / totalW)
-                    d._gameDefWpaSnaps = int(getattr(d, '_gameDefWpaSnaps', 0)) + 1
+            playMaker = (getattr(play, 'returner', None) or getattr(play, 'sackedBy', None)
+                         or getattr(play, 'interceptedBy', None)
+                         or getattr(play, 'forcedFumbleBy', None) or getattr(play, 'tackledBy', None))
+            if playMaker is not None and getattr(playMaker, 'defensivePosition', None) is not None:
+                playMaker._gameDefWpa = float(getattr(playMaker, '_gameDefWpa', 0.0)) + defWpa
+            for d in defenders:
+                d._gameDefWpaSnaps = int(getattr(d, '_gameDefWpaSnaps', 0)) + 1
 
     def broadcastGameState(self, includeLastPlay: bool = True, eventMessage: dict = None, isPossessionChange: bool = False, isFinalBroadcast: bool = False):
         """

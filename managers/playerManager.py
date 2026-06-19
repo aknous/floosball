@@ -2694,12 +2694,14 @@ class PlayerManager:
 
     def _computeDefValues(self) -> Dict[int, Dict[str, Any]]:
         """Per-player defensive value, pooled within defensive position group
-        (S/LB/CB/DE). defValue = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ.
-        As of the stats-based MVP change the WPA weight is 0, so defValue is the
-        position-weighted INDIVIDUAL box-stat composite (z within group) — a
-        per-player measure that doesn't cluster the way the team-shared WPA did.
-        (defWpaZ is still computed for the breakdown display.) Returns
-        {playerId: {defValue, defWpaZ, defBoxZ, defGroup, seasonDefWpa, boxScore}}."""
+        (S/LB/CB/DE). defValue = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ
+        — a position-weighted INDIVIDUAL box-stat composite (production) blended
+        with the player's defensive WPA (clutch value the box misses). Both terms
+        are now per-player (defensive WPA is attributed to the playmaker, not the
+        unit — see floosball_game _attributeWpa), so neither clusters the way the
+        old team-shared WPA did. z-scored WITHIN each group using that group's own
+        mean and std. Returns {playerId: {defValue, defWpaZ, defBoxZ, defGroup,
+        seasonDefWpa, boxScore}}."""
         import numpy as np
         from constants import MVP_DEF_WPA_WEIGHT, MVP_DEF_BOX_WEIGHT, DEF_BOX_WEIGHTS
 

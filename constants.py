@@ -117,21 +117,23 @@ DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tag
 # MVP total value = offenseScore + MVP_DEF_WEIGHT*defValue, where:
 #   offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ
 #   defValue     = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ
-# Defense is folded in via INDIVIDUAL box stats (defValue), NOT team-shared WPA —
-# the earlier WPA-based defValue clustered every skill player on a good-defense
-# team onto the ballot. Box stats are per-player, so they don't cluster. defValue
-# is a SECONDARY contributor (MVP_DEF_WEIGHT < the offense scale) so offense still
-# leads but a two-way / standout defender climbs, and All-Pro (top mvpScore per
-# slot) reflects defense too.
+# Defense is now INDIVIDUAL on both terms: box stats are per-player, and defensive
+# WPA is attributed to the PLAYER WHO MADE THE PLAY (see floosball_game _attributeWpa)
+# rather than split across the unit — so neither clusters the ballot the way the old
+# team-shared WPA did. defValue = box production + the value (clutch swing) the box
+# misses, mirroring offense (stats + WPA). It's a SECONDARY contributor
+# (MVP_DEF_WEIGHT < the offense scale) so offense still leads but a two-way / standout
+# defender climbs, and All-Pro (top mvpScore per slot) reflects defense too.
 MVP_PERF_WEIGHT = 0.7        # season performance rating (box-score percentile) share of offense score
 MVP_WPA_WEIGHT = 0.3         # per-snap offensive WPA share of offense score
 MVP_DEF_WEIGHT = 0.5         # how much a player's defensive value adds to their MVP score (secondary to offense)
-MVP_DEF_WPA_WEIGHT = 0.0     # defensive WPA share of defensive value (0 — defense judged by STATS, not win probability)
-MVP_DEF_BOX_WEIGHT = 1.0     # defensive box-stat share of defensive value (the whole thing now)
+MVP_DEF_WPA_WEIGHT = 0.3     # defensive WPA (now individual, playmaker-attributed) share of defensive value
+MVP_DEF_BOX_WEIGHT = 0.7     # defensive box-stat share of defensive value (production; primary)
 
 # Per-defensive-position weights for the box-stat composite (z-scored within
-# group) — now the WHOLE defensive value (WPA weight is 0). Coverage value is
-# invisible to the box, so CB/S lean hard on ints/PBUs to capture it.
+# group) — the box (production) term of defValue, blended with individual
+# defensive WPA. Coverage value is invisible to the box, so CB/S lean hard on
+# ints/PBUs to capture it (and the WPA term picks up clutch coverage swings).
 DEF_BOX_WEIGHTS = {
     'DE': {'sacks': 3.0, 'tfl': 2.0, 'forcedFumbles': 2.0, 'tackles': 0.5, 'ints': 1.0, 'passBreakups': 0.5},
     'LB': {'tackles': 1.0, 'tfl': 1.5, 'sacks': 2.0, 'forcedFumbles': 2.0, 'ints': 1.5, 'passBreakups': 1.0},
