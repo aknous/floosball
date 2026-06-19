@@ -4026,14 +4026,15 @@ class Game:
             if player:
                 player.sync_stats_dicts()
 
-        # Per-player: update confidence/determination, increment gamesPlayed, compute derived stats
+        # Per-player: update confidence/determination, increment gamesPlayed
+        # (regular season only), compute derived stats
         for player in self.homeTeam.rosterDict.values():
             if player:
-                player.postgameChanges()
+                player.postgameChanges(isRegularSeason=self.isRegularSeasonGame)
                 self._accumulatePostgameStats(player)
         for player in self.awayTeam.rosterDict.values():
             if player:
-                player.postgameChanges()
+                player.postgameChanges(isRegularSeason=self.isRegularSeasonGame)
                 self._accumulatePostgameStats(player)
 
     def postgame(self):
