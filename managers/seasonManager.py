@@ -4259,6 +4259,12 @@ class SeasonManager:
             # Accumulate fatigue after each playoff round
             self._accumulateFatigue()
 
+            # Round-1 bye teams rested — give them a small, market-tier-scaled
+            # fatigue reprieve so they enter round 2 a touch fresher than the
+            # teams that had to play (offsets the accumulation just applied).
+            if currentRound == 1:
+                self._applyByeFatigueRecovery(playoffsByeTeams)
+
             # Clear active games so roster swaps are unlocked between rounds.
             # Keep a reference so the API can still serve them until next round.
             self.currentSeason.completedWeekGames = self.currentSeason.activeGames
@@ -8695,6 +8701,27 @@ class SeasonManager:
                 weeklyGain = BASE_FATIGUE_PER_WEEK * (FATIGUE_RESILIENCE_CEILING - FATIGUE_RESILIENCE_SCALE * resilienceFactor)
                 adjustedGain = weeklyGain * (1.0 - fundingReduction)
                 player.attributes.fatigue = min(1.0, (player.attributes.fatigue or 0.0) + adjustedGain)
+
+    def _applyByeFatigueRecovery(self, byeTeamsByLeague: dict) -> None:
+        """Give the round-1 bye teams a small fatigue reprieve for resting,
+        scaled by market tier (richer clubs recover more). Applied once after
+        round 1; modest by design and floored at 0. See PLAYOFF_BYE_FATIGUE_RECOVERY.
+        """
+        from constants import PLAYOFF_BYE_FATIGUE_RECOVERY
+        byeTeams = []
+        for teamList in (byeTeamsByLeague or {}).values():
+            byeTeams.extend(teamList)
+        for team in byeTeams:
+            recovery = PLAYOFF_BYE_FATIGUE_RECOVERY.get(
+                getattr(team, 'fundingTier', 'MID_MARKET'), 0.006)
+            if recovery <= 0:
+                continue
+            for player in team.rosterDict.values():
+                if player is None:
+                    continue
+                player.attributes.fatigue = max(0.0, (player.attributes.fatigue or 0.0) - recovery)
+            logger.info(f"Playoff bye reprieve: {team.name} ({getattr(team, 'fundingTier', '?')}) "
+                        f"recovered {recovery:.3f} fatigue")
 
     def _applyMidseasonFormShift(self, week: int) -> None:
         """

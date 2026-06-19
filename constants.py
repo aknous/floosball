@@ -527,6 +527,14 @@ FATIGUE_RESILIENCE_CEILING = 1.4    # Max multiplier for low-resilience players
 FATIGUE_PHYSICAL_IMPACT = 0.6       # Was 1.0 — softened so fatigue is less punishing
 FATIGUE_MENTAL_IMPACT = 0.2         # Was 0.3 — softened to match
 
+# Playoff bye reprieve: the top-2 seeds rest through round 1, so their players
+# recover a little fatigue while everyone else takes another week of wear.
+# Modest by design ("a bit") and scaled by market tier — richer clubs have the
+# facilities/medical staff to recover more (same logic as FUNDING_FATIGUE_REDUCTION).
+# Each value is a flat fatigue reduction (gauge is 0..1, ~0.0025 gained/week),
+# applied once after round 1 and floored at 0.
+PLAYOFF_BYE_FATIGUE_RECOVERY = {'MEGA_MARKET': 0.012, 'LARGE_MARKET': 0.009, 'MID_MARKET': 0.006, 'SMALL_MARKET': 0.004}
+
 # Mental / form / fatigue modifiers can compound multiplicatively into a
 # heavy reduction on a high-rated player's effective rating. The soft floor
 # below caps that aggregate so a star never drops more than (1 - ratio) of
