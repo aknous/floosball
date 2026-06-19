@@ -2592,22 +2592,24 @@ class PlayerManager:
         return ratings
 
     def _computeMvpCandidates(self) -> List[Dict[str, Any]]:
-        """Compute MVP value (offense-only): mvpScore = MVP_PERF_WEIGHT*perfZ +
-        MVP_WPA_WEIGHT*offenseWpaRateZ, where perfZ/offenseWpaRateZ are pooled-std
-        z-scores of the season performance rating and the *per-snap* offensive WPA
-        rate, each measured against the player's own position mean.
+        """Compute MVP value (two-way): mvpScore = offenseScore +
+        MVP_DEF_WEIGHT*defValue, where
+          offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaRateZ
+        (pooled-std z-scores of the season performance rating and the *per-snap*
+        offensive WPA rate vs the player's own position mean), and defValue is the
+        player's INDIVIDUAL defensive box-stat value (z within defensive group; see
+        _computeDefValues).
 
-        Defense is intentionally NOT folded in: defValue is a player's share of
-        their TEAM's defensive WPA, spread across all five on-field defenders, so
-        adding it clustered a whole team's skill players onto the ballot by team
-        defense rather than individual production. WPA is normalized per snap so a
-        team in many high-leverage games can't bank raw volume for everyone.
-        defValue is still computed for the breakdown display but doesn't affect the
-        score. Sorted by mvpScore desc.
+        Defense is folded in via individual box STATS, not team-shared WPA. The old
+        WPA-based defValue spread a team's defensive WPA across all five on-field
+        defenders, so it clustered a whole team's skill players onto the ballot by
+        team defense; per-player box stats don't. It's a SECONDARY term
+        (MVP_DEF_WEIGHT < the offense scale) so offense still leads but a two-way /
+        standout defender climbs. Sorted by mvpScore desc.
         """
         import numpy as np
         from api_response_builders import PlayerResponseBuilder
-        from constants import MVP_PERF_WEIGHT, MVP_WPA_WEIGHT
+        from constants import MVP_PERF_WEIGHT, MVP_WPA_WEIGHT, MVP_DEF_WEIGHT
 
         def wpaRate(p):
             # Per-snap offensive WPA — a rate, not an accumulated volume, so clutch
@@ -2655,8 +2657,8 @@ class PlayerManager:
                 perfZ = (player.seasonPerformanceRating - posMean) / pooledStd
                 wpaZ = (wpaRate(player) - posWpaMean) / pooledWpaStd
                 offenseScore = MVP_PERF_WEIGHT * perfZ + MVP_WPA_WEIGHT * wpaZ
-                defValue = defValues.get(player.id, {}).get('defValue', 0.0)  # display only
-                mvpScore = offenseScore
+                defValue = defValues.get(player.id, {}).get('defValue', 0.0)  # individual box-stat z
+                mvpScore = offenseScore + MVP_DEF_WEIGHT * defValue
                 hasTeamObj = hasattr(player.team, 'name')
                 candidates.append({
                     'player': player,
@@ -2692,12 +2694,12 @@ class PlayerManager:
 
     def _computeDefValues(self) -> Dict[int, Dict[str, Any]]:
         """Per-player defensive value, pooled within defensive position group
-        (S/LB/CB/DE). Blends season defensive WPA (z) with a position-weighted
-        box-stat composite (z): defValue = MVP_DEF_WPA_WEIGHT*defWpaZ +
-        MVP_DEF_BOX_WEIGHT*defBoxZ. The within-group z-score re-centers the
-        leaguewide-negative raw def WPA, so a defender above their group's mean
-        scores positive. Returns {playerId: {defValue, defWpaZ, defBoxZ,
-        defGroup, seasonDefWpa, boxScore}}."""
+        (S/LB/CB/DE). defValue = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ.
+        As of the stats-based MVP change the WPA weight is 0, so defValue is the
+        position-weighted INDIVIDUAL box-stat composite (z within group) — a
+        per-player measure that doesn't cluster the way the team-shared WPA did.
+        (defWpaZ is still computed for the breakdown display.) Returns
+        {playerId: {defValue, defWpaZ, defBoxZ, defGroup, seasonDefWpa, boxScore}}."""
         import numpy as np
         from constants import MVP_DEF_WPA_WEIGHT, MVP_DEF_BOX_WEIGHT, DEF_BOX_WEIGHTS
 
@@ -2726,19 +2728,24 @@ class PlayerManager:
         if len(defenders) < 2:
             return {}
 
-        # Pooled stds across all defenders; means per defensive group
-        pooledWpaStd = float(np.std([d for _, _, d, _ in defenders])) or 1.0
-        pooledBoxStd = float(np.std([b for _, _, _, b in defenders])) or 1.0
-        groupWpaMean, groupBoxMean = {}, {}
+        # Z-score WITHIN each defensive group (own mean AND own std). The box-stat
+        # scale differs wildly between groups (a DE's sack-weighted score dwarfs a
+        # CB's INT-weighted one), so using a cross-group pooled std would collapse
+        # every within-group z toward zero and make defense inert. Per-group std
+        # gives each group's standout a true ~+2, comparable across groups.
+        groupWpaStats, groupBoxStats = {}, {}   # grp -> (mean, std)
         for grp in set(g for _, g, _, _ in defenders):
-            vals = [(d, b) for _, g, d, b in defenders if g == grp]
-            groupWpaMean[grp] = float(np.mean([d for d, _ in vals]))
-            groupBoxMean[grp] = float(np.mean([b for _, b in vals]))
+            ds = [d for _, g, d, _ in defenders if g == grp]
+            bs = [b for _, g, _, b in defenders if g == grp]
+            groupWpaStats[grp] = (float(np.mean(ds)), float(np.std(ds)) or 1.0)
+            groupBoxStats[grp] = (float(np.mean(bs)), float(np.std(bs)) or 1.0)
 
         out: Dict[int, Dict[str, Any]] = {}
         for p, grp, defWpa, boxScore in defenders:
-            defWpaZ = (defWpa - groupWpaMean[grp]) / pooledWpaStd
-            defBoxZ = (boxScore - groupBoxMean[grp]) / pooledBoxStd
+            wMean, wStd = groupWpaStats[grp]
+            bMean, bStd = groupBoxStats[grp]
+            defWpaZ = (defWpa - wMean) / wStd
+            defBoxZ = (boxScore - bMean) / bStd
             defValue = MVP_DEF_WPA_WEIGHT * defWpaZ + MVP_DEF_BOX_WEIGHT * defBoxZ
             out[p.id] = {
                 'defValue': round(defValue, 3),

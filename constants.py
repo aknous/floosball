@@ -113,18 +113,25 @@ CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
 WPA_PASS_QB_SHARE = 0.6      # completed pass: QB share of the WPA (receiver gets the remainder)
 DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tagged defender on a play
 
-# MVP + All-Pro defense value-metric blend weights (z-scores, pooled within position group).
-# MVP total value = offenseScore + defValue, where:
+# MVP + All-Pro value-metric blend weights (z-scores, pooled within position group).
+# MVP total value = offenseScore + MVP_DEF_WEIGHT*defValue, where:
 #   offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ
 #   defValue     = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ
+# Defense is folded in via INDIVIDUAL box stats (defValue), NOT team-shared WPA —
+# the earlier WPA-based defValue clustered every skill player on a good-defense
+# team onto the ballot. Box stats are per-player, so they don't cluster. defValue
+# is a SECONDARY contributor (MVP_DEF_WEIGHT < the offense scale) so offense still
+# leads but a two-way / standout defender climbs, and All-Pro (top mvpScore per
+# slot) reflects defense too.
 MVP_PERF_WEIGHT = 0.7        # season performance rating (box-score percentile) share of offense score
 MVP_WPA_WEIGHT = 0.3         # per-snap offensive WPA share of offense score
-MVP_DEF_WPA_WEIGHT = 0.7     # defensive WPA share of defensive value (carries coverage box can't see)
-MVP_DEF_BOX_WEIGHT = 0.3     # defensive box-stat share of defensive value (rewards splashy plays)
+MVP_DEF_WEIGHT = 0.5         # how much a player's defensive value adds to their MVP score (secondary to offense)
+MVP_DEF_WPA_WEIGHT = 0.0     # defensive WPA share of defensive value (0 — defense judged by STATS, not win probability)
+MVP_DEF_BOX_WEIGHT = 1.0     # defensive box-stat share of defensive value (the whole thing now)
 
 # Per-defensive-position weights for the box-stat composite (z-scored within
-# group). Coverage value is invisible to the box, so CB/S lean on ints/PBUs and
-# the WPA term carries the rest.
+# group) — now the WHOLE defensive value (WPA weight is 0). Coverage value is
+# invisible to the box, so CB/S lean hard on ints/PBUs to capture it.
 DEF_BOX_WEIGHTS = {
     'DE': {'sacks': 3.0, 'tfl': 2.0, 'forcedFumbles': 2.0, 'tackles': 0.5, 'ints': 1.0, 'passBreakups': 0.5},
     'LB': {'tackles': 1.0, 'tfl': 1.5, 'sacks': 2.0, 'forcedFumbles': 2.0, 'ints': 1.5, 'passBreakups': 1.0},
