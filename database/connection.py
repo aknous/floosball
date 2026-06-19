@@ -1083,6 +1083,11 @@ def _runPendingMigrations():
     _backfillPlayerSeasonTeamIds()
     _backfillPlayerSeasonStatsFromGames()
     _backfillPlayerCareerStatsFromGames()
+    # Repair historically under-counted career rows (orphaned stat-tracker ref,
+    # fixed forward in d3825a9) by rebuilding career = SUM(player_season_stats).
+    # Runs BEFORE players load into memory so the corrected rows hydrate
+    # careerStatsDict and the in-memory dict can't clobber the fix.
+    _recomputeCareerStatsFromSeasons()
     _backfillTeamPeakStreaks()
     _backfillCardTemplateOutputType()
 
@@ -1769,6 +1774,140 @@ def _backfillPlayerCareerStatsFromGames():
     except Exception as e:
         conn.rollback()
         logger.info(f"  Backfill warning (career): {e}")
+    finally:
+        conn.close()
+
+
+# Rate/derived stat keys that must be RECOMPUTED from summed components, never
+# summed (adding percentages/averages is meaningless). 'longest' takes the MAX.
+_CAREER_RATE_KEYS = {
+    'compPerc', 'ypc', 'ypr', 'rcvPerc', 'fgPerc', 'fgAvg',
+    'fgUnder20perc', 'fg20to40perc', 'fg40to50perc', 'fgOver50perc', 'xpPerc',
+}
+
+
+def _sumStatBlobs(blobs):
+    """Sum a list of per-season stat dicts for one category. Counting keys add,
+    'longest' takes the MAX, rate/derived keys are skipped (recomputed by caller)."""
+    out = {}
+    for b in blobs:
+        if not isinstance(b, dict):
+            continue
+        for k, v in b.items():
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                continue
+            if k in _CAREER_RATE_KEYS:
+                continue
+            if k == 'longest':
+                out[k] = max(out.get(k, 0), v)
+            else:
+                out[k] = out.get(k, 0) + v
+    return out
+
+
+def _recomputeCareerRates(passing, rushing, receiving, kicking):
+    """Recompute rate fields on the summed career blobs from their components."""
+    def pct(made, att):
+        return round(made / att * 100) if att else 0
+    if passing:
+        passing['compPerc'] = pct(passing.get('comp', 0), passing.get('att', 0))
+        passing['ypc'] = round(passing.get('yards', 0) / passing['comp'], 2) if passing.get('comp') else 0
+    if rushing:
+        rushing['ypc'] = round(rushing.get('yards', 0) / rushing['carries'], 2) if rushing.get('carries') else 0
+    if receiving:
+        receiving['rcvPerc'] = pct(receiving.get('receptions', 0), receiving.get('targets', 0))
+        receiving['ypr'] = round(receiving.get('yards', 0) / receiving['receptions'], 2) if receiving.get('receptions') else 0
+    if kicking:
+        kicking['fgPerc'] = pct(kicking.get('fgs', 0), kicking.get('fgAtt', 0))
+        kicking['fgAvg'] = round(kicking.get('fgYards', 0) / kicking['fgs'], 1) if kicking.get('fgs') else 0
+        kicking['xpPerc'] = pct(kicking.get('xps', 0), kicking.get('xpAtt', 0))
+        for tier in ('Under20', '20to40', '40to50', 'Over50'):
+            kicking[f'fg{tier}perc'] = pct(kicking.get(f'fg{tier}', 0), kicking.get(f'fg{tier}att', 0))
+
+
+def _recomputeCareerStatsFromSeasons():
+    """Rebuild player_career_stats (season=0) = SUM(player_season_stats) per
+    player, repairing the historically under-counted career rows. One-shot via an
+    app_settings flag. Both career and season stats are regular-season-only, so
+    career should exactly equal the sum of the player's season rows."""
+    import json as _json
+    from sqlalchemy import text
+    conn = engine.connect()
+    try:
+        done = conn.execute(text(
+            "SELECT value FROM app_settings WHERE key = 'career_stats_recomputed_v1'"
+        )).fetchone()
+        if done:
+            return
+        playerIds = [r[0] for r in conn.execute(text(
+            "SELECT DISTINCT player_id FROM player_season_stats")).fetchall()]
+        fixed = 0
+        for pid in playerIds:
+            rows = conn.execute(text(
+                "SELECT games_played, fantasy_points, passing_stats, rushing_stats, "
+                "receiving_stats, kicking_stats, defense_stats "
+                "FROM player_season_stats WHERE player_id = :pid"), {'pid': pid}).fetchall()
+            if not rows:
+                continue
+            gp = sum(int(r[0] or 0) for r in rows)
+            fp = sum(float(r[1] or 0) for r in rows)
+
+            def blobs(idx):
+                out = []
+                for r in rows:
+                    raw = r[idx]
+                    if not raw:
+                        continue
+                    try:
+                        out.append(_json.loads(raw) if isinstance(raw, str) else raw)
+                    except Exception:
+                        pass
+                return out
+
+            passing = _sumStatBlobs(blobs(2))
+            rushing = _sumStatBlobs(blobs(3))
+            receiving = _sumStatBlobs(blobs(4))
+            kicking = _sumStatBlobs(blobs(5))
+            defense = _sumStatBlobs(blobs(6))
+            _recomputeCareerRates(passing, rushing, receiving, kicking)
+
+            params = {
+                'pid': pid, 'gp': gp, 'fp': fp,
+                'py': passing.get('yards', 0), 'ptd': passing.get('tds', 0), 'pint': passing.get('ints', 0),
+                'ry': rushing.get('yards', 0), 'rtd': rushing.get('tds', 0),
+                'recy': receiving.get('yards', 0), 'rectd': receiving.get('tds', 0),
+                'pj': _json.dumps(passing), 'rj': _json.dumps(rushing), 'recj': _json.dumps(receiving),
+                'kj': _json.dumps(kicking), 'dj': _json.dumps(defense),
+            }
+            exists = conn.execute(text(
+                "SELECT 1 FROM player_career_stats WHERE player_id = :pid AND season = 0"),
+                {'pid': pid}).fetchone()
+            if exists:
+                conn.execute(text(
+                    "UPDATE player_career_stats SET games_played=:gp, fantasy_points=:fp, "
+                    "passing_yards=:py, passing_tds=:ptd, passing_ints=:pint, "
+                    "rushing_yards=:ry, rushing_tds=:rtd, receiving_yards=:recy, receiving_tds=:rectd, "
+                    "passing_stats=:pj, rushing_stats=:rj, receiving_stats=:recj, "
+                    "kicking_stats=:kj, defense_stats=:dj "
+                    "WHERE player_id=:pid AND season=0"), params)
+            else:
+                conn.execute(text(
+                    "INSERT INTO player_career_stats (player_id, season, games_played, fantasy_points, "
+                    "passing_yards, passing_tds, passing_ints, rushing_yards, rushing_tds, "
+                    "receiving_yards, receiving_tds, passing_stats, rushing_stats, receiving_stats, "
+                    "kicking_stats, defense_stats) "
+                    "VALUES (:pid, 0, :gp, :fp, :py, :ptd, :pint, :ry, :rtd, :recy, :rectd, "
+                    ":pj, :rj, :recj, :kj, :dj)"), params)
+            fixed += 1
+        conn.execute(text(
+            "INSERT INTO app_settings (key, value, updated_at) "
+            "VALUES ('career_stats_recomputed_v1', '1', CURRENT_TIMESTAMP) "
+            "ON CONFLICT(key) DO UPDATE SET value='1', updated_at=CURRENT_TIMESTAMP"))
+        conn.commit()
+        logger.info(f"  Backfill: recomputed career stats from season rows for {fixed} players")
+    except Exception as e:
+        conn.rollback()
+        logger.info(f"  Backfill warning (career-from-seasons): {e}")
     finally:
         conn.close()
 
