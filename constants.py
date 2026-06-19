@@ -113,22 +113,30 @@ CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
 WPA_PASS_QB_SHARE = 0.6      # completed pass: QB share of the WPA (receiver gets the remainder)
 DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tagged defender on a play
 
-# MVP + All-Pro value-metric blend weights (z-scores, pooled within position group).
-# MVP total value = offenseScore + MVP_DEF_WEIGHT*defValue, where:
-#   offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ
-#   defValue     = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ
-# Defense is now INDIVIDUAL on both terms: box stats are per-player, and defensive
-# WPA is attributed to the PLAYER WHO MADE THE PLAY (see floosball_game _attributeWpa)
-# rather than split across the unit — so neither clusters the ballot the way the old
-# team-shared WPA did. defValue = box production + the value (clutch swing) the box
-# misses, mirroring offense (stats + WPA). It's a SECONDARY contributor
-# (MVP_DEF_WEIGHT < the offense scale) so offense still leads but a two-way / standout
-# defender climbs, and All-Pro (top mvpScore per slot) reflects defense too.
-MVP_PERF_WEIGHT = 0.7        # season performance rating (box-score percentile) share of offense score
-MVP_WPA_WEIGHT = 0.3         # per-snap offensive WPA share of offense score
-MVP_DEF_WEIGHT = 0.5         # how much a player's defensive value adds to their MVP score (secondary to offense)
-MVP_DEF_WPA_WEIGHT = 0.3     # defensive WPA (now individual, playmaker-attributed) share of defensive value
-MVP_DEF_BOX_WEIGHT = 0.7     # defensive box-stat share of defensive value (production; primary)
+# MVP + All-Pro value metric (flat z-score blend, pooled within position group):
+#   mvpScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ + MVP_DEF_WPA_WEIGHT*defWpaZ
+# perfZ = z of the OVERALL (two-way) performance rating, which already composites
+# offensive + defensive PRODUCTION (see below), so defensive production is in perfZ
+# and there's no separate box term. The only standalone defensive term is the
+# defensive clutch WPA (defWpaZ). Both WPA terms are INDIVIDUAL — offense to the
+# ball-handler, defense to the playmaker (floosball_game _attributeWpa) — so neither
+# clusters the ballot the way the old team-shared defensive WPA did. Defense is
+# secondary (it's 30% of the perf composite + a small WPA term), so offense leads
+# but a two-way standout climbs, and All-Pro (top mvpScore per slot) reflects defense.
+# Players are two-way, so the OVERALL performance rating composites offensive and
+# defensive production (offense-dominant); MVP/All-Pro run off it.
+PERF_OFFENSE_WEIGHT = 0.7    # offensive-production share of the overall performance rating
+PERF_DEFENSE_WEIGHT = 0.3    # defensive-production share of the overall performance rating
+# Unified MVP (flat): production composite (two-way, via perfZ of the OVERALL rating)
+# + clutch WPA on each side. Defensive production lives inside perfZ now (via the
+# overall composite), so there's no separate box defValue term — only the clutch
+# defensive WPA remains, as a secondary term.
+MVP_PERF_WEIGHT = 0.7        # overall (two-way) production-composite z share
+MVP_WPA_WEIGHT = 0.3         # per-snap OFFENSIVE WPA share (offensive clutch)
+MVP_DEF_WPA_WEIGHT = 0.2     # individual DEFENSIVE WPA share (defensive clutch; secondary)
+# Per-defensive-group box weights (DEF_BOX_WEIGHTS, below) now feed the DEFENSIVE
+# performance rating; defValue's box term and the old MVP_DEF_WEIGHT/MVP_DEF_BOX_WEIGHT
+# are retired by the unify.
 
 # Per-defensive-position weights for the box-stat composite (z-scored within
 # group) — the box (production) term of defValue, blended with individual

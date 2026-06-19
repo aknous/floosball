@@ -2409,7 +2409,45 @@ class PlayerManager:
                     adjustment = effectiveAdjustment * percentileDifference
                     # seasonPerformanceRating stored for MVP/analysis only;
                     # playerRating stays fixed for the season
-        
+
+        # ── Defensive + overall (two-way) performance ratings ──
+        # Parallel to the offensive ratings above: a player's defensive production
+        # (DEF_BOX_WEIGHTS composite) percentile WITHIN their defensive group →
+        # 60-100, then an offense-dominant OVERALL composite. The overall rating is
+        # what MVP/All-Pro rank on (perfZ) and what the UI shows as the player's
+        # season performance; the offensive rating stays separate for the offensive
+        # over/under metric.
+        from constants import DEF_BOX_WEIGHTS, PERF_OFFENSE_WEIGHT, PERF_DEFENSE_WEIGHT
+        defByGroup: Dict[str, list] = {}
+        seenDef = set()
+        for players in (self.activeQbs, self.activeRbs, self.activeWrs, self.activeTes):
+            for p in players:
+                if p.id in seenDef:
+                    continue
+                dpos = getattr(p, 'defensivePosition', None)
+                if dpos is None:
+                    continue
+                seenDef.add(p.id)
+                grp = dpos.name if hasattr(dpos, 'name') else str(dpos)
+                box = (p.seasonStatsDict.get('defense', {}) or {}) if hasattr(p, 'seasonStatsDict') else {}
+                w = DEF_BOX_WEIGHTS.get(grp, {})
+                boxScore = sum(wt * float(box.get(k, 0) or 0) for k, wt in w.items())
+                defByGroup.setdefault(grp, []).append((p, boxScore))
+        for grp, members in defByGroup.items():
+            grpScores = [b for _, b in members]
+            for p, b in members:
+                pctRank = stats.percentileofscore(grpScores, b, 'rank')
+                p.seasonDefensivePerformanceRating = round(FloosMethods.scaleValue(pctRank, 60, 100, 0, 100))
+        # Overall composite (offense-dominant); offense-only for kickers / no defense.
+        for players in (self.activeQbs, self.activeRbs, self.activeWrs, self.activeTes, self.activeKs):
+            for p in players:
+                offR = getattr(p, 'seasonPerformanceRating', 0) or 0
+                defR = getattr(p, 'seasonDefensivePerformanceRating', 0) or 0
+                p.seasonOverallPerformanceRating = (
+                    round(PERF_OFFENSE_WEIGHT * offR + PERF_DEFENSE_WEIGHT * defR)
+                    if (offR and defR) else (offR or defR)
+                )
+
         # Sort players by performance ratings
         self.activeQbs.sort(key=lambda player: getattr(player, 'seasonPerformanceRating', 0), reverse=True)
         self.activeRbs.sort(key=lambda player: getattr(player, 'seasonPerformanceRating', 0), reverse=True)
@@ -2592,24 +2630,22 @@ class PlayerManager:
         return ratings
 
     def _computeMvpCandidates(self) -> List[Dict[str, Any]]:
-        """Compute MVP value (two-way): mvpScore = offenseScore +
-        MVP_DEF_WEIGHT*defValue, where
-          offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaRateZ
-        (pooled-std z-scores of the season performance rating and the *per-snap*
-        offensive WPA rate vs the player's own position mean), and defValue is the
-        player's INDIVIDUAL defensive box-stat value (z within defensive group; see
-        _computeDefValues).
-
-        Defense is folded in via individual box STATS, not team-shared WPA. The old
-        WPA-based defValue spread a team's defensive WPA across all five on-field
-        defenders, so it clustered a whole team's skill players onto the ballot by
-        team defense; per-player box stats don't. It's a SECONDARY term
-        (MVP_DEF_WEIGHT < the offense scale) so offense still leads but a two-way /
-        standout defender climbs. Sorted by mvpScore desc.
+        """Compute the MVP value metric (two-way), a flat z-score blend:
+          mvpScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaRateZ
+                     + MVP_DEF_WPA_WEIGHT*defWpaZ
+        where perfZ is the z (pooled-std, vs position mean) of the player's OVERALL
+        performance rating — a composite of their offensive AND defensive PRODUCTION
+        (seasonOverallPerformanceRating). So defensive production is already in perfZ;
+        the only standalone defensive term is the individual defensive clutch WPA
+        (defWpaZ, from _computeDefValues). offenseWpaRate is per-snap so game volume
+        doesn't inflate it. Both WPA terms are per-player (offense→ball-handler,
+        defense→playmaker), so neither clusters the way the old team-shared defensive
+        WPA did. Defense is secondary (30% of the perf composite + a small WPA term)
+        so offense leads but a two-way / standout defender climbs. Sorted by mvpScore.
         """
         import numpy as np
         from api_response_builders import PlayerResponseBuilder
-        from constants import MVP_PERF_WEIGHT, MVP_WPA_WEIGHT, MVP_DEF_WEIGHT
+        from constants import MVP_PERF_WEIGHT, MVP_WPA_WEIGHT, MVP_DEF_WPA_WEIGHT
 
         def wpaRate(p):
             # Per-snap offensive WPA — a rate, not an accumulated volume, so clutch
@@ -2632,11 +2668,11 @@ class PlayerManager:
         allWpas = []
         for position, players in positionGroups.items():
             eligible = [p for p in players
-                        if getattr(p, 'seasonPerformanceRating', 0) > 0
+                        if getattr(p, 'seasonOverallPerformanceRating', 0) > 0
                         and hasattr(p, 'team') and p.team != 'Free Agent']
             if len(eligible) < 2:
                 continue
-            ratings = [p.seasonPerformanceRating for p in eligible]
+            ratings = [p.seasonOverallPerformanceRating for p in eligible]
             wpas = [wpaRate(p) for p in eligible]
             positionData[position] = (eligible, float(np.mean(ratings)), float(np.mean(wpas)))
             allRatings.extend(ratings)
@@ -2654,11 +2690,16 @@ class PlayerManager:
         candidates = []
         for position, (eligible, posMean, posWpaMean) in positionData.items():
             for player in eligible:
-                perfZ = (player.seasonPerformanceRating - posMean) / pooledStd
+                # perfZ is the two-way production composite (offense + defense box,
+                # via seasonOverallPerformanceRating). offenseScore = that + the
+                # offensive clutch WPA. defWpaZ adds the defensive clutch WPA (the
+                # only defensive term not already inside perfZ). No box defValue —
+                # defensive production lives in perfZ now.
+                perfZ = (player.seasonOverallPerformanceRating - posMean) / pooledStd
                 wpaZ = (wpaRate(player) - posWpaMean) / pooledWpaStd
                 offenseScore = MVP_PERF_WEIGHT * perfZ + MVP_WPA_WEIGHT * wpaZ
-                defValue = defValues.get(player.id, {}).get('defValue', 0.0)  # individual box-stat z
-                mvpScore = offenseScore + MVP_DEF_WEIGHT * defValue
+                defWpaZ = defValues.get(player.id, {}).get('defWpaZ', 0.0)
+                mvpScore = offenseScore + MVP_DEF_WPA_WEIGHT * defWpaZ
                 hasTeamObj = hasattr(player.team, 'name')
                 candidates.append({
                     'player': player,
@@ -2669,11 +2710,13 @@ class PlayerManager:
                     'teamAbbr': getattr(player.team, 'abbr', '') if hasTeamObj else '',
                     'teamColor': getattr(player.team, 'color', '#334155') if hasTeamObj else '#334155',
                     'teamId': player.team.id if hasTeamObj else None,
-                    'seasonPerformanceRating': player.seasonPerformanceRating,
-                    'zScore': round(perfZ, 3),            # kept: _selectSeasonMVP logs it + frontend
+                    'seasonPerformanceRating': getattr(player, 'seasonOverallPerformanceRating', player.seasonPerformanceRating),
+                    'offensivePerformanceRating': player.seasonPerformanceRating,
+                    'defensivePerformanceRating': getattr(player, 'seasonDefensivePerformanceRating', 0),
+                    'zScore': round(perfZ, 3),            # overall production z (logged by _selectSeasonMVP + frontend)
                     'wpaScore': round(wpaZ, 3),
                     'offenseScore': round(offenseScore, 3),
-                    'defValue': round(defValue, 3),
+                    'defValue': round(defWpaZ, 3),        # defensive clutch WPA z (defensive production is in zScore now)
                     'mvpScore': round(mvpScore, 3),
                     'seasonWpa': round(float(getattr(player, 'seasonWpa', 0.0)), 2),
                     'gamesPlayed': getattr(player, 'gamesPlayed', 0),
@@ -2693,17 +2736,17 @@ class PlayerManager:
         return deduped
 
     def _computeDefValues(self) -> Dict[int, Dict[str, Any]]:
-        """Per-player defensive value, pooled within defensive position group
-        (S/LB/CB/DE). defValue = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ
-        — a position-weighted INDIVIDUAL box-stat composite (production) blended
-        with the player's defensive WPA (clutch value the box misses). Both terms
-        are now per-player (defensive WPA is attributed to the playmaker, not the
-        unit — see floosball_game _attributeWpa), so neither clusters the way the
-        old team-shared WPA did. z-scored WITHIN each group using that group's own
-        mean and std. Returns {playerId: {defValue, defWpaZ, defBoxZ, defGroup,
-        seasonDefWpa, boxScore}}."""
+        """Per-player INDIVIDUAL defensive z-scores, pooled within defensive position
+        group (S/LB/CB/DE) using that group's own mean and std. Returns defBoxZ
+        (position-weighted box-stat production), defWpaZ (defensive WPA, attributed
+        to the playmaker — see floosball_game _attributeWpa, so it doesn't cluster),
+        and defValue = defBoxZ + defWpaZ (a standalone total used for the
+        defensive-candidate ranking + display). NOTE: the unified MVP no longer
+        reads defValue — defensive PRODUCTION lives in seasonOverallPerformanceRating
+        (perfZ) and MVP adds only defWpaZ (defensive clutch). Returns {playerId:
+        {defValue, defWpaZ, defBoxZ, defGroup, seasonDefWpa, boxScore}}."""
         import numpy as np
-        from constants import MVP_DEF_WPA_WEIGHT, MVP_DEF_BOX_WEIGHT, DEF_BOX_WEIGHTS
+        from constants import DEF_BOX_WEIGHTS
 
         # The roster's offensive players double as the defense (K excluded).
         defenders = []  # (player, group, defWpa, boxScore)
@@ -2748,7 +2791,7 @@ class PlayerManager:
             bMean, bStd = groupBoxStats[grp]
             defWpaZ = (defWpa - wMean) / wStd
             defBoxZ = (boxScore - bMean) / bStd
-            defValue = MVP_DEF_WPA_WEIGHT * defWpaZ + MVP_DEF_BOX_WEIGHT * defBoxZ
+            defValue = defBoxZ + defWpaZ   # standalone total (ranking/display); MVP uses defWpaZ + perfZ
             out[p.id] = {
                 'defValue': round(defValue, 3),
                 'defWpaZ': round(defWpaZ, 3),
