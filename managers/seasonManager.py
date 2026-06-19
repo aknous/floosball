@@ -8859,7 +8859,9 @@ class SeasonManager:
         """
         if week < 4:
             return  # Same warm-up gate as the form shift
-        from random import randint as _attRand
+        from random import randint as _attRand, random as _attFrac
+        from constants import (ATTITUDE_NEUTRAL, ATTITUDE_REVERT_RATE,
+                               ATTITUDE_DRIFT_MAGNITUDE)
 
         for team in self.leagueManager.teams:
             winPct = team.seasonTeamStats.get('winPerc', 0.5)
@@ -8867,39 +8869,70 @@ class SeasonManager:
             if len(starters) < 4:
                 continue
 
-            # Magnitude scales with how far from .500 (0..2 per week max).
-            magnitude = abs(winPct - 0.5) * 4
-            if magnitude < 0.5:
-                continue  # Mid-tier teams: no drift signal
+            # Active win/loss push scales with distance from .500. Mid-tier teams
+            # (magnitude < 0.5) get only the mean-reversion below, no active push.
+            magnitude = abs(winPct - 0.5) * ATTITUDE_DRIFT_MAGNITUDE
+            activeDrift = magnitude >= 0.5
 
-            # Coach attitude scales drift. A leader-coach (90+) makes upward
-            # drift faster (winning teams build leaders sooner) and softens
-            # downward drift (good coach holds the room together when losing).
-            # A toxic-coach (≤70) does the opposite. ±~30% effect at extremes.
+            # Coach attitude scales the active drift. A leader-coach (90+) makes
+            # upward drift faster and softens downward drift; a toxic-coach (<=70)
+            # does the opposite. ~30% effect at extremes.
             coach = getattr(team, 'coach', None)
             coachAttitude = getattr(coach, 'attitude', 80) if coach else 80
             coachLift = (coachAttitude - 80) / 60  # -1/3 .. +1/3 across 60-100
 
             for p in starters:
                 current = getattr(p.attributes, 'attitude', 80) or 80
-                if winPct > 0.5:
-                    # Toward leadership. Players already near the ceiling
-                    # gain less (diminishing returns above 90). Coach lift
-                    # adds up to +30% to upward drift magnitude.
+                if activeDrift and winPct > 0.5:
+                    # Toward leadership. Diminishing returns above 90; leader-coach
+                    # adds up to +30% to the upward drift.
                     ceilingResist = max(0.0, (current - 80) / 20)  # 0..1
                     coachScale = 1.0 + max(-0.3, coachLift)  # leader: faster, toxic: same
                     cap = max(0, round(magnitude * coachScale * (1.0 - 0.6 * ceilingResist)))
                     if cap > 0:
-                        p.attributes.attitude = min(100, current + _attRand(0, cap))
-                else:
-                    # Toward toxicity. Resilience cushions the slide. A
-                    # leader-coach further cushions; a toxic-coach amplifies.
+                        current = min(100, current + _attRand(0, cap))
+                elif activeDrift:
+                    # Toward toxicity. Resilience cushions the slide; a leader-coach
+                    # cushions further, a toxic-coach amplifies.
                     resilience = getattr(p.attributes, 'resilience', 80) or 80
                     resilienceResist = max(0.0, (resilience - 70) / 30)  # 0..1
                     coachScale = max(0.5, 1.0 - coachLift)  # leader: cushion, toxic: amp
                     cap = max(0, round(magnitude * coachScale * (1.0 - 0.5 * resilienceResist)))
                     if cap > 0:
-                        p.attributes.attitude = max(0, current - _attRand(0, cap))
+                        current = max(0, current - _attRand(0, cap))
+
+                # Mean-reversion toward neutral -- weak, proportional to distance,
+                # applied EVERY week (even mid-tier/idle teams) so soured/inflated
+                # extremes decay back toward the middle. Weaker than the active push,
+                # so a losing team still sours (just slower) while a soured player on
+                # a mid-tier team or in the FA pool recovers over a season or two.
+                # Probabilistic 1-point step (fractional amount = chance of a move)
+                # so a small rate still shifts the integer attribute.
+                revertAmount = (ATTITUDE_NEUTRAL - current) * ATTITUDE_REVERT_RATE
+                step = int(revertAmount)
+                frac = abs(revertAmount - step)
+                if frac and _attFrac() < frac:
+                    step += 1 if revertAmount > 0 else -1
+                current = max(0, min(100, current + step))
+
+                p.attributes.attitude = current
+
+        # Free agents have no team record, so they get ONLY the mean-reversion --
+        # without this the FA pool stays a permanent toxicity sink (the rostered
+        # reversion above never reaches an unsigned player). Lets a soured FA
+        # recover toward neutral while waiting to be signed.
+        for p in (getattr(self.playerManager, 'freeAgents', None) or []):
+            attrs = getattr(p, 'attributes', None)
+            if attrs is None:
+                continue
+            current = getattr(attrs, 'attitude', 80) or 80
+            revertAmount = (ATTITUDE_NEUTRAL - current) * ATTITUDE_REVERT_RATE
+            step = int(revertAmount)
+            frac = abs(revertAmount - step)
+            if frac and _attFrac() < frac:
+                step += 1 if revertAmount > 0 else -1
+            if step:
+                attrs.attitude = max(0, min(100, current + step))
 
     def _recomputeFundingTiersForOffseason(self, completedSeason: int) -> None:
         """Refresh funding tiers at offseason start using the completed

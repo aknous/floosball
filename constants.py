@@ -482,6 +482,19 @@ RETIREMENT_CHANCE_EARLY = 25        # % chance (yearsPast >= EARLY)
 # longevity and still playing, they retire even mid-contract.
 RETIREMENT_MIDCONTRACT_YEARS_PAST = 3
 
+# ---- Locker-room attitude drift (the toxic <-> leader axis) ----
+# Attitude drifts with team record (seasonManager._driftAttitudes): winning trends
+# a roster toward Leader, losing toward Toxic. To stop the league from polarizing
+# to the poles over many seasons (which empties the middle and turns the FA pool
+# into a toxicity sink), a weak MEAN-REVERSION pulls every player back toward
+# neutral each week, proportional to their distance from it. The reversion is
+# weaker than the active win/loss push, so a genuinely losing team still sours --
+# just slower -- while a soured player on a mid-tier team or in the FA pool recovers
+# (~+0.4/week at attitude 40 -> Sour in a season, Steady in two).
+ATTITUDE_NEUTRAL = 80              # resting attitude the reversion pulls toward
+ATTITUDE_REVERT_RATE = 0.01       # weekly reversion = this fraction of distance-to-neutral
+ATTITUDE_DRIFT_MAGNITUDE = 3      # win/loss drift multiplier on |winPct-0.5| (was 4)
+
 # ---- Roster Supply Floor ----
 # After retirements are known, guarantee the league has enough living players at
 # EACH position to fill every roster slot (24 teams × {QB1,RB1,WR2,TE1,K1}),
