@@ -9331,39 +9331,40 @@ class SeasonManager:
             session.close()
 
     def _assignFundingTiers(self, session, season: int) -> None:
-        """Assign funding tiers by each team's share of league funding.
+        """Assign the MARKET tier by each team's share of the league FANBASE.
 
-        A team's ratio = effective_funding / fair_share, where fair_share is
-        total_league_funding / team_count. Self-scaling: as the economy grows
-        fair-share grows with it, so MEGA/LARGE always mean "meaningfully
-        ahead of the pack today" rather than a fixed floobit target that
-        decays in value as fans get richer.
-
-        Thresholds from constants.FUNDING_TIER_THRESHOLDS (multiples of fair-share):
-          ≥ 2.0× → MEGA_MARKET   (owns ≥2× the average slice)
-          ≥ 1.15× → LARGE_MARKET (15%+ above average)
-          ≥ 0.85× → MID_MARKET   (within ±15% of average)
-          < 0.85× → SMALL_MARKET (15%+ below average)
+        Markets→Facilities cutover: "Market" now means fanbase SIZE (popularity),
+        not funding — the dev/morale/fatigue/scouting effects come from facilities
+        now, and FA order from Appeal. So MEGA/LARGE/MID/SMALL_MARKET band a team's
+        fan count against the league average:
+          ratio = fanCount / fairShare, fairShare = totalFans / teamCount.
+        Thresholds (FUNDING_TIER_THRESHOLDS): ≥2.0 MEGA, ≥1.15 LARGE, ≥0.85 MID,
+        else SMALL. The label still drives expectation-pressure scaling (a genuine
+        market-size effect) and the Market display. (Method name kept for callers;
+        the `funding_tier` column now holds the fanbase label.)
         """
-        from database.models import TeamFunding
+        from database.models import TeamFunding, User
+        from sqlalchemy import func
         from constants import FUNDING_TIER_NAMES, FUNDING_TIER_THRESHOLDS
 
         records = session.query(TeamFunding).filter_by(season=season).all()
         if not records:
             return
 
-        totalFunding = sum((r.effective_funding or 0) for r in records)
+        # Fan count per team = users whose favorite team it is.
+        fanCounts = dict(
+            session.query(User.favorite_team_id, func.count())
+            .filter(User.favorite_team_id.isnot(None))
+            .group_by(User.favorite_team_id).all())
         teamCount = len(records)
-        # If the whole league has zero funding, there's nothing to rank —
-        # everyone sits at MID. Should never happen in practice (baseline
-        # ensures each team has some effective funding) but guard anyway.
-        if totalFunding <= 0 or teamCount == 0:
-            fairShare = 1
-        else:
-            fairShare = max(1, totalFunding / teamCount)
+        totalFans = sum(fanCounts.get(r.team_id, 0) for r in records)
+        # Fanless league (no favorites set yet) → everyone neutral MID.
+        fairShare = (totalFans / teamCount) if (totalFans > 0 and teamCount > 0) else 0
 
-        def tierFor(effective: int) -> tuple:
-            ratio = (effective or 0) / fairShare
+        def tierFor(fanCount: int) -> tuple:
+            if fairShare <= 0:
+                return 'MID_MARKET', 3
+            ratio = fanCount / fairShare
             for idx, name in enumerate(FUNDING_TIER_NAMES):
                 if ratio >= FUNDING_TIER_THRESHOLDS[name]:
                     return name, idx + 1
@@ -9371,13 +9372,11 @@ class SeasonManager:
             return FUNDING_TIER_NAMES[last], last + 1
 
         for rec in records:
-            tierName, tierRank = tierFor(rec.effective_funding or 0)
+            tierName, tierRank = tierFor(fanCounts.get(rec.team_id, 0))
             rec.funding_tier = tierName
             rec.tier_rank = tierRank
-            # Snapshot the funding value this tier was computed from so the
-            # markets chart can place the filled dot in the matching band
-            # even when post-recompute contributions push effective_funding
-            # higher than what locked the tier.
+            # tier_locked_funding is a legacy markets-chart snapshot (funding-based);
+            # left as effective_funding for now — the chart is reworked in the UI phase.
             rec.tier_locked_funding = rec.effective_funding or 0
 
         session.flush()
