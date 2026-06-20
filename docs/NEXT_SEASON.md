@@ -35,10 +35,12 @@ A survivor-style contest layer on top of pick-em (last-one-standing elimination)
 
 ## Bugs / smaller fixes
 
-### FA Requisition needs 2 votes but Renewal needs 1 (inconsistent threshold)
-Player-reported confusion: Front Office shows "RATIFIED FA Requisition <player> 1/2 votes 50%" while Renewal Endorsements pass at 1/1 100%.
-- **Investigated (2026-06-20) — root cause:** `GM_VOTE_BASE_MIN` (constants.py:816) sets a floor of **2** for both `resign_player` and `sign_fa`, but only `sign_fa` actually enforces it. `sign_fa` resolves via `calculateBallotThreshold` (honors the base-min → floor 2); `resign_player`/`cut_player`/`fire_coach` resolve via `calculateThreshold`, which **ignores** `GM_VOTE_BASE_MIN` and hardcodes `max(1, ceil(fanCount × GM_PASS_FRACTION))` → floor **1**. So those vote types' base-mins (resign 2, cut 2, fire 3) are effectively dead, and FA is the lone type that needs 2.
-- **Fix options (owner to decide):** (A) make FA consistent — floor `calculateBallotThreshold` at 1 so a small fanbase signs an FA on 1 vote like a re-sign; (B) make them all honor `GM_VOTE_BASE_MIN` (so resign/cut also need 2 — but that makes more things confusing-to-pass, probably not it); (C) keep FA's higher bar (FA signings need broader consensus than re-signing your own guy) and surface a UI note explaining why. Likely **A** or **C**. `gmManager.py:35,58`.
+### FA Requisition vote reads as "passed below threshold" (paradigm + threshold inconsistency)
+Player-reported confusion: Front Office shows "RATIFIED FA Requisition <player> **1/2 votes 50%**" — it *passed* despite showing below the bar — while Renewal Endorsements pass at 1/1 100%. Two distinct root causes, both real:
+- **Investigated (2026-06-20):**
+  1. **FA resolves by a PROBABILITY ROLL, not a deterministic threshold.** `resolveSignFaVotes` (`gmManager.py:440`): `probability = totalBallots/threshold` (1/2 = 0.5), then `_rollSuccess(0.5)` — a 50% coin flip. The roll *hit*, so it ratified. Renewals/cut/fire are **deterministic** (`net ≥ threshold` passes, else fails); hire is **plurality**. Three paradigms, all rendered with the same "X/Y votes Z%" string, so a 50%-chance-that-happened-to-hit looks like "passed with half the votes."
+  2. **Threshold floor mismatch.** `GM_VOTE_BASE_MIN` (constants.py:816) declares a floor of 2 for resign+FA, but only `sign_fa` (via `calculateBallotThreshold`) enforces it; resign/cut/fire (via `calculateThreshold`) ignore it and floor at `max(1, …)` = 1. So FA needs 2, renew needs 1.
+- **Fix options (owner to decide):** the bigger fix is the *display/paradigm* — either (A) make FA deterministic too (sign the ranked leader iff ballots ≥ threshold; no roll) so "X/Y Z%" means the same everywhere; or (B) keep the roll but render FA's % unmistakably as a *chance* ("50% chance to sign"), visually distinct from the deterministic progress bars. Plus decide the floor (FA 2 vs 1) for consistency. `gmManager.py:35,58,440`.
 
 ## Shipped (this cycle)
 - Card-effect tuning pass (Showoff base card OP) ✅
