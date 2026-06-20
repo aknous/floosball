@@ -151,32 +151,42 @@ class TeamManager:
             self.logger.warning(f"Failed to load team facilities: {e}")
 
     def ensureTeamFacilities(self) -> None:
-        """Seed default facilities for any team that has none, then reload.
-
-        Idempotent: teams already seeded (by the tier→facilities migration on an
-        existing DB, or a prior run) are skipped. Covers the FRESH-league case —
-        the init-time migration no-ops because teams don't exist yet, so brand-new
-        teams get the neutral MID baseline (perk facilities at Lv2, Stadium Lv0)
-        here, once they're persisted with ids. Run after saveTeamData()."""
+        """Seed facilities for any team that has none, GRANDFATHERED from the
+        team's current market tier (MEGA→Lv4, LARGE→Lv3, MID→Lv2, SMALL→Lv1;
+        Stadium Lv0) so an existing DB reproduces today's tier perks. The tier is
+        read from the latest team_funding row (team.fundingTier isn't populated
+        yet at this point in boot). Idempotent — teams that already have facility
+        rows are skipped. This is the RELIABLE seed point (runs after saveTeamData,
+        with teams persisted); the init-time migration no-ops when teams don't
+        exist yet, which is why this — not a flat MID baseline — does the
+        grandfathering. A fresh league with no funding history falls back to MID."""
         try:
-            from database.models import TeamFacility
+            from database.models import TeamFacility, TeamFunding
             from constants import (FACILITY_CATALOG, MIGRATION_TIER_START_LEVEL,
                                    MIGRATION_STADIUM_START_LEVEL)
+            from sqlalchemy import func
             if not self.db_session:
                 return
             existing = {tid for (tid,) in self.db_session.query(TeamFacility.team_id).distinct().all()}
+            # latest-season market tier per team (the grandfather basis)
+            sub = (self.db_session.query(TeamFunding.team_id, func.max(TeamFunding.season).label('s'))
+                   .group_by(TeamFunding.team_id).subquery())
+            tierByTeam = {tid: (tier or 'MID_MARKET') for tid, tier in
+                          self.db_session.query(TeamFunding.team_id, TeamFunding.funding_tier)
+                          .join(sub, (TeamFunding.team_id == sub.c.team_id) & (TeamFunding.season == sub.c.s)).all()}
             seeded = 0
             for team in self.teams:
                 if not getattr(team, 'id', None) or team.id in existing:
                     continue
+                tier = tierByTeam.get(team.id, 'MID_MARKET')
                 for key in FACILITY_CATALOG:
                     level = (MIGRATION_STADIUM_START_LEVEL if key == 'stadium'
-                             else MIGRATION_TIER_START_LEVEL['MID_MARKET'])
+                             else MIGRATION_TIER_START_LEVEL.get(tier, 2))
                     self.db_session.add(TeamFacility(team_id=team.id, facility_key=key, level=level))
                 seeded += 1
             if seeded:
                 self.db_session.commit()
-                self.logger.info(f"Seeded default facilities for {seeded} new team(s)")
+                self.logger.info(f"Seeded facilities (tier-grandfathered) for {seeded} team(s)")
             self.loadFacilities()
         except Exception as e:
             self.db_session.rollback() if self.db_session else None
