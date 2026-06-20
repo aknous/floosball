@@ -5696,9 +5696,10 @@ def get_league_facilities():
         fanCounts = dict(session.query(_UserModel.favorite_team_id, func.count())
                          .filter(_UserModel.favorite_team_id.isnot(None))
                          .group_by(_UserModel.favorite_team_id).all())
-        # market tier (fanbase label)
-        tierByTeam = {r.team_id: r.funding_tier for r in
-                      session.query(TeamFunding).filter_by(season=season).all()}
+        # market tier (fanbase label) + effective_funding (the FA-order tiebreaker)
+        fundingRows = session.query(TeamFunding).filter_by(season=season).all()
+        tierByTeam = {r.team_id: r.funding_tier for r in fundingRows}
+        effByTeam = {r.team_id: (r.effective_funding or 0) for r in fundingRows}
         out = []
         for team in (tm.teams if tm else []):
             levels = levelsByTeam.get(team.id, {})
@@ -5712,8 +5713,14 @@ def get_league_facilities():
                 'levels': {k: levels.get(k, 0) for k in FACILITY_CATALOG},
                 'fanCount': fanCounts.get(team.id, 0),
                 'marketTier': tierByTeam.get(team.id, 'MID_MARKET'),
+                '_eff': effByTeam.get(team.id, 0),
             })
-        out.sort(key=lambda t: (-t['appeal'], -t['fanCount']))
+        # Match the real FA draft order (_buildFaDraftOrder): Appeal, then
+        # effective_funding as the within-Appeal tiebreaker. So the displayed
+        # "FA PICK #N" equals the actual draft slot, including for tied teams.
+        out.sort(key=lambda t: (-t['appeal'], -t['_eff']))
+        for t in out:
+            t.pop('_eff', None)
         return build_success_response({
             'season': season,
             'facilityCatalog': {k: v.get('name', k) for k, v in FACILITY_CATALOG.items()},
