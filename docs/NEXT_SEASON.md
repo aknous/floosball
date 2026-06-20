@@ -35,13 +35,10 @@ A survivor-style contest layer on top of pick-em (last-one-standing elimination)
 
 ## Bugs / smaller fixes
 
-### FA Requisition floor still 2 vs Renewal's 1 (minor, optional)
-With the FA vote now deterministic (see Shipped), the remaining wrinkle is just the threshold *floor*: FA needs 2 ballots (`GM_VOTE_BASE_MIN["sign_fa"]=2`, enforced via `calculateBallotThreshold`) while resign/cut/fire floor at 1 (their `calculateThreshold` ignores `GM_VOTE_BASE_MIN`). Defensible (signing an outside FA wants a bit more consensus than re-signing your own guy) and no longer *confusing* now that the display is consistent — but if you want them identical, drop FA's floor to 1. `constants.py:816`, `gmManager.py:58`.
-
 ## Shipped (this cycle)
 - Card-effect tuning pass (Showoff base card OP) ✅
 - Bracket achievement tiers unlock only at Floos-Bowl end (not incrementally) ✅
 - Day-end site slowness (synchronous email sending off the hot path) ✅
 - Playoffs: team streak/form keep moving; games-played tracks regular season only; round-1 bye fatigue reprieve ✅
 - Reactions: pointerdown gesture-gate (phantom-reaction fix) ✅
-- Front Office: FA Requisition now resolves deterministically (was a probability roll that read as "passed below threshold") ✅ (`b578400`)
+- Front Office: FA Requisition reworked — **thresholdless ranked-choice** (any ballots resolve via IRV to the most-wanted available targets; no probability roll, no pass/fail). Front Office shows the ranked **priority target list**, not a "RATIFIED X/Y votes %" tally. Makes the old floor-2-vs-1 concern moot (no threshold at all). ✅ (backend `ac36be7`, frontend `afebc8a`)
