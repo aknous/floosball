@@ -35,12 +35,8 @@ A survivor-style contest layer on top of pick-em (last-one-standing elimination)
 
 ## Bugs / smaller fixes
 
-### FA Requisition vote reads as "passed below threshold" (paradigm + threshold inconsistency)
-Player-reported confusion: Front Office shows "RATIFIED FA Requisition <player> **1/2 votes 50%**" — it *passed* despite showing below the bar — while Renewal Endorsements pass at 1/1 100%. Two distinct root causes, both real:
-- **Investigated (2026-06-20):**
-  1. **FA resolves by a PROBABILITY ROLL, not a deterministic threshold.** `resolveSignFaVotes` (`gmManager.py:440`): `probability = totalBallots/threshold` (1/2 = 0.5), then `_rollSuccess(0.5)` — a 50% coin flip. The roll *hit*, so it ratified. Renewals/cut/fire are **deterministic** (`net ≥ threshold` passes, else fails); hire is **plurality**. Three paradigms, all rendered with the same "X/Y votes Z%" string, so a 50%-chance-that-happened-to-hit looks like "passed with half the votes."
-  2. **Threshold floor mismatch.** `GM_VOTE_BASE_MIN` (constants.py:816) declares a floor of 2 for resign+FA, but only `sign_fa` (via `calculateBallotThreshold`) enforces it; resign/cut/fire (via `calculateThreshold`) ignore it and floor at `max(1, …)` = 1. So FA needs 2, renew needs 1.
-- **Fix options (owner to decide):** the bigger fix is the *display/paradigm* — either (A) make FA deterministic too (sign the ranked leader iff ballots ≥ threshold; no roll) so "X/Y Z%" means the same everywhere; or (B) keep the roll but render FA's % unmistakably as a *chance* ("50% chance to sign"), visually distinct from the deterministic progress bars. Plus decide the floor (FA 2 vs 1) for consistency. `gmManager.py:35,58,440`.
+### FA Requisition floor still 2 vs Renewal's 1 (minor, optional)
+With the FA vote now deterministic (see Shipped), the remaining wrinkle is just the threshold *floor*: FA needs 2 ballots (`GM_VOTE_BASE_MIN["sign_fa"]=2`, enforced via `calculateBallotThreshold`) while resign/cut/fire floor at 1 (their `calculateThreshold` ignores `GM_VOTE_BASE_MIN`). Defensible (signing an outside FA wants a bit more consensus than re-signing your own guy) and no longer *confusing* now that the display is consistent — but if you want them identical, drop FA's floor to 1. `constants.py:816`, `gmManager.py:58`.
 
 ## Shipped (this cycle)
 - Card-effect tuning pass (Showoff base card OP) ✅
@@ -48,3 +44,4 @@ Player-reported confusion: Front Office shows "RATIFIED FA Requisition <player> 
 - Day-end site slowness (synchronous email sending off the hot path) ✅
 - Playoffs: team streak/form keep moving; games-played tracks regular season only; round-1 bye fatigue reprieve ✅
 - Reactions: pointerdown gesture-gate (phantom-reaction fix) ✅
+- Front Office: FA Requisition now resolves deterministically (was a probability roll that read as "passed below threshold") ✅ (`b578400`)
