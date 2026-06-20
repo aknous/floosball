@@ -447,7 +447,12 @@ class GmManager:
         the team should pursue first. The directive walks the resolved
         ranking and assigns each player to the first remaining open slot
         at their position; players whose positions are already filled get
-        skipped.
+        skipped — so a single ballot resolution can sign MULTIPLE FAs when
+        several positions are open.
+
+        DETERMINISTIC: passes iff totalBallots >= threshold (no probability
+        roll), matching the resign/cut/fire votes so the Front Office UI's
+        "X/Y votes Z%" reads as progress-to-threshold for every vote type.
 
         Returns:
           - directives: {teamId: [playerId, ...]} the slot-walk-trimmed
@@ -491,19 +496,18 @@ class GmManager:
             if overallRanking:
                 overallRankingsByTeam[team.id] = list(overallRanking)
 
-            if probability == 0.0:
+            # DETERMINISTIC: a ranked-choice FA requisition passes when enough
+            # fans submitted ballots (totalBallots >= threshold) — same pass/fail
+            # semantics as the resign/cut/fire votes, so the "X/Y votes Z%" UI
+            # means progress-to-threshold everywhere (no probability roll that
+            # could "ratify" below the bar). On pass, the slot-walk signs the
+            # fan-ranked leader(s) into open slots — potentially MULTIPLE FAs when
+            # several positions are open. On fail, the normal FA draft fills the slots.
+            if totalBallots < threshold:
                 self.voteRepo.recordResult(
                     teamId=team.id, season=season, voteType="sign_fa",
                     totalVotes=totalBallots, threshold=threshold,
-                    probability=0.0, outcome="below_threshold",
-                )
-                continue
-
-            if not self._rollSuccess(probability):
-                self.voteRepo.recordResult(
-                    teamId=team.id, season=season, voteType="sign_fa",
-                    totalVotes=totalBallots, threshold=threshold,
-                    probability=probability, outcome="failed_roll",
+                    probability=probability, outcome="below_threshold",
                 )
                 continue
 
