@@ -225,3 +225,68 @@ def openProject(session, teamId: int, facilityKey: str, currentLevel: int, seaso
         funded=0, opened_season=season, status='open')
     session.add(proj)
     return proj
+
+
+# ─── Voting (Phase 3) ────────────────────────────────────────────────────────
+
+def voteCandidates(levels: dict, openProjectKeys: set) -> list:
+    """Facilities eligible to be the next project: not maxed, and not already
+    in progress. `levels` = {facility_key: level}, openProjectKeys = facilities
+    with an open project. Returns [{key, name, currentLevel, targetLevel}]."""
+    out = []
+    for key, cfg in FACILITY_CATALOG.items():
+        lvl = levels.get(key, 0)
+        if lvl < FACILITY_MAX_LEVEL and key not in openProjectKeys:
+            out.append({'key': key, 'name': cfg.get('name', key),
+                        'currentLevel': lvl, 'targetLevel': lvl + 1,
+                        'kind': 'new' if lvl == 0 else 'upgrade'})
+    return out
+
+
+def castFacilityVote(session, teamId: int, userId: int, facilityKey: str, season: int) -> None:
+    """Upsert a fan's facility vote (one per fan/team/season, changeable)."""
+    from database.models import FacilityVote
+    if facilityKey not in FACILITY_CATALOG:
+        raise ValueError("Unknown facility")
+    row = session.query(FacilityVote).filter_by(team_id=teamId, user_id=userId, season=season).first()
+    if row:
+        row.facility_key = facilityKey
+    else:
+        session.add(FacilityVote(team_id=teamId, user_id=userId, facility_key=facilityKey, season=season))
+        session.flush()  # make the insert visible to a re-cast in the same session
+
+
+def getFacilityVote(session, teamId: int, userId: int, season: int):
+    from database.models import FacilityVote
+    row = session.query(FacilityVote).filter_by(team_id=teamId, user_id=userId, season=season).first()
+    return row.facility_key if row else None
+
+
+def tallyFacilityVotes(session, teamId: int, season: int) -> dict:
+    """{facility_key: vote_count} for a team's season."""
+    from database.models import FacilityVote
+    from sqlalchemy import func
+    rows = (session.query(FacilityVote.facility_key, func.count())
+            .filter_by(team_id=teamId, season=season)
+            .group_by(FacilityVote.facility_key).all())
+    return {k: int(c) for k, c in rows}
+
+
+def resolveFacilityVote(session, teamId: int, season: int, levels: dict):
+    """Open the plurality-winning project for a team. Skips facilities that are
+    maxed or already in progress. Ties break by catalog order (deterministic).
+    Returns the opened FacilityProject, or None if no valid winner."""
+    from database.models import FacilityProject
+    tally = tallyFacilityVotes(session, teamId, season)
+    if not tally:
+        return None
+    openKeys = {p.facility_key for p in
+                session.query(FacilityProject).filter_by(team_id=teamId, status='open').all()}
+    catalogOrder = list(FACILITY_CATALOG)
+    valid = [(k, c) for k, c in tally.items()
+             if k in FACILITY_CATALOG and levels.get(k, 0) < FACILITY_MAX_LEVEL and k not in openKeys]
+    if not valid:
+        return None
+    # most votes wins; tie → earlier in the catalog
+    winner = max(valid, key=lambda kc: (kc[1], -catalogOrder.index(kc[0])))[0]
+    return openProject(session, teamId, winner, levels.get(winner, 0), season)

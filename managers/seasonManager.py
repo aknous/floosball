@@ -442,11 +442,13 @@ class SeasonManager:
         # season-start values so in-season mechanics couldn't drift.
         self._recomputeFundingTiersForOffseason(self.currentSeason.seasonNumber)
 
-        # Facilities (Markets→Facilities): run the season-end waterfall —
-        # Treasury (carry + baseline + contributions + this season's deposit)
-        # pays upkeep first, then the oldest open project; offseason construction
-        # builds funded projects and decays unmaintained facilities. Costs are
-        # share-denominated off the PRIOR season's faucet.
+        # Facilities (Markets→Facilities): first resolve the fan vote — the
+        # plurality-winning facility gets a project opened into the queue — THEN
+        # run the season-end waterfall so this season's deposit can fund it.
+        # Treasury pays upkeep first, then the oldest open project; offseason
+        # construction builds funded projects and decays unmaintained facilities.
+        # Costs are share-denominated off the PRIOR season's faucet.
+        self._resolveFacilityVotes(self.currentSeason.seasonNumber)
         self._runFacilitySeasonEnd(self.currentSeason.seasonNumber)
 
         # Close game stats file
@@ -9007,6 +9009,42 @@ class SeasonManager:
             except Exception as e:
                 session.rollback()
                 logger.error(f"Offseason tier recompute failed: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
+    def _resolveFacilityVotes(self, completedSeason: int) -> None:
+        """Resolve the season's facility vote per team — the plurality-winning
+        facility gets an upgrade/build project opened into the queue (Phase 3).
+        Runs just before the waterfall so the new project can receive this
+        season's deposit. No votes → no new project (Treasury just accumulates)."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            from database.models import TeamFacility
+            from managers import facilitiesManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = teamManager.teams if teamManager else []
+            session = get_session()
+            try:
+                opened = 0
+                for team in teams:
+                    levels = {f.facility_key: f.level for f in
+                              session.query(TeamFacility).filter_by(team_id=team.id).all()}
+                    proj = facilitiesManager.resolveFacilityVote(
+                        session, team.id, completedSeason, levels)
+                    if proj is not None:
+                        opened += 1
+                        logger.info(f"Facility vote: {getattr(team, 'name', team.id)} → "
+                                    f"{proj.facility_key} Lv{proj.target_level}")
+                session.commit()
+                if opened:
+                    logger.info(f"Facility votes resolved: {opened} project(s) opened")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Facility vote resolution failed: {e}")
             finally:
                 session.close()
         except ImportError:

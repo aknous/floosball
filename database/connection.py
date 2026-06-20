@@ -891,8 +891,18 @@ def _runPendingMigrations():
             cols = [r[1] for r in conn.execute(text("PRAGMA table_info(team_facilities)")).fetchall()]
             if 'upkeep_funded' not in cols:
                 conn.execute(text("ALTER TABLE team_facilities ADD COLUMN upkeep_funded INTEGER NOT NULL DEFAULT 0"))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS facility_votes ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "team_id INTEGER NOT NULL, "
+                "user_id INTEGER NOT NULL, "
+                "facility_key VARCHAR(32) NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "UNIQUE(team_id, user_id, season))"
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_facility_vote_team_season ON facility_votes(team_id, season)"))
             conn.commit()
-            logger.info("  Migration: ensured facility_projects + team_treasury + upkeep_funded")
+            logger.info("  Migration: ensured facility_projects + team_treasury + upkeep_funded + facility_votes")
         except Exception:
             conn.rollback()
 

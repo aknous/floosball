@@ -632,6 +632,29 @@ class TeamTreasury(Base):
         return f"<TeamTreasury(team={self.team_id}, balance={self.balance})>"
 
 
+class FacilityVote(Base):
+    """A fan's vote for which facility a team should invest in NEXT (Markets→
+    Facilities, Phase 3). One vote per fan per team per season, changeable
+    (single-vote plurality). Resolved at season end — the plurality winner gets
+    an upgrade/build project opened into the queue.
+    """
+    __tablename__ = "facility_votes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    facility_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("team_id", "user_id", "season", name="uq_facility_vote"),
+        Index("idx_facility_vote_team_season", "team_id", "season"),
+    )
+
+    def __repr__(self):
+        return f"<FacilityVote(team={self.team_id}, user={self.user_id}, {self.facility_key}, S{self.season})>"
+
+
 class Game(Base):
     """Game table - stores game metadata and scores."""
     __tablename__ = "games"

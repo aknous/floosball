@@ -5666,6 +5666,65 @@ def get_team_facilities(team_id: int):
         session.close()
 
 
+@app.get("/api/teams/{team_id}/facilities/vote")
+def get_facility_vote(team_id: int, user: Optional[_User] = Depends(_getOptionalUser)):
+    """Facility vote ballot: the facilities eligible to be the team's next
+    project (not maxed, not already in progress) + the current user's vote.
+    Tallies are hidden while the season is live (anti-bandwagon)."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamFacility, FacilityProject
+    from managers import facilitiesManager
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        levels = {f.facility_key: f.level for f in
+                  session.query(TeamFacility).filter_by(team_id=team_id).all()}
+        openKeys = {p.facility_key for p in
+                    session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()}
+        candidates = facilitiesManager.voteCandidates(levels, openKeys)
+        myVote = facilitiesManager.getFacilityVote(session, team_id, user.id, season) if user else None
+        return build_success_response({
+            'teamId': team_id, 'season': season,
+            'candidates': candidates, 'myVote': myVote,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/teams/{team_id}/facilities/vote")
+def post_facility_vote(team_id: int, payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Cast/change the user's facility vote (one per fan/team/season). Favorite
+    team only. body: {facilityKey}."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    facilityKey = payload.get("facilityKey")
+    if not facilityKey:
+        raise HTTPException(status_code=400, detail="'facilityKey' is required")
+    from database.connection import get_session
+    from database.models import User as _UserModel
+    from managers import facilitiesManager
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        dbUser = session.query(_UserModel).filter_by(id=user.id).first()
+        if not dbUser or dbUser.favorite_team_id != team_id:
+            raise HTTPException(status_code=400, detail="You can only vote for your favorite team")
+        facilitiesManager.castFacilityVote(session, team_id, user.id, facilityKey, season)
+        session.commit()
+        return build_success_response({
+            'teamId': team_id, 'season': season, 'myVote': facilityKey,
+        })
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
+
+
 @app.get("/api/teams/{team_id}/projected-funding")
 def get_projected_funding(team_id: int):
     """Estimate end-of-season auto-contribution funding for a team.
