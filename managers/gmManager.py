@@ -450,9 +450,10 @@ class GmManager:
         skipped — so a single ballot resolution can sign MULTIPLE FAs when
         several positions are open.
 
-        DETERMINISTIC: passes iff totalBallots >= threshold (no probability
-        roll), matching the resign/cut/fire votes so the Front Office UI's
-        "X/Y votes Z%" reads as progress-to-threshold for every vote type.
+        NO THRESHOLD: this isn't a pass/fail vote — it's "who do the fans
+        want?". Any ballots at all (even one) resolve via IRV to a ranked list
+        of available targets, and the team pursues them in that priority order.
+        The result is surfaced as that ranked target list, not a ratify tally.
 
         Returns:
           - directives: {teamId: [playerId, ...]} the slot-walk-trimmed
@@ -469,10 +470,6 @@ class GmManager:
             totalBallots = len(ballots)
             if totalBallots == 0:
                 continue
-
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateBallotThreshold(engagedFans)
-            probability = self.calculateProbability(totalBallots, threshold)
 
             openPositions = teamOpenPositions.get(team.id, [])
             if not openPositions:
@@ -496,20 +493,13 @@ class GmManager:
             if overallRanking:
                 overallRankingsByTeam[team.id] = list(overallRanking)
 
-            # DETERMINISTIC: a ranked-choice FA requisition passes when enough
-            # fans submitted ballots (totalBallots >= threshold) — same pass/fail
-            # semantics as the resign/cut/fire votes, so the "X/Y votes Z%" UI
-            # means progress-to-threshold everywhere (no probability roll that
-            # could "ratify" below the bar). On pass, the slot-walk signs the
-            # fan-ranked leader(s) into open slots — potentially MULTIPLE FAs when
-            # several positions are open. On fail, the normal FA draft fills the slots.
-            if totalBallots < threshold:
-                self.voteRepo.recordResult(
-                    teamId=team.id, season=season, voteType="sign_fa",
-                    totalVotes=totalBallots, threshold=threshold,
-                    probability=probability, outcome="below_threshold",
-                )
-                continue
+            # NO THRESHOLD: a ranked-choice FA requisition isn't pass/fail — it's
+            # "who do the fans want?". ANY ballots (even one) resolve. IRV
+            # (_tallyFullRankingOverall) produces a full ranking over the AVAILABLE
+            # candidates only — unavailable players are excluded from
+            # eligibleCandidates, so an unavailable top choice naturally falls
+            # through to the next vote-getter. The slot-walk below signs down that
+            # ranking into open slots (multiple FAs when several positions are open).
 
             # Slot-walk: each player in the ranking consumes one open slot
             # at their position. Once a position runs out of slots, further
@@ -540,15 +530,29 @@ class GmManager:
             if teamDirectives:
                 directives[team.id] = teamDirectives
 
+            # Priority-ordered target list for the Front Office display — the FA
+            # requisition is shown as a ranked list of who the team is pursuing,
+            # not a pass/fail tally. threshold=0 / probability=1.0 signals "no
+            # threshold" (same convention as the plurality hire_coach result).
+            targetList = []
+            for pid in teamDirectives:
+                p = playerLookup.get(pid)
+                if p:
+                    targetList.append({
+                        'id': pid,
+                        'name': getattr(p, 'name', f'Player {pid}'),
+                        'position': getattr(getattr(p, 'position', None), 'value', None),
+                    })
+
             self.voteRepo.recordResult(
                 teamId=team.id, season=season, voteType="sign_fa",
-                totalVotes=totalBallots, threshold=threshold,
-                probability=probability, outcome="success",
-                details=json.dumps({"directives": teamDirectives}),
+                totalVotes=totalBallots, threshold=0,
+                probability=1.0, outcome="success",
+                details=json.dumps({"directives": teamDirectives, "targets": targetList}),
             )
             logger.info(
-                f"GM: {team.name} FA directives: {teamDirectives} "
-                f"({totalBallots} ballots, p={probability:.0%})"
+                f"GM: {team.name} FA targets (priority order): {teamDirectives} "
+                f"({totalBallots} ballots)"
             )
 
         return directives, overallRankingsByTeam
