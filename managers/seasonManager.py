@@ -6656,24 +6656,10 @@ class SeasonManager:
         # higher Appeal drafts free agents first ("players prefer better-equipped
         # clubs"). At activation Appeal reproduces the old tier order, since the
         # grandfather migration seeds facility levels from tier — so nobody loses
-        # FA position. effective_funding is the within-Appeal tiebreaker (preserves
-        # the exact funding-based order the old tier_rank used); rookie-draft
-        # position is the final tiebreak.
-        effFundingByTeam: dict = {}
-        try:
-            from database.connection import get_session as _gs
-            from database.models import TeamFunding
-            _s = _gs()
-            try:
-                seasonNum = self.currentSeason.seasonNumber
-                rows = _s.query(TeamFunding).filter_by(season=seasonNum).all()
-                for r in rows:
-                    effFundingByTeam[r.team_id] = r.effective_funding or 0
-            finally:
-                _s.close()
-        except Exception as e:
-            logger.warning(f"Could not load funding for FA draft order: {e}")
-
+        # FA position. Ties in Appeal break by REVERSE STANDINGS (the rookie-draft
+        # order — worse teams pick first) for parity. (effective_funding was the
+        # old within-Appeal tiebreaker; dropped post-cutover now that funding is
+        # no longer a competitive lever.)
         from managers import facilitiesManager
         rookieDraftOrder = self.currentSeason.freeAgencyOrder
         rookieOrderIdx = {
@@ -6681,9 +6667,8 @@ class SeasonManager:
         }
         def _appealKey(t):
             appeal = facilitiesManager.computeAppeal(getattr(t, 'facilities', {}) or {})
-            eff = effFundingByTeam.get(getattr(t, 'id', -1), 0)
-            # higher Appeal then higher funding draft FIRST → negate for ascending sort
-            return (-appeal, -eff, rookieOrderIdx.get(getattr(t, 'id', None), 999))
+            # higher Appeal drafts FIRST; ties → reverse standings (rookie order)
+            return (-appeal, rookieOrderIdx.get(getattr(t, 'id', None), 999))
         freeAgencyOrder = sorted(rookieDraftOrder, key=_appealKey)
         self._pendingFaDraftOrder = freeAgencyOrder
 

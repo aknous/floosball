@@ -5696,13 +5696,13 @@ def get_league_facilities():
         fanCounts = dict(session.query(_UserModel.favorite_team_id, func.count())
                          .filter(_UserModel.favorite_team_id.isnot(None))
                          .group_by(_UserModel.favorite_team_id).all())
-        # market tier (fanbase label) + effective_funding (the FA-order tiebreaker)
-        fundingRows = session.query(TeamFunding).filter_by(season=season).all()
-        tierByTeam = {r.team_id: r.funding_tier for r in fundingRows}
-        effByTeam = {r.team_id: (r.effective_funding or 0) for r in fundingRows}
+        # market tier (fanbase label)
+        tierByTeam = {r.team_id: r.funding_tier for r in
+                      session.query(TeamFunding).filter_by(season=season).all()}
         out = []
         for team in (tm.teams if tm else []):
             levels = levelsByTeam.get(team.id, {})
+            st = getattr(team, 'seasonTeamStats', {}) or {}
             out.append({
                 'id': team.id,
                 'name': team.name,
@@ -5713,14 +5713,15 @@ def get_league_facilities():
                 'levels': {k: levels.get(k, 0) for k in FACILITY_CATALOG},
                 'fanCount': fanCounts.get(team.id, 0),
                 'marketTier': tierByTeam.get(team.id, 'MID_MARKET'),
-                '_eff': effByTeam.get(team.id, 0),
+                '_wp': st.get('winPerc', 0), '_sd': st.get('scoreDiff', 0),
             })
-        # Match the real FA draft order (_buildFaDraftOrder): Appeal, then
-        # effective_funding as the within-Appeal tiebreaker. So the displayed
-        # "FA PICK #N" equals the actual draft slot, including for tied teams.
-        out.sort(key=lambda t: (-t['appeal'], -t['_eff']))
+        # Match the real FA draft order (_buildFaDraftOrder): Appeal first, then
+        # REVERSE STANDINGS (worse record drafts first, by winPerc then scoreDiff)
+        # as the within-Appeal tiebreaker. So the displayed "FA PICK #N" equals the
+        # actual draft slot, including for tied teams.
+        out.sort(key=lambda t: (-t['appeal'], t['_wp'], t['_sd']))
         for t in out:
-            t.pop('_eff', None)
+            t.pop('_wp', None); t.pop('_sd', None)
         return build_success_response({
             'season': season,
             'facilityCatalog': {k: v.get('name', k) for k, v in FACILITY_CATALOG.items()},
@@ -5749,6 +5750,12 @@ def get_facility_vote(team_id: int, user: Optional[_User] = Depends(_getOptional
         openKeys = {p.facility_key for p in
                     session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()}
         candidates = facilitiesManager.voteCandidates(levels, openKeys)
+        # enrich each candidate with what winning it would cost: the build (to reach
+        # the target level) and the upkeep it would then carry each season.
+        shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
+        for c in candidates:
+            c['cost'] = facilitiesManager.upgradeCostFloobits(c['currentLevel'], shareUnit)
+            c['upkeep'] = facilitiesManager.upkeepCostFloobits(c['targetLevel'], shareUnit)
         myVote = facilitiesManager.getFacilityVote(session, team_id, user.id, season) if user else None
         return build_success_response({
             'teamId': team_id, 'season': season,
