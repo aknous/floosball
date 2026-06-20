@@ -24,7 +24,9 @@ Finish the awakened-powers / league-wide Criticality event (the gated "Cores los
 ### Card Vault / Showcase — retuning + documentation
 The Showcase shipped (payouts fire). Retune the grade/payout curves + set bonuses, build/finish the permanent **Vault**, and write proper documentation (no canonical doc yet beyond the plan).
 - **Plan:** `docs/COLLECTIBLE_CARDS_PLAN.md` (+ memory: card_collection_vault_showcase)
-- **Status:** Showcase live; Vault + retune + docs pending. Also surfacing gap — players don't see their season-end Showcase payout (buried by the season-end tax).
+- **Status:** Showcase live; Vault + retune + docs pending.
+- **Payout method change (2026-06-20):** switch from the **end-of-season lump sum → a WEEKLY DIVIDEND** scaled by the showcase score. Also fixes the surfacing gap — the lump sum was invisible (buried a half-second before the season-end tax, no durable record); a weekly dividend is visible income all season. Implies the score is evaluated/paid each week (recompute cadence + a weekly currency grant), not once at season end.
+- **Scoring transparency (2026-06-20):** users complain the score is **opaque** — no way to see *why* they got it or how points are derived (per-card contribution, recency decay, edition/classification weights, active set bonuses). Need a visible breakdown: each featured card's point contribution + the multipliers applied. The scoring math already exists (`showcaseManager.evaluate`); the gap is surfacing it (the API deliberately strips the raw score today — that needs to change to a transparent per-card breakdown).
 
 ### New prognostication feature — Survivor
 A survivor-style contest layer on top of pick-em (last-one-standing elimination), part of the broader prognosticator progression direction.
