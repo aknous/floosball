@@ -126,7 +126,9 @@ Maxing everything is intentionally *not* feasible for most — so clubs build an
 
 ## 6. Appeal → FA draft order
 
-FA draft order currently keys off `tier_rank`. Replace with a continuous **Appeal** score = weighted sum of a team's facility levels. Order the FA draft by Appeal (highest picks first) — a strictly better signal (24-team ordering, no within-tier ties) with a clean narrative: **free agents prefer clubs with better facilities.** Appeal is its own surfaced rating, **distinct from the Market label** (which is fanbase size, §2) — so a small-market club that's built great facilities still drafts high.
+FA draft order currently keys off `tier_rank`. Replace with a continuous **Appeal** score = weighted sum of a team's facility levels. Order the FA draft by Appeal (highest picks first) — a clean narrative: **free agents prefer clubs with better facilities.** Appeal is its own surfaced rating, **distinct from the Market label** (which is fanbase size, §2) — so a small-market club that's built great facilities still drafts high.
+
+**Preserves tier order at launch (locked):** because the grandfather migration seeds facility levels from tier, Appeal at activation = 16 (MEGA) / 12 (LARGE) / 8 (MID) / 4 (SMALL), reproducing the exact current FA order; `effective_funding` is the within-Appeal tiebreaker so within-tier order is identical too. No team loses a draft slot in the transition season. (Shipped: `seasonManager._buildFaDraftOrder`.)
 
 ## 7. Data model
 
@@ -163,7 +165,7 @@ Reuse the GM Front Office voting primitive: **one vote per fan per team, changea
 
 **Migration steps (one-time, inline-migration + backfill, gated by an `app_settings` flag):**
 1. Create the `TeamFacility` rows from each team's current `funding_tier` per the table above.
-2. Seed each team's **Treasury** from current `carried_funding` (or a fraction of `effective_funding`) so season 1 has funding momentum.
+2. Seed each team's **Treasury** from `carried_funding` **only** — the 50% decay-carry, NOT the full accumulated funding. Rationale (locked): this past season's contributions already *bought* the current tier perks, which are now grandfathered into facility levels; letting them *also* seed a full Treasury would double-dip (you'd get both the perks and the money that paid for them). Only the normal 50% carry rolls into the starting Treasury, mirroring what the old system already carries season-to-season.
 3. Open-projects queue starts **empty**; the first facility vote runs in season 1's Front Office window.
 4. Compute initial **Appeal** from the seeded levels → MEGA teams highest → preserves current FA draft ordering at launch.
 5. Seed the **share unit** from the just-completed season's faucet (or a sensible constant for the very first run).
