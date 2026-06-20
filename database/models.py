@@ -557,6 +557,31 @@ class TeamFunding(Base):
         return f"<TeamFunding(team_id={self.team_id}, season={self.season}, tier={self.funding_tier}, effective={self.effective_funding})>"
 
 
+class TeamFacility(Base):
+    """A team's standing facility and its level (Markets→Facilities system).
+
+    PERSISTENT, not season-scoped — facilities are the team's lasting
+    infrastructure, carried across seasons (subject to decay). One row per
+    (team, facility_key). Levels are seeded once from the legacy funding_tier
+    by the migration (see docs/MARKETS_FACILITIES_PLAN.md) and change as fans
+    fund upgrades / let upkeep lapse in later phases.
+    """
+    __tablename__ = "team_facilities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    facility_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    level: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("team_id", "facility_key", name="uq_team_facility"),
+        Index("idx_team_facility_team", "team_id"),
+    )
+
+    def __repr__(self):
+        return f"<TeamFacility(team_id={self.team_id}, facility={self.facility_key}, level={self.level})>"
+
+
 class Game(Base):
     """Game table - stores game metadata and scores."""
     __tablename__ = "games"

@@ -117,6 +117,9 @@ class FloosballApplication:
         # Save teams to database so leagues can reference them
         if self.teamManager.db_session:
             self.teamManager.saveTeamData()
+            # Seed default facilities for any brand-new teams (fresh league) —
+            # the init-time tier migration no-ops before teams exist. Idempotent.
+            self.teamManager.ensureTeamFacilities()
         
         # Create leagues and distribute teams
         logger.info("Setting up leagues...")

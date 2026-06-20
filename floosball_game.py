@@ -5744,10 +5744,10 @@ class Game:
     # ─── Funding Morale ───────────────────────────────────────────────────
 
     def _applyFundingMorale(self, team):
-        """Apply a small pregame confidence/determination nudge based on team funding tier."""
-        from constants import FUNDING_MORALE_MODIFIER
-        fundingTier = getattr(team, 'fundingTier', 'MID_MARKET')
-        modifier = FUNDING_MORALE_MODIFIER.get(fundingTier, 0)
+        """Apply a small pregame confidence/determination nudge based on the
+        team's Locker Room level (Markets→Facilities; migrated levels reproduce
+        the old market-tier morale modifier)."""
+        modifier = team.facilityEffect('morale') if hasattr(team, 'facilityEffect') else 0
         if modifier == 0:
             return
         for player in team.rosterDict.values():

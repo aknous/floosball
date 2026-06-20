@@ -843,6 +843,27 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Team facilities (Markets→Facilities system, feature/facilities).
+        # Persistent per-(team, facility_key) level. Seeded from legacy
+        # funding_tier by _seedTeamFacilitiesFromTiers (backfill, gated flag).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS team_facilities ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "team_id INTEGER NOT NULL, "
+                "facility_key VARCHAR(32) NOT NULL, "
+                "level INTEGER NOT NULL DEFAULT 0, "
+                "UNIQUE(team_id, facility_key))"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_team_facility_team "
+                "ON team_facilities(team_id)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured team_facilities table")
+        except Exception:
+            conn.rollback()
+
         # Clear stale will_retire on already-retired players. The flag is set at
         # week 22 and (historically) never reset, so retirees kept carrying it.
         # Idempotent.
@@ -1090,6 +1111,9 @@ def _runPendingMigrations():
     _recomputeCareerStatsFromSeasons()
     _backfillTeamPeakStreaks()
     _backfillCardTemplateOutputType()
+    # Tier→facilities migration: seed team_facilities from current market tiers
+    # so facility-derived effects reproduce today's tier perks at launch.
+    _seedTeamFacilitiesFromTiers()
 
 
 def _recomputeFundingTiers():
@@ -1908,6 +1932,60 @@ def _recomputeCareerStatsFromSeasons():
     except Exception as e:
         conn.rollback()
         logger.info(f"  Backfill warning (career-from-seasons): {e}")
+    finally:
+        conn.close()
+
+
+def _seedTeamFacilitiesFromTiers():
+    """One-time tier→facilities migration (Markets→Facilities, feature/facilities).
+
+    Seeds team_facilities from each team's CURRENT market tier so nobody
+    launches nerfed: MEGA→Lv4, LARGE→Lv3, MID→Lv2, SMALL→Lv1 on the four
+    legacy-perk facilities, Stadium at Lv0. The per-level effect curves
+    (constants.FACILITY_CATALOG) are calibrated so these levels reproduce the
+    current FUNDING_* perks. Idempotent: gated by an app_settings flag AND a
+    per-row INSERT OR IGNORE on the (team_id, facility_key) unique constraint.
+    """
+    from sqlalchemy import text
+    from constants import (FACILITY_CATALOG, MIGRATION_TIER_START_LEVEL,
+                           MIGRATION_STADIUM_START_LEVEL)
+    conn = engine.connect()
+    try:
+        done = conn.execute(text(
+            "SELECT value FROM app_settings WHERE key = 'facilities_seeded_v1'"
+        )).fetchone()
+        if done:
+            return
+        teamIds = [r[0] for r in conn.execute(text("SELECT id FROM teams")).fetchall()]
+        if not teamIds:
+            return  # fresh DB with no teams yet — season start will seed funding first
+        # Current tier = the latest season's team_funding row per team.
+        tierByTeam = {}
+        for tid, tier in conn.execute(text(
+            "SELECT tf.team_id, tf.funding_tier FROM team_funding tf "
+            "JOIN (SELECT team_id, MAX(season) AS s FROM team_funding GROUP BY team_id) m "
+            "ON tf.team_id = m.team_id AND tf.season = m.s")).fetchall():
+            tierByTeam[tid] = tier or 'MID_MARKET'
+        seeded = 0
+        for tid in teamIds:
+            tier = tierByTeam.get(tid, 'MID_MARKET')
+            for key in FACILITY_CATALOG:
+                level = (MIGRATION_STADIUM_START_LEVEL if key == 'stadium'
+                         else MIGRATION_TIER_START_LEVEL.get(tier, 2))
+                conn.execute(text(
+                    "INSERT OR IGNORE INTO team_facilities (team_id, facility_key, level) "
+                    "VALUES (:tid, :key, :lvl)"),
+                    {'tid': tid, 'key': key, 'lvl': level})
+            seeded += 1
+        conn.execute(text(
+            "INSERT INTO app_settings (key, value, updated_at) "
+            "VALUES ('facilities_seeded_v1', '1', CURRENT_TIMESTAMP) "
+            "ON CONFLICT(key) DO UPDATE SET value='1', updated_at=CURRENT_TIMESTAMP"))
+        conn.commit()
+        logger.info(f"  Backfill: seeded facilities from market tiers for {seeded} teams")
+    except Exception as e:
+        conn.rollback()
+        logger.info(f"  Backfill warning (facilities-from-tiers): {e}")
     finally:
         conn.close()
 

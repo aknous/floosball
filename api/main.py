@@ -11359,7 +11359,7 @@ def get_upcoming_rookies(user: Optional[_User] = Depends(_getOptionalUser)):
     """
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
-    from constants import FUNDING_SCOUTING_BONUS, GM_ACTIVE_WEEK
+    from constants import GM_ACTIVE_WEEK
     pm = floosball_app.playerManager
     sm = floosball_app.seasonManager
     tm = floosball_app.teamManager
@@ -11373,7 +11373,9 @@ def get_upcoming_rookies(user: Optional[_User] = Depends(_getOptionalUser)):
         scoutTeam = tm.getTeamById(user.favorite_team_id) if tm else None
         if scoutTeam:
             coachScouting = getattr(getattr(scoutTeam, 'coach', None), 'scouting', 80) or 80
-            tierBonus = FUNDING_SCOUTING_BONUS.get(getattr(scoutTeam, 'fundingTier', 'MID_MARKET'), 0)
+            # Scouting Department level (Markets→Facilities) replaces the old
+            # market-tier scouting bonus; migrated levels reproduce the tier perk.
+            tierBonus = scoutTeam.facilityEffect('scouting_bonus') if hasattr(scoutTeam, 'facilityEffect') else 0
             effectiveScouting = max(0, min(100, coachScouting + tierBonus))
 
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0

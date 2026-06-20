@@ -5282,13 +5282,14 @@ class SeasonManager:
             # Prospects train through their drafting team's coach/funding too, so coaches
             # with strong playerDevelopment and MEGA-market teams grow pipelines faster.
             logger.info("Step 7: Player offseason training")
-            from constants import FUNDING_DEV_BONUS
             teamDevRating: dict = {}       # player.id → coach dev rating
-            teamFundingBonus: dict = {}    # player.id → funding dev bonus
+            teamFundingBonus: dict = {}    # player.id → facility dev bonus
             teamManager = self.serviceContainer.getService('team_manager')
             for team in teamManager.teams:
                 coachDevRating = getattr(getattr(team, 'coach', None), 'playerDevelopment', 50)
-                fundingBonus = FUNDING_DEV_BONUS.get(getattr(team, 'fundingTier', 'MID_MARKET'), 0)
+                # Training Facility level (Markets→Facilities) replaces the old
+                # market-tier dev bonus; migrated levels reproduce the tier perks.
+                fundingBonus = team.facilityEffect('dev_bonus')
                 # Rostered players train with this team's coach/funding
                 for rosterPlayer in team.rosterDict.values():
                     if rosterPlayer is not None and hasattr(rosterPlayer, 'id'):
@@ -8686,13 +8687,15 @@ class SeasonManager:
             logger.error(f"Error sending season-end emails: {e}")
 
     def _accumulateFatigue(self) -> None:
-        """Increase fatigue for all rostered players based on resilience and team funding tier."""
+        """Increase fatigue for all rostered players based on resilience and the
+        team's Recovery Center level (Markets→Facilities)."""
         from constants import (BASE_FATIGUE_PER_WEEK, FATIGUE_RESILIENCE_SCALE,
-                               FATIGUE_RESILIENCE_CEILING, FUNDING_FATIGUE_REDUCTION,
+                               FATIGUE_RESILIENCE_CEILING,
                                RATING_SCALE_MIN, RATING_SCALE_MAX)
         for team in self.leagueManager.teams:
-            fundingTier = getattr(team, 'fundingTier', 'MID_MARKET')
-            fundingReduction = FUNDING_FATIGUE_REDUCTION.get(fundingTier, 0.0)
+            # Recovery Center level reduces weekly fatigue gain (migrated levels
+            # reproduce the old market-tier fatigue reduction).
+            fundingReduction = team.facilityEffect('fatigue_reduction')
             for player in team.rosterDict.values():
                 if player is None:
                     continue

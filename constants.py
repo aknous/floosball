@@ -456,6 +456,44 @@ SCOUTING_BANDS = [
     (0, 15),    # <65: ±15
 ]
 FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 'SMALL_MARKET': -3}
+
+# ============================================================================
+# FACILITIES  (Markets→Facilities system — see docs/MARKETS_FACILITIES_PLAN.md)
+# ============================================================================
+# Fan-funded, fan-voted team facilities replace the passive market-tier perks.
+# Each facility drives an effect the sim ALREADY applies (the FUNDING_* dicts
+# above); the per-level effect curves are calibrated so the one-time
+# tier→facilities MIGRATION reproduces today's perks with no nerf:
+#   MEGA_MARKET→Lv4, LARGE_MARKET→Lv3, MID_MARKET→Lv2, SMALL_MARKET→Lv1.
+# Read the level→effect tables below at those indices to confirm parity.
+# The lone deliberate change: SMALL-market PENALTIES become neutral — a built
+# facility can't be a penalty, so the floor rises from "penalized" to "neutral,
+# just hasn't built much yet" (Lv0/Lv1 = 0). Lv5 is a new above-MEGA ceiling.
+# Curves are back-loaded (real effects at Lv3+) to hold migration parity; the
+# smoothing of low levels is a tuning task (see plan doc §14).
+FACILITY_MAX_LEVEL = 5
+
+# facility_key -> {name, effect (which sim effect it drives), levels[0..5]}
+FACILITY_CATALOG = {
+    'training':    {'name': 'Training Facility',    'effect': 'dev_bonus',
+                    'levels': [0, 0, 0, 1, 1, 2]},                       # player development (cf FUNDING_DEV_BONUS)
+    'locker_room': {'name': 'Locker Room',          'effect': 'morale',
+                    'levels': [0.0, 0.0, 0.0, 0.0025, 0.0075, 0.01]},    # pregame morale nudge (cf FUNDING_MORALE_MODIFIER)
+    'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
+                    'levels': [0.0, 0.0, 0.0, 0.15, 0.30, 0.35]},        # weekly fatigue-gain reduction (cf FUNDING_FATIGUE_REDUCTION)
+    'scouting':    {'name': 'Scouting Department',    'effect': 'scouting_bonus',
+                    'levels': [0, 0, 0, 3, 5, 7]},                       # rookie scouting accuracy (cf FUNDING_SCOUTING_BONUS)
+    'stadium':     {'name': 'Stadium',               'effect': 'home_morale',
+                    'levels': [0.0, 0.001, 0.002, 0.003, 0.004, 0.005]}, # NEW — everyone starts Lv0; effect unwired until a later phase
+}
+
+# Migration: starting level for the four legacy-perk facilities by current tier.
+MIGRATION_TIER_START_LEVEL = {'MEGA_MARKET': 4, 'LARGE_MARKET': 3, 'MID_MARKET': 2, 'SMALL_MARKET': 1}
+MIGRATION_STADIUM_START_LEVEL = 0  # new facility nobody has built yet
+
+# Appeal (FA-draft attractiveness) = weighted sum of facility levels. Flat
+# weights to start; higher Appeal drafts free agents first. Tune later.
+APPEAL_LEVEL_WEIGHTS = {k: 1.0 for k in FACILITY_CATALOG}
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 

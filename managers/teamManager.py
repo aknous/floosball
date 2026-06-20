@@ -121,16 +121,67 @@ class TeamManager:
                     self.teams.append(team)
             
             self.logger.info(f"Loaded {len(self.teams)} teams from database")
-            
+
+            # Load standing facilities onto each team (Markets→Facilities)
+            self.loadFacilities()
+
             # Rebuild team rosters from player-team relationships
             self._rebuildTeamRosters()
-            
+
             return True
             
         except Exception as e:
             self.logger.error(f"Failed to load teams from database: {e}")
             return False
     
+    def loadFacilities(self) -> None:
+        """Populate each team's `facilities` dict (facility_key -> level) from
+        team_facilities (Markets→Facilities). Persistent across seasons. Safe to
+        call repeatedly — fully replaces each team's dict."""
+        try:
+            from database.models import TeamFacility
+            if not self.db_session:
+                return
+            byTeam = {}
+            for row in self.db_session.query(TeamFacility).all():
+                byTeam.setdefault(row.team_id, {})[row.facility_key] = row.level
+            for team in self.teams:
+                team.facilities = byTeam.get(team.id, {})
+        except Exception as e:
+            self.logger.warning(f"Failed to load team facilities: {e}")
+
+    def ensureTeamFacilities(self) -> None:
+        """Seed default facilities for any team that has none, then reload.
+
+        Idempotent: teams already seeded (by the tier→facilities migration on an
+        existing DB, or a prior run) are skipped. Covers the FRESH-league case —
+        the init-time migration no-ops because teams don't exist yet, so brand-new
+        teams get the neutral MID baseline (perk facilities at Lv2, Stadium Lv0)
+        here, once they're persisted with ids. Run after saveTeamData()."""
+        try:
+            from database.models import TeamFacility
+            from constants import (FACILITY_CATALOG, MIGRATION_TIER_START_LEVEL,
+                                   MIGRATION_STADIUM_START_LEVEL)
+            if not self.db_session:
+                return
+            existing = {tid for (tid,) in self.db_session.query(TeamFacility.team_id).distinct().all()}
+            seeded = 0
+            for team in self.teams:
+                if not getattr(team, 'id', None) or team.id in existing:
+                    continue
+                for key in FACILITY_CATALOG:
+                    level = (MIGRATION_STADIUM_START_LEVEL if key == 'stadium'
+                             else MIGRATION_TIER_START_LEVEL['MID_MARKET'])
+                    self.db_session.add(TeamFacility(team_id=team.id, facility_key=key, level=level))
+                seeded += 1
+            if seeded:
+                self.db_session.commit()
+                self.logger.info(f"Seeded default facilities for {seeded} new team(s)")
+            self.loadFacilities()
+        except Exception as e:
+            self.db_session.rollback() if self.db_session else None
+            self.logger.warning(f"ensureTeamFacilities failed: {e}")
+
     def _createTeamFromDatabase(self, db_team) -> Optional[FloosTeam.Team]:
         """Create a game Team object from database Team model"""
         try:
