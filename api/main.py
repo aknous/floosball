@@ -5592,6 +5592,80 @@ def contribute_to_team(team_id: int, payload: Dict[str, Any], user: _User = Depe
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/teams/{team_id}/facilities/contribute")
+def contribute_to_facilities(team_id: int, payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Contribute Floobits toward a team's facilities (Markets→Facilities).
+    body: {amount, target?: 'treasury'|'upkeep'|'project', facilityKey?, projectId?}.
+    Requires auth; favorite team only."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    amount = payload.get("amount")
+    if not isinstance(amount, int) or amount <= 0:
+        raise HTTPException(status_code=400, detail="'amount' must be a positive integer")
+    try:
+        result = floosball_app.seasonManager.contributeToFacilities(
+            user.id, team_id, amount,
+            target=payload.get("target", "treasury"),
+            facilityKey=payload.get("facilityKey"),
+            projectId=payload.get("projectId"),
+        )
+        return build_success_response(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error contributing to facilities for team {team_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/teams/{team_id}/facilities")
+def get_team_facilities(team_id: int):
+    """Team facilities state (Markets→Facilities): levels + effects + upkeep,
+    open projects with cost/progress, Treasury balance, Appeal, and the current
+    share unit. Drives the Facilities page. Public (read-only)."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamFacility, FacilityProject
+    from managers import facilitiesManager
+    from constants import FACILITY_CATALOG, FACILITY_MAX_LEVEL
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
+        facRows = session.query(TeamFacility).filter_by(team_id=team_id).all()
+        levels = {f.facility_key: f.level for f in facRows}
+        facilities = []
+        for f in facRows:
+            cfg = FACILITY_CATALOG.get(f.facility_key, {})
+            facilities.append({
+                'key': f.facility_key,
+                'name': cfg.get('name', f.facility_key),
+                'level': f.level,
+                'maxLevel': FACILITY_MAX_LEVEL,
+                'effect': cfg.get('effect'),
+                'upkeepCost': facilitiesManager.upkeepCostFloobits(f.level, shareUnit),
+                'upkeepFunded': f.upkeep_funded or 0,
+                'upgradeCost': facilitiesManager.upgradeCostFloobits(f.level, shareUnit),
+            })
+        projects = [{
+            'id': p.id, 'facilityKey': p.facility_key, 'kind': p.kind,
+            'targetLevel': p.target_level,
+            'cost': facilitiesManager.projectCostFloobits(p.cost_shares, shareUnit),
+            'funded': p.funded, 'openedSeason': p.opened_season,
+        } for p in session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()]
+        return build_success_response({
+            'teamId': team_id,
+            'treasury': facilitiesManager.getTreasury(session, team_id),
+            'appeal': facilitiesManager.computeAppeal(levels),
+            'shareUnit': round(shareUnit),
+            'facilities': facilities,
+            'projects': projects,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/teams/{team_id}/projected-funding")
 def get_projected_funding(team_id: int):
     """Estimate end-of-season auto-contribution funding for a team.

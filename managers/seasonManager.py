@@ -9201,6 +9201,97 @@ class SeasonManager:
         finally:
             session.close()
 
+    def contributeToFacilities(self, userId: int, teamId: int, amount: int,
+                               target: str = 'treasury', facilityKey: str = None,
+                               projectId: int = None) -> dict:
+        """Contribute Floobits toward a team's facilities (Markets→Facilities).
+
+        target:
+          - 'treasury' (default) → the general Treasury pool (the season-end
+            waterfall spends it on upkeep then the oldest open project).
+          - 'upkeep' (+facilityKey) → that facility's upkeep bar — pre-protects
+            it so the waterfall doesn't have to cover it.
+          - 'project' (+projectId) → an open project's bar — accelerates it past
+            the FIFO waterfall.
+
+        Deducts from the user (favorite team only) and credits the chosen bar.
+        Returns the new balance + the team's Treasury. Raises ValueError on failure.
+        """
+        if amount <= 0:
+            raise ValueError("Contribution amount must be positive")
+        if not self.currentSeason:
+            raise ValueError("No active season")
+
+        from database.connection import get_session
+        from database.models import User, TeamFacility, FacilityProject
+        from database.repositories.card_repositories import CurrencyRepository
+        from managers import facilitiesManager
+
+        season = self.currentSeason.seasonNumber
+        session = get_session()
+        try:
+            user = session.query(User).filter_by(id=userId).first()
+            if not user:
+                raise ValueError("User not found")
+            if user.favorite_team_id != teamId:
+                raise ValueError("You can only contribute to your favorite team")
+
+            currencyRepo = CurrencyRepository(session)
+            currency = currencyRepo.getByUser(userId)
+            balance = currency.balance if currency else 0
+            if balance < amount:
+                raise ValueError(f"Insufficient balance ({balance}F available)")
+
+            # Resolve + validate the target BEFORE spending.
+            if target == 'upkeep':
+                if not facilityKey:
+                    raise ValueError("facilityKey required for an upkeep contribution")
+                fac = session.query(TeamFacility).filter_by(
+                    team_id=teamId, facility_key=facilityKey).first()
+                if not fac:
+                    raise ValueError("Facility not found")
+                desc = f'Facility upkeep ({facilityKey})'
+            elif target == 'project':
+                if not projectId:
+                    raise ValueError("projectId required for a project contribution")
+                proj = session.query(FacilityProject).filter_by(
+                    id=projectId, team_id=teamId, status='open').first()
+                if not proj:
+                    raise ValueError("Open project not found")
+                desc = f'Facility project (#{projectId})'
+            elif target == 'treasury':
+                desc = 'Team Treasury'
+            else:
+                raise ValueError(f"Unknown contribution target: {target}")
+
+            currencyRepo.spendFunds(userId, amount, 'facility_contribution',
+                                    description=desc, season=season)
+            if target == 'upkeep':
+                fac.upkeep_funded = (fac.upkeep_funded or 0) + amount
+            elif target == 'project':
+                proj.funded = (proj.funded or 0) + amount
+            else:
+                facilitiesManager.addTreasury(session, teamId, amount)
+
+            session.commit()
+            currency = currencyRepo.getByUser(userId)
+            logger.info(f"User {userId} contributed {amount}F to team {teamId} facilities "
+                        f"(target={target})")
+            return {
+                'teamId': teamId, 'amount': amount, 'target': target,
+                'newBalance': currency.balance if currency else 0,
+                'treasury': facilitiesManager.getTreasury(session, teamId),
+            }
+        except ValueError:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error processing facility contribution: {e}")
+            raise ValueError(f"Contribution failed: {e}")
+        finally:
+            session.close()
+
     def _assignFundingTiers(self, session, season: int) -> None:
         """Assign funding tiers by each team's share of league funding.
 
