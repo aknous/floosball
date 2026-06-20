@@ -21,11 +21,11 @@ Today's "market tier" secretly conflates *market size* and *investment*. The new
 |---|---|---|---|
 | **Market** (Fanbase) | How many users favorite the team — a fanbase-size band | Expectation-pressure / spotlight scaling | None (it's popularity) |
 | **Treasury** | Floobits fans contribute (in-season + season-end deposit) | Funds upkeep + projects | Direct (contribute) |
-| **Facilities** (Prestige) | What's been built (leveled) | Player dev / morale / fatigue / scouting **+** FA-draft order | Vote + fund |
+| **Facilities** (Appeal) | What's been built (leveled) | Player dev / morale / fatigue / scouting **+** FA-draft order | Vote + fund |
 
 So "how big is our following" and "what have we built" stop being one muddy number.
 
-**Labels:** keep the familiar **MEGA / LARGE / MID / SMALL_MARKET** names, but repoint them at **Market = fanbase size** (relative fan-count band) — which is what "market" literally means in sports, so it's now *more* accurate than today's usage. It's a mostly-decorative badge that also drives expectation-pressure scaling (genuinely a market-size effect — see `EXPECTATION_SCALE_BY_TIER`). The new **Prestige** signal (facilities-derived, §6) is a *separate* thing that drives FA order. A few-fan whale club is then a "SMALL_MARKET, high-Prestige" overachiever — the labels stay meaningful instead of redundant.
+**Labels:** keep the familiar **MEGA / LARGE / MID / SMALL_MARKET** names, but repoint them at **Market = fanbase size** (relative fan-count band) — which is what "market" literally means in sports, so it's now *more* accurate than today's usage. It's a mostly-decorative badge that also drives expectation-pressure scaling (genuinely a market-size effect — see `EXPECTATION_SCALE_BY_TIER`). The new **Appeal** signal (facilities-derived, §6) is a *separate* thing that drives FA order. A few-fan whale club is then a "SMALL_MARKET, high-Appeal" overachiever — the labels stay meaningful instead of redundant.
 
 ## 3. The seasonal cycle
 
@@ -124,9 +124,9 @@ Maxing everything is intentionally *not* feasible for most — so clubs build an
 
 **Balancers:** flat share-fractions for all teams (no per-team cost scaling — headcount is a bad proxy), the **200F baseline floor** (everyone holds a minimal set), the **Lv5 benefit cap**, and the **upkeep plateau**.
 
-## 6. Prestige → FA draft order
+## 6. Appeal → FA draft order
 
-FA draft order currently keys off `tier_rank`. Replace with a continuous **Prestige** score = weighted sum of a team's facility levels. Order the FA draft by Prestige (highest picks first) — a strictly better signal (24-team ordering, no within-tier ties) with a clean narrative: **free agents prefer clubs with better facilities.** Prestige is its own surfaced rating, **distinct from the Market label** (which is fanbase size, §2) — so a small-market club that's built great facilities still drafts high.
+FA draft order currently keys off `tier_rank`. Replace with a continuous **Appeal** score = weighted sum of a team's facility levels. Order the FA draft by Appeal (highest picks first) — a strictly better signal (24-team ordering, no within-tier ties) with a clean narrative: **free agents prefer clubs with better facilities.** Appeal is its own surfaced rating, **distinct from the Market label** (which is fanbase size, §2) — so a small-market club that's built great facilities still drafts high.
 
 ## 7. Data model
 
@@ -136,12 +136,12 @@ New tables / columns (follow the `/migrate` inline-migration pattern: model → 
 - **`FacilityProject`** (the open-projects queue) — `team_id`, `facility_type`, `kind` (`upgrade`|`new`), `target_level`, `cost_shares`, `funded` (Floobits), `opened_season`, `status` (`open`|`built`), `built_season`. FIFO by `opened_season`/id.
 - **`FacilityVote`** — `team_id`, `user_id`, `project_key` (which candidate they back), `season`. Single-vote, changeable (mirror `AwardVote` / GM vote repos).
 - **`FacilityContribution`** — log of direct earmark contributions (or reuse `CurrencyTransaction` with a `facility_contribution` type + a target ref). Needed for progress bars + "you contributed" surfacing.
-- Retain **`TeamFunding`** as the Treasury ledger (Treasury balance = carried + contributions − spent), but `funding_tier` becomes a **derived** Prestige label, no longer a gate.
+- Retain **`TeamFunding`** as the Treasury ledger (Treasury balance = carried + contributions − spent), but `funding_tier` becomes the **derived Market label** (fanbase band — it already holds the MEGA_MARKET names), no longer a gate. **Appeal** is a separate computed value (from facility levels).
 - **`Season`** (or `app_settings`): cache last season's faucet total → the share unit.
 
 ## 8. Voting
 
-Reuse the GM Front Office voting primitive: **one vote per fan per team, changeable, plurality wins.** Candidates = every available upgrade (each facility's next level) + every unbuilt new facility. Window opens week 22, closes at season end; tally hidden until close (anti-bandwagon, like awards). Winner → back of the open-projects queue. Quorum: if turnout is below the active-user floor, default to the highest-Prestige-value upgrade (a sensible auto-pick), mirroring the awards below-quorum fallback.
+Reuse the GM Front Office voting primitive: **one vote per fan per team, changeable, plurality wins.** Candidates = every available upgrade (each facility's next level) + every unbuilt new facility. Window opens week 22, closes at season end; tally hidden until close (anti-bandwagon, like awards). Winner → back of the open-projects queue. Quorum: if turnout is below the active-user floor, default to the highest-Appeal-value upgrade (a sensible auto-pick), mirroring the awards below-quorum fallback.
 
 ## 9. Migration plan — current tiers → starting facilities
 
@@ -165,17 +165,17 @@ Reuse the GM Front Office voting primitive: **one vote per fan per team, changea
 1. Create the `TeamFacility` rows from each team's current `funding_tier` per the table above.
 2. Seed each team's **Treasury** from current `carried_funding` (or a fraction of `effective_funding`) so season 1 has funding momentum.
 3. Open-projects queue starts **empty**; the first facility vote runs in season 1's Front Office window.
-4. Compute initial **Prestige** from the seeded levels → MEGA teams highest → preserves current FA draft ordering at launch.
+4. Compute initial **Appeal** from the seeded levels → MEGA teams highest → preserves current FA draft ordering at launch.
 5. Seed the **share unit** from the just-completed season's faucet (or a sensible constant for the very first run).
-6. `funding_tier` is recomputed as a derived Prestige label thereafter; it no longer gates anything.
+6. `funding_tier` is recomputed as a derived **Market** label (fanbase band) thereafter; it no longer gates anything.
 
 **Deploy-resilience:** idempotent (gated flag, skip if `TeamFacility` already seeded), so a redeploy can't double-seed.
 
 ## 10. API surface
 
 - Repoint the sim's per-team effect reads (`FUNDING_DEV_BONUS` etc.) from tier-lookup to facility-level-lookup.
-- `GET /api/teams/{id}/facilities` — levels, effects, upkeep status, open projects + progress, this-team Prestige.
-- `GET /api/league/facilities` — league view (replaces `/api/league/markets`): Prestige ordering, each team's headline facilities.
+- `GET /api/teams/{id}/facilities` — levels, effects, upkeep status, open projects + progress, this-team Appeal.
+- `GET /api/league/facilities` — league view (replaces `/api/league/markets`): Appeal ordering, each team's headline facilities.
 - `POST /api/teams/{id}/facilities/contribute` — earmark to a specific upkeep bar or open project (replaces/extends the current `/contribute`).
 - `GET/POST /api/teams/{id}/facilities/vote` — facility vote ballot + cast (mirror awards/GM endpoints).
 - Keep `team_funding_pct` preference (now "season-end deposit %") and surface the season-end waterfall result in the **Season Recap** (closes the original invisibility gap).
@@ -194,7 +194,7 @@ Reuse the GM Front Office voting primitive: **one vote per fan per team, changea
 - `FACILITY_EFFECT_BY_LEVEL` per facility (the redesigned finer curves; anchored to current tier perks at the migration levels).
 - `FACILITY_MAX_LEVEL = 5`.
 - `MIGRATION_TIER_START_LEVEL = {MEGA:4, LARGE:3, MID:2, SMALL:1}`.
-- `PRESTIGE_LEVEL_WEIGHTS` (FA-order weighting).
+- `APPEAL_LEVEL_WEIGHTS` (FA-order weighting).
 - Retain `FUNDING_BASELINE_PER_TEAM` (the floor), `team_funding_pct` default.
 
 ## 13. Phased build
@@ -202,7 +202,7 @@ Reuse the GM Front Office voting primitive: **one vote per fan per team, changea
 1. **Data + migration** — tables, the tier→facilities seed, repoint sim effect-reads to facility levels (behavior identical to today at launch since levels reproduce tiers). Ship dark; validate parity with `/simcheck`.
 2. **Treasury + direct funding** — earmark contributions to upkeep/projects, progress bars, the season-end waterfall, decay. Validate the economy over N seasons (do whales plateau? mids specialize? bottoms hold the floor?).
 3. **Voting** — Front Office facility vote → open-projects queue → offseason construction.
-4. **Prestige → FA order** — swap FA draft ordering from `tier_rank` to Prestige.
+4. **Appeal → FA order** — swap FA draft ordering from `tier_rank` to Appeal.
 5. **UI + Recap surfacing** — the Facilities page, vote panel, recap beat; retire the old markets UI + stale copy.
 
 ## 14. Decisions & open validation
@@ -210,7 +210,7 @@ Reuse the GM Front Office voting primitive: **one vote per fan per team, changea
 **Decided:**
 - **Upkeep inflation — KEEP.** Share-denominated upkeep on an already-built facility drifts up as the league economy grows; that's intended (keeps the plateau honest). Needs one line of UI explanation.
 - **Whale influence — ACCEPT.** Direct funding lets a big spender solo a bar; fine, bounded by the Lv5 ceiling. No per-fan cap.
-- **Labels — RESOLVED.** Keep MEGA/LARGE/MID/SMALL_MARKET, repointed at **Market = fanbase size** (§2). **Prestige** is the separate facilities-derived FA-order signal (§6).
+- **Labels — RESOLVED.** Keep MEGA/LARGE/MID/SMALL_MARKET, repointed at **Market = fanbase size** (§2). **Appeal** is the separate facilities-derived FA-order signal (§6).
 
 **Still to validate (tuning, via `/simcheck`):**
 - Effect-per-level curves (anchor to current perks).
