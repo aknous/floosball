@@ -19,6 +19,7 @@ Replace the passive market-tier perks with a fan-funded, fan-voted **Facilities*
 Finish the awakened-powers / league-wide Criticality event (the gated "Cores lose control" payoff). The buildup + lower layers exist; L4 is the actual fire.
 - **Plan:** `docs/AWAKENED_POWERS_PLAN.md` (+ memory: criticality event design, sim_evolution_anomaly)
 - **Status:** designed/locked, gated; L4 fire framework to build in `floosball_game.py`.
+- **Idea (undefined, 2026-06-19):** *Awakened / glitched player cards* — tie the anomaly/awakening theme into the card system. When a player awakens (or during a Criticality), some special card variant of them exists. Not yet specced — what it is, how you get one, what it does, whether it's cosmetic vs mechanical. Flesh out before building.
 
 ### Card Vault / Showcase — retuning + documentation
 The Showcase shipped (payouts fire). Retune the grade/payout curves + set bonuses, build/finish the permanent **Vault**, and write proper documentation (no canonical doc yet beyond the plan).
