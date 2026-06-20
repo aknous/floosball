@@ -130,6 +130,83 @@ def computeShareUnit(session, lastSeason: int, numTeams: int = 24) -> float:
         return 0.0
 
 
+def getTreasury(session, teamId: int) -> int:
+    from database.models import TeamTreasury
+    row = session.query(TeamTreasury).filter_by(team_id=teamId).first()
+    return int(row.balance) if row else 0
+
+
+def setTreasury(session, teamId: int, balance: int) -> None:
+    from database.models import TeamTreasury
+    bal = max(0, int(balance))
+    row = session.query(TeamTreasury).filter_by(team_id=teamId).first()
+    if row:
+        row.balance = bal
+    else:
+        session.add(TeamTreasury(team_id=teamId, balance=bal))
+
+
+def addTreasury(session, teamId: int, amount: int) -> None:
+    """Credit (or debit, if negative) a team's Treasury. Floored at 0."""
+    setTreasury(session, teamId, getTreasury(session, teamId) + int(amount))
+
+
+def prepareSeasonStart(session, teamIds: list, carriedByTeam: dict, baseline: int) -> None:
+    """Season-start facility bookkeeping: reset every facility's upkeep_funded
+    to 0 (new season's direct-funding tally) and top up Treasuries.
+
+    First activation (no TeamTreasury row yet) seeds the Treasury from the 50%
+    carry (carriedByTeam) — the contributions that bought the grandfathered
+    facilities are NOT re-credited (no double-dip). Every season then adds the
+    league baseline so even a fanless team can hold a minimal facility set.
+    """
+    from database.models import TeamFacility, TeamTreasury
+    session.query(TeamFacility).update({TeamFacility.upkeep_funded: 0})
+    for tid in teamIds:
+        row = session.query(TeamTreasury).filter_by(team_id=tid).first()
+        if row is None:
+            session.add(TeamTreasury(team_id=tid, balance=max(0, int(carriedByTeam.get(tid, 0)) + baseline)))
+        else:
+            row.balance = max(0, int(row.balance) + baseline)
+
+
+def applySeasonEnd(session, teamObjs: list, season: int, shareUnit: float) -> list:
+    """Run the season-end waterfall + offseason construction for every team and
+    PERSIST the result (facility levels, project funding/builds, Treasury
+    leftover, in-memory team.facilities). Treasury is assumed already credited
+    with this season's deposit/contributions. Returns per-team logs.
+    """
+    from database.models import TeamFacility, FacilityProject
+    logs = []
+    for team in teamObjs:
+        facRows = session.query(TeamFacility).filter_by(team_id=team.id).all()
+        projRows = session.query(FacilityProject).filter_by(team_id=team.id, status='open').all()
+        if not facRows:
+            continue
+        treasury = getTreasury(session, team.id)
+        facilities = [{'key': f.facility_key, 'level': f.level, 'upkeep_funded': f.upkeep_funded}
+                      for f in facRows]
+        projects = [{'id': p.id, 'facility_key': p.facility_key, 'target_level': p.target_level,
+                     'cost_shares': p.cost_shares, 'funded': p.funded, 'opened_season': p.opened_season}
+                    for p in projRows]
+        res = resolveSeasonEnd(facilities, projects, treasury, shareUnit, season)
+        levelByKey = {f['key']: f['level'] for f in res['facilities']}
+        for f in facRows:
+            f.level = levelByKey.get(f.facility_key, f.level)
+        builtIds = {p['id'] for p in res['projects'] if p['built']}
+        fundedById = {p['id']: p['funded'] for p in res['projects']}
+        for p in projRows:
+            p.funded = fundedById.get(p.id, p.funded)
+            if p.id in builtIds:
+                p.status = 'built'
+                p.built_season = season
+        setTreasury(session, team.id, res['leftover'])
+        team.facilities = {f.facility_key: f.level for f in facRows}  # refresh in-memory
+        if res['log']:
+            logs.append((getattr(team, 'name', team.id), res['log']))
+    return logs
+
+
 def openProject(session, teamId: int, facilityKey: str, currentLevel: int, season: int):
     """Open a build/upgrade project for the next level of a facility. No-op if
     already maxed or an open project for this facility exists. Returns the row or None."""

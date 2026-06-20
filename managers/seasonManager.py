@@ -442,6 +442,13 @@ class SeasonManager:
         # season-start values so in-season mechanics couldn't drift.
         self._recomputeFundingTiersForOffseason(self.currentSeason.seasonNumber)
 
+        # Facilities (Markets→Facilities): run the season-end waterfall —
+        # Treasury (carry + baseline + contributions + this season's deposit)
+        # pays upkeep first, then the oldest open project; offseason construction
+        # builds funded projects and decays unmaintained facilities. Costs are
+        # share-denominated off the PRIOR season's faucet.
+        self._runFacilitySeasonEnd(self.currentSeason.seasonNumber)
+
         # Close game stats file
         self._closeGameStatsFile()
 
@@ -9005,6 +9012,35 @@ class SeasonManager:
         except ImportError:
             pass
 
+    def _runFacilitySeasonEnd(self, completedSeason: int) -> None:
+        """Season-end facility waterfall + offseason construction (Markets→
+        Facilities). Treasury (already credited with the deposit) pays upkeep,
+        then the oldest open project; funded projects build, unmaintained
+        facilities decay. Costs are share-denominated off the PRIOR season's
+        faucet (the rates fans funded against during the season)."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            from managers import facilitiesManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = teamManager.teams if teamManager else []
+            session = get_session()
+            try:
+                shareUnit = facilitiesManager.computeShareUnit(
+                    session, completedSeason - 1, numTeams=max(1, len(teams)))
+                logs = facilitiesManager.applySeasonEnd(session, teams, completedSeason, shareUnit)
+                session.commit()
+                logger.info(f"Facility season-end: shareUnit={shareUnit:.0f}, "
+                            f"{len(logs)} team(s) had decay/builds")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Facility season-end failed: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
     def _applySeasonEndTax(self, completedSeason: int) -> None:
         """Deduct each user's chosen funding percentage of unspent Floobits between seasons.
         Contributions update the existing TeamFunding records created at season start."""
@@ -9051,12 +9087,17 @@ class SeasonManager:
                 # Update existing TeamFunding records (created at season start)
                 records = session.query(TeamFunding).filter_by(season=completedSeason).all()
                 recordMap = {r.team_id: r for r in records}
+                from managers import facilitiesManager
                 for teamId, amount in teamFundingAccum.items():
                     rec = recordMap.get(teamId)
                     if rec:
                         rec.fan_contributions = (rec.fan_contributions or 0) + amount
                         rec.current_funding = (rec.baseline_funding or 0) + rec.fan_contributions
                         rec.effective_funding = rec.current_funding + (rec.carried_funding or 0)
+                    # Dual-feed: the season-end deposit also funds the new facility
+                    # Treasury (the waterfall spends it next). Transitional — the old
+                    # TeamFunding ledger above still drives the Market label until cutover.
+                    facilitiesManager.addTreasury(session, teamId, amount)
 
                 session.commit()
                 logger.info(f"Season-end funding collected from {contributed} users, total {totalCollected}F")
@@ -9317,8 +9358,10 @@ class SeasonManager:
 
                 # Create new records for every team
                 teamManager = self.serviceContainer.getService('team_manager')
+                carriedByTeam: dict = {}
                 for team in teamManager.teams:
                     carriedFunding = math.floor(prevFunding.get(team.id, 0) * FUNDING_DECAY_RATE)
+                    carriedByTeam[team.id] = carriedFunding
                     baseline = FUNDING_BASELINE_PER_TEAM
                     currentFunding = baseline
                     effectiveFunding = currentFunding + carriedFunding
@@ -9339,6 +9382,19 @@ class SeasonManager:
                     session.add(funding)
 
                 session.flush()
+
+                # Facilities (Markets→Facilities): reset each facility's upkeep
+                # tally for the new season + top up the Treasury (first activation
+                # seeds it from the 50% carry — no double-dip with the grandfathered
+                # facilities; every season adds the baseline floor).
+                try:
+                    from managers import facilitiesManager
+                    facilitiesManager.prepareSeasonStart(
+                        session, [t.id for t in teamManager.teams],
+                        carriedByTeam, FUNDING_BASELINE_PER_TEAM)
+                    session.flush()
+                except Exception as e:
+                    logger.warning(f"Facility season-start prep failed: {e}")
                 # Tier assignment:
                 #   Season 1 (no prior season): assign by ratio. All teams
                 #     start at baseline=200 with carried=0, so everyone
