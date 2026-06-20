@@ -5753,9 +5753,11 @@ def get_facility_vote(team_id: int, user: Optional[_User] = Depends(_getOptional
         # enrich each candidate with what winning it would cost: the build (to reach
         # the target level) and the upkeep it would then carry each season.
         shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
+        tallies = facilitiesManager.tallyFacilityVotes(session, team_id, season)
         for c in candidates:
             c['cost'] = facilitiesManager.upgradeCostFloobits(c['currentLevel'], shareUnit)
             c['upkeep'] = facilitiesManager.upkeepCostFloobits(c['targetLevel'], shareUnit)
+            c['votes'] = tallies.get(c['key'], 0)
         myVote = facilitiesManager.getFacilityVote(session, team_id, user.id, season) if user else None
         return build_success_response({
             'teamId': team_id, 'season': season,
