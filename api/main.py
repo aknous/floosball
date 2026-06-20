@@ -5671,6 +5671,58 @@ def get_team_facilities(team_id: int):
         session.close()
 
 
+@app.get("/api/league/facilities")
+def get_league_facilities():
+    """Per-team facilities summary for the league graphs: each team's facility
+    levels, Appeal (FA-draft signal), Market tier (fanbase band), and fan count.
+    Powers the facilities/Appeal comparison + the fan-count chart. Public."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamFacility, TeamFunding, User as _UserModel
+    from managers import facilitiesManager
+    from constants import FACILITY_CATALOG
+    from sqlalchemy import func
+    sm = floosball_app.seasonManager
+    tm = floosball_app.teamManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        # facility levels per team
+        levelsByTeam = {}
+        for row in session.query(TeamFacility).all():
+            levelsByTeam.setdefault(row.team_id, {})[row.facility_key] = row.level
+        # fan counts
+        fanCounts = dict(session.query(_UserModel.favorite_team_id, func.count())
+                         .filter(_UserModel.favorite_team_id.isnot(None))
+                         .group_by(_UserModel.favorite_team_id).all())
+        # market tier (fanbase label)
+        tierByTeam = {r.team_id: r.funding_tier for r in
+                      session.query(TeamFunding).filter_by(season=season).all()}
+        out = []
+        for team in (tm.teams if tm else []):
+            levels = levelsByTeam.get(team.id, {})
+            out.append({
+                'id': team.id,
+                'name': team.name,
+                'city': getattr(team, 'city', ''),
+                'abbr': getattr(team, 'abbr', (team.name or '')[:3].upper()),
+                'color': getattr(team, 'color', None),
+                'appeal': facilitiesManager.computeAppeal(levels),
+                'levels': {k: levels.get(k, 0) for k in FACILITY_CATALOG},
+                'fanCount': fanCounts.get(team.id, 0),
+                'marketTier': tierByTeam.get(team.id, 'MID_MARKET'),
+            })
+        out.sort(key=lambda t: (-t['appeal'], -t['fanCount']))
+        return build_success_response({
+            'season': season,
+            'facilityCatalog': {k: v.get('name', k) for k, v in FACILITY_CATALOG.items()},
+            'teams': out,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/teams/{team_id}/facilities/vote")
 def get_facility_vote(team_id: int, user: Optional[_User] = Depends(_getOptionalUser)):
     """Facility vote ballot: the facilities eligible to be the team's next
