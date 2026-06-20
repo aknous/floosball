@@ -60,11 +60,21 @@ def resolveSeasonEnd(facilities: list, projects: list, treasury: int,
     pot = int(treasury)
     log = []
 
+    # A facility with an open upgrade project is UNDER CONSTRUCTION — its upkeep
+    # is waived this season (no double-paying to maintain a level you're
+    # replacing) and it can't decay. The Treasury that would've gone to its
+    # upkeep is left in the pot to help fund the upgrade instead.
+    upgradingKeys = {p['facility_key'] for p in projects}
+
     # 1. UPKEEP WATERFALL — cover each facility's upkeep shortfall from the pot.
     #    Highest-level facilities are protected first (most investment at stake);
     #    a fan can pre-protect any specific facility via direct upkeep funding.
     facState = []
     for f in sorted(facilities, key=lambda x: -x['level']):
+        if f['key'] in upgradingKeys:
+            facState.append({'key': f['key'], 'level': f['level'], 'upkeepMet': True,
+                             'upkeepCost': 0, 'upkeepPaid': 0})
+            continue
         cost = upkeepCostFloobits(f['level'], shareUnit)
         funded = int(f.get('upkeep_funded', 0))
         shortfall = max(0, cost - funded)

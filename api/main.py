@@ -5635,16 +5635,21 @@ def get_team_facilities(team_id: int):
         shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
         facRows = session.query(TeamFacility).filter_by(team_id=team_id).all()
         levels = {f.facility_key: f.level for f in facRows}
+        openProjRows = session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()
+        upgradingKeys = {p.facility_key for p in openProjRows}
         facilities = []
         for f in facRows:
             cfg = FACILITY_CATALOG.get(f.facility_key, {})
+            # A facility under active upgrade has its upkeep WAIVED this season.
+            upgrading = f.facility_key in upgradingKeys
             facilities.append({
                 'key': f.facility_key,
                 'name': cfg.get('name', f.facility_key),
                 'level': f.level,
                 'maxLevel': FACILITY_MAX_LEVEL,
                 'effect': cfg.get('effect'),
-                'upkeepCost': facilitiesManager.upkeepCostFloobits(f.level, shareUnit),
+                'upgrading': upgrading,
+                'upkeepCost': 0 if upgrading else facilitiesManager.upkeepCostFloobits(f.level, shareUnit),
                 'upkeepFunded': f.upkeep_funded or 0,
                 'upgradeCost': facilitiesManager.upgradeCostFloobits(f.level, shareUnit),
             })
@@ -5653,7 +5658,7 @@ def get_team_facilities(team_id: int):
             'targetLevel': p.target_level,
             'cost': facilitiesManager.projectCostFloobits(p.cost_shares, shareUnit),
             'funded': p.funded, 'openedSeason': p.opened_season,
-        } for p in session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()]
+        } for p in openProjRows]
         return build_success_response({
             'teamId': team_id,
             'treasury': facilitiesManager.getTreasury(session, team_id),
