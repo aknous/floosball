@@ -772,14 +772,19 @@ SHOWCASE_SET_EDITION_WEIGHT = {"base": 0.15, "holographic": 0.35, "prismatic": 0
 SHOWCASE_GRADE_THRESHOLDS = [
     ("S", 700), ("A", 480), ("B", 240), ("C", 120), ("D", 45), ("F", 0),
 ]
-# Grade → flat Floobit payout at season end.
-# Calibrated next-season to read as a strong second income against a season of
-# fantasy, without eclipsing it (showcase pays once/season and clears, and the
-# permanent-vault cost — vaulted cards can't be equipped/sold — justifies it).
-# S capped at 3000 (a first pass at 5000 ran too hot). Old table was
-# 50/120/250/450/800, below even a casual fantasy season. Re-tune via
+# Grade is now a legible LABEL only (it no longer sets the payout) — the showcase
+# pays a WEEKLY DIVIDEND scaled continuously by the live score, not a flat lump.
+#
+# Weekly dividend = round(SHOWCASE_DIVIDEND_RATE × finalScore), paid every regular-
+# season week (28 weeks) off whatever is featured that week. Calibrated so a
+# sustained top showcase earns roughly the OLD end-of-season lump across a full
+# season, but the top end is now rewarded above the old flat cap (a perfect S
+# out-earns a barely-S one). Reference points at this rate (×28 weeks, if held all
+# season): D-entry (45)≈164F, C-entry (120)≈437F, B-entry (240)≈874F, A-entry
+# (480)≈1747F, S-entry (700)≈2548F, perfect-ish (~1000)≈3640F. Realized totals run
+# lower since the showcase is empty/partial early-season. Re-tune via
 # tune_showcase.py / simcheck.
-SHOWCASE_GRADE_PAYOUT = {"F": 0, "D": 250, "C": 600, "B": 1200, "A": 2000, "S": 3000}
+SHOWCASE_DIVIDEND_RATE = 0.13
 
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7

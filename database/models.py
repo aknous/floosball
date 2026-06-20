@@ -1725,6 +1725,9 @@ class GmFaBallot(Base):
     team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
     season: Mapped[int] = mapped_column(Integer, nullable=False)
     rankings: Mapped[str] = mapped_column(Text, nullable=False)  # JSON array of player IDs
+    # Fan's preferred order to fill open slots once all voted players are taken
+    # (JSON array of position values 1-5). NULL = no preference.
+    position_priority: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     cost_paid: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

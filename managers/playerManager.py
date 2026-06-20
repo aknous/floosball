@@ -4246,11 +4246,23 @@ class PlayerManager:
         if not candidates:
             return False  # open slots exist but no FAs or prospects to fill them
 
-        # Pick the highest-rated candidate overall.
-        slot, candidate, kind = max(
-            candidates,
-            key=lambda c: getattr(c[1], 'playerRating', getattr(c[1].attributes, 'skillRating', 0)),
-        )
+        def _rating(c):
+            return getattr(c[1], 'playerRating', getattr(c[1].attributes, 'skillRating', 0))
+
+        # Fan position priority (set by the FA ballot's "fill order"): when present,
+        # fill the highest-priority OPEN position first — best player there —
+        # OVERRIDING pure rating, so a team that ranked QB/WR ahead of K won't grab
+        # a higher-rated kicker first. Positions no fan ranked fall to the back,
+        # tie-broken by rating. No priority set -> best-rated overall (legacy).
+        priority = getattr(self, '_gmFaPositionPriority', {}).get(getattr(team, 'id', None))
+        if priority:
+            def _prioKey(c):
+                posVal = getattr(getattr(c[1], 'position', None), 'value', None)
+                idx = priority.index(posVal) if posVal in priority else len(priority)
+                return (idx, -_rating(c))
+            slot, candidate, kind = min(candidates, key=_prioKey)
+        else:
+            slot, candidate, kind = max(candidates, key=_rating)
 
         teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
 

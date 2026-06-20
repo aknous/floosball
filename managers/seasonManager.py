@@ -1344,6 +1344,11 @@ class SeasonManager:
         if not in_playoffs:
             self._awardWeeklyFpFloobits(self.currentSeason.seasonNumber, week)
 
+        # Card Showcase weekly dividend (regular season only) — the live showcase
+        # is re-graded each week and pays Floobits scaled by its score.
+        if not in_playoffs:
+            self._awardShowcaseDividends(self.currentSeason.seasonNumber, week)
+
         # Achievement hook — Veteran (rosters set this regular-season week)
         if not in_playoffs:
             self._creditVeteranForWeek(self.currentSeason.seasonNumber)
@@ -3854,27 +3859,43 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Failed to award playoff bracket prizes: {e}")
 
-    def _awardShowcasePayouts(self) -> None:
-        """End-of-season Card Showcase payout: each user's featured showcase is
-        graded (F→S) and pays out flat Floobits. Guarded against double-payment
-        by a per-season transaction check. The showcase is season-scoped, so it
-        clears automatically — next season simply has no featured slots."""
+    def _awardShowcaseDividends(self, season: int, week: int) -> None:
+        """Weekly Card Showcase dividend: each user's currently-featured showcase
+        is re-graded and pays Floobits scaled by its score. Guarded against
+        double-payment by a per-(season, week) transaction check, so a resume/
+        replay of the week is safe. Fires a per-user notification so the income is
+        visible all season (parity with the weekly FP earnings)."""
         try:
             from database.connection import get_session as _gs
             from managers import showcaseManager
-            season = self.currentSeason.seasonNumber
             s = _gs()
             try:
-                summary = showcaseManager.awardSeasonPayouts(s, season)
-                s.commit()
+                summary = showcaseManager.awardWeeklyDividends(s, season, week)
                 if summary.get("alreadyAwarded"):
-                    logger.info("Showcase payouts already awarded — skipping")
-                else:
-                    logger.info(f"Showcase payouts awarded to {summary['paid']} users (S{season})")
+                    s.commit()
+                    logger.info(f"Showcase dividends already awarded for week {week} — skipping")
+                    return
+                # Notify the users who were actually paid.
+                try:
+                    from database.repositories.notification_repository import NotificationRepository
+                    notifRepo = NotificationRepository(s)
+                    for r in summary.get("results", []):
+                        if r.get("dividend", 0) > 0:
+                            notifRepo.create(
+                                r["userId"], 'showcase_dividend',
+                                f'Week {week} Showcase',
+                                f'+{r["dividend"]} Floobits from your Showcase (grade {r["grade"]})',
+                                data={'season': season, 'week': week,
+                                      'dividend': r["dividend"], 'grade': r["grade"]},
+                            )
+                except Exception as _e:
+                    logger.warning(f"Showcase dividend notifications failed: {_e}")
+                s.commit()
+                logger.info(f"Showcase dividends paid to {summary['paid']} users (S{season} wk{week})")
             finally:
                 s.close()
         except Exception as e:
-            logger.error(f"Failed to award showcase payouts: {e}")
+            logger.error(f"Failed to award showcase dividends: {e}")
 
     def _seedTeams(self, teams):
         """Order teams by the playoff-seeding tiebreaker chain — win% →
@@ -4320,9 +4341,8 @@ class SeasonManager:
 
                 # Bracket challenge: final scoring + floobit prizes to top brackets.
                 self._awardPlayoffBracketPrizes()
-
-                # Card Showcase: grade each user's featured collection and pay out.
-                self._awardShowcasePayouts()
+                # (The Showcase no longer pays a season-end lump — it pays a weekly
+                # dividend during the regular season; see _awardShowcaseDividends.)
 
                 playoffDict['Floos Bowl'] = gameResults
                 self.currentSeason.freeAgencyOrder.append(runnerUp)
@@ -4809,7 +4829,9 @@ class SeasonManager:
                 self._clearRecapEvents(self.currentSeason.seasonNumber)
             self._offseasonGmResults = []
             self._offseasonFaVoteResults = {}
+            self._offseasonFaPositionPriority = {}
             self.playerManager._gmFaDirectives = {}
+            self.playerManager._gmFaPositionPriority = {}
         # Reset freeAgencyComplete on every team — last season's FA draft
         # left it True, which would make this season's panel boot with every
         # team showing DONE + "FREE AGENCY COMPLETE" until the draft starts.
@@ -7015,7 +7037,7 @@ class SeasonManager:
             }
 
             gm = GmManager(session, lowQuorum=self._isTestMode)
-            directives, overallRankings = gm.resolveSignFaVotes(
+            directives, overallRankings, positionPriorities = gm.resolveSignFaVotes(
                 teamManager.teams, season,
                 freeAgentLists, teamOpenPositions
             )
@@ -7023,8 +7045,12 @@ class SeasonManager:
 
             # Pass directives to playerManager for use in FA draft
             self.playerManager._gmFaDirectives = directives
+            # Fan-aggregated position fill order for the best-available fallback.
+            self.playerManager._gmFaPositionPriority = positionPriorities
             if directives:
                 logger.info(f"GM FA directives for {len(directives)} team(s)")
+            if positionPriorities:
+                logger.info(f"GM FA position priorities for {len(positionPriorities)} team(s)")
 
             # Build enriched per-team flat ranking. Each entry carries its
             # own position name so the UI can render position chips on a
@@ -7058,6 +7084,16 @@ class SeasonManager:
                 if entries:
                     enrichedFaRankings[teamAbbr] = entries
             self._offseasonFaVoteResults = enrichedFaRankings
+
+            # Resolved fan position fill-order per team (abbr-keyed), for the
+            # Front Office to show how the fallback will fill open slots.
+            posPriorityByAbbr: Dict[str, list] = {}
+            for tId, order in (positionPriorities or {}).items():
+                t = teamLookup.get(tId)
+                abbr = getattr(t, 'abbr', None) if t else None
+                if abbr and order:
+                    posPriorityByAbbr[abbr] = list(order)
+            self._offseasonFaPositionPriority = posPriorityByAbbr
 
             # Broadcast directives to frontend with player details
             if BROADCASTING_AVAILABLE and broadcaster and directives:

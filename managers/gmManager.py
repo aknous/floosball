@@ -437,9 +437,33 @@ class GmManager:
 
     # ── Sign FA (Ranked Choice Voting) ──────────────────────────────────
 
+    def _aggregatePositionPriorities(self, priorities: List[List[int]]) -> List[int]:
+        """Borda-count fans' position-fill orderings into one team order.
+
+        Each ballot ranks positions best-first; a ranking of N awards (N - index)
+        points to each position. Returns position values (1-5) sorted by total
+        points desc (tie-break: more appearances, then position value) — the
+        order the FA-draft fallback fills open slots when voted players run out.
+        Positions no fan ranked are omitted; empty input -> []."""
+        if not priorities:
+            return []
+        scores: Dict[int, float] = {}
+        appearances: Dict[int, int] = {}
+        for ranking in priorities:
+            n = len(ranking)
+            seen = set()
+            for idx, pos in enumerate(ranking):
+                if pos in seen:
+                    continue
+                seen.add(pos)
+                scores[pos] = scores.get(pos, 0) + (n - idx)
+                appearances[pos] = appearances.get(pos, 0) + 1
+        return sorted(scores.keys(),
+                      key=lambda p: (-scores[p], -appearances.get(p, 0), p))
+
     def resolveSignFaVotes(self, teams, season: int,
                            freeAgentLists: Dict,
-                           teamOpenPositions: Dict) -> Tuple[Dict[int, List[int]], Dict[int, List[int]]]:
+                           teamOpenPositions: Dict) -> Tuple[Dict[int, List[int]], Dict[int, List[int]], Dict[int, List[int]]]:
         """Resolve sign_fa ballots via overall ranked-choice voting.
 
         Single-list IRV across all candidates whose position is currently
@@ -460,9 +484,13 @@ class GmManager:
             sign list used by the FA draft.
           - overallRankings: {teamId: [playerId, ...]} the full IRV
             ranking before slot-walking, for tally display.
+          - positionPriorities: {teamId: [posVal, ...]} the fan-aggregated
+            order to fill open slots once the voted players run out (drives
+            the FA-draft best-available fallback instead of pure rating).
         """
         directives: Dict[int, List[int]] = {}
         overallRankingsByTeam: Dict[int, List[int]] = {}
+        positionPrioritiesByTeam: Dict[int, List[int]] = {}
 
         # Position-value → name lookup for slot-fill bookkeeping.
         for team in teams:
@@ -474,6 +502,13 @@ class GmManager:
             openPositions = teamOpenPositions.get(team.id, [])
             if not openPositions:
                 continue
+
+            # Fan-aggregated position fill order (used only by the best-available
+            # fallback in the FA draft, once voted players are exhausted).
+            posPriorities = self.ballotRepo.getPositionPrioritiesForTeam(team.id, season)
+            aggPriority = self._aggregatePositionPriorities(posPriorities)
+            if aggPriority:
+                positionPrioritiesByTeam[team.id] = aggPriority
 
             # Eligible candidates: all FAs at any open position, plus team's
             # own prospects at any open position. Prospects share ID space.
@@ -555,7 +590,7 @@ class GmManager:
                 f"({totalBallots} ballots)"
             )
 
-        return directives, overallRankingsByTeam
+        return directives, overallRankingsByTeam, positionPrioritiesByTeam
 
     def _tallyFullRankingOverall(self, ballots: List[List[int]],
                                  eligibleCandidates: set) -> List[int]:

@@ -2929,8 +2929,8 @@ def _recapFundingLeaderboard(session, target):
 
 
 def _recapShowcaseLeaderboard(session, target):
-    """Season Vault-Showcase leaderboard (top entries by the hidden score, which
-    drives the grade). Number-free — only grade / payout / card count exposed."""
+    """Season Vault-Showcase leaderboard (top entries by the score, which drives
+    the grade). Grade / weekly dividend / card count exposed."""
     from database.models import ShowcaseSlot, User as DBUser
     from managers import showcaseManager
     userIds = [r[0] for r in session.query(ShowcaseSlot.user_id).filter(
@@ -2948,7 +2948,7 @@ def _recapShowcaseLeaderboard(session, target):
         rows.append({
             "userId": uid,
             "username": (getattr(u, 'username', None) or f"User{uid}") if u else f"User{uid}",
-            "grade": ev["grade"], "estimatedPayout": ev["payout"],
+            "grade": ev["grade"], "weeklyDividend": ev["weeklyDividend"],
             "cardCount": len(infos), "_score": ev["score"],
         })
     rows.sort(key=lambda r: r["_score"], reverse=True)
@@ -5434,6 +5434,7 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
     # window), so return the latest saved ballot whenever a user is
     # authenticated and has a favorite team set.
     existingBallot = None
+    existingPositionPriority = None
     if user:
         try:
             from database.connection import get_session
@@ -5448,6 +5449,11 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
                     ballot = ballotRepo.getUserBallot(user.id, dbUser.favorite_team_id, currentSeason)
                     if ballot:
                         existingBallot = json.loads(ballot.rankings)
+                        if getattr(ballot, 'position_priority', None):
+                            try:
+                                existingPositionPriority = json.loads(ballot.position_priority)
+                            except (json.JSONDecodeError, TypeError):
+                                existingPositionPriority = None
             finally:
                 session.close()
         except Exception:
@@ -5542,9 +5548,12 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         "isOffseason": isOffseason, "freeAgents": faList, "draftOrder": draftOrder,
         "transactions": transactions, "faWindowOpen": faWindowOpen,
         "faWindowEnd": faWindowEnd, "faPool": faPool,
-        "existingBallot": existingBallot, "faDirectives": faDirectives,
+        "existingBallot": existingBallot,
+        "existingPositionPriority": existingPositionPriority,
+        "faDirectives": faDirectives,
         "gmResolutions": gmResolutions,
         "faVoteResults": faVoteResults,
+        "faPositionPriority": getattr(sm, '_offseasonFaPositionPriority', {}) or {},
         "rookieBallotResults": rookieBallotResults,
         "rookies": upcomingRookies,
         "phase": phase,
@@ -8465,9 +8474,10 @@ def reorderVault(req: ReorderVaultRequest, user: _User = Depends(_getCurrentUser
 
 
 def _buildShowcasePayload(session, cardManager, userId, currentSeason):
-    """Shared GET/PUT response: 8 slots (filled or null) + the live grade,
-    estimated payout, and named Active/Almost sets. The raw score is never
-    included — grade + payout + set names only."""
+    """Shared GET/PUT response: 8 slots (filled or null) + the live grade, the
+    weekly Floobit dividend, the set-bonus multiplier, and the named Active/Almost
+    sets. Each featured card carries its own scoring breakdown (multipliers + its
+    Floobit share of the dividend) so the payout is fully transparent."""
     from database.models import ShowcaseSlot, UserCard
     from managers import showcaseManager
     from constants import SHOWCASE_SLOTS
@@ -8497,14 +8507,23 @@ def _buildShowcasePayload(session, cardManager, userId, currentSeason):
         slots.append({"slotNumber": slotNum, "card": cardData})
 
     score = showcaseManager.evaluate(infos, currentSeason)
+    # Attach each card's scoring breakdown to its slot (keyed by userCardId).
+    byCardId = {b["userCardId"]: b for b in score["cardBreakdown"]}
+    for s in slots:
+        card = s["card"]
+        if card and card.get("id") in byCardId:
+            card["showcase"] = byCardId[card["id"]]
     return {
         "slots": slots,
         "slotCount": len([s for s in slots if s["card"]]),
         "maxSlots": SHOWCASE_SLOTS,
         "grade": score["grade"],
-        "estimatedPayout": score["payout"],
+        "weeklyDividend": score["weeklyDividend"],
+        "setBonus": score["setBonus"],
+        "maxSetBonus": score["maxSetBonus"],
         "activeSets": score["activeSets"],
         "almostSets": score["almostSets"],
+        "sets": score["sets"],
         "season": currentSeason,
     }
 
@@ -8538,9 +8557,8 @@ class SetShowcaseRequest(BaseModel):
 
 @app.get("/api/cards/showcase/leaderboard")
 def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
-    """Ranked list of everyone with a featured Showcase this season. Ranked by
-    the hidden score (which drives the grade); only grade / payout / card count
-    are exposed, never the raw number."""
+    """Ranked list of everyone with a featured Showcase this season. Ranked by the
+    score (which drives the grade); grade / weekly dividend / card count exposed."""
     from database.connection import get_session
     from database.models import ShowcaseSlot, User as _UserModel
     from managers import showcaseManager
@@ -8563,7 +8581,7 @@ def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
                 "userId": uid,
                 "username": (getattr(u, "username", None) or "Anonymous") if u else "Anonymous",
                 "grade": ev["grade"],
-                "estimatedPayout": ev["payout"],
+                "weeklyDividend": ev["weeklyDividend"],
                 "cardCount": len(infos),
                 "activeSets": ev["activeSets"],
                 "_score": ev["score"],  # for ranking only; stripped below
@@ -8582,31 +8600,53 @@ def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
 
 @app.get("/api/cards/showcase/last-result")
 def showcaseLastResult(user: _User = Depends(_getCurrentUser)):
-    """The user's most recent end-of-season Showcase payout, for the results
-    recap. Durable (reads the payout transaction) so offline users see it on
-    their next visit. Returns null data if they've never been paid out."""
+    """End-of-season Showcase recap: the user's TOTAL weekly dividends from their
+    most recent COMPLETED season (season < current), plus the weeks paid and the
+    grade their showcase finished on. Durable (reads the dividend transactions) so
+    offline users see it on their next visit; gated to a completed season so it
+    reads as a season wrap, not a mid-season pop. Null if they earned nothing."""
     from database.connection import get_session
     from database.models import CurrencyTransaction
-    from managers.showcaseManager import SHOWCASE_PAYOUT_TX
+    from managers.showcaseManager import SHOWCASE_DIVIDEND_TX
     import re as _re
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
 
     session = get_session()
     try:
-        tx = (
+        # Most recent completed season with any dividend for this user.
+        lastSeason = (
+            session.query(CurrencyTransaction.season)
+            .filter(
+                CurrencyTransaction.user_id == user.id,
+                CurrencyTransaction.transaction_type == SHOWCASE_DIVIDEND_TX,
+                CurrencyTransaction.season < currentSeason,
+            )
+            .order_by(CurrencyTransaction.season.desc())
+            .first()
+        )
+        if not lastSeason:
+            return build_success_response(None)
+        season = lastSeason[0]
+        txs = (
             session.query(CurrencyTransaction)
             .filter(
                 CurrencyTransaction.user_id == user.id,
-                CurrencyTransaction.transaction_type == SHOWCASE_PAYOUT_TX,
+                CurrencyTransaction.transaction_type == SHOWCASE_DIVIDEND_TX,
+                CurrencyTransaction.season == season,
             )
-            .order_by(CurrencyTransaction.season.desc(), CurrencyTransaction.id.desc())
-            .first()
+            .order_by(CurrencyTransaction.week.asc(), CurrencyTransaction.id.asc())
+            .all()
         )
-        if not tx:
+        if not txs:
             return build_success_response(None)
-        m = _re.search(r"grade (\w+)", tx.description or "")
+        total = sum(t.amount for t in txs)
+        m = _re.search(r"grade (\w+)", txs[-1].description or "")
         return build_success_response({
-            "season": tx.season,
-            "payout": tx.amount,
+            "season": season,
+            "total": total,
+            "weeksPaid": len(txs),
             "grade": m.group(1) if m else None,
         })
     finally:
@@ -10389,6 +10429,9 @@ class GmVoteUndoRequest(BaseModel):
 
 class GmFaBallotRequest(BaseModel):
     rankings: List[int]
+    # Optional fan fill-order for open slots once voted players run out: a list of
+    # position values (1=QB,2=RB,3=WR,4=TE,5=K). Omit to leave unchanged; [] clears.
+    positionPriority: Optional[List[int]] = None
 
 
 @app.post("/api/gm/vote")
@@ -11268,6 +11311,13 @@ def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUs
     if not req.rankings or len(req.rankings) > GM_FA_BALLOT_MAX_RANKINGS:
         raise HTTPException(400, f"Provide 1-{GM_FA_BALLOT_MAX_RANKINGS} ranked player IDs")
 
+    # Validate the optional position-priority order: distinct position values 1-5.
+    positionPriority = req.positionPriority
+    if positionPriority is not None:
+        if (len(positionPriority) != len(set(positionPriority))
+                or any(p not in (1, 2, 3, 4, 5) for p in positionPriority)):
+            raise HTTPException(400, "positionPriority must be distinct position values 1-5")
+
     session = get_session()
     try:
         dbUser = session.query(User).filter_by(id=user.id).first()
@@ -11329,12 +11379,14 @@ def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUs
         ballot = ballotRepo.submitBallot(
             userId=user.id, teamId=teamId, season=currentSeason,
             rankings=cleanedRankings, costPaid=costPaid,
+            positionPriority=positionPriority,
         )
         session.commit()
 
         return build_success_response({
             "ballotId": ballot.id,
             "rankings": cleanedRankings,
+            "positionPriority": positionPriority,
             "costPaid": costPaid,
             "isUpdate": existing is not None,
         })

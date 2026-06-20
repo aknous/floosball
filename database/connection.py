@@ -1066,6 +1066,15 @@ def _runPendingMigrations():
             logger.info("  Migration: added seasons.playoff_seeds")
         except Exception:
             conn.rollback()
+        # FA ballot position priority: a fan's preferred order to fill open slots
+        # once all voted players are taken (JSON array of position values 1-5).
+        # NULL = no preference (falls back to best-available-by-rating).
+        try:
+            conn.execute(text("ALTER TABLE gm_fa_ballots ADD COLUMN position_priority TEXT"))
+            conn.commit()
+            logger.info("  Migration: added gm_fa_ballots.position_priority")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
