@@ -476,7 +476,7 @@ FACILITY_MAX_LEVEL = 5
 # facility_key -> {name, effect (which sim effect it drives), levels[0..5]}
 FACILITY_CATALOG = {
     'training':    {'name': 'Training Facility',    'effect': 'dev_bonus',
-                    'levels': [0, 0, 0, 1, 1, 2]},                       # player development (cf FUNDING_DEV_BONUS)
+                    'levels': [0, 0.4, 0.8, 1.2, 1.6, 2.0]},             # player-dev bias; every level a real step (resolved to int probabilistically in apply_offseason_training)
     'locker_room': {'name': 'Locker Room',          'effect': 'morale',
                     'levels': [0.0, 0.0, 0.0, 0.0025, 0.0075, 0.01]},    # pregame morale nudge (cf FUNDING_MORALE_MODIFIER)
     'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
