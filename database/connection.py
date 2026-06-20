@@ -864,6 +864,38 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Facility economy (Phase 2): projects queue, treasury, upkeep funding.
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS facility_projects ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "team_id INTEGER NOT NULL, "
+                "facility_key VARCHAR(32) NOT NULL, "
+                "kind VARCHAR(8) NOT NULL, "
+                "target_level INTEGER NOT NULL, "
+                "cost_shares FLOAT NOT NULL, "
+                "funded INTEGER NOT NULL DEFAULT 0, "
+                "opened_season INTEGER NOT NULL, "
+                "status VARCHAR(8) NOT NULL DEFAULT 'open', "
+                "built_season INTEGER)"
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_facility_project_team ON facility_projects(team_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_facility_project_status ON facility_projects(status)"))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS team_treasury ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "team_id INTEGER NOT NULL UNIQUE, "
+                "balance INTEGER NOT NULL DEFAULT 0)"
+            ))
+            # upkeep_funded on team_facilities (ADD COLUMN is a no-op if present)
+            cols = [r[1] for r in conn.execute(text("PRAGMA table_info(team_facilities)")).fetchall()]
+            if 'upkeep_funded' not in cols:
+                conn.execute(text("ALTER TABLE team_facilities ADD COLUMN upkeep_funded INTEGER NOT NULL DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: ensured facility_projects + team_treasury + upkeep_funded")
+        except Exception:
+            conn.rollback()
+
         # Clear stale will_retire on already-retired players. The flag is set at
         # week 22 and (historically) never reset, so retirees kept carrying it.
         # Idempotent.

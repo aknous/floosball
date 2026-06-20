@@ -494,6 +494,21 @@ MIGRATION_STADIUM_START_LEVEL = 0  # new facility nobody has built yet
 # Appeal (FA-draft attractiveness) = weighted sum of facility levels. Flat
 # weights to start; higher Appeal drafts free agents first. Tune later.
 APPEAL_LEVEL_WEIGHTS = {k: 1.0 for k in FACILITY_CATALOG}
+
+# ---- Facility economy (share-denominated costs; plan doc §5) ----
+# Costs/upkeep are denominated in SHARES, not absolute Floobits, so they
+# self-scale with the economy: 1 share = (total Floobits distributed to users
+# last season) / num_teams. Indexed by level (0..5): the cost to REACH a level
+# and the per-season cost to MAINTAIN it. Lv0 = free (unbuilt). At S10's ~6,000F
+# share these read as Lv5 upgrade ≈ 5,100F, Lv5 upkeep ≈ 1,800F/season; full-max
+# (5 facilities × Lv5) ≈ 9,000F/season upkeep. Tune via the economy harness.
+FACILITY_UPGRADE_COST_SHARES = [0.0, 0.05, 0.10, 0.20, 0.42, 0.85]  # cost to reach level i
+# Upkeep is steep at the top so the soft cap bites: an average-income team
+# (≈1 share of income) sustains only a partial/specialized build; a whale
+# (≈2.5×) can just hold a full max (engage-or-decay). Tuned via the harness.
+FACILITY_UPKEEP_SHARES       = [0.0, 0.005, 0.015, 0.045, 0.115, 0.400]  # upkeep to hold level i
+# A facility that ends the season with upkeep unmet slips this many levels.
+FACILITY_DECAY_LEVELS = 1
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 

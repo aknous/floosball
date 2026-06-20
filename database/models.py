@@ -572,6 +572,9 @@ class TeamFacility(Base):
     team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
     facility_key: Mapped[str] = mapped_column(String(32), nullable=False)
     level: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Floobits put toward THIS season's upkeep (direct contributions). Reset to 0
+    # each season start; the season-end waterfall tops it up from the deposit.
+    upkeep_funded: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("team_id", "facility_key", name="uq_team_facility"),
@@ -580,6 +583,53 @@ class TeamFacility(Base):
 
     def __repr__(self):
         return f"<TeamFacility(team_id={self.team_id}, facility={self.facility_key}, level={self.level})>"
+
+
+class FacilityProject(Base):
+    """An open (in-progress) facility build/upgrade in a team's queue.
+
+    Created when a project is opened (Phase 3: by fan vote). Fans fund it
+    directly all season; the season-end waterfall tops up the OLDEST open
+    project. Persists across seasons until fully funded (then it builds in the
+    offseason and status→built). See docs/MARKETS_FACILITIES_PLAN.md §3.
+    """
+    __tablename__ = "facility_projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    facility_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)        # 'upgrade' | 'new'
+    target_level: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_shares: Mapped[float] = mapped_column(Float, nullable=False)   # share-denominated; Floobit target = cost_shares × shareUnit(season)
+    funded: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # Floobits accumulated
+    opened_season: Mapped[int] = mapped_column(Integer, nullable=False)      # FIFO key
+    status: Mapped[str] = mapped_column(String(8), default="open", nullable=False)  # 'open' | 'built'
+    built_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        Index("idx_facility_project_team", "team_id"),
+        Index("idx_facility_project_status", "status"),
+    )
+
+    def __repr__(self):
+        return f"<FacilityProject(team={self.team_id}, {self.facility_key}→Lv{self.target_level}, funded={self.funded}, {self.status})>"
+
+
+class TeamTreasury(Base):
+    """A team's persistent facility Treasury balance (Markets→Facilities).
+
+    Separate from the legacy TeamFunding ledger (which still drives the Market
+    label + FA order during the transition). Funded by carry-forward + baseline +
+    fan contributions; spent on upkeep and projects by the season-end waterfall.
+    """
+    __tablename__ = "team_treasury"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False, unique=True)
+    balance: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    def __repr__(self):
+        return f"<TeamTreasury(team={self.team_id}, balance={self.balance})>"
 
 
 class Game(Base):
