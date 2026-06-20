@@ -6643,10 +6643,14 @@ class SeasonManager:
         if not self.currentSeason:
             return
 
-        # Pull tier_rank fresh from the DB (sidesteps the runtime-reset bug
-        # documented in _initializeTeamFunding). Rookie-draft position is the
-        # within-tier tiebreaker (worst record first).
-        tierRankByTeam: dict = {}
+        # FA draft order = team APPEAL (facilities-derived, Markets→Facilities):
+        # higher Appeal drafts free agents first ("players prefer better-equipped
+        # clubs"). At activation Appeal reproduces the old tier order, since the
+        # grandfather migration seeds facility levels from tier — so nobody loses
+        # FA position. effective_funding is the within-Appeal tiebreaker (preserves
+        # the exact funding-based order the old tier_rank used); rookie-draft
+        # position is the final tiebreak.
+        effFundingByTeam: dict = {}
         try:
             from database.connection import get_session as _gs
             from database.models import TeamFunding
@@ -6655,23 +6659,23 @@ class SeasonManager:
                 seasonNum = self.currentSeason.seasonNumber
                 rows = _s.query(TeamFunding).filter_by(season=seasonNum).all()
                 for r in rows:
-                    tierRankByTeam[r.team_id] = r.tier_rank or 3
+                    effFundingByTeam[r.team_id] = r.effective_funding or 0
             finally:
                 _s.close()
         except Exception as e:
-            logger.warning(f"Could not load funding for FA draft preview: {e}")
+            logger.warning(f"Could not load funding for FA draft order: {e}")
 
+        from managers import facilitiesManager
         rookieDraftOrder = self.currentSeason.freeAgencyOrder
         rookieOrderIdx = {
             getattr(t, 'id', None): idx for idx, t in enumerate(rookieDraftOrder)
         }
-        def _rank(t):
-            return tierRankByTeam.get(getattr(t, 'id', -1),
-                                      getattr(t, 'fundingTierRank', 3) or 3)
-        freeAgencyOrder = sorted(
-            rookieDraftOrder,
-            key=lambda t: (_rank(t), rookieOrderIdx.get(getattr(t, 'id', None), 999)),
-        )
+        def _appealKey(t):
+            appeal = facilitiesManager.computeAppeal(getattr(t, 'facilities', {}) or {})
+            eff = effFundingByTeam.get(getattr(t, 'id', -1), 0)
+            # higher Appeal then higher funding draft FIRST → negate for ascending sort
+            return (-appeal, -eff, rookieOrderIdx.get(getattr(t, 'id', None), 999))
+        freeAgencyOrder = sorted(rookieDraftOrder, key=_appealKey)
         self._pendingFaDraftOrder = freeAgencyOrder
 
         if not (BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled()):
