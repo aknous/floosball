@@ -10102,6 +10102,16 @@ class SeasonManager:
                     if hasContribution:
                         _am.unlockSecret(session, uid, "devotee")
 
+                # Lifer — backed the same favorite team for 5+ full seasons.
+                # Keyed off Supporter loyalty tenure (supporter_weeks), which
+                # ticks one per regular-season week and soft-resets on a team change.
+                from constants import SUPPORTER_WEEKS_PER_SEASON as _SWPS
+                liferRows = session.query(User.id).filter(
+                    User.supporter_weeks >= 5 * _SWPS,
+                ).all()
+                for (uid,) in liferRows:
+                    _am.unlockSecret(session, uid, "lifer")
+
                 session.commit()
             except Exception as e:
                 session.rollback()

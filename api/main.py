@@ -2131,6 +2131,19 @@ def post_game_rally(game_id: int, req: _RallyRequest, user: _User = Depends(_get
             spectatorManager.addRallyFill(session, user.id, _season, _week)
         except Exception as _e:
             logger.debug(f"spectator rally fill skipped: {_e}")
+        # Secret — Diehard: rallied your own favorite team while they trail by 20+
+        try:
+            favId = getattr(dbUser, "favorite_team_id", None)
+            if favId and req.teamId == favId and hasattr(game, "homeTeam"):
+                isHome = game.homeTeam.id == req.teamId
+                teamScore = game.homeScore if isHome else game.awayScore
+                oppScore = game.awayScore if isHome else game.homeScore
+                if (oppScore - teamScore) >= 20:
+                    from managers import achievementManager as _am
+                    _am.unlockSecret(session, user.id, "diehard")
+                    session.commit()
+        except Exception as _e:
+            logger.warning(f"Diehard hook failed: {_e}")
     finally:
         session.close()
 
@@ -6476,6 +6489,15 @@ def follow_player(player_id: int, user: _User = Depends(_getCurrentUser)):
         if not existing:
             session.add(FollowedPlayer(user_id=user.id, player_id=player_id))
             session.commit()
+            # Secret — Superfan: following 10+ players at once
+            try:
+                followCount = session.query(FollowedPlayer).filter_by(user_id=user.id).count()
+                if followCount >= 10:
+                    from managers import achievementManager as _am
+                    _am.unlockSecret(session, user.id, "superfan")
+                    session.commit()
+            except Exception as _e:
+                logger.warning(f"Superfan hook failed: {_e}")
         return build_success_response({"playerId": player_id, "following": True})
     except HTTPException:
         raise
@@ -7275,6 +7297,9 @@ def set_fantasy_roster(req: FantasyRosterRequest, user: _User = Depends(_getCurr
                 favTeamId = getattr(user, "favorite_team_id", None)
                 if favTeamId and all(p.team_id == favTeamId for p in players):
                     _am.unlockSecret(session, user.id, "homer")
+                # Greenhorn — every roster player is a rookie (first season)
+                if all(getattr(p, "seasons_played", 0) == 0 for p in players):
+                    _am.unlockSecret(session, user.id, "greenhorn")
 
         session.commit()
         return build_success_response({"message": "Roster updated", "rosterId": roster.id})
@@ -8419,7 +8444,18 @@ def sellCards(req: SellCardsRequest, user: _User = Depends(_getCurrentUser)):
 
     session = get_session()
     try:
+        # Secret — Liquidator: was a Diamond among the cards being sold? Check
+        # before sellCards deletes the rows.
+        from database.models import UserCard as _UC, CardTemplate as _CT
+        soldDiamond = session.query(_UC.id).join(
+            _CT, _UC.card_template_id == _CT.id
+        ).filter(
+            _UC.id.in_(req.userCardIds), _UC.user_id == user.id, _CT.edition == "diamond",
+        ).first() is not None
         result = cardManager.sellCards(session, user.id, req.userCardIds, currentSeason, currentWeek)
+        if soldDiamond:
+            from managers import achievementManager as _am
+            _am.unlockSecret(session, user.id, "liquidator")
         session.commit()
         return build_success_response(result)
     except ValueError as e:
@@ -8460,6 +8496,7 @@ def blendCards(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
         # several sacrificed templates with one new one, so the count may change.
         from managers import achievementManager as _am
         _am.syncCuratorProgress(session, user.id, currentSeason)
+        _am.unlockSecret(session, user.id, "alchemist")  # Secret — first use of the Combine
         session.commit()
         return build_success_response(result)
     except ValueError as e:
@@ -9655,6 +9692,17 @@ def revealPack(req: RevealPackRequest, user: _User = Depends(_getCurrentUser)):
     session = get_session()
     try:
         result = cardManager.revealPack(session, user.id, req.packTypeId, currentSeason, shopDay=shopDay, currentWeek=currentWeek)
+        # Secret — Lightning Strike: a Diamond pulled out of a Humble pack
+        try:
+            from database.models import PackType as _PT
+            pt = session.get(_PT, req.packTypeId)
+            if pt and pt.name == "humble" and any(
+                (c.get("edition") == "diamond") for c in (result.get("revealed") or [])
+            ):
+                from managers import achievementManager as _am
+                _am.unlockSecret(session, user.id, "lightning_strike")
+        except Exception as _e:
+            logger.warning(f"Lightning Strike hook failed: {_e}")
         session.commit()
         return build_success_response(result)
     except ValueError as e:
