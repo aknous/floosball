@@ -2398,17 +2398,17 @@ def _seedAchievements():
             # bonus portion, so a hand of 4-5 modest FPx cards can hit
             # 7x on a hot week. New top tier requires both a heavily
             # stacked FPx hand AND a favorable modifier draw.
-            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 250,
-             "description": "Reach a 2.5x total FP multiplier in a single week.",
+            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 220,
+             "description": "Reach a 2.2x total FP multiplier in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 450,
-             "description": "Reach a 4.5x total FP multiplier in a single week.",
+            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 400,
+             "description": "Reach a 4.0x total FP multiplier in a single week.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 700,
-             "description": "Reach a 7.0x total FP multiplier in a single week.",
+            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 600,
+             "description": "Reach a 6.0x total FP multiplier in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 1000,
-             "description": "Reach a 10.0x total FP multiplier in a single week.",
+            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 850,
+             "description": "Reach a 8.5x total FP multiplier in a single week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # ── Secret achievements — hidden until unlocked ────────────────────────
             # Mostly floobits with selective packs for the genuinely hard
