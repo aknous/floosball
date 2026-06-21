@@ -10267,7 +10267,7 @@ class SeasonManager:
                             for p in userPicks
                         ):
                             _am4.unlockSecret(session, userId, "contrarian")
-                        # Secret — Bizarro: a full 12-pick week, all MANUAL, every one
+                        # Secret — Jinx: a full 12-pick week, all MANUAL, every one
                         # WRONG. The inverse of Perfect Week — rewards deliberately
                         # picking every loser. Auto-picks excluded (same as Contrarian)
                         # so an unlucky auto-picker on a chalk week doesn't unlock it.
@@ -10275,7 +10275,7 @@ class SeasonManager:
                             (not p.is_auto) and (p.correct is False)
                             for p in userPicks
                         ):
-                            _am4.unlockSecret(session, userId, "bizarro")
+                            _am4.unlockSecret(session, userId, "jinx")
                     except Exception as _e:
                         logger.warning(f"Contrarian hook failed: {_e}")
 

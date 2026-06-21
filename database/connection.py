@@ -2502,7 +2502,7 @@ def _seedAchievements():
             {"key": "pool_shark", "name": "Pool Shark", "category": "secret", "scope": "once", "sort_order": 740, "target": 1,
              "description": "Finish #1 on the season playoff bracket leaderboard.",
              "reward_config": {"floobits": 0, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "bizarro", "name": "Bizarro", "category": "secret", "scope": "once", "sort_order": 745, "target": 1,
+            {"key": "jinx", "name": "Jinx", "category": "secret", "scope": "once", "sort_order": 745, "target": 1,
              "description": "Whiff on every single pick in a full 12-game pick-em week.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
             {"key": "sparkler", "name": "Sparkler", "category": "guidance", "scope": "per_season", "sort_order": 170, "target": 1,
