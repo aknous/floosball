@@ -5601,6 +5601,212 @@ def contribute_to_team(team_id: int, payload: Dict[str, Any], user: _User = Depe
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/teams/{team_id}/facilities/contribute")
+def contribute_to_facilities(team_id: int, payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Contribute Floobits toward a team's facilities (Markets→Facilities).
+    body: {amount, target?: 'treasury'|'upkeep'|'project', facilityKey?, projectId?}.
+    Requires auth; favorite team only."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    amount = payload.get("amount")
+    if not isinstance(amount, int) or amount <= 0:
+        raise HTTPException(status_code=400, detail="'amount' must be a positive integer")
+    try:
+        result = floosball_app.seasonManager.contributeToFacilities(
+            user.id, team_id, amount,
+            target=payload.get("target", "treasury"),
+            facilityKey=payload.get("facilityKey"),
+            projectId=payload.get("projectId"),
+        )
+        return build_success_response(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error contributing to facilities for team {team_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/teams/{team_id}/facilities")
+def get_team_facilities(team_id: int):
+    """Team facilities state (Markets→Facilities): levels + effects + upkeep,
+    open projects with cost/progress, Treasury balance, Appeal, and the current
+    share unit. Drives the Facilities page. Public (read-only)."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamFacility, FacilityProject
+    from managers import facilitiesManager
+    from constants import FACILITY_CATALOG, FACILITY_MAX_LEVEL
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
+        facRows = session.query(TeamFacility).filter_by(team_id=team_id).all()
+        levels = {f.facility_key: f.level for f in facRows}
+        openProjRows = session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()
+        upgradingKeys = {p.facility_key for p in openProjRows}
+        facilities = []
+        for f in facRows:
+            cfg = FACILITY_CATALOG.get(f.facility_key, {})
+            # A facility under active upgrade has its upkeep WAIVED this season.
+            upgrading = f.facility_key in upgradingKeys
+            facilities.append({
+                'key': f.facility_key,
+                'name': cfg.get('name', f.facility_key),
+                'level': f.level,
+                'maxLevel': FACILITY_MAX_LEVEL,
+                'effect': cfg.get('effect'),
+                'upgrading': upgrading,
+                'upkeepCost': 0 if upgrading else facilitiesManager.upkeepCostFloobits(f.level, shareUnit),
+                'upkeepFunded': f.upkeep_funded or 0,
+                'upgradeCost': facilitiesManager.upgradeCostFloobits(f.level, shareUnit),
+            })
+        projects = [{
+            'id': p.id, 'facilityKey': p.facility_key, 'kind': p.kind,
+            'targetLevel': p.target_level,
+            'cost': facilitiesManager.projectCostFloobits(p.cost_shares, shareUnit),
+            'funded': p.funded, 'openedSeason': p.opened_season,
+        } for p in openProjRows]
+        return build_success_response({
+            'teamId': team_id,
+            'treasury': facilitiesManager.getTreasury(session, team_id),
+            'appeal': facilitiesManager.computeAppeal(levels),
+            'shareUnit': round(shareUnit),
+            'facilities': facilities,
+            'projects': projects,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/league/facilities")
+def get_league_facilities():
+    """Per-team facilities summary for the league graphs: each team's facility
+    levels, Appeal (FA-draft signal), Market tier (fanbase band), and fan count.
+    Powers the facilities/Appeal comparison + the fan-count chart. Public."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamFacility, TeamFunding, User as _UserModel
+    from managers import facilitiesManager
+    from constants import FACILITY_CATALOG
+    from sqlalchemy import func
+    sm = floosball_app.seasonManager
+    tm = floosball_app.teamManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        # facility levels per team
+        levelsByTeam = {}
+        for row in session.query(TeamFacility).all():
+            levelsByTeam.setdefault(row.team_id, {})[row.facility_key] = row.level
+        # fan counts
+        fanCounts = dict(session.query(_UserModel.favorite_team_id, func.count())
+                         .filter(_UserModel.favorite_team_id.isnot(None))
+                         .group_by(_UserModel.favorite_team_id).all())
+        # market tier (fanbase label)
+        tierByTeam = {r.team_id: r.funding_tier for r in
+                      session.query(TeamFunding).filter_by(season=season).all()}
+        out = []
+        for team in (tm.teams if tm else []):
+            levels = levelsByTeam.get(team.id, {})
+            st = getattr(team, 'seasonTeamStats', {}) or {}
+            out.append({
+                'id': team.id,
+                'name': team.name,
+                'city': getattr(team, 'city', ''),
+                'abbr': getattr(team, 'abbr', (team.name or '')[:3].upper()),
+                'color': getattr(team, 'color', None),
+                'appeal': facilitiesManager.computeAppeal(levels),
+                'levels': {k: levels.get(k, 0) for k in FACILITY_CATALOG},
+                'fanCount': fanCounts.get(team.id, 0),
+                'marketTier': tierByTeam.get(team.id, 'MID_MARKET'),
+                '_wp': st.get('winPerc', 0), '_sd': st.get('scoreDiff', 0),
+            })
+        # Match the real FA draft order (_buildFaDraftOrder): Appeal first, then
+        # REVERSE STANDINGS (worse record drafts first, by winPerc then scoreDiff)
+        # as the within-Appeal tiebreaker. So the displayed "FA PICK #N" equals the
+        # actual draft slot, including for tied teams.
+        out.sort(key=lambda t: (-t['appeal'], t['_wp'], t['_sd']))
+        for t in out:
+            t.pop('_wp', None); t.pop('_sd', None)
+        return build_success_response({
+            'season': season,
+            'facilityCatalog': {k: v.get('name', k) for k, v in FACILITY_CATALOG.items()},
+            'teams': out,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/teams/{team_id}/facilities/vote")
+def get_facility_vote(team_id: int, user: Optional[_User] = Depends(_getOptionalUser)):
+    """Facility vote ballot: the facilities eligible to be the team's next
+    project (not maxed, not already in progress) + the current user's vote.
+    Tallies are hidden while the season is live (anti-bandwagon)."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamFacility, FacilityProject
+    from managers import facilitiesManager
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        levels = {f.facility_key: f.level for f in
+                  session.query(TeamFacility).filter_by(team_id=team_id).all()}
+        openKeys = {p.facility_key for p in
+                    session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()}
+        candidates = facilitiesManager.voteCandidates(levels, openKeys)
+        # enrich each candidate with what winning it would cost: the build (to reach
+        # the target level) and the upkeep it would then carry each season.
+        shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
+        tallies = facilitiesManager.tallyFacilityVotes(session, team_id, season)
+        for c in candidates:
+            c['cost'] = facilitiesManager.upgradeCostFloobits(c['currentLevel'], shareUnit)
+            c['upkeep'] = facilitiesManager.upkeepCostFloobits(c['targetLevel'], shareUnit)
+            c['votes'] = tallies.get(c['key'], 0)
+        myVote = facilitiesManager.getFacilityVote(session, team_id, user.id, season) if user else None
+        return build_success_response({
+            'teamId': team_id, 'season': season,
+            'candidates': candidates, 'myVote': myVote,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/teams/{team_id}/facilities/vote")
+def post_facility_vote(team_id: int, payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Cast/change the user's facility vote (one per fan/team/season). Favorite
+    team only. body: {facilityKey}."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    facilityKey = payload.get("facilityKey")
+    if not facilityKey:
+        raise HTTPException(status_code=400, detail="'facilityKey' is required")
+    from database.connection import get_session
+    from database.models import User as _UserModel
+    from managers import facilitiesManager
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        dbUser = session.query(_UserModel).filter_by(id=user.id).first()
+        if not dbUser or dbUser.favorite_team_id != team_id:
+            raise HTTPException(status_code=400, detail="You can only vote for your favorite team")
+        facilitiesManager.castFacilityVote(session, team_id, user.id, facilityKey, season)
+        session.commit()
+        return build_success_response({
+            'teamId': team_id, 'season': season, 'myVote': facilityKey,
+        })
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
+
+
 @app.get("/api/teams/{team_id}/projected-funding")
 def get_projected_funding(team_id: int):
     """Estimate end-of-season auto-contribution funding for a team.
@@ -11411,7 +11617,7 @@ def get_upcoming_rookies(user: Optional[_User] = Depends(_getOptionalUser)):
     """
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
-    from constants import FUNDING_SCOUTING_BONUS, GM_ACTIVE_WEEK
+    from constants import GM_ACTIVE_WEEK
     pm = floosball_app.playerManager
     sm = floosball_app.seasonManager
     tm = floosball_app.teamManager
@@ -11425,7 +11631,9 @@ def get_upcoming_rookies(user: Optional[_User] = Depends(_getOptionalUser)):
         scoutTeam = tm.getTeamById(user.favorite_team_id) if tm else None
         if scoutTeam:
             coachScouting = getattr(getattr(scoutTeam, 'coach', None), 'scouting', 80) or 80
-            tierBonus = FUNDING_SCOUTING_BONUS.get(getattr(scoutTeam, 'fundingTier', 'MID_MARKET'), 0)
+            # Scouting Department level (Markets→Facilities) replaces the old
+            # market-tier scouting bonus; migrated levels reproduce the tier perk.
+            tierBonus = scoutTeam.facilityEffect('scouting_bonus') if hasattr(scoutTeam, 'facilityEffect') else 0
             effectiveScouting = max(0, min(100, coachScouting + tierBonus))
 
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0

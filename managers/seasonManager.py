@@ -442,6 +442,17 @@ class SeasonManager:
         # season-start values so in-season mechanics couldn't drift.
         self._recomputeFundingTiersForOffseason(self.currentSeason.seasonNumber)
 
+        # Facilities (Markets→Facilities): first resolve the fan vote — the
+        # Run the season-end waterfall FIRST (Treasury pays upkeep, then the
+        # projects that were OPEN and fundable all season; offseason construction
+        # builds funded projects and decays unmaintained facilities). THEN resolve
+        # the vote, opening the winner as a fresh project — so it goes through an
+        # Active Projects season of funding before next season's waterfall can
+        # complete it, instead of being built instantly by this season's Treasury.
+        # Costs are share-denominated off the PRIOR season's faucet.
+        self._runFacilitySeasonEnd(self.currentSeason.seasonNumber)
+        self._resolveFacilityVotes(self.currentSeason.seasonNumber)
+
         # Close game stats file
         self._closeGameStatsFile()
 
@@ -3143,11 +3154,31 @@ class SeasonManager:
             logger.error(f"Error updating team records: {e}")
             logger.error(f"Game attributes: {dir(game) if hasattr(game, '__dict__') else 'No __dict__'}")
     
+    def _syncGameIdCounter(self) -> None:
+        """Advance the game-id counter past the highest game id already in the DB
+        so newly created games never reuse an existing id. A restart/resume resets
+        the in-memory counter to 0; without this, new games collide with old games
+        and inherit their play_reactions (phantom reactions from other users) and
+        any other game-id-keyed data. Monotonic — never lowers the counter."""
+        try:
+            if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session):
+                return
+            from database.models import Game as _DBGame
+            from sqlalchemy import func as _func
+            dbMax = self.db_session.query(_func.max(_DBGame.id)).scalar() or 0
+            if int(dbMax) > self._gameIdCounter:
+                self._gameIdCounter = int(dbMax)
+        except Exception as e:
+            logger.warning(f"_syncGameIdCounter failed: {e}")
+
     def createSchedule(self) -> None:
         """Generate season schedule (matches original floosball.py algorithm)"""
         import floosball_team as FloosTeam
         if not self.currentSeason:
             return
+        # Never reuse a game id already in the DB (else new games inherit old
+        # games' reactions/stats on a restart).
+        self._syncGameIdCounter()
             
         logger.info("Creating season schedule using original algorithm")
         
@@ -3248,13 +3279,19 @@ class SeasonManager:
                              f"(home={row.home_team_id}, away={row.away_team_id}); aborting schedule load")
                 return False
 
-            self._gameIdCounter += 1
             newGame = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam,
                                      timingManager=self.timingManager,
                                      personalityManager=self.serviceContainer.getService('personality_manager'),
                                      gameRules=self.currentSeason.gameRules)
-            newGame.id = self._gameIdCounter
+            # Use the REAL DB id as the game's id, NOT a fresh per-run counter.
+            # play_reactions (and the frontend) key off game.id, so reassigning
+            # sequential counter ids on resume made new games collide with old
+            # games' reactions — the "phantom reactions from other users" bug.
+            # Keep the counter past the highest loaded id for games created later.
+            newGame.id = row.id
             newGame.dbId = row.id
+            if row.id > self._gameIdCounter:
+                self._gameIdCounter = row.id
             newGame.seasonNumber = seasonNumber
             newGame.week = row.week - 1   # 0-indexed (matches original createSchedule convention)
             newGame.gameType = 'playoff' if row.is_playoff else 'regular'
@@ -3921,6 +3958,8 @@ class SeasonManager:
         flags that gate them are runtime-only, so re-running would double-pay).
         """
         resuming = resumeFromRound > 1
+        # Never reuse a game id already in the DB (phantom-reaction guard).
+        self._syncGameIdCounter()
 
         # Clean up stale data from any previous playoff run (safe no-op on first
         # run). On resume, scope it to the interrupted round and later so the
@@ -5304,13 +5343,14 @@ class SeasonManager:
             # Prospects train through their drafting team's coach/funding too, so coaches
             # with strong playerDevelopment and MEGA-market teams grow pipelines faster.
             logger.info("Step 7: Player offseason training")
-            from constants import FUNDING_DEV_BONUS
             teamDevRating: dict = {}       # player.id → coach dev rating
-            teamFundingBonus: dict = {}    # player.id → funding dev bonus
+            teamFundingBonus: dict = {}    # player.id → facility dev bonus
             teamManager = self.serviceContainer.getService('team_manager')
             for team in teamManager.teams:
                 coachDevRating = getattr(getattr(team, 'coach', None), 'playerDevelopment', 50)
-                fundingBonus = FUNDING_DEV_BONUS.get(getattr(team, 'fundingTier', 'MID_MARKET'), 0)
+                # Training Facility level (Markets→Facilities) replaces the old
+                # market-tier dev bonus; migrated levels reproduce the tier perks.
+                fundingBonus = team.facilityEffect('dev_bonus')
                 # Rostered players train with this team's coach/funding
                 for rosterPlayer in team.rosterDict.values():
                     if rosterPlayer is not None and hasattr(rosterPlayer, 'id'):
@@ -6664,35 +6704,24 @@ class SeasonManager:
         if not self.currentSeason:
             return
 
-        # Pull tier_rank fresh from the DB (sidesteps the runtime-reset bug
-        # documented in _initializeTeamFunding). Rookie-draft position is the
-        # within-tier tiebreaker (worst record first).
-        tierRankByTeam: dict = {}
-        try:
-            from database.connection import get_session as _gs
-            from database.models import TeamFunding
-            _s = _gs()
-            try:
-                seasonNum = self.currentSeason.seasonNumber
-                rows = _s.query(TeamFunding).filter_by(season=seasonNum).all()
-                for r in rows:
-                    tierRankByTeam[r.team_id] = r.tier_rank or 3
-            finally:
-                _s.close()
-        except Exception as e:
-            logger.warning(f"Could not load funding for FA draft preview: {e}")
-
+        # FA draft order = team APPEAL (facilities-derived, Markets→Facilities):
+        # higher Appeal drafts free agents first ("players prefer better-equipped
+        # clubs"). At activation Appeal reproduces the old tier order, since the
+        # grandfather migration seeds facility levels from tier — so nobody loses
+        # FA position. Ties in Appeal break by REVERSE STANDINGS (the rookie-draft
+        # order — worse teams pick first) for parity. (effective_funding was the
+        # old within-Appeal tiebreaker; dropped post-cutover now that funding is
+        # no longer a competitive lever.)
+        from managers import facilitiesManager
         rookieDraftOrder = self.currentSeason.freeAgencyOrder
         rookieOrderIdx = {
             getattr(t, 'id', None): idx for idx, t in enumerate(rookieDraftOrder)
         }
-        def _rank(t):
-            return tierRankByTeam.get(getattr(t, 'id', -1),
-                                      getattr(t, 'fundingTierRank', 3) or 3)
-        freeAgencyOrder = sorted(
-            rookieDraftOrder,
-            key=lambda t: (_rank(t), rookieOrderIdx.get(getattr(t, 'id', None), 999)),
-        )
+        def _appealKey(t):
+            appeal = facilitiesManager.computeAppeal(getattr(t, 'facilities', {}) or {})
+            # higher Appeal drafts FIRST; ties → reverse standings (rookie order)
+            return (-appeal, rookieOrderIdx.get(getattr(t, 'id', None), 999))
+        freeAgencyOrder = sorted(rookieDraftOrder, key=_appealKey)
         self._pendingFaDraftOrder = freeAgencyOrder
 
         if not (BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled()):
@@ -8722,13 +8751,15 @@ class SeasonManager:
             logger.error(f"Error sending season-end emails: {e}")
 
     def _accumulateFatigue(self) -> None:
-        """Increase fatigue for all rostered players based on resilience and team funding tier."""
+        """Increase fatigue for all rostered players based on resilience and the
+        team's Recovery Center level (Markets→Facilities)."""
         from constants import (BASE_FATIGUE_PER_WEEK, FATIGUE_RESILIENCE_SCALE,
-                               FATIGUE_RESILIENCE_CEILING, FUNDING_FATIGUE_REDUCTION,
+                               FATIGUE_RESILIENCE_CEILING,
                                RATING_SCALE_MIN, RATING_SCALE_MAX)
         for team in self.leagueManager.teams:
-            fundingTier = getattr(team, 'fundingTier', 'MID_MARKET')
-            fundingReduction = FUNDING_FATIGUE_REDUCTION.get(fundingTier, 0.0)
+            # Recovery Center level reduces weekly fatigue gain (migrated levels
+            # reproduce the old market-tier fatigue reduction).
+            fundingReduction = team.facilityEffect('fatigue_reduction')
             for player in team.rosterDict.values():
                 if player is None:
                     continue
@@ -9034,6 +9065,73 @@ class SeasonManager:
         except ImportError:
             pass
 
+    def _resolveFacilityVotes(self, completedSeason: int) -> None:
+        """Resolve the season's facility vote per team — the plurality-winning
+        facility gets an upgrade/build project opened into the queue (Phase 3).
+        Runs AFTER the waterfall so the new project opens fresh for next season's
+        funding (it shows in Active Projects and is funded over the coming season
+        rather than built instantly by this season's Treasury). Reads post-waterfall
+        levels. No votes → no new project (Treasury just accumulates)."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            from database.models import TeamFacility
+            from managers import facilitiesManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = teamManager.teams if teamManager else []
+            session = get_session()
+            try:
+                opened = 0
+                for team in teams:
+                    levels = {f.facility_key: f.level for f in
+                              session.query(TeamFacility).filter_by(team_id=team.id).all()}
+                    proj = facilitiesManager.resolveFacilityVote(
+                        session, team.id, completedSeason, levels)
+                    if proj is not None:
+                        opened += 1
+                        logger.info(f"Facility vote: {getattr(team, 'name', team.id)} → "
+                                    f"{proj.facility_key} Lv{proj.target_level}")
+                session.commit()
+                if opened:
+                    logger.info(f"Facility votes resolved: {opened} project(s) opened")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Facility vote resolution failed: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
+    def _runFacilitySeasonEnd(self, completedSeason: int) -> None:
+        """Season-end facility waterfall + offseason construction (Markets→
+        Facilities). Treasury (already credited with the deposit) pays upkeep,
+        then the oldest open project; funded projects build, unmaintained
+        facilities decay. Costs are share-denominated off the PRIOR season's
+        faucet (the rates fans funded against during the season)."""
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session
+            from managers import facilitiesManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = teamManager.teams if teamManager else []
+            session = get_session()
+            try:
+                shareUnit = facilitiesManager.computeShareUnit(
+                    session, completedSeason - 1, numTeams=max(1, len(teams)))
+                logs = facilitiesManager.applySeasonEnd(session, teams, completedSeason, shareUnit)
+                session.commit()
+                logger.info(f"Facility season-end: shareUnit={shareUnit:.0f}, "
+                            f"{len(logs)} team(s) had decay/builds")
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Facility season-end failed: {e}")
+            finally:
+                session.close()
+        except ImportError:
+            pass
+
     def _applySeasonEndTax(self, completedSeason: int) -> None:
         """Deduct each user's chosen funding percentage of unspent Floobits between seasons.
         Contributions update the existing TeamFunding records created at season start."""
@@ -9080,12 +9178,17 @@ class SeasonManager:
                 # Update existing TeamFunding records (created at season start)
                 records = session.query(TeamFunding).filter_by(season=completedSeason).all()
                 recordMap = {r.team_id: r for r in records}
+                from managers import facilitiesManager
                 for teamId, amount in teamFundingAccum.items():
                     rec = recordMap.get(teamId)
                     if rec:
                         rec.fan_contributions = (rec.fan_contributions or 0) + amount
                         rec.current_funding = (rec.baseline_funding or 0) + rec.fan_contributions
                         rec.effective_funding = rec.current_funding + (rec.carried_funding or 0)
+                    # Dual-feed: the season-end deposit also funds the new facility
+                    # Treasury (the waterfall spends it next). Transitional — the old
+                    # TeamFunding ledger above still drives the Market label until cutover.
+                    facilitiesManager.addTreasury(session, teamId, amount)
 
                 session.commit()
                 logger.info(f"Season-end funding collected from {contributed} users, total {totalCollected}F")
@@ -9189,40 +9292,132 @@ class SeasonManager:
         finally:
             session.close()
 
-    def _assignFundingTiers(self, session, season: int) -> None:
-        """Assign funding tiers by each team's share of league funding.
+    def contributeToFacilities(self, userId: int, teamId: int, amount: int,
+                               target: str = 'treasury', facilityKey: str = None,
+                               projectId: int = None) -> dict:
+        """Contribute Floobits toward a team's facilities (Markets→Facilities).
 
-        A team's ratio = effective_funding / fair_share, where fair_share is
-        total_league_funding / team_count. Self-scaling: as the economy grows
-        fair-share grows with it, so MEGA/LARGE always mean "meaningfully
-        ahead of the pack today" rather than a fixed floobit target that
-        decays in value as fans get richer.
+        target:
+          - 'treasury' (default) → the general Treasury pool (the season-end
+            waterfall spends it on upkeep then the oldest open project).
+          - 'upkeep' (+facilityKey) → that facility's upkeep bar — pre-protects
+            it so the waterfall doesn't have to cover it.
+          - 'project' (+projectId) → an open project's bar — accelerates it past
+            the FIFO waterfall.
 
-        Thresholds from constants.FUNDING_TIER_THRESHOLDS (multiples of fair-share):
-          ≥ 2.0× → MEGA_MARKET   (owns ≥2× the average slice)
-          ≥ 1.15× → LARGE_MARKET (15%+ above average)
-          ≥ 0.85× → MID_MARKET   (within ±15% of average)
-          < 0.85× → SMALL_MARKET (15%+ below average)
+        Deducts from the user (favorite team only) and credits the chosen bar.
+        Returns the new balance + the team's Treasury. Raises ValueError on failure.
         """
-        from database.models import TeamFunding
+        if amount <= 0:
+            raise ValueError("Contribution amount must be positive")
+        if not self.currentSeason:
+            raise ValueError("No active season")
+
+        from database.connection import get_session
+        from database.models import User, TeamFacility, FacilityProject
+        from database.repositories.card_repositories import CurrencyRepository
+        from managers import facilitiesManager
+
+        season = self.currentSeason.seasonNumber
+        session = get_session()
+        try:
+            user = session.query(User).filter_by(id=userId).first()
+            if not user:
+                raise ValueError("User not found")
+            if user.favorite_team_id != teamId:
+                raise ValueError("You can only contribute to your favorite team")
+
+            currencyRepo = CurrencyRepository(session)
+            currency = currencyRepo.getByUser(userId)
+            balance = currency.balance if currency else 0
+            if balance < amount:
+                raise ValueError(f"Insufficient balance ({balance}F available)")
+
+            # Resolve + validate the target BEFORE spending.
+            if target == 'upkeep':
+                if not facilityKey:
+                    raise ValueError("facilityKey required for an upkeep contribution")
+                fac = session.query(TeamFacility).filter_by(
+                    team_id=teamId, facility_key=facilityKey).first()
+                if not fac:
+                    raise ValueError("Facility not found")
+                desc = f'Facility upkeep ({facilityKey})'
+            elif target == 'project':
+                if not projectId:
+                    raise ValueError("projectId required for a project contribution")
+                proj = session.query(FacilityProject).filter_by(
+                    id=projectId, team_id=teamId, status='open').first()
+                if not proj:
+                    raise ValueError("Open project not found")
+                desc = f'Facility project (#{projectId})'
+            elif target == 'treasury':
+                desc = 'Team Treasury'
+            else:
+                raise ValueError(f"Unknown contribution target: {target}")
+
+            currencyRepo.spendFunds(userId, amount, 'facility_contribution',
+                                    description=desc, season=season)
+            if target == 'upkeep':
+                fac.upkeep_funded = (fac.upkeep_funded or 0) + amount
+            elif target == 'project':
+                proj.funded = (proj.funded or 0) + amount
+            else:
+                facilitiesManager.addTreasury(session, teamId, amount)
+
+            session.commit()
+            currency = currencyRepo.getByUser(userId)
+            logger.info(f"User {userId} contributed {amount}F to team {teamId} facilities "
+                        f"(target={target})")
+            return {
+                'teamId': teamId, 'amount': amount, 'target': target,
+                'newBalance': currency.balance if currency else 0,
+                'treasury': facilitiesManager.getTreasury(session, teamId),
+            }
+        except ValueError:
+            session.rollback()
+            raise
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error processing facility contribution: {e}")
+            raise ValueError(f"Contribution failed: {e}")
+        finally:
+            session.close()
+
+    def _assignFundingTiers(self, session, season: int) -> None:
+        """Assign the MARKET tier by each team's share of the league FANBASE.
+
+        Markets→Facilities cutover: "Market" now means fanbase SIZE (popularity),
+        not funding — the dev/morale/fatigue/scouting effects come from facilities
+        now, and FA order from Appeal. So MEGA/LARGE/MID/SMALL_MARKET band a team's
+        fan count against the league average:
+          ratio = fanCount / fairShare, fairShare = totalFans / teamCount.
+        Thresholds (FUNDING_TIER_THRESHOLDS): ≥2.0 MEGA, ≥1.15 LARGE, ≥0.85 MID,
+        else SMALL. The label still drives expectation-pressure scaling (a genuine
+        market-size effect) and the Market display. (Method name kept for callers;
+        the `funding_tier` column now holds the fanbase label.)
+        """
+        from database.models import TeamFunding, User
+        from sqlalchemy import func
         from constants import FUNDING_TIER_NAMES, FUNDING_TIER_THRESHOLDS
 
         records = session.query(TeamFunding).filter_by(season=season).all()
         if not records:
             return
 
-        totalFunding = sum((r.effective_funding or 0) for r in records)
+        # Fan count per team = users whose favorite team it is.
+        fanCounts = dict(
+            session.query(User.favorite_team_id, func.count())
+            .filter(User.favorite_team_id.isnot(None))
+            .group_by(User.favorite_team_id).all())
         teamCount = len(records)
-        # If the whole league has zero funding, there's nothing to rank —
-        # everyone sits at MID. Should never happen in practice (baseline
-        # ensures each team has some effective funding) but guard anyway.
-        if totalFunding <= 0 or teamCount == 0:
-            fairShare = 1
-        else:
-            fairShare = max(1, totalFunding / teamCount)
+        totalFans = sum(fanCounts.get(r.team_id, 0) for r in records)
+        # Fanless league (no favorites set yet) → everyone neutral MID.
+        fairShare = (totalFans / teamCount) if (totalFans > 0 and teamCount > 0) else 0
 
-        def tierFor(effective: int) -> tuple:
-            ratio = (effective or 0) / fairShare
+        def tierFor(fanCount: int) -> tuple:
+            if fairShare <= 0:
+                return 'MID_MARKET', 3
+            ratio = fanCount / fairShare
             for idx, name in enumerate(FUNDING_TIER_NAMES):
                 if ratio >= FUNDING_TIER_THRESHOLDS[name]:
                     return name, idx + 1
@@ -9230,13 +9425,11 @@ class SeasonManager:
             return FUNDING_TIER_NAMES[last], last + 1
 
         for rec in records:
-            tierName, tierRank = tierFor(rec.effective_funding or 0)
+            tierName, tierRank = tierFor(fanCounts.get(rec.team_id, 0))
             rec.funding_tier = tierName
             rec.tier_rank = tierRank
-            # Snapshot the funding value this tier was computed from so the
-            # markets chart can place the filled dot in the matching band
-            # even when post-recompute contributions push effective_funding
-            # higher than what locked the tier.
+            # tier_locked_funding is a legacy markets-chart snapshot (funding-based);
+            # left as effective_funding for now — the chart is reworked in the UI phase.
             rec.tier_locked_funding = rec.effective_funding or 0
 
         session.flush()
@@ -9346,8 +9539,10 @@ class SeasonManager:
 
                 # Create new records for every team
                 teamManager = self.serviceContainer.getService('team_manager')
+                carriedByTeam: dict = {}
                 for team in teamManager.teams:
                     carriedFunding = math.floor(prevFunding.get(team.id, 0) * FUNDING_DECAY_RATE)
+                    carriedByTeam[team.id] = carriedFunding
                     baseline = FUNDING_BASELINE_PER_TEAM
                     currentFunding = baseline
                     effectiveFunding = currentFunding + carriedFunding
@@ -9368,6 +9563,19 @@ class SeasonManager:
                     session.add(funding)
 
                 session.flush()
+
+                # Facilities (Markets→Facilities): reset each facility's upkeep
+                # tally for the new season + top up the Treasury (first activation
+                # seeds it from the 50% carry — no double-dip with the grandfathered
+                # facilities; every season adds the baseline floor).
+                try:
+                    from managers import facilitiesManager
+                    facilitiesManager.prepareSeasonStart(
+                        session, [t.id for t in teamManager.teams],
+                        carriedByTeam, FUNDING_BASELINE_PER_TEAM)
+                    session.flush()
+                except Exception as e:
+                    logger.warning(f"Facility season-start prep failed: {e}")
                 # Tier assignment:
                 #   Season 1 (no prior season): assign by ratio. All teams
                 #     start at baseline=200 with carried=0, so everyone
