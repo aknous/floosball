@@ -6443,6 +6443,14 @@ class SeasonManager:
                         'coach_fire', teamId=r.get('teamId'), teamName=r.get('teamName'),
                         detail=r.get('oldCoachName') or r.get('coachName'))
 
+            # Persist the FIRES durably before attempting hires. If hire
+            # resolution then raises, the except below only rolls back the
+            # hire/clear work — the fires (and their recorded results) survive,
+            # and any team left coachless is backfilled by the safety-net hire
+            # on next load. Previously a single hire-path crash rolled back the
+            # ENTIRE transaction, so passing fire votes silently did nothing.
+            session.commit()
+
             # Phase 2: Resolve hire votes for teams that fired their coach
             if firedTeamIds:
                 hireResults = gm.resolveHireCoachVotes(

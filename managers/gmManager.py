@@ -227,6 +227,13 @@ class GmManager:
 
             candidateById = {c.coach_id: c for c in candidates}
             candidateIds = set(candidateById.keys())
+            # Capture candidate names NOW, while their Coach rows still exist.
+            # clearCoachCandidates() below DELETES every losing candidate's Coach
+            # row, after which `cand.coach` lazy-loads as None and reading
+            # `cand.coach.name` raises 'NoneType' has no attribute 'name' — which
+            # rolled back the whole fire/hire transaction (coaches silently never
+            # got fired despite passing votes).
+            candNamesById = {c.coach_id: (c.coach.name if c.coach else None) for c in candidates}
 
             votes = self.voteRepo.getVotesForTeam(team.id, season, "hire_coach")
             votesByTarget: Dict[int, int] = {}
@@ -259,7 +266,7 @@ class GmManager:
                 reason = "no_votes_default_best"
 
             winnerCandidate = candidateById[winnerId]
-            winnerName = winnerCandidate.coach.name
+            winnerName = candNamesById.get(winnerId)
 
             # Hire the winning candidate. `hireCoachFromPool` flips
             # Team.coach_id and builds the in-memory Coach on the team.
@@ -308,7 +315,7 @@ class GmManager:
                 results.append({
                     "teamId": team.id, "teamName": team.name,
                     "voteType": "hire_coach",
-                    "targetPlayerName": cand.coach.name,
+                    "targetPlayerName": candNamesById.get(cand.coach_id),
                     "totalVotes": count, "threshold": 0,
                     "probability": 1.0 if isWinner else 0.0,
                     "outcome": outcome,
