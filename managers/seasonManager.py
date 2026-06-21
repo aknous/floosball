@@ -3147,11 +3147,31 @@ class SeasonManager:
             logger.error(f"Error updating team records: {e}")
             logger.error(f"Game attributes: {dir(game) if hasattr(game, '__dict__') else 'No __dict__'}")
     
+    def _syncGameIdCounter(self) -> None:
+        """Advance the game-id counter past the highest game id already in the DB
+        so newly created games never reuse an existing id. A restart/resume resets
+        the in-memory counter to 0; without this, new games collide with old games
+        and inherit their play_reactions (phantom reactions from other users) and
+        any other game-id-keyed data. Monotonic — never lowers the counter."""
+        try:
+            if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session):
+                return
+            from database.models import Game as _DBGame
+            from sqlalchemy import func as _func
+            dbMax = self.db_session.query(_func.max(_DBGame.id)).scalar() or 0
+            if int(dbMax) > self._gameIdCounter:
+                self._gameIdCounter = int(dbMax)
+        except Exception as e:
+            logger.warning(f"_syncGameIdCounter failed: {e}")
+
     def createSchedule(self) -> None:
         """Generate season schedule (matches original floosball.py algorithm)"""
         import floosball_team as FloosTeam
         if not self.currentSeason:
             return
+        # Never reuse a game id already in the DB (else new games inherit old
+        # games' reactions/stats on a restart).
+        self._syncGameIdCounter()
             
         logger.info("Creating season schedule using original algorithm")
         
@@ -3252,13 +3272,19 @@ class SeasonManager:
                              f"(home={row.home_team_id}, away={row.away_team_id}); aborting schedule load")
                 return False
 
-            self._gameIdCounter += 1
             newGame = FloosGame.Game(homeTeam=homeTeam, awayTeam=awayTeam,
                                      timingManager=self.timingManager,
                                      personalityManager=self.serviceContainer.getService('personality_manager'),
                                      gameRules=self.currentSeason.gameRules)
-            newGame.id = self._gameIdCounter
+            # Use the REAL DB id as the game's id, NOT a fresh per-run counter.
+            # play_reactions (and the frontend) key off game.id, so reassigning
+            # sequential counter ids on resume made new games collide with old
+            # games' reactions — the "phantom reactions from other users" bug.
+            # Keep the counter past the highest loaded id for games created later.
+            newGame.id = row.id
             newGame.dbId = row.id
+            if row.id > self._gameIdCounter:
+                self._gameIdCounter = row.id
             newGame.seasonNumber = seasonNumber
             newGame.week = row.week - 1   # 0-indexed (matches original createSchedule convention)
             newGame.gameType = 'playoff' if row.is_playoff else 'regular'
@@ -3909,6 +3935,8 @@ class SeasonManager:
         flags that gate them are runtime-only, so re-running would double-pay).
         """
         resuming = resumeFromRound > 1
+        # Never reuse a game id already in the DB (phantom-reaction guard).
+        self._syncGameIdCounter()
 
         # Clean up stale data from any previous playoff run (safe no-op on first
         # run). On resume, scope it to the interrupted round and later so the
