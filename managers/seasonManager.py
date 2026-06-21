@@ -443,13 +443,15 @@ class SeasonManager:
         self._recomputeFundingTiersForOffseason(self.currentSeason.seasonNumber)
 
         # Facilities (Markets→Facilities): first resolve the fan vote — the
-        # plurality-winning facility gets a project opened into the queue — THEN
-        # run the season-end waterfall so this season's deposit can fund it.
-        # Treasury pays upkeep first, then the oldest open project; offseason
-        # construction builds funded projects and decays unmaintained facilities.
+        # Run the season-end waterfall FIRST (Treasury pays upkeep, then the
+        # projects that were OPEN and fundable all season; offseason construction
+        # builds funded projects and decays unmaintained facilities). THEN resolve
+        # the vote, opening the winner as a fresh project — so it goes through an
+        # Active Projects season of funding before next season's waterfall can
+        # complete it, instead of being built instantly by this season's Treasury.
         # Costs are share-denominated off the PRIOR season's faucet.
-        self._resolveFacilityVotes(self.currentSeason.seasonNumber)
         self._runFacilitySeasonEnd(self.currentSeason.seasonNumber)
+        self._resolveFacilityVotes(self.currentSeason.seasonNumber)
 
         # Close game stats file
         self._closeGameStatsFile()
@@ -9030,8 +9032,10 @@ class SeasonManager:
     def _resolveFacilityVotes(self, completedSeason: int) -> None:
         """Resolve the season's facility vote per team — the plurality-winning
         facility gets an upgrade/build project opened into the queue (Phase 3).
-        Runs just before the waterfall so the new project can receive this
-        season's deposit. No votes → no new project (Treasury just accumulates)."""
+        Runs AFTER the waterfall so the new project opens fresh for next season's
+        funding (it shows in Active Projects and is funded over the coming season
+        rather than built instantly by this season's Treasury). Reads post-waterfall
+        levels. No votes → no new project (Treasury just accumulates)."""
         if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
             return
         try:
