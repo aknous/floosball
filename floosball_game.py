@@ -10297,6 +10297,8 @@ class Play():
                             # instead of every strip being an automatic turnover.
                             self.isFumble = True
                             self.forcedFumbleBy = primaryTackler
+                            if hasattr(self.receiver, 'stat_tracker'):
+                                self.receiver.stat_tracker.add_receiving_fumble(isReg)
                             if hasattr(primaryTackler, 'stat_tracker'):
                                 primaryTackler.stat_tracker.add_forced_fumble(isReg)
                             rcvRecoveryMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)

@@ -85,13 +85,13 @@ CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for
 
 # Interception model — three independent pick paths in calculateCatchProbability.
 # Each K scales one path's contribution before they combine as independent
-# risks. The combined league INT rate is ~linear in these. The prior values
-# (0.22/0.26/0.08) drifted the rate to ~2.9% per attempt (above the NFL ~2.3%
-# target); scaled down ~14% to land near ~2.5% — still a touch above NFL, but
-# back in a realistic band.
-INT_BAD_READ_K = 0.19    # QB throws into coverage (actual openness × coverage)
-INT_BAD_THROW_K = 0.22   # errant ball (throw quality), gated by defender proximity
-INT_DEF_PLAY_K = 0.07    # above-average DB jumps a contested throw
+# risks. The combined league INT rate is ~linear in these. History: 0.22/0.26/0.08
+# ran ~2.9%; a first trim to 0.19/0.22/0.07 still landed at 2.74% over a full
+# season 10 (above the NFL ~2.3% target, and amplifying blowout INT-fests). Trimmed
+# a further ~16% to target ~2.3% per attempt — NFL-realistic and thinner tails.
+INT_BAD_READ_K = 0.16    # QB throws into coverage (actual openness × coverage)
+INT_BAD_THROW_K = 0.185  # errant ball (throw quality), gated by defender proximity
+INT_DEF_PLAY_K = 0.06    # above-average DB jumps a contested throw
 
 # Hail mary: a desperation end-zone heave into a crowd should connect only as a
 # rare miracle. The normal two-phase catch model lands a contested deep ball

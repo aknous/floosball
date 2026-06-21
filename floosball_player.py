@@ -76,16 +76,17 @@ playerStatsDict =   {
                             'longest': 0
                         },
                         'receiving': {
-                            'receptions': 0, 
-                            'targets': 0, 
-                            'rcvPerc': 0, 
+                            'receptions': 0,
+                            'targets': 0,
+                            'rcvPerc': 0,
                             'drops': 0,
                             'yards': 0,
-                            'yac': 0, 
-                            'ypr': 0, 
+                            'yac': 0,
+                            'ypr': 0,
                             'tds': 0,
                             '20+': 0,
-                            'longest': 0
+                            'longest': 0,
+                            'fumbles': 0
                         },
                         'kicking': {
                             'fgAtt': 0,
