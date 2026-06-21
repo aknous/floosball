@@ -85,13 +85,22 @@ CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for
 
 # Interception model — three independent pick paths in calculateCatchProbability.
 # Each K scales one path's contribution before they combine as independent
-# risks. The combined league INT rate is ~linear in these. History: 0.22/0.26/0.08
-# ran ~2.9%; a first trim to 0.19/0.22/0.07 still landed at 2.74% over a full
-# season 10 (above the NFL ~2.3% target, and amplifying blowout INT-fests). Trimmed
-# a further ~16% to target ~2.3% per attempt — NFL-realistic and thinner tails.
-INT_BAD_READ_K = 0.16    # QB throws into coverage (actual openness × coverage)
-INT_BAD_THROW_K = 0.185  # errant ball (throw quality), gated by defender proximity
-INT_DEF_PLAY_K = 0.06    # above-average DB jumps a contested throw
+# risks. History: 0.22/0.26/0.08 ran ~2.9%; 0.19/0.22/0.07 still ran 2.74% over prod
+# season 10; a 16% trim (0.16/0.185/0.06) OVERSHOT to 1.85% on a developed-league sim
+# (the rate is steeper-than-linear in the Ks). Settled at a ~8% trim from the 0.19
+# baseline to land ~2.3% per attempt. The blowout INT-fests are handled separately by
+# INT_DESPERATION_DAMPEN below — the base rate shouldn't be flattened to fix the tail.
+INT_BAD_READ_K = 0.175   # QB throws into coverage (actual openness × coverage)
+INT_BAD_THROW_K = 0.20   # errant ball (throw quality), gated by defender proximity
+INT_DEF_PLAY_K = 0.065   # above-average DB jumps a contested throw
+
+# Desperation-deep INT dampener — a trailing team forced to chuck it deep in garbage
+# time was minting 9-INT games (the Floos Bowl, a 44-0 sim game). A genuine desperation
+# heave is a low-percentage prayer, but it shouldn't get PICKED at the full contested-
+# deep rate either (the defense is sitting back, the throw is just air-mailed). When a
+# pass is a deep/long throw AND the offense is in desperation mode (trailing late /
+# mustThrow), scale the computed INT probability by this factor. 1.0 = no dampening.
+INT_DESPERATION_DAMPEN = 0.55
 
 # Hail mary: a desperation end-zone heave into a crowd should connect only as a
 # rare miracle. The normal two-phase catch model lands a contested deep ball

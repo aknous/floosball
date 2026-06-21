@@ -35,7 +35,7 @@ from constants import (
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
-    INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K,
+    INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
     HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
@@ -10053,6 +10053,20 @@ class Play():
                     if receiverPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
                         chokeDropBoost = abs(receiverPressureMod) * 2.0
                         catchProbs['dropProb'] = min(30, catchProbs['dropProb'] + chokeDropBoost)
+
+                # Desperation-deep INT dampener — a trailing team forced to chuck it
+                # downfield in garbage time was minting 9-INT games (the Floos Bowl, a
+                # 44-0 sim game). A genuine catch-up heave is a low-percentage prayer, but
+                # the defense is sitting deep and the throw is air-mailed, so it shouldn't
+                # get PICKED at the full contested-deep rate. Only downfield throws, only
+                # when forced (mustThrow) or trailing by 2+ scores. Normal-game deep shots
+                # (tied/leading) keep their full INT risk.
+                if self.passType in (PassType.deep, PassType.long, PassType.hailMary):
+                    offDeficit = (self.game.awayScore - self.game.homeScore) \
+                        if self.offense == self.game.homeTeam \
+                        else (self.game.homeScore - self.game.awayScore)
+                    if mustThrow or offDeficit >= 14:
+                        catchProbs['intProb'] = round(catchProbs['intProb'] * INT_DESPERATION_DAMPEN, 1)
 
                 # Roll for outcome
                 outcomeRoll = batched_randint(1, 100)
