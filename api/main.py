@@ -8354,7 +8354,7 @@ def getCardCollection(
     """Get user's card collection with optional filters and sorting.
 
     `vaulted`: None = all cards, True = Vault only, False = un-vaulted only.
-    `sort`: recent | rarity | rating | tier | name | team | position | manual.
+    `sort`: recent | rarity | classification | rating | tier | name | team | position | manual.
     """
     from database.connection import get_session
     from database.repositories.card_repositories import UserCardRepository
@@ -8412,6 +8412,17 @@ def getCardCollection(
             return 0
         if sort == "rarity":
             result.sort(key=lambda d: (_EDITION_RANK.get(d.get("edition"), 0), _num(d, "id")), reverse=True)
+        elif sort == "classification":
+            # Group classified cards together, most prestigious first (MVP > Champion >
+            # All-Pro > Rookie), unclassified last; newest first within a tier.
+            def _classRank(d):
+                c = (d.get("classification") or "").lower()
+                if "mvp" in c: return 4
+                if "champion" in c: return 3
+                if "all_pro" in c: return 2
+                if "rookie" in c: return 1
+                return 0
+            result.sort(key=lambda d: (_classRank(d), _num(d, "id")), reverse=True)
         elif sort == "rating":
             result.sort(key=lambda d: (_num(d, "playerRating", "rating"), _num(d, "id")), reverse=True)
         elif sort == "tier":
