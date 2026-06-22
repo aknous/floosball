@@ -8346,6 +8346,7 @@ def getCurrencyHistory(
 def getCardCollection(
     edition: Optional[str] = Query(default=None),
     position: Optional[int] = Query(default=None),
+    classification: Optional[str] = Query(default=None),
     activeOnly: bool = Query(default=False),
     vaulted: Optional[bool] = Query(default=None),
     sort: str = Query(default="recent"),
@@ -8354,6 +8355,8 @@ def getCardCollection(
     """Get user's card collection with optional filters and sorting.
 
     `vaulted`: None = all cards, True = Vault only, False = un-vaulted only.
+    `classification`: substring match on the card's classification (e.g. 'mvp' also
+    matches 'mvp_champion'); None = all classifications.
     `sort`: recent | rarity | rating | tier | name | team | position | manual.
     """
     from database.connection import get_session
@@ -8385,6 +8388,8 @@ def getCardCollection(
             if edition and tpl.edition != edition:
                 continue
             if position is not None and tpl.position != position:
+                continue
+            if classification and classification.lower() not in (tpl.classification or "").lower():
                 continue
             if activeOnly and tpl.season_created != currentSeason:
                 continue
