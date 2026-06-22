@@ -76,16 +76,17 @@ playerStatsDict =   {
                             'longest': 0
                         },
                         'receiving': {
-                            'receptions': 0, 
-                            'targets': 0, 
-                            'rcvPerc': 0, 
+                            'receptions': 0,
+                            'targets': 0,
+                            'rcvPerc': 0,
                             'drops': 0,
                             'yards': 0,
-                            'yac': 0, 
-                            'ypr': 0, 
+                            'yac': 0,
+                            'ypr': 0,
                             'tds': 0,
                             '20+': 0,
-                            'longest': 0
+                            'longest': 0,
+                            'fumbles': 0
                         },
                         'kicking': {
                             'fgAtt': 0,
@@ -246,16 +247,22 @@ class Player:
         # Update stat_tracker reference to the new dict
         self.stat_tracker.game_stats_dict = self.gameStatsDict
 
-    def postgameChanges(self):
+    def postgameChanges(self, isRegularSeason: bool = True):
         self.attributes.confidenceModifier = round((self.attributes.confidenceModifier + self.gameAttributes.confidenceModifier)/2, 3)
         self.attributes.determinationModifier = round((self.attributes.determinationModifier + self.gameAttributes.determinationModifier)/2, 3)
-        self.gamesPlayed += 1
+        # Games played tracks REGULAR SEASON only. Playoff games are display- and
+        # records-only for players (they don't build season/career stat lines via
+        # stat_tracker), so gp must exclude them too — otherwise career gp outruns
+        # career production. The mental/streak changes below still apply every game.
+        if isRegularSeason:
+            self.gamesPlayed += 1
         # Sync stat_tracker data to optimized objects, then update gp in both
         self.sync_stats_dicts()
-        self.seasonStats.gp = self.gamesPlayed
-        self.seasonStatsDict['gp'] = self.gamesPlayed
-        self.careerStats.gp += 1
-        self.careerStatsDict['gp'] = self.careerStatsDict.get('gp', 0) + 1
+        if isRegularSeason:
+            self.seasonStats.gp = self.gamesPlayed
+            self.seasonStatsDict['gp'] = self.gamesPlayed
+            self.careerStats.gp += 1
+            self.careerStatsDict['gp'] = self.careerStatsDict.get('gp', 0) + 1
         if isinstance(self.team,Team):
             # Per-game streak adjustments. Refactored from an attitude-only
             # cascade to use the same complacency / resolve composites the

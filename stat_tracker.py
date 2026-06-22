@@ -159,6 +159,11 @@ class StatTracker:
         """Add fumble"""
         self.add_stat(StatCategory.RUSHING, 'fumblesLost', 1, is_regular_season)
         self.add_fantasy_points(-2)
+
+    def add_receiving_fumble(self, is_regular_season: bool = True):
+        """Add a receiving fumble (receiver stripped after a catch). Tracking-only
+        — the fantasy penalty for a lost fumble is applied at the turnover site."""
+        self.add_stat(StatCategory.RECEIVING, 'fumbles', 1, is_regular_season)
     
     # Kicking statistics methods
     def add_fg_attempt(self, is_regular_season: bool = True):

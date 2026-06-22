@@ -1,7 +1,8 @@
-"""Validate the end-of-season Showcase payout against an in-memory DB.
+"""Validate the weekly Showcase dividend against an in-memory DB.
 
-Builds a couple of showcases, runs showcaseManager.awardSeasonPayouts, and
-checks the payouts landed, match the grade, and are idempotent (no double-pay).
+Builds a couple of showcases, runs showcaseManager.awardWeeklyDividends across two
+weeks, and checks the dividends landed, match the grade, accumulate week over
+week, and are idempotent per week (no double-pay on a replay).
 Run: python3 test_showcase_payout.py
 """
 from sqlalchemy import create_engine
@@ -11,7 +12,6 @@ from database.models import (
     Base, User, CardTemplate, UserCard, ShowcaseSlot, UserCurrency, CurrencyTransaction,
 )
 from managers import showcaseManager
-from constants import SHOWCASE_GRADE_PAYOUT
 
 SEASON = 8
 
@@ -49,45 +49,47 @@ def main():
     s.add(User(id=2, username="casual", email="casual@test.local")); s.flush()
     feature(s, 2, SEASON, [("base", None)] * 8)
 
-    # User 3: featured nothing this season -> not in payout at all
+    # User 3: featured nothing this season -> never paid
     s.add(User(id=3, username="ghost", email="ghost@test.local")); s.flush()
     s.commit()
 
-    # Expected grades from the engine itself (so the test tracks tuning)
+    # Expected dividends from the engine itself (so the test tracks tuning)
     exp1 = showcaseManager.evaluate(showcaseManager.loadShowcaseCardInfos(s, 1, SEASON), SEASON)
     exp2 = showcaseManager.evaluate(showcaseManager.loadShowcaseCardInfos(s, 2, SEASON), SEASON)
-    print(f"User1 expected grade={exp1['grade']} payout={exp1['payout']}")
-    print(f"User2 expected grade={exp2['grade']} payout={exp2['payout']}")
+    div1, div2 = exp1["weeklyDividend"], exp2["weeklyDividend"]
+    print(f"User1 expected grade={exp1['grade']} dividend/wk={div1}")
+    print(f"User2 expected grade={exp2['grade']} dividend/wk={div2}")
 
-    summary = showcaseManager.awardSeasonPayouts(s, SEASON)
-    s.commit()
-    print(f"Payout summary: {summary}")
+    # Pay weeks 1 and 2; replay week 1 to prove the per-week guard.
+    summaryW1 = showcaseManager.awardWeeklyDividends(s, SEASON, 1); s.commit()
+    replayW1 = showcaseManager.awardWeeklyDividends(s, SEASON, 1); s.commit()
+    summaryW2 = showcaseManager.awardWeeklyDividends(s, SEASON, 2); s.commit()
+    print(f"Week1: {summaryW1}")
+    print(f"Week1 replay (guarded): {replayW1}")
+    print(f"Week2: {summaryW2}")
 
     def bal(uid):
         c = s.query(UserCurrency).filter_by(user_id=uid).first()
         return int(c.balance) if c else 0
 
     ok = True
-    if bal(1) != exp1["payout"]:
-        print(f"FAIL: user1 balance {bal(1)} != {exp1['payout']}"); ok = False
-    if bal(2) != exp2["payout"]:
-        print(f"FAIL: user2 balance {bal(2)} != {exp2['payout']}"); ok = False
+    # Two weeks paid -> balance = 2 × weekly dividend.
+    if bal(1) != div1 * 2:
+        print(f"FAIL: user1 balance {bal(1)} != {div1 * 2}"); ok = False
+    if bal(2) != div2 * 2:
+        print(f"FAIL: user2 balance {bal(2)} != {div2 * 2}"); ok = False
     if bal(3) != 0:
         print(f"FAIL: user3 (no showcase) got {bal(3)}"); ok = False
 
-    # Idempotency: a second run must not pay again
-    summary2 = showcaseManager.awardSeasonPayouts(s, SEASON)
-    s.commit()
-    if not summary2.get("alreadyAwarded"):
-        print(f"FAIL: second run not guarded: {summary2}"); ok = False
-    if bal(1) != exp1["payout"]:
-        print(f"FAIL: user1 double-paid -> {bal(1)}"); ok = False
+    # Per-week idempotency: the week-1 replay must not pay again.
+    if not replayW1.get("alreadyAwarded"):
+        print(f"FAIL: week-1 replay not guarded: {replayW1}"); ok = False
 
-    # Transaction count for user1 should be exactly 1
+    # User1 should have exactly 2 dividend transactions (one per distinct week).
     txn = s.query(CurrencyTransaction).filter_by(
-        user_id=1, transaction_type=showcaseManager.SHOWCASE_PAYOUT_TX).count()
-    if exp1["payout"] > 0 and txn != 1:
-        print(f"FAIL: user1 has {txn} payout transactions (expected 1)"); ok = False
+        user_id=1, transaction_type=showcaseManager.SHOWCASE_DIVIDEND_TX).count()
+    if div1 > 0 and txn != 2:
+        print(f"FAIL: user1 has {txn} dividend transactions (expected 2)"); ok = False
 
     print("PASS" if ok else "FAILURES ABOVE")
     return 0 if ok else 1

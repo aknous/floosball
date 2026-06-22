@@ -236,11 +236,22 @@ class GmFaBallotRepository:
         self.session = session
 
     def submitBallot(self, userId: int, teamId: int, season: int,
-                     rankings: List[int], costPaid: int) -> GmFaBallot:
-        """Submit or update a ballot. Returns the ballot."""
+                     rankings: List[int], costPaid: int,
+                     positionPriority: Optional[List[int]] = None) -> GmFaBallot:
+        """Submit or update a ballot. Returns the ballot.
+
+        `positionPriority` (optional) is the fan's preferred fill order for open
+        slots once voted players are exhausted; None leaves any existing value
+        untouched on an update so a player-only re-submit doesn't wipe it. Pass
+        an empty list to explicitly clear it.
+        """
+        ppJson = json.dumps(positionPriority) if positionPriority else (
+            json.dumps([]) if positionPriority == [] else None)
         existing = self.getUserBallot(userId, teamId, season)
         if existing:
             existing.rankings = json.dumps(rankings)
+            if positionPriority is not None:
+                existing.position_priority = ppJson
             existing.updated_at = datetime.utcnow()
             self.session.flush()
             return existing
@@ -249,6 +260,7 @@ class GmFaBallotRepository:
             team_id=teamId,
             season=season,
             rankings=json.dumps(rankings),
+            position_priority=ppJson,
             cost_paid=costPaid,
         )
         self.session.add(ballot)
@@ -280,3 +292,21 @@ class GmFaBallotRepository:
             except (json.JSONDecodeError, TypeError):
                 continue
         return result
+
+    def getPositionPrioritiesForTeam(self, teamId: int, season: int) -> List[List[int]]:
+        """Return the non-empty position-priority orderings across a team's
+        ballots (each a list of position values 1-5). Ballots with no preference
+        set are skipped, so an empty result means no fan expressed a preference."""
+        ballots = self.getBallotsByTeam(teamId, season)
+        result = []
+        for b in ballots:
+            raw = getattr(b, 'position_priority', None)
+            if not raw:
+                continue
+            try:
+                parsed = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(parsed, list) and parsed:
+                result.append([p for p in parsed if isinstance(p, int)])
+        return [p for p in result if p]

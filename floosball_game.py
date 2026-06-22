@@ -35,7 +35,7 @@ from constants import (
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
-    INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K,
+    INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
     HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
@@ -4026,14 +4026,15 @@ class Game:
             if player:
                 player.sync_stats_dicts()
 
-        # Per-player: update confidence/determination, increment gamesPlayed, compute derived stats
+        # Per-player: update confidence/determination, increment gamesPlayed
+        # (regular season only), compute derived stats
         for player in self.homeTeam.rosterDict.values():
             if player:
-                player.postgameChanges()
+                player.postgameChanges(isRegularSeason=self.isRegularSeasonGame)
                 self._accumulatePostgameStats(player)
         for player in self.awayTeam.rosterDict.values():
             if player:
-                player.postgameChanges()
+                player.postgameChanges(isRegularSeason=self.isRegularSeasonGame)
                 self._accumulatePostgameStats(player)
 
     def postgame(self):
@@ -5743,10 +5744,10 @@ class Game:
     # ─── Funding Morale ───────────────────────────────────────────────────
 
     def _applyFundingMorale(self, team):
-        """Apply a small pregame confidence/determination nudge based on team funding tier."""
-        from constants import FUNDING_MORALE_MODIFIER
-        fundingTier = getattr(team, 'fundingTier', 'MID_MARKET')
-        modifier = FUNDING_MORALE_MODIFIER.get(fundingTier, 0)
+        """Apply a small pregame confidence/determination nudge based on the
+        team's Locker Room level (Markets→Facilities; migrated levels reproduce
+        the old market-tier morale modifier)."""
+        modifier = team.facilityEffect('morale') if hasattr(team, 'facilityEffect') else 0
         if modifier == 0:
             return
         for player in team.rosterDict.values():
@@ -6355,6 +6356,14 @@ class Game:
                     qbCarries = qbRush.get('carries', 0)
                     qbRush['ypc'] = round(qbRush.get('yards', 0) / qbCarries, 1) if qbCarries > 0 else 0.0
                     result['rushing'] = qbRush
+                elif statsKey == 'rushing':
+                    # RB checkdowns/screens: the RB flattens 'rushing', so its
+                    # receiving line would otherwise be invisible. Attach it as a
+                    # nested block so the box score can list a pass-catching RB.
+                    rbRcv = dict(p.gameStatsDict['receiving'])
+                    rbRecs = rbRcv.get('receptions', 0)
+                    rbRcv['ypr'] = round(rbRcv.get('yards', 0) / rbRecs, 1) if rbRecs > 0 else 0.0
+                    result['receiving'] = rbRcv
                 # Per-player pre-game mental modifier breakdown — always
                 # included when snapshots exist, even if every stage netted
                 # zero. "Nothing is dragging this player" is itself useful
@@ -10053,6 +10062,20 @@ class Play():
                         chokeDropBoost = abs(receiverPressureMod) * 2.0
                         catchProbs['dropProb'] = min(30, catchProbs['dropProb'] + chokeDropBoost)
 
+                # Desperation-deep INT dampener — a trailing team forced to chuck it
+                # downfield in garbage time was minting 9-INT games (the Floos Bowl, a
+                # 44-0 sim game). A genuine catch-up heave is a low-percentage prayer, but
+                # the defense is sitting deep and the throw is air-mailed, so it shouldn't
+                # get PICKED at the full contested-deep rate. Only downfield throws, only
+                # when forced (mustThrow) or trailing by 2+ scores. Normal-game deep shots
+                # (tied/leading) keep their full INT risk.
+                if self.passType in (PassType.deep, PassType.long, PassType.hailMary):
+                    offDeficit = (self.game.awayScore - self.game.homeScore) \
+                        if self.offense == self.game.homeTeam \
+                        else (self.game.homeScore - self.game.awayScore)
+                    if mustThrow or offDeficit >= 14:
+                        catchProbs['intProb'] = round(catchProbs['intProb'] * INT_DESPERATION_DAMPEN, 1)
+
                 # Roll for outcome
                 outcomeRoll = batched_randint(1, 100)
 
@@ -10296,6 +10319,8 @@ class Play():
                             # instead of every strip being an automatic turnover.
                             self.isFumble = True
                             self.forcedFumbleBy = primaryTackler
+                            if hasattr(self.receiver, 'stat_tracker'):
+                                self.receiver.stat_tracker.add_receiving_fumble(isReg)
                             if hasattr(primaryTackler, 'stat_tracker'):
                                 primaryTackler.stat_tracker.add_forced_fumble(isReg)
                             rcvRecoveryMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)

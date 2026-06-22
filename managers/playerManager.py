@@ -733,15 +733,23 @@ class PlayerManager:
                     self.addToPositionList(player)
     
     def isNameInUse(self, name: str) -> bool:
-        """True if `name` is already attached to an active player or any
-        Coach row (assigned or pool). Used by name-pool readers to skip
-        polluted entries — defensive guard against the same name showing
-        up on a player after living simultaneously in unused_names.
+        """True if `name` is already attached to ANY player ever created
+        (active, free agent, RETIRED, or Hall-of-Fame) or any Coach row
+        (assigned or pool). Used by name-pool readers to skip polluted entries.
+
+        A retired/inducted player's name must NEVER be reused as a bare name —
+        generational reuse happens only via the suffix progression in
+        seasonManager._recyclePlayerName (Jr./III/IV...), which yields a DISTINCT
+        name. So the check spans every player row, not just the live roster.
         """
-        # In-memory active player check is the cheapest path.
-        for p in self.activePlayers:
-            if getattr(p, 'name', None) == name:
-                return True
+        # In-memory check — active roster, free agents, AND retirees (the
+        # retired list isn't in activePlayers but its names are still taken;
+        # this also catches an in-offseason retiree before its DB row is saved).
+        for lst in (self.activePlayers, getattr(self, 'freeAgents', []) or [],
+                    getattr(self, 'retiredPlayers', []) or []):
+            for p in lst:
+                if getattr(p, 'name', None) == name:
+                    return True
         # Coach check: scan rostered coaches (in-memory on Team objects)
         # AND the unassigned pool (DB) so we catch both cases.
         teamMgr = None
@@ -756,8 +764,13 @@ class PlayerManager:
                     return True
         if DATABASE_AVAILABLE and USE_DATABASE and self.db_session is not None:
             try:
-                from database.models import Coach as DBCoach
+                from database.models import Coach as DBCoach, Player as DBPlayer
                 if self.db_session.query(DBCoach).filter(DBCoach.name == name).first():
+                    return True
+                # ANY player row — covers retired & HOF players that aren't in
+                # the in-memory active list. This is the guard against reusing a
+                # former player's name on a freshly generated backfill/rookie.
+                if self.db_session.query(DBPlayer).filter(DBPlayer.name == name).first():
                     return True
             except Exception:
                 pass
@@ -4246,11 +4259,23 @@ class PlayerManager:
         if not candidates:
             return False  # open slots exist but no FAs or prospects to fill them
 
-        # Pick the highest-rated candidate overall.
-        slot, candidate, kind = max(
-            candidates,
-            key=lambda c: getattr(c[1], 'playerRating', getattr(c[1].attributes, 'skillRating', 0)),
-        )
+        def _rating(c):
+            return getattr(c[1], 'playerRating', getattr(c[1].attributes, 'skillRating', 0))
+
+        # Fan position priority (set by the FA ballot's "fill order"): when present,
+        # fill the highest-priority OPEN position first — best player there —
+        # OVERRIDING pure rating, so a team that ranked QB/WR ahead of K won't grab
+        # a higher-rated kicker first. Positions no fan ranked fall to the back,
+        # tie-broken by rating. No priority set -> best-rated overall (legacy).
+        priority = getattr(self, '_gmFaPositionPriority', {}).get(getattr(team, 'id', None))
+        if priority:
+            def _prioKey(c):
+                posVal = getattr(getattr(c[1], 'position', None), 'value', None)
+                idx = priority.index(posVal) if posVal in priority else len(priority)
+                return (idx, -_rating(c))
+            slot, candidate, kind = min(candidates, key=_prioKey)
+        else:
+            slot, candidate, kind = max(candidates, key=_rating)
 
         teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
 

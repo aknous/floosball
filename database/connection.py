@@ -72,6 +72,9 @@ def _runPendingMigrations():
         for col, colDef in [
             ('mvp_player_id', 'INTEGER REFERENCES players(id)'),
             ('all_pro_player_ids', 'TEXT'),
+            # Champion roster snapshot (player IDs at the Floos Bowl) so the
+            # champion classification + pack don't drift to the post-offseason roster.
+            ('champion_player_ids', 'TEXT'),
             # Rich All-Pro team (offense+defense split) for durable recap rebuild.
             ('all_pro_team', 'TEXT'),
             # Frozen MVP ballot (top-5 candidate dicts) captured at season end so
@@ -843,6 +846,69 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Team facilities (Markets→Facilities system, feature/facilities).
+        # Persistent per-(team, facility_key) level. Seeded from legacy
+        # funding_tier by _seedTeamFacilitiesFromTiers (backfill, gated flag).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS team_facilities ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "team_id INTEGER NOT NULL, "
+                "facility_key VARCHAR(32) NOT NULL, "
+                "level INTEGER NOT NULL DEFAULT 0, "
+                "UNIQUE(team_id, facility_key))"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_team_facility_team "
+                "ON team_facilities(team_id)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured team_facilities table")
+        except Exception:
+            conn.rollback()
+
+        # Facility economy (Phase 2): projects queue, treasury, upkeep funding.
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS facility_projects ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "team_id INTEGER NOT NULL, "
+                "facility_key VARCHAR(32) NOT NULL, "
+                "kind VARCHAR(8) NOT NULL, "
+                "target_level INTEGER NOT NULL, "
+                "cost_shares FLOAT NOT NULL, "
+                "funded INTEGER NOT NULL DEFAULT 0, "
+                "opened_season INTEGER NOT NULL, "
+                "status VARCHAR(8) NOT NULL DEFAULT 'open', "
+                "built_season INTEGER)"
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_facility_project_team ON facility_projects(team_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_facility_project_status ON facility_projects(status)"))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS team_treasury ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "team_id INTEGER NOT NULL UNIQUE, "
+                "balance INTEGER NOT NULL DEFAULT 0)"
+            ))
+            # upkeep_funded on team_facilities (ADD COLUMN is a no-op if present)
+            cols = [r[1] for r in conn.execute(text("PRAGMA table_info(team_facilities)")).fetchall()]
+            if 'upkeep_funded' not in cols:
+                conn.execute(text("ALTER TABLE team_facilities ADD COLUMN upkeep_funded INTEGER NOT NULL DEFAULT 0"))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS facility_votes ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "team_id INTEGER NOT NULL, "
+                "user_id INTEGER NOT NULL, "
+                "facility_key VARCHAR(32) NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "UNIQUE(team_id, user_id, season))"
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_facility_vote_team_season ON facility_votes(team_id, season)"))
+            conn.commit()
+            logger.info("  Migration: ensured facility_projects + team_treasury + upkeep_funded + facility_votes")
+        except Exception:
+            conn.rollback()
+
         # Clear stale will_retire on already-retired players. The flag is set at
         # week 22 and (historically) never reset, so retirees kept carrying it.
         # Idempotent.
@@ -1066,6 +1132,15 @@ def _runPendingMigrations():
             logger.info("  Migration: added seasons.playoff_seeds")
         except Exception:
             conn.rollback()
+        # FA ballot position priority: a fan's preferred order to fill open slots
+        # once all voted players are taken (JSON array of position values 1-5).
+        # NULL = no preference (falls back to best-available-by-rating).
+        try:
+            conn.execute(text("ALTER TABLE gm_fa_ballots ADD COLUMN position_priority TEXT"))
+            conn.commit()
+            logger.info("  Migration: added gm_fa_ballots.position_priority")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -1088,8 +1163,17 @@ def _runPendingMigrations():
     # Runs BEFORE players load into memory so the corrected rows hydrate
     # careerStatsDict and the in-memory dict can't clobber the fix.
     _recomputeCareerStatsFromSeasons()
+    # Reconstruct champion roster snapshots for seasons that ended before the
+    # snapshot existed — so the Champion classification + pack key off who actually
+    # won, even for past titles. Sourced from players.league_championships (stamped
+    # at the Floos Bowl, before any offseason churn). Runs BEFORE the next season's
+    # card generation so newly-generated Champion cards are correct.
+    _backfillChampionRosterSnapshots()
     _backfillTeamPeakStreaks()
     _backfillCardTemplateOutputType()
+    # Tier→facilities migration: seed team_facilities from current market tiers
+    # so facility-derived effects reproduce today's tier perks at launch.
+    _seedTeamFacilitiesFromTiers()
 
 
 def _recomputeFundingTiers():
@@ -1912,6 +1996,110 @@ def _recomputeCareerStatsFromSeasons():
         conn.close()
 
 
+def _backfillChampionRosterSnapshots():
+    """Reconstruct seasons.champion_player_ids for seasons that ended before the
+    snapshot was added. The Champion classification + pack key off this; without it
+    they fall back to the champion team's CURRENT roster, which has churned. Source
+    is players.league_championships ({"Season": N, ...} stamped on each champion AT
+    the Floos Bowl, before any offseason churn) — the authoritative title roster.
+
+    Idempotent: only fills seasons that have a champion but no snapshot yet. Touches
+    NO card classifications or values — just stores the roster so generation/packs can
+    read it. Runs before the next season's card generation."""
+    import json as _json
+    from sqlalchemy import text
+    conn = engine.connect()
+    try:
+        rows = conn.execute(text(
+            "SELECT season_number FROM seasons WHERE champion_team_id IS NOT NULL "
+            "AND (champion_player_ids IS NULL OR champion_player_ids = '')"
+        )).fetchall()
+        targetSeasons = {r[0] for r in rows}
+        if not targetSeasons:
+            return
+        champBySeason = {}
+        for pid, lc in conn.execute(text(
+                "SELECT id, league_championships FROM players "
+                "WHERE league_championships IS NOT NULL")).fetchall():
+            try:
+                entries = _json.loads(lc) if isinstance(lc, str) else lc
+                for e in (entries or []):
+                    s = e.get('Season')
+                    if s in targetSeasons:
+                        champBySeason.setdefault(s, []).append(pid)
+            except Exception:
+                pass
+        filled = 0
+        for s, ids in champBySeason.items():
+            conn.execute(text(
+                "UPDATE seasons SET champion_player_ids = :ids WHERE season_number = :s"),
+                {'ids': _json.dumps(sorted(ids)), 's': s})
+            filled += 1
+        conn.commit()
+        if filled:
+            logger.info(f"  Backfill: reconstructed champion_player_ids for {filled} "
+                        f"season(s) from league_championships")
+    except Exception as e:
+        conn.rollback()
+        logger.info(f"  Backfill warning (champion snapshots): {e}")
+    finally:
+        conn.close()
+
+
+def _seedTeamFacilitiesFromTiers():
+    """One-time tier→facilities migration (Markets→Facilities, feature/facilities).
+
+    Seeds team_facilities from each team's CURRENT market tier so nobody
+    launches nerfed: MEGA→Lv4, LARGE→Lv3, MID→Lv2, SMALL→Lv1 on the four
+    legacy-perk facilities, Stadium at Lv0. The per-level effect curves
+    (constants.FACILITY_CATALOG) are calibrated so these levels reproduce the
+    current FUNDING_* perks. Idempotent: gated by an app_settings flag AND a
+    per-row INSERT OR IGNORE on the (team_id, facility_key) unique constraint.
+    """
+    from sqlalchemy import text
+    from constants import (FACILITY_CATALOG, MIGRATION_TIER_START_LEVEL,
+                           MIGRATION_STADIUM_START_LEVEL)
+    conn = engine.connect()
+    try:
+        done = conn.execute(text(
+            "SELECT value FROM app_settings WHERE key = 'facilities_seeded_v1'"
+        )).fetchone()
+        if done:
+            return
+        teamIds = [r[0] for r in conn.execute(text("SELECT id FROM teams")).fetchall()]
+        if not teamIds:
+            return  # fresh DB with no teams yet — season start will seed funding first
+        # Current tier = the latest season's team_funding row per team.
+        tierByTeam = {}
+        for tid, tier in conn.execute(text(
+            "SELECT tf.team_id, tf.funding_tier FROM team_funding tf "
+            "JOIN (SELECT team_id, MAX(season) AS s FROM team_funding GROUP BY team_id) m "
+            "ON tf.team_id = m.team_id AND tf.season = m.s")).fetchall():
+            tierByTeam[tid] = tier or 'MID_MARKET'
+        seeded = 0
+        for tid in teamIds:
+            tier = tierByTeam.get(tid, 'MID_MARKET')
+            for key in FACILITY_CATALOG:
+                level = (MIGRATION_STADIUM_START_LEVEL if key == 'stadium'
+                         else MIGRATION_TIER_START_LEVEL.get(tier, 2))
+                conn.execute(text(
+                    "INSERT OR IGNORE INTO team_facilities (team_id, facility_key, level) "
+                    "VALUES (:tid, :key, :lvl)"),
+                    {'tid': tid, 'key': key, 'lvl': level})
+            seeded += 1
+        conn.execute(text(
+            "INSERT INTO app_settings (key, value, updated_at) "
+            "VALUES ('facilities_seeded_v1', '1', CURRENT_TIMESTAMP) "
+            "ON CONFLICT(key) DO UPDATE SET value='1', updated_at=CURRENT_TIMESTAMP"))
+        conn.commit()
+        logger.info(f"  Backfill: seeded facilities from market tiers for {seeded} teams")
+    except Exception as e:
+        conn.rollback()
+        logger.info(f"  Backfill warning (facilities-from-tiers): {e}")
+    finally:
+        conn.close()
+
+
 def clear_db():
     """Clear game/simulation data while preserving user accounts and beta allowlist.
 
@@ -2269,17 +2457,17 @@ def _seedAchievements():
             # bonus portion, so a hand of 4-5 modest FPx cards can hit
             # 7x on a hot week. New top tier requires both a heavily
             # stacked FPx hand AND a favorable modifier draw.
-            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 250,
-             "description": "Reach a 2.5x total FP multiplier in a single week.",
+            {"key": "compound_i", "name": "Compound I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 220,
+             "description": "Reach a 2.2x total FP multiplier in a single week.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 450,
-             "description": "Reach a 4.5x total FP multiplier in a single week.",
+            {"key": "compound_ii", "name": "Compound II", "category": "guidance", "scope": "per_season", "sort_order": 261, "target": 400,
+             "description": "Reach a 4.0x total FP multiplier in a single week.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 700,
-             "description": "Reach a 7.0x total FP multiplier in a single week.",
+            {"key": "compound_iii", "name": "Compound III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 600,
+             "description": "Reach a 6.0x total FP multiplier in a single week.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
-            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 1000,
-             "description": "Reach a 10.0x total FP multiplier in a single week.",
+            {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 850,
+             "description": "Reach a 8.5x total FP multiplier in a single week.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # ── Secret achievements — hidden until unlocked ────────────────────────
             # Mostly floobits with selective packs for the genuinely hard
@@ -2373,6 +2561,30 @@ def _seedAchievements():
             {"key": "pool_shark", "name": "Pool Shark", "category": "secret", "scope": "once", "sort_order": 740, "target": 1,
              "description": "Finish #1 on the season playoff bracket leaderboard.",
              "reward_config": {"floobits": 0, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "jinx", "name": "Jinx", "category": "secret", "scope": "once", "sort_order": 745, "target": 1,
+             "description": "Whiff on every single pick in a full 12-game pick-em week.",
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "greenhorn", "name": "Greenhorn", "category": "secret", "scope": "once", "sort_order": 750, "target": 1,
+             "description": "Field a full fantasy roster made up entirely of rookies.",
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "superfan", "name": "Superfan", "category": "secret", "scope": "once", "sort_order": 755, "target": 1,
+             "description": "Follow 10 or more players at once.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "alchemist", "name": "Alchemist", "category": "secret", "scope": "once", "sort_order": 760, "target": 1,
+             "description": "Forge a new card at the Combine.",
+             "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "liquidator", "name": "Liquidator", "category": "secret", "scope": "once", "sort_order": 765, "target": 1,
+             "description": "Sell a Diamond card.",
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "lightning_strike", "name": "Lightning Strike", "category": "secret", "scope": "once", "sort_order": 770, "target": 1,
+             "description": "Pull a Diamond card out of a Humble pack.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "diehard", "name": "Diehard", "category": "secret", "scope": "once", "sort_order": 775, "target": 1,
+             "description": "Rally your favorite team while they trail by 20 or more.",
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "lifer", "name": "Lifer", "category": "secret", "scope": "once", "sort_order": 780, "target": 1,
+             "description": "Back the same favorite team for five straight seasons.",
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "sparkler", "name": "Sparkler", "category": "guidance", "scope": "per_season", "sort_order": 170, "target": 1,
              "description": "Open your first Diamond card of the season.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},

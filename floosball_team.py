@@ -119,6 +119,10 @@ class Team:
         self.gmScore = 0
         self.fundingTier = 'MID_MARKET'
         self.fundingTierRank = 3
+        # Markets→Facilities: facility_key -> level. Loaded from team_facilities.
+        # Drives the dev/morale/fatigue/scouting effects via facilityEffect()
+        # (replaces the old fundingTier perk lookups). Empty = treat as Lv0.
+        self.facilities = {}
         self.cutsAvailable = 0
         self.eliminated = False
         self.faComplete = False
@@ -346,6 +350,23 @@ class Team:
         for player in self.rosterDict.values():
             player.updateInGameDetermination(.01)
         self.updateInGameDetermination(.01)
+
+    def facilityLevel(self, facilityKey):
+        """Current level of a facility (0 if unbuilt / not loaded)."""
+        return (self.facilities or {}).get(facilityKey, 0)
+
+    def facilityEffect(self, effectType):
+        """Effect value this team gets for a given effect ('dev_bonus',
+        'morale', 'fatigue_reduction', 'scouting_bonus', 'home_morale') from
+        the facility that drives it, at the team's current level. Replaces the
+        old FUNDING_* market-tier lookups. Returns 0 when unbuilt/unknown."""
+        from constants import FACILITY_CATALOG, FACILITY_MAX_LEVEL
+        for key, cfg in FACILITY_CATALOG.items():
+            if cfg.get('effect') == effectType:
+                level = max(0, min(FACILITY_MAX_LEVEL, (self.facilities or {}).get(key, 0)))
+                levels = cfg.get('levels') or []
+                return levels[level] if level < len(levels) else (levels[-1] if levels else 0)
+        return 0
 
     def teamUnderPerform(self):
         for player in self.rosterDict.values():

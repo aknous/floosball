@@ -85,13 +85,22 @@ CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for
 
 # Interception model — three independent pick paths in calculateCatchProbability.
 # Each K scales one path's contribution before they combine as independent
-# risks. The combined league INT rate is ~linear in these. The prior values
-# (0.22/0.26/0.08) drifted the rate to ~2.9% per attempt (above the NFL ~2.3%
-# target); scaled down ~14% to land near ~2.5% — still a touch above NFL, but
-# back in a realistic band.
-INT_BAD_READ_K = 0.19    # QB throws into coverage (actual openness × coverage)
-INT_BAD_THROW_K = 0.22   # errant ball (throw quality), gated by defender proximity
-INT_DEF_PLAY_K = 0.07    # above-average DB jumps a contested throw
+# risks. History: 0.22/0.26/0.08 ran ~2.9%; 0.19/0.22/0.07 still ran 2.74% over prod
+# season 10; a 16% trim (0.16/0.185/0.06) OVERSHOT to 1.85% on a developed-league sim
+# (the rate is steeper-than-linear in the Ks). Settled at a ~8% trim from the 0.19
+# baseline to land ~2.3% per attempt. The blowout INT-fests are handled separately by
+# INT_DESPERATION_DAMPEN below — the base rate shouldn't be flattened to fix the tail.
+INT_BAD_READ_K = 0.175   # QB throws into coverage (actual openness × coverage)
+INT_BAD_THROW_K = 0.20   # errant ball (throw quality), gated by defender proximity
+INT_DEF_PLAY_K = 0.065   # above-average DB jumps a contested throw
+
+# Desperation-deep INT dampener — a trailing team forced to chuck it deep in garbage
+# time was minting 9-INT games (the Floos Bowl, a 44-0 sim game). A genuine desperation
+# heave is a low-percentage prayer, but it shouldn't get PICKED at the full contested-
+# deep rate either (the defense is sitting back, the throw is just air-mailed). When a
+# pass is a deep/long throw AND the offense is in desperation mode (trailing late /
+# mustThrow), scale the computed INT probability by this factor. 1.0 = no dampening.
+INT_DESPERATION_DAMPEN = 0.55
 
 # Hail mary: a desperation end-zone heave into a crowd should connect only as a
 # rare miracle. The normal two-phase catch model lands a contested deep ball
@@ -181,6 +190,9 @@ RECEIVER_MATCHUP_SCALE = 50.0   # Divisor when computing receiver-vs-coverage ma
 COACH_ATTR_NEUTRAL = 80         # Attribute value with zero effect (midpoint of 60-100 range)
 COACH_ATTR_RANGE = 20           # Half-range used to normalise coach attributes to [-1, 1]
 COACH_OFFENSIVE_MIND_FLOOR = 60 # offensiveMind below this value gives zero matchup weighting
+# Flavor: chance a newly-generated coach reuses a RETIRED player's name (a former
+# player returning as a coach), instead of drawing a fresh name from the pool.
+COACH_RETIRED_NAME_CHANCE = 0.30
 
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
@@ -302,13 +314,11 @@ ROSTER_MIN_PLAYERS = 3
 #  3000 FP → 565 F
 WEEKLY_FP_FLOOBIT_SCALE = 1.10
 WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
-# Endowment (income_boost powerup) replaces the curve with a flatter one.
-# Less taper = monster weeks pay more; low weeks pay roughly the same.
-# Same cost (100 F). Sits ~10% above standard at modest play, ~50% above
-# at heavy play, breaking even around 1k FP/week × 4 weeks. Bumped
-# proportionally with the standard curve.
-WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.65
-WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.87
+# Endowment (income_boost powerup): a flat +25% on ANYTHING credited to the bank
+# while it's active — fantasy, pick-em, showcase + supporter dividends, etc. Applied
+# once at the choke point (CurrencyRepository.addFunds), so every income stream is
+# boosted uniformly (not just fantasy). 1.25 = +25%.
+INCOME_BOOST_MULTIPLIER = 1.25
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
 
@@ -456,6 +466,59 @@ SCOUTING_BANDS = [
     (0, 15),    # <65: ±15
 ]
 FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 'SMALL_MARKET': -3}
+
+# ============================================================================
+# FACILITIES  (Markets→Facilities system — see docs/MARKETS_FACILITIES_PLAN.md)
+# ============================================================================
+# Fan-funded, fan-voted team facilities replace the passive market-tier perks.
+# Each facility drives an effect the sim ALREADY applies (the FUNDING_* dicts
+# above); the per-level effect curves are calibrated so the one-time
+# tier→facilities MIGRATION reproduces today's perks with no nerf:
+#   MEGA_MARKET→Lv4, LARGE_MARKET→Lv3, MID_MARKET→Lv2, SMALL_MARKET→Lv1.
+# Read the level→effect tables below at those indices to confirm parity.
+# The lone deliberate change: SMALL-market PENALTIES become neutral — a built
+# facility can't be a penalty, so the floor rises from "penalized" to "neutral,
+# just hasn't built much yet" (Lv0/Lv1 = 0). Lv5 is a new above-MEGA ceiling.
+# Curves are back-loaded (real effects at Lv3+) to hold migration parity; the
+# smoothing of low levels is a tuning task (see plan doc §14).
+FACILITY_MAX_LEVEL = 5
+
+# facility_key -> {name, effect (which sim effect it drives), levels[0..5]}
+FACILITY_CATALOG = {
+    'training':    {'name': 'Training Facility',    'effect': 'dev_bonus',
+                    'levels': [0, 0.4, 0.8, 1.2, 1.6, 2.0]},             # player-dev bias; every level a real step (resolved to int probabilistically in apply_offseason_training)
+    'locker_room': {'name': 'Locker Room',          'effect': 'morale',
+                    'levels': [0.0, 0.0, 0.0, 0.0025, 0.0075, 0.01]},    # pregame morale nudge (cf FUNDING_MORALE_MODIFIER)
+    'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
+                    'levels': [0.0, 0.0, 0.0, 0.15, 0.30, 0.35]},        # weekly fatigue-gain reduction (cf FUNDING_FATIGUE_REDUCTION)
+    'scouting':    {'name': 'Scouting Department',    'effect': 'scouting_bonus',
+                    'levels': [0, 0, 0, 3, 5, 7]},                       # rookie scouting accuracy (cf FUNDING_SCOUTING_BONUS)
+    'stadium':     {'name': 'Stadium',               'effect': 'home_morale',
+                    'levels': [0.0, 0.001, 0.002, 0.003, 0.004, 0.005]}, # NEW — everyone starts Lv0; effect unwired until a later phase
+}
+
+# Migration: starting level for the four legacy-perk facilities by current tier.
+MIGRATION_TIER_START_LEVEL = {'MEGA_MARKET': 4, 'LARGE_MARKET': 3, 'MID_MARKET': 2, 'SMALL_MARKET': 1}
+MIGRATION_STADIUM_START_LEVEL = 0  # new facility nobody has built yet
+
+# Appeal (FA-draft attractiveness) = weighted sum of facility levels. Flat
+# weights to start; higher Appeal drafts free agents first. Tune later.
+APPEAL_LEVEL_WEIGHTS = {k: 1.0 for k in FACILITY_CATALOG}
+
+# ---- Facility economy (share-denominated costs; plan doc §5) ----
+# Costs/upkeep are denominated in SHARES, not absolute Floobits, so they
+# self-scale with the economy: 1 share = (total Floobits distributed to users
+# last season) / num_teams. Indexed by level (0..5): the cost to REACH a level
+# and the per-season cost to MAINTAIN it. Lv0 = free (unbuilt). At S10's ~6,000F
+# share these read as Lv5 upgrade ≈ 5,100F, Lv5 upkeep ≈ 1,800F/season; full-max
+# (5 facilities × Lv5) ≈ 9,000F/season upkeep. Tune via the economy harness.
+FACILITY_UPGRADE_COST_SHARES = [0.0, 0.05, 0.10, 0.20, 0.42, 0.85]  # cost to reach level i
+# Upkeep is steep at the top so the soft cap bites: an average-income team
+# (≈1 share of income) sustains only a partial/specialized build; a whale
+# (≈2.5×) can just hold a full max (engage-or-decay). Tuned via the harness.
+FACILITY_UPKEEP_SHARES       = [0.0, 0.005, 0.015, 0.045, 0.115, 0.400]  # upkeep to hold level i
+# A facility that ends the season with upkeep unmet slips this many levels.
+FACILITY_DECAY_LEVELS = 1
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
@@ -526,6 +589,14 @@ FATIGUE_RESILIENCE_SCALE = 0.8      # How much resilience reduces fatigue rate
 FATIGUE_RESILIENCE_CEILING = 1.4    # Max multiplier for low-resilience players
 FATIGUE_PHYSICAL_IMPACT = 0.6       # Was 1.0 — softened so fatigue is less punishing
 FATIGUE_MENTAL_IMPACT = 0.2         # Was 0.3 — softened to match
+
+# Playoff bye reprieve: the top-2 seeds rest through round 1, so their players
+# recover a little fatigue while everyone else takes another week of wear.
+# Modest by design ("a bit") and scaled by market tier — richer clubs have the
+# facilities/medical staff to recover more (same logic as FUNDING_FATIGUE_REDUCTION).
+# Each value is a flat fatigue reduction (gauge is 0..1, ~0.0025 gained/week),
+# applied once after round 1 and floored at 0.
+PLAYOFF_BYE_FATIGUE_RECOVERY = {'MEGA_MARKET': 0.012, 'LARGE_MARKET': 0.009, 'MID_MARKET': 0.006, 'SMALL_MARKET': 0.004}
 
 # Mental / form / fatigue modifiers can compound multiplicatively into a
 # heavy reduction on a high-rated player's effective rating. The soft floor
@@ -656,16 +727,13 @@ POWERUP_FORTUNES_FAVOR = {
 POWERUP_INCOME_BOOST = {
     "slug": "income_boost",
     "displayName": "Endowment",
-    "description": "Increases your weekly fantasy Floobit payout for 4 weeks.",
+    "description": "+25% on all Floobit income for 4 weeks — fantasy, pick-em, showcase, and supporter dividends.",
     "price": 100,
     "durationWeeks": 4,
     "seasonLimit": 2,
-    # Endowment swaps the SCALE/EXPONENT pair. The flatter curve trades a
-    # small dip on low-FP weeks for a meaningful bump on monster weeks
-    # (e.g. 500 FP: 61 F normal → 70 F endowment; 1000 FP: 105 → 132;
-    # 5000 FP: 423 → 596).
-    "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
-    "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
+    # Flat +25% on anything credited while active, applied at the bank
+    # (CurrencyRepository.addFunds). See INCOME_BOOST_MULTIPLIER.
+    "boostMultiplier": INCOME_BOOST_MULTIPLIER,
 }
 
 POWERUP_CATALOG = {
@@ -731,22 +799,19 @@ SHOWCASE_SLOTS = 8
 # Per-card base = EDITION_POINTS × recency + Σ CLASSIFICATION_POINTS, ×tier mult.
 SHOWCASE_EDITION_POINTS = {"base": 1, "holographic": 4, "prismatic": 12, "diamond": 30}
 SHOWCASE_CLASSIFICATION_POINTS = {"rookie": 5, "all_pro": 10, "champion": 12, "mvp": 20}
-# Recency: newer cards pay more, keyed by card age (seasons old). Gentle for the
-# first season, then a steep decline from two seasons on — a card gets ~2 prime
-# showcase seasons, after which it can't prop up a top grade. Ages past the table
-# use the floor. Non-linear on purpose (a flat per-season step can't do this).
-SHOWCASE_RECENCY_BY_AGE = {0: 1.0, 1: 0.85, 2: 0.45, 3: 0.25}
-SHOWCASE_RECENCY_FLOOR = 0.15   # 4+ seasons old
+# Recency: newer cards pay more, keyed by card age (seasons old). Newest score full;
+# older cards taper but stay meaningfully valuable (the decline was too aggressive
+# before — old cards fell off a cliff). Ages past the table use the floor. Non-linear
+# on purpose (a flat per-season step can't do this).
+SHOWCASE_RECENCY_BY_AGE = {0: 1.0, 1: 0.9, 2: 0.75, 3: 0.6}
+SHOWCASE_RECENCY_FLOOR = 0.5   # 4+ seasons old — keep a strong floor so old cards still count
 # Upgrade tier lifts a card's showcase value: ×(1 + (tier−1) × THIS).
 SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
-# Set bonuses ADD into one multiplier: score = Σ cardPoints × (1 + Σ bonuses),
-# with the bonus sum capped here so stacked sets can't run away.
+# Set bonuses are FLAT completion rewards that ADD into one multiplier:
+# score = Σ cardPoints × (1 + Σ bonuses), with the sum capped here so stacked sets
+# can't run away. Card quality is already priced into cardPoints (edition/recency/
+# tier), so a completed set pays its full bonus regardless of the editions in it.
 SHOWCASE_MAX_SET_BONUS = 1.5
-# Sets are TIERED by the edition of the cards forming them: an All-Pro Line of
-# holos is worth a fraction of one made of diamonds. Each active set's bonus is
-# scaled by the mean edition-weight of its member cards. So the top grades demand
-# high-edition sets, not just any cards that happen to share a tag.
-SHOWCASE_SET_EDITION_WEIGHT = {"base": 0.15, "holographic": 0.35, "prismatic": 0.65, "diamond": 1.0}
 # Score → grade (first threshold the score meets, scanning high to low).
 # Calibrated against target card-quality profiles + the real season-9 showcases.
 # The top grades demand QUALITY (fresh, high-edition, decorated cards), not
@@ -764,14 +829,19 @@ SHOWCASE_SET_EDITION_WEIGHT = {"base": 0.15, "holographic": 0.35, "prismatic": 0
 SHOWCASE_GRADE_THRESHOLDS = [
     ("S", 700), ("A", 480), ("B", 240), ("C", 120), ("D", 45), ("F", 0),
 ]
-# Grade → flat Floobit payout at season end.
-# Calibrated next-season to read as a strong second income against a season of
-# fantasy, without eclipsing it (showcase pays once/season and clears, and the
-# permanent-vault cost — vaulted cards can't be equipped/sold — justifies it).
-# S capped at 3000 (a first pass at 5000 ran too hot). Old table was
-# 50/120/250/450/800, below even a casual fantasy season. Re-tune via
+# Grade is now a legible LABEL only (it no longer sets the payout) — the showcase
+# pays a WEEKLY DIVIDEND scaled continuously by the live score, not a flat lump.
+#
+# Weekly dividend = round(SHOWCASE_DIVIDEND_RATE × finalScore), paid every regular-
+# season week (28 weeks) off whatever is featured that week. Calibrated so a
+# sustained top showcase earns roughly the OLD end-of-season lump across a full
+# season, but the top end is now rewarded above the old flat cap (a perfect S
+# out-earns a barely-S one). Reference points at this rate (×28 weeks, if held all
+# season): D-entry (45)≈164F, C-entry (120)≈437F, B-entry (240)≈874F, A-entry
+# (480)≈1747F, S-entry (700)≈2548F, perfect-ish (~1000)≈3640F. Realized totals run
+# lower since the showcase is empty/partial early-season. Re-tune via
 # tune_showcase.py / simcheck.
-SHOWCASE_GRADE_PAYOUT = {"F": 0, "D": 250, "C": 600, "B": 1200, "A": 2000, "S": 3000}
+SHOWCASE_DIVIDEND_RATE = 0.13
 
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7

@@ -786,12 +786,22 @@ class RecordManager:
             
         self.logger.debug(f"Processing post-game stats for {gameInstance.homeTeam.name} vs {gameInstance.awayTeam.name}")
         
-        # Only process season stats for regular season games
+        # Only accumulate season win/loss totals + per-player season stats for
+        # regular season games — the standings record is the regular-season body
+        # of work and must NOT absorb playoff results.
         if gameInstance.isRegularSeasonGame:
             self._updateTeamSeasonStats(gameInstance)
             self._updatePlayerSeasonStats(gameInstance)
-            self._updateWinStreaks(gameInstance)
-        
+
+        # Win/loss STREAK + form, however, run for playoff games too. Otherwise
+        # a team's streak (and the form label derived from it) freezes at the
+        # regular-season-end value, so a team that has won two playoff games
+        # still shows "L3 / SHAKY". This updates seasonTeamStats['streak'] (the
+        # display + form driver) and currentWinStreak/streakPressure (which its
+        # own comment always intended to count playoff wins) WITHOUT touching
+        # wins/losses, so the standings record is untouched.
+        self._updateWinStreaks(gameInstance)
+
         # Always update career stats for all games
         self._updatePlayerCareerStats(gameInstance)
         
@@ -962,10 +972,10 @@ class RecordManager:
                 abs(losingTeam.seasonTeamStats['streak']),
             )
 
-            # Streak pressure: independent of seasonTeamStats['streak']
-            # (which is regular-season-only). currentWinStreak counts every
-            # consecutive win across regular season + playoffs. Resets on
-            # any loss. Drives team.streakPressure for the spotlight bump.
+            # Streak pressure: currentWinStreak counts every consecutive win
+            # across regular season + playoffs (this method now runs for playoff
+            # games too). Resets on any loss. Drives team.streakPressure for the
+            # spotlight bump.
             try:
                 from constants import (
                     STREAK_PRESSURE_FLOOR,

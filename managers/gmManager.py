@@ -227,6 +227,13 @@ class GmManager:
 
             candidateById = {c.coach_id: c for c in candidates}
             candidateIds = set(candidateById.keys())
+            # Capture candidate names NOW, while their Coach rows still exist.
+            # clearCoachCandidates() below DELETES every losing candidate's Coach
+            # row, after which `cand.coach` lazy-loads as None and reading
+            # `cand.coach.name` raises 'NoneType' has no attribute 'name' — which
+            # rolled back the whole fire/hire transaction (coaches silently never
+            # got fired despite passing votes).
+            candNamesById = {c.coach_id: (c.coach.name if c.coach else None) for c in candidates}
 
             votes = self.voteRepo.getVotesForTeam(team.id, season, "hire_coach")
             votesByTarget: Dict[int, int] = {}
@@ -259,7 +266,7 @@ class GmManager:
                 reason = "no_votes_default_best"
 
             winnerCandidate = candidateById[winnerId]
-            winnerName = winnerCandidate.coach.name
+            winnerName = candNamesById.get(winnerId)
 
             # Hire the winning candidate. `hireCoachFromPool` flips
             # Team.coach_id and builds the in-memory Coach on the team.
@@ -308,7 +315,7 @@ class GmManager:
                 results.append({
                     "teamId": team.id, "teamName": team.name,
                     "voteType": "hire_coach",
-                    "targetPlayerName": cand.coach.name,
+                    "targetPlayerName": candNamesById.get(cand.coach_id),
                     "totalVotes": count, "threshold": 0,
                     "probability": 1.0 if isWinner else 0.0,
                     "outcome": outcome,
@@ -437,9 +444,33 @@ class GmManager:
 
     # ── Sign FA (Ranked Choice Voting) ──────────────────────────────────
 
+    def _aggregatePositionPriorities(self, priorities: List[List[int]]) -> List[int]:
+        """Borda-count fans' position-fill orderings into one team order.
+
+        Each ballot ranks positions best-first; a ranking of N awards (N - index)
+        points to each position. Returns position values (1-5) sorted by total
+        points desc (tie-break: more appearances, then position value) — the
+        order the FA-draft fallback fills open slots when voted players run out.
+        Positions no fan ranked are omitted; empty input -> []."""
+        if not priorities:
+            return []
+        scores: Dict[int, float] = {}
+        appearances: Dict[int, int] = {}
+        for ranking in priorities:
+            n = len(ranking)
+            seen = set()
+            for idx, pos in enumerate(ranking):
+                if pos in seen:
+                    continue
+                seen.add(pos)
+                scores[pos] = scores.get(pos, 0) + (n - idx)
+                appearances[pos] = appearances.get(pos, 0) + 1
+        return sorted(scores.keys(),
+                      key=lambda p: (-scores[p], -appearances.get(p, 0), p))
+
     def resolveSignFaVotes(self, teams, season: int,
                            freeAgentLists: Dict,
-                           teamOpenPositions: Dict) -> Tuple[Dict[int, List[int]], Dict[int, List[int]]]:
+                           teamOpenPositions: Dict) -> Tuple[Dict[int, List[int]], Dict[int, List[int]], Dict[int, List[int]]]:
         """Resolve sign_fa ballots via overall ranked-choice voting.
 
         Single-list IRV across all candidates whose position is currently
@@ -447,16 +478,29 @@ class GmManager:
         the team should pursue first. The directive walks the resolved
         ranking and assigns each player to the first remaining open slot
         at their position; players whose positions are already filled get
-        skipped.
+        skipped — so a single ballot resolution can sign MULTIPLE FAs when
+        several positions are open.
+
+        NO THRESHOLD: this isn't a pass/fail vote — it's "who do the fans
+        want?". Any ballots at all (even one) resolve via IRV to a ranked list
+        of available targets, and the team pursues them in that priority order.
+        The result is surfaced as that ranked target list, not a ratify tally.
 
         Returns:
           - directives: {teamId: [playerId, ...]} the slot-walk-trimmed
-            sign list used by the FA draft.
-          - overallRankings: {teamId: [playerId, ...]} the full IRV
-            ranking before slot-walking, for tally display.
+            top-per-open-slot list — the headline "FA TARGETS" display only
+            (NOT what the draft consumes).
+          - overallRankings: {teamId: [playerId, ...]} the FULL IRV ranking
+            before slot-walking. This is what drives the FA draft (so a #1
+            taken by another team falls to the fans' #2/#3 at that position),
+            and feeds the "Free Agent Vote Tallies" display.
+          - positionPriorities: {teamId: [posVal, ...]} the fan-aggregated
+            order to fill open slots once the voted players run out (drives
+            the FA-draft best-available fallback instead of pure rating).
         """
         directives: Dict[int, List[int]] = {}
         overallRankingsByTeam: Dict[int, List[int]] = {}
+        positionPrioritiesByTeam: Dict[int, List[int]] = {}
 
         # Position-value → name lookup for slot-fill bookkeeping.
         for team in teams:
@@ -465,13 +509,16 @@ class GmManager:
             if totalBallots == 0:
                 continue
 
-            engagedFans = self.voteRepo.getEngagedVoterCount(team.id, season)
-            threshold = self.calculateBallotThreshold(engagedFans)
-            probability = self.calculateProbability(totalBallots, threshold)
-
             openPositions = teamOpenPositions.get(team.id, [])
             if not openPositions:
                 continue
+
+            # Fan-aggregated position fill order (used only by the best-available
+            # fallback in the FA draft, once voted players are exhausted).
+            posPriorities = self.ballotRepo.getPositionPrioritiesForTeam(team.id, season)
+            aggPriority = self._aggregatePositionPriorities(posPriorities)
+            if aggPriority:
+                positionPrioritiesByTeam[team.id] = aggPriority
 
             # Eligible candidates: all FAs at any open position, plus team's
             # own prospects at any open position. Prospects share ID space.
@@ -491,21 +538,13 @@ class GmManager:
             if overallRanking:
                 overallRankingsByTeam[team.id] = list(overallRanking)
 
-            if probability == 0.0:
-                self.voteRepo.recordResult(
-                    teamId=team.id, season=season, voteType="sign_fa",
-                    totalVotes=totalBallots, threshold=threshold,
-                    probability=0.0, outcome="below_threshold",
-                )
-                continue
-
-            if not self._rollSuccess(probability):
-                self.voteRepo.recordResult(
-                    teamId=team.id, season=season, voteType="sign_fa",
-                    totalVotes=totalBallots, threshold=threshold,
-                    probability=probability, outcome="failed_roll",
-                )
-                continue
+            # NO THRESHOLD: a ranked-choice FA requisition isn't pass/fail — it's
+            # "who do the fans want?". ANY ballots (even one) resolve. IRV
+            # (_tallyFullRankingOverall) produces a full ranking over the AVAILABLE
+            # candidates only — unavailable players are excluded from
+            # eligibleCandidates, so an unavailable top choice naturally falls
+            # through to the next vote-getter. The slot-walk below signs down that
+            # ranking into open slots (multiple FAs when several positions are open).
 
             # Slot-walk: each player in the ranking consumes one open slot
             # at their position. Once a position runs out of slots, further
@@ -536,18 +575,32 @@ class GmManager:
             if teamDirectives:
                 directives[team.id] = teamDirectives
 
+            # Priority-ordered target list for the Front Office display — the FA
+            # requisition is shown as a ranked list of who the team is pursuing,
+            # not a pass/fail tally. threshold=0 / probability=1.0 signals "no
+            # threshold" (same convention as the plurality hire_coach result).
+            targetList = []
+            for pid in teamDirectives:
+                p = playerLookup.get(pid)
+                if p:
+                    targetList.append({
+                        'id': pid,
+                        'name': getattr(p, 'name', f'Player {pid}'),
+                        'position': getattr(getattr(p, 'position', None), 'value', None),
+                    })
+
             self.voteRepo.recordResult(
                 teamId=team.id, season=season, voteType="sign_fa",
-                totalVotes=totalBallots, threshold=threshold,
-                probability=probability, outcome="success",
-                details=json.dumps({"directives": teamDirectives}),
+                totalVotes=totalBallots, threshold=0,
+                probability=1.0, outcome="success",
+                details=json.dumps({"directives": teamDirectives, "targets": targetList}),
             )
             logger.info(
-                f"GM: {team.name} FA directives: {teamDirectives} "
-                f"({totalBallots} ballots, p={probability:.0%})"
+                f"GM: {team.name} FA targets (priority order): {teamDirectives} "
+                f"({totalBallots} ballots)"
             )
 
-        return directives, overallRankingsByTeam
+        return directives, overallRankingsByTeam, positionPrioritiesByTeam
 
     def _tallyFullRankingOverall(self, ballots: List[List[int]],
                                  eligibleCandidates: set) -> List[int]:
