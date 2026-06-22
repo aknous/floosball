@@ -22,6 +22,7 @@ from constants import (
     DEV_DECLINE_STEEPEN_PER_SEASON, DEV_DECLINE_PAST_LONGEVITY_KICK,
     DEV_DECLINE_MAX_STEEPEN, DEV_PROSPECT_SPREAD, DEV_PROSPECT_SEASONS,
     DEV_ATTRIBUTE_FLOOR, DEV_DECLINE_FACTOR_LOW, DEV_DECLINE_FACTOR_HIGH,
+    DEV_DECLINE_FACTOR_MODE,
 )
 from logger_config import get_logger
 
@@ -69,7 +70,10 @@ class PlayerDevelopment:
         pid = getattr(player, 'id', None)
         seed = int(pid) if pid else (abs(hash(getattr(player, 'name', ''))) % (2 ** 31))
         rng = random.Random((seed * 1099087573 + 12345) & 0xFFFFFFFF)
-        return rng.uniform(DEV_DECLINE_FACTOR_LOW, DEV_DECLINE_FACTOR_HIGH)
+        # Triangular around MODE so most players are gradual decliners, with the
+        # ageless (low) and cliff (high) ends as rarer tails.
+        return rng.triangular(DEV_DECLINE_FACTOR_LOW, DEV_DECLINE_FACTOR_HIGH,
+                              DEV_DECLINE_FACTOR_MODE)
 
     @staticmethod
     def careerContext(player: Any, devBias: int) -> DevContext:

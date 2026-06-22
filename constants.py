@@ -47,10 +47,12 @@ DEV_DECLINE_PAST_LONGEVITY_KICK = 2
 DEV_DECLINE_MAX_STEEPEN = 6
 # Per-player decline SEVERITY multiplier (stable per player, seeded off id) so not
 # everyone follows the same arc. Low end = ages gracefully, good for a long career;
-# ~1.0 = a normal gradual decline; high end = falls off a cliff. The whole decline
-# (base + steepening) scales by this on the downside only.
+# ~MODE = a normal gradual decline; high end = falls off a cliff. The whole decline
+# (base + steepening) scales by this on the downside only. Drawn triangular around
+# MODE so a GRADUAL falloff is the common case and the ageless/cliff tails are rarer.
 DEV_DECLINE_FACTOR_LOW = 0.3
 DEV_DECLINE_FACTOR_HIGH = 1.5
+DEV_DECLINE_FACTOR_MODE = 0.85
 # Prospects / early-career players are boom-or-bust: widen both ends; good dev
 # (positive devBias) skews the spread toward boom.
 DEV_PROSPECT_SPREAD = 4
