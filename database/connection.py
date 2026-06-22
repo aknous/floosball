@@ -2533,6 +2533,9 @@ def _seedAchievements():
             {"key": "stalwart", "name": "Stalwart", "category": "secret", "scope": "once", "sort_order": 680, "target": 1,
              "description": "Play an entire season with a full roster and zero roster swaps.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "underwriter", "name": "Underwriter", "category": "secret", "scope": "once", "sort_order": 685, "target": 5,
+             "description": "Single-handedly fund five facility bars, upkeep or project, from empty to full.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Card-upgrade secrets
             {"key": "overclocked", "name": "Overclocked", "category": "secret", "scope": "once", "sort_order": 690, "target": 1,
              "description": "Hold three max-tier (IV) cards in a single season.",

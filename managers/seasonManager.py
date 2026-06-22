@@ -9345,6 +9345,7 @@ class SeasonManager:
             # bar that only needs 99F deducts 99F (no overfunding / wasted spend). The
             # Treasury is an open pool, so it takes the full amount.
             shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
+            soloFunded = False  # user took a bar from empty to fully funded by themselves
             if target == 'upkeep':
                 if not facilityKey:
                     raise ValueError("facilityKey required for an upkeep contribution")
@@ -9352,11 +9353,12 @@ class SeasonManager:
                     team_id=teamId, facility_key=facilityKey).first()
                 if not fac:
                     raise ValueError("Facility not found")
-                need = max(0, facilitiesManager.upkeepCostFloobits(fac.level, shareUnit)
-                           - (fac.upkeep_funded or 0))
+                priorFunded = fac.upkeep_funded or 0
+                need = max(0, facilitiesManager.upkeepCostFloobits(fac.level, shareUnit) - priorFunded)
                 if need <= 0:
                     raise ValueError("Upkeep is already fully funded")
                 amount = min(amount, need)
+                soloFunded = (priorFunded == 0 and amount >= need)
                 desc = f'Facility upkeep ({facilityKey})'
             elif target == 'project':
                 if not projectId:
@@ -9365,11 +9367,12 @@ class SeasonManager:
                     id=projectId, team_id=teamId, status='open').first()
                 if not proj:
                     raise ValueError("Open project not found")
-                need = max(0, facilitiesManager.projectCostFloobits(proj.cost_shares, shareUnit)
-                           - (proj.funded or 0))
+                priorFunded = proj.funded or 0
+                need = max(0, facilitiesManager.projectCostFloobits(proj.cost_shares, shareUnit) - priorFunded)
                 if need <= 0:
                     raise ValueError("Project is already fully funded")
                 amount = min(amount, need)
+                soloFunded = (priorFunded == 0 and amount >= need)
                 desc = f'Facility project (#{projectId})'
             elif target == 'treasury':
                 desc = 'Team Treasury'
@@ -9394,6 +9397,7 @@ class SeasonManager:
                         f"(target={target})")
             return {
                 'teamId': teamId, 'amount': amount, 'target': target,
+                'soloFunded': soloFunded,
                 'newBalance': currency.balance if currency else 0,
                 'treasury': facilitiesManager.getTreasury(session, teamId),
             }

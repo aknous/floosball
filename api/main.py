@@ -5644,6 +5644,9 @@ def contribute_to_facilities(team_id: int, payload: Dict[str, Any], user: _User 
             _am.onTeamContribution(_s, user.id)
             if _cs:
                 _am.onSeasonTeamContributions(_s, user.id, _cs)
+            # Underwriter (secret) — fully funded a bar from empty to full single-handed.
+            if isinstance(result, dict) and result.get('soloFunded'):
+                _am.recordProgress(_s, user.id, 'underwriter', increment=1)
             _s.commit()
         except Exception as _e:
             _s.rollback()
