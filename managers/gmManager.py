@@ -488,9 +488,12 @@ class GmManager:
 
         Returns:
           - directives: {teamId: [playerId, ...]} the slot-walk-trimmed
-            sign list used by the FA draft.
-          - overallRankings: {teamId: [playerId, ...]} the full IRV
-            ranking before slot-walking, for tally display.
+            top-per-open-slot list — the headline "FA TARGETS" display only
+            (NOT what the draft consumes).
+          - overallRankings: {teamId: [playerId, ...]} the FULL IRV ranking
+            before slot-walking. This is what drives the FA draft (so a #1
+            taken by another team falls to the fans' #2/#3 at that position),
+            and feeds the "Free Agent Vote Tallies" display.
           - positionPriorities: {teamId: [posVal, ...]} the fan-aggregated
             order to fill open slots once the voted players run out (drives
             the FA-draft best-available fallback instead of pure rating).

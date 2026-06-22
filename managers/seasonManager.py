@@ -7080,12 +7080,18 @@ class SeasonManager:
             )
             session.commit()
 
-            # Pass directives to playerManager for use in FA draft
-            self.playerManager._gmFaDirectives = directives
+            # Feed the FA draft the FULL ranked list (not the slot-trimmed
+            # top-per-slot `directives`): when a fan's #1 at a position is signed
+            # by another team first, the draft now falls to the fans' #2/#3 at
+            # that position before dropping to best-available. The draft walk
+            # already guards every sign with an open-slot check, so a longer list
+            # can't over-sign — it just walks further down the ranking. (The
+            # trimmed `directives` stays the "FA TARGETS" headline display.)
+            self.playerManager._gmFaDirectives = overallRankings
             # Fan-aggregated position fill order for the best-available fallback.
             self.playerManager._gmFaPositionPriority = positionPriorities
-            if directives:
-                logger.info(f"GM FA directives for {len(directives)} team(s)")
+            if overallRankings:
+                logger.info(f"GM FA full ranked directives for {len(overallRankings)} team(s)")
             if positionPriorities:
                 logger.info(f"GM FA position priorities for {len(positionPriorities)} team(s)")
 
