@@ -514,10 +514,19 @@ class PlayerResponseBuilder(ResponseBuilder):
             'xFactorValue': player.attributes.xFactor
         })
         
-        # Add season performance if available
+        # Add season performance if available. seasonPerformanceRating is the
+        # OFFENSIVE rating; the overall (two-way) and defensive ratings are surfaced
+        # alongside so the UI can show all three.
         if hasattr(player, 'seasonPerformanceRating') and player.seasonPerformanceRating > 0:
             attr_dict['seasonPerformanceRatingStars'] = PlayerResponseBuilder.calculateStarRating(player.seasonPerformanceRating)
             attr_dict['seasonPerformanceRating'] = player.seasonPerformanceRating
+        _defPerf = getattr(player, 'seasonDefensivePerformanceRating', 0) or 0
+        _ovrPerf = getattr(player, 'seasonOverallPerformanceRating', 0) or 0
+        if _defPerf > 0:
+            attr_dict['seasonDefensivePerformanceRating'] = _defPerf
+        if _ovrPerf > 0:
+            attr_dict['seasonOverallPerformanceRating'] = _ovrPerf
+            attr_dict['seasonOverallPerformanceRatingStars'] = PlayerResponseBuilder.calculateStarRating(_ovrPerf)
 
         # Add fatigue (0-100 percentage)
         attr_dict['fatigue'] = round((getattr(player.attributes, 'fatigue', 0.0) or 0.0) * 100, 1)

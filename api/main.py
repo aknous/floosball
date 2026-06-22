@@ -2131,6 +2131,19 @@ def post_game_rally(game_id: int, req: _RallyRequest, user: _User = Depends(_get
             spectatorManager.addRallyFill(session, user.id, _season, _week)
         except Exception as _e:
             logger.debug(f"spectator rally fill skipped: {_e}")
+        # Secret — Diehard: rallied your own favorite team while they trail by 20+
+        try:
+            favId = getattr(dbUser, "favorite_team_id", None)
+            if favId and req.teamId == favId and hasattr(game, "homeTeam"):
+                isHome = game.homeTeam.id == req.teamId
+                teamScore = game.homeScore if isHome else game.awayScore
+                oppScore = game.awayScore if isHome else game.homeScore
+                if (oppScore - teamScore) >= 20:
+                    from managers import achievementManager as _am
+                    _am.unlockSecret(session, user.id, "diehard")
+                    session.commit()
+        except Exception as _e:
+            logger.warning(f"Diehard hook failed: {_e}")
     finally:
         session.close()
 
@@ -2929,8 +2942,8 @@ def _recapFundingLeaderboard(session, target):
 
 
 def _recapShowcaseLeaderboard(session, target):
-    """Season Vault-Showcase leaderboard (top entries by the hidden score, which
-    drives the grade). Number-free — only grade / payout / card count exposed."""
+    """Season Vault-Showcase leaderboard (top entries by the score, which drives
+    the grade). Grade / weekly dividend / card count exposed."""
     from database.models import ShowcaseSlot, User as DBUser
     from managers import showcaseManager
     userIds = [r[0] for r in session.query(ShowcaseSlot.user_id).filter(
@@ -2948,7 +2961,7 @@ def _recapShowcaseLeaderboard(session, target):
         rows.append({
             "userId": uid,
             "username": (getattr(u, 'username', None) or f"User{uid}") if u else f"User{uid}",
-            "grade": ev["grade"], "estimatedPayout": ev["payout"],
+            "grade": ev["grade"], "weeklyDividend": ev["weeklyDividend"],
             "cardCount": len(infos), "_score": ev["score"],
         })
     rows.sort(key=lambda r: r["_score"], reverse=True)
@@ -5434,6 +5447,7 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
     # window), so return the latest saved ballot whenever a user is
     # authenticated and has a favorite team set.
     existingBallot = None
+    existingPositionPriority = None
     if user:
         try:
             from database.connection import get_session
@@ -5448,6 +5462,11 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
                     ballot = ballotRepo.getUserBallot(user.id, dbUser.favorite_team_id, currentSeason)
                     if ballot:
                         existingBallot = json.loads(ballot.rankings)
+                        if getattr(ballot, 'position_priority', None):
+                            try:
+                                existingPositionPriority = json.loads(ballot.position_priority)
+                            except (json.JSONDecodeError, TypeError):
+                                existingPositionPriority = None
             finally:
                 session.close()
         except Exception:
@@ -5542,9 +5561,12 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         "isOffseason": isOffseason, "freeAgents": faList, "draftOrder": draftOrder,
         "transactions": transactions, "faWindowOpen": faWindowOpen,
         "faWindowEnd": faWindowEnd, "faPool": faPool,
-        "existingBallot": existingBallot, "faDirectives": faDirectives,
+        "existingBallot": existingBallot,
+        "existingPositionPriority": existingPositionPriority,
+        "faDirectives": faDirectives,
         "gmResolutions": gmResolutions,
         "faVoteResults": faVoteResults,
+        "faPositionPriority": getattr(sm, '_offseasonFaPositionPriority', {}) or {},
         "rookieBallotResults": rookieBallotResults,
         "rookies": upcomingRookies,
         "phase": phase,
@@ -5590,6 +5612,212 @@ def contribute_to_team(team_id: int, payload: Dict[str, Any], user: _User = Depe
     except Exception as e:
         logger.error(f"Error contributing to team {team_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/teams/{team_id}/facilities/contribute")
+def contribute_to_facilities(team_id: int, payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Contribute Floobits toward a team's facilities (Markets→Facilities).
+    body: {amount, target?: 'treasury'|'upkeep'|'project', facilityKey?, projectId?}.
+    Requires auth; favorite team only."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    amount = payload.get("amount")
+    if not isinstance(amount, int) or amount <= 0:
+        raise HTTPException(status_code=400, detail="'amount' must be a positive integer")
+    try:
+        result = floosball_app.seasonManager.contributeToFacilities(
+            user.id, team_id, amount,
+            target=payload.get("target", "treasury"),
+            facilityKey=payload.get("facilityKey"),
+            projectId=payload.get("projectId"),
+        )
+        return build_success_response(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error contributing to facilities for team {team_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/teams/{team_id}/facilities")
+def get_team_facilities(team_id: int):
+    """Team facilities state (Markets→Facilities): levels + effects + upkeep,
+    open projects with cost/progress, Treasury balance, Appeal, and the current
+    share unit. Drives the Facilities page. Public (read-only)."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamFacility, FacilityProject
+    from managers import facilitiesManager
+    from constants import FACILITY_CATALOG, FACILITY_MAX_LEVEL
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
+        facRows = session.query(TeamFacility).filter_by(team_id=team_id).all()
+        levels = {f.facility_key: f.level for f in facRows}
+        openProjRows = session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()
+        upgradingKeys = {p.facility_key for p in openProjRows}
+        facilities = []
+        for f in facRows:
+            cfg = FACILITY_CATALOG.get(f.facility_key, {})
+            # A facility under active upgrade has its upkeep WAIVED this season.
+            upgrading = f.facility_key in upgradingKeys
+            facilities.append({
+                'key': f.facility_key,
+                'name': cfg.get('name', f.facility_key),
+                'level': f.level,
+                'maxLevel': FACILITY_MAX_LEVEL,
+                'effect': cfg.get('effect'),
+                'upgrading': upgrading,
+                'upkeepCost': 0 if upgrading else facilitiesManager.upkeepCostFloobits(f.level, shareUnit),
+                'upkeepFunded': f.upkeep_funded or 0,
+                'upgradeCost': facilitiesManager.upgradeCostFloobits(f.level, shareUnit),
+            })
+        projects = [{
+            'id': p.id, 'facilityKey': p.facility_key, 'kind': p.kind,
+            'targetLevel': p.target_level,
+            'cost': facilitiesManager.projectCostFloobits(p.cost_shares, shareUnit),
+            'funded': p.funded, 'openedSeason': p.opened_season,
+        } for p in openProjRows]
+        return build_success_response({
+            'teamId': team_id,
+            'treasury': facilitiesManager.getTreasury(session, team_id),
+            'appeal': facilitiesManager.computeAppeal(levels),
+            'shareUnit': round(shareUnit),
+            'facilities': facilities,
+            'projects': projects,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/league/facilities")
+def get_league_facilities():
+    """Per-team facilities summary for the league graphs: each team's facility
+    levels, Appeal (FA-draft signal), Market tier (fanbase band), and fan count.
+    Powers the facilities/Appeal comparison + the fan-count chart. Public."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamFacility, TeamFunding, User as _UserModel
+    from managers import facilitiesManager
+    from constants import FACILITY_CATALOG
+    from sqlalchemy import func
+    sm = floosball_app.seasonManager
+    tm = floosball_app.teamManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        # facility levels per team
+        levelsByTeam = {}
+        for row in session.query(TeamFacility).all():
+            levelsByTeam.setdefault(row.team_id, {})[row.facility_key] = row.level
+        # fan counts
+        fanCounts = dict(session.query(_UserModel.favorite_team_id, func.count())
+                         .filter(_UserModel.favorite_team_id.isnot(None))
+                         .group_by(_UserModel.favorite_team_id).all())
+        # market tier (fanbase label)
+        tierByTeam = {r.team_id: r.funding_tier for r in
+                      session.query(TeamFunding).filter_by(season=season).all()}
+        out = []
+        for team in (tm.teams if tm else []):
+            levels = levelsByTeam.get(team.id, {})
+            st = getattr(team, 'seasonTeamStats', {}) or {}
+            out.append({
+                'id': team.id,
+                'name': team.name,
+                'city': getattr(team, 'city', ''),
+                'abbr': getattr(team, 'abbr', (team.name or '')[:3].upper()),
+                'color': getattr(team, 'color', None),
+                'appeal': facilitiesManager.computeAppeal(levels),
+                'levels': {k: levels.get(k, 0) for k in FACILITY_CATALOG},
+                'fanCount': fanCounts.get(team.id, 0),
+                'marketTier': tierByTeam.get(team.id, 'MID_MARKET'),
+                '_wp': st.get('winPerc', 0), '_sd': st.get('scoreDiff', 0),
+            })
+        # Match the real FA draft order (_buildFaDraftOrder): Appeal first, then
+        # REVERSE STANDINGS (worse record drafts first, by winPerc then scoreDiff)
+        # as the within-Appeal tiebreaker. So the displayed "FA PICK #N" equals the
+        # actual draft slot, including for tied teams.
+        out.sort(key=lambda t: (-t['appeal'], t['_wp'], t['_sd']))
+        for t in out:
+            t.pop('_wp', None); t.pop('_sd', None)
+        return build_success_response({
+            'season': season,
+            'facilityCatalog': {k: v.get('name', k) for k, v in FACILITY_CATALOG.items()},
+            'teams': out,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/teams/{team_id}/facilities/vote")
+def get_facility_vote(team_id: int, user: Optional[_User] = Depends(_getOptionalUser)):
+    """Facility vote ballot: the facilities eligible to be the team's next
+    project (not maxed, not already in progress) + the current user's vote.
+    Tallies are hidden while the season is live (anti-bandwagon)."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import TeamFacility, FacilityProject
+    from managers import facilitiesManager
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        levels = {f.facility_key: f.level for f in
+                  session.query(TeamFacility).filter_by(team_id=team_id).all()}
+        openKeys = {p.facility_key for p in
+                    session.query(FacilityProject).filter_by(team_id=team_id, status='open').all()}
+        candidates = facilitiesManager.voteCandidates(levels, openKeys)
+        # enrich each candidate with what winning it would cost: the build (to reach
+        # the target level) and the upkeep it would then carry each season.
+        shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
+        tallies = facilitiesManager.tallyFacilityVotes(session, team_id, season)
+        for c in candidates:
+            c['cost'] = facilitiesManager.upgradeCostFloobits(c['currentLevel'], shareUnit)
+            c['upkeep'] = facilitiesManager.upkeepCostFloobits(c['targetLevel'], shareUnit)
+            c['votes'] = tallies.get(c['key'], 0)
+        myVote = facilitiesManager.getFacilityVote(session, team_id, user.id, season) if user else None
+        return build_success_response({
+            'teamId': team_id, 'season': season,
+            'candidates': candidates, 'myVote': myVote,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/teams/{team_id}/facilities/vote")
+def post_facility_vote(team_id: int, payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
+    """Cast/change the user's facility vote (one per fan/team/season). Favorite
+    team only. body: {facilityKey}."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    facilityKey = payload.get("facilityKey")
+    if not facilityKey:
+        raise HTTPException(status_code=400, detail="'facilityKey' is required")
+    from database.connection import get_session
+    from database.models import User as _UserModel
+    from managers import facilitiesManager
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    session = get_session()
+    try:
+        dbUser = session.query(_UserModel).filter_by(id=user.id).first()
+        if not dbUser or dbUser.favorite_team_id != team_id:
+            raise HTTPException(status_code=400, detail="You can only vote for your favorite team")
+        facilitiesManager.castFacilityVote(session, team_id, user.id, facilityKey, season)
+        session.commit()
+        return build_success_response({
+            'teamId': team_id, 'season': season, 'myVote': facilityKey,
+        })
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
 
 
 @app.get("/api/teams/{team_id}/projected-funding")
@@ -6261,6 +6489,15 @@ def follow_player(player_id: int, user: _User = Depends(_getCurrentUser)):
         if not existing:
             session.add(FollowedPlayer(user_id=user.id, player_id=player_id))
             session.commit()
+            # Secret — Superfan: following 10+ players at once
+            try:
+                followCount = session.query(FollowedPlayer).filter_by(user_id=user.id).count()
+                if followCount >= 10:
+                    from managers import achievementManager as _am
+                    _am.unlockSecret(session, user.id, "superfan")
+                    session.commit()
+            except Exception as _e:
+                logger.warning(f"Superfan hook failed: {_e}")
         return build_success_response({"playerId": player_id, "following": True})
     except HTTPException:
         raise
@@ -7060,6 +7297,9 @@ def set_fantasy_roster(req: FantasyRosterRequest, user: _User = Depends(_getCurr
                 favTeamId = getattr(user, "favorite_team_id", None)
                 if favTeamId and all(p.team_id == favTeamId for p in players):
                     _am.unlockSecret(session, user.id, "homer")
+                # Greenhorn — every roster player is a rookie (first season)
+                if all(getattr(p, "seasons_played", 0) == 0 for p in players):
+                    _am.unlockSecret(session, user.id, "greenhorn")
 
         session.commit()
         return build_success_response({"message": "Roster updated", "rosterId": roster.id})
@@ -8204,7 +8444,18 @@ def sellCards(req: SellCardsRequest, user: _User = Depends(_getCurrentUser)):
 
     session = get_session()
     try:
+        # Secret — Liquidator: was a Diamond among the cards being sold? Check
+        # before sellCards deletes the rows.
+        from database.models import UserCard as _UC, CardTemplate as _CT
+        soldDiamond = session.query(_UC.id).join(
+            _CT, _UC.card_template_id == _CT.id
+        ).filter(
+            _UC.id.in_(req.userCardIds), _UC.user_id == user.id, _CT.edition == "diamond",
+        ).first() is not None
         result = cardManager.sellCards(session, user.id, req.userCardIds, currentSeason, currentWeek)
+        if soldDiamond:
+            from managers import achievementManager as _am
+            _am.unlockSecret(session, user.id, "liquidator")
         session.commit()
         return build_success_response(result)
     except ValueError as e:
@@ -8245,6 +8496,7 @@ def blendCards(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
         # several sacrificed templates with one new one, so the count may change.
         from managers import achievementManager as _am
         _am.syncCuratorProgress(session, user.id, currentSeason)
+        _am.unlockSecret(session, user.id, "alchemist")  # Secret — first use of the Combine
         session.commit()
         return build_success_response(result)
     except ValueError as e:
@@ -8465,9 +8717,10 @@ def reorderVault(req: ReorderVaultRequest, user: _User = Depends(_getCurrentUser
 
 
 def _buildShowcasePayload(session, cardManager, userId, currentSeason):
-    """Shared GET/PUT response: 8 slots (filled or null) + the live grade,
-    estimated payout, and named Active/Almost sets. The raw score is never
-    included — grade + payout + set names only."""
+    """Shared GET/PUT response: 8 slots (filled or null) + the live grade, the
+    weekly Floobit dividend, the set-bonus multiplier, and the named Active/Almost
+    sets. Each featured card carries its own scoring breakdown (multipliers + its
+    Floobit share of the dividend) so the payout is fully transparent."""
     from database.models import ShowcaseSlot, UserCard
     from managers import showcaseManager
     from constants import SHOWCASE_SLOTS
@@ -8497,14 +8750,25 @@ def _buildShowcasePayload(session, cardManager, userId, currentSeason):
         slots.append({"slotNumber": slotNum, "card": cardData})
 
     score = showcaseManager.evaluate(infos, currentSeason)
+    # Attach each card's scoring breakdown to its slot (keyed by userCardId).
+    byCardId = {b["userCardId"]: b for b in score["cardBreakdown"]}
+    for s in slots:
+        card = s["card"]
+        if card and card.get("id") in byCardId:
+            card["showcase"] = byCardId[card["id"]]
     return {
         "slots": slots,
         "slotCount": len([s for s in slots if s["card"]]),
         "maxSlots": SHOWCASE_SLOTS,
         "grade": score["grade"],
-        "estimatedPayout": score["payout"],
+        "weeklyDividend": score["weeklyDividend"],
+        "setBonus": score["setBonus"],
+        "maxSetBonus": score["maxSetBonus"],
+        "dividendRate": score["dividendRate"],
+        "scoring": score["scoring"],
         "activeSets": score["activeSets"],
         "almostSets": score["almostSets"],
+        "sets": score["sets"],
         "season": currentSeason,
     }
 
@@ -8538,9 +8802,8 @@ class SetShowcaseRequest(BaseModel):
 
 @app.get("/api/cards/showcase/leaderboard")
 def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
-    """Ranked list of everyone with a featured Showcase this season. Ranked by
-    the hidden score (which drives the grade); only grade / payout / card count
-    are exposed, never the raw number."""
+    """Ranked list of everyone with a featured Showcase this season. Ranked by the
+    score (which drives the grade); grade / weekly dividend / card count exposed."""
     from database.connection import get_session
     from database.models import ShowcaseSlot, User as _UserModel
     from managers import showcaseManager
@@ -8563,7 +8826,7 @@ def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
                 "userId": uid,
                 "username": (getattr(u, "username", None) or "Anonymous") if u else "Anonymous",
                 "grade": ev["grade"],
-                "estimatedPayout": ev["payout"],
+                "weeklyDividend": ev["weeklyDividend"],
                 "cardCount": len(infos),
                 "activeSets": ev["activeSets"],
                 "_score": ev["score"],  # for ranking only; stripped below
@@ -8582,31 +8845,53 @@ def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
 
 @app.get("/api/cards/showcase/last-result")
 def showcaseLastResult(user: _User = Depends(_getCurrentUser)):
-    """The user's most recent end-of-season Showcase payout, for the results
-    recap. Durable (reads the payout transaction) so offline users see it on
-    their next visit. Returns null data if they've never been paid out."""
+    """End-of-season Showcase recap: the user's TOTAL weekly dividends from their
+    most recent COMPLETED season (season < current), plus the weeks paid and the
+    grade their showcase finished on. Durable (reads the dividend transactions) so
+    offline users see it on their next visit; gated to a completed season so it
+    reads as a season wrap, not a mid-season pop. Null if they earned nothing."""
     from database.connection import get_session
     from database.models import CurrencyTransaction
-    from managers.showcaseManager import SHOWCASE_PAYOUT_TX
+    from managers.showcaseManager import SHOWCASE_DIVIDEND_TX
     import re as _re
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
 
     session = get_session()
     try:
-        tx = (
+        # Most recent completed season with any dividend for this user.
+        lastSeason = (
+            session.query(CurrencyTransaction.season)
+            .filter(
+                CurrencyTransaction.user_id == user.id,
+                CurrencyTransaction.transaction_type == SHOWCASE_DIVIDEND_TX,
+                CurrencyTransaction.season < currentSeason,
+            )
+            .order_by(CurrencyTransaction.season.desc())
+            .first()
+        )
+        if not lastSeason:
+            return build_success_response(None)
+        season = lastSeason[0]
+        txs = (
             session.query(CurrencyTransaction)
             .filter(
                 CurrencyTransaction.user_id == user.id,
-                CurrencyTransaction.transaction_type == SHOWCASE_PAYOUT_TX,
+                CurrencyTransaction.transaction_type == SHOWCASE_DIVIDEND_TX,
+                CurrencyTransaction.season == season,
             )
-            .order_by(CurrencyTransaction.season.desc(), CurrencyTransaction.id.desc())
-            .first()
+            .order_by(CurrencyTransaction.week.asc(), CurrencyTransaction.id.asc())
+            .all()
         )
-        if not tx:
+        if not txs:
             return build_success_response(None)
-        m = _re.search(r"grade (\w+)", tx.description or "")
+        total = sum(t.amount for t in txs)
+        m = _re.search(r"grade (\w+)", txs[-1].description or "")
         return build_success_response({
-            "season": tx.season,
-            "payout": tx.amount,
+            "season": season,
+            "total": total,
+            "weeksPaid": len(txs),
             "grade": m.group(1) if m else None,
         })
     finally:
@@ -9409,6 +9694,17 @@ def revealPack(req: RevealPackRequest, user: _User = Depends(_getCurrentUser)):
     session = get_session()
     try:
         result = cardManager.revealPack(session, user.id, req.packTypeId, currentSeason, shopDay=shopDay, currentWeek=currentWeek)
+        # Secret — Lightning Strike: a Diamond pulled out of a Humble pack
+        try:
+            from database.models import PackType as _PT
+            pt = session.get(_PT, req.packTypeId)
+            if pt and pt.name == "humble" and any(
+                (c.get("edition") == "diamond") for c in (result.get("revealed") or [])
+            ):
+                from managers import achievementManager as _am
+                _am.unlockSecret(session, user.id, "lightning_strike")
+        except Exception as _e:
+            logger.warning(f"Lightning Strike hook failed: {_e}")
         session.commit()
         return build_success_response(result)
     except ValueError as e:
@@ -10304,27 +10600,22 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
                 "pending": deferred,
             })
 
-        # Income boost (Endowment) — flatter FP→F curve while active
+        # Income boost (Endowment) — flat +25% on all Floobit income while active
         activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
         if activeBoost:
             # If games are in progress OR done-but-week-hasn't-rolled, the
             # current week is already "spent" — don't count it as remaining.
             weekConsumed = _areGamesStarted() or _areGamesCompleted()
             weeksRemaining = activeBoost.expires_at_week - currentWeek + (0 if weekConsumed else 1)
-            from constants import (
-                WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT,
-                WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
-            )
+            from constants import INCOME_BOOST_MULTIPLIER
             active.append({
                 "slug": "income_boost",
                 "displayName": "Endowment",
                 "expiresAtWeek": activeBoost.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
                 "expiring": weeksRemaining <= 1,
-                "scale": WEEKLY_FP_FLOOBIT_SCALE,
-                "exponent": WEEKLY_FP_FLOOBIT_EXPONENT,
-                "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
-                "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
+                "boostMultiplier": INCOME_BOOST_MULTIPLIER,
+                "boostPercent": round((INCOME_BOOST_MULTIPLIER - 1) * 100),
             })
 
         # Fortune's Favor (Patronage) — boosts chance card trigger rates
@@ -10389,6 +10680,9 @@ class GmVoteUndoRequest(BaseModel):
 
 class GmFaBallotRequest(BaseModel):
     rankings: List[int]
+    # Optional fan fill-order for open slots once voted players run out: a list of
+    # position values (1=QB,2=RB,3=WR,4=TE,5=K). Omit to leave unchanged; [] clears.
+    positionPriority: Optional[List[int]] = None
 
 
 @app.post("/api/gm/vote")
@@ -11268,6 +11562,13 @@ def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUs
     if not req.rankings or len(req.rankings) > GM_FA_BALLOT_MAX_RANKINGS:
         raise HTTPException(400, f"Provide 1-{GM_FA_BALLOT_MAX_RANKINGS} ranked player IDs")
 
+    # Validate the optional position-priority order: distinct position values 1-5.
+    positionPriority = req.positionPriority
+    if positionPriority is not None:
+        if (len(positionPriority) != len(set(positionPriority))
+                or any(p not in (1, 2, 3, 4, 5) for p in positionPriority)):
+            raise HTTPException(400, "positionPriority must be distinct position values 1-5")
+
     session = get_session()
     try:
         dbUser = session.query(User).filter_by(id=user.id).first()
@@ -11329,12 +11630,14 @@ def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUs
         ballot = ballotRepo.submitBallot(
             userId=user.id, teamId=teamId, season=currentSeason,
             rankings=cleanedRankings, costPaid=costPaid,
+            positionPriority=positionPriority,
         )
         session.commit()
 
         return build_success_response({
             "ballotId": ballot.id,
             "rankings": cleanedRankings,
+            "positionPriority": positionPriority,
             "costPaid": costPaid,
             "isUpdate": existing is not None,
         })
@@ -11359,7 +11662,7 @@ def get_upcoming_rookies(user: Optional[_User] = Depends(_getOptionalUser)):
     """
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
-    from constants import FUNDING_SCOUTING_BONUS, GM_ACTIVE_WEEK
+    from constants import GM_ACTIVE_WEEK
     pm = floosball_app.playerManager
     sm = floosball_app.seasonManager
     tm = floosball_app.teamManager
@@ -11373,7 +11676,9 @@ def get_upcoming_rookies(user: Optional[_User] = Depends(_getOptionalUser)):
         scoutTeam = tm.getTeamById(user.favorite_team_id) if tm else None
         if scoutTeam:
             coachScouting = getattr(getattr(scoutTeam, 'coach', None), 'scouting', 80) or 80
-            tierBonus = FUNDING_SCOUTING_BONUS.get(getattr(scoutTeam, 'fundingTier', 'MID_MARKET'), 0)
+            # Scouting Department level (Markets→Facilities) replaces the old
+            # market-tier scouting bonus; migrated levels reproduce the tier perk.
+            tierBonus = scoutTeam.facilityEffect('scouting_bonus') if hasattr(scoutTeam, 'facilityEffect') else 0
             effectiveScouting = max(0, min(100, coachScouting + tierBonus))
 
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0

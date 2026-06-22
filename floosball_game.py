@@ -35,7 +35,7 @@ from constants import (
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
-    INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K,
+    INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
     HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
@@ -3294,6 +3294,112 @@ class Game:
         self.yardsToFirstDown = self.gameRules.firstDownDistance
 
 
+    def _resolveDefensiveReturn(self):
+        """After an interception or fumble recovery, the defender runs it back.
+
+        Adjusts self.play.yardage — a return moves the ball toward the giving
+        team's own goal, which is the NEGATIVE direction here (it reduces
+        yardsToSafety) — so the existing turnover branches naturally produce a
+        normal return, a long flip in field position, or a pick-six /
+        scoop-and-score when the return clears the field. SPEED drives the
+        return distance; a speed-scaled breakaway can take it the distance.
+        Sets play.returner / play.returnYardage for play-by-play + WPA. Called
+        once per turnover, before the outcome branches read play.yardage."""
+        from constants import (RETURN_ENABLED, RETURN_BASE_YARDS, RETURN_SPEED_PIVOT,
+                               RETURN_YARDS_PER_SPEED, RETURN_BREAKAWAY_BASE,
+                               RETURN_BREAKAWAY_PER_SPEED, RETURN_BREAKAWAY_MAX,
+                               RETURN_BREAKAWAY_MEAN)
+        play = self.play
+        if not RETURN_ENABLED:
+            return
+        returner = play.interceptedBy if play.isInterception else (
+            play.forcedFumbleBy or play.tackledBy)
+        if returner is None:
+            return
+        spot = play.yardage  # recovery spot, net from the LOS in the offense's direction
+        gameAttrs = getattr(returner, 'gameAttributes', None)
+        spd = getattr(gameAttrs, 'speed', 75) if gameAttrs else 75
+        mean = max(1.0, RETURN_BASE_YARDS + (spd - RETURN_SPEED_PIVOT) * RETURN_YARDS_PER_SPEED)
+        returnYards = max(0, int(round(np.random.exponential(mean))))
+        # fieldAhead = full distance from the recovery spot to the giving team's
+        # goal line; a return of exactly this is a TD (the defensive-TD branch).
+        fieldAhead = spot + self.yardsToSafety
+        breakChance = min(RETURN_BREAKAWAY_MAX,
+                          RETURN_BREAKAWAY_BASE + max(0, spd - RETURN_SPEED_PIVOT) * RETURN_BREAKAWAY_PER_SPEED)
+        if fieldAhead > 0 and batched_randint(1, 100) <= breakChance:
+            # Breakaway: a long return (exponential tail) added on top — only goes
+            # the distance when the recovery was already deep, so TDs stay rare.
+            returnYards += int(round(np.random.exponential(RETURN_BREAKAWAY_MEAN)))
+        returnYards = max(0, min(returnYards, max(0, fieldAhead)))
+        play.returner = returner
+        play.returnYardage = returnYards
+        play.yardage = spot - returnYards
+
+
+    def _resolveBlockedKick(self):
+        """A blocked FG or punt is a live ball the defense recovers at the line
+        and may run back. The defense's distance to the kicking team's goal is
+        yardsToSafety, so a punting team (backed up, small yardsToSafety) is far
+        likelier to be taken back for a scoop-and-score than a FG team. Mirrors
+        the defensive-TD path for the score case. Sets play.blockedBy / returner
+        / returnYardage for PBP + WPA, then scores or flips possession and
+        broadcasts; the caller breaks the play loop afterward."""
+        from constants import (RETURN_BASE_YARDS, RETURN_SPEED_PIVOT, RETURN_YARDS_PER_SPEED,
+                               RETURN_BREAKAWAY_BASE, RETURN_BREAKAWAY_PER_SPEED, RETURN_BREAKAWAY_MAX,
+                               RETURN_BREAKAWAY_MEAN)
+        play = self.play
+        self.clockRunning = False
+        self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
+        defenders = [p for p in self.defensiveTeam.rosterDict.values()
+                     if p is not None and getattr(p, 'defensivePosition', None) is not None]
+        play.blockedBy = max(defenders, key=lambda d: float(getattr(d, 'defensiveRating', 60) or 60),
+                             default=None) if defenders else None
+        returner = max(defenders, key=lambda d: getattr(getattr(d, 'gameAttributes', None), 'speed', 70),
+                       default=None) if defenders else None
+        play.returner = returner
+
+        # Recovered at the line; run it back toward the kicking team's own goal.
+        spd = getattr(getattr(returner, 'gameAttributes', None), 'speed', 72) if returner else 72
+        mean = max(1.0, RETURN_BASE_YARDS + (spd - RETURN_SPEED_PIVOT) * RETURN_YARDS_PER_SPEED)
+        returnYards = max(0, int(round(np.random.exponential(mean))))
+        fieldAhead = self.yardsToSafety
+        breakChance = min(RETURN_BREAKAWAY_MAX,
+                          RETURN_BREAKAWAY_BASE + max(0, spd - RETURN_SPEED_PIVOT) * RETURN_BREAKAWAY_PER_SPEED)
+        if fieldAhead > 0 and batched_randint(1, 100) <= breakChance:
+            returnYards += int(round(np.random.exponential(RETURN_BREAKAWAY_MEAN)))
+        returnYards = max(0, min(returnYards, max(0, fieldAhead)))
+        play.returnYardage = returnYards
+
+        self.formatPlayText()
+        self.gameFeed.insert(0, {'play': play})
+        self.highlights.insert(0, {'play': play})
+        self.leagueHighlights.insert(0, {'play': play})
+
+        if fieldAhead > 0 and returnYards >= fieldAhead:
+            # Scoop-and-score (mirrors the defensive-TD branch; receiving team
+            # starts at its own 20 → yardsToEndzone 80).
+            self._addScore(self.defensiveTeam, 6)
+            self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
+            play.playResult = PlayResult.Touchdown
+            self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 3
+            play.isTd = True
+            play.scoreChange = True
+            play.homeTeamScore = self.homeScore
+            play.awayTeamScore = self.awayScore
+            if self.checkOvertimeEnd():
+                self.broadcastGameState(includeLastPlay=True)
+                return
+            self.broadcastGameState(includeLastPlay=True)
+            if self._shouldGoForTwo(self.defensiveTeam):
+                self._simulate2PointConversionPlay(self.defensiveTeam, self.offensiveTeam)
+            else:
+                self._simulateExtraPointPlay(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
+            self.turnover(self.defensiveTeam, self.offensiveTeam, 80)
+        else:
+            self.broadcastGameState(includeLastPlay=True)
+            self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety - returnYards)
+
+
     def formatPlayText(self):
         self._evaluateClutchChoke()
 
@@ -3477,7 +3583,17 @@ class Game:
                 else:
                     text = choice(sackList).format(self.play.passer.name, sackerName, self.play.yardage)
             elif self.play.isPassCompletion:
-                if self.play.targetSideline:
+                if getattr(self.play, 'isCheckdown', False):
+                    reason = getattr(self.play, 'checkdownReason', '')
+                    if reason == 'screen':
+                        verb = 'throws a screen to'
+                    elif reason == 'pressure':
+                        verb = 'dumps it off to'
+                    else:
+                        verb = 'checks down to'
+                    text = '{} {} {} for {} yards'.format(
+                        self.play.passer.name, verb, self.play.receiver.name, self.play.yardage)
+                elif self.play.targetSideline:
                     if self.play.passType is PassType.short:
                         text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineShortPassList), self.play.receiver.name, self.play.yardage)
                     elif self.play.passType is PassType.long:
@@ -3570,7 +3686,11 @@ class Game:
                         text = choice(midIncompleteList).format(self.play.passer.name, self.play.receiver.name)
         elif self.play.playType == PlayType.FieldGoal:
             kickerName = self.play.kicker.name
-            if self.play.isFgGood:
+            if getattr(self.play, 'isFgBlocked', False):
+                blockerName = getattr(getattr(self.play, 'blockedBy', None), 'name', None)
+                text = (f'{self.play.fgDistance}yd Field Goal by {kickerName} is BLOCKED by {blockerName}!'
+                        if blockerName else f'{self.play.fgDistance}yd Field Goal by {kickerName} is BLOCKED!')
+            elif self.play.isFgGood:
                 text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is good'
             else:
                 text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is no good'
@@ -3583,7 +3703,12 @@ class Game:
         elif self.play.playType is PlayType.Punt:
             punter = self.play.offense.rosterDict.get('k')
             punterName = punter.name if punter else 'Punter'
-            text = '{} punts'.format(punterName)
+            if getattr(self.play, 'isPuntBlocked', False):
+                blockerName = getattr(getattr(self.play, 'blockedBy', None), 'name', None)
+                text = ("{}'s punt is BLOCKED by {}!".format(punterName, blockerName)
+                        if blockerName else "{}'s punt is BLOCKED!".format(punterName))
+            else:
+                text = '{} punts'.format(punterName)
         elif self.play.playType is PlayType.Spike:
             qb = self.play.offense.rosterDict.get('qb')
             qbName = qb.name if qb else 'QB'
@@ -3609,6 +3734,30 @@ class Game:
                 else:
                     blitzPrefix = 'Blitz! '
                 text = blitzPrefix + text
+
+        # Defensive return tail: append run-back yardage, or call the pick-six /
+        # scoop-and-score. The house-call test mirrors the turnover branch (the ball
+        # reaching the giving team's own goal line). Called before the TD branch sets
+        # play.isTd, so detect the score by field geometry here.
+        returnYds = getattr(self.play, 'returnYardage', 0)
+        isBlockReturn = getattr(self.play, 'isFgBlocked', False) or getattr(self.play, 'isPuntBlocked', False)
+        if text and returnYds and (self.play.isInterception or self.play.isFumbleLost or isBlockReturn):
+            # House-call test mirrors the resolving branch: for a turnover the ball
+            # reaches the giving team's goal (yardsToSafety + adjusted yardage ≤ 0);
+            # for a blocked kick the return covers yardsToSafety from the line.
+            if isBlockReturn:
+                houseCall = returnYds >= self.yardsToSafety
+            else:
+                houseCall = (self.yardsToSafety + self.play.yardage) <= 0
+            # Blocked-kick text already ends in '!', so start a new sentence rather
+            # than tack on a comma clause (avoids 'BLOCKED!, returned ...').
+            endsBang = text.rstrip().endswith('!')
+            if houseCall:
+                tdText = 'Pick six!' if self.play.isInterception else 'Taken to the house!'
+                text += (' ' + tdText) if endsBang else ('. ' + tdText)
+            else:
+                ydText = 'returned {} yard{}'.format(returnYds, '' if returnYds == 1 else 's')
+                text += (' Defense ' + ydText + '.') if endsBang else (', ' + ydText)
 
         self.play.playText = text
 
@@ -3877,14 +4026,15 @@ class Game:
             if player:
                 player.sync_stats_dicts()
 
-        # Per-player: update confidence/determination, increment gamesPlayed, compute derived stats
+        # Per-player: update confidence/determination, increment gamesPlayed
+        # (regular season only), compute derived stats
         for player in self.homeTeam.rosterDict.values():
             if player:
-                player.postgameChanges()
+                player.postgameChanges(isRegularSeason=self.isRegularSeasonGame)
                 self._accumulatePostgameStats(player)
         for player in self.awayTeam.rosterDict.values():
             if player:
-                player.postgameChanges()
+                player.postgameChanges(isRegularSeason=self.isRegularSeasonGame)
                 self._accumulatePostgameStats(player)
 
     def postgame(self):
@@ -4726,6 +4876,13 @@ class Game:
                     self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
                     self.checkTwoMinuteWarning()
 
+                    if getattr(self.play, 'isFgBlocked', False):
+                        # Loose ball — defense recovers, may run it back.
+                        self._resolveBlockedKick()
+                        self._pendingPossessionChange = True
+                        lastPlayFormatted = True
+                        break
+
                     if self.play.isFgGood:
                         self._addScore(self.offensiveTeam, 3)
                         self._applyMomentumEvent(MOMENTUM_FG_MADE, self.offensiveTeam)
@@ -4769,6 +4926,19 @@ class Game:
 
                 if self.play.playType is PlayType.Punt:
                     self.play.playResult = PlayResult.Punt
+                    from constants import PUNT_BLOCK_ENABLED, PUNT_BLOCK_CHANCE
+                    if PUNT_BLOCK_ENABLED and batched_random() * 100 < PUNT_BLOCK_CHANCE:
+                        # Blocked punt — never travels; defense recovers at the line
+                        # (a backed-up punting team is prime scoop-and-score territory).
+                        self.play.isPuntBlocked = True
+                        playDuration = self.calculatePlayDuration(PlayType.Punt, False)
+                        self.consumeGameTime(playDuration)
+                        self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                        self.checkTwoMinuteWarning()
+                        self._resolveBlockedKick()
+                        self._pendingPossessionChange = True
+                        lastPlayFormatted = True
+                        break
                     self._applyMomentumEvent(MOMENTUM_PUNT, self.defensiveTeam)
                     kicker = self.offensiveTeam.rosterDict['k']
                     if kicker is None:
@@ -4847,6 +5017,10 @@ class Game:
 
                 # Handle turnovers
                 if self.play.isFumbleLost or self.play.isInterception:
+                    # Defender runs it back — adjusts play.yardage so the outcome
+                    # branches below resolve a normal return, a field-position flip,
+                    # or a pick-six / scoop-and-score.
+                    self._resolveDefensiveReturn()
                     self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
                     self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 2
                     if self.offensiveTeam is self.homeTeam:
@@ -5570,10 +5744,10 @@ class Game:
     # ─── Funding Morale ───────────────────────────────────────────────────
 
     def _applyFundingMorale(self, team):
-        """Apply a small pregame confidence/determination nudge based on team funding tier."""
-        from constants import FUNDING_MORALE_MODIFIER
-        fundingTier = getattr(team, 'fundingTier', 'MID_MARKET')
-        modifier = FUNDING_MORALE_MODIFIER.get(fundingTier, 0)
+        """Apply a small pregame confidence/determination nudge based on the
+        team's Locker Room level (Markets→Facilities; migrated levels reproduce
+        the old market-tier morale modifier)."""
+        modifier = team.facilityEffect('morale') if hasattr(team, 'facilityEffect') else 0
         if modifier == 0:
             return
         for player in team.rosterDict.values():
@@ -6182,6 +6356,14 @@ class Game:
                     qbCarries = qbRush.get('carries', 0)
                     qbRush['ypc'] = round(qbRush.get('yards', 0) / qbCarries, 1) if qbCarries > 0 else 0.0
                     result['rushing'] = qbRush
+                elif statsKey == 'rushing':
+                    # RB checkdowns/screens: the RB flattens 'rushing', so its
+                    # receiving line would otherwise be invisible. Attach it as a
+                    # nested block so the box score can list a pass-catching RB.
+                    rbRcv = dict(p.gameStatsDict['receiving'])
+                    rbRecs = rbRcv.get('receptions', 0)
+                    rbRcv['ypr'] = round(rbRcv.get('yards', 0) / rbRecs, 1) if rbRecs > 0 else 0.0
+                    result['receiving'] = rbRcv
                 # Per-player pre-game mental modifier breakdown — always
                 # included when snapshots exist, even if every stage netted
                 # zero. "Nothing is dragging this player" is itself useful
@@ -6664,24 +6846,28 @@ class Game:
             creditOff(getattr(play, 'kicker', None), offenseWpa)
         # Punt / Spike / Kneel / penalty: no single offensive actor — uncredited.
 
-        # ── Defense (unit-share) — scrimmage downs only ──
+        # ── Defense — scrimmage downs only ──
+        # Attribute the play's defensive swing to the PLAYER WHO MADE THE PLAY (the
+        # returner / sacker / interceptor / forced-fumbler / primary tackler), the
+        # same way offense credits the ball-handler — NOT split across the unit.
+        # Unit-sharing clustered the MVP ballot (every defender on a good-defense
+        # team inherited the swing regardless of individual production); per-player
+        # attribution doesn't. Every on-field defender still logs a SNAP so the
+        # "played defense" eligibility gate holds; only the playmaker banks the WPA.
+        # (A pass with no tackle and no turnover leaves the swing uncredited —
+        # per-defender coverage on an incompletion isn't tracked yet; box INT/PBU
+        # stats still capture coverage value.)
         if pt in (PlayType.Run, PlayType.Pass) and defense is not None:
             defWpa = -offenseWpa
             defenders = [p for p in defense.rosterDict.values()
                          if p is not None and getattr(p, 'defensivePosition', None) is not None]
-            if defenders:
-                playMaker = (getattr(play, 'sackedBy', None) or getattr(play, 'interceptedBy', None)
-                             or getattr(play, 'forcedFumbleBy', None) or getattr(play, 'tackledBy', None))
-                weights = {}
-                for d in defenders:
-                    w = max(1.0, float(getattr(d, 'defensiveRating', 60) or 60))
-                    if d is playMaker:
-                        w *= DEF_PLAYMAKER_BONUS
-                    weights[d] = w
-                totalW = sum(weights.values()) or 1.0
-                for d in defenders:
-                    d._gameDefWpa = float(getattr(d, '_gameDefWpa', 0.0)) + defWpa * (weights[d] / totalW)
-                    d._gameDefWpaSnaps = int(getattr(d, '_gameDefWpaSnaps', 0)) + 1
+            playMaker = (getattr(play, 'returner', None) or getattr(play, 'sackedBy', None)
+                         or getattr(play, 'interceptedBy', None)
+                         or getattr(play, 'forcedFumbleBy', None) or getattr(play, 'tackledBy', None))
+            if playMaker is not None and getattr(playMaker, 'defensivePosition', None) is not None:
+                playMaker._gameDefWpa = float(getattr(playMaker, '_gameDefWpa', 0.0)) + defWpa
+            for d in defenders:
+                d._gameDefWpaSnaps = int(getattr(d, '_gameDefWpaSnaps', 0)) + 1
 
     def broadcastGameState(self, includeLastPlay: bool = True, eventMessage: dict = None, isPossessionChange: bool = False, isFinalBroadcast: bool = False):
         """
@@ -8315,9 +8501,18 @@ class Play():
 
         probability = round(probability * 100)  # Convert to 5-96% integer range
 
+        # Rare block — the kick never gets off cleanly. Counts as a missed FG for
+        # the kicker; the game loop hands the loose ball to the defense (with a
+        # possible return) via _resolveBlockedKick.
+        from constants import FG_BLOCK_ENABLED, FG_BLOCK_CHANCE
+        self.isFgBlocked = FG_BLOCK_ENABLED and (batched_random() * 100 < FG_BLOCK_CHANCE)
+
         x = batched_randint(1,100)
 
-        if x <= probability:
+        if self.isFgBlocked:
+            self.isFgGood = False
+            self.kicker.addMissedFg(self.fgDistance, self.game.isRegularSeasonGame)
+        elif x <= probability:
             self.isFgGood = True
             self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
             if yardsToFG > self.kicker.gameStatsDict['kicking']['longest']:
@@ -8960,6 +9155,62 @@ class Play():
                 if tackler and hasattr(tackler, 'stat_tracker'):
                     tackler.stat_tracker.add_forced_fumble(isReg)
 
+    def _resolveRbCheckdown(self, tackler=None, reason='pressure', chargeAttempt=True) -> bool:
+        """The QB dumps a short pass to the RB — a safety valve when about to be
+        sacked ('pressure') or when no one downfield is open ('checkdown'),
+        instead of taking the sack or throwing it away. Resolves as a short
+        completion to the RB, reusing the receiving-credit methods (the RB stat +
+        fantasy plumbing already support receiving). `chargeAttempt` adds the pass
+        attempt — the pressure path hasn't booked one yet, the no-one-open path
+        already has. Returns False (no-op) if there's no RB to dump to."""
+        from constants import (RB_CHECKDOWN_BASE_YAC, RB_CHECKDOWN_YAC_PER_SPEED,
+                               RB_SCREEN_BASE_YAC)
+        rb = self.offense.rosterDict.get('rb')
+        if rb is None:
+            return False
+        isReg = self.game.isRegularSeasonGame
+        self.passType = PassType.short
+        self.receiver = rb
+        self.isPassCompletion = True
+        self.isCheckdown = True
+        self.checkdownReason = reason
+        self.insights.setdefault('pass', {})['checkdown'] = reason
+
+        if chargeAttempt:
+            self.passer.addPassAttempt(isReg)
+        self.passer.addCompletion(isReg)
+        rb.addRcvPassTarget(isReg)
+        rb.addReception(isReg)
+
+        # Short pass near the line + RB run-after-catch (speed/agility driven). A
+        # designed screen starts a touch behind the line but has blockers out front,
+        # so it carries more YAC upside than a hurried dump-off.
+        spd = rb.gameAttributes.speed
+        agi = rb.gameAttributes.agility
+        isScreen = reason == 'screen'
+        airYards = randint(-3, 1) if isScreen else randint(-1, 4)
+        baseYac = RB_SCREEN_BASE_YAC if isScreen else RB_CHECKDOWN_BASE_YAC
+        yacMean = max(1.0, baseYac + (spd - 78) * RB_CHECKDOWN_YAC_PER_SPEED)
+        yac = max(0, int(round(np.random.exponential(yacMean))) + int((agi - 80) / 25))
+        yards = max(-3, airYards + yac)
+        yards = min(yards, self.yardsToEndzone)
+        self.yardage = yards
+
+        # Reception credit (a TD, if it reaches the end zone, is credited by the
+        # game loop's pass-completion path like any other completion).
+        self.passer.addPassYards(yards, isReg)
+        rb.addReceiveYards(yards, isReg)
+        rb.addYAC(yac, isReg)
+        if yards >= 20:
+            rb.gameStatsDict['receiving']['20+'] += 1
+        if yards > rb.gameStatsDict['receiving']['longest']:
+            rb.gameStatsDict['receiving']['longest'] = yards
+        self.defense.gameDefenseStats['passYardsAlwd'] += yards
+        self.defense.gameDefenseStats['totalYardsAlwd'] += yards
+        if tackler and hasattr(tackler, 'stat_tracker'):
+            tackler.stat_tracker.add_tackle(isReg)
+        return True
+
     def calculatePressureImpact(self, rushDifferential: float) -> float:
         """
         Calculate throw quality degradation from defensive pressure.
@@ -9470,8 +9721,22 @@ class Play():
         # sacker (passRusher) becomes the tackler on the run.
         wouldBeSacked = sackRoll <= sackProbability
         qbScrambles = wouldBeSacked and self._qbEscapesSack()
-        if qbScrambles:
+        from constants import (RB_CHECKDOWN_ENABLED, RB_CHECKDOWN_PRESSURE_CHANCE,
+                               RB_SCREEN_ENABLED, RB_SCREEN_CHANCE)
+        hasRb = self.offense.rosterDict.get('rb') is not None
+        rbDumps = (wouldBeSacked and not qbScrambles and RB_CHECKDOWN_ENABLED and hasRb
+                   and batched_random() * 100 < RB_CHECKDOWN_PRESSURE_CHANCE)
+        # Designed screen: a called play on a clean dropback (no would-be sack).
+        screenCalled = (not wouldBeSacked and RB_SCREEN_ENABLED and hasRb
+                        and batched_random() * 100 < RB_SCREEN_CHANCE)
+        if screenCalled:
+            screenCov = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
+            self._resolveRbCheckdown(self._pickScrambleTackler(screenCov), reason='screen', chargeAttempt=True)
+        elif qbScrambles:
             self._resolveQbScramble(passRusher, reason='pressure')
+        elif rbDumps:
+            # Safety valve: dump it to the RB instead of taking the sack.
+            self._resolveRbCheckdown(passRusher, reason='pressure', chargeAttempt=True)
         elif wouldBeSacked:
             self.insights['pass']['wasSacked'] = True
             # Name the sacker based on blitz package
@@ -9681,12 +9946,21 @@ class Play():
                             self.targetSideline = False  # 30% chance to freelance
 
             # Handle throw away
+            from constants import RB_CHECKDOWN_ENABLED as _RBCK_EN, RB_CHECKDOWN_OPEN_CHANCE as _RBCK_OPEN
             if self.passType == PassType.throwAway and not mustThrow and self._qbTucksAndRuns():
                 # No one open: a mobile QB tucks and runs instead of throwing it
                 # away. The dropback became a rush, so un-charge the pass attempt
                 # booked at the top of this branch.
                 self.passer.stat_tracker.remove_pass_attempt(self.game.isRegularSeasonGame)
                 self._resolveQbScramble(self._pickScrambleTackler(coverageAssignments), reason='coverage')
+            elif (self.passType == PassType.throwAway and not mustThrow and _RBCK_EN
+                  and self.offense.rosterDict.get('rb') is not None
+                  and batched_random() * 100 < _RBCK_OPEN):
+                # No one open downfield: check it down to the RB rather than throw
+                # it away. The attempt was already booked at the top of this
+                # branch, so don't re-charge it.
+                self._resolveRbCheckdown(self._pickScrambleTackler(coverageAssignments),
+                                         reason='checkdown', chargeAttempt=False)
             elif self.passType == PassType.throwAway:
                 self.insights['pass']['wasSacked'] = False
                 self.insights['pass']['throwAway'] = True
@@ -9788,6 +10062,20 @@ class Play():
                         chokeDropBoost = abs(receiverPressureMod) * 2.0
                         catchProbs['dropProb'] = min(30, catchProbs['dropProb'] + chokeDropBoost)
 
+                # Desperation-deep INT dampener — a trailing team forced to chuck it
+                # downfield in garbage time was minting 9-INT games (the Floos Bowl, a
+                # 44-0 sim game). A genuine catch-up heave is a low-percentage prayer, but
+                # the defense is sitting deep and the throw is air-mailed, so it shouldn't
+                # get PICKED at the full contested-deep rate. Only downfield throws, only
+                # when forced (mustThrow) or trailing by 2+ scores. Normal-game deep shots
+                # (tied/leading) keep their full INT risk.
+                if self.passType in (PassType.deep, PassType.long, PassType.hailMary):
+                    offDeficit = (self.game.awayScore - self.game.homeScore) \
+                        if self.offense == self.game.homeTeam \
+                        else (self.game.homeScore - self.game.awayScore)
+                    if mustThrow or offDeficit >= 14:
+                        catchProbs['intProb'] = round(catchProbs['intProb'] * INT_DESPERATION_DAMPEN, 1)
+
                 # Roll for outcome
                 outcomeRoll = batched_randint(1, 100)
 
@@ -9801,7 +10089,14 @@ class Play():
 
                 # Check for interception first (bad throw to covered receiver)
                 if outcomeRoll <= catchProbs['intProb']:
-                    self.yardage = randint(-5, 10)
+                    # Interception caught at the throw's depth (air yards), clamped to
+                    # the end zone (a pick at the goal line → touchback via the turnover
+                    # branch). The defender's run-back is applied later by
+                    # _resolveDefensiveReturn off this recovery spot.
+                    from constants import RETURN_INT_SPOT_BY_DEPTH
+                    _intDepthKey = getattr(self.passType, 'name', str(self.passType))
+                    _intLo, _intHi = RETURN_INT_SPOT_BY_DEPTH.get(_intDepthKey, (0, 8))
+                    self.yardage = min(randint(_intLo, _intHi), self.yardsToEndzone)
                     self.passer.addInterception(self.game.isRegularSeasonGame)
                     self.passer.addMissedPass(self.game.isRegularSeasonGame)
                     self.passer.updateInGameConfidence(-.02)
@@ -10024,6 +10319,8 @@ class Play():
                             # instead of every strip being an automatic turnover.
                             self.isFumble = True
                             self.forcedFumbleBy = primaryTackler
+                            if hasattr(self.receiver, 'stat_tracker'):
+                                self.receiver.stat_tracker.add_receiving_fumble(isReg)
                             if hasattr(primaryTackler, 'stat_tracker'):
                                 primaryTackler.stat_tracker.add_forced_fumble(isReg)
                             rcvRecoveryMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)

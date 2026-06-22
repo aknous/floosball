@@ -27,6 +27,7 @@ _PASSIVE_GRANT_TYPES = frozenset({
     'card_effect',
     'admin_grant',
     'supporter_dividend',   # fan-income: Supporter dividend (fires on claim)
+    'showcase_dividend',    # weekly Showcase payout
 })
 
 
@@ -293,6 +294,27 @@ class CurrencyRepository:
     def addFunds(self, userId: int, amount: int, transactionType: str,
                  description: str = None, season: int = None, week: int = None) -> UserCurrency:
         """Add Floobits to a user's balance and log the transaction."""
+        # Endowment (income_boost powerup): a flat +25% on ANYTHING credited to the
+        # bank while it's active — fantasy, pick-em, showcase + supporter dividends,
+        # etc. Applied here at the single choke point so every income stream is
+        # boosted uniformly. Gated on positive, week-stamped income (refunds/spends
+        # go through refundFunds/spendFunds and never reach here). The boost is folded
+        # into `amount` so the balance, the logged tx, the achievement hooks and the
+        # toast all reflect the boosted value.
+        if amount > 0 and season and week:
+            try:
+                from constants import INCOME_BOOST_MULTIPLIER
+                from database.repositories.shop_repository import ShopPurchaseRepository
+                if ShopPurchaseRepository(self.session).getActiveIncomeBoost(userId, season, week):
+                    boosted = round(amount * INCOME_BOOST_MULTIPLIER)
+                    if boosted > amount:
+                        bonus = boosted - amount
+                        amount = boosted
+                        description = (f"{description} (+{bonus} Endowment)"
+                                       if description else f"+{bonus} Endowment")
+            except Exception:
+                pass  # never break a credit over the boost check
+
         currency = self.getOrCreate(userId)
         currency.balance += amount
         currency.lifetime_earned += amount
@@ -458,7 +480,7 @@ class PackTypeRepository:
             PackType(
                 name='humble',
                 display_name='Humble Pack',
-                cost=50,
+                cost=40,
                 cards_per_pack=3,
                 cards_kept=2,
                 guaranteed_rarity=None,
@@ -468,7 +490,7 @@ class PackTypeRepository:
             PackType(
                 name='grand',
                 display_name='Grand Pack',
-                cost=90,
+                cost=70,
                 cards_per_pack=5,
                 cards_kept=3,
                 guaranteed_rarity=None,
@@ -478,7 +500,7 @@ class PackTypeRepository:
             PackType(
                 name='exquisite',
                 display_name='Exquisite Pack',
-                cost=130,
+                cost=100,
                 cards_per_pack=7,
                 cards_kept=4,
                 guaranteed_rarity=None,
@@ -491,7 +513,7 @@ class PackTypeRepository:
         # Themed packs use the same rarity weights as Humble/Grand/Exquisite.
         # Value comes from the player / position filter, not rarity odds.
         themedRarityWeights = commonRarityWeights
-        themedCost = 75  # keep-2 targeted — a light premium over Humble, below Grand
+        themedCost = 60  # keep-2 targeted — a light premium over Humble, below Grand
         themedCardsPerPack = 3
         themedCardsKept = 2
 
@@ -553,7 +575,7 @@ class PackTypeRepository:
         defaults.append(PackType(
             name='themed_champion',
             display_name='Champion Pack',
-            cost=110,
+            cost=85,
             cards_per_pack=5,
             cards_kept=3,
             guaranteed_rarity='holographic',
@@ -565,7 +587,7 @@ class PackTypeRepository:
         defaults.append(PackType(
             name='themed_allpro',
             display_name='All-Pro Pack',
-            cost=110,
+            cost=85,
             cards_per_pack=5,
             cards_kept=3,
             guaranteed_rarity='holographic',
@@ -614,7 +636,7 @@ class PackTypeRepository:
             return 0
 
         themedRarityWeights = {'base': 75, 'holographic': 20, 'prismatic': 5, 'diamond': 1.5}
-        teamPackCost = 75  # match the other themed packs (themedCost above)
+        teamPackCost = 60  # match the other themed packs (themedCost above)
         added = 0
         for team in self.session.query(Team).filter(Team.id.in_(eligibleTeamIds)).all():
             name = f'themed_team_{team.id}'

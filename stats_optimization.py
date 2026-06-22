@@ -91,7 +91,8 @@ class ReceivingStats:
     longest: int = 0
     tds: int = 0
     twenty_plus: int = 0  # 20+
-    
+    fumbles: int = 0      # times stripped after a catch (see catch-strip in floosball_game)
+
     def reset(self):
         """Reset all stats to zero"""
         self.targets = 0
@@ -104,7 +105,8 @@ class ReceivingStats:
         self.longest = 0
         self.tds = 0
         self.twenty_plus = 0
-    
+        self.fumbles = 0
+
     def copy_from(self, other: 'ReceivingStats'):
         """Copy values from another ReceivingStats instance"""
         self.targets = other.targets
@@ -117,6 +119,7 @@ class ReceivingStats:
         self.longest = other.longest
         self.tds = other.tds
         self.twenty_plus = other.twenty_plus
+        self.fumbles = other.fumbles
 
 @dataclass
 class KickingStats:
@@ -273,7 +276,8 @@ class OptimizedPlayerStats:
                 'yac': self.receiving.yac,
                 'longest': self.receiving.longest,
                 'tds': self.receiving.tds,
-                '20+': self.receiving.twenty_plus
+                '20+': self.receiving.twenty_plus,
+                'fumbles': self.receiving.fumbles
             },
             'kicking': {
                 'fgAtt': self.kicking.fgAtt,
@@ -355,7 +359,8 @@ class OptimizedPlayerStats:
             stats.receiving.longest = rec.get('longest', 0)
             stats.receiving.tds = rec.get('tds', 0)
             stats.receiving.twenty_plus = rec.get('20+', 0)
-        
+            stats.receiving.fumbles = rec.get('fumbles', 0)
+
         # Load kicking stats (if present)
         if 'kicking' in data:
             k = data['kicking']

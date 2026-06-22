@@ -85,13 +85,22 @@ CLOSE_GAME_SCORE_THRESHOLD = 8  # Point differential considered a close game for
 
 # Interception model — three independent pick paths in calculateCatchProbability.
 # Each K scales one path's contribution before they combine as independent
-# risks. The combined league INT rate is ~linear in these. The prior values
-# (0.22/0.26/0.08) drifted the rate to ~2.9% per attempt (above the NFL ~2.3%
-# target); scaled down ~14% to land near ~2.5% — still a touch above NFL, but
-# back in a realistic band.
-INT_BAD_READ_K = 0.19    # QB throws into coverage (actual openness × coverage)
-INT_BAD_THROW_K = 0.22   # errant ball (throw quality), gated by defender proximity
-INT_DEF_PLAY_K = 0.07    # above-average DB jumps a contested throw
+# risks. History: 0.22/0.26/0.08 ran ~2.9%; 0.19/0.22/0.07 still ran 2.74% over prod
+# season 10; a 16% trim (0.16/0.185/0.06) OVERSHOT to 1.85% on a developed-league sim
+# (the rate is steeper-than-linear in the Ks). Settled at a ~8% trim from the 0.19
+# baseline to land ~2.3% per attempt. The blowout INT-fests are handled separately by
+# INT_DESPERATION_DAMPEN below — the base rate shouldn't be flattened to fix the tail.
+INT_BAD_READ_K = 0.175   # QB throws into coverage (actual openness × coverage)
+INT_BAD_THROW_K = 0.20   # errant ball (throw quality), gated by defender proximity
+INT_DEF_PLAY_K = 0.065   # above-average DB jumps a contested throw
+
+# Desperation-deep INT dampener — a trailing team forced to chuck it deep in garbage
+# time was minting 9-INT games (the Floos Bowl, a 44-0 sim game). A genuine desperation
+# heave is a low-percentage prayer, but it shouldn't get PICKED at the full contested-
+# deep rate either (the defense is sitting back, the throw is just air-mailed). When a
+# pass is a deep/long throw AND the offense is in desperation mode (trailing late /
+# mustThrow), scale the computed INT probability by this factor. 1.0 = no dampening.
+INT_DESPERATION_DAMPEN = 0.55
 
 # Hail mary: a desperation end-zone heave into a crowd should connect only as a
 # rare miracle. The normal two-phase catch model lands a contested deep ball
@@ -113,18 +122,35 @@ CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
 WPA_PASS_QB_SHARE = 0.6      # completed pass: QB share of the WPA (receiver gets the remainder)
 DEF_PLAYMAKER_BONUS = 2.0    # defensive-WPA share weight multiplier for the tagged defender on a play
 
-# MVP + All-Pro defense value-metric blend weights (z-scores, pooled within position group).
-# MVP total value = offenseScore + defValue, where:
-#   offenseScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ
-#   defValue     = MVP_DEF_WPA_WEIGHT*defWpaZ + MVP_DEF_BOX_WEIGHT*defBoxZ
-MVP_PERF_WEIGHT = 0.7        # season performance rating (box-score percentile) share of offense score
-MVP_WPA_WEIGHT = 0.3         # per-snap offensive WPA share of offense score
-MVP_DEF_WPA_WEIGHT = 0.7     # defensive WPA share of defensive value (carries coverage box can't see)
-MVP_DEF_BOX_WEIGHT = 0.3     # defensive box-stat share of defensive value (rewards splashy plays)
+# MVP + All-Pro value metric (flat z-score blend, pooled within position group):
+#   mvpScore = MVP_PERF_WEIGHT*perfZ + MVP_WPA_WEIGHT*offenseWpaZ + MVP_DEF_WPA_WEIGHT*defWpaZ
+# perfZ = z of the OVERALL (two-way) performance rating, which already composites
+# offensive + defensive PRODUCTION (see below), so defensive production is in perfZ
+# and there's no separate box term. The only standalone defensive term is the
+# defensive clutch WPA (defWpaZ). Both WPA terms are INDIVIDUAL — offense to the
+# ball-handler, defense to the playmaker (floosball_game _attributeWpa) — so neither
+# clusters the ballot the way the old team-shared defensive WPA did. Defense is
+# secondary (it's 30% of the perf composite + a small WPA term), so offense leads
+# but a two-way standout climbs, and All-Pro (top mvpScore per slot) reflects defense.
+# Players are two-way, so the OVERALL performance rating composites offensive and
+# defensive production (offense-dominant); MVP/All-Pro run off it.
+PERF_OFFENSE_WEIGHT = 0.7    # offensive-production share of the overall performance rating
+PERF_DEFENSE_WEIGHT = 0.3    # defensive-production share of the overall performance rating
+# Unified MVP (flat): production composite (two-way, via perfZ of the OVERALL rating)
+# + clutch WPA on each side. Defensive production lives inside perfZ now (via the
+# overall composite), so there's no separate box defValue term — only the clutch
+# defensive WPA remains, as a secondary term.
+MVP_PERF_WEIGHT = 0.7        # overall (two-way) production-composite z share
+MVP_WPA_WEIGHT = 0.3         # per-snap OFFENSIVE WPA share (offensive clutch)
+MVP_DEF_WPA_WEIGHT = 0.2     # individual DEFENSIVE WPA share (defensive clutch; secondary)
+# Per-defensive-group box weights (DEF_BOX_WEIGHTS, below) now feed the DEFENSIVE
+# performance rating; defValue's box term and the old MVP_DEF_WEIGHT/MVP_DEF_BOX_WEIGHT
+# are retired by the unify.
 
 # Per-defensive-position weights for the box-stat composite (z-scored within
-# group). Coverage value is invisible to the box, so CB/S lean on ints/PBUs and
-# the WPA term carries the rest.
+# group) — the box (production) term of defValue, blended with individual
+# defensive WPA. Coverage value is invisible to the box, so CB/S lean hard on
+# ints/PBUs to capture it (and the WPA term picks up clutch coverage swings).
 DEF_BOX_WEIGHTS = {
     'DE': {'sacks': 3.0, 'tfl': 2.0, 'forcedFumbles': 2.0, 'tackles': 0.5, 'ints': 1.0, 'passBreakups': 0.5},
     'LB': {'tackles': 1.0, 'tfl': 1.5, 'sacks': 2.0, 'forcedFumbles': 2.0, 'ints': 1.5, 'passBreakups': 1.0},
@@ -164,6 +190,9 @@ RECEIVER_MATCHUP_SCALE = 50.0   # Divisor when computing receiver-vs-coverage ma
 COACH_ATTR_NEUTRAL = 80         # Attribute value with zero effect (midpoint of 60-100 range)
 COACH_ATTR_RANGE = 20           # Half-range used to normalise coach attributes to [-1, 1]
 COACH_OFFENSIVE_MIND_FLOOR = 60 # offensiveMind below this value gives zero matchup weighting
+# Flavor: chance a newly-generated coach reuses a RETIRED player's name (a former
+# player returning as a coach), instead of drawing a fresh name from the pool.
+COACH_RETIRED_NAME_CHANCE = 0.30
 
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
@@ -188,8 +217,8 @@ WEEKLY_LEADERBOARD_TOP_PCT = 0.25
 # Floobits). A sim-season plays out in ~1 real week, so 14 days ≈ "sign in about
 # once every season or two" is enough to keep earning. Tunable.
 SUPPORTER_ACTIVITY_WINDOW_DAYS = 14
-SUPPORTER_BASE_DIVIDEND = 6           # flat Floobits/week while your team is active
-SUPPORTER_WIN_BONUS = 4               # base bonus the weeks your team wins
+SUPPORTER_BASE_DIVIDEND = 10          # flat Floobits/week while your team is active
+SUPPORTER_WIN_BONUS = 5               # base bonus the weeks your team wins
 # Win-quality add-ons, stacked onto the win bonus (the whole dividend is then
 # multiplied by Tenure × Funding, so great weeks for long-haul patrons pay big).
 # Most are read straight off the game (scores, quarter scores, playoff flag).
@@ -202,7 +231,7 @@ SUPPORTER_STREAK_BONUS_CAP = 6        # ...capped here (a 7+ win streak maxes it
 SUPPORTER_UNDERDOG_WIN_BONUS = 3      # added on an upset win (beat a higher-ELO opponent — same rule as the UPSET badge / house_money card)
 # Playoff wins pay more, scaled by round (1=Rd1, 2=Rd2, 3=League Championship,
 # 4=Floos Bowl). Keyed by round number = week - 28.
-SUPPORTER_PLAYOFF_WIN_BONUS = {1: 4, 2: 6, 3: 8, 4: 12}
+SUPPORTER_PLAYOFF_WIN_BONUS = {1: 5, 2: 10, 3: 15, 4: 25}
 SUPPORTER_TEAM_CHANGE_TENURE_KEEP = 0.5  # fraction of tenure kept on a team change (soft reset)
 # Patron rank — your share of your team's funding, applied ON TOP of loyalty.
 # Percentile thresholds (top X% of a team's contributors this season); the single
@@ -273,23 +302,23 @@ ROSTER_MIN_PLAYERS = 3
 #   SCALE     — overall payout scale (raises floor + ceiling together)
 #   EXPONENT  — taper aggressiveness (closer to 1.0 = less taper)
 # Curve tightened after card rebalance pushed typical hands to 1k-3k FP,
-# bumped ~33% in v0.16.1, then nudged up another ~12% next-season — payouts
-# still felt a touch thin against pack/upgrade prices. Shape (exponent)
-# unchanged so the high-end taper still prevents runaway whales while
-# floors and middle play benefit too. Sample profile (default):
-#   100 FP →  17 F
-#   500 FP →  61 F
-#  1000 FP → 105 F
-#  3000 FP → 247 F
-WEEKLY_FP_FLOOBIT_SCALE = 0.48
+# bumped ~33% in v0.16.1, then ~2.3x next-season: actually playing fantasy was
+# earning ~830 F/season vs ~5k from parking Floobit-output cards, so FP play
+# wasn't a viable income path. Shape (exponent) unchanged so the high-end taper
+# still prevents runaway whales while floors and middle play benefit too.
+# Floobit-output cards stay as-is (a deliberate earn-over-FP strategy); this
+# just makes FP play a real alternative. Sample profile (default):
+#   100 FP →  40 F
+#   500 FP → 140 F
+#  1000 FP → 241 F
+#  3000 FP → 565 F
+WEEKLY_FP_FLOOBIT_SCALE = 1.10
 WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
-# Endowment (income_boost powerup) replaces the curve with a flatter one.
-# Less taper = monster weeks pay more; low weeks pay roughly the same.
-# Same cost (100 F). Sits ~10% above standard at modest play, ~50% above
-# at heavy play, breaking even around 1k FP/week × 4 weeks. Bumped
-# proportionally with the standard curve.
-WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.30
-WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.87
+# Endowment (income_boost powerup): a flat +25% on ANYTHING credited to the bank
+# while it's active — fantasy, pick-em, showcase + supporter dividends, etc. Applied
+# once at the choke point (CurrencyRepository.addFunds), so every income stream is
+# boosted uniformly (not just fantasy). 1.25 = +25%.
+INCOME_BOOST_MULTIPLIER = 1.25
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
 
@@ -437,6 +466,59 @@ SCOUTING_BANDS = [
     (0, 15),    # <65: ±15
 ]
 FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 'SMALL_MARKET': -3}
+
+# ============================================================================
+# FACILITIES  (Markets→Facilities system — see docs/MARKETS_FACILITIES_PLAN.md)
+# ============================================================================
+# Fan-funded, fan-voted team facilities replace the passive market-tier perks.
+# Each facility drives an effect the sim ALREADY applies (the FUNDING_* dicts
+# above); the per-level effect curves are calibrated so the one-time
+# tier→facilities MIGRATION reproduces today's perks with no nerf:
+#   MEGA_MARKET→Lv4, LARGE_MARKET→Lv3, MID_MARKET→Lv2, SMALL_MARKET→Lv1.
+# Read the level→effect tables below at those indices to confirm parity.
+# The lone deliberate change: SMALL-market PENALTIES become neutral — a built
+# facility can't be a penalty, so the floor rises from "penalized" to "neutral,
+# just hasn't built much yet" (Lv0/Lv1 = 0). Lv5 is a new above-MEGA ceiling.
+# Curves are back-loaded (real effects at Lv3+) to hold migration parity; the
+# smoothing of low levels is a tuning task (see plan doc §14).
+FACILITY_MAX_LEVEL = 5
+
+# facility_key -> {name, effect (which sim effect it drives), levels[0..5]}
+FACILITY_CATALOG = {
+    'training':    {'name': 'Training Facility',    'effect': 'dev_bonus',
+                    'levels': [0, 0.4, 0.8, 1.2, 1.6, 2.0]},             # player-dev bias; every level a real step (resolved to int probabilistically in apply_offseason_training)
+    'locker_room': {'name': 'Locker Room',          'effect': 'morale',
+                    'levels': [0.0, 0.0, 0.0, 0.0025, 0.0075, 0.01]},    # pregame morale nudge (cf FUNDING_MORALE_MODIFIER)
+    'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
+                    'levels': [0.0, 0.0, 0.0, 0.15, 0.30, 0.35]},        # weekly fatigue-gain reduction (cf FUNDING_FATIGUE_REDUCTION)
+    'scouting':    {'name': 'Scouting Department',    'effect': 'scouting_bonus',
+                    'levels': [0, 0, 0, 3, 5, 7]},                       # rookie scouting accuracy (cf FUNDING_SCOUTING_BONUS)
+    'stadium':     {'name': 'Stadium',               'effect': 'home_morale',
+                    'levels': [0.0, 0.001, 0.002, 0.003, 0.004, 0.005]}, # NEW — everyone starts Lv0; effect unwired until a later phase
+}
+
+# Migration: starting level for the four legacy-perk facilities by current tier.
+MIGRATION_TIER_START_LEVEL = {'MEGA_MARKET': 4, 'LARGE_MARKET': 3, 'MID_MARKET': 2, 'SMALL_MARKET': 1}
+MIGRATION_STADIUM_START_LEVEL = 0  # new facility nobody has built yet
+
+# Appeal (FA-draft attractiveness) = weighted sum of facility levels. Flat
+# weights to start; higher Appeal drafts free agents first. Tune later.
+APPEAL_LEVEL_WEIGHTS = {k: 1.0 for k in FACILITY_CATALOG}
+
+# ---- Facility economy (share-denominated costs; plan doc §5) ----
+# Costs/upkeep are denominated in SHARES, not absolute Floobits, so they
+# self-scale with the economy: 1 share = (total Floobits distributed to users
+# last season) / num_teams. Indexed by level (0..5): the cost to REACH a level
+# and the per-season cost to MAINTAIN it. Lv0 = free (unbuilt). At S10's ~6,000F
+# share these read as Lv5 upgrade ≈ 5,100F, Lv5 upkeep ≈ 1,800F/season; full-max
+# (5 facilities × Lv5) ≈ 9,000F/season upkeep. Tune via the economy harness.
+FACILITY_UPGRADE_COST_SHARES = [0.0, 0.05, 0.10, 0.20, 0.42, 0.85]  # cost to reach level i
+# Upkeep is steep at the top so the soft cap bites: an average-income team
+# (≈1 share of income) sustains only a partial/specialized build; a whale
+# (≈2.5×) can just hold a full max (engage-or-decay). Tuned via the harness.
+FACILITY_UPKEEP_SHARES       = [0.0, 0.005, 0.015, 0.045, 0.115, 0.400]  # upkeep to hold level i
+# A facility that ends the season with upkeep unmet slips this many levels.
+FACILITY_DECAY_LEVELS = 1
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
@@ -473,6 +555,19 @@ RETIREMENT_CHANCE_EARLY = 25        # % chance (yearsPast >= EARLY)
 # longevity and still playing, they retire even mid-contract.
 RETIREMENT_MIDCONTRACT_YEARS_PAST = 3
 
+# ---- Locker-room attitude drift (the toxic <-> leader axis) ----
+# Attitude drifts with team record (seasonManager._driftAttitudes): winning trends
+# a roster toward Leader, losing toward Toxic. To stop the league from polarizing
+# to the poles over many seasons (which empties the middle and turns the FA pool
+# into a toxicity sink), a weak MEAN-REVERSION pulls every player back toward
+# neutral each week, proportional to their distance from it. The reversion is
+# weaker than the active win/loss push, so a genuinely losing team still sours --
+# just slower -- while a soured player on a mid-tier team or in the FA pool recovers
+# (~+0.4/week at attitude 40 -> Sour in a season, Steady in two).
+ATTITUDE_NEUTRAL = 80              # resting attitude the reversion pulls toward
+ATTITUDE_REVERT_RATE = 0.01       # weekly reversion = this fraction of distance-to-neutral
+ATTITUDE_DRIFT_MAGNITUDE = 3      # win/loss drift multiplier on |winPct-0.5| (was 4)
+
 # ---- Roster Supply Floor ----
 # After retirements are known, guarantee the league has enough living players at
 # EACH position to fill every roster slot (24 teams × {QB1,RB1,WR2,TE1,K1}),
@@ -494,6 +589,14 @@ FATIGUE_RESILIENCE_SCALE = 0.8      # How much resilience reduces fatigue rate
 FATIGUE_RESILIENCE_CEILING = 1.4    # Max multiplier for low-resilience players
 FATIGUE_PHYSICAL_IMPACT = 0.6       # Was 1.0 — softened so fatigue is less punishing
 FATIGUE_MENTAL_IMPACT = 0.2         # Was 0.3 — softened to match
+
+# Playoff bye reprieve: the top-2 seeds rest through round 1, so their players
+# recover a little fatigue while everyone else takes another week of wear.
+# Modest by design ("a bit") and scaled by market tier — richer clubs have the
+# facilities/medical staff to recover more (same logic as FUNDING_FATIGUE_REDUCTION).
+# Each value is a flat fatigue reduction (gauge is 0..1, ~0.0025 gained/week),
+# applied once after round 1 and floored at 0.
+PLAYOFF_BYE_FATIGUE_RECOVERY = {'MEGA_MARKET': 0.012, 'LARGE_MARKET': 0.009, 'MID_MARKET': 0.006, 'SMALL_MARKET': 0.004}
 
 # Mental / form / fatigue modifiers can compound multiplicatively into a
 # heavy reduction on a high-rated player's effective rating. The soft floor
@@ -531,6 +634,56 @@ QB_SCRAMBLE_FUMBLE_CHANCE = 3         # % a scramble ends in a fumble
 # QB tucks and runs. This is the dominant scramble path; agility gates the decision.
 QB_SCRAMBLE_OPEN_RUN_PER_AGILITY = 3.0  # % tuck-and-run chance per agility pt above the threshold
 QB_SCRAMBLE_OPEN_RUN_MAX = 75           # cap on the tuck-and-run chance (% of would-be throwaways)
+
+# ── Defensive returns (INT / fumble run-backs) ──────────────────────────────
+# After a turnover the recovering defender runs it back. Return distance is
+# SPEED-driven (small mean, exponential tail); a speed-scaled breakaway can take
+# it a long way and, if it clears the field, produces a pick-six / scoop-and-score
+# (the existing defensive-TD branch fires off the resulting field position). The
+# geometry self-limits TDs — a house-call needs a near-full-field return. Flip
+# RETURN_ENABLED to disable. Tune the breakaway constants to set the pick-six rate.
+RETURN_ENABLED = True
+RETURN_BASE_YARDS = 4.0          # mean return yards at the speed pivot
+RETURN_SPEED_PIVOT = 80          # speed at which base yards apply
+RETURN_YARDS_PER_SPEED = 0.3     # mean yards added per speed point above the pivot
+RETURN_BREAKAWAY_BASE = 1.5      # % base breakaway (long return) chance
+RETURN_BREAKAWAY_PER_SPEED = 0.15  # added breakaway % per speed point above the pivot
+RETURN_BREAKAWAY_MAX = 8         # cap on breakaway chance
+RETURN_BREAKAWAY_MEAN = 18       # mean EXTRA yards a breakaway adds (exponential tail);
+                                 # added on top of the base return, then clamped to the
+                                 # field — so a breakaway rarely reaches the end zone
+                                 # unless the recovery was already deep (keeps TDs rare)
+RETURN_INT_SPOT_BY_DEPTH = {     # where an INT is caught (air yards), by pass depth
+    'short': (0, 6), 'medium': (4, 14), 'long': (10, 28), 'hailMary': (15, 45),
+}
+
+# ── Blocked kicks (FG / punt) ───────────────────────────────────────────────
+# Rare special-teams blocks. The defense recovers at the line of scrimmage and
+# can run it back (reuses the return model above). Geometry makes blocked-punt
+# scoop-and-scores likelier than blocked FGs — a punting team is backed up, so
+# the return to the end zone is short. Tuned for a handful of blocks per league
+# season; flip the ENABLED flags to disable.
+FG_BLOCK_ENABLED = True
+FG_BLOCK_CHANCE = 0.25     # % of FG attempts blocked
+PUNT_BLOCK_ENABLED = True
+PUNT_BLOCK_CHANCE = 0.1    # % of punts blocked (punts are far more frequent than FGs)
+
+# ── RB pass option (safety-valve checkdown) ─────────────────────────────────
+# RBs catch passes: a dump-off to the back when the QB is about to be sacked, or
+# when no one downfield is open (instead of throwing it away). Resolves as a short
+# completion to the RB — the RB stat + fantasy plumbing already supports receiving,
+# so pass-catching backs get realistic receiving production. Keep volume modest (a
+# few catches a game). Flip RB_CHECKDOWN_ENABLED to disable.
+RB_CHECKDOWN_ENABLED = True
+RB_CHECKDOWN_PRESSURE_CHANCE = 45   # % of would-be sacks dumped to the RB instead
+RB_CHECKDOWN_OPEN_CHANCE = 55       # % of "no one open" dropbacks checked down to the RB
+RB_CHECKDOWN_BASE_YAC = 3.5         # mean YAC on a dump-off at RB speed pivot 78
+RB_CHECKDOWN_YAC_PER_SPEED = 0.12   # mean YAC added per RB speed point above 78
+# Designed RB screen — a called play (not a pressure reaction) on clean dropbacks.
+# Blockers set up out front, so screens carry more YAC upside than a dump-off.
+RB_SCREEN_ENABLED = True
+RB_SCREEN_CHANCE = 1                # % of clean (non-pressure) dropbacks that are a screen
+RB_SCREEN_BASE_YAC = 5.5           # mean YAC on a screen at RB speed pivot 78
 
 # Power-Up Shop
 POWERUP_EXTRA_SWAP = {
@@ -574,16 +727,13 @@ POWERUP_FORTUNES_FAVOR = {
 POWERUP_INCOME_BOOST = {
     "slug": "income_boost",
     "displayName": "Endowment",
-    "description": "Increases your weekly fantasy Floobit payout for 4 weeks.",
+    "description": "+25% on all Floobit income for 4 weeks — fantasy, pick-em, showcase, and supporter dividends.",
     "price": 100,
     "durationWeeks": 4,
     "seasonLimit": 2,
-    # Endowment swaps the SCALE/EXPONENT pair. The flatter curve trades a
-    # small dip on low-FP weeks for a meaningful bump on monster weeks
-    # (e.g. 500 FP: 61 F normal → 70 F endowment; 1000 FP: 105 → 132;
-    # 5000 FP: 423 → 596).
-    "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
-    "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
+    # Flat +25% on anything credited while active, applied at the bank
+    # (CurrencyRepository.addFunds). See INCOME_BOOST_MULTIPLIER.
+    "boostMultiplier": INCOME_BOOST_MULTIPLIER,
 }
 
 POWERUP_CATALOG = {
@@ -597,13 +747,13 @@ POWERUP_CATALOG = {
 
 # Shop reroll (not a powerup — lives in the Daily Selection section)
 SHOP_REROLL_BASE_COST = 10
-SHOP_REROLL_COST_INCREMENT = 10  # Each reroll costs 10 more than the last
+SHOP_REROLL_COST_INCREMENT = 5   # Each reroll costs 5 more than the last
 
-# Themed pack rotation reroll — pricier than featured-card reroll because
-# the rotation pool now includes Grand (350F) and Exquisite (750F) packs.
-# Rerolling for an exquisite roll should be a real commitment.
-THEMED_PACK_REROLL_BASE_COST = 50
-THEMED_PACK_REROLL_COST_INCREMENT = 30
+# Themed pack rotation reroll — pricier than the featured-card reroll because
+# the rotation pool includes the higher pack tiers. Rerolling for a premium pack
+# should be a real commitment, but not a wall.
+THEMED_PACK_REROLL_BASE_COST = 35
+THEMED_PACK_REROLL_COST_INCREMENT = 20
 
 # ---- Card Upgrade Tiers (Level Up) ----
 # Cards level I->IV (tier 1->4) by feeding ONE same-effect duplicate + Floobits.
@@ -631,11 +781,13 @@ CARD_TIER_DIVIDEND_FLOOBITS = {
     "diamond":     {1: 0, 2: 18, 3: 34, 4: 50},
 }
 # Floobit cost to perform the upgrade INTO a tier (I->II uses [2], etc.), before
-# the edition multiplier. Steep + escalating so maxing is a multi-week sink, not
-# a day-one rush (the same-effect duplicate requirement is the primary gate).
-CARD_TIER_UPGRADE_COST = {2: 72, 3: 225, 4: 540}
+# the edition multiplier. Escalating so maxing is a multi-week sink (the
+# same-effect duplicate requirement is the primary gate), but cut next-season
+# alongside the broader economy pass — a Diamond T4 was ~1080 F. Mults chosen so
+# base×mult lands on a round 5 at every tier (e.g. Diamond: 80/240/560).
+CARD_TIER_UPGRADE_COST = {2: 50, 3: 150, 4: 350}
 CARD_TIER_EDITION_COST_MULT = {
-    "base": 1.0, "holographic": 1.25, "prismatic": 1.6, "diamond": 2.0,
+    "base": 1.0, "holographic": 1.2, "prismatic": 1.4, "diamond": 1.6,
 }
 
 # ─── Card Showcase (seasonal collection payout) ──────────────────────────────
@@ -647,28 +799,49 @@ SHOWCASE_SLOTS = 8
 # Per-card base = EDITION_POINTS × recency + Σ CLASSIFICATION_POINTS, ×tier mult.
 SHOWCASE_EDITION_POINTS = {"base": 1, "holographic": 4, "prismatic": 12, "diamond": 30}
 SHOWCASE_CLASSIFICATION_POINTS = {"rookie": 5, "all_pro": 10, "champion": 12, "mvp": 20}
-# Recency: newer cards pay more. recency = max(FLOOR, 1 − STEP × seasonsOld).
-SHOWCASE_RECENCY_FLOOR = 0.25
-SHOWCASE_RECENCY_STEP = 0.25
+# Recency: newer cards pay more, keyed by card age (seasons old). Newest score full;
+# older cards taper but stay meaningfully valuable (the decline was too aggressive
+# before — old cards fell off a cliff). Ages past the table use the floor. Non-linear
+# on purpose (a flat per-season step can't do this).
+SHOWCASE_RECENCY_BY_AGE = {0: 1.0, 1: 0.9, 2: 0.75, 3: 0.6}
+SHOWCASE_RECENCY_FLOOR = 0.5   # 4+ seasons old — keep a strong floor so old cards still count
 # Upgrade tier lifts a card's showcase value: ×(1 + (tier−1) × THIS).
 SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
-# Set bonuses ADD into one multiplier: score = Σ cardPoints × (1 + Σ bonuses),
-# with the bonus sum capped here so stacked sets can't run away.
-SHOWCASE_MAX_SET_BONUS = 2.5
+# Set bonuses are FLAT completion rewards that ADD into one multiplier:
+# score = Σ cardPoints × (1 + Σ bonuses), with the sum capped here so stacked sets
+# can't run away. Card quality is already priced into cardPoints (edition/recency/
+# tier), so a completed set pays its full bonus regardless of the editions in it.
+SHOWCASE_MAX_SET_BONUS = 1.5
 # Score → grade (first threshold the score meets, scanning high to low).
-# Calibrated via tune_showcase.py Monte Carlo (recency-1.0 best-8 showcases):
-# casual≈D, regular≈C, dedicated≈B, whale≈A, top-few-%-whale≈S.
+# Calibrated against target card-quality profiles + the real season-9 showcases.
+# The top grades demand QUALITY (fresh, high-edition, decorated cards), not
+# volume or holo set-stacking — edition-scaled sets + steep recency see to that:
+#   F/D/C  random accumulation (casual→F/D, regular→D, dedicated/whale→C)
+#   B      a deliberately curated showcase, even of holos (full sets)
+#   A      a strong fresh showcase (8 decorated prismatics, 8 bare diamonds,
+#          or a few decorated diamonds among prismatics)
+#   S      ~5-6+ fresh decorated diamonds (compound classifications) — the
+#          collector trophy, reached via the collectible shop over time
+# S is set so a strong-but-imperfect diamond showcase clears it (not a perfect
+# 8/8), since only ~18 players can ever be a decorated diamond — assembling 8
+# fresh would be unattainable. Re-featuring last season's diamonds (all 1 yr
+# old, ×0.85) still grades well; two seasons old falls off (the recency cliff).
 SHOWCASE_GRADE_THRESHOLDS = [
-    ("S", 270), ("A", 175), ("B", 115), ("C", 70), ("D", 35), ("F", 0),
+    ("S", 700), ("A", 480), ("B", 240), ("C", 120), ("D", 45), ("F", 0),
 ]
-# Grade → flat Floobit payout at season end.
-# Calibrated next-season to read as a strong second income against a season of
-# fantasy, without eclipsing it (showcase pays once/season and clears, and the
-# permanent-vault cost — vaulted cards can't be equipped/sold — justifies it).
-# S capped at 3000 (a first pass at 5000 ran too hot). Old table was
-# 50/120/250/450/800, below even a casual fantasy season. Re-tune via
+# Grade is now a legible LABEL only (it no longer sets the payout) — the showcase
+# pays a WEEKLY DIVIDEND scaled continuously by the live score, not a flat lump.
+#
+# Weekly dividend = round(SHOWCASE_DIVIDEND_RATE × finalScore), paid every regular-
+# season week (28 weeks) off whatever is featured that week. Calibrated so a
+# sustained top showcase earns roughly the OLD end-of-season lump across a full
+# season, but the top end is now rewarded above the old flat cap (a perfect S
+# out-earns a barely-S one). Reference points at this rate (×28 weeks, if held all
+# season): D-entry (45)≈164F, C-entry (120)≈437F, B-entry (240)≈874F, A-entry
+# (480)≈1747F, S-entry (700)≈2548F, perfect-ish (~1000)≈3640F. Realized totals run
+# lower since the showcase is empty/partial early-season. Re-tune via
 # tune_showcase.py / simcheck.
-SHOWCASE_GRADE_PAYOUT = {"F": 0, "D": 250, "C": 600, "B": 1200, "A": 2000, "S": 3000}
+SHOWCASE_DIVIDEND_RATE = 0.13
 
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7

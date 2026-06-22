@@ -164,14 +164,23 @@ class PlayerDevelopment:
         """Apply one offseason's training to a player.
 
         coachDevRating (0-100): coach's playerDevelopment attribute.
-        fundingDevBonus: market-tier bonus (-1..+1). Together they form devBias,
-        which accelerates a RISING player's climb (and skews prospect booms) but
-        does NOT slow the aging decline.
+        fundingDevBonus: Training Facility bonus (0..2.0, fractional per level).
+        Together they form devBias, which accelerates a RISING player's climb (and
+        skews prospect booms) but does NOT slow the aging decline.
         Returns a dict of development details for logging.
         """
         try:
-            # devBias: coach (60→0, 80→+2, 100→+4) + funding tier (-1..+1).
-            devBias = round((coachDevRating - 60) / 10) + fundingDevBonus
+            # devBias: coach (60→0, 80→+2, 100→+4) + Training Facility bonus.
+            # The facility bonus is fractional per level (every level a real step);
+            # resolve it to an integer probabilistically so devBias stays
+            # randint-safe while each level still scales the EXPECTED bias
+            # (e.g. 0.4 → +1 forty percent of the time).
+            fb = float(fundingDevBonus or 0)
+            fundingInt = int(fb // 1)
+            frac = fb - fundingInt
+            if frac > 0 and random.random() < frac:
+                fundingInt += 1
+            devBias = round((coachDevRating - 60) / 10) + fundingInt
 
             PlayerDevelopment.update_intangible_attributes(player.attributes)
 

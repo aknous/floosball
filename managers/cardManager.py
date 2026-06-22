@@ -143,6 +143,12 @@ def getActivePackNames(shopDay: int) -> list:
 # Map position code → position int for theme filtering
 _POSITION_CODE_TO_INT = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
 
+# Champion pack draws one card per player (dedup). After a title most of the winning
+# roster can retire (season 11: 5 of 6 winners retired), leaving too few with current
+# templates to fill the pack — below this many distinct champions, top up from the
+# champion team's current roster (untagged) so the pack still fills.
+CHAMPION_PACK_MIN_PLAYERS = 6
+
 
 def _applyThemeFilter(templates: list, themeType: str, themeValue: str,
                       session=None, currentSeason: int = 0) -> list:
@@ -184,9 +190,30 @@ def _applyThemeFilter(templates: list, themeType: str, themeValue: str,
             return []
         if themeType == 'champion':
             champTeamId = priorSeason.champion_team_id
-            if champTeamId is None:
-                return []
-            return [t for t in templates if t.team_id == champTeamId]
+            # True champions: the Floos-Bowl roster SNAPSHOT (who actually won), NOT the
+            # team's current roster — `team_id` drifts as players join/leave/retire.
+            rawChampIds = getattr(priorSeason, 'champion_player_ids', None)
+            champIds = set()
+            if rawChampIds:
+                try:
+                    import json as _jsonCh
+                    champIds = set(_jsonCh.loads(rawChampIds)) if isinstance(rawChampIds, str) else set(rawChampIds)
+                except Exception:
+                    champIds = set()
+            if not champIds:
+                # Pre-snapshot season (no roster captured): fall back to the champion
+                # team's templates by team_id (the old, drift-prone behavior).
+                return [t for t in templates if champTeamId and t.team_id == champTeamId]
+            pool = [t for t in templates if t.player_id in champIds]
+            # Safeguard: if too few winners are still active (most retired), top up with
+            # the champion TEAM's current roster so the pack fills. These top-ups carry
+            # NO champion tag — only true winners do, via the classification snapshot —
+            # so this never re-tags a non-winner (the bug this whole fix addresses).
+            if len({t.player_id for t in pool}) < CHAMPION_PACK_MIN_PLAYERS and champTeamId:
+                have = {t.player_id for t in pool}
+                pool += [t for t in templates
+                         if t.team_id == champTeamId and t.player_id not in have]
+            return pool
         # allpro
         rawIds = priorSeason.all_pro_player_ids
         if not rawIds:
@@ -1801,11 +1828,18 @@ class CardManager:
     FEATURED_CARD_COUNT = 5
     # Markup over sell value for shop singles
     SHOP_MARKUP = {
-        'base': 5.0,
-        'holographic': 3.34,
-        'prismatic': 5.0,
-        'diamond': 5.0,
+        'base': 4.0,
+        'holographic': 2.7,
+        'prismatic': 4.0,
+        'diamond': 4.0,
     }
+
+    def _featuredBuyPrice(self, template) -> int:
+        """Shop price for a featured card: sell value × edition markup, floored
+        at 10 and rounded to the nearest 5. Single source of truth so the
+        displayed price and the charged price can never drift."""
+        markup = self.SHOP_MARKUP.get(template.edition, 2.7)
+        return max(10, int(round(template.sell_value * markup / 5.0)) * 5)
 
     def getFeaturedCards(self, session, userId: int, currentSeason: int,
                          currentWeek: int = 0, isScheduledMode: bool = False,
@@ -1946,8 +1980,7 @@ class CardManager:
         result = []
         for row in existing:
             t = row.card_template
-            markup = self.SHOP_MARKUP.get(t.edition, 3.0)
-            buyPrice = max(10, int(t.sell_value * markup))
+            buyPrice = self._featuredBuyPrice(t)
             effName = (t.effect_config or {}).get("effectName") or ""
             result.append({
                 "templateId": t.id,
@@ -2279,8 +2312,7 @@ class CardManager:
         if not template:
             raise ValueError("Card template not found")
 
-        markup = self.SHOP_MARKUP.get(template.edition, 3.0)
-        buyPrice = max(10, int(template.sell_value * markup))
+        buyPrice = self._featuredBuyPrice(template)
 
         result = currencyRepo.spendFunds(
             userId, buyPrice,
