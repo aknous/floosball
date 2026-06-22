@@ -8761,6 +8761,7 @@ def _buildShowcasePayload(session, cardManager, userId, currentSeason):
         "slotCount": len([s for s in slots if s["card"]]),
         "maxSlots": SHOWCASE_SLOTS,
         "grade": score["grade"],
+        "score": score["score"],
         "weeklyDividend": score["weeklyDividend"],
         "setBonus": score["setBonus"],
         "maxSetBonus": score["maxSetBonus"],
