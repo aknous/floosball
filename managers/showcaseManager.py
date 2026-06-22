@@ -245,6 +245,14 @@ def evaluate(cards, currentSeason: int) -> dict:
         "baseScore": round(baseScore, 1),
         "setBonus": round(totalBonus, 3),   # e.g. 0.45 → sets add +45%
         "dividendRate": SHOWCASE_DIVIDEND_RATE,  # weekly payout = rate × score × (1+setBonus)
+        # Scoring "manual" — the point tables, so the client can render the rules.
+        "scoring": {
+            "edition": SHOWCASE_EDITION_POINTS,
+            "classification": SHOWCASE_CLASSIFICATION_POINTS,
+            "recencyByAge": {str(k): v for k, v in SHOWCASE_RECENCY_BY_AGE.items()},
+            "recencyFloor": SHOWCASE_RECENCY_FLOOR,
+            "tierBonusPerLevel": SHOWCASE_TIER_BONUS_PER_LEVEL,
+        },
         "score": round(finalScore, 1),      # drives the grade + leaderboard ranking
     }
 
