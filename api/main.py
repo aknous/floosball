@@ -5632,6 +5632,24 @@ def contribute_to_facilities(team_id: int, payload: Dict[str, Any], user: _User 
             facilityKey=payload.get("facilityKey"),
             projectId=payload.get("projectId"),
         )
+        # Achievement hooks — patron (any contribution) + benefactor tiers (cumulative).
+        # Facility funding is a team contribution, same as the old /contribute path,
+        # which fires these too; without this, funding via facilities never unlocks them.
+        from database.connection import get_session as _getSessionFac
+        from managers import achievementManager as _am
+        _sm = floosball_app.seasonManager
+        _cs = _sm.currentSeason.seasonNumber if _sm and _sm.currentSeason else 0
+        _s = _getSessionFac()
+        try:
+            _am.onTeamContribution(_s, user.id)
+            if _cs:
+                _am.onSeasonTeamContributions(_s, user.id, _cs)
+            _s.commit()
+        except Exception as _e:
+            _s.rollback()
+            logger.warning(f"Achievement hook failed (facility contribution): {_e}")
+        finally:
+            _s.close()
         return build_success_response(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
