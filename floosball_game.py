@@ -431,8 +431,8 @@ midIncompleteList = [
                     '{} and {} can\'t connect, incomplete',
                     '{} throws for {}, out of reach',
                     '{} misses {} on the route, incomplete',
-                    '{} can\'t find {} in coverage, incomplete',
-                    '{} under pressure, overthrows {}, incomplete',
+                    '{} just misses {}, incomplete',
+                    '{} and {} can\'t hook up, incomplete',
                 ]
 
 # Medium dropped — args: (passer.name, receiver.name)
@@ -450,7 +450,7 @@ deepIncompleteList = [
                     '{} goes deep for {}, can\'t connect',
                     '{} launches it for {}, overthrown',
                     '{} and {} can\'t hook up downfield, incomplete',
-                    '{} heaves it for {}, well covered, incomplete',
+                    '{} sends it deep for {}, incomplete',
                     '{} throws deep for {}, out of bounds',
                     '{} airs it out for {}, no good',
                 ]
