@@ -17,9 +17,10 @@ import os
 from logger_config import get_logger
 from api.websocket_manager import manager as ws_manager
 from api.event_models import GameEvent, SeasonEvent, StandingsEvent, SystemEvent, PlayerOffDayEvent
+from constants import CONTRIBUTION_TX_TYPES
 from api_response_builders import (
-    TeamResponseBuilder, 
-    PlayerResponseBuilder, 
+    TeamResponseBuilder,
+    PlayerResponseBuilder,
     GameResponseBuilder,
     LeagueResponseBuilder,
     build_success_response,
@@ -2928,7 +2929,7 @@ def _recapFundingLeaderboard(session, target):
                     DBUser.id, DBUser.username,
                     func.coalesce(func.sum(-CurrencyTransaction.amount), 0).label('total'))
                 .join(CurrencyTransaction, CurrencyTransaction.user_id == DBUser.id)
-                .filter(CurrencyTransaction.transaction_type == 'team_contribution',
+                .filter(CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
                         CurrencyTransaction.season == target)
                 .group_by(DBUser.id, DBUser.username)
                 .order_by(func.sum(-CurrencyTransaction.amount).desc())
@@ -5134,7 +5135,7 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
             PickEmPick.season == seasonNum).scalar()
         usersWhoFunded = session.query(func.count(func.distinct(CurrencyTransaction.user_id))).filter(
             CurrencyTransaction.season == seasonNum,
-            CurrencyTransaction.transaction_type == 'team_contribution',
+            CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
         ).scalar()
 
         # Beta funnel: users who signed up but never requested access
@@ -6026,7 +6027,7 @@ def get_league_markets():
             )
             .join(CurrencyTransaction, CurrencyTransaction.user_id == User.id)
             .filter(
-                CurrencyTransaction.transaction_type == 'team_contribution',
+                CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
                 CurrencyTransaction.season == currentSeason,
                 User.favorite_team_id.isnot(None),
             )
@@ -6058,7 +6059,7 @@ def get_league_markets():
             )
             .join(CurrencyTransaction, CurrencyTransaction.user_id == User.id)
             .filter(
-                CurrencyTransaction.transaction_type == 'team_contribution',
+                CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
                 CurrencyTransaction.season == currentSeason,
                 User.favorite_team_id.isnot(None),
             )

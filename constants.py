@@ -321,6 +321,11 @@ WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
 INCOME_BOOST_MULTIPLIER = 1.25
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
+# Currency-transaction types that count as a fan funding their team. Markets→Facilities
+# added 'facility_contribution' (active funding goes to the Treasury now); 'team_contribution'
+# is still written by the passive season-end tax. Patron rank, funding leaderboards, and the
+# Patron achievement all key off this set so facility contributions count like the old ones.
+CONTRIBUTION_TX_TYPES = ('team_contribution', 'facility_contribution')
 
 # ---- Team Funding (Patronage) ----
 FUNDING_DECAY_RATE = 0.5                # 50% carry-forward of previous effective funding
