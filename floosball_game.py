@@ -3535,7 +3535,11 @@ class Game:
             runGap = self.play.insights.get('run', {}).get('selectedGap', 'B-gap')
             isOutside = runGap in ('C-gap', 'bounce')
             if self.play.isFumble:
-                yds = self.play.yardage
+                # On a lost fumble, _resolveReturn repurposes play.yardage to the NET
+                # (run yards minus the defense's return); add the return back so the
+                # narration shows the actual run yardage, not the net. (No return =
+                # returnYardage 0, so this is a no-op for recovered fumbles.)
+                yds = self.play.yardage + (getattr(self.play, 'returnYardage', 0) or 0)
                 gainText = 'no gain' if yds == 0 else 'a loss of {} yards'.format(abs(yds)) if yds < 0 else '{} yards'.format(yds)
                 if self.play.isFumbleLost:
                     forcedBy = self.play.forcedFumbleBy
