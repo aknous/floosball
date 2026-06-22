@@ -9339,10 +9339,12 @@ class SeasonManager:
             currencyRepo = CurrencyRepository(session)
             currency = currencyRepo.getByUser(userId)
             balance = currency.balance if currency else 0
-            if balance < amount:
-                raise ValueError(f"Insufficient balance ({balance}F available)")
 
-            # Resolve + validate the target BEFORE spending.
+            # Resolve + validate the target BEFORE spending. For an upkeep or project
+            # bar, clamp the contribution to what it still needs, so hitting "100F" on a
+            # bar that only needs 99F deducts 99F (no overfunding / wasted spend). The
+            # Treasury is an open pool, so it takes the full amount.
+            shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
             if target == 'upkeep':
                 if not facilityKey:
                     raise ValueError("facilityKey required for an upkeep contribution")
@@ -9350,6 +9352,11 @@ class SeasonManager:
                     team_id=teamId, facility_key=facilityKey).first()
                 if not fac:
                     raise ValueError("Facility not found")
+                need = max(0, facilitiesManager.upkeepCostFloobits(fac.level, shareUnit)
+                           - (fac.upkeep_funded or 0))
+                if need <= 0:
+                    raise ValueError("Upkeep is already fully funded")
+                amount = min(amount, need)
                 desc = f'Facility upkeep ({facilityKey})'
             elif target == 'project':
                 if not projectId:
@@ -9358,11 +9365,19 @@ class SeasonManager:
                     id=projectId, team_id=teamId, status='open').first()
                 if not proj:
                     raise ValueError("Open project not found")
+                need = max(0, facilitiesManager.projectCostFloobits(proj.cost_shares, shareUnit)
+                           - (proj.funded or 0))
+                if need <= 0:
+                    raise ValueError("Project is already fully funded")
+                amount = min(amount, need)
                 desc = f'Facility project (#{projectId})'
             elif target == 'treasury':
                 desc = 'Team Treasury'
             else:
                 raise ValueError(f"Unknown contribution target: {target}")
+
+            if balance < amount:
+                raise ValueError(f"Insufficient balance ({balance}F available)")
 
             currencyRepo.spendFunds(userId, amount, 'facility_contribution',
                                     description=desc, season=season)
