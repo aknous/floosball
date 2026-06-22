@@ -1848,7 +1848,8 @@ class SeasonManager:
                         homeCount = 0
                         awayCount = 0
                         for entry in getattr(game, 'gameFeed', []):
-                            if entry.get('isBigPlay'):
+                            play = entry.get('play') if isinstance(entry, dict) else None
+                            if getattr(play, 'isBigPlay', False):
                                 # Count for both teams since we can't easily tell which
                                 homeCount += 1
                                 awayCount += 1

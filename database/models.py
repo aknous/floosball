@@ -491,7 +491,7 @@ class TeamSeasonStats(Base):
     fumbles_recovered: Mapped[int] = mapped_column(Integer, default=0)
     total_yards_allowed: Mapped[int] = mapped_column(Integer, default=0)
 
-    # Cumulative count of WPA "big plays" (home or away WPA ≥ 10) in
+    # Cumulative count of WPA "big plays" (home or away WPA ≥ 7) in
     # games this team participated in. Drives the Highlight Reel card
     # projection (pays per favorite-team big play).
     big_plays: Mapped[int] = mapped_column(Integer, default=0)
