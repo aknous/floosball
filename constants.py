@@ -838,7 +838,7 @@ SHOWCASE_GRADE_THRESHOLDS = [
 # (480)≈1747F, S-entry (700)≈2548F, perfect-ish (~1000)≈3640F. Realized totals run
 # lower since the showcase is empty/partial early-season. Re-tune via
 # tune_showcase.py / simcheck.
-SHOWCASE_DIVIDEND_RATE = 0.16
+SHOWCASE_DIVIDEND_RATE = 0.13
 
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7
