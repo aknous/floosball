@@ -266,6 +266,7 @@ def evaluate(cards, currentSeason: int) -> dict:
             "recencyByAge": {str(k): v for k, v in SHOWCASE_RECENCY_BY_AGE.items()},
             "recencyFloor": SHOWCASE_RECENCY_FLOOR,
             "tierBonusPerLevel": SHOWCASE_TIER_BONUS_PER_LEVEL,
+            "grades": [[g, t] for g, t in SHOWCASE_GRADE_THRESHOLDS],  # [grade, minScore]
         },
         "score": round(finalScore, 1),      # drives the grade + leaderboard ranking
     }
