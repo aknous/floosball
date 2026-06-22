@@ -72,6 +72,9 @@ def _runPendingMigrations():
         for col, colDef in [
             ('mvp_player_id', 'INTEGER REFERENCES players(id)'),
             ('all_pro_player_ids', 'TEXT'),
+            # Champion roster snapshot (player IDs at the Floos Bowl) so the
+            # champion classification + pack don't drift to the post-offseason roster.
+            ('champion_player_ids', 'TEXT'),
             # Rich All-Pro team (offense+defense split) for durable recap rebuild.
             ('all_pro_team', 'TEXT'),
             # Frozen MVP ballot (top-5 candidate dicts) captured at season end so

@@ -898,6 +898,10 @@ class Season(Base):
     current_week: Mapped[int] = mapped_column(Integer, default=1)
     playoffs_started: Mapped[bool] = mapped_column(Boolean, default=False)
     champion_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"))
+    # JSON list of player IDs on the champion's roster AT the Floos Bowl — snapshotted
+    # at season end before the offseason churns it, so the Champion classification + pack
+    # reflect who actually won (not whoever's on the team next season).
+    champion_player_ids: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     mvp_player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     all_pro_player_ids: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # JSON list of player IDs (offense+defense union)
     # Rich, durable All-Pro team: JSON list of {id, side, position, value} so the

@@ -5500,18 +5500,23 @@ class SeasonManager:
                 mvpData = getattr(prevSeason, 'mvp', None)
                 if mvpData and isinstance(mvpData, dict):
                     mvpPlayerId = mvpData.get('id')
-
-                champion = getattr(prevSeason, 'champion', None)
-                if champion and hasattr(champion, 'rosterDict'):
-                    for player in champion.rosterDict.values():
-                        if player and hasattr(player, 'id'):
-                            championPlayerIds.add(player.id)
-
                 allProPlayerIds = getattr(prevSeason, 'allProPlayerIds', set())
             elif prevSeasonNum >= 1:
                 # Resume fallback: read from DB + player objects
                 mvpPlayerId, championPlayerIds, allProPlayerIds = \
                     self._loadClassificationsFromDB(session, prevSeasonNum)
+
+            # Champion IDs ALWAYS come from the Floos-Bowl roster SNAPSHOT, never the
+            # live roster — by the time this runs the offseason has churned the team, so
+            # the live roster would tag players who weren't on it when it won.
+            try:
+                from database.models import Season as _SeasonRow
+                _row = session.query(_SeasonRow).filter(_SeasonRow.season_number == prevSeasonNum).first()
+                if _row and _row.champion_player_ids:
+                    import json as _jsonC
+                    championPlayerIds = set(_jsonC.loads(_row.champion_player_ids))
+            except Exception as _e:
+                logger.warning(f"Could not load champion snapshot for season {prevSeasonNum}: {_e}")
             cardManager = CardManager(self.serviceContainer)
             count = cardManager.generateSeasonTemplates(
                 session, seasonNumber,
@@ -10644,9 +10649,18 @@ class SeasonManager:
                 db_season.playoffs_started = getattr(self.currentSeason, 'playoffsStarted', False)
                 db_season.end_date = datetime.datetime.now()
             
-            # Set champion team ID
+            # Set champion team ID + snapshot the championship roster NOW, before the
+            # offseason churns it — the Champion classification + pack must reflect who
+            # actually won, not whoever is on the team next season.
             if hasattr(self.currentSeason, 'champion') and self.currentSeason.champion:
                 db_season.champion_team_id = self.currentSeason.champion.id
+                try:
+                    import json as _jsonChamp
+                    champRosterIds = [p.id for p in self.currentSeason.champion.rosterDict.values()
+                                      if p and getattr(p, 'id', None) is not None]
+                    db_season.champion_player_ids = _jsonChamp.dumps(champRosterIds)
+                except Exception as _e:
+                    logger.warning(f"Could not snapshot champion roster: {_e}")
 
             # Persist MVP and All-Pro for classification lookups on resume
             mvpData = getattr(self.currentSeason, 'mvp', None)
