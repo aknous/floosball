@@ -46,11 +46,24 @@ def _recency(seasonCreated: int, currentSeason: int) -> float:
     return SHOWCASE_RECENCY_BY_AGE.get(seasonsOld, SHOWCASE_RECENCY_FLOOR)
 
 
+_CLASSIFICATION_LABELS = {"rookie": "Rookie", "all_pro": "All-Pro", "champion": "Champion", "mvp": "MVP"}
+
+
 def _classificationPoints(classification) -> int:
     if not classification:
         return 0
     return sum(pts for key, pts in SHOWCASE_CLASSIFICATION_POINTS.items()
                if key in classification)
+
+
+def _classificationTags(classification) -> list:
+    """Per-tag breakdown so the client can name a card's badges (Champion, All-Pro,
+    MVP, Rookie) instead of a single opaque 'Classification' lump."""
+    if not classification:
+        return []
+    return [{"name": _CLASSIFICATION_LABELS.get(key, key), "points": pts}
+            for key, pts in SHOWCASE_CLASSIFICATION_POINTS.items()
+            if key in classification]
 
 
 def _cardBreakdown(card: dict, currentSeason: int) -> dict:
@@ -73,6 +86,7 @@ def _cardBreakdown(card: dict, currentSeason: int) -> dict:
         "userCardId": card.get("userCardId"),
         "editionPoints": editionPts,
         "classificationPoints": classificationPts,
+        "classifications": _classificationTags(card.get("classification")),
         "recency": round(rec, 3),
         "tierMult": round(tierMult, 3),
         "points": round(points, 2),
