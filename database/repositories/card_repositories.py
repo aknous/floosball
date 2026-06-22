@@ -27,6 +27,7 @@ _PASSIVE_GRANT_TYPES = frozenset({
     'card_effect',
     'admin_grant',
     'supporter_dividend',   # fan-income: Supporter dividend (fires on claim)
+    'showcase_dividend',    # weekly Showcase payout
 })
 
 
