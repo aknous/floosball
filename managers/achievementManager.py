@@ -372,10 +372,11 @@ def backfillOnboardingAchievements(session: Session, userId: int) -> int:
         if recordProgress(session, userId, "deck_builder", absolute=1):
             unlocks += 1
 
-    # Patron — any team_contribution currency transaction
+    # Patron — any team-funding contribution (team or facility)
+    from constants import CONTRIBUTION_TX_TYPES
     hasContribution = session.query(CurrencyTransaction.id).filter(
         CurrencyTransaction.user_id == userId,
-        CurrencyTransaction.transaction_type == "team_contribution",
+        CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
     ).first()
     if hasContribution:
         if recordProgress(session, userId, "patron", absolute=1):
@@ -825,15 +826,16 @@ def onWeeklyTotalFpMultiplier(session: Session, userId: int, multProduct: float,
 
 def onSeasonTeamContributions(session: Session, userId: int, currentSeason: int) -> List[UserAchievement]:
     """Benefactor tiers (I–IV) — cumulative floobits contributed to the user's team this season.
-    Sums CurrencyTransaction rows with type='team_contribution'."""
+    Sums CurrencyTransaction rows of any contribution type (team + facility)."""
     if not currentSeason:
         return []
     from database.models import CurrencyTransaction
+    from constants import CONTRIBUTION_TX_TYPES
     from sqlalchemy import func
     contributed = session.query(func.coalesce(func.sum(-CurrencyTransaction.amount), 0)).filter(
         CurrencyTransaction.user_id == userId,
         CurrencyTransaction.season == currentSeason,
-        CurrencyTransaction.transaction_type == "team_contribution",
+        CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
     ).scalar() or 0
     unlocked = []
     for key in ("benefactor_i", "benefactor_ii", "benefactor_iii", "benefactor_iv"):

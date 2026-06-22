@@ -6307,11 +6307,16 @@ class Game:
                     rushCarries += p.gameStatsDict['rushing']['carries']
                     fumbleLost  += p.gameStatsDict['rushing']['fumblesLost']
 
-            # QB lost fumbles (sack-strips / scramble fumbles) count as turnovers
-            # too — the loop above only covers the skill positions.
-            qbFumblesLost = qb.gameStatsDict['rushing']['fumblesLost'] if qb else 0
-            turnovers = passInts + fumbleLost + qbFumblesLost
             defense   = team.gameDefenseStats
+            # Turnovers this team COMMITTED = the opponent defense's takeaways. The
+            # defense credits fumRec on every fumble recovery (rush, receiving catch-
+            # strip, sack-strip, special teams) and ints on every interception, so this
+            # counts every turnover source. Summing only the offense's rushing
+            # fumblesLost (the old way) missed receiving and other fumbles, so the box
+            # score under-reported turnovers.
+            _oppTeam = self.awayTeam if team is self.homeTeam else self.homeTeam
+            _oppDef = getattr(_oppTeam, 'gameDefenseStats', {}) or {}
+            turnovers = (_oppDef.get('ints', 0) or 0) + (_oppDef.get('fumRec', 0) or 0)
 
             def playerDict(p, statsKey):
                 if not p:

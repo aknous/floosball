@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from database.models import User, Game, TeamSeasonStats, SupporterDividend
 from constants import (
+    CONTRIBUTION_TX_TYPES,
     SUPPORTER_BASE_DIVIDEND,
     SUPPORTER_WIN_BONUS,
     SUPPORTER_SHUTOUT_BONUS,
@@ -93,9 +94,10 @@ def computePatronRanks(session: Session, season: int) -> Dict[int, Tuple[float, 
     ranked by their share of their (favorite) team's funding. Non-contributors
     and those below the lowest tier are absent (callers treat as ×1.0 / None).
 
-    Contributions are derived from CurrencyTransaction (type 'team_contribution',
-    amount stored negative on spend) — no separate ledger needed, and a user can
-    only contribute to their favorite team, so each total belongs to that team."""
+    Contributions are derived from CurrencyTransaction (any CONTRIBUTION_TX_TYPES:
+    team_contribution + facility_contribution, amount stored negative on spend) — no
+    separate ledger needed, and a user can only contribute to their favorite team, so
+    each total belongs to that team."""
     from database.models import CurrencyTransaction
     from sqlalchemy import func
 
@@ -106,7 +108,7 @@ def computePatronRanks(session: Session, season: int) -> Dict[int, Tuple[float, 
         )
         .filter(
             CurrencyTransaction.season == season,
-            CurrencyTransaction.transaction_type == 'team_contribution',
+            CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
         )
         .group_by(CurrencyTransaction.user_id)
         .all()

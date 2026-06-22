@@ -45,6 +45,14 @@ DEV_DECLINE_RANGE = (-5, 1)      # post-peak base: skews down (steepens over tim
 DEV_DECLINE_STEEPEN_PER_SEASON = 1
 DEV_DECLINE_PAST_LONGEVITY_KICK = 2
 DEV_DECLINE_MAX_STEEPEN = 6
+# Per-player decline SEVERITY multiplier (stable per player, seeded off id) so not
+# everyone follows the same arc. Low end = ages gracefully, good for a long career;
+# ~MODE = a normal gradual decline; high end = falls off a cliff. The whole decline
+# (base + steepening) scales by this on the downside only. Drawn triangular around
+# MODE so a GRADUAL falloff is the common case and the ageless/cliff tails are rarer.
+DEV_DECLINE_FACTOR_LOW = 0.3
+DEV_DECLINE_FACTOR_HIGH = 1.5
+DEV_DECLINE_FACTOR_MODE = 0.85
 # Prospects / early-career players are boom-or-bust: widen both ends; good dev
 # (positive devBias) skews the spread toward boom.
 DEV_PROSPECT_SPREAD = 4
@@ -321,6 +329,11 @@ WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
 INCOME_BOOST_MULTIPLIER = 1.25
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
+# Currency-transaction types that count as a fan funding their team. Markets→Facilities
+# added 'facility_contribution' (active funding goes to the Treasury now); 'team_contribution'
+# is still written by the passive season-end tax. Patron rank, funding leaderboards, and the
+# Patron achievement all key off this set so facility contributions count like the old ones.
+CONTRIBUTION_TX_TYPES = ('team_contribution', 'facility_contribution')
 
 # ---- Team Funding (Patronage) ----
 FUNDING_DECAY_RATE = 0.5                # 50% carry-forward of previous effective funding
