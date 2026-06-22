@@ -55,13 +55,22 @@ def runBackupOnce():
         con.close()
     os.replace(tmpPath, outPath)
 
-    keep = max(1, int(os.environ.get('BACKUP_KEEP', '7')))
+    keep = max(1, int(os.environ.get('BACKUP_KEEP', '3')))
     existing = sorted(glob.glob(os.path.join(backupDir, 'floosball_*.db')))
     for old in existing[:-keep]:
         try:
             os.remove(old)
         except OSError:
             pass
+    # Clean up any leftover .partial files (a backup that died mid-write, e.g. on a
+    # full disk). The retention glob above only matches completed *.db backups, so
+    # without this a failed partial would sit on the volume forever.
+    for partial in glob.glob(os.path.join(backupDir, 'floosball_*.db.partial')):
+        if partial != tmpPath:
+            try:
+                os.remove(partial)
+            except OSError:
+                pass
     return outPath
 
 
