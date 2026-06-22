@@ -8764,6 +8764,8 @@ def _buildShowcasePayload(session, cardManager, userId, currentSeason):
         "weeklyDividend": score["weeklyDividend"],
         "setBonus": score["setBonus"],
         "maxSetBonus": score["maxSetBonus"],
+        "dividendRate": score["dividendRate"],
+        "scoring": score["scoring"],
         "activeSets": score["activeSets"],
         "almostSets": score["almostSets"],
         "sets": score["sets"],
