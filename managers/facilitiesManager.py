@@ -115,7 +115,13 @@ def resolveSeasonEnd(facilities: list, projects: list, treasury: int,
             builtProjects.append(p['id'])
             log.append(f"BUILT {p['facility_key']}→Lv{p['target_level']}")
 
-    outFac = [{'key': k, 'level': newLevels[k], 'upkeepMet': next(f['upkeepMet'] for f in facState if f['key'] == k)}
+    # upkeepPaid is carried out so the caller can persist it onto the facility row —
+    # otherwise a treasury-paid upkeep reads as unfunded in the UI until next season.
+    facByKey = {f['key']: f for f in facState}
+    outFac = [{'key': k, 'level': newLevels[k],
+               'upkeepMet': facByKey.get(k, {}).get('upkeepMet', True),
+               'upkeepPaid': facByKey.get(k, {}).get('upkeepPaid', 0),
+               'upkeepCost': facByKey.get(k, {}).get('upkeepCost', 0)}
               for k in newLevels]
     outProj = [{'id': p['id'], 'funded': p['funded'], 'built': p['built']} for p in projState]
     return {'facilities': outFac, 'projects': outProj, 'leftover': max(0, pot), 'log': log}
@@ -201,8 +207,12 @@ def applySeasonEnd(session, teamObjs: list, season: int, shareUnit: float) -> li
                     for p in projRows]
         res = resolveSeasonEnd(facilities, projects, treasury, shareUnit, season)
         levelByKey = {f['key']: f['level'] for f in res['facilities']}
+        paidByKey = {f['key']: f.get('upkeepPaid', 0) for f in res['facilities']}
         for f in facRows:
             f.level = levelByKey.get(f.facility_key, f.level)
+            # Reflect the treasury-paid upkeep on the row so the facility reads as
+            # funded through the offseason (the season-start reset zeroes it again).
+            f.upkeep_funded = paidByKey.get(f.facility_key, f.upkeep_funded)
         builtIds = {p['id'] for p in res['projects'] if p['built']}
         fundedById = {p['id']: p['funded'] for p in res['projects']}
         for p in projRows:
