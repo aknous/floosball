@@ -10598,27 +10598,22 @@ def getActivePowerups(user: _User = Depends(_getCurrentUser)):
                 "pending": deferred,
             })
 
-        # Income boost (Endowment) — flatter FP→F curve while active
+        # Income boost (Endowment) — flat +25% on all Floobit income while active
         activeBoost = shopRepo.getActiveIncomeBoost(user.id, currentSeasonNum, currentWeek)
         if activeBoost:
             # If games are in progress OR done-but-week-hasn't-rolled, the
             # current week is already "spent" — don't count it as remaining.
             weekConsumed = _areGamesStarted() or _areGamesCompleted()
             weeksRemaining = activeBoost.expires_at_week - currentWeek + (0 if weekConsumed else 1)
-            from constants import (
-                WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT,
-                WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
-            )
+            from constants import INCOME_BOOST_MULTIPLIER
             active.append({
                 "slug": "income_boost",
                 "displayName": "Endowment",
                 "expiresAtWeek": activeBoost.expires_at_week,
                 "weeksRemaining": max(0, weeksRemaining),
                 "expiring": weeksRemaining <= 1,
-                "scale": WEEKLY_FP_FLOOBIT_SCALE,
-                "exponent": WEEKLY_FP_FLOOBIT_EXPONENT,
-                "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
-                "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
+                "boostMultiplier": INCOME_BOOST_MULTIPLIER,
+                "boostPercent": round((INCOME_BOOST_MULTIPLIER - 1) * 100),
             })
 
         # Fortune's Favor (Patronage) — boosts chance card trigger rates

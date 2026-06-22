@@ -311,13 +311,11 @@ ROSTER_MIN_PLAYERS = 3
 #  3000 FP → 565 F
 WEEKLY_FP_FLOOBIT_SCALE = 1.10
 WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
-# Endowment (income_boost powerup) replaces the curve with a flatter one.
-# Less taper = monster weeks pay more; low weeks pay roughly the same.
-# Same cost (100 F). Sits ~10% above standard at modest play, ~50% above
-# at heavy play, breaking even around 1k FP/week × 4 weeks. Bumped
-# proportionally with the standard curve.
-WEEKLY_FP_FLOOBIT_BOOSTED_SCALE = 0.65
-WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT = 0.87
+# Endowment (income_boost powerup): a flat +25% on ANYTHING credited to the bank
+# while it's active — fantasy, pick-em, showcase + supporter dividends, etc. Applied
+# once at the choke point (CurrencyRepository.addFunds), so every income stream is
+# boosted uniformly (not just fantasy). 1.25 = +25%.
+INCOME_BOOST_MULTIPLIER = 1.25
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
 
@@ -726,16 +724,13 @@ POWERUP_FORTUNES_FAVOR = {
 POWERUP_INCOME_BOOST = {
     "slug": "income_boost",
     "displayName": "Endowment",
-    "description": "Increases your weekly fantasy Floobit payout for 4 weeks.",
+    "description": "+25% on all Floobit income for 4 weeks — fantasy, pick-em, showcase, and supporter dividends.",
     "price": 100,
     "durationWeeks": 4,
     "seasonLimit": 2,
-    # Endowment swaps the SCALE/EXPONENT pair. The flatter curve trades a
-    # small dip on low-FP weeks for a meaningful bump on monster weeks
-    # (e.g. 500 FP: 61 F normal → 70 F endowment; 1000 FP: 105 → 132;
-    # 5000 FP: 423 → 596).
-    "boostedScale": WEEKLY_FP_FLOOBIT_BOOSTED_SCALE,
-    "boostedExponent": WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
+    # Flat +25% on anything credited while active, applied at the bank
+    # (CurrencyRepository.addFunds). See INCOME_BOOST_MULTIPLIER.
+    "boostMultiplier": INCOME_BOOST_MULTIPLIER,
 }
 
 POWERUP_CATALOG = {

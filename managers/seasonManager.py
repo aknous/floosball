@@ -8159,10 +8159,7 @@ class SeasonManager:
 
     def _awardWeeklyFpFloobits(self, season: int, week: int) -> None:
         """Award Floobits via the FP→F curve: scale × FP^exponent (Endowment shifts to flatter taper)."""
-        from constants import (
-            WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT,
-            WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT,
-        )
+        from constants import WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT
 
         fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
         if not fantasyTracker:
@@ -8190,8 +8187,6 @@ class SeasonManager:
             try:
                 currencyRepo = CurrencyRepository(session)
                 notifRepo = NotificationRepository(session)
-                from database.repositories.shop_repository import ShopPurchaseRepository
-                shopRepo = ShopPurchaseRepository(session)
                 # Pre-load Prosperity card flat-F bonuses per user
                 prosperityBonuses = {}
                 try:
@@ -8212,12 +8207,9 @@ class SeasonManager:
                     if weekFp <= 0:
                         continue
                     userId = entry['userId']
-                    activeBoost = shopRepo.getActiveIncomeBoost(userId, season, week)
-                    if activeBoost:
-                        scale, exponent = WEEKLY_FP_FLOOBIT_BOOSTED_SCALE, WEEKLY_FP_FLOOBIT_BOOSTED_EXPONENT
-                    else:
-                        scale, exponent = WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT
-                    base = round(scale * (weekFp ** exponent))
+                    # Endowment's +25% is applied uniformly at the bank (addFunds),
+                    # so the FP curve here is always the standard one.
+                    base = round(WEEKLY_FP_FLOOBIT_SCALE * (weekFp ** WEEKLY_FP_FLOOBIT_EXPONENT))
                     prosperity = prosperityBonuses.get(userId, 0)
                     reward = int(base + prosperity)
                     if reward <= 0:
@@ -8225,8 +8217,6 @@ class SeasonManager:
                     descCore = f'Week {week}: {weekFp:.0f} FP → {base}F'
                     if prosperity:
                         descCore += f' (+{prosperity} Prosperity)'
-                    if activeBoost:
-                        descCore += ' [Endowment]'
                     currencyRepo.addFunds(
                         userId, reward, 'weekly_fp_bonus',
                         description=descCore,
