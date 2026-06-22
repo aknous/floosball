@@ -8611,11 +8611,23 @@ class Play():
         self.yardage = 0
         self.isPassCompletion = False
         # The clock was running and the offense had to hustle to the line and snap
-        # before spiking — burn that gather time first (a fast no-huddle rush, so
-        # shorter than a normal pre-snap). Without this the spike consumed zero
-        # clock, so the displayed time never moved off the previous play's mark.
+        # before spiking — burn that gather time first. It scales with the offense's
+        # tempo skill: coach clock-management IQ + the on-field offense's average
+        # discipline. A sharp, disciplined team snaps fast (~5s); a low-IQ,
+        # undisciplined one scrambles to the line slowly (~12s). Both normalised on a
+        # 60-100 -> 0-1 scale (0.5 neutral) and averaged. Without any of this the spike
+        # consumed zero clock, so the displayed time never moved off the previous play.
         if self.game.clockRunning:
-            gatherTime = min(self.game.gameClockSeconds, batched_randint(6, 10))
+            coach = getattr(self.game.offensiveTeam, 'coach', None)
+            clockIQ = self.game._coachClockIQ(coach)
+            _slots = ('qb', 'rb', 'wr1', 'wr2', 'te')
+            _discs = [getattr(getattr(self.game.offensiveTeam.rosterDict.get(s), 'gameAttributes', None), 'discipline', 80)
+                      for s in _slots if self.game.offensiveTeam.rosterDict.get(s)]
+            _avgDisc = (sum(_discs) / len(_discs)) if _discs else 80
+            discNorm = max(0.0, min(1.0, (_avgDisc - 60) / 40))
+            skill = (clockIQ + discNorm) / 2          # 0 worst .. 0.5 neutral .. 1 best
+            gather = round(12 - skill * 7) + batched_randint(-1, 1)
+            gatherTime = min(self.game.gameClockSeconds, max(4, gather))
             self.game.consumeGameTime(gatherTime)
             self.game.checkTwoMinuteWarning()
         self.game.clockRunning = False
