@@ -6356,6 +6356,14 @@ class Game:
                     qbCarries = qbRush.get('carries', 0)
                     qbRush['ypc'] = round(qbRush.get('yards', 0) / qbCarries, 1) if qbCarries > 0 else 0.0
                     result['rushing'] = qbRush
+                elif statsKey == 'rushing':
+                    # RB checkdowns/screens: the RB flattens 'rushing', so its
+                    # receiving line would otherwise be invisible. Attach it as a
+                    # nested block so the box score can list a pass-catching RB.
+                    rbRcv = dict(p.gameStatsDict['receiving'])
+                    rbRecs = rbRcv.get('receptions', 0)
+                    rbRcv['ypr'] = round(rbRcv.get('yards', 0) / rbRecs, 1) if rbRecs > 0 else 0.0
+                    result['receiving'] = rbRcv
                 # Per-player pre-game mental modifier breakdown — always
                 # included when snapshots exist, even if every stage netted
                 # zero. "Nothing is dragging this player" is itself useful

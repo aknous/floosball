@@ -1317,7 +1317,24 @@ class TeamManager:
             pass
 
         name = None
-        if playerMgr and hasattr(playerMgr, 'popUniqueName'):
+        # Flavor: a retired player occasionally returns as a coach — reuse their name
+        # rather than drawing a fresh one. Skip names already worn by a live coach.
+        try:
+            from constants import COACH_RETIRED_NAME_CHANCE
+            retired = getattr(playerMgr, 'retiredPlayers', None) if playerMgr else None
+            if retired and _random.random() < COACH_RETIRED_NAME_CHANCE:
+                usedCoachNames = {t.coach.name for t in self.teams
+                                  if getattr(t, 'coach', None) and getattr(t.coach, 'name', None)}
+                cands = [p.name for p in retired
+                         if getattr(p, 'name', None) and p.name not in usedCoachNames]
+                if cands:
+                    name = _random.choice(cands)
+        except Exception:
+            name = None
+
+        if name is not None:
+            pass  # took a retired player's name above
+        elif playerMgr and hasattr(playerMgr, 'popUniqueName'):
             name = playerMgr.popUniqueName()
             if name is not None and not deferSave:
                 playerMgr.saveUnusedNames()

@@ -190,6 +190,9 @@ RECEIVER_MATCHUP_SCALE = 50.0   # Divisor when computing receiver-vs-coverage ma
 COACH_ATTR_NEUTRAL = 80         # Attribute value with zero effect (midpoint of 60-100 range)
 COACH_ATTR_RANGE = 20           # Half-range used to normalise coach attributes to [-1, 1]
 COACH_OFFENSIVE_MIND_FLOOR = 60 # offensiveMind below this value gives zero matchup weighting
+# Flavor: chance a newly-generated coach reuses a RETIRED player's name (a former
+# player returning as a coach), instead of drawing a fresh name from the pool.
+COACH_RETIRED_NAME_CHANCE = 0.30
 
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
