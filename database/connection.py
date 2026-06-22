@@ -1163,6 +1163,12 @@ def _runPendingMigrations():
     # Runs BEFORE players load into memory so the corrected rows hydrate
     # careerStatsDict and the in-memory dict can't clobber the fix.
     _recomputeCareerStatsFromSeasons()
+    # Reconstruct champion roster snapshots for seasons that ended before the
+    # snapshot existed — so the Champion classification + pack key off who actually
+    # won, even for past titles. Sourced from players.league_championships (stamped
+    # at the Floos Bowl, before any offseason churn). Runs BEFORE the next season's
+    # card generation so newly-generated Champion cards are correct.
+    _backfillChampionRosterSnapshots()
     _backfillTeamPeakStreaks()
     _backfillCardTemplateOutputType()
     # Tier→facilities migration: seed team_facilities from current market tiers
@@ -1986,6 +1992,56 @@ def _recomputeCareerStatsFromSeasons():
     except Exception as e:
         conn.rollback()
         logger.info(f"  Backfill warning (career-from-seasons): {e}")
+    finally:
+        conn.close()
+
+
+def _backfillChampionRosterSnapshots():
+    """Reconstruct seasons.champion_player_ids for seasons that ended before the
+    snapshot was added. The Champion classification + pack key off this; without it
+    they fall back to the champion team's CURRENT roster, which has churned. Source
+    is players.league_championships ({"Season": N, ...} stamped on each champion AT
+    the Floos Bowl, before any offseason churn) — the authoritative title roster.
+
+    Idempotent: only fills seasons that have a champion but no snapshot yet. Touches
+    NO card classifications or values — just stores the roster so generation/packs can
+    read it. Runs before the next season's card generation."""
+    import json as _json
+    from sqlalchemy import text
+    conn = engine.connect()
+    try:
+        rows = conn.execute(text(
+            "SELECT season_number FROM seasons WHERE champion_team_id IS NOT NULL "
+            "AND (champion_player_ids IS NULL OR champion_player_ids = '')"
+        )).fetchall()
+        targetSeasons = {r[0] for r in rows}
+        if not targetSeasons:
+            return
+        champBySeason = {}
+        for pid, lc in conn.execute(text(
+                "SELECT id, league_championships FROM players "
+                "WHERE league_championships IS NOT NULL")).fetchall():
+            try:
+                entries = _json.loads(lc) if isinstance(lc, str) else lc
+                for e in (entries or []):
+                    s = e.get('Season')
+                    if s in targetSeasons:
+                        champBySeason.setdefault(s, []).append(pid)
+            except Exception:
+                pass
+        filled = 0
+        for s, ids in champBySeason.items():
+            conn.execute(text(
+                "UPDATE seasons SET champion_player_ids = :ids WHERE season_number = :s"),
+                {'ids': _json.dumps(sorted(ids)), 's': s})
+            filled += 1
+        conn.commit()
+        if filled:
+            logger.info(f"  Backfill: reconstructed champion_player_ids for {filled} "
+                        f"season(s) from league_championships")
+    except Exception as e:
+        conn.rollback()
+        logger.info(f"  Backfill warning (champion snapshots): {e}")
     finally:
         conn.close()
 
