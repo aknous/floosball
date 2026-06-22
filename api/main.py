@@ -8346,6 +8346,7 @@ def getCurrencyHistory(
 def getCardCollection(
     edition: Optional[str] = Query(default=None),
     position: Optional[int] = Query(default=None),
+    classification: Optional[str] = Query(default=None),
     activeOnly: bool = Query(default=False),
     vaulted: Optional[bool] = Query(default=None),
     sort: str = Query(default="recent"),
@@ -8354,7 +8355,9 @@ def getCardCollection(
     """Get user's card collection with optional filters and sorting.
 
     `vaulted`: None = all cards, True = Vault only, False = un-vaulted only.
-    `sort`: recent | rarity | classification | rating | tier | name | team | position | manual.
+    `classification`: substring match on the card's classification (e.g. 'mvp' also
+    matches 'mvp_champion'); None = all classifications.
+    `sort`: recent | rarity | rating | tier | name | team | position | manual.
     """
     from database.connection import get_session
     from database.repositories.card_repositories import UserCardRepository
@@ -8386,6 +8389,8 @@ def getCardCollection(
                 continue
             if position is not None and tpl.position != position:
                 continue
+            if classification and classification.lower() not in (tpl.classification or "").lower():
+                continue
             if activeOnly and tpl.season_created != currentSeason:
                 continue
             if vaulted is not None and bool(getattr(card, "vaulted", False)) != vaulted:
@@ -8412,17 +8417,6 @@ def getCardCollection(
             return 0
         if sort == "rarity":
             result.sort(key=lambda d: (_EDITION_RANK.get(d.get("edition"), 0), _num(d, "id")), reverse=True)
-        elif sort == "classification":
-            # Group classified cards together, most prestigious first (MVP > Champion >
-            # All-Pro > Rookie), unclassified last; newest first within a tier.
-            def _classRank(d):
-                c = (d.get("classification") or "").lower()
-                if "mvp" in c: return 4
-                if "champion" in c: return 3
-                if "all_pro" in c: return 2
-                if "rookie" in c: return 1
-                return 0
-            result.sort(key=lambda d: (_classRank(d), _num(d, "id")), reverse=True)
         elif sort == "rating":
             result.sort(key=lambda d: (_num(d, "playerRating", "rating"), _num(d, "id")), reverse=True)
         elif sort == "tier":
