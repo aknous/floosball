@@ -809,14 +809,11 @@ SHOWCASE_RECENCY_BY_AGE = {0: 1.0, 1: 0.85, 2: 0.45, 3: 0.25}
 SHOWCASE_RECENCY_FLOOR = 0.15   # 4+ seasons old
 # Upgrade tier lifts a card's showcase value: ×(1 + (tier−1) × THIS).
 SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
-# Set bonuses ADD into one multiplier: score = Σ cardPoints × (1 + Σ bonuses),
-# with the bonus sum capped here so stacked sets can't run away.
+# Set bonuses are FLAT completion rewards that ADD into one multiplier:
+# score = Σ cardPoints × (1 + Σ bonuses), with the sum capped here so stacked sets
+# can't run away. Card quality is already priced into cardPoints (edition/recency/
+# tier), so a completed set pays its full bonus regardless of the editions in it.
 SHOWCASE_MAX_SET_BONUS = 1.5
-# Sets are TIERED by the edition of the cards forming them: an All-Pro Line of
-# holos is worth a fraction of one made of diamonds. Each active set's bonus is
-# scaled by the mean edition-weight of its member cards. So the top grades demand
-# high-edition sets, not just any cards that happen to share a tag.
-SHOWCASE_SET_EDITION_WEIGHT = {"base": 0.15, "holographic": 0.35, "prismatic": 0.65, "diamond": 1.0}
 # Score → grade (first threshold the score meets, scanning high to low).
 # Calibrated against target card-quality profiles + the real season-9 showcases.
 # The top grades demand QUALITY (fresh, high-edition, decorated cards), not

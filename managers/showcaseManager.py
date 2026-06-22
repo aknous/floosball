@@ -14,7 +14,8 @@ the named Active / Almost sets.
 Scoring (all weights in constants.py, tune via /simcheck):
   per-card  = (EDITION + Σ CLASSIFICATION) × recency × (1 + (tier−1) × tierStep)
   recency   = max(FLOOR, 1 − STEP × seasonsOld)   # newer cards pay more (prestige decays too)
-  setBonus  = baseBonus × meanEditionWeight(set members)  # holo sets < diamond sets
+  setBonus  = Σ baseBonus of each completed set  # FLAT — completion reward, card
+              # quality already lives in per-card (edition/recency/tier); no extra scaling
   finalScore= Σ per-card × (1 + min(Σ setBonus, MAX_SET_BONUS))
   grade     = first threshold finalScore meets (high→low) — a LABEL only
   dividend  = round(SHOWCASE_DIVIDEND_RATE × finalScore)   # paid per regular-season week
@@ -32,7 +33,6 @@ from constants import (
     SHOWCASE_RECENCY_FLOOR,
     SHOWCASE_TIER_BONUS_PER_LEVEL,
     SHOWCASE_MAX_SET_BONUS,
-    SHOWCASE_SET_EDITION_WEIGHT,
     SHOWCASE_GRADE_THRESHOLDS,
     SHOWCASE_DIVIDEND_RATE,
 )
@@ -86,31 +86,12 @@ def _cardPoints(card: dict, currentSeason: int) -> float:
 
 # ─── Set detectors (return (cards-still-needed, member-cards); 0 dist = active) ─
 # Each detector returns how many cards the set still needs AND the cards that form
-# it, so an active set's bonus can be scaled by the edition quality of its members
-# (a holo All-Pro Line is worth a fraction of a diamond one).
+# it. A completed set adds its FLAT bonus (no edition scaling) — card quality is
+# already priced into per-card scoring.
 
 def _hasTag(card: dict, tag: str) -> bool:
     c = card.get("classification")
     return bool(c) and tag in c
-
-
-def _editionQuality(members) -> float:
-    """Mean edition-weight of a set's member cards (0..1; all-diamond = 1.0)."""
-    if not members:
-        return 0.0
-    return sum(SHOWCASE_SET_EDITION_WEIGHT.get(c.get("edition"), 0.0)
-               for c in members) / len(members)
-
-
-def _qualityTier(quality: float) -> str:
-    """Qualitative edition tier of an active set, for display."""
-    if quality >= 0.85:
-        return "Diamond"
-    if quality >= 0.55:
-        return "Prismatic"
-    if quality >= 0.30:
-        return "Holo"
-    return "Base"
 
 
 def _distFullSpectrum(cards):
@@ -230,12 +211,13 @@ def evaluate(cards, currentSeason: int) -> dict:
             "bonus": round(rule["bonus"], 2),   # base bonus at all-Diamond quality
         }
         if dist == 0 and cards:
-            quality = _editionQuality(members)
-            applied = rule["bonus"] * quality   # holo sets pay a fraction of diamond sets
-            tier = _qualityTier(quality)
-            totalBonus += applied
-            entry.update(status="active", tier=tier, appliedBonus=round(applied, 3))
-            active.append({"key": rule["key"], "name": rule["name"], "tier": tier})
+            # FLAT completion bonus — a set adds its full bonus regardless of the
+            # editions in it. Card quality is already priced into baseScore (edition /
+            # recency / tier), so the set bonus is a pure completion reward. No edition
+            # scaling (it double-taxed quality and made the payout confusing).
+            totalBonus += rule["bonus"]
+            entry.update(status="active")
+            active.append({"key": rule["key"], "name": rule["name"]})
         elif cards and 1 <= dist <= 2:
             unit = rule["one"] if dist == 1 else rule["many"]
             hint = f"{dist} more {unit}"
