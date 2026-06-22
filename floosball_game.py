@@ -8610,6 +8610,14 @@ class Play():
         self.playType = PlayType.Spike
         self.yardage = 0
         self.isPassCompletion = False
+        # The clock was running and the offense had to hustle to the line and snap
+        # before spiking — burn that gather time first (a fast no-huddle rush, so
+        # shorter than a normal pre-snap). Without this the spike consumed zero
+        # clock, so the displayed time never moved off the previous play's mark.
+        if self.game.clockRunning:
+            gatherTime = min(self.game.gameClockSeconds, batched_randint(6, 10))
+            self.game.consumeGameTime(gatherTime)
+            self.game.checkTwoMinuteWarning()
         self.game.clockRunning = False
         if self.game.down == 1:
             self.playResult = PlayResult.SecondDown
