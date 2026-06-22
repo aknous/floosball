@@ -796,12 +796,12 @@ SHOWCASE_SLOTS = 8
 # Per-card base = EDITION_POINTS × recency + Σ CLASSIFICATION_POINTS, ×tier mult.
 SHOWCASE_EDITION_POINTS = {"base": 1, "holographic": 4, "prismatic": 12, "diamond": 30}
 SHOWCASE_CLASSIFICATION_POINTS = {"rookie": 5, "all_pro": 10, "champion": 12, "mvp": 20}
-# Recency: newer cards pay more, keyed by card age (seasons old). Gentle for the
-# first season, then a steep decline from two seasons on — a card gets ~2 prime
-# showcase seasons, after which it can't prop up a top grade. Ages past the table
-# use the floor. Non-linear on purpose (a flat per-season step can't do this).
-SHOWCASE_RECENCY_BY_AGE = {0: 1.0, 1: 0.85, 2: 0.45, 3: 0.25}
-SHOWCASE_RECENCY_FLOOR = 0.15   # 4+ seasons old
+# Recency: newer cards pay more, keyed by card age (seasons old). Newest score full;
+# older cards taper but stay meaningfully valuable (the decline was too aggressive
+# before — old cards fell off a cliff). Ages past the table use the floor. Non-linear
+# on purpose (a flat per-season step can't do this).
+SHOWCASE_RECENCY_BY_AGE = {0: 1.0, 1: 0.9, 2: 0.75, 3: 0.6}
+SHOWCASE_RECENCY_FLOOR = 0.5   # 4+ seasons old — keep a strong floor so old cards still count
 # Upgrade tier lifts a card's showcase value: ×(1 + (tier−1) × THIS).
 SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
 # Set bonuses are FLAT completion rewards that ADD into one multiplier:

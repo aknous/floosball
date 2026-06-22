@@ -244,6 +244,7 @@ def evaluate(cards, currentSeason: int) -> dict:
         "cardBreakdown": breakdowns,
         "baseScore": round(baseScore, 1),
         "setBonus": round(totalBonus, 3),   # e.g. 0.45 → sets add +45%
+        "dividendRate": SHOWCASE_DIVIDEND_RATE,  # weekly payout = rate × score × (1+setBonus)
         "score": round(finalScore, 1),      # drives the grade + leaderboard ranking
     }
 
