@@ -7509,17 +7509,21 @@ class Game:
         # Pass plays
         if self.play.playType == PlayType.Pass:
             if self.play.isPassCompletion:
-                # Completed pass - check if in bounds
-                return self.play.isInBounds
+                # Completed pass - in bounds keeps the clock; out of bounds stops
+                # it unless the running-clock rule suppresses OOB stoppage.
+                if self.play.isInBounds:
+                    return True
+                return not self.gameRules.clockStopsOnOutOfBounds
             else:
-                return False  # Incomplete stops clock
-        
-        # Run plays - clock runs unless out of bounds
+                # Incomplete stops the clock unless the running-clock rule is on.
+                return not self.gameRules.clockStopsOnIncompletePass
+
+        # Run plays - clock runs unless out of bounds (and the OOB rule stops it)
         if self.play.playType == PlayType.Run:
             if self.play.isInBounds:
                 return True  # Run in bounds, clock runs
             else:
-                return False  # Out of bounds stops clock
+                return not self.gameRules.clockStopsOnOutOfBounds
         
         # Kneel - clock always runs
         if self.play.playType == PlayType.Kneel:

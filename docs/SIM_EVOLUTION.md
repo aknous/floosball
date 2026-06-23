@@ -253,3 +253,23 @@ stay gated. They touch the field-position model *and* the win-probability EP tab
 MVP/All-Pro/pick-em — so they need an exhaustive field-position sweep (touchback spot = fieldLength−20,
 midfield = fieldLength/2, yardLine display, punt flip, onside spots, WP `field_position` normalization)
 plus a WP-regression check. FG range correctly stays absolute (a 35-yard kick is 35 yards on any field).
+
+## Build log — clock knobs + running clock (2026-06-23)
+
+Promoted out of the gated set:
+
+- **Clock / FG scalars** (`overtimeLengthSeconds`, `timeoutClockThreshold`, `spikeClockThreshold`,
+  `kneelDrainSeconds`, `fgSnapDistance`) — already read from `gameRules`; one consistency fix
+  (`kneelDrainSeconds` was the AI's drain *prediction* only, the actual post-play drain was a
+  hardcoded `min(36,…)` → now `kneelDrainSeconds - 4`). Proven: kneel post-play drain is exactly
+  `kneelDrainSeconds-4`; `fgSnapDistance` 17→7 raised FG output 1.64→1.78 per team-game.
+- **Running clock** — new booleans `clockStopsOnIncompletePass` / `clockStopsOnOutOfBounds`
+  (default True = standard football), gated in `shouldClockRun()` (the single per-play clock
+  decision; none of the 14 explicit `clockRunning=False` stops touch incompletion/OOB). With both
+  off: plays/game 162.9→117.9 (−28%), ppg 12.2→9.3. The clock-management play-calling heuristics
+  still assume incompletions stop the clock, so they degrade gracefully — a later pass can make
+  them rule-aware (e.g. don't favor sideline/incomplete throws to "stop the clock" when it won't).
+
+Still gated: field geometry (`fieldLength` + `kickoffPosition`), `quartersPerGame` (67 sites assume
+Q4 = final / halftime at Q2), and the remaining placement scalars (`patSnapDistance`,
+`twoPointConversionDistance`, `twoMinuteWarningSeconds`).

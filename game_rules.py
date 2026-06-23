@@ -58,6 +58,12 @@ class GameRules:
     timeoutClockThreshold: int = 120    # Below this in Q2/Q4, timeout considered
     kneelDrainSeconds: int = 40         # Clock burned per kneel
 
+    # ── Clock stoppage (the Cores can flip these to a "running clock") ──
+    # When False, that event no longer stops the clock — the inter-play clock
+    # keeps draining, so games have far fewer plays. Defaults = standard football.
+    clockStopsOnIncompletePass: bool = True
+    clockStopsOnOutOfBounds: bool = True
+
     # ── Scoring values ─────────────────────────────────────────────
     touchdownPoints: int = 6
     fieldGoalPoints: int = 3
@@ -131,6 +137,8 @@ class GameRules:
             "spikeClockThreshold": self.spikeClockThreshold,
             "timeoutClockThreshold": self.timeoutClockThreshold,
             "kneelDrainSeconds": self.kneelDrainSeconds,
+            "clockStopsOnIncompletePass": self.clockStopsOnIncompletePass,
+            "clockStopsOnOutOfBounds": self.clockStopsOnOutOfBounds,
             "touchdownPoints": self.touchdownPoints,
             "fieldGoalPoints": self.fieldGoalPoints,
             "extraPointPoints": self.extraPointPoints,
@@ -196,6 +204,11 @@ MUTABLE_RULE_FIELDS = {
     # of truth for the per-kneel drain (snap 4s + play-clock kneelDrainSeconds-4).
     "overtimeLengthSeconds", "timeoutClockThreshold", "spikeClockThreshold",
     "kneelDrainSeconds", "fgSnapDistance",
+    # Running-clock rule — suppress the incompletion / out-of-bounds clock stops
+    # (gated in shouldClockRun). Far fewer plays per game. Clock-management
+    # play-calling heuristics still assume incompletions stop the clock, so they
+    # degrade gracefully (a later pass can make them rule-aware).
+    "clockStopsOnIncompletePass", "clockStopsOnOutOfBounds",
 }
 
 RULE_OVERRIDES_SETTING_KEY = "rule_overrides"
