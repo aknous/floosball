@@ -2290,10 +2290,16 @@ class Game:
 
         if scoreDiff > 0:
             if self.currentQuarter == 4 and self.gameClockSeconds < 300:
-                # Leading with little time: burn clock, don't risk a FG miss
-                # Skip kneel inside own 2 to avoid backing into a safety —
-                # fall through and let the run/punt logic pick something safer.
-                if self.gameClockSeconds <= 40 and self.yardsToSafety > 2:
+                # Leading with little time: burn clock, don't risk a FG miss.
+                # A kneel on 4th down is a turnover on downs, so it's only safe
+                # when it actually ENDS the game: the opponent must have no
+                # timeouts to stop the clock, and the remaining time must fit in
+                # one kneel's drain — otherwise the kneel just hands them the ball
+                # back with time on the clock. Skip inside own 2 (safety risk);
+                # otherwise fall through to a safe run / punt.
+                _oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
+                if (self.gameClockSeconds <= self.gameRules.kneelDrainSeconds
+                        and self.yardsToSafety > 2 and _oppTimeouts == 0):
                     self.play.kneel()
                     return
                 if inFieldGoalRange and self.yardsToEndzone <= 40:
@@ -5276,8 +5282,14 @@ class Game:
                                 self.play.playResult = PlayResult.FourthDown
                             continue
                         else:
-                            self.play.playResult = PlayResult.TurnoverOnDowns
-                            self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
+                            # A victory-formation kneel that ran the clock to 0:00
+                            # ends the game — it's not a live turnover on downs, so
+                            # don't stamp the turnover label / momentum swing on it.
+                            kneelEndedGame = (self.play.playType is PlayType.Kneel
+                                              and self.gameClockSeconds <= 0)
+                            if not kneelEndedGame:
+                                self.play.playResult = PlayResult.TurnoverOnDowns
+                                self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
                             self.clockRunning = False  # Clock stops after turnover on downs
                             self.formatPlayText()
                             # Kneel and spike branches above (line ~4451) already
