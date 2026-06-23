@@ -142,8 +142,85 @@ class GameRules:
             "patchHistory": list(self.patchHistory),
         }
 
+    def applyOverrides(self, overrides: Dict[str, Any],
+                       reason: str = "persisted override",
+                       source: str = "core_patch") -> List[str]:
+        """Apply a ``{field: value}`` override map via ``applyPatch`` (audit-logged).
+
+        Only fields in ``MUTABLE_RULE_FIELDS`` are applied — structural rules
+        (downs, field length, clock) are gated out until the sim's heuristics
+        are safe under non-default values. Unknown/blocked fields are silently
+        skipped. Returns the list of field names actually applied.
+        """
+        applied: List[str] = []
+        for fieldName, value in (overrides or {}).items():
+            if fieldName not in MUTABLE_RULE_FIELDS:
+                continue
+            if self.applyPatch(fieldName, value, reason=reason, source=source):
+                applied.append(fieldName)
+        return applied
+
 
 # Module-level default — used by code paths that need to fall back to
 # standard rules when no Season-scoped instance is available (tests,
 # isolated game sims, etc.).
 DEFAULT_RULES = GameRules()
+
+
+# ── Rule-override persistence (the Cores' rule-mutation layer) ──────────────
+# The current set of rules safe to mutate at runtime: low-blast-radius scalars
+# only (scoring values + the FG attempt threshold). STRUCTURAL rules (downs,
+# field length, clock) stay OUT until the sim's heuristics are made safe under
+# non-default values — see docs/SIM_EVOLUTION.md feasibility.
+MUTABLE_RULE_FIELDS = {
+    "touchdownPoints", "fieldGoalPoints", "extraPointPoints",
+    "twoPointConversionPoints", "safetyPoints", "fgMinAttemptProb",
+}
+
+RULE_OVERRIDES_SETTING_KEY = "rule_overrides"
+
+
+def loadRuleOverrides() -> Dict[str, Any]:
+    """Read the persisted rule-override map from ``app_settings``.
+
+    Returns ``{}`` on any error (missing table, no row, bad JSON) so a fresh or
+    test DB simply runs the default ruleset.
+    """
+    try:
+        import json
+        from sqlalchemy import text
+        from database.connection import SessionLocal
+        session = SessionLocal()
+        try:
+            row = session.execute(
+                text("SELECT value FROM app_settings WHERE key = :k"),
+                {"k": RULE_OVERRIDES_SETTING_KEY},
+            ).fetchone()
+        finally:
+            session.close()
+        if not row or not row[0]:
+            return {}
+        data = json.loads(row[0])
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def saveRuleOverrides(overrides: Dict[str, Any]) -> None:
+    """Upsert the rule-override map into ``app_settings`` (the persistent store)."""
+    import json
+    from datetime import datetime
+    from sqlalchemy import text
+    from database.connection import SessionLocal
+    session = SessionLocal()
+    try:
+        session.execute(
+            text("INSERT INTO app_settings (key, value, updated_at) "
+                 "VALUES (:k, :v, :t) "
+                 "ON CONFLICT(key) DO UPDATE SET value = :v, updated_at = :t"),
+            {"k": RULE_OVERRIDES_SETTING_KEY, "v": json.dumps(overrides),
+             "t": datetime.utcnow()},
+        )
+        session.commit()
+    finally:
+        session.close()

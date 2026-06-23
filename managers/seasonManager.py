@@ -84,11 +84,20 @@ class Season:
         self.currentWeekText = None
         self.startDate: datetime.datetime = datetime.datetime.utcnow()
         # Rule book for this season. Defaults to the standard ruleset.
-        # Future Cores' rule patches mutate this object via
-        # ``gameRules.applyPatch(...)`` and the patch propagates to
-        # every game scheduled in this season from that point forward.
-        from game_rules import GameRules
+        # Cores' rule patches (e.g. a fan-voted scoring change) are persisted
+        # in app_settings and hydrated here, so the mutated ruleset is in force
+        # from this season's first game and survives restarts. The patch then
+        # propagates to every game scheduled in this season (each Game holds a
+        # reference to this object). No-op when nothing is persisted.
+        from game_rules import GameRules, loadRuleOverrides
         self.gameRules = GameRules()
+        _ruleOverrides = loadRuleOverrides()
+        if _ruleOverrides:
+            _appliedRules = self.gameRules.applyOverrides(
+                _ruleOverrides, reason="season start", source="persisted")
+            if _appliedRules:
+                logger.info("  GameRules: applied persisted rule override(s): "
+                            f"{ {k: _ruleOverrides[k] for k in _appliedRules} }")
         self.activeGames = None
         self.completedWeekGames = None  # Finished games kept for display until next week
         self.schedule: List[Dict[str, FloosGame.Game]] = []

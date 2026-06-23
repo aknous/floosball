@@ -3378,7 +3378,7 @@ class Game:
         if fieldAhead > 0 and returnYards >= fieldAhead:
             # Scoop-and-score (mirrors the defensive-TD branch; receiving team
             # starts at its own 20 → yardsToEndzone 80).
-            self._addScore(self.defensiveTeam, 6)
+            self._addScore(self.defensiveTeam, self.gameRules.touchdownPoints)
             self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
             play.playResult = PlayResult.Touchdown
             self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 3
@@ -4884,9 +4884,9 @@ class Game:
                         break
 
                     if self.play.isFgGood:
-                        self._addScore(self.offensiveTeam, 3)
+                        self._addScore(self.offensiveTeam, self.gameRules.fieldGoalPoints)
                         self._applyMomentumEvent(MOMENTUM_FG_MADE, self.offensiveTeam)
-                        self.defensiveTeam.gameDefenseStats['ptsAlwd'] += 3
+                        self.defensiveTeam.gameDefenseStats['ptsAlwd'] += self.gameRules.fieldGoalPoints
                         self.play.playResult = PlayResult.FieldGoalGood
                         self.play.scoreChange = True
                         self.play.homeTeamScore = self.homeScore
@@ -5037,7 +5037,7 @@ class Game:
                         self.broadcastGameState(includeLastPlay=True)
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
-                        self._addScore(self.defensiveTeam, 6)
+                        self._addScore(self.defensiveTeam, self.gameRules.touchdownPoints)
                         self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
 
                         # Defensive TD: PAT/2-pt now runs as a separate no-time
@@ -5086,9 +5086,9 @@ class Game:
                             self.play.passer.updateInGameConfidence(.03)
                             self.play.receiver.updateInGameConfidence(.03)
 
-                        self.play.defense.gameDefenseStats['ptsAlwd'] += 6
+                        self.play.defense.gameDefenseStats['ptsAlwd'] += self.gameRules.touchdownPoints
 
-                        self._addScore(self.offensiveTeam, 6)
+                        self._addScore(self.offensiveTeam, self.gameRules.touchdownPoints)
                         self._applyMomentumEvent(MOMENTUM_TD, self.offensiveTeam)
 
                         # Broadcast TD as its own play, then run the PAT/2-pt
@@ -5142,7 +5142,7 @@ class Game:
 
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
                         if self.play.isFumbleLost:
-                            self._addScore(self.defensiveTeam, 6)
+                            self._addScore(self.defensiveTeam, self.gameRules.touchdownPoints)
                             self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
 
                             # Scoop-and-score TD: PAT/2-pt now fires as a
@@ -5176,7 +5176,7 @@ class Game:
                             self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                             break
                         else:
-                            self._addScore(self.defensiveTeam, 2)
+                            self._addScore(self.defensiveTeam, self.gameRules.safetyPoints)
                             self._applyMomentumEvent(MOMENTUM_SAFETY, self.defensiveTeam)
 
                             self.play.defense.gameDefenseStats['safeties'] += 1
@@ -7379,7 +7379,7 @@ class Game:
 
         twoPointGood = self.play.yardage >= 2
         if twoPointGood:
-            self._addScore(scoringTeam, 2)
+            self._addScore(scoringTeam, self.gameRules.twoPointConversionPoints)
             self.play.playResult = PlayResult.Touchdown2PtGood
             self.play.scoreChange = True
         else:
@@ -7449,11 +7449,11 @@ class Game:
 
         self.play.extraPointTry(scoringTeam)
         if self.play.isXpGood:
-            self._addScore(scoringTeam, 1)
+            self._addScore(scoringTeam, self.gameRules.extraPointPoints)
             self.play.playResult = PlayResult.ExtraPointGood
             self.play.scoreChange = True
             if trackPtsAllowed:
-                opposingTeam.gameDefenseStats['ptsAlwd'] += 1
+                opposingTeam.gameDefenseStats['ptsAlwd'] += self.gameRules.extraPointPoints
         else:
             self.play.playResult = PlayResult.ExtraPointNoGood
             self.play.scoreChange = False
