@@ -221,3 +221,35 @@ resurrection **un-retire mechanics + offseason ordering** (with a sim-check). **
 mutations (downs, field length, TD points) are the only **L-tier** risk — gate them behind the safe
 scalar mutations. Resurrection's voting is the lightest first win; rule-mutation's *persistence
 layer* is the highest-leverage piece to build first.
+
+## Build log — mutable rule layer (2026-06-23)
+
+The rule-mutation persistence layer (`GameRules.applyOverrides` + `loadRuleOverrides`/
+`saveRuleOverrides` → `app_settings`, hydrated in `Season.__init__`) is live and the
+`MUTABLE_RULE_FIELDS` allowlist gates what may be mutated. Proven mutable so far:
+
+- **Scoring values** (`touchdownPoints`, `fieldGoalPoints`, `extraPointPoints`,
+  `twoPointConversionPoints`, `safetyPoints`) — proven via a "rainbow" override (each value
+  distinct from every old literal) + instrumenting `_addScore`: across 4,082 scoring events the
+  only point values emitted were the override values, zero of the old literals (6/3/1/2). Every
+  scoring site reads `self.gameRules.*`. (`fgMinAttemptProb` is allowlisted too — a play-calling
+  input, not a score value; matters once powered-up kickers need extended FG range.)
+- **Structural #1 `firstDownDistance`** — core mechanic already read `gameRules`; fixed the three
+  goal-to-go `10` literals (one mechanic at the conversion site, two display) to `firstDownDistance`.
+  Proven at `firstDownDistance=15`: 789/789 fresh non-goal-to-go first downs measured exactly 15
+  yards (zero at 10), scoring fell 14.3→12.5 ppg, no crashes.
+- **Structural #2 `downsPerSeries`** — generalized every "final down / advance-vs-turnover /
+  possession-loop bound / kneel count / spike availability / clock-management gate" from the
+  literal 4 to `gameRules.downsPerSeries`; replaced the by-down ordinal text + `PlayResult` chains
+  with `downOrdinal()`/`downPlayResult()` helpers (now support up to 6 downs via `FifthDown`/
+  `SixthDown`). Named-stat counters (`3rd/4thDownAtt`), pressure-by-down, and `down_factor` stay
+  as graceful-degradation heuristics. Proven at 3 and 5: the per-play down distribution bounds
+  exactly at `downsPerSeries` (dp=3 never reaches down 4; dp=5 produces 8,468 fifth-down plays),
+  scoring is monotonic (9.6 / 12.5 / 17.8 ppg at 3/4/5 downs), two offseasons completed cleanly.
+  No code outside `floosball_game.py` assumes a fixed 4 downs.
+
+**Deferred: field geometry.** `fieldLength` (and `kickoffPosition`, to be wired in the same pass)
+stay gated. They touch the field-position model *and* the win-probability EP table, which feeds
+MVP/All-Pro/pick-em — so they need an exhaustive field-position sweep (touchback spot = fieldLength−20,
+midfield = fieldLength/2, yardLine display, punt flip, onside spots, WP `field_position` normalization)
+plus a WP-regression check. FG range correctly stays absolute (a 35-yard kick is 35 yards on any field).

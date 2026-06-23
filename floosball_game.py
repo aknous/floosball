@@ -167,6 +167,8 @@ class PlayResult(enum.Enum):
     SecondDown = '2nd Down'
     ThirdDown = '3rd Down'
     FourthDown = '4th Down'
+    FifthDown = '5th Down'
+    SixthDown = '6th Down'
     Punt = 'Punt'
     TurnoverOnDowns = 'Turnover On Downs'
     FieldGoalGood = 'Field Goal is Good'
@@ -181,6 +183,27 @@ class PlayResult(enum.Enum):
     Safety = 'Safety'
     Fumble = 'Fumble'
     Interception = 'Interception'
+
+
+# ── Down helpers (downsPerSeries is a mutable rule — see game_rules.py) ──
+# The number of downs in a series is no longer fixed at 4, so down-number →
+# ordinal text and down-number → PlayResult enum are computed generically
+# instead of via hardcoded 1st/2nd/3rd/4th chains.
+_DOWN_ORDINALS = {1: '1st', 2: '2nd', 3: '3rd', 4: '4th', 5: '5th', 6: '6th'}
+_DOWN_PLAY_RESULTS = {
+    1: PlayResult.FirstDown, 2: PlayResult.SecondDown, 3: PlayResult.ThirdDown,
+    4: PlayResult.FourthDown, 5: PlayResult.FifthDown, 6: PlayResult.SixthDown,
+}
+
+
+def downOrdinal(down: int) -> str:
+    """'1st'..'6th' for known downs, else 'Nth' (defensive fallback)."""
+    return _DOWN_ORDINALS.get(down, '{0}th'.format(down))
+
+
+def downPlayResult(down: int) -> 'PlayResult':
+    """PlayResult enum for the given (non-first) down; FirstDown as fallback."""
+    return _DOWN_PLAY_RESULTS.get(down, PlayResult.FirstDown)
 
 
 # ── Inside run descriptions (A-gap, B-gap) ──
@@ -1202,17 +1225,8 @@ class Game:
             gameStatsDict['homeTeamPoss'] = False
             gameStatsDict['awayTeamPoss'] = True
         gameStatsDict['down'] = self.down
-        if self.down == 1:
-            down = '1st'
-        elif self.down == 2:
-            down = '2nd'
-        elif self.down == 3:
-            down = '3rd'
-        elif self.down == 4:
-            down = '4th'
-        else:
-            down = '1st'
-        if self.yardsToEndzone <= 10:
+        down = downOrdinal(self.down)
+        if self.yardsToEndzone <= self.gameRules.firstDownDistance:
             gameStatsDict['yardsTo1stDwn'] = self.yardsToEndzone
             gameStatsDict['downText'] = '{0} & Goal'.format(down)
         else:
@@ -1395,18 +1409,9 @@ class Game:
             gameStatsDict['homeTeamPoss'] = False
             gameStatsDict['awayTeamPoss'] = True
         gameStatsDict['down'] = self.down
-        if self.down == 1:
-            down = '1st'
-        elif self.down == 2:
-            down = '2nd'
-        elif self.down == 3:
-            down = '3rd'
-        elif self.down == 4:
-            down = '4th'
-        else:
-            down = '1st'
+        down = downOrdinal(self.down)
         gameStatsDict['downText'] = '{0} & {1}'.format(down, self.yardsToFirstDown)
-        if self.yardsToEndzone < 10:
+        if self.yardsToEndzone < self.gameRules.firstDownDistance:
             gameStatsDict['yardsTo1stDwn'] = self.yardsToEndzone
         else:
             gameStatsDict['yardsTo1stDwn'] = self.yardsToFirstDown
@@ -1843,7 +1848,7 @@ class Game:
         )
         # Realistic spike budget — using more would forfeit too many downs.
         # Down 1 or 2 → 1 spike between productive plays; 3rd down → 0.
-        spikesAvailable = 1 if self.down < 3 else 0
+        spikesAvailable = 1 if self.down < self.gameRules.downsPerSeries - 1 else 0
         plays = 0
         while secs > 5:
             plays += 1
@@ -2103,7 +2108,7 @@ class Game:
         # When a FG only ties (down by exactly 3) or it's the first
         # possession, play for TD on downs 1–3 and only kick on 4th.
         fgOnlyTies = (scoreDiff == -3)
-        if (self.down < 4 and scoreDiff >= -3 and not isFirstPoss and not fgOnlyTies
+        if (self.down < self.gameRules.downsPerSeries and scoreDiff >= -3 and not isFirstPoss and not fgOnlyTies
                 and self.yardsToEndzone <= kickerMaxFg):
             aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
             # 60 aggr → 0.96 (chip shot only), 80 → 0.92, 100 → 0.88
@@ -2112,8 +2117,8 @@ class Game:
                 self.play.playType = PlayType.FieldGoal
                 return
 
-        if self.down == 4:
-            # Kick FG on 4th if probability is reasonable and it ties or wins.
+        if self.down == self.gameRules.downsPerSeries:
+            # Kick FG on the final down if probability is reasonable and it ties or wins.
             # Long-shot FG check: if the kick is low-probability AND the
             # yards-to-go is reachable, prefer going for it to get closer
             # for a higher-percentage attempt. Aggressive coaches roll the
@@ -2912,8 +2917,8 @@ class Game:
                 }
         self.play.insights['_prePlayComposure'] = prePlayComposure
 
-        # Clock management — evaluated before any play selection on downs 1-3
-        if self.down <= 3:
+        # Clock management — evaluated before any play selection on non-final downs
+        if self.down < self.gameRules.downsPerSeries:
             # Kneel: Q4/OT, leading — only when guaranteed to drain the clock
             # Each kneel ~40 sec; opponent timeouts only matter when game is close (≤8 pts)
             # Field-position guard: kneel loses 1 yard, so on own 1 (or goal line) it
@@ -2922,7 +2927,7 @@ class Game:
             if ((self.currentQuarter == 4 or self.currentQuarter >= 5)
                     and scoreDiff > 0 and self.yardsToSafety > 2):
                 oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
-                availableKneels = 4 - self.down  # 1st→3, 2nd→2, 3rd→1
+                availableKneels = self.gameRules.downsPerSeries - self.down  # remaining downs
                 # Defense won't waste TOs in unwinnable games (matches _checkDefensiveTimeout)
                 maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
                 effectiveOppTos = oppTimeouts if scoreDiff <= maxComebackPts else 0
@@ -2960,7 +2965,7 @@ class Game:
                     # already reserves ~7s for the closing FG kick, so >= 1
                     # means "1 play + FG fits". Defer rate is very high here —
                     # kicking the tying FG when a snap still fits is wrong.
-                    if self.down < 4 and playsAvailable >= 1:
+                    if self.down < self.gameRules.downsPerSeries and playsAvailable >= 1:
                         playsBonus = min(0.04, (playsAvailable - 1) * 0.02)
                         deferChance = 0.94 + playsBonus + 0.03 * aggrNorm + 0.02 * gameIQ
                         deferChance = max(0.85, min(0.99, deferChance))
@@ -3015,7 +3020,7 @@ class Game:
                         # Kick when there's no meaningful play room left.
                         # Helper reserves FG time, so playsAvailable == 0 means
                         # "only the FG itself fits before regulation ends".
-                        if self.down == 4 or playsAvailable == 0:
+                        if self.down == self.gameRules.downsPerSeries or playsAvailable == 0:
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'gameWinningFG',
                                 'reason': 'Tied, in chip-shot range, kick to win',
@@ -3054,10 +3059,10 @@ class Game:
             # into a 4th-down must-score).
             spikeKicker = self.offensiveTeam.rosterDict.get('k')
             spikeKickerMax = (spikeKicker.maxFgDistance - self.gameRules.fgSnapDistance) if spikeKicker else 0
-            spikeFgException = (self.down == 3 and -3 <= scoreDiff <= 0
+            spikeFgException = (self.down == self.gameRules.downsPerSeries - 1 and -3 <= scoreDiff <= 0
                                 and self.yardsToEndzone <= spikeKickerMax
                                 and secs <= 20)
-            spikeDownOK = self.down <= 2 or spikeFgException
+            spikeDownOK = self.down <= self.gameRules.downsPerSeries - 2 or spikeFgException
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
                     and secs <= self.gameRules.spikeClockThreshold
@@ -3160,7 +3165,7 @@ class Game:
         # End-of-half FG attempt (only if reasonable probability)
         endGameFgProb = self._estimateFgProbability()
         endGameFgThreshold = self._coachFgThreshold(coach)
-        if self.currentQuarter == 2 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == 4:
+        if self.currentQuarter == 2 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
             if self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 self.play.playType = PlayType.FieldGoal
                 return
@@ -3170,7 +3175,7 @@ class Game:
         # enough clock to run another play, prefer going for it to get
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
-        if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == 4:
+        if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
             if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 canAdvance = self.gameClockSeconds >= 30
                 if canAdvance and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
@@ -3212,8 +3217,8 @@ class Game:
                     self.play.targetSideline = False
                     return
 
-        # 4th down
-        if self.down == 4:
+        # Final down — punt / FG / go-for-it decision
+        if self.down == self.gameRules.downsPerSeries:
             self._fourthDownCaller(scoreDiff, coach, isHome)
             # Record decision after the fact
             if 'fourthDown' in self.play.insights:
@@ -4676,14 +4681,14 @@ class Game:
                         broadcaster.broadcast_sync(self.id, event)
 
             # Start new possession if needed
-            if self.down == 0 or self.down > 4:
+            if self.down == 0 or self.down > self.gameRules.downsPerSeries:
                 self.down = 1
                 self.yardsToFirstDown = self.gameRules.firstDownDistance
                 self.yardsToEndzone = 80
                 self.yardsToSafety = 20
 
             # Possession loop - while offense has downs
-            while self.down <= 4 and self.gameClockSeconds > 0:
+            while self.down <= self.gameRules.downsPerSeries and self.gameClockSeconds > 0:
                 # Show previous play if exists (unless already formatted at quarter transition)
                 # Update yardline display to current ball position (do this before broadcast and play creation)
                 if self.yardsToEndzone > 50:
@@ -5131,7 +5136,7 @@ class Game:
                             self.away1stDownsTotal += 1
                             if downBefore == 3: self.away3rdDownConv += 1
                             elif downBefore == 4: self.away4thDownConv += 1
-                        if self.yardsToEndzone < 10:
+                        if self.yardsToEndzone < self.gameRules.firstDownDistance:
                             self.yardsToFirstDown = self.yardsToEndzone
                         else:
                             self.yardsToFirstDown = self.gameRules.firstDownDistance
@@ -5227,14 +5232,9 @@ class Game:
                         self.yardsToEndzone -= self.play.yardage
                         self.yardsToSafety += self.play.yardage
                         self.yardsToFirstDown -= self.play.yardage
-                        if self.down < 4:
+                        if self.down < self.gameRules.downsPerSeries:
                             self.down += 1
-                            if self.down == 2:
-                                self.play.playResult = PlayResult.SecondDown
-                            elif self.down == 3:
-                                self.play.playResult = PlayResult.ThirdDown
-                            elif self.down == 4:
-                                self.play.playResult = PlayResult.FourthDown
+                            self.play.playResult = downPlayResult(self.down)
                             continue
                         else:
                             self.play.playResult = PlayResult.TurnoverOnDowns
@@ -8259,7 +8259,7 @@ class Game:
             team = self.offensiveTeam.name
             if baseYardage >= self.yardsToEndzone or baseYardage >= self.yardsToFirstDown:
                 return
-            if self.down >= 4:
+            if self.down >= self.gameRules.downsPerSeries:
                 return
             if self._l3NegByTeam.get(team, 0) >= ANOMALY_L3_MAX_NEG_PER_TEAM:
                 return
@@ -8606,12 +8606,7 @@ class Play():
         self.yardage = 0
         self.isPassCompletion = False
         self.game.clockRunning = False
-        if self.game.down == 1:
-            self.playResult = PlayResult.SecondDown
-        elif self.game.down == 2:
-            self.playResult = PlayResult.ThirdDown
-        else:
-            self.playResult = PlayResult.FourthDown
+        self.playResult = downPlayResult(self.game.down + 1)
 
     def kneel(self):
         """QB kneels to drain the clock. Loses 1 yard, ~4 seconds of game time.
@@ -8623,12 +8618,7 @@ class Play():
         # Only drain the actual play time (snap to knee-down)
         kneelDuration = min(4, self.game.gameClockSeconds)
         self.game.gameClockSeconds -= kneelDuration
-        if self.game.down == 1:
-            self.playResult = PlayResult.SecondDown
-        elif self.game.down == 2:
-            self.playResult = PlayResult.ThirdDown
-        else:
-            self.playResult = PlayResult.FourthDown
+        self.playResult = downPlayResult(self.game.down + 1)
 
     def calculateGapQuality(self, gapType: str, rbPower: int, rbAgility: int, blockingRating: int, defenseRunCoverage: int) -> float:
         """
@@ -9907,7 +9897,7 @@ class Play():
             isTrailing = (self.offense == self.game.homeTeam and self.game.homeScore < self.game.awayScore) or \
                          (self.offense == self.game.awayTeam and self.game.awayScore < self.game.homeScore)
             isTied = self.game.homeScore == self.game.awayScore
-            isFourthDown = self.game.down == 4
+            isFourthDown = self.game.down == self.game.gameRules.downsPerSeries
             isTimeExpiring = self.game.gameClockSeconds <= 30
             isLateGame = self.game.currentQuarter >= 4
             mustThrow = isFourthDown and (isTrailing or (isTied and self.game.currentQuarter >= 5))

@@ -147,10 +147,10 @@ class GameRules:
                        source: str = "core_patch") -> List[str]:
         """Apply a ``{field: value}`` override map via ``applyPatch`` (audit-logged).
 
-        Only fields in ``MUTABLE_RULE_FIELDS`` are applied — structural rules
-        (downs, field length, clock) are gated out until the sim's heuristics
-        are safe under non-default values. Unknown/blocked fields are silently
-        skipped. Returns the list of field names actually applied.
+        Only fields in ``MUTABLE_RULE_FIELDS`` are applied — the remaining
+        structural rules (field length / geometry, clock) are gated out until
+        the sim's heuristics are safe under non-default values. Unknown/blocked
+        fields are silently skipped. Returns the field names actually applied.
         """
         applied: List[str] = []
         for fieldName, value in (overrides or {}).items():
@@ -168,13 +168,28 @@ DEFAULT_RULES = GameRules()
 
 
 # ── Rule-override persistence (the Cores' rule-mutation layer) ──────────────
-# The current set of rules safe to mutate at runtime: low-blast-radius scalars
-# only (scoring values + the FG attempt threshold). STRUCTURAL rules (downs,
-# field length, clock) stay OUT until the sim's heuristics are made safe under
-# non-default values — see docs/SIM_EVOLUTION.md feasibility.
+# The current set of rules safe to mutate at runtime:
+#   - scoring values + the FG attempt threshold (proven: every _addScore site
+#     reads gameRules; see the rainbow-override proof);
+#   - structural rules #1 firstDownDistance and #2 downsPerSeries (proven: down
+#     distribution bounds at downsPerSeries, fresh-1st-down distance tracks the
+#     override, scoring moves monotonically).
+# STILL GATED OUT: field geometry (fieldLength / endZoneDepth / kickoffPosition)
+# and clock rules — these touch the field-position model + win-probability (which
+# feeds MVP/All-Pro/pick-em) and need an exhaustive sweep first. The next pass
+# should wire fieldLength together with kickoffPosition. See docs/SIM_EVOLUTION.md.
 MUTABLE_RULE_FIELDS = {
     "touchdownPoints", "fieldGoalPoints", "extraPointPoints",
     "twoPointConversionPoints", "safetyPoints", "fgMinAttemptProb",
+    # Structural rule #1 — yards needed to convert a first down. Core mechanic
+    # (reset/decrement/goal-to-go) reads gameRules; play-calling heuristics use
+    # the live yardsToFirstDown so they degrade gracefully at non-default values.
+    "firstDownDistance",
+    # Structural rule #2 — number of downs in a series. Core flow (possession
+    # loop bound, advance-vs-turnover, final-down punt/FG/go decision, kneel
+    # count, spike availability, down-text/PlayResult) all reference this.
+    # Down-text + PlayResult support up to 6 downs (downOrdinal/downPlayResult).
+    "downsPerSeries",
 }
 
 RULE_OVERRIDES_SETTING_KEY = "rule_overrides"
