@@ -3427,7 +3427,8 @@ class Game:
             play.scoreChange = True
             play.homeTeamScore = self.homeScore
             play.awayTeamScore = self.awayScore
-            if self.checkOvertimeEnd():
+            if self.checkOvertimeEnd(defensiveScore=True):
+                self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                 self.broadcastGameState(includeLastPlay=True)
                 return
             self.broadcastGameState(includeLastPlay=True)
@@ -3628,6 +3629,12 @@ class Game:
                 else:
                     text = choice(sackList).format(self.play.passer.name, sackerName, self.play.yardage)
             elif self.play.isPassCompletion:
+                # On a lost fumble after the catch, _resolveReturn repurposes
+                # play.yardage to the NET (catch yards minus the defense's return).
+                # Add the return back so the narration shows the actual receiving
+                # yards, not the net. (No return = returnYardage 0, so this is a
+                # no-op on a normal completion.)
+                rcvYds = self.play.yardage + (getattr(self.play, 'returnYardage', 0) or 0)
                 if getattr(self.play, 'isCheckdown', False):
                     reason = getattr(self.play, 'checkdownReason', '')
                     if reason == 'screen':
@@ -3637,14 +3644,14 @@ class Game:
                     else:
                         verb = 'checks down to'
                     text = '{} {} {} for {} yards'.format(
-                        self.play.passer.name, verb, self.play.receiver.name, self.play.yardage)
+                        self.play.passer.name, verb, self.play.receiver.name, rcvYds)
                 elif self.play.targetSideline:
                     if self.play.passType is PassType.short:
-                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineShortPassList), self.play.receiver.name, self.play.yardage)
+                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineShortPassList), self.play.receiver.name, rcvYds)
                     elif self.play.passType is PassType.long:
-                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineLongPassList), self.play.receiver.name, self.play.yardage)
+                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineLongPassList), self.play.receiver.name, rcvYds)
                     else:
-                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineMidPassList), self.play.receiver.name, self.play.yardage)
+                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineMidPassList), self.play.receiver.name, rcvYds)
                     # Don't append OOB on a TD — once the receiver crosses the
                     # goal line the play is dead by score, not by stepping out.
                     # The OOB flag stays True for clock-management purposes,
@@ -3652,16 +3659,16 @@ class Game:
                     if not self.play.isInBounds and not self.play.isTd:
                         text += ', out of bounds'
                 elif self.play.passType is PassType.short:
-                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(shortPassList), self.play.receiver.name, self.play.yardage)
+                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(shortPassList), self.play.receiver.name, rcvYds)
                 elif self.play.passType is PassType.long:
-                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(longPassList), self.play.receiver.name, self.play.yardage)
+                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(longPassList), self.play.receiver.name, rcvYds)
                 elif self.play.passType is PassType.hailMary:
                     # End-zone phrasing only when it actually scores; a hail mary
                     # caught short and tackled mustn't claim it reached the end zone.
                     hmPool = extraLongPassList if self.play.isTd else extraLongNonScoringPassList
-                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(hmPool), self.play.receiver.name, self.play.yardage)
+                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(hmPool), self.play.receiver.name, rcvYds)
                 else:
-                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(midPassList), self.play.receiver.name, self.play.yardage)
+                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(midPassList), self.play.receiver.name, rcvYds)
                 # Fumble after catch
                 if self.play.isFumble:
                     forcedBy = self.play.forcedFumbleBy
@@ -5097,7 +5104,8 @@ class Game:
                         self.play.awayTeamScore = self.awayScore
 
                         # Check if OT should end after score
-                        if self.checkOvertimeEnd():
+                        if self.checkOvertimeEnd(defensiveScore=True):
+                            self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                             self.broadcastGameState(includeLastPlay=True)
                             break
 
@@ -5210,7 +5218,8 @@ class Game:
                                 broadcaster.broadcast_sync(self.id, event)
 
                             # Check if OT should end after score
-                            if self.checkOvertimeEnd():
+                            if self.checkOvertimeEnd(defensiveScore=True):
+                                self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                                 break
 
                             if self._shouldGoForTwo(self.defensiveTeam):
@@ -5259,7 +5268,8 @@ class Game:
                                 broadcaster.broadcast_sync(self.id, event)
 
                             # Check if OT should end after score
-                            if self.checkOvertimeEnd():
+                            if self.checkOvertimeEnd(defensiveScore=True):
+                                self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                                 break
 
                             self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
@@ -7947,9 +7957,10 @@ class Game:
         
         return expected_points
     
-    def checkOvertimeEnd(self) -> bool:
+    def checkOvertimeEnd(self, defensiveScore: bool = False) -> bool:
         """Check if scoring in OT should end the game.
-        1st OT: both teams must have had a possession before a score can end the game.
+        1st OT: both teams must have had a possession before an OFFENSIVE score can
+        end the game; a DEFENSIVE score (return TD or safety) is an immediate walk-off.
         2nd+ OT: sudden death — first score wins."""
         if self.currentQuarter < 5:
             return False
@@ -7960,7 +7971,15 @@ class Game:
         if self.otPeriod >= 2:
             return True
 
-        # 1st OT: game ends only after both teams have had their guaranteed possession
+        # A defensive/return TD or safety in OT is a walk-off the moment it happens
+        # (the scoring team did so on the opponent's possession). This ALSO sidesteps
+        # the ordering trap where the offense's possession-complete flag is only set
+        # in turnover(), which runs AFTER this check on a scoop-and-score.
+        if defensiveScore:
+            return True
+
+        # 1st OT: an offensive score ends the game only after both teams have had
+        # their guaranteed possession.
         if self.otSecondPossComplete:
             return True
 
