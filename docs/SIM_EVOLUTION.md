@@ -273,3 +273,54 @@ Promoted out of the gated set:
 Still gated: field geometry (`fieldLength` + `kickoffPosition`), `quartersPerGame` (67 sites assume
 Q4 = final / halftime at Q2), and the remaining placement scalars (`patSnapDistance`,
 `twoPointConversionDistance`, `twoMinuteWarningSeconds`).
+
+## Design — contested scoring (the Dunk) + drive play-limit (2026-06-23, design only)
+
+Two new gameplay rules beyond value/flag tweaks. Both are gated rule fields (default off =
+standard football); the Cores' Criticality is the natural thing to switch them on.
+
+### A. The Dunk — contested touchdowns
+Reframes scoring from "reach the end zone = automatic 6" to a contested finish: the ball-carrier
+must dunk it through the uprights; a miss or a block is a **turnover** (like a missed FG).
+
+- **Rule:** `requireDunkToScore: bool = False`.
+- **Injection point:** the two offensive TD branches — `floosball_game.py:5044` (run path) and
+  `:5082` (pass path), both `if self.play.yardage >= self.yardsToEndzone:`. When the rule is on,
+  instead of calling `_addScore(touchdownPoints)` immediately, resolve `_resolveDunk()` first.
+- **Resolution** (`_resolveDunk(dunker, defense) -> 'good'|'blocked'|'missed'`):
+  - Dunker athleticism from the ball-carrier's existing attributes (playmaking / xFactor, plus a
+    position lean — RB power, WR/TE leaping). Contesting defender = the nearest assigned defender
+    (the would-be tackler / a "rim protector" DB/DE) via coverage / instinct / tackling.
+  - Tunable base rates, matchup-modulated: clean dunk ~82%, blocked ~10%, rim-out miss ~8%. Elite
+    rim protectors push block %, elite finishers push make %. Constants in `constants.py`
+    (`DUNK_BASE_MAKE`, `DUNK_BASE_BLOCK`, matchup spread).
+  - Reads the active **`fieldGoalUprights`** entry — a Criticality-injected weird rim (custom
+    `value` / `rangeBonus`) composes here (an 8-point high rim that's harder to dunk).
+- **Outcomes:** good → existing TD path (`touchdownPoints`, then PAT/2pt as normal); blocked /
+  missed → `turnover(self.offensiveTeam, self.defensiveTeam, <goal-line spot>)`, defense takes over
+  (mirror the blocked-FG/turnover handling). No re-down — a miss is a turnover, per design.
+- **Stats / PBP / WPA:** new `dunking` stat sub-dict (attempts / makes / blocks); block credited to
+  the defender (a "dunk stuff" stat). Narration pool ("rises up and SLAMS it home!", "STUFFED at
+  the uprights!", "rims it out!"). WPA needs no special-casing — it rides the existing
+  `scoreChange`/`turnover` swing, so a stuffed dunk is a huge swing attributed to the blocker
+  (defensive playmaker WPA).
+- **Scope v1:** offensive rush/receive TDs only. Defensive return TDs (pick-six) and the goal-line
+  re-snap edges are a follow-up ("pick-sixes must dunk too").
+- **Effort: L.** New resolution + outcome branches + stat plumbing + PBP + frontend (a dunk
+  animation/result on the field graphic). Biggest piece is tuning so it's dramatic, not punishing.
+
+### B. Drive play-limit — a per-drive shot clock
+"Score a TD or FG within X plays of the drive, or it's a turnover."
+
+- **Rule:** `maxPlaysPerDrive: int = 0` (0 = disabled / unlimited).
+- **New state:** `self.drivePlayCount`, incremented per play, reset to 0 in `turnover()`
+  (`:3281`) and after any score (every possession change). First downs do **not** reset it — that's
+  the point; it's a drive-level clock, independent of the down system.
+- **Gate:** after incrementing, if `maxPlaysPerDrive > 0 and drivePlayCount >= maxPlaysPerDrive`
+  and the play didn't score → forced turnover (reuse the turnover-on-downs path). Overlays
+  `downsPerSeries`: the drive ends on whichever fails first (out of downs OR out of drive-plays).
+- **Display / PBP:** surface "X plays left to score" (shot-clock style); "Out of plays — turnover
+  on the drive!". **AI hook:** coaches should escalate aggression as the count nears the limit
+  (push to FG range / go for it) — a heuristic add; degrades gracefully without it.
+- **Effort: M.** A counter + a turnover gate + two reset points + display — same shape as
+  `downsPerSeries`, lower risk than the Dunk. Good first build of the two.
