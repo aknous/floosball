@@ -1159,7 +1159,11 @@ class PlayerK(Player):
         self.offensiveRating = self.attributes.overallRating
         self.defensiveRating = self.offensiveRating  # Kickers: no defensive role, rating = offensive
         self.playerRating = self.attributes.overallRating
-        self.maxFgDistance = round(70*(self.attributes.legStrength/100))
+        # Max attemptable FG distance, scaled across the legStrength domain
+        # (60-100). Weakest leg can still attempt ~50-yarders; elite legs reach
+        # the mid-60s. leg 60 -> 50, 80 -> 58, 100 -> 66. The make-probability
+        # model (not this cap) gates whether a long attempt is worth taking.
+        self.maxFgDistance = round(50 + (self.attributes.legStrength - 60) * 0.4)
 
 
     def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):

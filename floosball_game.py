@@ -2264,6 +2264,30 @@ class Game:
                 self.play.passPlay(self._selectPassPlay(passLength))
                 return
 
+        # Never punt from inside the opponent's 40 — a punt there nets almost
+        # nothing and hands over the ball. Kick a makeable FG, otherwise go for
+        # it. The one exception is a team protecting a lead in the final two
+        # minutes, which may still pin with a coffin-corner punt rather than risk
+        # a turnover or hand the ball back already in FG range — that case falls
+        # through to the normal logic below.
+        leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
+                       and self.gameClockSeconds <= 120)
+        if self.yardsToEndzone <= 40 and not leadingLate:
+            goForIt = not inFieldGoalRange  # no makeable FG → going for it is the only non-punt option
+            if inFieldGoalRange and self.yardsToFirstDown <= 2:
+                # 4th-and-short can still favor going for the first down / TD.
+                if batched_randint(1, 10) <= goForItThreshold:
+                    goForIt = True
+            if goForIt:
+                if self.yardsToFirstDown <= 3:
+                    self.play.runPlay()
+                else:
+                    self.play.passPlay(self._selectPassPlay(
+                        'medium' if self.yardsToFirstDown <= 12 else 'long'))
+            else:
+                self.play.playType = PlayType.FieldGoal
+            return
+
         if scoreDiff > 0:
             if self.currentQuarter == 4 and self.gameClockSeconds < 300:
                 # Leading with little time: burn clock, don't risk a FG miss
@@ -3085,7 +3109,13 @@ class Game:
             # 4-5 min is the "no coach does that" case the window used to allow.
             isLateGame = self.currentQuarter in (2, 4) or self.currentQuarter >= 5
             multiScore = scoreDiff <= -9
-            toWindow = (180 if (self.currentQuarter >= 4 and multiScore)
+            # A tied / one-score offense in (or a play away from) FG range must
+            # bank clock for a game-tying/winning FG — same 3:00 urgency as a
+            # multi-score team, not the 2:00 cap that let it bleed time before.
+            _toKicker = self.offensiveTeam.rosterDict.get('k')
+            _toKickerMaxFg = (_toKicker.maxFgDistance - self.gameRules.fgSnapDistance) if _toKicker else 0
+            fgStopPriority = scoreDiff <= 0 and self.yardsToEndzone <= _toKickerMaxFg + 8
+            toWindow = (180 if (self.currentQuarter >= 4 and (multiScore or fgStopPriority))
                         else self.gameRules.timeoutClockThreshold)
             twoMinImminent = (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
                               and self.gameRules.timeoutClockThreshold < secs
@@ -3095,12 +3125,17 @@ class Game:
                     and not twoMinImminent and not self._clockStoppedByWarning
                     and secs <= toWindow):
                 if secs <= self.gameRules.timeoutClockThreshold:
-                    # Inside 2:00 — high urgency
+                    # Inside 2:00 — high urgency. In FG range with a one-score/tied
+                    # deficit, a competent coach stops the clock near-deterministically.
                     toChance = 0.5 + 0.5 * gameIQ
+                    if fgStopPriority:
+                        toChance = max(toChance, 0.9)
                 else:
-                    # 2-3 min, multi-score only — urgency builds toward 2:00
+                    # 2-3 min — urgency builds toward 2:00. A one-score/tied team
+                    # in FG range gets a stronger pull than a multi-score chase.
                     urgency = max(0.0, (180 - secs) / 60)
-                    toChance = (0.2 + 0.45 * gameIQ) * urgency
+                    base = (0.5 + 0.4 * gameIQ) if fgStopPriority else (0.2 + 0.45 * gameIQ)
+                    toChance = base * urgency
                 if _random.random() < toChance:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'timeout',
