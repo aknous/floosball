@@ -6,6 +6,10 @@ feature is the mechanical L4 layer of the anomaly system — see
 `criticality_event_design` memories for the surrounding context (ladder, Cores,
 suppression cycle, instability dial, all already shipped + gated).
 
+> **Related:** `docs/SIM_EVOLUTION.md` — Criticality *aftermath* ideas (fan-voted rule mutation
+> by Aris / reversion by Pyre; player resurrection by Vera/Cassian, paid for in facility levels).
+> Those build on the machinery defined here.
+
 ## The reframe vs. the old design
 The earlier locked design had L4 powers as **Criticality-exclusive** (awakened
 players only bend the sim during a league Criticality). **That is superseded.**
