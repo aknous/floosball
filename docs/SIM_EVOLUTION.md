@@ -324,3 +324,29 @@ must dunk it through the uprights; a miss or a block is a **turnover** (like a m
   (push to FG range / go for it) — a heuristic add; degrades gracefully without it.
 - **Effort: M.** A counter + a turnover gate + two reset points + display — same shape as
   `downsPerSeries`, lower risk than the Dunk. Good first build of the two.
+
+### C. Extra-point options ladder
+Generalize the binary PAT (kick-for-1 / conversion-for-2) into a configurable menu, with new
+options from different yardages worth more points.
+
+- **Rule (list-typed):** `extraPointOptions: List[{name, type:'kick'|'conversion', distance, points}]`,
+  default `[{kick,15,1}, {conversion,2,2}]` (current behavior). E.g. add `{long kick,35,2}` or
+  `{deep conversion,10,4}`.
+- **Chooser:** `_shouldGoForTwo` (`floosball_game.py:7320`) generalizes to `_choosePatOption(team,
+  scoreDiff,…)` — pick from the ladder by points needed (riskier high-value option when chasing).
+- **Resolution:** reuse `extraPointTry` (kick) / `_simulate2PointConversionPlay` (conversion),
+  parameterized by the option's `distance`, awarding its `points`. Success already scales with
+  distance in both sims, so risk/reward falls out.
+- **Infra note:** list-typed rule like `fieldGoalUprights` — `applyPatch` excludes collections, so
+  it needs a dedicated collection-mutator + persistence path (shared with the Dunk's uprights).
+  Build that small "list-rule override" path once and both features use it.
+- **Effort: M.** Resolution primitives exist; work is the list rule + mutator, the N-option chooser
+  AI, and PBP/stat/frontend.
+
+### Rule-architecture note (how mutation/reversion works)
+The live ruleset = `GameRules()` defaults + a **sparse override delta** persisted in
+`app_settings['rule_overrides']` (only changed fields), re-applied each season in `Season.__init__`.
+Revert = drop the key from the delta → rebuilds from the dataclass default. `toDict()` materializes
+the full ruleset on demand for display. Scalars ride the generic `applyOverrides`; list-typed rules
+(uprights, extraPointOptions) need a dedicated collection mutator. Reversion lands at the next season
+boundary (hydration is season-start); mid-season reversion would need re-applying to the live object.
