@@ -4989,8 +4989,11 @@ class Game:
                         if self._timeoutCalled and self.timingManager:
                             await self.timingManager.waitAfterTimeout()
                         if self.clockRunning and self.gameClockSeconds > 0:
-                            # No timeout called — drain the play clock (time between plays)
-                            playClockDrain = min(36, self.gameClockSeconds)
+                            # No timeout called — drain the play clock (time between plays).
+                            # Total kneel drain = snap (4s, in kneel()) + this play-clock
+                            # drain, so this is kneelDrainSeconds - 4 (keeps the AI's drain
+                            # prediction at _checkClockManagement in sync with the rule).
+                            playClockDrain = min(max(0, self.gameRules.kneelDrainSeconds - 4), self.gameClockSeconds)
                             self.consumeGameTime(playClockDrain)
                             self.checkTwoMinuteWarning()
 

@@ -190,6 +190,12 @@ MUTABLE_RULE_FIELDS = {
     # count, spike availability, down-text/PlayResult) all reference this.
     # Down-text + PlayResult support up to 6 downs (downOrdinal/downPlayResult).
     "downsPerSeries",
+    # Clock / FG knobs — already read from gameRules throughout the engine, so
+    # these are low-blast-radius scalars (the two-minute pressure heuristics are
+    # a separate concept and stay fixed). kneelDrainSeconds is the single source
+    # of truth for the per-kneel drain (snap 4s + play-clock kneelDrainSeconds-4).
+    "overtimeLengthSeconds", "timeoutClockThreshold", "spikeClockThreshold",
+    "kneelDrainSeconds", "fgSnapDistance",
 }
 
 RULE_OVERRIDES_SETTING_KEY = "rule_overrides"
