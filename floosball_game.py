@@ -431,8 +431,8 @@ midIncompleteList = [
                     '{} and {} can\'t connect, incomplete',
                     '{} throws for {}, out of reach',
                     '{} misses {} on the route, incomplete',
-                    '{} can\'t find {} in coverage, incomplete',
-                    '{} under pressure, overthrows {}, incomplete',
+                    '{} just misses {}, incomplete',
+                    '{} and {} can\'t hook up, incomplete',
                 ]
 
 # Medium dropped — args: (passer.name, receiver.name)
@@ -450,7 +450,7 @@ deepIncompleteList = [
                     '{} goes deep for {}, can\'t connect',
                     '{} launches it for {}, overthrown',
                     '{} and {} can\'t hook up downfield, incomplete',
-                    '{} heaves it for {}, well covered, incomplete',
+                    '{} sends it deep for {}, incomplete',
                     '{} throws deep for {}, out of bounds',
                     '{} airs it out for {}, no good',
                 ]
@@ -3535,7 +3535,11 @@ class Game:
             runGap = self.play.insights.get('run', {}).get('selectedGap', 'B-gap')
             isOutside = runGap in ('C-gap', 'bounce')
             if self.play.isFumble:
-                yds = self.play.yardage
+                # On a lost fumble, _resolveReturn repurposes play.yardage to the NET
+                # (run yards minus the defense's return); add the return back so the
+                # narration shows the actual run yardage, not the net. (No return =
+                # returnYardage 0, so this is a no-op for recovered fumbles.)
+                yds = self.play.yardage + (getattr(self.play, 'returnYardage', 0) or 0)
                 gainText = 'no gain' if yds == 0 else 'a loss of {} yards'.format(abs(yds)) if yds < 0 else '{} yards'.format(yds)
                 if self.play.isFumbleLost:
                     forcedBy = self.play.forcedFumbleBy
@@ -8610,6 +8614,26 @@ class Play():
         self.playType = PlayType.Spike
         self.yardage = 0
         self.isPassCompletion = False
+        # The clock ran while the offense rushed to the line to spike — burn that short
+        # gather first. It's quick (the QB just slams it down, no play to run) and scales
+        # with the offense's tempo skill: coach clock-management IQ + the on-field
+        # offense's average discipline. A sharp, disciplined team snaps almost at once
+        # (~3s); a low-IQ, undisciplined one takes a beat to get set (~7s). Both on a
+        # 60-100 -> 0-1 scale (0.5 neutral), averaged. Without any of this the spike
+        # consumed zero clock, so the displayed time never moved off the previous play.
+        if self.game.clockRunning:
+            coach = getattr(self.game.offensiveTeam, 'coach', None)
+            clockIQ = self.game._coachClockIQ(coach)
+            _slots = ('qb', 'rb', 'wr1', 'wr2', 'te')
+            _discs = [getattr(getattr(self.game.offensiveTeam.rosterDict.get(s), 'gameAttributes', None), 'discipline', 80)
+                      for s in _slots if self.game.offensiveTeam.rosterDict.get(s)]
+            _avgDisc = (sum(_discs) / len(_discs)) if _discs else 80
+            discNorm = max(0.0, min(1.0, (_avgDisc - 60) / 40))
+            skill = (clockIQ + discNorm) / 2          # 0 worst .. 0.5 neutral .. 1 best
+            gather = round(7 - skill * 4) + batched_randint(-1, 1)
+            gatherTime = min(self.game.gameClockSeconds, max(3, gather))
+            self.game.consumeGameTime(gatherTime)
+            self.game.checkTwoMinuteWarning()
         self.game.clockRunning = False
         if self.game.down == 1:
             self.playResult = PlayResult.SecondDown

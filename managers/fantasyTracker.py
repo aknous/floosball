@@ -1116,7 +1116,8 @@ class FantasyTracker:
                                 favoriteTeamOpponentElo = getattr(oppTeamLive, 'elo', 1500.0)
                                 favoriteTeamOpponentName = getattr(oppTeamLive, 'abbr', '') or getattr(oppTeamLive, 'name', '')
                             for entry in getattr(game, 'gameFeed', []):
-                                if entry.get('isBigPlay'):
+                                play = entry.get('play') if isinstance(entry, dict) else None
+                                if getattr(play, 'isBigPlay', False):
                                     favoriteTeamBigPlays += 1
 
                 # Playoff status

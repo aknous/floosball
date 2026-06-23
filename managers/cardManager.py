@@ -1585,15 +1585,18 @@ class CardManager:
         revealed = [self._serializeTemplate(t, currentSeason) for t in drawnTemplates]
 
         # Annotate each revealed card with how many of that EFFECT the user
-        # already owns (non-vaulted — vaulted cards can't be fed or upgraded), so
-        # the reveal UI can flag duplicates for upgrade planning: a same-effect
-        # duplicate is exactly what Level Up consumes.
+        # already owns — current-season, non-vaulted only. Expired (past-season)
+        # and vaulted cards can't be fed or upgraded, so they aren't usable
+        # duplicates and shouldn't inflate the "You own N" count. A same-effect
+        # active duplicate is exactly what Level Up consumes.
         from collections import Counter
         from database.repositories.card_repositories import UserCardRepository
         ownedCounts: Counter = Counter()
         for c in UserCardRepository(session).getByUser(userId):
             if getattr(c, "vaulted", False):
                 continue
+            if getattr(getattr(c, "card_template", None), "season_created", None) != currentSeason:
+                continue  # expired — can't be fed/upgraded
             en = self._effectName(c)
             if en:
                 ownedCounts[en] += 1
@@ -1963,15 +1966,17 @@ class CardManager:
                 .all()
             )
 
-        # Count how many of each EFFECT the user already owns (non-vaulted —
-        # vaulted cards can't be fed/upgraded), mirroring the pack-reveal flow so
-        # the shop flags duplicates the same way the reveal UI does.
+        # Count how many of each EFFECT the user already owns — current-season,
+        # non-vaulted only (expired and vaulted cards can't be fed/upgraded),
+        # mirroring the pack-reveal flow so the shop flags duplicates the same way.
         from collections import Counter as _Counter
         from database.repositories.card_repositories import UserCardRepository as _UCRepo
         ownedCounts: _Counter = _Counter()
         for c in _UCRepo(session).getByUser(userId):
             if getattr(c, "vaulted", False):
                 continue
+            if getattr(getattr(c, "card_template", None), "season_created", None) != currentSeason:
+                continue  # expired — can't be fed/upgraded
             en = self._effectName(c)
             if en:
                 ownedCounts[en] += 1
