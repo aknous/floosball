@@ -325,23 +325,29 @@ must dunk it through the uprights; a miss or a block is a **turnover** (like a m
 - **Effort: M.** A counter + a turnover gate + two reset points + display — same shape as
   `downsPerSeries`, lower risk than the Dunk. Good first build of the two.
 
-### C. Extra-point options ladder
-Generalize the binary PAT (kick-for-1 / conversion-for-2) into a configurable menu, with new
-options from different yardages worth more points.
+### C. Extra-point conversion ladder
+The kick stays the only kick and is always worth 1 (existing `extraPointPoints` from
+`patSnapDistance`). Everything above 1 is a **real run/pass conversion play** — exactly like
+today's 2-point conversion — snapped from a progressively longer distance for more points. There
+is no "long kick"; the ladder is purely a menu of conversion plays.
 
-- **Rule (list-typed):** `extraPointOptions: List[{name, type:'kick'|'conversion', distance, points}]`,
-  default `[{kick,15,1}, {conversion,2,2}]` (current behavior). E.g. add `{long kick,35,2}` or
-  `{deep conversion,10,4}`.
-- **Chooser:** `_shouldGoForTwo` (`floosball_game.py:7320`) generalizes to `_choosePatOption(team,
-  scoreDiff,…)` — pick from the ladder by points needed (riskier high-value option when chasing).
-- **Resolution:** reuse `extraPointTry` (kick) / `_simulate2PointConversionPlay` (conversion),
-  parameterized by the option's `distance`, awarding its `points`. Success already scales with
-  distance in both sims, so risk/reward falls out.
-- **Infra note:** list-typed rule like `fieldGoalUprights` — `applyPatch` excludes collections, so
-  it needs a dedicated collection-mutator + persistence path (shared with the Dunk's uprights).
-  Build that small "list-rule override" path once and both features use it.
-- **Effort: M.** Resolution primitives exist; work is the list rule + mutator, the N-option chooser
-  AI, and PBP/stat/frontend.
+- **Rule (list-typed):** `conversionOptions: List[{distance, points}]`, default `[{2, 2}]` (today's
+  2-pointer — `twoPointConversionDistance` / `twoPointConversionPoints` become the first entry).
+  E.g. add `{5, 3}`, `{10, 4}`. Farther snap = harder play = more points.
+- **The PAT decision** is then: take the 1-point kick, or pick a conversion option from the ladder.
+  `_shouldGoForTwo` (`floosball_game.py:7320`) generalizes to `_choosePatOption(team, scoreDiff,…)`
+  → choose among {kick→1} ∪ conversionOptions by points needed (reach for a longer/riskier
+  conversion when chasing; safe kick when comfortable).
+- **Resolution:** the kick reuses `extraPointTry` unchanged; every conversion reuses
+  `_simulate2PointConversionPlay` (`:7347`) **parameterized by the option's `distance`** (it already
+  sets up `yardsToEndzone = <distance>` before snapshotting the play) and awards the option's
+  `points`. Success already scales with the snap distance, so risk/reward falls out — no new
+  resolution code, just distance + points threaded through.
+- **Infra note:** `conversionOptions` is a list-typed rule like `fieldGoalUprights` — `applyPatch`
+  excludes collections, so it needs a dedicated collection-mutator + persistence path (shared with
+  the Dunk's uprights). Build that small "list-rule override" path once and both features use it.
+- **Effort: M.** The conversion sim already exists; work is the list rule + mutator, the N-option
+  chooser AI, threading distance/points through, and PBP/stat/frontend.
 
 ### Rule-architecture note (how mutation/reversion works)
 The live ruleset = `GameRules()` defaults + a **sparse override delta** persisted in
