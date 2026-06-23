@@ -146,3 +146,78 @@ and roster-fill logic so a resurrection doesn't double-fill or strand a slot.
 3. **Pyre reversion** ballot.
 4. **Player resurrection** (per-team ballot + reinstate).
 5. **Rulebook page** (current vs. default + change log) + recap + Cores voicing polish.
+
+---
+
+## Feasibility (assessed against the codebase, 2026-06-22 — design only)
+
+Both ideas are **~M effort each**, built largely on existing infra — finish-the-wiring jobs, not
+ground-up builds. The fan-**voting** layer is cheaply reusable for both; the effort lives *outside*
+the voting, in the application mechanics.
+
+### Rule mutation / reversion
+**Foundation already there.** `GameRules` is **one shared per-season instance**
+(`seasonManager.py:90`), read consistently in ~40 sim sites, and already has `applyPatch()` + a
+`patchHistory` audit trail + `toDict()`. The override store plugs into a single seam
+(`SeasonManager.__init__`); because every game references that one object, a mid-season patch
+propagates automatically.
+
+**Gaps (the work):**
+- **Persistence — not built.** `GameRules` lives only in memory and is recreated as defaults on
+  every boot, so a change is lost on restart. Needs a `rule_overrides` JSON column on `Season`
+  (inline migration) + hydrate on season start. A persisted sibling exists
+  (`LeagueAnomalyState.cores_patches_applied`, "mirrors patchHistory but persisted") but nothing
+  writes rule overrides yet. **[S]**
+- **Hardcoded-value leaks.** ~12 scoring/PAT/2-pt/FG literals (`_addScore(team, 6/3/2/1)` call
+  sites), ~15 `down == 4` sites (the core possession loop), field-position anchors (80/60/20), and
+  clock literals (`*900`, `600`, `120`) that won't respect a mutated rule. Mechanical, but real. **[S–M]**
+- **Sim-safety.** Drastic *structural* values (3 downs, 80-yard field, 7-point TD) stress heuristics
+  that assume the defaults — the WP model's `*900` time math, play-calling deficit/aggression
+  tables, "one-/two-possession game" inference. The genuinely hard part. **[L for structural rules]**
+
+**Recommendation:** ship a **bounded first cut** — persistence + de-hardcode the scoring/FG
+literals + restrict mutations to *low-blast-radius* rules (scoring values, FG attempt prob, clock
+thresholds, kneel drain). That delivers the full Aris-mutates / Pyre-reverts loop end-to-end with
+contained sim risk; defer downs/field-length/TD-points until heuristic-safety is scoped.
+**Overall: M (bounded) → L (structural).**
+
+### Player resurrection
+**Feasible, ~M.** Retiree data is **fully retained** (Player row + attributes + accolades survive
+retirement — nothing is purged), the "decorated" gate **reuses `_computeHofPoints` verbatim**, and
+roster reinstatement **reuses the FA-signing state machine** + an un-retire prelude.
+
+**Gaps:**
+- **"This team's retired greats" query.** `previousTeam` is in-memory only (not persisted). The
+  durable hook exists — accolade JSON (MVP/All-Pro/championship) embeds a team abbr, and the HoF
+  gallery already derives team this way — but a *records-only* decorated retiree has no durable team
+  link. Clean fix: a small additive `previous_team_id` column backfilled from
+  `PlayerSeasonStats.team_id`. **[S]**
+- **Offseason ordering / supply floor (the careful part).** Insert the resurrection *after*
+  retirements resolve and *before* the final pre-FA `ensurePositionSupply` check (≈ offseason STEP
+  3.3–3.4) so the player is rostered *and* counted as supply — otherwise the supply floor desyncs
+  and the FA draft can strand/over-fill slots. Needs a `/simcheck` pass.
+- **Facility cost.** Treasury debit (`addTreasury` negative) is a clean *existing* price primitive.
+  **Knocking down a level has no path today** (levels only go up or passively decay), so a small new
+  `spendFacilityLevel` helper (~5 lines) + endpoint is needed if the price is literal levels. **[S]**
+- The "revenant" diminishment (return below peak, short longevity/term) is new but localized
+  (reuses `_getPlayerTerm` for the short contract).
+
+**Overall: M** — assembly + two small additions + the un-retire mechanics + a per-team vote
+surface. No engine/scheduling/playoff changes.
+
+### Voting (shared)
+- **Rule ballot (league-wide, single pick)** → clone the **Awards/MVP** pattern (derived windows,
+  engagement-scaled quorum, plurality + fallback). Needs a **small new `RuleVote` table** (target is
+  a rule key, not a player FK, so `AwardVote` can't be reused as-is) — ~40 lines. **[S]**
+- **Resurrection ballot (per-team)** → extend **`GmVote`** with a new `vote_type`
+  (`resurrect_player`). **No schema change** — retirees are still `Player` rows; drops straight into
+  the existing offseason GM-resolution batch + the fan-count threshold. **[S]**
+- For *both*, the effort-determining work is **outside the voting** (rule application; un-retirement).
+
+### Bottom line
+Both are **M-effort, infra-reuse** features. Do the voting cheaply on the existing systems; spend
+the real effort on (1) rule **persistence + de-hardcoding** (bounded rule set first), and (2) the
+resurrection **un-retire mechanics + offseason ordering** (with a sim-check). **Structural** rule
+mutations (downs, field length, TD points) are the only **L-tier** risk — gate them behind the safe
+scalar mutations. Resurrection's voting is the lightest first win; rule-mutation's *persistence
+layer* is the highest-leverage piece to build first.
