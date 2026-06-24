@@ -242,6 +242,23 @@ expect("confident carrier converts the first down more than a tentative one", co
 expect("confident carrier narrates reaching across the marker", confNotes.get('stretch_first', 0) > 0)
 expect("tentative carrier never reaches (takes the spot)", timidNotes.get('stretch_first', 0) == 0)
 
+# ── 13. Dive for a catch — confidence makes a receiver lay out ───────────
+print("13. A confident receiver lays out for contested balls (diving grabs)")
+def diveGrabs(conf):
+    s = Scenario(awayDefPass=90, awayDefRun=90); g = s.game; dives = 0
+    for _ in range(N):
+        s.situation(quarter=2, clock=600, offense='home', offScore=0, defScore=0,
+                    down=1, distance=10, ballOn=60)
+        for slot in ('wr1', 'wr2', 'te'):
+            s.home.rosterDict[slot].gameAttributes.confidenceModifier = conf
+        g.play.passPlay(g._selectPassPlay('medium'))
+        if getattr(g.play, '_diveCatch', False): dives += 1
+    return dives
+reseed(1); confDives = diveGrabs(5)
+reseed(1); timidDives = diveGrabs(-5)
+expect("confident receiver makes diving grabs on contested balls", confDives > 0)
+expect("a non-confident receiver never lays out for a diving grab", timidDives == 0)
+
 
 print()
 if failures:

@@ -133,6 +133,7 @@ MENTAL_GUNSLINGER_K = 6.0    # pp added to turnover odds for high-confidence × 
 # into a tight window vs check down / throw it away.
 MENTAL_AGGR_ROLL_K = 25      # +/- to the "force the throw" roll per full confidence unit
 MENTAL_AGGR_BAIL_K = 15      # shifts the throw-away bail threshold per full confidence unit
+MENTAL_DIVE_K = 10          # catch-prob (pp) a confident receiver gains laying out for a contested ball
 
 # WPA -> player value attribution (see docs/WPA_MVP_PLAN.md). Per-play win
 # probability swing is credited to the players involved and accumulated into a

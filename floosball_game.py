@@ -36,7 +36,7 @@ from constants import (
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
     MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
-    MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K,
+    MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K, MENTAL_DIVE_K,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
     HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
@@ -3812,6 +3812,10 @@ class Game:
             else:
                 ydText = 'returned {} yard{}'.format(returnYds, '' if returnYds == 1 else 's')
                 text += (' Defense ' + ydText + '.') if endsBang else (', ' + ydText)
+
+        # Surface a diving catch (a confident receiver laid out for a contested ball).
+        if getattr(self.play, '_diveCatch', False) and self.play.isPassCompletion and not self.play.isFumble:
+            text += ', a diving grab!'
 
         # Surface the stretch-for-the-marker decision (see _stretchForFirst). Skip on
         # a fumble (the reach popped it loose — the fumble text already tells that story).
@@ -10296,6 +10300,18 @@ class Play():
                 catchProbs['intProb'] = min(25, catchProbs['intProb'] + self._gunslingerTax(self.passer))
                 catchProbs['dropProb'] = min(30, catchProbs['dropProb'] + self._gunslingerTax(self.receiver))
 
+                # Dive for a tough ball — on a CONTESTED (catchable-but-hard) throw, a
+                # confident receiver lays out, extending their catch range. The
+                # gunslinger drop tax above already punishes a reckless (undisciplined)
+                # lay-out with more drops. Flag it so a resulting grab narrates the dive.
+                self._diveCatch = False
+                _diveC = self._confidenceState(self.receiver)
+                if _diveC > 0 and 15 <= catchProbs['catchProb'] <= 60:
+                    catchProbs['catchProb'] = min(85, catchProbs['catchProb'] + _diveC * MENTAL_DIVE_K)
+                    self._diveAttempt = True
+                else:
+                    self._diveAttempt = False
+
                 # Desperation-deep INT dampener — a trailing team forced to chuck it
                 # downfield in garbage time was minting 9-INT games (the Floos Bowl, a
                 # 44-0 sim game). A genuine catch-up heave is a low-percentage prayer, but
@@ -10354,6 +10370,9 @@ class Play():
                 # Check for catch
                 elif outcomeRoll <= (catchProbs['intProb'] + catchProbs['catchProb']):
                     # COMPLETION!
+                    # A grab off a lay-out on a contested ball gets the diving-catch tag.
+                    if getattr(self, '_diveAttempt', False):
+                        self._diveCatch = True
                     self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
                     
                     # Calculate air yards based on throw quality
