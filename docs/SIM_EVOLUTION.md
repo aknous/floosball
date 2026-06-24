@@ -1,7 +1,19 @@
 # Sim Evolution — Cores-driven, fan-shaped mutation
 
 > Status: **idea capture / design**, not built. Lives on `next-season`.
->
+
+## Staging — the sim-evolution arc (owner direction, 2026-06-23)
+
+The whole arc is sequenced into two stages. Build Stage 1 first; Stage 2 is designed but parked.
+
+- **Stage 1 — the chaos engine.** Three pillars, all built on the anomaly/Criticality machinery:
+  1. **L4 awakened powers** — `docs/AWAKENED_POWERS_PLAN.md` (signature abilities + charge meter).
+  2. **Criticality** — un-gate the league event so it actually fires (today `ANOMALY_CRITICALITY_ENABLED=False`); powers go into overdrive. See `criticality_event_design` memory.
+  3. **Rule changes** — the mutable `GameRules` layer + fan-voted mutation/reversion (the rest of *this* doc). Note: the scalar/structural rule plumbing is **already partly shipped** (scoring values, `firstDownDistance`, `downsPerSeries`, clock knobs, running-clock — see the build logs below); what's left is the fan-voting + the remaining structural rules (field geometry).
+- **Stage 2 — chrome / enhancements.** `docs/CHROME.md` — user-gifted, favorite-team, facility-gated cybernetic augments (double-edge + burnout). Deferred until Stage 1 ships; it's a *louder paid hand* on the same anomaly dial Stage 1 establishes, so it wants that foundation first.
+
+---
+
 > Unifying concept: at special moments (chiefly the aftermath of a **Criticality**), the
 > **Cores** hand the fans real power to reshape the simulation — its **rules** and its
 > **rosters**. Each Core does it in character. The sim drifts away from "football" over many

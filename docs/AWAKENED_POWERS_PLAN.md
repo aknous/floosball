@@ -1,7 +1,8 @@
 # Awakened Powers (L4) — Design Spec & Build Plan
 
-Status: **DESIGN LOCKED 2026-06-14**, not yet built. Backend `next-season`. The
-feature is the mechanical L4 layer of the anomaly system — see
+Status: **DESIGN LOCKED 2026-06-14**, not yet built. Backend `next-season`. **Sim-evolution STAGE 1**
+(with Criticality + rule changes — see the staging note in `docs/SIM_EVOLUTION.md`; chrome is Stage 2).
+The feature is the mechanical L4 layer of the anomaly system — see
 `docs`/CLAUDE.md "Anomaly System" + the `sim_evolution_anomaly` /
 `criticality_event_design` memories for the surrounding context (ladder, Cores,
 suppression cycle, instability dial, all already shipped + gated).
