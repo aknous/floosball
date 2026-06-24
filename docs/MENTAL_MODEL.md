@@ -121,11 +121,22 @@ attitude barely touches individual play.
 - **Separate trait from mood:** the scoreboard moves the transient **mood** (already display-only); the
   **attitude trait** stays steady. Chemistry reads the trait; mood is flavor.
 
-**Effect — teammates, not self:** attitude feeds a **team chemistry** value applied pregame as a small
-nudge to *teammates'* confidence baseline (toxic drags the room a little; leader lifts it). It does **not**
+**Effect — teammates, not self; a *peak* gate, not a *win* gate (owner, locked):** attitude feeds a
+**team chemistry** value, computed as the **roster average** of attitude (toxics weighted slightly
+heavier than leaders, since bad apples spread — but average-based, *not* a per-player sum). It does **not**
 drive the toxic player's own outcomes. *(hook: a new term in the pregame stack alongside
-`_applyTeamDisposition:6135` / funding morale `5807`.)* Result: a TOXIC tag means "genuinely bad for the
-room," not "was on a losing team," and the FA pool shows a natural spread of dispositions.
+`_applyTeamDisposition:6135` / funding morale `5807`.)*
+
+- **Average, not count** — so a single toxic in a good room is absorbed and can't be scapegoated; only a
+  genuinely sour *room* suffers. This is the deliberate fix for the over-blame problem (linear-per-player
+  would make each toxic "cost" something visible, feeding exactly the over-attribution we're killing).
+- **Ceiling, not baseline; low magnitude** — chemistry modulates the team's confidence **ceiling**, not
+  its baseline. A toxic room's players can't quite reach their confidence peak (cap a touch below max); a
+  leader room reaches it more easily. Baseline performance (and thus *winning*) is untouched: a great team
+  with a toxic locker room still wins — it just never catches fire.
+
+Result: a TOXIC tag means "this room can't peak," not "was on a losing team," and the FA pool shows a
+natural spread of dispositions.
 
 ---
 
@@ -248,13 +259,20 @@ holds after a pick).
   disposition) — Det/Res now do the explicit work, so the composites can shrink.
 - Pull down the kicker FG composure ceiling.
 
-## 9. Open questions
+## 9. Resolved decisions (owner, 2026-06-24)
 
-- **`C` representation:** keep the ±5 `confidenceModifier` rescaled, or introduce a clean `[-1,1]` state
-  var and derive the legacy modifier for display? (Recommend the latter for legibility.)
-- **Aggression in play-calling:** keep aggression purely resolution-time (recommended), or also let a
-  confident QB nudge the *called* play toward aggression?
-- **Quirk engine:** delete the dead path, or finally enable it as flavor? (Out of scope for the mental
-  *mechanics*, but it's in the cleanup.)
-- **Chemistry strength:** how big a teammate-confidence nudge should a TOXIC / LEADER room produce — and
-  is it linear in the count of toxic/leader players, or a team-average?
+- **`C` representation → clean `[-1,1]` state var.** Same dynamics as the legacy ±5 modifier, but it
+  separates the *state* from the *effects* (which the ±5 entangles across `xFactor` ×2.2 + `_mentalDrift`
+  + `/15` gates). Derive a display number / legacy modifier from it for the UI.
+- **Aggression → resolution-time only.** Play-calling stays the coach's job; confidence drives the
+  *player's* in-play risk choices, not the called play.
+- **Quirk engine → delete.** It's disabled dead code; remove the whole path (`pickQuirkLine` /
+  `getEligibleQuirks` / `quirk_reactions.yaml` wiring), don't revive it.
+- **Chemistry → roster *average*, ceiling not baseline, low magnitude.** See §3 — average so one toxic
+  can't be scapegoated; gates *peak* (a touch off the confidence ceiling) not *winning*.
+
+## 10. Still open
+
+- **Chemistry magnitude / curve:** exactly how far below max the confidence ceiling drops for a fully
+  toxic room (and how far above for a leader room) — a tuning task for `/simcheck` + the scenario harness.
+- **Toxic-vs-leader weighting in the average:** how much heavier toxics weigh than leaders.
