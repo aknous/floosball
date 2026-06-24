@@ -67,9 +67,11 @@ player isn't a better football player — they're a different kind of thing wear
 
 ## The model: users gift chrome (and it bites back)
 
-**Users gift chrome to players** — spend Floobits (a new sink) to bolt an augment onto any player in
-the sim, not just one they own. That's the hook: a deliberate hand on the sim's characters. Why a
-user would do it:
+**Users gift chrome to players on their favorite team** — spend Floobits (a new sink) to bolt an
+augment onto a player on the team they back. **Favorite-team-only** (owner direction, 2026-06-23):
+chrome is a **loyalty investment in your own roster**, not a weapon — which cleanly kills the
+sabotage/Trojan-horse vector and makes chroming a *collective* effort by a team's fanbase. (Later
+expansion could widen the scope, but the loyalty framing is the right start.) Why a user would do it:
 
 - **Amp someone they're invested in** — a fantasy-roster player, their favorite team's star, the
   subject of a card they own (a chromed player likely makes the card more valuable / a chrome-variant
@@ -104,16 +106,50 @@ strongest-theme first:
 6. **Overload / bricking.** Stacking too much chrome on one player **overloads** them → permanent
    malfunction / they break. A ceiling on greed.
 
-Recommended starting set: **#1 + #2 as the spine** (chrome = the user's deliberate hand on the
-existing anomaly dial, with a commons cost), plus **#3** for moment-to-moment risk/reward. #4–#6 are
-flavor/depth knobs to layer later. This makes chrome a genuine **risk/reward gift**: you can push a
-player toward greatness, but you might glitch them, shorten them, or help tip the whole league over —
-and you don't fully control which.
+**Locked drawbacks (owner, 2026-06-23): #3 double-edged on-field + #4 burnout/longevity** — the
+explicit **high-risk / high-reward** core. Chrome amps a player (the reward) but adds an on-field
+failure mode AND burns their career down (the cost). #1 (glitch-ladder instability) and #2 (league
+commons / Criticality pressure) stay as the **strongly-recommended tie-ins** to the anomaly system —
+they're what make chrome *matter* league-wide and connect it to awakening — but #3+#4 are the
+confirmed spine. #5–#6 are optional depth knobs for later. Net: chrome is a genuine bet — you can
+forge your favorite into a monster, but you'll spend their longevity and accept boom-bust games to
+do it.
 
 > Note the elegant loop: the anomaly aggregate is **already fully user-driven** (cards/rosters/
 > follows). Chrome is just a *louder, deliberate, paid* input to the same system — so it slots into
 > the machinery that already exists rather than bolting on a new one. Chrome is users reaching into
 > the anomaly dial with both hands.
+
+### The Chrome facility — gating the enhancement tier
+
+The **tier of chrome a team can install is gated by a new Chrome facility** (owner direction,
+2026-06-23) — a sixth entry in the Facilities catalog (`docs/MARKETS_FACILITIES_PLAN.md` §4, levels
+0–5, fan-funded + voted like Training Facility / Recovery Center / etc.). Unlike the existing
+facilities, which *repoint an effect the sim already applies*, the Chrome facility is the **entry
+point to the new chrome system** — the first facility that unlocks a new mechanic rather than scaling
+an old bonus.
+
+This gives chrome a clean **two-layer economy**, both Floobit sinks, both favorite-team-scoped:
+
+1. **Team layer (collective) — build the facility.** A team's fanbase funds/votes the Chrome
+   facility up its 0–5 track. Higher level = access to **higher-tier enhancements** (Lv0 = none →
+   Lv1–2 = basic attribute amps → Lv4–5 = exotic, reality-bending chrome that edges into the awakened
+   catalog). This is the existing facilities loop — a new build target that makes the facilities
+   system more compelling.
+2. **Player layer (individual) — gift the chrome.** Within the tier the facility has unlocked, an
+   individual fan spends Floobits to install a specific implant on a specific player on the team.
+
+So a team's chrome ceiling is a **collective achievement** (everyone funds the Lab), but *who gets
+chromed and with what* is **individual choice** (you gift your guy). High-Chrome-facility teams field
+more (and more dangerous) chrome — which ties the cyberpunk arms race to the funding/market dynamics
+already in the Facilities design.
+
+- **Naming (owner's domain):** the facility wants a cyberpunk name in the formal-ish register of the
+  others — e.g. *Chrome Lab*, *Augmentation Bay*, *The Foundry*, *Chop Shop*. Placeholder: **Chrome
+  Lab**.
+- **Open:** does facility level also gate *how much* chrome (a per-team count cap), or only the tier?
+  Does a higher tier carry *worse* drawbacks (deeper chrome = harder burnout) so the arms race is
+  self-limiting?
 
 ## How chrome relates to glitching (the open fork the owner flagged)
 
@@ -159,11 +195,11 @@ weather report. That's the "step past vanilla football" the owner is after.
 
 ## Open threads (to decide later)
 
-- **Agency / economy.** ~~Who installs chrome?~~ **Decided (owner): users gift chrome, paid in
-  Floobits** (see "The model" above). Remaining specifics: flat vs escalating cost; can you chrome any
-  player or only ones you follow/own/roster; is gifting public (whose chrome is it / leaderboard of
-  chromers); can chrome be *targeted at rivals* (a sabotage/griefing vector to design around, given
-  the drawbacks).
+- **Agency / economy.** **Decided (owner):** users gift chrome (Floobits), **favorite-team-only**,
+  **tier-gated by a team Chrome facility** (two-layer model above). Sabotage vector is *closed* by the
+  favorite-team scope. Remaining specifics: flat vs escalating per-gift cost; does facility level cap
+  the *count* of chromed players or only the tier; is gifting public (a leaderboard of chromers /
+  whose chrome is it).
 - **Permanence & cost.** Is chrome permanent? Does it carry across seasons? Does a **Reset** strip the
   chrome (the Cores melting it down) the way it purges awakened players? Does chrome shorten careers
   (the body rejecting it — a longevity cost, ties to retirement)?
