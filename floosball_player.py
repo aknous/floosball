@@ -323,7 +323,17 @@ class Player:
         self.gameAttributes.determinationModifier = round(self.gameAttributes.determinationModifier + value, 3)
         self.updateInGameRating()
 
-    def updateInGameConfidence(self, value):
+    def updateInGameConfidence(self, value, source=None):
+        """Adjust the in-game confidence state. The two shock absorbers gate
+        confidence's DOWNWARD drift by source (docs/MENTAL_MODEL.md):
+          - source='mistake'   -> resilience resists loss from the player's OWN error
+          - source='scoreboard' -> determination (selfBelief) resists loss from losing
+        Neutral attr (80) preserves today's drop; 100 shrugs it off, 60 spirals (2x)."""
+        if value < 0 and source in ('mistake', 'scoreboard'):
+            attr = (self.gameAttributes.resilience if source == 'mistake'
+                    else self.gameAttributes.selfBelief)
+            scale = 1.0 - max(-1.0, min(1.0, (attr - 80) / 20.0))
+            value *= scale
         self.gameAttributes.confidenceModifier = round(self.gameAttributes.confidenceModifier + value, 3)
         self.updateInGameRating()
 

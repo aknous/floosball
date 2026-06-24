@@ -259,6 +259,24 @@ reseed(1); timidDives = diveGrabs(-5)
 expect("confident receiver makes diving grabs on contested balls", confDives > 0)
 expect("a non-confident receiver never lays out for a diving grab", timidDives == 0)
 
+# ── 14. Determination & Resilience — the two confidence shock absorbers ──
+# Deterministic: they scale confidence's DOWNWARD drift by source.
+print("14. Determination resists scoreboard loss; resilience resists own-mistake loss")
+_sp = Scenario().home.rosterDict['wr1']
+def drift(attr_name, attr_val, source, val=-0.10):
+    setattr(_sp.gameAttributes, attr_name, attr_val)
+    _sp.gameAttributes.confidenceModifier = 0.0
+    _sp.updateInGameConfidence(val, source=source)
+    return _sp.gameAttributes.confidenceModifier
+expect("high resilience (100) shrugs off an own mistake (~no drop)", abs(drift('resilience', 100, 'mistake')) < 1e-9)
+expect("neutral resilience (80) takes the full mistake drop", abs(drift('resilience', 80, 'mistake') + 0.10) < 1e-9)
+expect("low resilience (60) spirals (≈2x the mistake drop)", drift('resilience', 60, 'mistake') < -0.18)
+expect("high determination/selfBelief (100) holds when losing (~no drop)", abs(drift('selfBelief', 100, 'scoreboard')) < 1e-9)
+expect("low determination/selfBelief (60) folds when losing (≈2x)", drift('selfBelief', 60, 'scoreboard') < -0.18)
+_sp.gameAttributes.resilience = 100; _sp.gameAttributes.confidenceModifier = 0.0
+_sp.updateInGameConfidence(+0.10, source='mistake')
+expect("a positive drift (good play) is never scaled", abs(_sp.gameAttributes.confidenceModifier - 0.10) < 1e-9)
+
 
 print()
 if failures:

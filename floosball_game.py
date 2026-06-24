@@ -5828,7 +5828,7 @@ class Game:
         dragMagnitude = effectMagnitude * 0.3
         for player in suffering.rosterDict.values():
             if player is not None:
-                player.updateInGameConfidence(-dragMagnitude * 0.6)
+                player.updateInGameConfidence(-dragMagnitude * 0.6, source='scoreboard')
                 player.updateInGameDetermination(-dragMagnitude * 0.4)
 
     # ─── End Momentum System ────────────────────────────────────────────────
@@ -9078,7 +9078,7 @@ class Play():
             if (self.defense.defenseRunCoverageRating + batched_randint(-5, 5)) >= \
                (self.runner.gameAttributes.overallRating + runnerRecoveryMod + batched_randint(-5, 5)):
                 self.runner.addFumble(self.game.isRegularSeasonGame)
-                self.runner.updateInGameConfidence(-.05)
+                self.runner.updateInGameConfidence(-.05, source='mistake')
                 self.defense.updateInGameConfidence(.02)
                 self.defense.gameDefenseStats['fumRec'] += 1
                 self.isFumbleLost = True
@@ -10045,7 +10045,7 @@ class Play():
                 #fumble
                 self.isFumble = True
                 if (basePassRush + batched_randint(-5,5)) >= (self.passer.gameAttributes.power + self.passer.gameAttributes.luckModifier + batched_randint(-5,5)):
-                    self.passer.updateInGameConfidence(-.02)
+                    self.passer.updateInGameConfidence(-.02, source='mistake')
                     self.defense.updateInGameConfidence(.02)
                     self.defense.gameDefenseStats['fumRec'] += 1
                     self.isFumbleLost = True
@@ -10349,7 +10349,7 @@ class Play():
                     self.yardage = min(randint(_intLo, _intHi), self.yardsToEndzone)
                     self.passer.addInterception(self.game.isRegularSeasonGame)
                     self.passer.addMissedPass(self.game.isRegularSeasonGame)
-                    self.passer.updateInGameConfidence(-.02)
+                    self.passer.updateInGameConfidence(-.02, source='mistake')
                     self.defense.updateInGameConfidence(.02)
                     self.defense.gameDefenseStats['ints'] += 1
                     self.isInterception = True
@@ -10581,7 +10581,7 @@ class Play():
                             rcvRecoveryMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)
                             if (self.defense.defensePassCoverageRating + batched_randint(-5, 5)) >= \
                                (self.receiver.gameAttributes.overallRating + rcvRecoveryMod + batched_randint(-5, 5)):
-                                self.receiver.updateInGameConfidence(-.02)
+                                self.receiver.updateInGameConfidence(-.02, source='mistake')
                                 self.defense.updateInGameConfidence(.02)
                                 self.defense.gameDefenseStats['fumRec'] += 1
                                 self.isFumbleLost = True
@@ -10601,7 +10601,7 @@ class Play():
                     # DROPPED PASS
                     self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
                     self.receiver.addPassDrop(self.game.isRegularSeasonGame)
-                    self.receiver.updateInGameConfidence(-.005)
+                    self.receiver.updateInGameConfidence(-.005, source='mistake')
                     self.defense.updateInGameConfidence(.005)
                     self.passIsDropped = True
                     self.yardage = 0
