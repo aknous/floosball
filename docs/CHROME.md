@@ -29,6 +29,13 @@ This gives us a clean distinction the chaos systems have been missing:
 Glitching is the sim cracking under attention. Chrome is the gods reaching in and **modding the
 characters**. Same destination (the game stops being football), opposite hands.
 
+**Refinement (owner direction, 2026-06-23): the Cores don't install chrome themselves — bored, they
+hand the keys to the Spectators.** It's the *users* who gift chrome to players. The Cores just opened
+the door (Aris's idea, Pyre's reluctant infrastructure) and now watch what we build with it. So the
+"top-down" column below is really **Cores-sanctioned, user-driven**: the gods got bored and let the
+audience start modding the cast. (This also means chrome is a real gameplay system, not just lore —
+see the model + drawbacks below.)
+
 Per-Core stance writes itself from the existing voices (`coresManager.py`):
 - **Aris** (whimsical, wants the anomalies, courts chaos) — the instigator. "We've run this 498
   times. I want to see what happens if their arms are railguns."
@@ -58,6 +65,56 @@ do things). Sketch of an implant taxonomy keyed to existing attributes:
 Each piece **amps an attribute past its normal cap** or grants a **quirk/ability**. A fully chromed
 player isn't a better football player — they're a different kind of thing wearing a jersey.
 
+## The model: users gift chrome (and it bites back)
+
+**Users gift chrome to players** — spend Floobits (a new sink) to bolt an augment onto any player in
+the sim, not just one they own. That's the hook: a deliberate hand on the sim's characters. Why a
+user would do it:
+
+- **Amp someone they're invested in** — a fantasy-roster player, their favorite team's star, the
+  subject of a card they own (a chromed player likely makes the card more valuable / a chrome-variant
+  card drops).
+- **Push a player toward awakening** — chrome accelerates them up the ladder, so it's the lever for
+  *deliberately* surfacing the L4 powers (and the collection/spectacle around them).
+- **Live the cyberpunk fantasy** — build the chrome monster you want to watch.
+
+**But chrome bites back — gifting it carries drawbacks.** This is what makes it a decision, not a
+free upgrade (and it keeps it from being a pure power-creep economy). The design space, roughly
+strongest-theme first:
+
+1. **It spikes instability (ties straight into the anomaly system).** Chrome raises the player's
+   **attention** and **destabilizes** them — accelerating them up the glitch ladder
+   (`stirring/erratic/rampant`), where glitches are *involuntary and double-edged* (L1–L3). So chrome
+   is the upside *and* the downside of the same dial: it rushes a player toward awakening (powers)
+   **through** a stretch of chaos you don't control. Mechanically this is the user's deliberate
+   version of what following/carding does passively today.
+2. **League commons / Criticality pressure.** Every chrome gift nudges the **league aggregate** toward
+   a Criticality. Individually tempting, collectively dangerous — a tragedy of the commons the Cores
+   narrate with relish ("they keep chroming their little favorites; do they know what that *does* to
+   the aggregate?"). Chroming the league into a Criticality might even be an emergent *goal* for some
+   users, and a dread for others.
+3. **Double-edged on the field.** A chrome piece amps one thing but adds **variance / a failure mode**
+   — +power but more fumbles, a cannon arm but wilder accuracy, untouchable but brittle. Boom-bust,
+   not strictly better. (Mirrors the card-tier philosophy: higher ceiling, higher variance.)
+4. **Burnout / longevity cost.** The body rejects chrome over time → **shortened career / earlier
+   retirement**. A chromed star burns bright and short — a real cost to the player you "helped."
+5. **Reset vulnerability.** A Criticality **Reset melts the chrome** (and maybe purges the player) —
+   your Floobit investment is at risk exactly when the league goes critical, which your own chroming
+   helped cause.
+6. **Overload / bricking.** Stacking too much chrome on one player **overloads** them → permanent
+   malfunction / they break. A ceiling on greed.
+
+Recommended starting set: **#1 + #2 as the spine** (chrome = the user's deliberate hand on the
+existing anomaly dial, with a commons cost), plus **#3** for moment-to-moment risk/reward. #4–#6 are
+flavor/depth knobs to layer later. This makes chrome a genuine **risk/reward gift**: you can push a
+player toward greatness, but you might glitch them, shorten them, or help tip the whole league over —
+and you don't fully control which.
+
+> Note the elegant loop: the anomaly aggregate is **already fully user-driven** (cards/rosters/
+> follows). Chrome is just a *louder, deliberate, paid* input to the same system — so it slots into
+> the machinery that already exists rather than bolting on a new one. Chrome is users reaching into
+> the anomaly dial with both hands.
+
 ## How chrome relates to glitching (the open fork the owner flagged)
 
 Three coherent ways to wire chrome to the existing anomaly/awakened machinery. Pick one (or blend):
@@ -81,6 +138,12 @@ of **#3** for Criticality (chromed players' implants overdrive during the event,
 existing `getCriticalityMultiplier` instability dial). #2 stays a later expansion if we want a
 Cores-curated track separate from attention.
 
+The **user-gifted model** reinforces #1: a user spends Floobits → the player's attention/instability
+spikes (drawback #1 above) → they climb the glitch ladder faster → they awaken → the chrome is the
+visible body of that awakening. The user *paid to push a player up the existing ladder*. So chrome
+doesn't need a parallel track — it's a paid accelerator on the anomaly system, and awakening is the
+payoff the user was buying (through a stretch of uncontrolled glitching).
+
 ## Amping the chaos — where this lands the arc
 
 Chrome is the **character** axis of "evolve Floosball into another game entirely." It composes with
@@ -96,10 +159,11 @@ weather report. That's the "step past vanilla football" the owner is after.
 
 ## Open threads (to decide later)
 
-- **Agency / economy.** Who installs chrome? Options, not exclusive: (a) the Cores assign it (pure
-  top-down, no user input — most on-theme); (b) **fans fund it** as a Floobit sink, like resurrection
-  is paid in facility levels (`SIM_EVOLUTION` Idea 2) — gives users a lever; (c) earned by
-  performance/awakening. Leaning (a) for theme + a touch of (b) for engagement.
+- **Agency / economy.** ~~Who installs chrome?~~ **Decided (owner): users gift chrome, paid in
+  Floobits** (see "The model" above). Remaining specifics: flat vs escalating cost; can you chrome any
+  player or only ones you follow/own/roster; is gifting public (whose chrome is it / leaderboard of
+  chromers); can chrome be *targeted at rivals* (a sabotage/griefing vector to design around, given
+  the drawbacks).
 - **Permanence & cost.** Is chrome permanent? Does it carry across seasons? Does a **Reset** strip the
   chrome (the Cores melting it down) the way it purges awakened players? Does chrome shorten careers
   (the body rejecting it — a longevity cost, ties to retirement)?
