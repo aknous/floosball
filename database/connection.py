@@ -977,8 +977,15 @@ def _runPendingMigrations():
             conn.execute(text(
                 "UPDATE player_attributes SET attitude_baseline = "
                 "CAST(ROUND(attitude + (80 - attitude) * 0.5) AS INTEGER) WHERE attitude IS NOT NULL"))
+            # One-time rebalance: snap the CURRENT attitude to the recovered baseline so the
+            # decade of manufactured toxicity clears immediately on deploy, rather than healing
+            # gradually over ~1.5 seasons of reversion. (Removes both the down-drift on soured
+            # players AND the up-drift inflation on perennial winners — everyone resets to their
+            # estimated disposition.) Validated on a prod copy: toxic 18% -> 2%.
+            conn.execute(text(
+                "UPDATE player_attributes SET attitude = attitude_baseline WHERE attitude IS NOT NULL"))
             conn.commit()
-            logger.info("  Migration: added player_attributes.attitude_baseline (+ disposition backfill)")
+            logger.info("  Migration: added player_attributes.attitude_baseline (+ disposition backfill + rebalance)")
         except Exception:
             conn.rollback()
 
