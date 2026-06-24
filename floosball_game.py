@@ -36,6 +36,7 @@ from constants import (
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
     MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
+    MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
     HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
@@ -9444,15 +9445,18 @@ class Play():
         openness = np.random.normal(meanOpenness, stdDev)
         return max(0, min(100, openness)), round(effectiveRouteRunning)
     
-    def selectPassTarget(self, targetList: list, qbVision: int, qbDiscipline: int, mustThrow: bool = False):
+    def selectPassTarget(self, targetList: list, qbVision: int, qbDiscipline: int, mustThrow: bool = False, aggression: float = 0.0):
         """
-        Stage 2: QB finds and selects a receiver based on vision and discipline.
-        High vision = accurately perceives receiver openness
-        Low vision = distorted perception (sees receivers as more/less open than they are)
-        High discipline = won't throw to covered receivers
+        Stage 2: QB finds and selects a receiver based on vision and aggression.
+        High vision = accurately perceives receiver openness.
+        aggression (confidence, [-1,1]) = willingness to force a throw into a tight
+        window vs check down / throw it away. A confident QB pulls the trigger more;
+        a rattled QB bails. (Discipline no longer gates the *willingness* — that's
+        confidence now; discipline is the gunslinger error tax on the outcome.)
         mustThrow = desperation: QB must attempt a throw (4th down trailing, time expiring, etc.)
         Returns: (selectedTarget, willThrowAway)
         """
+        aggrBonus = int(round(aggression * MENTAL_AGGR_ROLL_K))
         # Calculate how accurately QB perceives openness
         # High vision (90+): ±5% error, Medium (70-89): ±15% error, Low (<70): ±25% error
         if qbVision >= 90:
@@ -9487,23 +9491,20 @@ class Play():
         for target in sortedTargets:
             perceivedOpenness = target['openness']
 
-            # Discipline check using perceived openness
+            # Comfortable-throw thresholds by read quality; the "force it anyway"
+            # roll is shifted by aggression (confidence) — a confident QB pulls the
+            # trigger into tighter windows, a rattled one waits for someone open.
             if qbDiscipline >= 90:
-                # Elite: prefers 50+ openness, otherwise frequently throws
-                # to next-best read instead of stalling.
-                if perceivedOpenness >= 50 or batched_randint(1, 100) <= 50:
+                if perceivedOpenness >= 50 or batched_randint(1, 100) <= 50 + aggrBonus:
                     return (target, False)
             elif qbDiscipline >= 75:
-                # Good: throws to 30+ openness or rolls to throw anyway.
-                if perceivedOpenness >= 30 or batched_randint(1, 100) <= 70:
+                if perceivedOpenness >= 30 or batched_randint(1, 100) <= 70 + aggrBonus:
                     return (target, False)
             elif qbDiscipline >= 60:
-                # Average: throws to 15+, mostly forces it otherwise.
-                if perceivedOpenness >= 15 or batched_randint(1, 100) <= 85:
+                if perceivedOpenness >= 15 or batched_randint(1, 100) <= 85 + aggrBonus:
                     return (target, False)
             else:
-                # Low discipline: throws to anyone, risky
-                if batched_randint(1, 100) <= 95:
+                if batched_randint(1, 100) <= 95 + aggrBonus:
                     return (target, False)
 
         # No suitable receiver found - force throw to the most-open target
@@ -9512,11 +9513,10 @@ class Play():
         if mustThrow:
             return (sortedTargets[0], False)
         topOpenness = sortedTargets[0]['openness'] if sortedTargets else 0
-        # Disciplined QBs (80+) bail when no target is reasonably open.
-        # openness < 50 is the trigger — even a moderately covered top read
-        # is enough to throw away rather than force it. Below-80 discipline
-        # QBs always force the throw (they don't have the patience to bail).
-        if qbDiscipline >= 80 and topOpenness < 50:
+        # Disciplined QBs (80+) bail when no target is reasonably open — but a
+        # confident QB bails less readily (forces it), a rattled one bails sooner.
+        bailThreshold = 50 - aggression * MENTAL_AGGR_BAIL_K
+        if qbDiscipline >= 80 and topOpenness < bailThreshold:
             return (None, True)
         # Otherwise force the throw to the most-open option.
         return (sortedTargets[0], False)
@@ -10051,7 +10051,8 @@ class Play():
                 targetList,
                 self.passer.attributes.vision,
                 self.passer.gameAttributes.discipline,
-                mustThrow=mustThrow
+                mustThrow=mustThrow,
+                aggression=self._confidenceState(self.passer),
             )
             
             if willThrowAway or selectedTarget is None:

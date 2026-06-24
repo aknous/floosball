@@ -129,6 +129,26 @@ expect("surgeon barely turns it over despite high confidence", surgI < 1.0)
 expect("frozen (low C, low D) completes less than the game manager (low C, high D)", frzC < mgrC - 3.0)
 
 
+# ── 8. Aggression: confidence drives force-it vs check-down/throw-away ────
+print("8. A confident QB forces throws; a rattled QB bails")
+def throwawayRate(conf, n=400):
+    s = Scenario(); g = s.game
+    bail = 0
+    for _ in range(n):
+        s.situation(quarter=2, clock=600, offense='home', offScore=0, defScore=0,
+                    down=1, distance=10, ballOn=60)
+        s.home.rosterDict['qb'].gameAttributes.confidenceModifier = conf
+        g.play.passPlay(g._selectPassPlay('medium'))
+        if getattr(g.play, 'isThrowAway', False) or getattr(g.play, 'selectedTarget', None) is None:
+            bail += 1
+    return bail / n * 100
+random.seed(11)
+confBail = throwawayRate(5)
+rattledBail = throwawayRate(-5)
+expect("rattled QB throws it away / bails more than a confident QB", rattledBail > confBail + 1.0)
+expect("confident QB rarely bails (forces the throw)", confBail < 2.0)
+
+
 print()
 if failures:
     print(f"FAILED ({len(failures)}): " + "; ".join(failures))

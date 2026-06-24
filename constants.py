@@ -129,6 +129,10 @@ CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
 MENTAL_EXEC_GAIN = 3.0       # rating pts of execution per full confidence unit (C=±1)
 MENTAL_FROZEN_K = 2.0        # extra underperformance for low-confidence × undisciplined ("frozen")
 MENTAL_GUNSLINGER_K = 6.0    # pp added to turnover odds for high-confidence × undisciplined
+# Aggression (play-style): confidence drives a QB's willingness to force a throw
+# into a tight window vs check down / throw it away.
+MENTAL_AGGR_ROLL_K = 25      # +/- to the "force the throw" roll per full confidence unit
+MENTAL_AGGR_BAIL_K = 15      # shifts the throw-away bail threshold per full confidence unit
 
 # WPA -> player value attribution (see docs/WPA_MVP_PLAN.md). Per-play win
 # probability swing is credited to the players involved and accumulated into a
