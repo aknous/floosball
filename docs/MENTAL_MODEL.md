@@ -322,3 +322,25 @@ holds after a pick).
 - **Chemistry magnitude / curve:** exactly how far below max the confidence ceiling drops for a fully
   toxic room (and how far above for a leader room) — a tuning task for `/simcheck` + the scenario harness.
 - **Toxic-vs-leader weighting in the average:** how much heavier toxics weigh than leaders.
+
+## Skill-player situational decisions (P2b — owner direction 2026-06-24)
+
+Beyond the QB read, ball-carriers make situational micro-decisions that the model should drive,
+surfaced in the play text so they're *felt*. The clock-aware sideline decision is the first built.
+
+- **Out of bounds (clock-aware).** Was pure RNG, situation-blind — a leading team could randomly
+  step out late and stop its own clock. Now `_sidelineDecision`: the SITUATION sets intent
+  (trailing+late → get out to stop the clock; leading+late → stay in to burn it), football IQ
+  (instinct) gates whether the player acts on it, and DISCIPLINE decides clean exit vs greedy
+  squeeze-for-more-yards (which risks a tackle in bounds, clock running). Narrated:
+  *gets out of bounds to stop the clock / fights for extra yards and gets out / tries for more and
+  is dragged down in bounds — the clock keeps running / stays in bounds, keeping the clock moving /
+  steps out of bounds, stopping the clock*. **Built + tested** (run + catch sites).
+- **Dive for a catch** (WR/TE) — aggression (confidence) to lay out for a tough ball vs let it go;
+  discipline = controlled vs reckless. Convert a would-be incompletion at a risk. **Designed, next.**
+- **Stretch for the first down / pylon** (ball-carrier) — reach the ball across the marker to
+  convert (reward) vs secure it and take the spot; a gunslinger stretches and risks the fumble.
+  **Designed, next.**
+
+All three: Confidence × Discipline for the *risk/reward* choices, Football IQ for the *awareness*
+ones, the game situation as the trigger, and a play-text line on every one.

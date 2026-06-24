@@ -193,6 +193,35 @@ reseed(5); confBail = bailRate(5)
 reseed(5); rattledBail = bailRate(-5)
 expect("rattled QB bails more than a confident QB", rattledBail > confBail + 1.0)
 
+# ── 11. Situational sideline decision (clock-aware OOB) ───────────────────
+print("11. Ball-carriers make clock-aware out-of-bounds decisions")
+def oobRun(scoreDiff, disc=95, inst=95, conf=0):
+    s = Scenario(); g = s.game; oob = 0; notes = {}
+    for _ in range(N):
+        s.situation(quarter=4, clock=90, offense='home',
+                    offScore=14 + max(0, scoreDiff), defScore=14 + max(0, -scoreDiff),
+                    down=2, distance=8, ballOn=55)
+        rb = s.home.rosterDict['rb']
+        rb.gameAttributes.discipline = disc; rb.gameAttributes.instinct = inst
+        rb.gameAttributes.confidenceModifier = conf
+        g.play.runPlay()
+        if not g.play.isInBounds: oob += 1
+        n = getattr(g.play, '_sidelineNote', None)
+        if n: notes[n] = notes.get(n, 0) + 1
+    return oob / N * 100, notes
+reseed(6); trailOOB, trailNotes = oobRun(-7)          # trailing late, smart
+reseed(6); leadOOB,  leadNotes  = oobRun(+7)          # leading late, smart
+reseed(6); _, greedyNotes       = oobRun(-7, disc=62, conf=5)  # trailing, greedy gunslinger
+expect("trailing-late carrier gets out of bounds far more than a leading one",
+       trailOOB > leadOOB + 8.0)
+expect("leading-late carrier stays in bounds (doesn't stop its own clock)", leadOOB < 3.0)
+expect("trailing-late smart carrier narrates getting out to stop the clock",
+       trailNotes.get('smart_oob', 0) > 0)
+expect("leading-late smart carrier narrates staying in bounds",
+       leadNotes.get('stays_inbounds', 0) > 0)
+expect("greedy/undisciplined carrier sometimes gets tackled in bounds gambling for yards",
+       greedyNotes.get('tackled_inbounds', 0) > 0)
+
 
 print()
 if failures:

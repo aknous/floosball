@@ -3658,7 +3658,7 @@ class Game:
                     # goal line the play is dead by score, not by stepping out.
                     # The OOB flag stays True for clock-management purposes,
                     # but it shouldn't show up in the narration.
-                    if not self.play.isInBounds and not self.play.isTd:
+                    if not self.play.isInBounds and not self.play.isTd and not getattr(self.play, '_sidelineNote', None):
                         text += ', out of bounds'
                 elif self.play.passType is PassType.short:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(shortPassList), self.play.receiver.name, rcvYds)
@@ -3812,6 +3812,19 @@ class Game:
             else:
                 ydText = 'returned {} yard{}'.format(returnYds, '' if returnYds == 1 else 's')
                 text += (' Defense ' + ydText + '.') if endsBang else (', ' + ydText)
+
+        # Surface the clock-aware sideline decision (see _sidelineDecision).
+        _sNote = getattr(self.play, '_sidelineNote', None)
+        if _sNote and not self.play.isTd:
+            _sText = {
+                'smart_oob':        ', and gets out of bounds to stop the clock',
+                'extra_oob':        ', fights for extra yards and gets out of bounds',
+                'tackled_inbounds': ', tries for more and is dragged down in bounds — the clock keeps running',
+                'stays_inbounds':   ', and stays in bounds, keeping the clock moving',
+                'blunder_oob':      ', and steps out of bounds, stopping the clock',
+            }.get(_sNote)
+            if _sText:
+                text += _sText
 
         self.play.playText = text
 
@@ -9110,15 +9123,17 @@ class Play():
         if self.yardage > self.yardsToEndzone:
             self.yardage = self.yardsToEndzone
 
-        # Determine if run went out of bounds (for clock management)
+        # Determine if run went out of bounds — clock-aware (see _sidelineDecision)
         if selectedGap['type'] == 'C-gap' or selectedGap['type'] == 'bounce':
             # Outside runs more likely to go out of bounds
             oobChance = 25 if selectedGap['type'] == 'bounce' else 15
         else:
             # Inside runs rarely go out
             oobChance = 5
-        
-        self.isInBounds = batched_randint(1, 100) > oobChance
+
+        self.isInBounds, self._sidelineNote, _sbonus = self._sidelineDecision(self.runner, oobChance)
+        if _sbonus:
+            self.yardage = min(self.yardage + _sbonus, self.yardsToEndzone - 1)
         
         # Update stats
         self.runner.addRushYards(self.yardage, self.game.isRegularSeasonGame)
@@ -9367,6 +9382,44 @@ class Play():
         if C <= 0:
             return 0.0
         return C * self._undiscipline(player) * MENTAL_GUNSLINGER_K
+
+    def _sidelineDecision(self, carrier, baseOobChance):
+        """Clock-aware sideline decision for a ball-carrier near the boundary.
+        Returns (isInBounds, note, bonusYards). The game SITUATION sets the intent,
+        football IQ (instinct) gates whether the player acts on it, and discipline
+        decides whether they get out cleanly or greedily squeeze for more yards and
+        risk a tackle in bounds (which leaves the clock running). Outside a
+        late-game clock situation, it's the original play-type chance."""
+        g = self.game
+        late = (g.currentQuarter >= 4) and g.gameClockSeconds <= 120
+        if not late or carrier is None:
+            return (batched_randint(1, 100) > baseOobChance, None, 0)
+        offHome = self.offense is g.homeTeam
+        scoreDiff = (g.homeScore - g.awayScore) if offHome else (g.awayScore - g.homeScore)
+        nearSideline = batched_randint(1, 100) <= baseOobChance  # could the play reach the sideline?
+        iq = max(0.0, min(1.0, (getattr(carrier.gameAttributes, 'instinct', 80) - 60) / 40.0))
+        aware = batched_randint(1, 100) <= 40 + iq * 60          # IQ gates situational awareness
+
+        if scoreDiff < 0:  # trailing late — WANT the clock stopped: get out
+            if not nearSideline or not aware:
+                return (batched_randint(1, 100) > baseOobChance, None, 0)
+            und = self._undiscipline(carrier)
+            C = self._confidenceState(carrier)
+            if und > 0.5 and C > 0 and batched_randint(1, 100) <= int(und * (50 + 50 * C)):
+                # greedy: gamble for more yards instead of getting out immediately
+                if batched_randint(1, 100) <= 55:
+                    return (False, 'extra_oob', batched_randint(2, 6))     # got the yards AND out
+                return (True, 'tackled_inbounds', batched_randint(0, 3))   # dragged down in bounds, clock runs
+            return (False, 'smart_oob', 0)                                  # disciplined: out immediately
+
+        if scoreDiff > 0:  # leading late — WANT the clock running: stay in
+            if not nearSideline:
+                return (True, None, 0)
+            if aware:
+                return (True, 'stays_inbounds', 0)
+            return (False, 'blunder_oob', 0)                                # oblivious: stops own clock
+
+        return (batched_randint(1, 100) > baseOobChance, None, 0)
 
     def _mentalDrift(self, player, baseWeight=2, driftWeight=25):
         """Confidence-driven execution term, pre-scaled by 15 so the existing
@@ -10396,7 +10449,9 @@ class Play():
                         else:
                             oobChance = 15
 
-                    self.isInBounds = batched_randint(1, 100) > oobChance
+                    self.isInBounds, self._sidelineNote, _sbonus = self._sidelineDecision(self.receiver, oobChance)
+                    if _sbonus:
+                        self.yardage = min(self.yardage + _sbonus, self.yardsToEndzone - 1)
                     
                     # Update stats
                     self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)
