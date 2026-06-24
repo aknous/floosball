@@ -1,12 +1,12 @@
 # Chrome — cybernetic enhancement & the boredom of gods
 
 Status: **DESIGN CAPTURE / BRAINSTORM 2026-06-23** (owner ideas, not yet specced or built).
-**Sim-evolution STAGE 2** — parked until Stage 1 (L4 powers + Criticality + rule changes) ships; see
-the staging note in `docs/SIM_EVOLUTION.md`. Sibling to `docs/AWAKENED_POWERS_PLAN.md` (the L4 ability
-layer) and `docs/SIM_EVOLUTION.md` (rule mutation, resurrection). This is the **aesthetic + character**
-pillar of the same chaos arc: push Floosball past vanilla football into full cyberpunk-scifi, with the
-players themselves getting chromed up. It's a *louder paid hand* on the same anomaly dial Stage 1
-establishes, which is why it wants that foundation first.
+**Sim-evolution STAGE 3** — parked until Stage 1 (L4 powers + Criticality) and Stage 2 (rule changes)
+ship; see the staging note in `docs/SIM_EVOLUTION.md`. Sibling to `docs/AWAKENED_POWERS_PLAN.md` (the
+L4 ability layer) and `docs/SIM_EVOLUTION.md` (rule mutation, resurrection). This is the **aesthetic +
+character** pillar of the same chaos arc: push Floosball past vanilla football into full
+cyberpunk-scifi, with the players themselves getting chromed up. It's a *louder paid hand* on the same
+anomaly dial Stages 1–2 establish, which is why it wants that foundation first.
 
 > Owner's pitch (verbatim intent): "Take this a step further into real cyberpunk scifi territory.
 > Go full cyberpunk chrome with the players — cybernetic enhancements, implants — amp up the chaos
