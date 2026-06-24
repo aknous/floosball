@@ -9,6 +9,10 @@ suppression cycle, instability dial, all already shipped + gated).
 > **Related:** `docs/SIM_EVOLUTION.md` — Criticality *aftermath* ideas (fan-voted rule mutation
 > by Aris / reversion by Pyre; player resurrection by Vera/Cassian, paid for in facility levels).
 > Those build on the machinery defined here.
+>
+> **Related:** `docs/CHROME.md` — the cyberpunk-chrome *character* layer (the Cores get bored and
+> start installing cybernetic augments into players). Top-down counterpart to this doc's bottom-up
+> awakening; leading proposal is chrome = the visible escalation of awakening.
 
 ## The reframe vs. the old design
 The earlier locked design had L4 powers as **Criticality-exclusive** (awakened
