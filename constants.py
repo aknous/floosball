@@ -124,6 +124,12 @@ CHOKE_MODIFIER_THRESHOLD = 1.5    # Min abs(keyPressureMod) for choke
 CLUTCH_WPA_THRESHOLD = 6.0        # Min WPA% impact for clutch plays
 CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
 
+# Mental model — Confidence × Discipline (docs/MENTAL_MODEL.md). Starting values;
+# tune via /simcheck + the scenario harness.
+MENTAL_EXEC_GAIN = 3.0       # rating pts of execution per full confidence unit (C=±1)
+MENTAL_FROZEN_K = 2.0        # extra underperformance for low-confidence × undisciplined ("frozen")
+MENTAL_GUNSLINGER_K = 6.0    # pp added to turnover odds for high-confidence × undisciplined
+
 # WPA -> player value attribution (see docs/WPA_MVP_PLAN.md). Per-play win
 # probability swing is credited to the players involved and accumulated into a
 # season total that feeds the MVP + All-Pro defense value metrics.

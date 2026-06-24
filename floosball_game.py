@@ -35,6 +35,7 @@ from constants import (
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
+    MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
     HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
@@ -9031,6 +9032,8 @@ class Play():
         fumbleThreshold = 97
         if self.game.gamePressure >= CLUTCH_PRESSURE_THRESHOLD and runnerPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
             fumbleThreshold = max(92, fumbleThreshold - int(abs(runnerPressureMod) * 2))
+        # Gunslinger tax — a confident, undisciplined back carries it too loose.
+        fumbleThreshold = max(88, fumbleThreshold - int(round(self._gunslingerTax(self.runner))))
 
         if (fumbleRoll + fumbleResistModifier) > fumbleThreshold:
             self.isFumble = True
@@ -9325,17 +9328,53 @@ class Play():
 
         return max(0.65, min(1.0, degradationFactor))
 
+    # ── Mental model — Confidence × Discipline (docs/MENTAL_MODEL.md) ──────────
+    def _confidenceState(self, player):
+        """Normalized confidence state in [-1, +1] (0 = neutral) from the in-game
+        ±5 confidence modifier. This is the single master mental state."""
+        try:
+            c = player.gameAttributes.confidenceModifier
+        except Exception:
+            return 0.0
+        return max(-1.0, min(1.0, c / 5.0))
+
+    def _undiscipline(self, player):
+        """How undisciplined a player is: 0 (controlled) .. 1 (gunslinger). The
+        gate that turns confidence into either production or chaos."""
+        try:
+            d = player.gameAttributes.discipline
+        except Exception:
+            return 0.0
+        return max(0.0, min(1.0, (80 - d) / 20.0))
+
+    def _confExecution(self, player):
+        """Confidence × Discipline execution term (rating points). High confidence
+        overperforms; low confidence underperforms, with an extra 'frozen' penalty
+        when the player is also undisciplined (misses the play in front of them)."""
+        C = self._confidenceState(player)
+        val = C * MENTAL_EXEC_GAIN
+        if C < 0:
+            val -= (-C) * self._undiscipline(player) * MENTAL_FROZEN_K
+        return val
+
+    def _gunslingerTax(self, player):
+        """Extra turnover odds (pp) for a confident, undisciplined player forcing
+        it — the high-C / low-D corner of the 2x2. Zero unless C > 0."""
+        if player is None:
+            return 0.0
+        C = self._confidenceState(player)
+        if C <= 0:
+            return 0.0
+        return C * self._undiscipline(player) * MENTAL_GUNSLINGER_K
+
     def _mentalDrift(self, player, baseWeight=2, driftWeight=25):
-        """Calculate mental state effect from base personality + in-game drift.
-        Base personality (±2 each) provides moderate persistent influence.
-        In-game drift (small increments from TDs, drops, momentum) is amplified
-        to create visible frustration/flow state effects during the game.
-        """
-        baseConf = player.attributes.confidenceModifier
-        baseDet = player.attributes.determinationModifier
-        confDrift = player.gameAttributes.confidenceModifier - baseConf
-        detDrift = player.gameAttributes.determinationModifier - baseDet
-        return (baseConf + baseDet) * baseWeight + (confDrift + detDrift) * driftWeight
+        """Confidence-driven execution term, pre-scaled by 15 so the existing
+        callers' `/15` yields the rating-point execution value (Output B of the
+        Confidence × Discipline model). Determination/resilience no longer feed
+        this term — they gate confidence's DRIFT (see the per-play confidence
+        update). `baseWeight`/`driftWeight` are retained for signature compat but
+        unused."""
+        return self._confExecution(player) * 15
 
     def _defenderMentalMod(self, defender):
         """Combined mental swing for a defender on a single resolution.
@@ -10156,6 +10195,12 @@ class Play():
                     if receiverPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
                         chokeDropBoost = abs(receiverPressureMod) * 2.0
                         catchProbs['dropProb'] = min(30, catchProbs['dropProb'] + chokeDropBoost)
+
+                # Gunslinger tax — a confident, undisciplined QB forces throws into
+                # trouble (more INTs); same for an over-amped receiver (more drops).
+                # Confidence x Discipline model, docs/MENTAL_MODEL.md.
+                catchProbs['intProb'] = min(25, catchProbs['intProb'] + self._gunslingerTax(self.passer))
+                catchProbs['dropProb'] = min(30, catchProbs['dropProb'] + self._gunslingerTax(self.receiver))
 
                 # Desperation-deep INT dampener — a trailing team forced to chuck it
                 # downfield in garbage time was minting 9-INT games (the Floos Bowl, a
