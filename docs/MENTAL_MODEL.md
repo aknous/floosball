@@ -396,3 +396,18 @@ Do them as focused, measured passes, not a marathon-session rush:**
   persistence (3 sites) + risks a frontend `undefined`. The quirk engine is dead but threaded through
   the reaction engine's `composeReaction`/`pickSidelineCutaway` signatures. Also retire `selfBelief`'s
   old postgame confidence swing now that it's the P3 Determination dial. None is a clean one-line delete.
+
+## End-to-end validation (2026-06-24, 2.1-season fast sim)
+
+Beyond the 14 deterministic unit/frequency sections, the model was validated at SEASON SCALE on a
+fresh fast sim (778 games, ~2.1 seasons):
+- **Stability:** 0 tracebacks / 0 ERROR / 0 DB-lock over the whole run.
+- **Confidence stays bounded:** `confidence_modifier` spans exactly −5.00..+5.00 — the Det/Res
+  scaling did not break the clamp or cause runaway.
+- **Gunslinger tax emerges:** low-discipline QBs (61–75) throw **2.03%** INTs vs high-discipline
+  (83–99) **1.55%**; `corr(discipline, INT%) = −0.49`. Real and sensibly-sized.
+- **Shock absorbers emerge:** high-resilience players end at **+1.67** mean confidence vs
+  low-resilience **+0.14** (`corr(resilience, confidence)=+0.18`, `corr(selfBelief, confidence)=+0.19`)
+  — resilient/determined players resist the downswings as designed.
+- **Note:** league ppg ~15.2 — the situational-decision creep (stretch/dive convert a few extra
+  plays) persists; flagged for the tuning pass, still in a sane band.
