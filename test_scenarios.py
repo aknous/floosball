@@ -277,6 +277,31 @@ _sp.gameAttributes.resilience = 100; _sp.gameAttributes.confidenceModifier = 0.0
 _sp.updateInGameConfidence(+0.10, source='mistake')
 expect("a positive drift (good play) is never scaled", abs(_sp.gameAttributes.confidenceModifier - 0.10) < 1e-9)
 
+# ── 15. Catch-side stretch + the POWER grounding ─────────────────────────
+# The stretch now keys off a physical attribute (power) for the reach, not just
+# confidence — and it fires on catches, not only runs.
+print("15. A receiver stretches for the marker; power drives the reach")
+def catchStretch(conf, power):
+    s = Scenario(awayDefPass=85); g = s.game; converted = camShort = 0
+    for _ in range(2500):
+        s.situation(quarter=2, clock=600, offense='home', offScore=0, defScore=0,
+                    down=3, distance=12, ballOn=55)
+        for sl in ('wr1', 'wr2', 'te'):
+            r = s.home.rosterDict[sl]
+            r.gameAttributes.confidenceModifier = conf; r.gameAttributes.power = power
+        g.play.passPlay(g._selectPassPlay('medium'))
+        n = getattr(g.play, '_stretchNote', None)
+        if n == 'stretch_first': converted += 1
+        elif n == 'stretch_short': camShort += 1
+    return converted, camShort
+reseed(2); powConv, powShort = catchStretch(5, 95)    # confident + powerful
+reseed(2); weakConv, weakShort = catchStretch(5, 62)  # confident + weak
+reseed(2); timidConv, _ = catchStretch(-5, 95)        # tentative
+expect("a receiver reaches the ball across the marker on a catch (catch-side wired)", powConv > 0)
+expect("a powerful receiver converts the reach more than a weak one (power grounding)", powConv > weakConv)
+expect("a weak receiver comes up short more often than a powerful one", weakShort > powShort)
+expect("a tentative receiver never reaches", timidConv == 0)
+
 
 print()
 if failures:

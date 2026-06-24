@@ -3658,7 +3658,7 @@ class Game:
                     # goal line the play is dead by score, not by stepping out.
                     # The OOB flag stays True for clock-management purposes,
                     # but it shouldn't show up in the narration.
-                    if not self.play.isInBounds and not self.play.isTd:
+                    if not self.play.isInBounds and not self.play.isTd and not getattr(self.play, '_stretchNote', None):
                         text += ', out of bounds'
                 elif self.play.passType is PassType.short:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(shortPassList), self.play.receiver.name, rcvYds)
@@ -9457,7 +9457,12 @@ class Play():
         C = self._confidenceState(carrier)
         if C <= 0:
             return (0, None, 0)              # not confident enough to lunge for it
-        if batched_randint(1, 100) > int(45 + 40 * C):
+        # Confidence drives the WILLINGNESS to reach; POWER drives the physical
+        # extension through contact (a strong back/big TE gets it there, a slight
+        # receiver doesn't). Discipline (below) drives the fumble risk on the reach.
+        powerNorm = max(-1.0, min(1.0, (getattr(carrier.gameAttributes, 'power', 80) - 80) / 20.0))
+        successChance = int(45 + 25 * C + 15 * powerNorm)   # ~5..85
+        if batched_randint(1, 100) > successChance:
             return (0, 'stretch_short', 0)   # overreaches, comes up just short
         note = 'stretch_goal' if target == self.yardsToEndzone else 'stretch_first'
         fumbleBump = int(round(self._undiscipline(carrier) * 4 * C))  # 0 (disciplined) .. ~4 (gunslinger)
@@ -10509,7 +10514,14 @@ class Play():
                     self.isInBounds, self._sidelineNote, _sbonus = self._sidelineDecision(self.receiver, oobChance)
                     if _sbonus:
                         self.yardage = min(self.yardage + _sbonus, self.yardsToEndzone - 1)
-                    
+
+                    # Stretch for the marker on the catch (mirrors the run side): a
+                    # confident receiver with the power to extend reaches it across;
+                    # an undisciplined reach feeds the strip-fumble check below.
+                    _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.receiver)
+                    if _stBonus:
+                        self.yardage = min(self.yardage + _stBonus, self.yardsToEndzone - 1)
+
                     # Update stats
                     self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)
                     self.passer.addCompletion(self.game.isRegularSeasonGame)
@@ -10555,10 +10567,10 @@ class Play():
                         primaryTackler = safetyPlayer  # Safety made the tackle on deep plays
                     # Surface tackler so play text can credit the defender
                     self.tackledBy = primaryTackler
-                    if primaryTackler and self.isInBounds and batched_randint(1, 100) > 97:
-                        # ~3% chance of fumble on catch — only in bounds; a
-                        # receiver who steps out of bounds can't be stripped
-                        # (the play is dead at the boundary).
+                    if primaryTackler and self.isInBounds and batched_randint(1, 100) > 97 - _stFumbleBump:
+                        # ~3% chance of fumble on catch (wider after a reach-for-the-marker
+                        # stretch — _stFumbleBump); only in bounds — a receiver who steps
+                        # out of bounds can't be stripped (the play is dead at the boundary).
                         rcvFumbleResist = round(self.receiver.gameAttributes.power * 0.7 + self.receiver.gameAttributes.discipline * 0.3)
                         defStripAbility = 70
                         if hasattr(primaryTackler, 'attributes'):
