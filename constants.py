@@ -588,9 +588,14 @@ RETIREMENT_MIDCONTRACT_YEARS_PAST = 3
 # weaker than the active win/loss push, so a genuinely losing team still sours --
 # just slower -- while a soured player on a mid-tier team or in the FA pool recovers
 # (~+0.4/week at attitude 40 -> Sour in a season, Steady in two).
-ATTITUDE_NEUTRAL = 80              # resting attitude the reversion pulls toward
-ATTITUDE_REVERT_RATE = 0.01       # weekly reversion = this fraction of distance-to-neutral
-ATTITUDE_DRIFT_MAGNITUDE = 3      # win/loss drift multiplier on |winPct-0.5| (was 4)
+ATTITUDE_NEUTRAL = 80              # global fallback anchor (used only if a player has no baseline)
+# Reversion now pulls toward each player's attitude_baseline (their DISPOSITION), not a
+# global neutral — so attitude is a stable trait, and a bad season is a recoverable dip
+# rather than a slide into permanent toxicity. Rate raised 0.01 -> 0.05 so reversion
+# actually dominates the drift (the old 0.01 was glacial — veterans soured monotonically
+# with tenure because the drift accumulated faster than reversion could recover).
+ATTITUDE_REVERT_RATE = 0.05       # weekly reversion = this fraction of distance-to-BASELINE
+ATTITUDE_DRIFT_MAGNITUDE = 1.5    # win/loss drift multiplier on |winPct-0.5| (dampened 3 -> 1.5)
 
 # ---- Roster Supply Floor ----
 # After retirements are known, guarantee the league has enough living players at

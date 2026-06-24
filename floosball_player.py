@@ -525,6 +525,7 @@ class PlayerAttributes:
         #dynamic personality attributes
         self.discipline = 0
         self.attitude = 0
+        self.attitudeBaseline = 0   # disposition anchor (set = attitude at generation)
 
         #static personality intangibles
         self.focus = 0
@@ -830,6 +831,7 @@ class PlayerAttributes:
         self.creativity  = int(gamePool.pop(randint(0, len(gamePool)) - 1))
         self.discipline  = int(gamePool.pop(randint(0, len(gamePool)) - 1))
         self.attitude    = int(lrPool.pop(randint(0, len(lrPool)) - 1))
+        self.attitudeBaseline = self.attitude   # disposition anchor — drift reverts toward this
         self.resilience  = int(lrPool.pop(randint(0, len(lrPool)) - 1))
         # selfBelief: governs how volatile this player's confidence is in
         # response to performance and team form. High = stable; low = volatile.

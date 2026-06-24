@@ -302,6 +302,17 @@ expect("a powerful receiver converts the reach more than a weak one (power groun
 expect("a weak receiver comes up short more often than a powerful one", weakShort > powShort)
 expect("a tentative receiver never reaches", timidConv == 0)
 
+# ── 16. Attitude baseline anchor (P4) ────────────────────────────────────
+# Attitude is now a stable trait: a disposition baseline is set at generation,
+# and the offseason drift mean-reverts toward THAT (not a global neutral).
+print("16. Attitude carries a disposition baseline set at generation")
+_apTeam = Scenario().home
+_bases = [(p.attributes.attitude, getattr(p.attributes, 'attitudeBaseline', None))
+          for p in _apTeam.rosterDict.values() if p]
+expect("every generated player has a positive attitudeBaseline", all(b for _, b in _bases))
+expect("attitudeBaseline equals the generated attitude (the anchor starts on the disposition)",
+       all(a == b for a, b in _bases))
+
 
 print()
 if failures:

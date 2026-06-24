@@ -251,6 +251,9 @@ class PlayerAttributes(Base):
     blocking: Mapped[int] = mapped_column(Integer)
     discipline: Mapped[int] = mapped_column(Integer)
     attitude: Mapped[int] = mapped_column(Integer)
+    # Per-player attitude anchor (their disposition). Drift mean-reverts toward THIS,
+    # not a global neutral, so a bad season is a recoverable dip, not a slide to toxic.
+    attitude_baseline: Mapped[int] = mapped_column(Integer, default=80)
     focus: Mapped[int] = mapped_column(Integer)
     instinct: Mapped[int] = mapped_column(Integer)
     creativity: Mapped[int] = mapped_column(Integer)

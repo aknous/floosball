@@ -965,6 +965,23 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # attitude_baseline — the disposition anchor the drift mean-reverts toward.
+        # Existing players have DRIFTED attitudes (a decade of losing-team souring),
+        # so anchoring to their current value would lock in the manufactured toxicity.
+        # Backfill estimates disposition by pulling the current attitude halfway back
+        # toward neutral (80): a drifted toxic recovers, a genuine sour stays low-ish.
+        # In the same try as the ADD COLUMN so the backfill runs ONCE (re-boots throw
+        # on the existing column and skip it).
+        try:
+            conn.execute(text("ALTER TABLE player_attributes ADD COLUMN attitude_baseline INTEGER DEFAULT 80"))
+            conn.execute(text(
+                "UPDATE player_attributes SET attitude_baseline = "
+                "CAST(ROUND(attitude + (80 - attitude) * 0.5) AS INTEGER) WHERE attitude IS NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added player_attributes.attitude_baseline (+ disposition backfill)")
+        except Exception:
+            conn.rollback()
+
         # Retire the 'random' powerup slug on stashed achievement rewards.
         # Tycoon now grants income_boost; Veteran grants extra_swap. Map
         # existing 'random' rows by their achievement source so the user
