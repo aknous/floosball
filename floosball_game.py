@@ -3658,7 +3658,7 @@ class Game:
                     # goal line the play is dead by score, not by stepping out.
                     # The OOB flag stays True for clock-management purposes,
                     # but it shouldn't show up in the narration.
-                    if not self.play.isInBounds and not self.play.isTd and not getattr(self.play, '_sidelineNote', None):
+                    if not self.play.isInBounds and not self.play.isTd:
                         text += ', out of bounds'
                 elif self.play.passType is PassType.short:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(shortPassList), self.play.receiver.name, rcvYds)
@@ -3829,18 +3829,16 @@ class Game:
             if _stText:
                 text += _stText
 
-        # Surface the clock-aware sideline decision (see _sidelineDecision).
-        _sNote = getattr(self.play, '_sidelineNote', None)
-        if _sNote and not self.play.isTd:
-            _sText = {
-                'smart_oob':        ', and gets out of bounds to stop the clock',
-                'extra_oob':        ', fights for extra yards and gets out of bounds',
-                'tackled_inbounds': ', tries for more and is dragged down in bounds — the clock keeps running',
-                'stays_inbounds':   ', and stays in bounds, keeping the clock moving',
-                'blunder_oob':      ', and steps out of bounds, stopping the clock',
-            }.get(_sNote)
-            if _sText:
-                text += _sText
+        # Factual out-of-bounds for a ball-carrier run. The clock-aware sideline
+        # DECISION (_sidelineDecision) is mechanical; the text just states whether
+        # the run ended out of bounds — no intent narration ("to stop the clock").
+        # A player can be tackled AND pushed out, so this can sit after a "tackled
+        # by" clause. Passes get their out-of-bounds clause in the pass branch.
+        if (getattr(self.play, 'runner', None) is not None
+                and not self.play.isInBounds and not self.play.isTd
+                and not getattr(self.play, '_stretchNote', None)
+                and ', out of bounds' not in text):
+            text += ', out of bounds'
 
         self.play.playText = text
 

@@ -332,10 +332,11 @@ surfaced in the play text so they're *felt*. The clock-aware sideline decision i
   step out late and stop its own clock. Now `_sidelineDecision`: the SITUATION sets intent
   (trailing+late → get out to stop the clock; leading+late → stay in to burn it), football IQ
   (instinct) gates whether the player acts on it, and DISCIPLINE decides clean exit vs greedy
-  squeeze-for-more-yards (which risks a tackle in bounds, clock running). Narrated:
-  *gets out of bounds to stop the clock / fights for extra yards and gets out / tries for more and
-  is dragged down in bounds — the clock keeps running / stays in bounds, keeping the clock moving /
-  steps out of bounds, stopping the clock*. **Built + tested** (run + catch sites).
+  squeeze-for-more-yards (which risks a tackle in bounds, clock running). The DECISION is mechanical
+  (it drives `isInBounds`); the play text is **factual only — no intent narration** (owner direction:
+  don't editorialize motive like "to stop the clock"). Text just appends *out of bounds* when the run
+  ended out (a player can be tackled AND pushed out, so it can follow a "tackled by" clause). **Built
+  + tested** (run + catch sites).
 - **Stretch for the first down / pylon** (ball-carrier) — `_stretchForFirst`: a confident carrier
   ending JUST short of the marker (or goal line) reaches the ball across to convert; an undisciplined
   reach exposes the ball (a fumble bump fed into the existing fumble check); tentative carriers take
