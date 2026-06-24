@@ -98,6 +98,37 @@ s.g.otSecondPossComplete = True   # what the fix sets at the defensive-score sit
 expect("after the fix flag, isGameOver -> True (game ends)", s.gameOver() is True)
 
 
+# ── 7. Mental model: Confidence x Discipline quadrants ───────────────────
+# Drives many medium pass plays with the offense pinned to each corner of the
+# 2x2 and checks the archetype falls out (docs/MENTAL_MODEL.md).
+print("7. Confidence x Discipline produces the four archetypes")
+def quadrant(conf, disc, n=400):
+    s = Scenario(); g = s.game
+    comp = ints = 0
+    for _ in range(n):
+        s.situation(quarter=2, clock=600, offense='home', offScore=0, defScore=0,
+                    down=1, distance=10, ballOn=60)
+        for slot in ('qb', 'wr1', 'wr2', 'te'):
+            p = s.home.rosterDict[slot]
+            p.gameAttributes.confidenceModifier = conf   # in-game C, [-5,5]
+            p.gameAttributes.discipline = disc           # 60..100
+        g.play.passPlay(g._selectPassPlay('medium'))
+        if getattr(g.play, 'isInterception', False):
+            ints += 1
+        elif getattr(g.play, 'isPassCompletion', False):
+            comp += 1
+    return comp / n * 100, ints / n * 100
+random.seed(7)
+surgC, surgI = quadrant(5, 95)     # high C, high D
+gunC,  gunI  = quadrant(5, 62)     # high C, low D
+mgrC,  mgrI  = quadrant(-5, 95)    # low C, high D
+frzC,  frzI  = quadrant(-5, 62)    # low C, low D
+expect("high confidence completes more than low confidence", min(surgC, gunC) > max(mgrC, frzC))
+expect("gunslinger (high C, low D) throws more INTs than the surgeon (high C, high D)", gunI > surgI + 1.0)
+expect("surgeon barely turns it over despite high confidence", surgI < 1.0)
+expect("frozen (low C, low D) completes less than the game manager (low C, high D)", frzC < mgrC - 3.0)
+
+
 print()
 if failures:
     print(f"FAILED ({len(failures)}): " + "; ".join(failures))
