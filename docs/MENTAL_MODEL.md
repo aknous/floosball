@@ -336,11 +336,63 @@ surfaced in the play text so they're *felt*. The clock-aware sideline decision i
   *gets out of bounds to stop the clock / fights for extra yards and gets out / tries for more and
   is dragged down in bounds — the clock keeps running / stays in bounds, keeping the clock moving /
   steps out of bounds, stopping the clock*. **Built + tested** (run + catch sites).
-- **Dive for a catch** (WR/TE) — aggression (confidence) to lay out for a tough ball vs let it go;
-  discipline = controlled vs reckless. Convert a would-be incompletion at a risk. **Designed, next.**
-- **Stretch for the first down / pylon** (ball-carrier) — reach the ball across the marker to
-  convert (reward) vs secure it and take the spot; a gunslinger stretches and risks the fumble.
-  **Designed, next.**
+- **Stretch for the first down / pylon** (ball-carrier) — `_stretchForFirst`: a confident carrier
+  ending JUST short of the marker (or goal line) reaches the ball across to convert; an undisciplined
+  reach exposes the ball (a fumble bump fed into the existing fumble check); tentative carriers take
+  the spot. Narrated *reaches across the marker for the first down! / stretches across the goal line!
+  / lunges but comes up just short*. **Built + tested** (runs; catch-side reach not yet wired).
+- **Dive for a catch** (WR/TE) — on a CONTESTED ball (catch prob 15–60), a confident receiver lays
+  out, extending their catch range (`MENTAL_DIVE_K`); the gunslinger drop tax is the reckless-lay-out
+  risk; tentative receivers don't dive. Narrated *a diving grab!*. **Built + tested.**
 
 All three: Confidence × Discipline for the *risk/reward* choices, Football IQ for the *awareness*
 ones, the game situation as the trigger, and a play-text line on every one.
+
+## Build status & remaining backlog (as of 2026-06-24, branch `feature/mental-model`)
+
+The CORE model is built and tested — `feature/mental-model` off `development`, last build commit
+`feb8264`, 14 deterministic sections in `test_scenarios.py` (helper unit tests across QB/RB/WR/TE/K
+plus emergent + situational frequency checks). Determinism via `reseed()` (random + numpy +
+`clear_all_batch_caches`). **NOTE:** all the mental helpers live on the `Play` class (next to
+`_mentalDrift`), NOT `Game` — tests must call them on `scenario.game.play`.
+
+**Built + validated:**
+- **P1 — Confidence × Discipline core.** `_confExecution` (execution = C × `MENTAL_EXEC_GAIN`, minus
+  a frozen tax for low-C × undisciplined), `_gunslingerTax` (turnover bump for high-C × undisciplined),
+  via the redefined `_mentalDrift` = confidence-only execution × 15. Applies at every gate, all
+  positions. Catch-site INT/drop gunslinger taxes; run-fumble gunslinger bump.
+- **P2 — QB aggression.** `selectPassTarget(aggression=...)`: confidence shifts the force-it rolls
+  (`MENTAL_AGGR_ROLL_K`) and the throw-away bail threshold (`MENTAL_AGGR_BAIL_K`).
+- **P2b/c/d — situational ball-carrier decisions** (above): clock-aware OOB, stretch-for-first
+  (runs), dive-for-a-catch — all with play-text narration.
+- **P3 — Determination & Resilience shock absorbers.** Centralized in
+  `Player.updateInGameConfidence(value, source)`: `source='mistake'` scales the down-drift by
+  RESILIENCE; `source='scoreboard'` scales it by DETERMINATION (mapped to the existing `selfBelief`
+  attribute). Neutral attr (80) preserves today's drop; 100 shrugs off (0×), 60 spirals (2×); positive
+  drift never scaled. Tagged sites: fumble/INT/catch-fumble/drop = `mistake`; momentum drag = `scoreboard`.
+
+**Remaining — each is consolidation/tuning of an EXISTING, entangled system, not a clean build.
+Do them as focused, measured passes, not a marathon-session rush:**
+- **P4 — Attitude → chemistry (TUNING, deferred).** The machinery already exists: `_driftAttitudes`
+  (win/loss drift + mean-reversion + resilience cushion + coach influence) and
+  `_propagateAttitudeContagion` (leader/toxic room effect). The "everyone toxic at FA" symptom is a
+  balance problem: drift (`ATTITUDE_DRIFT_MAGNITUDE=3`) outpaces reversion (`ATTITUDE_REVERT_RATE=0.01`),
+  and generation centers attitude ~73 (`lrCenter = mentalSeed-7`) while the system reverts toward 80,
+  so a chunk start below the toxic line and survivorship keeps leaders rostered. Fix = a measured
+  multi-season tuning pass (read the rostered-vs-FA attitude spread before/after). Gotchas: the
+  multi-season sim is slow (>700 games), and attitude isn't a plain `players` column (it's in the
+  attributes blob) — the measurement needs setup. Best via `/tune`.
+- **P5 — Football IQ (BUILD, balance-affecting).** focus/instinct/creativity already feed the derived
+  ratings (vision/playMaking/xFactor/defensive). Giving them NEW distinct hooks (focus→execution
+  consistency, instinct→reads, creativity→improvisation) adds mechanics and shifts balance → needs
+  tuning, and risks the re-complication this redesign set out to avoid. Decide first whether the
+  conceptual reclassification (keep existing feeds, just document the identity) is enough.
+- **P6 — Team form emergent (CONSOLIDATION, risky).** Goal: delete `FORM_STATE_RATING_MULT` + the two
+  composites and recompute the form badge from aggregate confidence. But `complacencyVulnerability` /
+  `adversityResolve` also feed disposition and the attitude contagion, so removal must unwind those
+  consumers carefully.
+- **P7 — Cleanup (ENTANGLED, low-value).** `clutchFactor` is permanently 0 but is load-bearing for the
+  DB `clutch_factor` sync AND emitted into the play-insights the frontend reads — removing it touches
+  persistence (3 sites) + risks a frontend `undefined`. The quirk engine is dead but threaded through
+  the reaction engine's `composeReaction`/`pickSidelineCutaway` signatures. Also retire `selfBelief`'s
+  old postgame confidence swing now that it's the P3 Determination dial. None is a clean one-line delete.
