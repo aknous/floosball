@@ -1,0 +1,260 @@
+# Mental Model — design spec & gameplay integration
+
+> Status: **DESIGN SPEC, not built** (2026-06-24). Owner-driven redesign of the player mental /
+> personality system. Analyzed against `development`; intended as a between-season build. File:line
+> references are the *current* code (the hooks the new model plugs into / replaces).
+
+## Why this exists
+
+A review found the current mental system is **two real levers wrapped in seven attributes** — several
+dead (`clutchFactor`, the quirk engine), several invisible (`focus`/`instinct`/`creativity` only exist
+laundered inside derived ratings), and `determination` never moves an outcome on its own (it's always
+summed with confidence in `_mentalDrift`). It's simultaneously *over-complicated* (too many named dials
+with no felt identity) and, in a few spots, *miscalibrated* (kicker FG composure ±18%, rally stacking
+~±8 rating/gate). The fix is not "more attributes" — it's to re-center everything on **one dynamic
+state (confidence)** with a small set of dials that each have a distinct, legible job.
+
+## The final roster
+
+| Bucket | Attribute | Job |
+|---|---|---|
+| **Dynamic state** | **Confidence** (`confidenceModifier`) | The master self-belief level. Drives aggression + over/under-performance. The only mental *state* that moves during a game. |
+| **Mental dials** (static) | **Discipline** | Shapes *how* confidence expresses: controlled vs wild. The error/control gate. |
+| | **Determination** | Shock absorber #1 — resists confidence loss from the **scoreboard** (losing). |
+| | **Resilience** | Shock absorber #2 — resists confidence loss from the player's **own mistakes**. |
+| | **Attitude** | A **stable trait** → team chemistry (affects *teammates*, not the player's own play). |
+| **Clutch axis** (static) | **pressureHandling** | Unchanged. Composure in high-leverage *moments* (the clutch/choke engine). Orthogonal to confidence. |
+| **Football IQ** (skill, *not* mental) | **focus / instinct / creativity** | Reclassified as the *processing layer of skill*: execution / reads / improvisation. Feed derived ratings as today; no longer presented as personality. |
+| **Folded / removed** | `selfBelief` | Folded — its job (scaling confidence swings) is now Determination + Resilience. |
+| | `clutchFactor` | Deleted (already dead, hardcoded 0). |
+| | `quirk` engine | Deleted or enabled — currently disabled dead code (`quirk=None`, 0% chance). |
+
+Net felt attributes: **Confidence + 4 dials + pressureHandling**, plus three skill (IQ) inputs. Down
+from the current sprawl, each with one clear role.
+
+---
+
+## 1. The core model — Confidence × Discipline
+
+**Confidence `C`** is the dynamic state. Normalize to a signed band `C ∈ [-1, +1]`, neutral `0`
+(maps from the existing `confidenceModifier`, currently clamped ±5 — rescale, don't invent a new var).
+Confidence drives two outputs, and **Discipline `D`** (use `Dn = clamp((D-80)/20, -1, 1)`, the project's
+`(attr-80)/20` convention) gates them.
+
+### Output A — Aggression (decision-time, per player)
+`A = C` sets risk appetite at **resolution time** (not play-calling — that stays coach-driven). High `A`
+→ the player reaches for the bigger outcome; low `A` → takes what's there.
+
+- **QB:** deep-read / contested-throw willingness. High `C` → throws the deep option more; low `C` →
+  checks down. *(hook: target selection + `mustThrow`/read logic inside `passPlay` → `_selectPassPlay`)*
+- **WR/TE:** contested-catch attempt + YAC aggression. *(hook: `calculateCatchProbability`, the contested
+  branch)*
+- **RB:** hit-the-hole decisively vs dance; cut for the big gap vs take the safe yards. *(hook: the gate
+  selection in `runPlay`, `floosball_game.py:8960-8990`)*
+
+### Output B — Execution (over/under-perform)
+`E = C × execGain` is a small additive term to the quality math (throw quality, catch security, run-gate
+differential). High `C` overperforms, low `C` underperforms. **This replaces the flat `_mentalDrift/15`
+nudge** currently added at every gate (`floosball_game.py:9328-9338`) — same insertion points, but the
+value now comes from the confidence *state* instead of the summed conf+det blob.
+
+### The Discipline gate — the 2×2
+Discipline decides whether confidence's energy is *controlled or wild*, across the whole range:
+
+|  | High discipline | Low discipline |
+|---|---|---|
+| **High C** | Overperforms, no error tax — *surgeon* | Overperforms **and** forces it — *gunslinger* |
+| **Low C** | Executes the safe play — *game manager* | Misses the play in front of them — *frozen* |
+
+Two taxes implement the right-hand column:
+
+- **Gunslinger tax (high C, low D):** `errInflate = max(0, C) × (1 - Dn) × K_err`, added to **INT /
+  fumble / drop** odds. High `D` → `(1-Dn)≈0` → confidence with no error tax. Low `D` → a real turnover
+  tax that scales with how confident they are. *(hooks: INT in `calculateCatchProbability:9648-9653`,
+  drop `9655-9657`, fumble `runPlay:9015-9035`.)*
+- **Frozen tax (low C, low D):** `missPenalty = max(0, -C) × (1 - Dn) × K_miss`, a hit to execution on
+  *available* plays (the open checkdown thrown late, the gap hit a beat slow). High `D` at low `C` →
+  competent-safe (no miss tax, just low ceiling); low `D` → tentative misses. *(hook: same execution term
+  in Output B, sign-aware.)*
+
+So **Discipline is the control knob at both ends**: at high confidence it's the difference between a
+surgeon and a gunslinger; at low confidence it's the difference between a game manager and a frozen
+player. Confidence is the *amplitude*; discipline is the *control*.
+
+---
+
+## 2. Determination & Resilience — the two shock absorbers
+
+These do **not** add to any gate (that was the old `_mentalDrift` mistake). They gate the **downward
+movement of `C`**, from two different sources. Confidence rises freely on good outcomes; what makes a
+player mentally tough is *resisting the fall*.
+
+- **Determination `Det`** — resists scoreboard-driven loss. When the team falls behind, per-play (or
+  per scoring event) confidence drifts down by `ΔC_score = baseScoreDrop × (1 - Detn)`. High `Det` →
+  no fold when losing; low `Det` → confidence bleeds with the deficit.
+  *(Replaces the negative side of the momentum→confidence path for the trailing team,
+  `_applyMomentumEffect:5764-5801`, and the `selfBelief`-scaled postgame streak swing,
+  `floosball_player.py:276-301`.)*
+- **Resilience `Res`** — resists own-mistake loss. After the player's *own* INT / fumble / drop, the
+  confidence hit is `ΔC_mistake = baseMistakeDrop × (1 - Resn)`. High `Res` → shakes it off; low `Res`
+  → spirals.
+  *(Scales the existing per-play confidence drops: INT `10197`, fumble `9041`, catch-fumble `10424` —
+  these currently apply unscaled.)*
+
+This is the clean split you described: **Det = vs the scoreboard, Res = vs the mirror.** Both only touch
+confidence's *decline*; neither is a flat rating term, so neither double-counts with Output A/B.
+
+---
+
+## 3. Attitude — a stable trait, not a scoreboard reaction
+
+**The bug today:** attitude is too *variable and result-driven* — losing pushes players toxic, winning
+pushes them to leader, so by free agency the leaders are re-signed and the pool fills with toxics
+(survivorship bias on a volatile attribute). Players blame their TOXIC tags for bad games even though
+attitude barely touches individual play.
+
+**The fix — make it a trait:**
+- **Anchor** attitude to a per-player baseline set at generation (their actual disposition).
+- **Mean-revert + dampen:** only *sustained, multi-season* patterns nudge the trait, and it decays back
+  toward baseline. One bad season can't flip a player toxic. *(Replaces the current win/loss-driven swing
+  feeding `computeMoodTier`/disposition.)*
+- **Separate trait from mood:** the scoreboard moves the transient **mood** (already display-only); the
+  **attitude trait** stays steady. Chemistry reads the trait; mood is flavor.
+
+**Effect — teammates, not self:** attitude feeds a **team chemistry** value applied pregame as a small
+nudge to *teammates'* confidence baseline (toxic drags the room a little; leader lifts it). It does **not**
+drive the toxic player's own outcomes. *(hook: a new term in the pregame stack alongside
+`_applyTeamDisposition:6135` / funding morale `5807`.)* Result: a TOXIC tag means "genuinely bad for the
+room," not "was on a losing team," and the FA pool shows a natural spread of dispositions.
+
+---
+
+## 4. pressureHandling — kept, orthogonal
+
+No redesign. `getPressureModifier` (`floosball_player.py:664`) stays the **big-moment composure** axis,
+gated by `gamePressure ≥ CLUTCH_PRESSURE_THRESHOLD` (`calculateGamePressure:5506`). Different time scale
+and trigger from confidence: confidence is the *running state* across the game; pressureHandling is *innate
+composure in leverage spikes*, independent of how the game's gone. A low-confidence / high-pressureHandling
+player still drills the game-winner — that combination is a feature.
+
+**Guardrail:** keep it from stacking absurdly with the confidence error tax in clutch moments. The earlier
+review flagged the kicker FG composure (±18%) as over-tuned; pull that ceiling down so a great-but-shaky
+kicker isn't beaten by a mediocre-but-icy one as often. Pressure handles the *spike*; confidence handles
+the *baseline*; tune the sum.
+
+---
+
+## 5. Football IQ — focus / instinct / creativity (skill, not mental)
+
+These move out of the personality conversation and become the **processing layer of skill** — the
+difference between a physically gifted player and one who also *plays smart*. They keep their current
+derived-rating feeds (`xFactor:654`, `vision:660`, `playMakingAbility:653`, the defensive formulas
+`868-922`), just relabeled and given a clear identity:
+
+- **focus → execution consistency.** The *floor*: drop rate, assignment soundness, penalty avoidance,
+  holding up when *un*pressured.
+- **instinct → reads & anticipation.** Where the play's going: defensive ball-hawking (INTs, jumping
+  routes), RB vision (gap selection), pre-snap / coverage recognition.
+- **creativity → improvisation.** Something from nothing: YAC / elusiveness, broken-play recovery, QB
+  off-script.
+
+**The clean decision chain** — IQ is skill, confidence/discipline are the dials on it:
+
+> **IQ (do they *see* the right play?)** → **Confidence (do they have the belief to *pull the trigger*?)**
+> → **Discipline (do they stay in *control* or force it?)**
+
+A high-IQ / low-confidence player reads it perfectly but checks down. A low-IQ / high-confidence /
+low-discipline player fires into triple coverage he never should have seen. That interaction is the whole
+point, and it falls out of the model for free.
+
+---
+
+## 6. How it plugs into the gameplay loop
+
+The loop is unchanged in shape; the mental terms change at five touchpoints.
+
+```
+PREGAME (per game, per player) ──────────────────────────────────────────────
+  existing stack stays: compression(5929) → funding morale(5807) → fatigue
+                        → team disposition(6135) → mental soft-cap(5977, guardrail)
+  NEW: set in-game Confidence C from the season-carried baseline.
+  NEW: compute team Chemistry from ATTITUDE traits → small nudge to teammates' C baseline.
+
+PER PLAY ─────────────────────────────────────────────────────────────────────
+  1. DECISION (resolution-time, per player)
+       Aggression A = C  → risk appetite in: QB deep-read vs checkdown,
+       WR contested-catch attempt, RB hit-the-gap vs take-what's-there.
+       IQ (instinct) → is the read correct / matchup targeted.        [skill]
+  2. RESOLUTION (outcome math)
+       Execution  E = C × execGain   → added to throw quality(9504) /
+                                        catch security(9554) / run gates(8960-8990).
+                                        REPLACES flat _mentalDrift/15(9328).
+       Gunslinger tax (C>0, low D)   → + INT(9648)/drop(9655)/fumble(9015).
+       Frozen tax     (C<0, low D)   → − execution on available plays.
+       IQ (focus/instinct/creativity)→ drop floor, reads, improvisation. [skill]
+       pressureHandling(664)         → clutch/choke in high-leverage moments. [unchanged]
+  3. CONFIDENCE UPDATE
+       good play (completion/conv/TD)→ C up   (small, ungated)
+       own mistake (INT/fumble/drop) → C down × (1 - Resn)         [Resilience]
+       falling behind (scoreboard)   → C down × (1 - Detn)         [Determination]
+       momentum(5764) / rally(297)   → feed C  (rally capped per the review)
+
+POSTGAME / SEASON ────────────────────────────────────────────────────────────
+  Carry C baseline toward the game's end state (existing 251-252),
+    swing magnitude governed by Det/Res (replaces selfBelief scaling, 276-301).
+  Attitude trait mean-reverts toward baseline; only sustained patterns move it.
+```
+
+### Current → intended, hook by hook
+| Hook (file:line) | Today | Intended |
+|---|---|---|
+| `_mentalDrift` (9328-9338) | summed conf+det, flat add `/15` to every gate | **Replaced** by Execution `E = C×execGain` (confidence only) |
+| INT/fumble/drop odds (9648/9015/9655) | mental only via clutch override | **+ Gunslinger tax** `max(0,C)×(1-Dn)` |
+| per-play conf drops (10197/9041/10424) | unscaled | **× (1-Resn)** (Resilience) |
+| trailing-team conf drift (5764-5801, 276-301) | momentum + selfBelief streak swing | **× (1-Detn)** (Determination) |
+| play resolution choices (passPlay/runPlay) | no confidence input | **Aggression `A=C`** drives risk appetite |
+| attitude → mood/disposition | volatile, win/loss-driven, self-affecting | **Stable trait → teammate chemistry** |
+| `focus/instinct/creativity` | "mental intangibles" in xFactor | **Football IQ (skill)**, relabeled |
+| `selfBelief` / `clutchFactor` / quirk | scattered / dead | **Folded / deleted** |
+| kicker FG composure (8537-8573) | ±18% under pressure | **Ceiling pulled down** (over-tuned) |
+
+---
+
+## 7. Tuning targets & validation
+
+Calibrate so confidence is **meaningful but not dominant** vs the ~21-point league skill spread:
+
+- A full confidence swing (`C: 0→±1`) should be worth roughly **a third to half a skill tier** at the
+  gates — felt, but skill still wins most matchups.
+- Max gunslinger tax (`C=+1`, `D` floor) should add on the order of **a few pp** to turnover odds — enough
+  that an undisciplined hot QB is visibly riskier, not enough to swamp skill.
+- Rally + momentum into `C` must stay **capped** (the review flagged ~±8 rating/gate as too hot).
+
+**Validate with the scenario harness** (`scenario.py` / `test_scenarios.py`): construct the four
+quadrants deterministically — high/low `C` × high/low `D` — and assert the expected style (gunslinger
+INT rate, game-manager checkdown rate, frozen missed-play rate, surgeon clean overperformance) rather than
+waiting for them to emerge in a fast sim. Same for Det (confidence holds when down 14) and Res (confidence
+holds after a pick).
+
+## 8. Migration / removal checklist
+
+- Rescale `confidenceModifier` → `C ∈ [-1,1]`; route it through Aggression + Execution + the Discipline taxes.
+- Move `determination` off `_mentalDrift`; make it gate scoreboard confidence drop.
+- Scale the own-mistake confidence drops by `resilience`.
+- Re-anchor `attitude` to a baseline + mean-revert; repoint its effect to teammate chemistry.
+- Relabel `focus/instinct/creativity` as Football IQ; keep their derived-rating feeds.
+- Delete `clutchFactor`; delete or enable the quirk engine; fold `selfBelief`.
+- Consolidate the three overlapping composites (`complacencyVulnerability` / `adversityResolve` /
+  disposition) — Det/Res now do the explicit work, so the composites can shrink.
+- Pull down the kicker FG composure ceiling.
+
+## 9. Open questions
+
+- **`C` representation:** keep the ±5 `confidenceModifier` rescaled, or introduce a clean `[-1,1]` state
+  var and derive the legacy modifier for display? (Recommend the latter for legibility.)
+- **Aggression in play-calling:** keep aggression purely resolution-time (recommended), or also let a
+  confident QB nudge the *called* play toward aggression?
+- **Quirk engine:** delete the dead path, or finally enable it as flavor? (Out of scope for the mental
+  *mechanics*, but it's in the cleanup.)
+- **Chemistry strength:** how big a teammate-confidence nudge should a TOXIC / LEADER room produce — and
+  is it linear in the count of toxic/leader players, or a team-average?
