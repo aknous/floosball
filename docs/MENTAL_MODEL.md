@@ -374,15 +374,19 @@ plus emergent + situational frequency checks). Determinism via `reseed()` (rando
 
 **Remaining — each is consolidation/tuning of an EXISTING, entangled system, not a clean build.
 Do them as focused, measured passes, not a marathon-session rush:**
-- **P4 — Attitude → chemistry (TUNING, deferred).** The machinery already exists: `_driftAttitudes`
-  (win/loss drift + mean-reversion + resilience cushion + coach influence) and
-  `_propagateAttitudeContagion` (leader/toxic room effect). The "everyone toxic at FA" symptom is a
-  balance problem: drift (`ATTITUDE_DRIFT_MAGNITUDE=3`) outpaces reversion (`ATTITUDE_REVERT_RATE=0.01`),
-  and generation centers attitude ~73 (`lrCenter = mentalSeed-7`) while the system reverts toward 80,
-  so a chunk start below the toxic line and survivorship keeps leaders rostered. Fix = a measured
-  multi-season tuning pass (read the rostered-vs-FA attitude spread before/after). Gotchas: the
-  multi-season sim is slow (>700 games), and attitude isn't a plain `players` column (it's in the
-  attributes blob) — the measurement needs setup. Best via `/tune`.
+- **P4 — Attitude as a stable trait (BUILT 2026-06-24, commit `7914464`).** The toxic-prevalence fix
+  — the core motivation for the rework. Prod diagnosis: 18% TOXIC (attitude < 50), 44% negative, and
+  attitude soured *monotonically with tenure* (6% toxic at rookie → 50% by season 5). Confirmed only
+  `_driftAttitudes` writes attitude, so toxicity was MANUFACTURED by the win/loss drift accumulating
+  downward over a career while the `0.01` reversion was too glacial to recover anyone (and the FA pool
+  was a toxicity sink). Also found: `_propagateAttitudeContagion` writes `confidenceModifier` /
+  `determinationModifier`, NOT attitude — it's a morale effect, mislabeled (so it's *not* the attitude
+  down-force). Fix: new per-player `attitude_baseline` (disposition anchor; model + inline migration +
+  backfill + load/save); `_driftAttitudes` mean-reverts toward the baseline, not a global neutral;
+  `ATTITUDE_REVERT_RATE 0.01→0.05`, `ATTITUDE_DRIFT_MAGNITUDE 3→1.5`. Result: fresh sim toxic 18%→5%,
+  souring-with-tenure gone, `corr(attitude, disposition) 0.38→0.99`; prod backfill 18%→2%. The
+  fresh-generation ~5% toxic is the `lrPool` generation tail (`lrCenter = mentalSeed-7`) — a separate
+  lever if an even lower floor is wanted.
 - **P5 — Football IQ (BUILD, balance-affecting).** focus/instinct/creativity already feed the derived
   ratings (vision/playMaking/xFactor/defensive). Giving them NEW distinct hooks (focus→execution
   consistency, instinct→reads, creativity→improvisation) adds mechanics and shifts balance → needs
