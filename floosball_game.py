@@ -3813,6 +3813,18 @@ class Game:
                 ydText = 'returned {} yard{}'.format(returnYds, '' if returnYds == 1 else 's')
                 text += (' Defense ' + ydText + '.') if endsBang else (', ' + ydText)
 
+        # Surface the stretch-for-the-marker decision (see _stretchForFirst). Skip on
+        # a fumble (the reach popped it loose — the fumble text already tells that story).
+        _stNote = getattr(self.play, '_stretchNote', None)
+        if _stNote and not self.play.isFumble:
+            _stText = {
+                'stretch_first': ', and reaches the ball across the marker for the first down!',
+                'stretch_goal':  ', and stretches the ball across the goal line!',
+                'stretch_short': ', and lunges for the marker but comes up just short',
+            }.get(_stNote)
+            if _stText:
+                text += _stText
+
         # Surface the clock-aware sideline decision (see _sidelineDecision).
         _sNote = getattr(self.play, '_sidelineNote', None)
         if _sNote and not self.play.isTd:
@@ -9025,6 +9037,13 @@ class Play():
                     self.yardage += min(remaining, max(12, int(np.random.exponential(22))))
 
         self.yardage = min(self.yardage, self.yardsToEndzone)
+
+        # Stretch for the first down / goal line — a confident back reaches it out
+        # to convert; the reach can expose the ball (fumble bump, resolved below).
+        _stretchBonus, self._stretchNote, _stretchFumbleBump = self._stretchForFirst(self.runner)
+        if _stretchBonus:
+            self.yardage = min(self.yardage + _stretchBonus, self.yardsToEndzone)
+
         baseYards = self.yardage
 
         # Fumble check
@@ -9043,7 +9062,7 @@ class Play():
             fumbleResistModifier = 2
         
         # Runner choking under pressure lowers fumble threshold (high-pressure only)
-        fumbleThreshold = 97
+        fumbleThreshold = 97 - _stretchFumbleBump   # reaching for the marker exposes the ball
         if self.game.gamePressure >= CLUTCH_PRESSURE_THRESHOLD and runnerPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
             fumbleThreshold = max(92, fumbleThreshold - int(abs(runnerPressureMod) * 2))
         # Gunslinger tax — a confident, undisciplined back carries it too loose.
@@ -9420,6 +9439,27 @@ class Play():
             return (False, 'blunder_oob', 0)                                # oblivious: stops own clock
 
         return (batched_randint(1, 100) > baseOobChance, None, 0)
+
+    def _stretchForFirst(self, carrier):
+        """A confident ball-carrier ending JUST short of the first-down marker (or
+        goal line) reaches the ball across to convert. Returns
+        (bonusYards, note, fumbleBump). Confidence drives the reach; an undisciplined
+        reach exposes the ball (a fumble bump that the existing fumble check resolves).
+        Tentative carriers (C <= 0) just take the spot."""
+        if getattr(self, 'isTd', False) or carrier is None:
+            return (0, None, 0)
+        target = min(self.game.yardsToFirstDown, self.yardsToEndzone)  # marker or goal, whichever is live
+        short = target - self.yardage
+        if short < 1 or short > 2:           # only when within a reach
+            return (0, None, 0)
+        C = self._confidenceState(carrier)
+        if C <= 0:
+            return (0, None, 0)              # not confident enough to lunge for it
+        if batched_randint(1, 100) > int(45 + 40 * C):
+            return (0, 'stretch_short', 0)   # overreaches, comes up just short
+        note = 'stretch_goal' if target == self.yardsToEndzone else 'stretch_first'
+        fumbleBump = int(round(self._undiscipline(carrier) * 4 * C))  # 0 (disciplined) .. ~4 (gunslinger)
+        return (short, note, fumbleBump)
 
     def _mentalDrift(self, player, baseWeight=2, driftWeight=25):
         """Confidence-driven execution term, pre-scaled by 15 so the existing

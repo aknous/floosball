@@ -222,6 +222,26 @@ expect("leading-late smart carrier narrates staying in bounds",
 expect("greedy/undisciplined carrier sometimes gets tackled in bounds gambling for yards",
        greedyNotes.get('tackled_inbounds', 0) > 0)
 
+# ── 12. Stretch for the first down — confidence drives the reach ─────────
+print("12. A confident carrier reaches the ball across the marker to convert")
+def stretchRun(conf):
+    s = Scenario(); g = s.game; firstDowns = 0; notes = {}
+    for _ in range(N):
+        s.situation(quarter=2, clock=600, offense='home', offScore=0, defScore=0,
+                    down=3, distance=5, ballOn=50)
+        s.home.rosterDict['rb'].gameAttributes.confidenceModifier = conf
+        g.play.runPlay()
+        nt = getattr(g.play, '_stretchNote', None)
+        if nt: notes[nt] = notes.get(nt, 0) + 1
+        if g.play.yardage >= 5 and not getattr(g.play, 'isFumbleLost', False):
+            firstDowns += 1
+    return firstDowns / N * 100, notes
+reseed(8); confConv, confNotes = stretchRun(5)
+reseed(8); timidConv, timidNotes = stretchRun(-5)
+expect("confident carrier converts the first down more than a tentative one", confConv > timidConv + 5.0)
+expect("confident carrier narrates reaching across the marker", confNotes.get('stretch_first', 0) > 0)
+expect("tentative carrier never reaches (takes the spot)", timidNotes.get('stretch_first', 0) == 0)
+
 
 print()
 if failures:
