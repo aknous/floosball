@@ -180,7 +180,53 @@ point, and it falls out of the model for free.
 
 ---
 
-## 6. How it plugs into the gameplay loop
+## 6. Team form / disposition — emergent, not a separate system
+
+Today, team form is a **parallel** system: `computeFormState` (`api_response_builders.py:111`) reads
+streak + record + the collective mental composites (avg `complacencyVulnerability`, collective
+`adversityResolve`) to pick a status, which maps to a flat team rating multiplier
+(`FORM_STATE_RATING_MULT`, constants.py:443 — 0.92–1.00) applied pregame in `_applyTeamDisposition`
+(`floosball_game.py:6135`). That multiplier stacks *on top of* per-player mental and momentum — the
+double-count the review flagged.
+
+Under the new model, **the form statuses are just team-aggregate confidence, labeled.** Each maps onto
+mechanics we already defined:
+
+| Status | Emergent from (new model) |
+|---|---|
+| **Getting Hot / Hot Streak** | aggregate `C` **rising** (winning lifts confidence) |
+| **Steady** | neutral aggregate `C` |
+| **Shaky** | `C` **dipping** from recent losses / own mistakes |
+| **Cooling Off** | `C` **fading from a high** (winning team losing its grip) |
+| **Spiraling** | `C` **collapse** — low **Determination** + losing |
+| **Complacent** | high `C` + **low collective Discipline** → a *gunslinger team* |
+| **Resolute** | high **Determination** holding `C` despite a losing record |
+
+### What changes
+- **Delete `FORM_STATE_RATING_MULT`.** The performance swing is now produced by the **aggregate of
+  per-player confidence** (Execution + the discipline taxes), so there's no separate team multiplier to
+  layer on. No double-count.
+- **The status badge stays** (good UX) but becomes a **readout**: compute it from team-aggregate `C`
+  (level), its trajectory (rising/falling), and collective discipline (controlled vs wild). It describes
+  the model's state; it doesn't impose its own.
+- **Complacent gets better.** It's specifically **high `C` + low Discipline** → the team overperforms on
+  execution but pays the **gunslinger tax** (real turnovers). The trap game emerges as actual giveaways,
+  and it only fires on *undisciplined* overconfident teams — a high-`C`, high-Discipline elite stays a
+  "surgeon" and doesn't trap-game. (Replaces the flat −8% on any elite team.)
+- **Spiraling / Getting Hot stop double-counting ELO.** The current code carries hand-tuning notes about
+  exactly this (Spiraling cut to −1% because the multiplier double-counted the ELO underdog signal;
+  Getting Hot's boost removed because selection effect already covers it). In the new model that's **one
+  knob** — Determination governs how far a losing team's confidence falls — not a multiplier stacked on
+  ELO. Structural fix, not a patch.
+- **Composites fold away.** `complacencyVulnerability` → confidence×discipline; `adversityResolve` →
+  determination/resilience. Both can be deleted.
+
+### Keep
+The **situational context** the disposition layer blends in — *trap game*, *playoff push*, *underdog
+hunger* — is opponent/stakes-based, not internal confidence, so it's genuinely separate. Keep it as a
+thin context layer (or feed it into `gamePressure`), independent of the form badge.
+
+## 7. How it plugs into the gameplay loop
 
 The loop is unchanged in shape; the mental terms change at five touchpoints.
 
@@ -231,7 +277,7 @@ POSTGAME / SEASON ────────────────────�
 
 ---
 
-## 7. Tuning targets & validation
+## 8. Tuning targets & validation
 
 Calibrate so confidence is **meaningful but not dominant** vs the ~21-point league skill spread:
 
@@ -247,7 +293,7 @@ INT rate, game-manager checkdown rate, frozen missed-play rate, surgeon clean ov
 waiting for them to emerge in a fast sim. Same for Det (confidence holds when down 14) and Res (confidence
 holds after a pick).
 
-## 8. Migration / removal checklist
+## 9. Migration / removal checklist
 
 - Rescale `confidenceModifier` → `C ∈ [-1,1]`; route it through Aggression + Execution + the Discipline taxes.
 - Move `determination` off `_mentalDrift`; make it gate scoreboard confidence drop.
@@ -259,7 +305,7 @@ holds after a pick).
   disposition) — Det/Res now do the explicit work, so the composites can shrink.
 - Pull down the kicker FG composure ceiling.
 
-## 9. Resolved decisions (owner, 2026-06-24)
+## 10. Resolved decisions (owner, 2026-06-24)
 
 - **`C` representation → clean `[-1,1]` state var.** Same dynamics as the legacy ±5 modifier, but it
   separates the *state* from the *effects* (which the ±5 entangles across `xFactor` ×2.2 + `_mentalDrift`
@@ -271,7 +317,7 @@ holds after a pick).
 - **Chemistry → roster *average*, ceiling not baseline, low magnitude.** See §3 — average so one toxic
   can't be scapegoated; gates *peak* (a touch off the confidence ceiling) not *winning*.
 
-## 10. Still open
+## 11. Still open
 
 - **Chemistry magnitude / curve:** exactly how far below max the confidence ceiling drops for a fully
   toxic room (and how far above for a leader room) — a tuning task for `/simcheck` + the scenario harness.
