@@ -243,7 +243,12 @@ class SeasonManager:
         """
         seasonNumber = self.serviceContainer.getService('game_state').getState('seasonsPlayed', 0) + 1
         logger.info(f"Starting season {seasonNumber}")
-        
+
+        # Release any recycled retiree names whose hold has elapsed back into the
+        # usable pool (held NAME_REUSE_DELAY_SEASONS seasons after retirement).
+        if self.playerManager:
+            self.playerManager.releaseDueNames(seasonNumber)
+
         self.currentSeason = Season(seasonNumber)
 
         # Anchor season start to the correct Monday
@@ -6319,8 +6324,12 @@ class SeasonManager:
             name += 'I'
         else:
             name += ' Jr.'
-        
-        self.playerManager.unusedNames.append(name)
+
+        # Hold the recycled variant out of the usable pool for a few seasons so a
+        # familiar name doesn't reappear the very next season.
+        from constants import NAME_REUSE_DELAY_SEASONS
+        currentSeasonNum = getattr(self.currentSeason, 'seasonNumber', 0) or 0
+        self.playerManager.addPendingName(name, currentSeasonNum + NAME_REUSE_DELAY_SEASONS)
     
     def _generateCoachCandidatesForFA(self) -> None:
         """Pre-generate 3 coach candidates per team at front office open.

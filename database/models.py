@@ -1207,6 +1207,21 @@ class UnusedName(Base):
         return f"<UnusedName(id={self.id}, name='{self.name}')>"
 
 
+class PendingName(Base):
+    """Recycled retiree names held out of the usable pool until available_season.
+    Kept separate from unused_names because the unused-name save path full-replaces
+    that table; pending names must survive it. Released into unused_names at the
+    season start where season >= available_season (see playerManager.releaseDueNames)."""
+    __tablename__ = "pending_names"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    available_season: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    def __repr__(self):
+        return f"<PendingName(name='{self.name}', available_season={self.available_season})>"
+
+
 class BetaAllowlist(Base):
     """Beta allowlist - emails permitted to access the app during beta."""
     __tablename__ = "beta_allowlist"

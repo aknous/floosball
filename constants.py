@@ -568,6 +568,13 @@ RETIREMENT_CHANCE_EARLY = 25        # % chance (yearsPast >= EARLY)
 # longevity and still playing, they retire even mid-contract.
 RETIREMENT_MIDCONTRACT_YEARS_PAST = 3
 
+# ---- Name reuse ----
+# When a player retires their name is recycled to its next generational variant
+# (Base -> Jr. -> III -> IV ...). Instead of returning to the usable pool right
+# away, the variant is held for this many seasons before it can be assigned to a
+# new player, so a familiar name doesn't reappear the very next season.
+NAME_REUSE_DELAY_SEASONS = 5
+
 # ---- Locker-room attitude drift (the toxic <-> leader axis) ----
 # Attitude drifts with team record (seasonManager._driftAttitudes): winning trends
 # a roster toward Leader, losing toward Toxic. To stop the league from polarizing
