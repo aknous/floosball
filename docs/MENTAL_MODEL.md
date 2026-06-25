@@ -387,11 +387,15 @@ Do them as focused, measured passes, not a marathon-session rush:**
   souring-with-tenure gone, `corr(attitude, disposition) 0.38→0.99`; prod backfill 18%→2%. The
   fresh-generation ~5% toxic is the `lrPool` generation tail (`lrCenter = mentalSeed-7`) — a separate
   lever if an even lower floor is wanted.
-- **P5 — Football IQ (BUILD, balance-affecting).** focus/instinct/creativity already feed the derived
-  ratings (vision/playMaking/xFactor/defensive). Giving them NEW distinct hooks (focus→execution
-  consistency, instinct→reads, creativity→improvisation) adds mechanics and shifts balance → needs
-  tuning, and risks the re-complication this redesign set out to avoid. Decide first whether the
-  conceptual reclassification (keep existing feeds, just document the identity) is enough.
+- **P5 — Football IQ (DONE 2026-06-24 — presentational, no backend change).** focus/instinct/creativity
+  already feed the derived ratings (vision/playMaking/xFactor/defensive) and have NO direct game-sim
+  use — so mechanically they ALREADY are the skill-processing layer. The only issue was presentational:
+  the frontend listed them under MENTAL next to personality attributes. Decision (owner): the
+  conceptual reclassification is enough — adding new mechanical hooks was the re-complication this
+  rework set out to avoid. Done on the FRONTEND (`feature/football-iq-grouping`, commit `81d5aa4`):
+  `PlayerPage` attributes tab now splits them into a dedicated **FOOTBALL IQ** group (separate from the
+  MENTAL/temperament group) with hover explanations — Focus = execution sharpness, Instinct = reads,
+  Creativity = improvisation. No backend / mechanics change.
 - **P6 — Team form: REVIEWED 2026-06-24, decision = KEEP the multiplier (do NOT delete).** The spec's
   premise (the form multiplier is a double-count to remove) is OUTDATED. Inspection of the actual values:
   the double-counting states the review flagged were ALREADY hand-tuned away — `GETTING_HOT` boost
