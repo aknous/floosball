@@ -410,11 +410,20 @@ Do them as focused, measured passes, not a marathon-session rush:**
   independent seasons with forms on vs ~0.93 (26-2) with them off — exactly the "elite gives a couple
   back to trap games" dynamic. **Decision: leave `FORM_STATE_RATING_MULT` and the composites as-is.**
   The badge could optionally be made confidence-aware (cosmetic) later; the mechanic stays.
-- **P7 — Cleanup (ENTANGLED, low-value).** `clutchFactor` is permanently 0 but is load-bearing for the
-  DB `clutch_factor` sync AND emitted into the play-insights the frontend reads — removing it touches
-  persistence (3 sites) + risks a frontend `undefined`. The quirk engine is dead but threaded through
-  the reaction engine's `composeReaction`/`pickSidelineCutaway` signatures. Also retire `selfBelief`'s
-  old postgame confidence swing now that it's the P3 Determination dial. None is a clean one-line delete.
+- **P7 — Cleanup (ASSESSED 2026-06-24, deferred). Reassessed into three parts — note the postgame
+  swing should NOT be touched:**
+  - `clutchFactor` — permanently 0; the frontend only has it in a `websocket.ts` *type*, nothing renders
+    it. SAFE to remove (attribute + insight emission + DB sync + the stale FE type). Not yet done.
+  - **selfBelief postgame swing (`floosball_player.py:266-305`) — KEEP, do NOT retire.** The spec's
+    premise (redundant with the P3 Determination dial) is WRONG, same lesson as P6: it's the confidence
+    SEASON-ARC engine — a win-streak boost / losing-streak drop (scaled by selfBelief + the composites)
+    that makes a team's confidence track its form *between* games. P3's det/res only gate confidence's
+    *in-game* drops; this drives the season-long master-state arc the whole new model reads. Retiring it
+    would flatten the confidence arc (confident teams would never actually become confident).
+  - quirk engine — genuinely dead (`quirk=None`, 0% chance) but threaded through ~59 references across
+    `personalityManager` + `personalityReactionEngine`. Removable, but a chunky refactor for ZERO
+    behavioral change. Low value; leave unless tidiness is worth it.
+  - **Decision: deferred.** If revisited, do `clutchFactor` only; keep the postgame swing; quirk is optional.
 
 ## End-to-end validation (2026-06-24, 2.1-season fast sim)
 
