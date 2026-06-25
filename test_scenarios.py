@@ -128,6 +128,32 @@ for i in range(60):
 expect("with 2+ plays left (90s), it does NOT auto-kick (plays on for the TD)", kicks < 18)
 
 
+# ── 8. Clock-management skill drives the plays-remain decision ───────────
+# With a WINNING FG already in hand and 2+ plays left, the smart play is to
+# DRAIN the clock and kick on the last snap. A sharp clock-management coach
+# does that almost always; a poor one gambles the ball on a TD far more often.
+print("8. Clock-management skill: a sharp coach drains for the winning FG, a poor one gambles")
+def drainRate(clockMgmt, n=300):
+    s = Scenario()
+    s.home.coach.clockManagement = clockMgmt
+    s.home.coach.aggressiveness = 80          # neutral aggression — isolate clock IQ
+    drains = 0
+    for i in range(n):
+        _r.seed(i)
+        # trailing by 2 (a FG WINS), 30s, 1st down, 1 timeout -> 2 plays available
+        s.situation(quarter=4, clock=30, offense='home', offScore=20, defScore=22,
+                    down=1, distance=10, ballOn=16, offTimeouts=1, defTimeouts=3, clockRunning=False)
+        if s.clockDecision() == 'setupFG':
+            drains += 1
+    return drains / n
+sharpDrain = drainRate(100)   # clock IQ 1.0
+poorDrain = drainRate(60)     # clock IQ 0.0
+expect("a sharp clock-management coach drains for the winning FG more than a poor one (skill matters)",
+       sharpDrain > poorDrain + 0.08)
+expect("a sharp coach drains (sets up the FG) the vast majority of the time", sharpDrain > 0.85)
+expect("a poor coach gambles for the TD noticeably more often", poorDrain < 0.85)
+
+
 print()
 if failures:
     print(f"FAILED ({len(failures)}): " + "; ".join(failures))

@@ -3009,16 +3009,46 @@ class Game:
                     # 2+ plays remain. A long shot → keep advancing to get closer.
                     if despFgProb < despThreshold and self.gameClockSeconds > 8:
                         pass  # fall through to the play caller (try to gain yards)
+                    elif self.down < 4 and scoreDiff >= -2:
+                        # WINNING FG (trailing 1-2) with 2+ plays — the FG already
+                        # wins, so the smart play is to DRAIN the clock and kick on
+                        # the last snap, NOT gamble the ball on a TD. Clock-mgmt
+                        # SKILL drives this: a sharp coach (high gameIQ) almost
+                        # always drains; a poor one (or a very aggressive one)
+                        # gambles for the TD far more often.
+                        gambleChance = max(0.05, min(0.50, 0.22 + 0.35 * aggrNorm - 0.30 * gameIQ))
+                        if _random.random() < gambleChance:
+                            # Gamble for the TD — fall through to the play caller.
+                            self.play.insights['clockMgmt'] = {
+                                'decision': 'pushForTD',
+                                'reason': 'Winning FG in hand but coach pushes for the TD',
+                                'clockRemaining': self.gameClockSeconds,
+                                'playsAvailable': playsAvailable,
+                                'down': self.down,
+                                'fgProbability': round(despFgProb * 100, 1),
+                                'coachClockIQ': round(gameIQ, 2),
+                            }
+                        else:
+                            self.play.insights['clockMgmt'] = {
+                                'decision': 'setupFG',
+                                'reason': 'Winning FG in range — draining the clock to kick on the last play',
+                                'clockRemaining': self.gameClockSeconds,
+                                'playsAvailable': playsAvailable,
+                                'down': self.down,
+                                'fgProbability': round(despFgProb * 100, 1),
+                                'coachClockIQ': round(gameIQ, 2),
+                            }
+                        # Either way, fall through to a play this snap (kick comes on the last play).
                     elif self.down < 4:
-                        # Makeable FG with 2+ plays — usually defer to try for the
-                        # TD first; the FG stays as the fallback on the last play.
+                        # TYING FG (trailing 3) with 2+ plays — the FG only ties, so
+                        # try for the TD to win outright; FG stays as the fallback.
                         playsBonus = min(0.04, (playsAvailable - 2) * 0.02)
                         deferChance = 0.94 + playsBonus + 0.03 * aggrNorm + 0.02 * gameIQ
                         deferChance = max(0.85, min(0.99, deferChance))
                         if _random.random() < deferChance:
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'deferFG',
-                                'reason': 'In FG range but 2+ plays remain — try for TD first',
+                                'reason': 'Down 3 with 2+ plays — try for the TD to win outright',
                                 'clockRemaining': self.gameClockSeconds,
                                 'playsAvailable': playsAvailable,
                                 'down': self.down,
@@ -3029,7 +3059,7 @@ class Game:
                         else:
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'desperationFG',
-                                'reason': 'Coach chose the FG over a TD attempt',
+                                'reason': 'Coach chose the tying FG over a TD attempt',
                                 'clockRemaining': self.gameClockSeconds,
                                 'fgProbability': round(despFgProb * 100, 1),
                                 'coachClockIQ': round(gameIQ, 2),
