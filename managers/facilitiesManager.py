@@ -47,13 +47,15 @@ def computeAppeal(facilities: dict) -> float:
 # ─── The pure season-end resolver ────────────────────────────────────────────
 
 def resolveSeasonEnd(facilities: list, projects: list, treasury: int,
-                     shareUnit: float, season: int) -> dict:
+                     shareUnit: float, season: int, builtThisSeasonKeys=None) -> dict:
     """Resolve one season-end for a single team. PURE — no DB, no mutation of
     inputs; returns the new state + a log.
 
     facilities: [{'key','level','upkeep_funded'}]  (upkeep_funded = direct funding so far this season)
     projects:   [{'id','facility_key','target_level','cost_shares','funded','opened_season'}]  (OPEN only)
     treasury:   Floobits available at season end (carried + baseline + deposits), BEFORE the waterfall.
+    builtThisSeasonKeys: facility keys whose upgrade was FULLY FUNDED + built mid-season
+                         this year (immediate build) — they waive upkeep this season too.
     Returns {'facilities':[{key,level,upkeepMet}], 'projects':[{id,funded,built}],
              'leftover':int, 'log':[...]}.
     """
@@ -64,7 +66,10 @@ def resolveSeasonEnd(facilities: list, projects: list, treasury: int,
     # is waived this season (no double-paying to maintain a level you're
     # replacing) and it can't decay. The Treasury that would've gone to its
     # upkeep is left in the pot to help fund the upgrade instead.
-    upgradingKeys = {p['facility_key'] for p in projects}
+    # A facility that was FULLY FUNDED + built mid-season this year is treated the
+    # same: it was under construction for the year it was completed, so no upkeep
+    # is owed until the following season.
+    upgradingKeys = {p['facility_key'] for p in projects} | set(builtThisSeasonKeys or [])
 
     # 1. UPKEEP WATERFALL — cover each facility's upkeep shortfall from the pot.
     #    Highest-level facilities are protected first (most investment at stake);
@@ -199,13 +204,19 @@ def applySeasonEnd(session, teamObjs: list, season: int, shareUnit: float) -> li
         projRows = session.query(FacilityProject).filter_by(team_id=team.id, status='open').all()
         if not facRows:
             continue
+        # Facilities whose upgrade was fully funded + built MID-SEASON this year —
+        # already at the new level; they waive upkeep this season (were under
+        # construction the year they completed).
+        builtThisSeason = {p.facility_key for p in session.query(FacilityProject).filter_by(
+            team_id=team.id, status='built', built_season=season).all()}
         treasury = getTreasury(session, team.id)
         facilities = [{'key': f.facility_key, 'level': f.level, 'upkeep_funded': f.upkeep_funded}
                       for f in facRows]
         projects = [{'id': p.id, 'facility_key': p.facility_key, 'target_level': p.target_level,
                      'cost_shares': p.cost_shares, 'funded': p.funded, 'opened_season': p.opened_season}
                     for p in projRows]
-        res = resolveSeasonEnd(facilities, projects, treasury, shareUnit, season)
+        res = resolveSeasonEnd(facilities, projects, treasury, shareUnit, season,
+                               builtThisSeasonKeys=builtThisSeason)
         levelByKey = {f['key']: f['level'] for f in res['facilities']}
         paidByKey = {f['key']: f.get('upkeepPaid', 0) for f in res['facilities']}
         for f in facRows:
@@ -245,6 +256,30 @@ def openProject(session, teamId: int, facilityKey: str, currentLevel: int, seaso
         funded=0, opened_season=season, status='open')
     session.add(proj)
     return proj
+
+
+def buildProjectNow(session, teamId: int, project, teamObj=None, season: int = None) -> int:
+    """Apply a just-completed project IMMEDIATELY (mid-season): bump the facility
+    to the target level, mark the project built, and refresh the in-memory
+    team.facilities so the new perks take effect from the team's next game —
+    rather than waiting for the season-end resolution. Mirrors the build branch
+    of applySeasonEnd for a single project. Upkeep for a facility built this way
+    is waived at season end (applySeasonEnd passes built_season == season keys to
+    resolveSeasonEnd's builtThisSeasonKeys). Returns the new level."""
+    from database.models import TeamFacility
+    newLevel = project.target_level
+    fac = session.query(TeamFacility).filter_by(
+        team_id=teamId, facility_key=project.facility_key).first()
+    if fac:
+        fac.level = newLevel
+    project.status = 'built'
+    if season is not None:
+        project.built_season = season
+    if teamObj is not None:
+        facilities = dict(teamObj.facilities or {})
+        facilities[project.facility_key] = newLevel
+        teamObj.facilities = facilities  # reassign so the effects engine reads the new level
+    return newLevel
 
 
 # ─── Voting (Phase 3) ────────────────────────────────────────────────────────

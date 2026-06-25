@@ -9356,6 +9356,8 @@ class SeasonManager:
             # Treasury is an open pool, so it takes the full amount.
             shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
             soloFunded = False  # user took a bar from empty to fully funded by themselves
+            builtKey = None     # facility key built immediately if this completes a project
+            builtLevel = None
             if target == 'upkeep':
                 if not facilityKey:
                     raise ValueError("facilityKey required for an upkeep contribution")
@@ -9398,6 +9400,18 @@ class SeasonManager:
                 fac.upkeep_funded = (fac.upkeep_funded or 0) + amount
             elif target == 'project':
                 proj.funded = (proj.funded or 0) + amount
+                # Immediate build: if this contribution completes the project, apply it
+                # NOW — the facility level jumps and its perks go live from the team's
+                # next game, instead of waiting for the season-end resolution. Upkeep on
+                # a facility built this way is waived for the rest of this season.
+                projectCostF = facilitiesManager.projectCostFloobits(proj.cost_shares, shareUnit)
+                if (proj.funded or 0) >= projectCostF:
+                    teamManager = self.serviceContainer.getService('team_manager')
+                    teamObj = teamManager.getTeamById(teamId) if teamManager else None
+                    builtLevel = facilitiesManager.buildProjectNow(session, teamId, proj, teamObj, season)
+                    builtKey = proj.facility_key
+                    logger.info(f"Facility project #{projectId} fully funded mid-season — "
+                                f"{builtKey} built to Lv{builtLevel} immediately (team {teamId})")
             else:
                 facilitiesManager.addTreasury(session, teamId, amount)
 
@@ -9408,6 +9422,9 @@ class SeasonManager:
             return {
                 'teamId': teamId, 'amount': amount, 'target': target,
                 'soloFunded': soloFunded,
+                'projectBuilt': builtKey is not None,
+                'builtFacilityKey': builtKey,
+                'builtLevel': builtLevel,
                 'newBalance': currency.balance if currency else 0,
                 'treasury': facilitiesManager.getTreasury(session, teamId),
             }
