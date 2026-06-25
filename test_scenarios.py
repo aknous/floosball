@@ -98,6 +98,62 @@ s.g.otSecondPossComplete = True   # what the fix sets at the defensive-score sit
 expect("after the fix flag, isGameOver -> True (game ends)", s.gameOver() is True)
 
 
+# ── 7. Last-play FG: kick the game-winner/tier instead of running ────────
+# Trailing by 1-2 (FG wins) or 3 (FG ties), or tied (FG wins): on the LAST
+# realistic play (down 4, or only ~1 snap fits), kick the FG — don't gamble the
+# final play on a TD. The gate is the play-count estimate (which accounts for
+# timeouts/spikes needed to stop the clock), NOT a fixed clock threshold.
+print("7. A game-winning/tying FG is kicked on the last play, not deferred to a run")
+def fgCall(deficit, clock, down, ballOn=16, offTO=1):
+    s = Scenario()
+    s.situation(quarter=4, clock=clock, offense='home', offScore=20, defScore=20 + deficit,
+                down=down, distance=10, ballOn=ballOn, offTimeouts=offTO, defTimeouts=3,
+                clockRunning=False)
+    return s.callPlay()
+expect("trailing by 2, 1st down, 14s, 1 timeout (the reported bug) -> kicks the winner",
+       fgCall(2, 14, 1) is PlayType.FieldGoal)
+expect("trailing by 2, no timeouts, 12s -> kicks (last play)", fgCall(2, 12, 1, offTO=0) is PlayType.FieldGoal)
+expect("trailing by 3 (FG ties), last play -> kicks the tying FG", fgCall(3, 12, 1) is PlayType.FieldGoal)
+expect("tied (FG wins), last play -> kicks the winner", fgCall(0, 12, 1) is PlayType.FieldGoal)
+expect("3rd down, no timeouts (can't spike), ~1 play left -> kicks", fgCall(2, 20, 3, offTO=0) is PlayType.FieldGoal)
+expect("4th down in range, trailing -> kicks", fgCall(2, 25, 4) is PlayType.FieldGoal)
+# Plays remain (90s): should NOT auto-kick — play on for the TD. Frequency check
+# since the defer carries a small coach-miss chance.
+import random as _r
+kicks = 0
+for i in range(60):
+    _r.seed(i)
+    if fgCall(2, 90, 1) is PlayType.FieldGoal:
+        kicks += 1
+expect("with 2+ plays left (90s), it does NOT auto-kick (plays on for the TD)", kicks < 18)
+
+
+# ── 8. Clock-management skill drives the plays-remain decision ───────────
+# With a WINNING FG already in hand and 2+ plays left, the smart play is to
+# DRAIN the clock and kick on the last snap. A sharp clock-management coach
+# does that almost always; a poor one gambles the ball on a TD far more often.
+print("8. Clock-management skill: a sharp coach drains for the winning FG, a poor one gambles")
+def drainRate(clockMgmt, n=300):
+    s = Scenario()
+    s.home.coach.clockManagement = clockMgmt
+    s.home.coach.aggressiveness = 80          # neutral aggression — isolate clock IQ
+    drains = 0
+    for i in range(n):
+        _r.seed(i)
+        # trailing by 2 (a FG WINS), 30s, 1st down, 1 timeout -> 2 plays available
+        s.situation(quarter=4, clock=30, offense='home', offScore=20, defScore=22,
+                    down=1, distance=10, ballOn=16, offTimeouts=1, defTimeouts=3, clockRunning=False)
+        if s.clockDecision() == 'setupFG':
+            drains += 1
+    return drains / n
+sharpDrain = drainRate(100)   # clock IQ 1.0
+poorDrain = drainRate(60)     # clock IQ 0.0
+expect("a sharp clock-management coach drains for the winning FG more than a poor one (skill matters)",
+       sharpDrain > poorDrain + 0.08)
+expect("a sharp coach drains (sets up the FG) the vast majority of the time", sharpDrain > 0.85)
+expect("a poor coach gambles for the TD noticeably more often", poorDrain < 0.85)
+
+
 print()
 if failures:
     print(f"FAILED ({len(failures)}): " + "; ".join(failures))

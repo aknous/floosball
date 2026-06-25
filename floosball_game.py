@@ -2975,9 +2975,13 @@ class Game:
             # Bad coaches (IQ~0.0) frequently miss the correct situational play.
             gameIQ = self._coachClockIQ(coach)
 
-            # Desperation FG: trailing by ≤3, in FG range, very little time — kick NOW
+            # Late-game FG, trailing by ≤3, in range. Decision hinges on whether
+            # this is the LAST realistic play — NOT a fixed clock threshold. The
+            # ≤45s here is just a coarse entry filter; the real gate is
+            # _estimateAvailablePlays (which reserves ~7s for the FG and accounts
+            # for the timeouts/spikes needed to stop the clock between snaps).
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
-                    and -3 <= scoreDiff < 0 and self.gameClockSeconds <= 30):
+                    and -3 <= scoreDiff < 0 and self.gameClockSeconds <= 45):
                 kicker = self.offensiveTeam.rosterDict.get('k')
                 kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
                 despFgProb = self._estimateFgProbability()
@@ -2985,19 +2989,66 @@ class Game:
                     despThreshold = self._coachFgThreshold(coach)
                     aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
                     playsAvailable = self._estimateAvailablePlays()
-                    # Don't auto-kick on 1st-3rd down if there's still room for a
-                    # productive play before the FG. _estimateAvailablePlays
-                    # already reserves ~7s for the closing FG kick, so >= 1
-                    # means "1 play + FG fits". Defer rate is very high here —
-                    # kicking the tying FG when a snap still fits is wrong.
-                    if self.down < 4 and playsAvailable >= 1:
-                        playsBonus = min(0.04, (playsAvailable - 1) * 0.02)
+                    # LAST PLAY → kick. 4th down, or only ~1 snap fits before the
+                    # clock forces the kick (playsAvailable <= 1). Trailing 1-2
+                    # WINS, trailing 3 TIES — and a chip shot is near-automatic, so
+                    # kicking beats gambling the final play on a TD. Kick even a
+                    # long shot here: it's the only remaining chance.
+                    if self.down == 4 or playsAvailable <= 1:
+                        self.play.insights['clockMgmt'] = {
+                            'decision': 'desperationFG',
+                            'reason': 'Last play — kick the FG to ' + ('win' if scoreDiff >= -2 else 'tie'),
+                            'clockRemaining': self.gameClockSeconds,
+                            'playsAvailable': playsAvailable,
+                            'down': self.down,
+                            'fgProbability': round(despFgProb * 100, 1),
+                            'coachClockIQ': round(gameIQ, 2),
+                        }
+                        self.play.playType = PlayType.FieldGoal
+                        return
+                    # 2+ plays remain. A long shot → keep advancing to get closer.
+                    if despFgProb < despThreshold and self.gameClockSeconds > 8:
+                        pass  # fall through to the play caller (try to gain yards)
+                    elif self.down < 4 and scoreDiff >= -2:
+                        # WINNING FG (trailing 1-2) with 2+ plays — the FG already
+                        # wins, so the smart play is to DRAIN the clock and kick on
+                        # the last snap, NOT gamble the ball on a TD. Clock-mgmt
+                        # SKILL drives this: a sharp coach (high gameIQ) almost
+                        # always drains; a poor one (or a very aggressive one)
+                        # gambles for the TD far more often.
+                        gambleChance = max(0.05, min(0.50, 0.22 + 0.35 * aggrNorm - 0.30 * gameIQ))
+                        if _random.random() < gambleChance:
+                            # Gamble for the TD — fall through to the play caller.
+                            self.play.insights['clockMgmt'] = {
+                                'decision': 'pushForTD',
+                                'reason': 'Winning FG in hand but coach pushes for the TD',
+                                'clockRemaining': self.gameClockSeconds,
+                                'playsAvailable': playsAvailable,
+                                'down': self.down,
+                                'fgProbability': round(despFgProb * 100, 1),
+                                'coachClockIQ': round(gameIQ, 2),
+                            }
+                        else:
+                            self.play.insights['clockMgmt'] = {
+                                'decision': 'setupFG',
+                                'reason': 'Winning FG in range — draining the clock to kick on the last play',
+                                'clockRemaining': self.gameClockSeconds,
+                                'playsAvailable': playsAvailable,
+                                'down': self.down,
+                                'fgProbability': round(despFgProb * 100, 1),
+                                'coachClockIQ': round(gameIQ, 2),
+                            }
+                        # Either way, fall through to a play this snap (kick comes on the last play).
+                    elif self.down < 4:
+                        # TYING FG (trailing 3) with 2+ plays — the FG only ties, so
+                        # try for the TD to win outright; FG stays as the fallback.
+                        playsBonus = min(0.04, (playsAvailable - 2) * 0.02)
                         deferChance = 0.94 + playsBonus + 0.03 * aggrNorm + 0.02 * gameIQ
                         deferChance = max(0.85, min(0.99, deferChance))
                         if _random.random() < deferChance:
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'deferFG',
-                                'reason': 'In FG range but plays remain — try for TD first',
+                                'reason': 'Down 3 with 2+ plays — try for the TD to win outright',
                                 'clockRemaining': self.gameClockSeconds,
                                 'playsAvailable': playsAvailable,
                                 'down': self.down,
@@ -3008,32 +3059,20 @@ class Game:
                         else:
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'desperationFG',
-                                'reason': 'Coach chose tying FG over TD attempt',
+                                'reason': 'Coach chose the tying FG over a TD attempt',
                                 'clockRemaining': self.gameClockSeconds,
                                 'fgProbability': round(despFgProb * 100, 1),
                                 'coachClockIQ': round(gameIQ, 2),
                             }
                             self.play.playType = PlayType.FieldGoal
                             return
-                    elif despFgProb < despThreshold and self.gameClockSeconds > 8:
-                        pass  # Long shot, try to get closer first
-                    elif _random.random() < 0.6 + 0.4 * gameIQ:
-                        self.play.insights['clockMgmt'] = {
-                            'decision': 'desperationFG',
-                            'reason': 'Trailing by 3 or less, little time left',
-                            'clockRemaining': self.gameClockSeconds,
-                            'fgProbability': round(despFgProb * 100, 1),
-                            'coachClockIQ': round(gameIQ, 2),
-                        }
-                        self.play.playType = PlayType.FieldGoal
-                        return
 
             # Game-winning FG: tied in Q4 with chip-shot range and little time —
             # take the safe winner instead of risking a turnover trying for a TD.
             # 4th down or last realistic play → kick now. Otherwise, drain clock
             # with a safe run unless the coach is aggressive enough to push.
-            if (self.currentQuarter == 4 and scoreDiff == 0
-                    and self.gameClockSeconds <= 30
+            if ((self.currentQuarter == 4 or self.currentQuarter >= 5) and scoreDiff == 0
+                    and self.gameClockSeconds <= 45
                     and not self._isGarbageTime(scoreDiff)):
                 kicker = self.offensiveTeam.rosterDict.get('k')
                 kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
@@ -3042,10 +3081,11 @@ class Game:
                     if winFgProb >= 0.75:
                         playsAvailable = self._estimateAvailablePlays()
                         aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
-                        # Kick when there's no meaningful play room left.
-                        # Helper reserves FG time, so playsAvailable == 0 means
-                        # "only the FG itself fits before regulation ends".
-                        if self.down == 4 or playsAvailable == 0:
+                        # Kick on the LAST play — 4th down, or only ~1 snap fits
+                        # before the clock forces the kick (playsAvailable <= 1).
+                        # A tied team kicking a chip shot wins outright; gambling
+                        # the final play on a TD is wrong.
+                        if self.down == 4 or playsAvailable <= 1:
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'gameWinningFG',
                                 'reason': 'Tied, in chip-shot range, kick to win',
