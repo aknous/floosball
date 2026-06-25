@@ -392,10 +392,20 @@ Do them as focused, measured passes, not a marathon-session rush:**
   consistency, instinct→reads, creativity→improvisation) adds mechanics and shifts balance → needs
   tuning, and risks the re-complication this redesign set out to avoid. Decide first whether the
   conceptual reclassification (keep existing feeds, just document the identity) is enough.
-- **P6 — Team form emergent (CONSOLIDATION, risky).** Goal: delete `FORM_STATE_RATING_MULT` + the two
-  composites and recompute the form badge from aggregate confidence. But `complacencyVulnerability` /
-  `adversityResolve` also feed disposition and the attitude contagion, so removal must unwind those
-  consumers carefully.
+- **P6 — Team form: REVIEWED 2026-06-24, decision = KEEP the multiplier (do NOT delete).** The spec's
+  premise (the form multiplier is a double-count to remove) is OUTDATED. Inspection of the actual values:
+  the double-counting states the review flagged were ALREADY hand-tuned away — `GETTING_HOT` boost
+  removed ("selection effect already covers it"), `SPIRALING` cut to 0.99 ("double-counted the ELO
+  signal"). What REMAINS — `COMPLACENT 0.92`, `RESOLUTE 1.04`, `COOLING_OFF 0.96` — is the deliberate
+  DRAMA / anti-runaway engine, not a double-count. Its purpose (owner): stop top teams running away,
+  give the league occasional upsets/storylines. The per-player confidence model does NOT reproduce it —
+  RESOLUTE's Cinderella boost has no confidence equivalent (confidence only prevents *collapse*, never
+  boosts a loser above baseline), and the gunslinger-tax "trap game" only fires on *undisciplined*
+  elites (a disciplined elite would just steamroll). A forms-ON vs forms-OFF sim confirmed the effect:
+  the league-wide win% spread barely moves, but the BEST team is capped at ~0.86 (24-4) in two
+  independent seasons with forms on vs ~0.93 (26-2) with them off — exactly the "elite gives a couple
+  back to trap games" dynamic. **Decision: leave `FORM_STATE_RATING_MULT` and the composites as-is.**
+  The badge could optionally be made confidence-aware (cosmetic) later; the mechanic stays.
 - **P7 — Cleanup (ENTANGLED, low-value).** `clutchFactor` is permanently 0 but is load-bearing for the
   DB `clutch_factor` sync AND emitted into the play-insights the frontend reads — removing it touches
   persistence (3 sites) + risks a frontend `undefined`. The quirk engine is dead but threaded through
