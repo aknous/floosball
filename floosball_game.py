@@ -36,6 +36,7 @@ from constants import (
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
+    FUMBLE_BASE_THRESHOLD, FUMBLE_CHOKE_FLOOR, FUMBLE_CHOKE_SWING_K, INT_CHOKE_BOOST_K,
     HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
@@ -8929,10 +8930,13 @@ class Play():
         elif fumbleResist <= 67:
             fumbleResistModifier = 2
         
-        # Runner choking under pressure lowers fumble threshold (high-pressure only)
-        fumbleThreshold = 97
+        # Runner choking under pressure lowers fumble threshold (high-pressure only).
+        # DAMPENED: floor 95 (was 92) + swing 1.0 (was 2.0) so a clutch game nudges
+        # fumbles up modestly instead of ~doubling them — the base rate is unchanged.
+        fumbleThreshold = FUMBLE_BASE_THRESHOLD
         if self.game.gamePressure >= CLUTCH_PRESSURE_THRESHOLD and runnerPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
-            fumbleThreshold = max(92, fumbleThreshold - int(abs(runnerPressureMod) * 2))
+            fumbleThreshold = max(FUMBLE_CHOKE_FLOOR,
+                                  fumbleThreshold - int(abs(runnerPressureMod) * FUMBLE_CHOKE_SWING_K))
 
         if (fumbleRoll + fumbleResistModifier) > fumbleThreshold:
             self.isFumble = True
@@ -10049,9 +10053,11 @@ class Play():
 
                 # Choke boosts only in high-pressure situations (Q4 close games, etc.)
                 if self.game.gamePressure >= CLUTCH_PRESSURE_THRESHOLD:
-                    # QB choking under pressure increases INT risk
+                    # QB choking under pressure increases INT risk. DAMPENED: boost
+                    # K 0.75 (was 1.5) so a clutch choke nudges INT risk up modestly
+                    # instead of spiking it — the base INT rate is unchanged.
                     if qbPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
-                        chokeIntBoost = abs(qbPressureMod) * 1.5
+                        chokeIntBoost = abs(qbPressureMod) * INT_CHOKE_BOOST_K
                         catchProbs['intProb'] = min(25, catchProbs['intProb'] + chokeIntBoost)
 
                     # Receiver choking under pressure increases drop risk

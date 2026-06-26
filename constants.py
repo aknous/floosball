@@ -102,6 +102,15 @@ INT_DEF_PLAY_K = 0.065   # above-average DB jumps a contested throw
 # mustThrow), scale the computed INT probability by this factor. 1.0 = no dampening.
 INT_DESPERATION_DAMPEN = 0.55
 
+# Clutch turnover amplification — high-pressure games (gamePressure >= CLUTCH_PRESSURE_THRESHOLD)
+# spike both fumbles and INTs for a CHOKING player. The base rates are NFL-realistic; only this
+# clutch SPIKE was too hot (turnover-fest Floos Bowls), so it's DAMPENED here (not the base).
+FUMBLE_BASE_THRESHOLD = 98        # run-fumble roll threshold; > this = fumble (~2% base, was 97/~3%).
+FUMBLE_CHOKE_FLOOR = 95           # clutch choke can't drop the fumble threshold below this (was 92)
+FUMBLE_CHOKE_SWING_K = 1.0        # per-unit-of-choke drop on the threshold (was 2.0)
+INT_CHOKE_BOOST_K = 0.0           # clutch-choke INT-prob boost OFF (was 1.5) — the QB's throw-quality
+                                  # drop under pressure already raises clutch INTs; this extra boost double-counted.
+
 # Hail mary: a desperation end-zone heave into a crowd should connect only as a
 # rare miracle. The normal two-phase catch model lands a contested deep ball
 # well above that, so the hail-mary catch probability is scaled down to target
