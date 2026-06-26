@@ -867,6 +867,20 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # pending_names — recycled retiree names held until available_season
+        # before they re-enter the usable pool (NAME_REUSE_DELAY_SEASONS).
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS pending_names ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "name VARCHAR(100) NOT NULL, "
+                "available_season INTEGER NOT NULL)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured pending_names table")
+        except Exception:
+            conn.rollback()
+
         # Facility economy (Phase 2): projects queue, treasury, upkeep funding.
         try:
             conn.execute(text(

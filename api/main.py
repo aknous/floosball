@@ -5407,11 +5407,12 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         ]
     draftOrder = []
     # Once the FA draft preview has run (pre_fa phase onward), prefer the
-    # tier-sorted order it computed and stored. Falls back to the rookie
+    # Appeal-sorted order it computed and stored. Falls back to the rookie
     # draft order (worst-first) for earlier phases. Without this fallback,
-    # a refresh during pre_fa wipes the tier groupings the frontend just
+    # a refresh during pre_fa wipes the Appeal-ranked board the frontend just
     # rendered, since the rookie order is the only one currently in
     # currentSeason.freeAgencyOrder.
+    from managers import facilitiesManager as _facMgr
     flowPhase = getattr(sm, '_offseasonFlowPhase', None)
     pendingFaOrder = getattr(sm, '_pendingFaDraftOrder', None)
     if flowPhase in ('pre_fa', 'fa_draft') and pendingFaOrder:
@@ -5428,8 +5429,8 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
             "id": getattr(t, 'id', None),
             "color": getattr(t, 'color', None),
             "complete": getattr(t, 'freeAgencyComplete', False),
-            "fundingTier": getattr(t, 'fundingTier', 'MID_MARKET'),
-            "fundingTierRank": getattr(t, 'fundingTierRank', 3),
+            # FA order is by Appeal (facilities-derived), not market tier.
+            "appeal": round(_facMgr.computeAppeal(getattr(t, 'facilities', {}) or {}), 1),
         })
     transactions = getattr(sm, '_offseasonTransactions', [])
     faWindowOpen = getattr(sm, '_faWindowOpen', False)

@@ -48,6 +48,9 @@ class PlayerManager:
         self.hallOfFame: List[FloosPlayer.Player] = []
         self.rookieDraftList: List[FloosPlayer.Player] = []
         self.unusedNames: List[str] = []
+        # Recycled retiree names held out of the usable pool until their season.
+        # In-memory list of (name, availableSeason); persisted alongside unusedNames.
+        self.pendingNames: List[tuple] = []
         
         # Position-specific lists (replaces activeQbList, etc.)
         self.activeQbs: List[FloosPlayer.Player] = []
@@ -654,7 +657,17 @@ class PlayerManager:
             
             # Get all unused names from database
             db_names = self.db_session.query(UnusedName).all()
-            
+
+            # Also load held (pending) retiree names with their release season.
+            try:
+                from database.models import PendingName
+                self.pendingNames = [(p.name, p.available_season)
+                                     for p in self.db_session.query(PendingName).all()]
+                if self.pendingNames:
+                    logger.info(f"Loaded {len(self.pendingNames)} held (pending) names from database")
+            except Exception as e:
+                logger.error(f"Failed to load pending names: {e}")
+
             if db_names:
                 self.unusedNames = [name.name for name in db_names]
                 logger.info(f"Loaded {len(self.unusedNames)} unused names from database")
@@ -1965,17 +1978,22 @@ class PlayerManager:
     def _saveUnusedNamesToDatabase(self) -> None:
         """Save unused names to database"""
         try:
-            from database.models import UnusedName
-            
+            from database.models import UnusedName, PendingName
+
             # Clear existing unused names
             self.db_session.query(UnusedName).delete()
+            # Full-replace held (pending) names too, so they persist on the same
+            # reliable path (and don't accumulate stale rows).
+            self.db_session.query(PendingName).delete()
             self.db_session.flush()  # Ensure delete is committed before insert
-            
+
             # Add current unused names
             self.name_repo.add_names_batch(self.unusedNames)
+            for pendName, pendSeason in self.pendingNames:
+                self.db_session.add(PendingName(name=pendName, available_season=pendSeason))
             self.db_session.commit()
-            
-            logger.debug(f"Saved {len(self.unusedNames)} unused names to database")
+
+            logger.debug(f"Saved {len(self.unusedNames)} unused names + {len(self.pendingNames)} held to database")
         except Exception as e:
             logger.error(f"Failed to save unused names to database: {e}")
             self.db_session.rollback()
@@ -1999,7 +2017,35 @@ class PlayerManager:
             logger.info(f"Saved {len(self.unusedNames)} unused names to data/unusedNames.json")
         except Exception as e:
             logger.error(f"Failed to save unused names: {e}")
-    
+
+    def addPendingName(self, name: str, availableSeason: int) -> None:
+        """Hold a recycled retiree name out of the usable pool until availableSeason.
+        Appends to the in-memory pendingNames list (persisted alongside unusedNames
+        via the full-replace save) — kept off the shared session's mid-offseason
+        transaction, which is lock-prone and may roll back."""
+        if not (DATABASE_AVAILABLE and USE_DATABASE):
+            # JSON/legacy mode: no delay support — fall back to immediate reuse.
+            self.unusedNames.append(name)
+            return
+        self.pendingNames.append((name, availableSeason))
+
+    def releaseDueNames(self, seasonNumber: int) -> int:
+        """Move recycled names whose hold has elapsed (availableSeason <= season)
+        back into the usable pool. Called at season start. Returns the count released."""
+        if not self.pendingNames:
+            return 0
+        due = [(n, s) for (n, s) in self.pendingNames if s <= seasonNumber]
+        if not due:
+            return 0
+        for name, _ in due:
+            if name not in self.unusedNames:
+                self.unusedNames.append(name)
+        self.pendingNames = [(n, s) for (n, s) in self.pendingNames if s > seasonNumber]
+        # Persist both lists together (full-replace, same reliable path as unused names).
+        self.saveUnusedNames()
+        logger.info(f"Released {len(due)} retired name(s) back to the pool (season {seasonNumber})")
+        return len(due)
+
     def processHofPromotions(self) -> None:
         """Process Hall of Fame promotions"""
         hofCandidates = []

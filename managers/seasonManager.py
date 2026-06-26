@@ -243,7 +243,12 @@ class SeasonManager:
         """
         seasonNumber = self.serviceContainer.getService('game_state').getState('seasonsPlayed', 0) + 1
         logger.info(f"Starting season {seasonNumber}")
-        
+
+        # Release any recycled retiree names whose hold has elapsed back into the
+        # usable pool (held NAME_REUSE_DELAY_SEASONS seasons after retirement).
+        if self.playerManager:
+            self.playerManager.releaseDueNames(seasonNumber)
+
         self.currentSeason = Season(seasonNumber)
 
         # Anchor season start to the correct Monday
@@ -6319,8 +6324,12 @@ class SeasonManager:
             name += 'I'
         else:
             name += ' Jr.'
-        
-        self.playerManager.unusedNames.append(name)
+
+        # Hold the recycled variant out of the usable pool for a few seasons so a
+        # familiar name doesn't reappear the very next season.
+        from constants import NAME_REUSE_DELAY_SEASONS
+        currentSeasonNum = getattr(self.currentSeason, 'seasonNumber', 0) or 0
+        self.playerManager.addPendingName(name, currentSeasonNum + NAME_REUSE_DELAY_SEASONS)
     
     def _generateCoachCandidatesForFA(self) -> None:
         """Pre-generate 3 coach candidates per team at front office open.
@@ -6708,8 +6717,8 @@ class SeasonManager:
 
     async def _broadcastFaDraftPreview(self) -> None:
         """Compute the tier-sorted FA draft order + current FA pool and
-        broadcast them so the OffseasonPanel renders the team board with
-        tier groupings and the FA pool list during the pre-FA wait.
+        broadcast them so the OffseasonPanel renders the team board as a single
+        Appeal-ranked list and the FA pool list during the pre-FA wait.
 
         Stores the order on `self._pendingFaDraftOrder` so `_processFreeAgency`
         reuses it instead of recomputing — guarantees the order users saw
@@ -6749,8 +6758,9 @@ class SeasonManager:
                     'abbr': getattr(t, 'abbr', t.name[:3].upper()),
                     'id': getattr(t, 'id', None),
                     'color': getattr(t, 'color', None),
-                    'fundingTier': getattr(t, 'fundingTier', 'MID_MARKET'),
-                    'fundingTierRank': getattr(t, 'fundingTierRank', 3),
+                    # FA order is by Appeal (facilities-derived), not market tier —
+                    # the board renders a single Appeal-ranked list, no tier groups.
+                    'appeal': round(facilitiesManager.computeAppeal(getattr(t, 'facilities', {}) or {}), 1),
                 }
                 for t in freeAgencyOrder
             ]
@@ -9347,6 +9357,8 @@ class SeasonManager:
             # Treasury is an open pool, so it takes the full amount.
             shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
             soloFunded = False  # user took a bar from empty to fully funded by themselves
+            builtKey = None     # facility key built immediately if this completes a project
+            builtLevel = None
             if target == 'upkeep':
                 if not facilityKey:
                     raise ValueError("facilityKey required for an upkeep contribution")
@@ -9389,6 +9401,18 @@ class SeasonManager:
                 fac.upkeep_funded = (fac.upkeep_funded or 0) + amount
             elif target == 'project':
                 proj.funded = (proj.funded or 0) + amount
+                # Immediate build: if this contribution completes the project, apply it
+                # NOW — the facility level jumps and its perks go live from the team's
+                # next game, instead of waiting for the season-end resolution. Upkeep on
+                # a facility built this way is waived for the rest of this season.
+                projectCostF = facilitiesManager.projectCostFloobits(proj.cost_shares, shareUnit)
+                if (proj.funded or 0) >= projectCostF:
+                    teamManager = self.serviceContainer.getService('team_manager')
+                    teamObj = teamManager.getTeamById(teamId) if teamManager else None
+                    builtLevel = facilitiesManager.buildProjectNow(session, teamId, proj, teamObj, season)
+                    builtKey = proj.facility_key
+                    logger.info(f"Facility project #{projectId} fully funded mid-season — "
+                                f"{builtKey} built to Lv{builtLevel} immediately (team {teamId})")
             else:
                 facilitiesManager.addTreasury(session, teamId, amount)
 
@@ -9399,6 +9423,9 @@ class SeasonManager:
             return {
                 'teamId': teamId, 'amount': amount, 'target': target,
                 'soloFunded': soloFunded,
+                'projectBuilt': builtKey is not None,
+                'builtFacilityKey': builtKey,
+                'builtLevel': builtLevel,
                 'newBalance': currency.balance if currency else 0,
                 'treasury': facilitiesManager.getTreasury(session, teamId),
             }
