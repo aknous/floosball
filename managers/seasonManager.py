@@ -6717,8 +6717,8 @@ class SeasonManager:
 
     async def _broadcastFaDraftPreview(self) -> None:
         """Compute the tier-sorted FA draft order + current FA pool and
-        broadcast them so the OffseasonPanel renders the team board with
-        tier groupings and the FA pool list during the pre-FA wait.
+        broadcast them so the OffseasonPanel renders the team board as a single
+        Appeal-ranked list and the FA pool list during the pre-FA wait.
 
         Stores the order on `self._pendingFaDraftOrder` so `_processFreeAgency`
         reuses it instead of recomputing — guarantees the order users saw
@@ -6758,8 +6758,9 @@ class SeasonManager:
                     'abbr': getattr(t, 'abbr', t.name[:3].upper()),
                     'id': getattr(t, 'id', None),
                     'color': getattr(t, 'color', None),
-                    'fundingTier': getattr(t, 'fundingTier', 'MID_MARKET'),
-                    'fundingTierRank': getattr(t, 'fundingTierRank', 3),
+                    # FA order is by Appeal (facilities-derived), not market tier —
+                    # the board renders a single Appeal-ranked list, no tier groups.
+                    'appeal': round(facilitiesManager.computeAppeal(getattr(t, 'facilities', {}) or {}), 1),
                 }
                 for t in freeAgencyOrder
             ]
