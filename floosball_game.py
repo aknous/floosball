@@ -3761,7 +3761,7 @@ class Game:
             elif self.play.isFgGood:
                 fire = getattr(self.play, 'awakenedFire', None)
                 if fire and fire.get('flavor'):
-                    text = (f'AWAKENED — {fire["name"]}: {kickerName} {fire["flavor"]}. '
+                    text = (f'AWAKENED — {fire["powerName"]}: {kickerName} {fire["flavor"]}. '
                             f'{self.play.fgDistance}yd Field Goal is GOOD!')
                 else:
                     text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is good'
@@ -7021,8 +7021,8 @@ class Game:
     def _awakenedTryFire(self, situation, player):
         """P3 firing. If `player` is awakened, their meter is full (ready), and their career power
         covers `situation`, DISCHARGE it: reset the meter, record the fire, and return the fire dict
-        {pid, power, name, situation, flavor} so the caller can force the outcome + narrate. Returns
-        None otherwise (zero overhead when no awakened players are charged / the feature is off)."""
+        {playerId, playerName, power, powerName, situation, flavor} so the caller can force the outcome
+        + narrate. Returns None otherwise (zero overhead when nobody is charged / the feature is off)."""
         if not self._awakenedReady or player is None:
             return None
         pid = getattr(player, 'id', None)
@@ -7033,9 +7033,10 @@ class Game:
         if not powerKey or not awakenedPowers.powerCoversSituation(powerKey, situation):
             return None
         fire = {
-            'pid': pid,
+            'playerId': pid,
+            'playerName': getattr(player, 'name', None),
             'power': powerKey,
-            'name': awakenedPowers.powerName(powerKey),
+            'powerName': awakenedPowers.powerName(powerKey),
             'situation': situation,
             'flavor': awakenedPowers.situationFlavor(powerKey, situation),
         }
@@ -7183,6 +7184,7 @@ class Game:
                     'clutchPerformers': list(getattr(playObj, 'clutchPerformers', []) or []),
                     'chokePerformers': list(getattr(playObj, 'chokePerformers', []) or []),
                     'insights': getattr(playObj, 'insights', None),
+                    'awakenedFire': getattr(playObj, 'awakenedFire', None),
                 }
         elif includeLastPlay and hasattr(self, 'play') and self.play:
             # WP/WPA, the momentum big-play bonus, and the clutch/choke WP-impact
@@ -7212,6 +7214,9 @@ class Game:
                 'glitchPlayerName': getattr(self.play, 'glitchPlayerName', None),
                 'glitchLayer': getattr(self.play, 'glitchLayer', None),
                 'glitchYardDelta': getattr(self.play, 'glitchYardDelta', None),
+                # Awakened (L4) fire — null unless an awakened player used their power on this play.
+                # When present: {playerId, playerName, power, powerName, situation, flavor}.
+                'awakenedFire': getattr(self.play, 'awakenedFire', None),
                 # Participant IDs — used by the frontend highlights feed
                 # to filter "plays involving players the user cares
                 # about." Null when the role didn't apply to this play.
