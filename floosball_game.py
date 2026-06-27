@@ -7052,9 +7052,10 @@ class Game:
                   file=__import__('sys').stderr)
         return fire
 
-    def _pickReadyAwakenedDefender(self, team):
-        """The first ready awakened player on `team` whose career power covers 'defense' (the focal
-        defender for a defensive fire), or None. Does NOT discharge — the caller fires it."""
+    def _pickReadyAwakenedDefender(self, team, situation):
+        """The first ready awakened player on `team` whose career power covers `situation` — 'pick'
+        on a pass, 'strip' on a run (the focal defender for a defensive fire), or None. Does NOT
+        discharge — the caller fires it."""
         if not self._awakenedReady or team is None:
             return None
         from managers import awakenedPowers
@@ -7063,7 +7064,7 @@ class Game:
                 continue
             if self._awakenedReady.get(getattr(pl, 'id', None)):
                 pk = self._awakenedPower.get(pl.id)
-                if pk and awakenedPowers.powerCoversSituation(pk, 'defense'):
+                if pk and awakenedPowers.powerCoversSituation(pk, situation):
                     return pl
         return None
 
@@ -9203,9 +9204,9 @@ class Play():
             from constants import AWAKENED_FORCE_RUN_GAIN
             self.yardage = min(self.yardsToEndzone, max(self.yardage, AWAKENED_FORCE_RUN_GAIN))
         else:
-            # Defensive fire — a charged awakened defender rips the ball loose (forced fumble lost).
-            _dfn = self.game._pickReadyAwakenedDefender(self.defense)
-            if _dfn and self.game._awakenedTryFire('defense', _dfn):
+            # Defensive fire — a charged awakened defender strips the ball loose (forced fumble lost).
+            _dfn = self.game._pickReadyAwakenedDefender(self.defense, 'strip')
+            if _dfn and self.game._awakenedTryFire('strip', _dfn):
                 self.awakenedFire = self.game._lastAwakenedFire
                 self._awakenedDefender = _dfn
 
@@ -9243,7 +9244,7 @@ class Play():
         # Gunslinger tax — a confident, undisciplined back carries it too loose.
         fumbleThreshold = max(88, fumbleThreshold - int(round(self._gunslingerTax(self.runner))))
 
-        _defFire = bool(self.awakenedFire and self.awakenedFire.get('situation') == 'defense')
+        _defFire = bool(self.awakenedFire and self.awakenedFire.get('situation') == 'strip')
         _offFire = bool(self.awakenedFire) and not _defFire
         if _defFire:
             # Forced strip — the awakened defender rips it loose and recovers (a guaranteed takeaway).
@@ -10413,8 +10414,8 @@ class Play():
                                      or self.game._awakenedTryFire('catch', self.receiver))
                 if not self.awakenedFire:
                     # Defensive fire — a charged awakened defender picks it off.
-                    _dfn = self.game._pickReadyAwakenedDefender(self.defense)
-                    if _dfn and self.game._awakenedTryFire('defense', _dfn):
+                    _dfn = self.game._pickReadyAwakenedDefender(self.defense, 'pick')
+                    if _dfn and self.game._awakenedTryFire('pick', _dfn):
                         self.awakenedFire = self.game._lastAwakenedFire
                         self._awakenedDefender = _dfn
 
@@ -10531,7 +10532,7 @@ class Play():
                 # An awakened fire forces the outcome below (the roll keys off intProb + catchProb):
                 # an offensive fire forces the completion; a defensive fire forces the interception.
                 if self.awakenedFire:
-                    if self.awakenedFire.get('situation') == 'defense':
+                    if self.awakenedFire.get('situation') == 'pick':
                         catchProbs['intProb'] = 100
                         catchProbs['catchProb'] = 0
                         catchProbs['dropProb'] = 0
@@ -10577,7 +10578,7 @@ class Play():
                     else:
                         self.interceptedBy = coveringDefender
                     # A defensive fire credits the awakened defender with the pick.
-                    if self.awakenedFire and self.awakenedFire.get('situation') == 'defense' and self._awakenedDefender:
+                    if self.awakenedFire and self.awakenedFire.get('situation') == 'pick' and self._awakenedDefender:
                         self.interceptedBy = self._awakenedDefender
                     if self.interceptedBy:
                         self.insights['pass']['interceptedBy'] = self.interceptedBy.name

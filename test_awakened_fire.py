@@ -90,7 +90,7 @@ g5._awakenedCharge = {lb.id: 100.0}; g5._awakenedFills = {lb.id: 0}
 g5._awakenedReady = {lb.id: True}; g5._awakenedPower = {lb.id: 'pickpocket'}   # covers run + defense
 g5.play.runPlay()
 p5 = g5.play
-expect("the run is tagged as a defensive fire", p5.awakenedFire and p5.awakenedFire['situation'] == 'defense')
+expect("the run is tagged as a strip fire", p5.awakenedFire and p5.awakenedFire['situation'] == 'strip')
 expect("the run is stripped (fumble lost)", p5.isFumbleLost)
 expect("the forced fumble is credited to the awakened defender", p5.forcedFumbleBy is lb)
 
@@ -104,7 +104,7 @@ for _ in range(30):
     g6._awakenedCharge = {cb.id: 100.0}; g6._awakenedFills = {cb.id: 0}
     g6._awakenedReady = {cb.id: True}; g6._awakenedPower = {cb.id: 'highway_robbery'}  # covers defense
     g6.play.passPlay(g6._selectPassPlay('medium'))
-    if g6.play.awakenedFire and g6.play.awakenedFire['situation'] == 'defense':
+    if g6.play.awakenedFire and g6.play.awakenedFire['situation'] == 'pick':
         fired6 = g6.play
         break
 expect("a charged defender fires on a pass", fired6 is not None)

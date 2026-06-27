@@ -31,9 +31,9 @@ for pos, primary in ap.PRIMARY_SITUATION.items():
     keys = {ap.assignPower(pos, rng) for _ in range(60)}
     expect(f"{pos}: every rolled power covers '{primary}'",
            keys and all(k and ap.powerCoversSituation(k, primary) for k in keys))
-expect("a narrow power (Magnet) covers catch+defense, NOT run",
-       ap.powerCoversSituation('magnet', 'catch') and ap.powerCoversSituation('magnet', 'defense')
-       and not ap.powerCoversSituation('magnet', 'run'))
+expect("a narrow power (Magnet) covers catch + pick + strip, NOT run",
+       ap.powerCoversSituation('magnet', 'catch') and ap.powerCoversSituation('magnet', 'pick')
+       and ap.powerCoversSituation('magnet', 'strip') and not ap.powerCoversSituation('magnet', 'run'))
 expect("a universal power (No-Clip) covers every situation",
        all(ap.powerCoversSituation('no_clip', s) for s in ap.SITUATIONS))
 expect("situationFlavor returns a line for a covered situation", bool(ap.situationFlavor('magnet', 'catch')))

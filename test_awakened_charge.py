@@ -59,10 +59,10 @@ expect("firing resets the meter + clears ready", g._awakenedCharge[1] == 0.0 and
 expect("firing counts a fire", g._awakenedFills[1] == 1)
 expect("a discharged meter does not fire again", g._awakenedTryFire('run', RB) is None)
 # DEF (pickpocket) is NOT ready (only 18 charge) -> no fire, no discharge.
-expect("a not-ready player does not fire", g._awakenedTryFire('defense', DEF) is None and g._awakenedCharge[3] > 0)
-# Make K ready, then test situation coverage: moonshot covers 'kick' but NOT 'defense'.
+expect("a not-ready player does not fire", g._awakenedTryFire('strip', DEF) is None and g._awakenedCharge[3] > 0)
+# Make K ready, then test situation coverage: moonshot covers 'kick' but NOT 'pick'.
 g._awakenedReady[2] = True
-expect("a ready player does NOT fire on a situation its power doesn't cover", g._awakenedTryFire('defense', K) is None)
+expect("a ready player does NOT fire on a situation its power doesn't cover", g._awakenedTryFire('pick', K) is None)
 expect("...and that non-fire leaves the meter intact (still ready)", g._awakenedReady[2] is True)
 expect("the same player fires on a covered situation", (g._awakenedTryFire('kick', K) or {}).get('power') == 'moonshot')
 
