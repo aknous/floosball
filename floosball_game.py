@@ -7045,6 +7045,21 @@ class Game:
         self._lastAwakenedFire = fire
         return fire
 
+    def _pickReadyAwakenedDefender(self, team):
+        """The first ready awakened player on `team` whose career power covers 'defense' (the focal
+        defender for a defensive fire), or None. Does NOT discharge — the caller fires it."""
+        if not self._awakenedReady or team is None:
+            return None
+        from managers import awakenedPowers
+        for pl in team.rosterDict.values():
+            if pl is None:
+                continue
+            if self._awakenedReady.get(getattr(pl, 'id', None)):
+                pk = self._awakenedPower.get(pl.id)
+                if pk and awakenedPowers.powerCoversSituation(pk, 'defense'):
+                    return pl
+        return None
+
     def awakenedChargeState(self) -> dict:
         """Current awakened charge meter for this game. {pid: {charge, pct, ready, fires, power}}.
         Empty unless awakened players are in the game (ANOMALY_AWAKENED_POWERS_ENABLED)."""
@@ -8571,7 +8586,8 @@ class Play():
         self.isFumble = False
         self.isFumbleLost = False
         self.isFumbleRecovered = False
-        self.awakenedFire = None   # L4 fire dict for this play (P3), or None
+        self.awakenedFire = None       # L4 fire dict for this play (P3), or None
+        self._awakenedDefender = None  # the awakened defender on a defensive fire, or None
         self.isInterception = False
         self.isTd = False
         self.isXpTry = False
@@ -9157,6 +9173,12 @@ class Play():
         if self.awakenedFire:
             from constants import AWAKENED_FORCE_RUN_GAIN
             self.yardage = min(self.yardsToEndzone, max(self.yardage, AWAKENED_FORCE_RUN_GAIN))
+        else:
+            # Defensive fire — a charged awakened defender rips the ball loose (forced fumble lost).
+            _dfn = self.game._pickReadyAwakenedDefender(self.defense)
+            if _dfn and self.game._awakenedTryFire('defense', _dfn):
+                self.awakenedFire = self.game._lastAwakenedFire
+                self._awakenedDefender = _dfn
 
         # Stretch for the first down / goal line — a confident back reaches it out
         # to convert; the reach can expose the ball (fumble bump, resolved below).
@@ -9192,7 +9214,18 @@ class Play():
         # Gunslinger tax — a confident, undisciplined back carries it too loose.
         fumbleThreshold = max(88, fumbleThreshold - int(round(self._gunslingerTax(self.runner))))
 
-        if (fumbleRoll + fumbleResistModifier) > fumbleThreshold and not self.awakenedFire:
+        _defFire = bool(self.awakenedFire and self.awakenedFire.get('situation') == 'defense')
+        _offFire = bool(self.awakenedFire) and not _defFire
+        if _defFire:
+            # Forced strip — the awakened defender rips it loose and recovers (a guaranteed takeaway).
+            self.isFumble = True
+            self.isFumbleLost = True
+            self.runner.addFumble(self.game.isRegularSeasonGame)
+            self.runner.updateInGameConfidence(-.05, source='mistake')
+            self.defense.updateInGameConfidence(.02)
+            self.defense.gameDefenseStats['fumRec'] += 1
+            self.playResult = PlayResult.Fumble
+        elif (fumbleRoll + fumbleResistModifier) > fumbleThreshold and not _offFire:
             self.isFumble = True
             runnerRecoveryMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
             if (self.defense.defenseRunCoverageRating + batched_randint(-5, 5)) >= \
@@ -9203,7 +9236,7 @@ class Play():
                 self.defense.gameDefenseStats['fumRec'] += 1
                 self.isFumbleLost = True
                 self.playResult = PlayResult.Fumble
-        
+
         # Identify primary tackler from defensive gameplan
         defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
         coverageAssignments = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
@@ -9213,8 +9246,10 @@ class Play():
             self.tackledBy = lbPlayer  # Inside runs: LB is primary tackler
         else:
             self.tackledBy = passRusherRun  # Edge runs: DE is primary tackler
+        if _defFire and self._awakenedDefender:
+            self.tackledBy = self._awakenedDefender  # the awakened defender made the play
         if self.isFumble and self.isFumbleLost:
-            self.forcedFumbleBy = self.tackledBy
+            self.forcedFumbleBy = self._awakenedDefender if _defFire else self.tackledBy
 
         # Per-player defensive stats for run plays
         isReg = self.game.isRegularSeasonGame
@@ -10347,6 +10382,12 @@ class Play():
                 # this completion (no INT, no drop) and a big gain (P3). None unless gated on + ready.
                 self.awakenedFire = (self.game._awakenedTryFire('throw', self.passer)
                                      or self.game._awakenedTryFire('catch', self.receiver))
+                if not self.awakenedFire:
+                    # Defensive fire — a charged awakened defender picks it off.
+                    _dfn = self.game._pickReadyAwakenedDefender(self.defense)
+                    if _dfn and self.game._awakenedTryFire('defense', _dfn):
+                        self.awakenedFire = self.game._lastAwakenedFire
+                        self._awakenedDefender = _dfn
 
                 # STAGE 3: Calculate throw quality
                 throwQuality = self.calculateThrowQuality(
@@ -10458,13 +10499,17 @@ class Play():
                     if mustThrow or offDeficit >= 14:
                         catchProbs['intProb'] = round(catchProbs['intProb'] * INT_DESPERATION_DAMPEN, 1)
 
-                # An awakened fire forces the completion: no INT, no drop, and a certain catch so the
-                # outcome roll always lands in the completion branch below (which keys off intProb +
-                # catchProb).
+                # An awakened fire forces the outcome below (the roll keys off intProb + catchProb):
+                # an offensive fire forces the completion; a defensive fire forces the interception.
                 if self.awakenedFire:
-                    catchProbs['intProb'] = 0
-                    catchProbs['dropProb'] = 0
-                    catchProbs['catchProb'] = 100
+                    if self.awakenedFire.get('situation') == 'defense':
+                        catchProbs['intProb'] = 100
+                        catchProbs['catchProb'] = 0
+                        catchProbs['dropProb'] = 0
+                    else:
+                        catchProbs['intProb'] = 0
+                        catchProbs['dropProb'] = 0
+                        catchProbs['catchProb'] = 100
 
                 # Roll for outcome
                 outcomeRoll = batched_randint(1, 100)
@@ -10502,6 +10547,9 @@ class Play():
                         self.interceptedBy = safetyPlayer
                     else:
                         self.interceptedBy = coveringDefender
+                    # A defensive fire credits the awakened defender with the pick.
+                    if self.awakenedFire and self.awakenedFire.get('situation') == 'defense' and self._awakenedDefender:
+                        self.interceptedBy = self._awakenedDefender
                     if self.interceptedBy:
                         self.insights['pass']['interceptedBy'] = self.interceptedBy.name
                         if hasattr(self.interceptedBy, 'stat_tracker'):

@@ -76,6 +76,37 @@ if fired:
     expect("fired pass forces the breakaway floor", fired.yardage >= AWAKENED_FORCE_PASS_GAIN)
     expect("fired pass does not fumble", not fired.isFumbleLost)
 
+print("\n5. A charged defender strips a run (forced fumble lost, credited to the defender)")
+s5 = Scenario()
+s5.situation(quarter=2, clock=600, offense='home', down=1, distance=10, ballOn=60)
+g5 = s5.game
+lb = g5.defensiveTeam.rosterDict['rb']   # LB (the defense's RB slot) — only the DEFENDER is ready
+g5._awakenedCharge = {lb.id: 100.0}; g5._awakenedFills = {lb.id: 0}
+g5._awakenedReady = {lb.id: True}; g5._awakenedPower = {lb.id: 'pickpocket'}   # covers run + defense
+g5.play.runPlay()
+p5 = g5.play
+expect("the run is tagged as a defensive fire", p5.awakenedFire and p5.awakenedFire['situation'] == 'defense')
+expect("the run is stripped (fumble lost)", p5.isFumbleLost)
+expect("the forced fumble is credited to the awakened defender", p5.forcedFumbleBy is lb)
+
+print("\n6. A charged defender picks off a pass (forced INT, credited to the defender)")
+s6 = Scenario()
+fired6 = None
+for _ in range(30):
+    s6.situation(quarter=2, clock=600, offense='home', down=1, distance=10, ballOn=60)
+    g6 = s6.game
+    cb = g6.defensiveTeam.rosterDict['wr1']   # CB; only the defender is ready
+    g6._awakenedCharge = {cb.id: 100.0}; g6._awakenedFills = {cb.id: 0}
+    g6._awakenedReady = {cb.id: True}; g6._awakenedPower = {cb.id: 'highway_robbery'}  # covers defense
+    g6.play.passPlay(g6._selectPassPlay('medium'))
+    if g6.play.awakenedFire and g6.play.awakenedFire['situation'] == 'defense':
+        fired6 = g6.play
+        break
+expect("a charged defender fires on a pass", fired6 is not None)
+if fired6:
+    expect("the pass is intercepted", fired6.isInterception)
+    expect("the pick is credited to the awakened defender", fired6.interceptedBy is cb)
+
 print()
 if failures:
     print(f"FAILED ({len(failures)}): " + "; ".join(failures))
