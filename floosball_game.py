@@ -3854,12 +3854,22 @@ class Game:
                 and ', out of bounds' not in text):
             text += ', out of bounds'
 
-        # Awakened (L4) fire — prepend the power flavor uniformly across every play type, so the PBP
-        # names who used the power. Null on plays where no power fired.
+        # Awakened (L4) fire — REPLACE the normal play text with the power line (no double narration).
+        # The flavor is a self-contained description with a {player} placeholder for the awakened
+        # player's name; a short result tag carries the yardage (the scoring badge handles TDs).
         fire = getattr(self.play, 'awakenedFire', None)
         if fire and fire.get('flavor'):
-            prefix = f"{fire['powerName']}: {fire['flavor']}."
-            text = f"{prefix} {text}" if text else prefix
+            name = fire.get('playerName') or 'They'
+            line = fire['flavor'].replace('{player}', name)
+            # Yardage is woven INTO the line via {yards} (offense), matching the normal narration's
+            # "...for N yards" tone rather than a bolted-on tag. Picks/strips get the return as a
+            # trailing clause, exactly like the normal turnover text ("..., returned N yards").
+            line = line.replace('{yards}', str(max(0, getattr(self.play, 'yardage', 0) or 0)))
+            if fire.get('situation') in ('pick', 'strip'):
+                ry = getattr(self.play, 'returnYardage', 0) or 0
+                if ry > 0:
+                    line += f", returned {ry} yards"
+            text = f"{fire['powerName']}: {line}"
 
         self.play.playText = text
 
