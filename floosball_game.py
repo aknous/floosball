@@ -3861,6 +3861,14 @@ class Game:
         if fire and fire.get('flavor'):
             name = fire.get('playerName') or 'They'
             line = fire['flavor'].replace('{player}', name)
+            # On a pass, name both the QB and the receiver ({passer}/{receiver}); the throw lines name
+            # the receiver, the catch lines name the passer.
+            if '{passer}' in line:
+                passer = getattr(self.play, 'passer', None)
+                line = line.replace('{passer}', passer.name if passer else 'the passer')
+            if '{receiver}' in line:
+                receiver = getattr(self.play, 'receiver', None)
+                line = line.replace('{receiver}', receiver.name if receiver else 'the receiver')
             # Yardage is woven INTO the line via {yards} (offense), matching the normal narration's
             # "...for N yards" tone rather than a bolted-on tag. Picks/strips get the return as a
             # trailing clause, exactly like the normal turnover text ("..., returned N yards").
