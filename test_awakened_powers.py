@@ -63,6 +63,20 @@ expect("a second awakening returns the same career power (idempotent)", p1again 
 s2 = get_session()
 expect("signature_power persists + reloads", s2.query(Player).get(1).signature_power == p1)
 
+# ── 3. Distribution — least-used assignment avoids duplicates ──
+print("\n3. Distribution — assigned powers go to the back; no duplicates until the pool is exhausted")
+from collections import Counter
+s3 = get_session()
+for i in range(100, 130):                    # 30 RBs (run pool is far larger than 30)
+    s3.add(Player(id=i, name=f'RB{i}', position=1))
+s3.commit()
+got = []
+for i in range(100, 130):
+    got.append(anomalyManager.assignSignaturePower(s3, i))
+    s3.commit()
+dups = [k for k, c in Counter(got).items() if c > 1]
+expect("30 same-position awakenings -> all distinct powers (no duplicates)", not dups)
+
 shutil.rmtree(_tmp, ignore_errors=True)
 print()
 if failures:

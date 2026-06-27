@@ -557,11 +557,22 @@ def normalizePosition(position):
     return ''
 
 
-def assignPower(position, rng=_random):
+def assignPower(position, rng=_random, usedCounts=None):
     """Roll ONE career power that covers the player's primary action (so it fires regularly).
-    Returns a power key, or None if the position is unknown / no eligible power exists."""
+
+    To spread the catalog and avoid duplicates, pass `usedCounts` = {powerKey: how many current
+    players already hold it}; assignment then rolls only among the LEAST-held eligible powers (an
+    already-assigned power effectively goes to the back of the line and isn't reused until every
+    eligible power has been handed out an equal number of times). Returns a power key, or None if
+    the position is unknown / no eligible power exists.
+    """
     primary = PRIMARY_SITUATION.get(normalizePosition(position))
     if not primary:
         return None
     pool = [k for k in _POWERS if primary in _POWERS[k]]
-    return rng.choice(pool) if pool else None
+    if not pool:
+        return None
+    if usedCounts:
+        fewest = min(usedCounts.get(k, 0) for k in pool)
+        pool = [k for k in pool if usedCounts.get(k, 0) == fewest]
+    return rng.choice(pool)

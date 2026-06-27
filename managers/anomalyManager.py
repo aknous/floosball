@@ -61,7 +61,12 @@ def assignSignaturePower(session, player_id):
         return None
     if player.signature_power:
         return player.signature_power  # career identity already set — never re-rolled
-    power = awakenedPowers.assignPower(_POSITION_ENUM.get(player.position, ''))
+    # Spread the catalog: roll only among the least-held eligible powers (assigned ones go to the back).
+    from collections import Counter
+    rows = session.query(Player.signature_power).filter(Player.signature_power.isnot(None)).all()
+    usedCounts = Counter(r[0] for r in rows if r[0])
+    power = awakenedPowers.assignPower(
+        _POSITION_ENUM.get(player.position, ''), usedCounts=usedCounts)
     if power:
         player.signature_power = power
     return power
