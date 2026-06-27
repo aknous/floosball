@@ -15,6 +15,13 @@ EDITING GUIDE — this file is meant to be edited freely:
     runs at import and flags any unknown/typo situation key.
   All flavor is GENDER-NEUTRAL (singular they/them/their) and apostrophe-free. Names are placeholders.
 
+TOKENS the engine substitutes into each line (NO apostrophes around them — they are literal):
+  {player}    — the awakened player (use in EVERY line; the line's subject)
+  {yards}     — the yardage gained; put in OFFENSE lines only (throw/run/catch), woven "...for {yards} yards"
+  {receiver}  — the receiver's name; put in THROW lines (where {player} is the QB)
+  {passer}    — the QB's name; put in CATCH lines (where {player} is the receiver)
+  kick lines take no yardage; pick/strip lines take no {yards} (the engine appends ", returned N yards").
+
 THE SITUATIONS — what the player is doing when the power fires:
   throw  — the QB completes the pass            run   — the ball-carrier breaks free
   catch  — the receiver hauls it in             kick  — the kicker drills it
