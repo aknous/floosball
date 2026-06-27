@@ -3759,12 +3759,7 @@ class Game:
                 text = (f'{self.play.fgDistance}yd Field Goal by {kickerName} is BLOCKED by {blockerName}!'
                         if blockerName else f'{self.play.fgDistance}yd Field Goal by {kickerName} is BLOCKED!')
             elif self.play.isFgGood:
-                fire = getattr(self.play, 'awakenedFire', None)
-                if fire and fire.get('flavor'):
-                    text = (f'AWAKENED — {fire["powerName"]}: {kickerName} {fire["flavor"]}. '
-                            f'{self.play.fgDistance}yd Field Goal is GOOD!')
-                else:
-                    text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is good'
+                text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is good'
             else:
                 text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is no good'
         elif self.play.playType == PlayType.ExtraPoint:
@@ -3858,6 +3853,13 @@ class Game:
                 and not getattr(self.play, '_stretchNote', None)
                 and ', out of bounds' not in text):
             text += ', out of bounds'
+
+        # Awakened (L4) fire — prepend the power flavor uniformly across every play type, so the PBP
+        # names who used the power. Null on plays where no power fired.
+        fire = getattr(self.play, 'awakenedFire', None)
+        if fire and fire.get('flavor'):
+            prefix = f"{fire['powerName']}: {fire['flavor']}."
+            text = f"{prefix} {text}" if text else prefix
 
         self.play.playText = text
 

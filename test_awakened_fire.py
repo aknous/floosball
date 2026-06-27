@@ -35,6 +35,9 @@ p = s.game.play
 expect("the play is tagged as an awakened fire", p.awakenedFire and p.awakenedFire['power'] == 'no_clip')
 expect("the fire records WHO used the power", p.awakenedFire['playerName'] == rb.name and p.awakenedFire['playerId'] == rb.id)
 expect("the fire records the power name", p.awakenedFire['powerName'] == 'No-Clip')
+s.game.formatPlayText()
+expect("the PBP text leads with the power name + flavor",
+       p.playText.startswith('No-Clip:') and rb.name in p.playText)
 expect("the run is forced to at least the breakaway floor", p.yardage >= AWAKENED_FORCE_RUN_GAIN)
 expect("a fired run does not fumble", not p.isFumbleLost)
 expect("firing discharged the meter", s.game._awakenedReady[rb.id] is False and s.game._awakenedFills[rb.id] == 1)
