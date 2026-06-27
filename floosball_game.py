@@ -832,6 +832,12 @@ class Game:
         self._anomalyAttention: Dict[int, float] = {}
         self._anomalyState: Dict[int, str] = {}
         self._anomalyAttentionLoaded: bool = False
+        # Awakened (L4) charge meter — per-game, gated. {pid: current charge}, {pid: # fills this
+        # game}, {pid: {'off','def'} ability keys}. Populated for awakened players when the snapshot
+        # loads (ANOMALY_AWAKENED_POWERS_ENABLED); empty otherwise.
+        self._awakenedCharge: Dict[int, float] = {}
+        self._awakenedFills: Dict[int, int] = {}
+        self._awakenedAbilities: Dict[int, dict] = {}
         # Multiplier on per-play anomaly probability. 1.0 normally, 5.0
         # if this game is happening inside an active Criticality window.
         # Set when attention is loaded.
@@ -6968,6 +6974,54 @@ class Game:
             for d in defenders:
                 d._gameDefWpaSnaps = int(getattr(d, '_gameDefWpaSnaps', 0)) + 1
 
+        # ── Awakened (L4) charge meter (P2, gated) — impact-weighted positive involvement.
+        # Only non-empty when an awakened player is in this game. Yards on offense, a flat stop on
+        # defense, a chunk per made FG. Each fill marks the ability ready (the fire lands in P3).
+        if self._awakenedCharge:
+            self._accumulateAwakenedCharge(play, pt)
+
+    def _accumulateAwakenedCharge(self, play, pt):
+        from constants import (AWAKENED_CHARGE_THRESHOLD, AWAKENED_CHARGE_PER_YARD,
+                               AWAKENED_CHARGE_QB_SHARE, AWAKENED_CHARGE_DEF_EVENT,
+                               AWAKENED_CHARGE_KICKER)
+        def _charge(pl, amt):
+            if pl is None or amt <= 0:
+                return
+            pid = getattr(pl, 'id', None)
+            if pid not in self._awakenedCharge:
+                return
+            self._awakenedCharge[pid] += amt
+            while self._awakenedCharge[pid] >= AWAKENED_CHARGE_THRESHOLD:
+                self._awakenedCharge[pid] -= AWAKENED_CHARGE_THRESHOLD
+                self._awakenedFills[pid] = self._awakenedFills.get(pid, 0) + 1
+        yds = max(0, getattr(play, 'yardage', 0) or 0)
+        if pt is PlayType.Run:
+            _charge(getattr(play, 'runner', None), yds * AWAKENED_CHARGE_PER_YARD)
+        elif pt is PlayType.Pass and getattr(play, 'isPassCompletion', False):
+            _charge(getattr(play, 'passer', None), yds * AWAKENED_CHARGE_PER_YARD * AWAKENED_CHARGE_QB_SHARE)
+            _charge(getattr(play, 'receiver', None), yds * AWAKENED_CHARGE_PER_YARD * (1.0 - AWAKENED_CHARGE_QB_SHARE))
+        elif pt in (PlayType.FieldGoal, PlayType.ExtraPoint) and getattr(play, 'isFgGood', False):
+            _charge(getattr(play, 'kicker', None), AWAKENED_CHARGE_KICKER)
+        if pt in (PlayType.Run, PlayType.Pass):
+            pm = (getattr(play, 'returner', None) or getattr(play, 'sackedBy', None)
+                  or getattr(play, 'interceptedBy', None) or getattr(play, 'forcedFumbleBy', None)
+                  or getattr(play, 'tackledBy', None))
+            _charge(pm, AWAKENED_CHARGE_DEF_EVENT)
+
+    def awakenedChargeState(self) -> dict:
+        """Current awakened charge meter for this game (P2). {pid: {charge, pct, fills, abilities}}.
+        Empty unless awakened players are in the game (ANOMALY_AWAKENED_POWERS_ENABLED)."""
+        from constants import AWAKENED_CHARGE_THRESHOLD
+        return {
+            pid: {
+                'charge': round(charge, 1),
+                'pct': round(100.0 * charge / AWAKENED_CHARGE_THRESHOLD, 1),
+                'fills': self._awakenedFills.get(pid, 0),
+                'abilities': self._awakenedAbilities.get(pid, {}),
+            }
+            for pid, charge in self._awakenedCharge.items()
+        }
+
     def broadcastGameState(self, includeLastPlay: bool = True, eventMessage: dict = None, isPossessionChange: bool = False, isFinalBroadcast: bool = False):
         """
         Broadcast comprehensive game state after a play or game event.
@@ -8103,6 +8157,18 @@ class Game:
                 self._anomalyState = {
                     r.player_id: r.state for r in stateRows
                 }
+                # Awakened (L4) charge meter — gated. Init a per-game bar for each awakened player
+                # on THIS game's rosters, + capture their signature abilities (for P3 firing).
+                from constants import ANOMALY_AWAKENED_POWERS_ENABLED
+                if ANOMALY_AWAKENED_POWERS_ENABLED:
+                    rosterIds = {p.id for t in (self.homeTeam, self.awayTeam) if t
+                                 for p in t.rosterDict.values() if p is not None}
+                    for r in stateRows:
+                        if r.state == 'awakened' and r.player_id in rosterIds:
+                            self._awakenedCharge[r.player_id] = 0.0
+                            self._awakenedFills[r.player_id] = 0
+                            self._awakenedAbilities[r.player_id] = {
+                                'off': r.offensive_ability, 'def': r.defensive_ability}
             finally:
                 session.close()
             self._criticalityMultiplier = getCriticalityMultiplier(

@@ -1111,6 +1111,16 @@ ANOMALY_CRITICALITY_ENABLED = False
 # that fires the ability (~1-2/game), with Criticality as the overdrive. Default OFF.
 ANOMALY_AWAKENED_POWERS_ENABLED = False
 
+# Awakened charge meter (P2) — a per-game bar per awakened player, fed by impact-weighted positive
+# involvement (yards on offense, stops on defense, made kicks). Fills ~1-2x/game for a focal player;
+# each fill = the signature ability is ready to fire (P3). Tuned in playtest (Criticality scales these
+# up via the instability dial in P5).
+AWAKENED_CHARGE_THRESHOLD = 100.0   # meter fills at this, then resets and the ability is "ready"
+AWAKENED_CHARGE_PER_YARD = 1.2      # offensive charge per positive yard (run / reception)
+AWAKENED_CHARGE_QB_SHARE = 0.4      # completion charge split QB / receiver (mirrors WPA_PASS_QB_SHARE)
+AWAKENED_CHARGE_DEF_EVENT = 18.0    # flat charge for a defensive playmaker stop (charges slower)
+AWAKENED_CHARGE_KICKER = 60.0       # per made FG — a kicker touches the ball rarely, so charges fast
+
 # ── Glitch firing hygiene ─────────────────────────────────────────────────────
 # Per-play per-candidate glitch probability = min(CAP, attention / SCALE ×
 # instability). Tuned DOWN hard from last season (was attention/1000 with no
