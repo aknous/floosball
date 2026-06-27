@@ -8571,6 +8571,7 @@ class Play():
         self.isFumble = False
         self.isFumbleLost = False
         self.isFumbleRecovered = False
+        self.awakenedFire = None   # L4 fire dict for this play (P3), or None
         self.isInterception = False
         self.isTd = False
         self.isXpTry = False
@@ -9150,6 +9151,13 @@ class Play():
 
         self.yardage = min(self.yardage, self.yardsToEndzone)
 
+        # Awakened (L4) fire — a charged runner whose power covers 'run' breaks free: force a big gain
+        # (or a TD if reachable) and no fumble (P3). None unless gated on + they are ready.
+        self.awakenedFire = self.game._awakenedTryFire('run', self.runner)
+        if self.awakenedFire:
+            from constants import AWAKENED_FORCE_RUN_GAIN
+            self.yardage = min(self.yardsToEndzone, max(self.yardage, AWAKENED_FORCE_RUN_GAIN))
+
         # Stretch for the first down / goal line — a confident back reaches it out
         # to convert; the reach can expose the ball (fumble bump, resolved below).
         _stretchBonus, self._stretchNote, _stretchFumbleBump = self._stretchForFirst(self.runner)
@@ -9184,7 +9192,7 @@ class Play():
         # Gunslinger tax — a confident, undisciplined back carries it too loose.
         fumbleThreshold = max(88, fumbleThreshold - int(round(self._gunslingerTax(self.runner))))
 
-        if (fumbleRoll + fumbleResistModifier) > fumbleThreshold:
+        if (fumbleRoll + fumbleResistModifier) > fumbleThreshold and not self.awakenedFire:
             self.isFumble = True
             runnerRecoveryMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
             if (self.defense.defenseRunCoverageRating + batched_randint(-5, 5)) >= \
