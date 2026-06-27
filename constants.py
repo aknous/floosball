@@ -1121,10 +1121,13 @@ AWAKENED_CHARGE_QB_SHARE = 0.4      # completion charge split QB / receiver (mir
 AWAKENED_CHARGE_DEF_EVENT = 18.0    # flat charge for a defensive playmaker stop (charges slower)
 AWAKENED_CHARGE_KICKER = 60.0       # per made FG — a kicker touches the ball rarely, so charges fast
 
-# Awakened fire outcomes (P3) — when a power fires, force a huge success in that situation. A fired
-# run/completion gains at least this many yards (or reaches the end zone, whichever is closer).
+# Awakened fire outcomes (P3) — when a power fires, force a big breakaway: a base gain (run/pass)
+# PLUS an exponential tail for variance, capped at the end zone. So a fired play ranges (e.g. 45, 60,
+# 78, or a house call) instead of always landing on the flat floor, and from scoring range it just
+# scores. Tail = the exponential mean of the bonus yardage.
 AWAKENED_FORCE_RUN_GAIN = 45
 AWAKENED_FORCE_PASS_GAIN = 40
+AWAKENED_FORCE_GAIN_TAIL = 20
 
 # ── Glitch firing hygiene ─────────────────────────────────────────────────────
 # Per-play per-candidate glitch probability = min(CAP, attention / SCALE ×

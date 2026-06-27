@@ -9219,8 +9219,9 @@ class Play():
         # (or a TD if reachable) and no fumble (P3). None unless gated on + they are ready.
         self.awakenedFire = self.game._awakenedTryFire('run', self.runner)
         if self.awakenedFire:
-            from constants import AWAKENED_FORCE_RUN_GAIN
-            self.yardage = min(self.yardsToEndzone, max(self.yardage, AWAKENED_FORCE_RUN_GAIN))
+            from constants import AWAKENED_FORCE_RUN_GAIN, AWAKENED_FORCE_GAIN_TAIL
+            forced = AWAKENED_FORCE_RUN_GAIN + int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
+            self.yardage = min(self.yardsToEndzone, max(self.yardage, forced))
         else:
             # Defensive fire — a charged awakened defender strips the ball loose (forced fumble lost).
             _dfn = self.game._pickReadyAwakenedDefender(self.defense, 'strip')
@@ -10709,10 +10710,11 @@ class Play():
                         yac = self.yardsToEndzone - passYards
                         self.yardage = self.yardsToEndzone
 
-                    # Awakened fire — force the breakaway floor (or the end zone), keeping yac coherent.
+                    # Awakened fire — force a big varied breakaway (or the end zone), keeping yac coherent.
                     if self.awakenedFire:
-                        from constants import AWAKENED_FORCE_PASS_GAIN
-                        self.yardage = min(self.yardsToEndzone, max(self.yardage, AWAKENED_FORCE_PASS_GAIN))
+                        from constants import AWAKENED_FORCE_PASS_GAIN, AWAKENED_FORCE_GAIN_TAIL
+                        forced = AWAKENED_FORCE_PASS_GAIN + int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
+                        self.yardage = min(self.yardsToEndzone, max(self.yardage, forced))
                         yac = max(0, self.yardage - passYards)
 
                     self.insights['pass']['airYards'] = passYards
