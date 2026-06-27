@@ -837,7 +837,7 @@ class Game:
         # loads (ANOMALY_AWAKENED_POWERS_ENABLED); empty otherwise.
         self._awakenedCharge: Dict[int, float] = {}
         self._awakenedFills: Dict[int, int] = {}
-        self._awakenedAbilities: Dict[int, dict] = {}
+        self._awakenedPower: Dict[int, str] = {}   # pid -> career signature power key
         # Multiplier on per-play anomaly probability. 1.0 normally, 5.0
         # if this game is happening inside an active Criticality window.
         # Set when attention is loaded.
@@ -7009,7 +7009,7 @@ class Game:
             _charge(pm, AWAKENED_CHARGE_DEF_EVENT)
 
     def awakenedChargeState(self) -> dict:
-        """Current awakened charge meter for this game (P2). {pid: {charge, pct, fills, abilities}}.
+        """Current awakened charge meter for this game (P2). {pid: {charge, pct, fills, power}}.
         Empty unless awakened players are in the game (ANOMALY_AWAKENED_POWERS_ENABLED)."""
         from constants import AWAKENED_CHARGE_THRESHOLD
         return {
@@ -7017,7 +7017,7 @@ class Game:
                 'charge': round(charge, 1),
                 'pct': round(100.0 * charge / AWAKENED_CHARGE_THRESHOLD, 1),
                 'fills': self._awakenedFills.get(pid, 0),
-                'abilities': self._awakenedAbilities.get(pid, {}),
+                'power': self._awakenedPower.get(pid),
             }
             for pid, charge in self._awakenedCharge.items()
         }
@@ -8157,18 +8157,21 @@ class Game:
                 self._anomalyState = {
                     r.player_id: r.state for r in stateRows
                 }
-                # Awakened (L4) charge meter — gated. Init a per-game bar for each awakened player
-                # on THIS game's rosters, + capture their signature abilities (for P3 firing).
+                # Awakened (L4) charge meter — gated. Init a per-game bar for each awakened player on
+                # THIS game's rosters who has a career signature power (players.signature_power).
                 from constants import ANOMALY_AWAKENED_POWERS_ENABLED
                 if ANOMALY_AWAKENED_POWERS_ENABLED:
                     rosterIds = {p.id for t in (self.homeTeam, self.awayTeam) if t
                                  for p in t.rosterDict.values() if p is not None}
-                    for r in stateRows:
-                        if r.state == 'awakened' and r.player_id in rosterIds:
-                            self._awakenedCharge[r.player_id] = 0.0
-                            self._awakenedFills[r.player_id] = 0
-                            self._awakenedAbilities[r.player_id] = {
-                                'off': r.offensive_ability, 'def': r.defensive_ability}
+                    awakenedIds = [r.player_id for r in stateRows
+                                   if r.state == 'awakened' and r.player_id in rosterIds]
+                    if awakenedIds:
+                        from database.models import Player as _Player
+                        for pl in session.query(_Player).filter(_Player.id.in_(awakenedIds)).all():
+                            if pl.signature_power:
+                                self._awakenedCharge[pl.id] = 0.0
+                                self._awakenedFills[pl.id] = 0
+                                self._awakenedPower[pl.id] = pl.signature_power
             finally:
                 session.close()
             self._criticalityMultiplier = getCriticalityMultiplier(

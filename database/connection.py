@@ -133,7 +133,8 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
-        # L4 awakened signature abilities (offensive + defensive) on anomaly_state.
+        # L4 awakened signature abilities (offensive + defensive) on anomaly_state — legacy from an
+        # earlier P1 model; the live model stores the single career power on players.signature_power.
         for _col in ("offensive_ability", "defensive_ability"):
             try:
                 conn.execute(text(f"ALTER TABLE anomaly_state ADD COLUMN {_col} VARCHAR(40)"))
@@ -141,6 +142,14 @@ def _runPendingMigrations():
                 logger.info(f"  Migration: added anomaly_state.{_col}")
             except Exception:
                 conn.rollback()
+
+        # L4 awakened signature power — the player's ONE career power.
+        try:
+            conn.execute(text("ALTER TABLE players ADD COLUMN signature_power VARCHAR(40)"))
+            conn.commit()
+            logger.info("  Migration: added players.signature_power")
+        except Exception:
+            conn.rollback()
 
         # Cores exchange threading on persisted league-news items, so multi-Core
         # conversations group under one header on refresh (not just live).

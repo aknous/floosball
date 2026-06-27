@@ -51,28 +51,20 @@ logger = get_logger("floosball.anomaly")
 _POSITION_ENUM = {0: 'QB', 1: 'RB', 2: 'WR', 3: 'TE', 4: 'K'}
 
 
-def assignAwakenedAbilities(session, state, player_id):
-    """Assign the L4 signature abilities to a just-awakened player and write them onto `state`.
-
-    Offensive ability = the broken expression of the player's best offensive attribute; defensive
-    ability = their position's takeaway (none for kickers). Idempotent — re-running keeps the same
-    keys (best attribute is frozen on the player). Returns (offKey, defKey) or None if no player.
-    Caller gates on ANOMALY_AWAKENED_POWERS_ENABLED.
+def assignSignaturePower(session, player_id):
+    """Assign the player's ONE career signature power at first awakening and store it on the Player.
+    The power is kept for their whole career (their identity) — idempotent, so a re-awakening keeps
+    the existing power. Returns the power key (or None). Caller gates on ANOMALY_AWAKENED_POWERS_ENABLED.
     """
     player = session.query(Player).filter_by(id=player_id).first()
-    if player is None or player.attributes is None:
+    if player is None:
         return None
-    a = player.attributes
-    attrDict = {
-        'armStrength': a.arm_strength, 'accuracy': a.accuracy, 'agility': a.agility,
-        'speed': a.speed, 'power': a.power, 'hands': a.hands, 'reach': a.reach,
-        'legStrength': a.leg_strength,
-    }
-    offKey, defKey = awakenedPowers.assignAbilities(
-        _POSITION_ENUM.get(player.position, ''), attrDict)
-    state.offensive_ability = offKey
-    state.defensive_ability = defKey
-    return offKey, defKey
+    if player.signature_power:
+        return player.signature_power  # career identity already set — never re-rolled
+    power = awakenedPowers.assignPower(_POSITION_ENUM.get(player.position, ''))
+    if power:
+        player.signature_power = power
+    return power
 
 
 # ─── Tuning constants ───────────────────────────────────────────────────────
@@ -800,10 +792,9 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
             # awakening. When off, nothing is assigned (feature invisible).
             from constants import ANOMALY_AWAKENED_POWERS_ENABLED
             if ANOMALY_AWAKENED_POWERS_ENABLED:
-                res = assignAwakenedAbilities(session, state, attn.player_id)
-                if res:
-                    logger.info(f"Awakened abilities for player {attn.player_id}: "
-                                f"off={res[0]} def={res[1]}")
+                power = assignSignaturePower(session, attn.player_id)
+                if power:
+                    logger.info(f"Awakened: player {attn.player_id} signature power = {power}")
 
         transitions += 1
         # Only narrate transitions to non-stable states.

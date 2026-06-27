@@ -162,6 +162,10 @@ class Player(Base):
     offensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     defensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     defensive_position: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
+    # Awakened (L4) signature power — the player's ONE career power, assigned once at first awakening
+    # (managers/awakenedPowers.py key) and kept for their career. Null until awakened. Gated by
+    # ANOMALY_AWAKENED_POWERS_ENABLED.
+    signature_power: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     free_agent_years: Mapped[Optional[int]] = mapped_column(Integer)
     service_time: Mapped[Optional[str]] = mapped_column(String(20))
     # Prospect pipeline (see constants.PROSPECT_*)

@@ -1500,24 +1500,28 @@ async def get_player_anomaly(player_id: int):
         ).first()
         if row is None or row.state in (None, 'stable'):
             return build_success_response(None)
-        # L4 awakened signature abilities (gated) — the player's permanent identity.
+        # L4 awakened signature power (gated) — the player's ONE career power + the situations it works in.
         from constants import ANOMALY_AWAKENED_POWERS_ENABLED
-        awakenedAbilities = None
+        signaturePower = None
         if ANOMALY_AWAKENED_POWERS_ENABLED and row.state == 'awakened':
             from managers import awakenedPowers
-            offName = awakenedPowers.abilityName(row.offensive_ability) if row.offensive_ability else None
-            defName = awakenedPowers.abilityName(row.defensive_ability) if row.defensive_ability else None
-            awakenedAbilities = {
-                'offensive': {'key': row.offensive_ability, 'name': offName} if offName else None,
-                'defensive': {'key': row.defensive_ability, 'name': defName} if defName else None,
-            }
+            from database.models import Player as _Player
+            player = session.query(_Player).filter_by(id=player_id).first()
+            key = player.signature_power if player else None
+            if key:
+                signaturePower = {
+                    'key': key,
+                    'name': awakenedPowers.powerName(key),
+                    'concept': awakenedPowers.powerConcept(key),
+                    'situations': awakenedPowers.coveredSituations(key),
+                }
         return build_success_response({
             'state': row.state,
             'ability': row.ability,
             'abilityTier': row.ability_tier,
             'awakenedAtWeek': row.awakened_at_week,
             'seasonsCarried': row.seasons_carried,
-            'awakenedAbilities': awakenedAbilities,
+            'signaturePower': signaturePower,
         })
     finally:
         session.close()

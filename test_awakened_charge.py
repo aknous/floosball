@@ -28,7 +28,7 @@ g = Scenario().game
 RB, K, DEF, NOBODY = Pl(1), Pl(2), Pl(3), Pl(99)   # 99 = an awakened player NOT involved this play
 g._awakenedCharge = {1: 0.0, 2: 0.0, 3: 0.0}
 g._awakenedFills = {1: 0, 2: 0, 3: 0}
-g._awakenedAbilities = {1: {'off': 'battering_ram', 'def': 'strip_score'}}
+g._awakenedPower = {1: 'no_clip'}
 
 print("1. Offense charges by yards; only awakened players accrue")
 g._accumulateAwakenedCharge(Play(runner=RB, yardage=50, isPassCompletion=False), PlayType.Run)
@@ -54,15 +54,15 @@ expect("defensive playmaker stop charges a flat event", abs(g._awakenedCharge[3]
 
 print("\n4. Pass completion splits QB / receiver")
 g2 = Scenario().game
-g2._awakenedCharge = {10: 0.0, 11: 0.0}; g2._awakenedFills = {10: 0, 11: 0}; g2._awakenedAbilities = {}
+g2._awakenedCharge = {10: 0.0, 11: 0.0}; g2._awakenedFills = {10: 0, 11: 0}; g2._awakenedPower = {}
 g2._accumulateAwakenedCharge(Play(passer=Pl(10), receiver=Pl(11), yardage=30, isPassCompletion=True), PlayType.Pass)
 expect("QB gets the QB share", abs(g2._awakenedCharge[10] - 30 * AWAKENED_CHARGE_PER_YARD * AWAKENED_CHARGE_QB_SHARE) < 0.01)
 expect("receiver gets the rest", abs(g2._awakenedCharge[11] - 30 * AWAKENED_CHARGE_PER_YARD * (1 - AWAKENED_CHARGE_QB_SHARE)) < 0.01)
 
 print("\n5. awakenedChargeState() exposure")
 st = g.awakenedChargeState()
-expect("state reports charge/pct/fills/abilities for tracked players",
-       1 in st and 'pct' in st[1] and st[1]['fills'] == 1 and st[1]['abilities'].get('off') == 'battering_ram')
+expect("state reports charge/pct/fills/power for tracked players",
+       1 in st and 'pct' in st[1] and st[1]['fills'] == 1 and st[1]['power'] == 'no_clip')
 
 print()
 if failures:
