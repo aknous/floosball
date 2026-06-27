@@ -836,8 +836,10 @@ class Game:
         # game}, {pid: {'off','def'} ability keys}. Populated for awakened players when the snapshot
         # loads (ANOMALY_AWAKENED_POWERS_ENABLED); empty otherwise.
         self._awakenedCharge: Dict[int, float] = {}
-        self._awakenedFills: Dict[int, int] = {}
-        self._awakenedPower: Dict[int, str] = {}   # pid -> career signature power key
+        self._awakenedFills: Dict[int, int] = {}     # actual fires this game (P3)
+        self._awakenedReady: Dict[int, bool] = {}    # meter full + waiting to fire (P3)
+        self._awakenedPower: Dict[int, str] = {}     # pid -> career signature power key
+        self._lastAwakenedFire: dict = None          # most recent fire, for PBP/feed
         # Multiplier on per-play anomaly probability. 1.0 normally, 5.0
         # if this game is happening inside an active Criticality window.
         # Set when attention is loaded.
@@ -3757,7 +3759,12 @@ class Game:
                 text = (f'{self.play.fgDistance}yd Field Goal by {kickerName} is BLOCKED by {blockerName}!'
                         if blockerName else f'{self.play.fgDistance}yd Field Goal by {kickerName} is BLOCKED!')
             elif self.play.isFgGood:
-                text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is good'
+                fire = getattr(self.play, 'awakenedFire', None)
+                if fire and fire.get('flavor'):
+                    text = (f'AWAKENED — {fire["name"]}: {kickerName} {fire["flavor"]}. '
+                            f'{self.play.fgDistance}yd Field Goal is GOOD!')
+                else:
+                    text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is good'
             else:
                 text = f'{self.play.fgDistance}yd Field Goal by {kickerName} is no good'
         elif self.play.playType == PlayType.ExtraPoint:
@@ -6990,10 +6997,13 @@ class Game:
             pid = getattr(pl, 'id', None)
             if pid not in self._awakenedCharge:
                 return
-            self._awakenedCharge[pid] += amt
-            while self._awakenedCharge[pid] >= AWAKENED_CHARGE_THRESHOLD:
-                self._awakenedCharge[pid] -= AWAKENED_CHARGE_THRESHOLD
-                self._awakenedFills[pid] = self._awakenedFills.get(pid, 0) + 1
+            # Fill toward the threshold; at full, the meter holds (ready) and waits to fire (P3).
+            # It does NOT keep accumulating past full — the next covered play discharges it.
+            if self._awakenedReady.get(pid):
+                return
+            self._awakenedCharge[pid] = min(AWAKENED_CHARGE_THRESHOLD, self._awakenedCharge[pid] + amt)
+            if self._awakenedCharge[pid] >= AWAKENED_CHARGE_THRESHOLD:
+                self._awakenedReady[pid] = True
         yds = max(0, getattr(play, 'yardage', 0) or 0)
         if pt is PlayType.Run:
             _charge(getattr(play, 'runner', None), yds * AWAKENED_CHARGE_PER_YARD)
@@ -7008,15 +7018,43 @@ class Game:
                   or getattr(play, 'tackledBy', None))
             _charge(pm, AWAKENED_CHARGE_DEF_EVENT)
 
+    def _awakenedTryFire(self, situation, player):
+        """P3 firing. If `player` is awakened, their meter is full (ready), and their career power
+        covers `situation`, DISCHARGE it: reset the meter, record the fire, and return the fire dict
+        {pid, power, name, situation, flavor} so the caller can force the outcome + narrate. Returns
+        None otherwise (zero overhead when no awakened players are charged / the feature is off)."""
+        if not self._awakenedReady or player is None:
+            return None
+        pid = getattr(player, 'id', None)
+        if not self._awakenedReady.get(pid):
+            return None
+        from managers import awakenedPowers
+        powerKey = self._awakenedPower.get(pid)
+        if not powerKey or not awakenedPowers.powerCoversSituation(powerKey, situation):
+            return None
+        fire = {
+            'pid': pid,
+            'power': powerKey,
+            'name': awakenedPowers.powerName(powerKey),
+            'situation': situation,
+            'flavor': awakenedPowers.situationFlavor(powerKey, situation),
+        }
+        self._awakenedCharge[pid] = 0.0
+        self._awakenedReady[pid] = False
+        self._awakenedFills[pid] = self._awakenedFills.get(pid, 0) + 1
+        self._lastAwakenedFire = fire
+        return fire
+
     def awakenedChargeState(self) -> dict:
-        """Current awakened charge meter for this game (P2). {pid: {charge, pct, fills, power}}.
+        """Current awakened charge meter for this game. {pid: {charge, pct, ready, fires, power}}.
         Empty unless awakened players are in the game (ANOMALY_AWAKENED_POWERS_ENABLED)."""
         from constants import AWAKENED_CHARGE_THRESHOLD
         return {
             pid: {
                 'charge': round(charge, 1),
                 'pct': round(100.0 * charge / AWAKENED_CHARGE_THRESHOLD, 1),
-                'fills': self._awakenedFills.get(pid, 0),
+                'ready': bool(self._awakenedReady.get(pid)),
+                'fires': self._awakenedFills.get(pid, 0),
                 'power': self._awakenedPower.get(pid),
             }
             for pid, charge in self._awakenedCharge.items()
@@ -8171,6 +8209,7 @@ class Game:
                             if pl.signature_power:
                                 self._awakenedCharge[pl.id] = 0.0
                                 self._awakenedFills[pl.id] = 0
+                                self._awakenedReady[pl.id] = False
                                 self._awakenedPower[pl.id] = pl.signature_power
             finally:
                 session.close()
@@ -8688,12 +8727,16 @@ class Play():
         from constants import FG_BLOCK_ENABLED, FG_BLOCK_CHANCE
         self.isFgBlocked = FG_BLOCK_ENABLED and (batched_random() * 100 < FG_BLOCK_CHANCE)
 
+        # Awakened (L4) fire — a charged kicker whose power covers 'kick' makes it automatically,
+        # no block (P3). Returns None unless ANOMALY_AWAKENED_POWERS_ENABLED + they are ready.
+        self.awakenedFire = self.game._awakenedTryFire('kick', self.kicker)
+
         x = batched_randint(1,100)
 
-        if self.isFgBlocked:
+        if self.isFgBlocked and not self.awakenedFire:
             self.isFgGood = False
             self.kicker.addMissedFg(self.fgDistance, self.game.isRegularSeasonGame)
-        elif x <= probability:
+        elif self.awakenedFire or x <= probability:
             self.isFgGood = True
             self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
             if yardsToFG > self.kicker.gameStatsDict['kicking']['longest']:
