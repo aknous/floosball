@@ -7046,6 +7046,10 @@ class Game:
         self._awakenedReady[pid] = False
         self._awakenedFills[pid] = self._awakenedFills.get(pid, 0) + 1
         self._lastAwakenedFire = fire
+        import os as _os
+        if _os.environ.get('AWAKENED_TEST'):
+            print(f"[AWAKENED] {fire['playerName']} fired {fire['powerName']} ({situation})",
+                  file=__import__('sys').stderr)
         return fire
 
     def _pickReadyAwakenedDefender(self, team):
@@ -8219,8 +8223,10 @@ class Game:
                 }
                 # Awakened (L4) charge meter — gated. Init a per-game bar for each awakened player on
                 # THIS game's rosters who has a career signature power (players.signature_power).
+                import os as _os
                 from constants import ANOMALY_AWAKENED_POWERS_ENABLED
-                if ANOMALY_AWAKENED_POWERS_ENABLED:
+                _awTest = bool(_os.environ.get('AWAKENED_TEST'))
+                if ANOMALY_AWAKENED_POWERS_ENABLED or _awTest:
                     rosterIds = {p.id for t in (self.homeTeam, self.awayTeam) if t
                                  for p in t.rosterDict.values() if p is not None}
                     awakenedIds = [r.player_id for r in stateRows
@@ -8233,6 +8239,22 @@ class Game:
                                 self._awakenedFills[pl.id] = 0
                                 self._awakenedReady[pl.id] = False
                                 self._awakenedPower[pl.id] = pl.signature_power
+                    # AWAKENED_TEST — force-awaken a couple roster players per team (QB + RB) and start
+                    # them charged, so every game shows powers firing without the attention machinery.
+                    if _awTest:
+                        from managers import awakenedPowers
+                        _slotPos = {'qb': 'QB', 'rb': 'RB', 'wr1': 'WR', 'wr2': 'WR', 'te': 'TE', 'k': 'K'}
+                        for t in (self.homeTeam, self.awayTeam):
+                            if not t:
+                                continue
+                            for slot in ('qb', 'rb'):
+                                pl = t.rosterDict.get(slot)
+                                if pl is None or pl.id in self._awakenedPower:
+                                    continue
+                                self._awakenedPower[pl.id] = awakenedPowers.assignPower(_slotPos[slot])
+                                self._awakenedCharge[pl.id] = 0.0
+                                self._awakenedFills[pl.id] = 0
+                                self._awakenedReady[pl.id] = True   # ready now -> fires on the first covered play
             finally:
                 session.close()
             self._criticalityMultiplier = getCriticalityMultiplier(
