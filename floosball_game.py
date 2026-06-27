@@ -10343,6 +10343,11 @@ class Play():
                 self.qbPressureMod = qbPressureMod
                 self.rcvPressureMod = receiverPressureMod
 
+                # Awakened (L4) fire — a charged QB (throw) or the targeted receiver (catch) forces
+                # this completion (no INT, no drop) and a big gain (P3). None unless gated on + ready.
+                self.awakenedFire = (self.game._awakenedTryFire('throw', self.passer)
+                                     or self.game._awakenedTryFire('catch', self.receiver))
+
                 # STAGE 3: Calculate throw quality
                 throwQuality = self.calculateThrowQuality(
                     self.passType,
@@ -10452,6 +10457,14 @@ class Play():
                         else (self.game.homeScore - self.game.awayScore)
                     if mustThrow or offDeficit >= 14:
                         catchProbs['intProb'] = round(catchProbs['intProb'] * INT_DESPERATION_DAMPEN, 1)
+
+                # An awakened fire forces the completion: no INT, no drop, and a certain catch so the
+                # outcome roll always lands in the completion branch below (which keys off intProb +
+                # catchProb).
+                if self.awakenedFire:
+                    catchProbs['intProb'] = 0
+                    catchProbs['dropProb'] = 0
+                    catchProbs['catchProb'] = 100
 
                 # Roll for outcome
                 outcomeRoll = batched_randint(1, 100)
@@ -10600,6 +10613,12 @@ class Play():
                         yac = self.yardsToEndzone - passYards
                         self.yardage = self.yardsToEndzone
 
+                    # Awakened fire — force the breakaway floor (or the end zone), keeping yac coherent.
+                    if self.awakenedFire:
+                        from constants import AWAKENED_FORCE_PASS_GAIN
+                        self.yardage = min(self.yardsToEndzone, max(self.yardage, AWAKENED_FORCE_PASS_GAIN))
+                        yac = max(0, self.yardage - passYards)
+
                     self.insights['pass']['airYards'] = passYards
                     self.insights['pass']['yac'] = yac
 
@@ -10691,7 +10710,8 @@ class Play():
                         primaryTackler = safetyPlayer  # Safety made the tackle on deep plays
                     # Surface tackler so play text can credit the defender
                     self.tackledBy = primaryTackler
-                    if primaryTackler and self.isInBounds and batched_randint(1, 100) > 97 - _stFumbleBump:
+                    if (primaryTackler and self.isInBounds and not self.awakenedFire
+                            and batched_randint(1, 100) > 97 - _stFumbleBump):
                         # ~3% chance of fumble on catch (wider after a reach-for-the-marker
                         # stretch — _stFumbleBump); only in bounds — a receiver who steps
                         # out of bounds can't be stripped (the play is dead at the boundary).

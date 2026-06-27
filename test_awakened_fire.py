@@ -9,7 +9,7 @@ Run: python test_awakened_fire.py
 import os, sys
 sys.path.insert(0, os.getcwd())
 from scenario import Scenario
-from constants import AWAKENED_FORCE_RUN_GAIN
+from constants import AWAKENED_FORCE_RUN_GAIN, AWAKENED_FORCE_PASS_GAIN
 
 failures = []
 def expect(label, cond):
@@ -55,6 +55,26 @@ g3.play.fieldGoalTry()
 expect("the FG is forced good", g3.play.isFgGood)
 expect("the FG is tagged as an awakened fire", g3.play.awakenedFire and g3.play.awakenedFire['power'] == 'moonshot')
 expect("firing discharged the kicker's meter", g3._awakenedReady[k.id] is False)
+
+print("\n4. A charged QB forces the completion (no INT/drop, big gain)")
+# A dropback can sack/throw-away (no target), so loop until a real throw fires.
+s4 = Scenario()
+fired = None
+for _ in range(30):
+    s4.situation(quarter=1, clock=800, offense='home', down=1, distance=10, ballOn=70)
+    g4 = s4.game
+    qb = g4.offensiveTeam.rosterDict['qb']
+    g4._awakenedCharge = {qb.id: 100.0}; g4._awakenedFills = {qb.id: 0}
+    g4._awakenedReady = {qb.id: True}; g4._awakenedPower = {qb.id: 'wormhole'}  # covers throw
+    g4.play.passPlay(g4._selectPassPlay('medium'))
+    if g4.play.awakenedFire:
+        fired = g4.play
+        break
+expect("a charged QB fires on a throw", fired is not None and fired.awakenedFire['power'] == 'wormhole')
+if fired:
+    expect("fired pass is a completion, not an interception", fired.isPassCompletion and not fired.isInterception)
+    expect("fired pass forces the breakaway floor", fired.yardage >= AWAKENED_FORCE_PASS_GAIN)
+    expect("fired pass does not fumble", not fired.isFumbleLost)
 
 print()
 if failures:
