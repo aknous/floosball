@@ -830,7 +830,7 @@ class RecordManager:
             # team participated in regardless of which side executed them.
             bigPlayCount = sum(
                 1 for entry in getattr(gameInstance, 'gameFeed', [])
-                if entry.get('isBigPlay')
+                if getattr(entry.get('play') if isinstance(entry, dict) else None, 'isBigPlay', False)
             )
             if bigPlayCount:
                 homeTeam.seasonTeamStats['bigPlays'] = (

@@ -45,6 +45,14 @@ DEV_DECLINE_RANGE = (-5, 1)      # post-peak base: skews down (steepens over tim
 DEV_DECLINE_STEEPEN_PER_SEASON = 1
 DEV_DECLINE_PAST_LONGEVITY_KICK = 2
 DEV_DECLINE_MAX_STEEPEN = 6
+# Per-player decline SEVERITY multiplier (stable per player, seeded off id) so not
+# everyone follows the same arc. Low end = ages gracefully, good for a long career;
+# ~MODE = a normal gradual decline; high end = falls off a cliff. The whole decline
+# (base + steepening) scales by this on the downside only. Drawn triangular around
+# MODE so a GRADUAL falloff is the common case and the ageless/cliff tails are rarer.
+DEV_DECLINE_FACTOR_LOW = 0.3
+DEV_DECLINE_FACTOR_HIGH = 1.5
+DEV_DECLINE_FACTOR_MODE = 0.85
 # Prospects / early-career players are boom-or-bust: widen both ends; good dev
 # (positive devBias) skews the spread toward boom.
 DEV_PROSPECT_SPREAD = 4
@@ -124,6 +132,17 @@ CLUTCH_MODIFIER_THRESHOLD = 2.0   # Min keyPressureMod for clutch
 CHOKE_MODIFIER_THRESHOLD = 1.5    # Min abs(keyPressureMod) for choke
 CLUTCH_WPA_THRESHOLD = 6.0        # Min WPA% impact for clutch plays
 CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
+
+# Mental model — Confidence × Discipline (docs/MENTAL_MODEL.md). Starting values;
+# tune via /simcheck + the scenario harness.
+MENTAL_EXEC_GAIN = 3.0       # rating pts of execution per full confidence unit (C=±1)
+MENTAL_FROZEN_K = 2.0        # extra underperformance for low-confidence × undisciplined ("frozen")
+MENTAL_GUNSLINGER_K = 6.0    # pp added to turnover odds for high-confidence × undisciplined
+# Aggression (play-style): confidence drives a QB's willingness to force a throw
+# into a tight window vs check down / throw it away.
+MENTAL_AGGR_ROLL_K = 25      # +/- to the "force the throw" roll per full confidence unit
+MENTAL_AGGR_BAIL_K = 15      # shifts the throw-away bail threshold per full confidence unit
+MENTAL_DIVE_K = 10          # catch-prob (pp) a confident receiver gains laying out for a contested ball
 
 # WPA -> player value attribution (see docs/WPA_MVP_PLAN.md). Per-play win
 # probability swing is credited to the players involved and accumulated into a
@@ -330,6 +349,11 @@ WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
 INCOME_BOOST_MULTIPLIER = 1.25
 
 DEFAULT_FUNDING_PCT = 25  # Default % of unspent floobits contributed at season end
+# Currency-transaction types that count as a fan funding their team. Markets→Facilities
+# added 'facility_contribution' (active funding goes to the Treasury now); 'team_contribution'
+# is still written by the passive season-end tax. Patron rank, funding leaderboards, and the
+# Patron achievement all key off this set so facility contributions count like the old ones.
+CONTRIBUTION_TX_TYPES = ('team_contribution', 'facility_contribution')
 
 # ---- Team Funding (Patronage) ----
 FUNDING_DECAY_RATE = 0.5                # 50% carry-forward of previous effective funding
@@ -573,9 +597,14 @@ RETIREMENT_MIDCONTRACT_YEARS_PAST = 3
 # weaker than the active win/loss push, so a genuinely losing team still sours --
 # just slower -- while a soured player on a mid-tier team or in the FA pool recovers
 # (~+0.4/week at attitude 40 -> Sour in a season, Steady in two).
-ATTITUDE_NEUTRAL = 80              # resting attitude the reversion pulls toward
-ATTITUDE_REVERT_RATE = 0.01       # weekly reversion = this fraction of distance-to-neutral
-ATTITUDE_DRIFT_MAGNITUDE = 3      # win/loss drift multiplier on |winPct-0.5| (was 4)
+ATTITUDE_NEUTRAL = 80              # global fallback anchor (used only if a player has no baseline)
+# Reversion now pulls toward each player's attitude_baseline (their DISPOSITION), not a
+# global neutral — so attitude is a stable trait, and a bad season is a recoverable dip
+# rather than a slide into permanent toxicity. Rate raised 0.01 -> 0.05 so reversion
+# actually dominates the drift (the old 0.01 was glacial — veterans soured monotonically
+# with tenure because the drift accumulated faster than reversion could recover).
+ATTITUDE_REVERT_RATE = 0.05       # weekly reversion = this fraction of distance-to-BASELINE
+ATTITUDE_DRIFT_MAGNITUDE = 1.5    # win/loss drift multiplier on |winPct-0.5| (dampened 3 -> 1.5)
 
 # ---- Roster Supply Floor ----
 # After retirements are known, guarantee the league has enough living players at

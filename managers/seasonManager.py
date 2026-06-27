@@ -1857,7 +1857,8 @@ class SeasonManager:
                         homeCount = 0
                         awayCount = 0
                         for entry in getattr(game, 'gameFeed', []):
-                            if entry.get('isBigPlay'):
+                            play = entry.get('play') if isinstance(entry, dict) else None
+                            if getattr(play, 'isBigPlay', False):
                                 # Count for both teams since we can't easily tell which
                                 homeCount += 1
                                 awayCount += 1
@@ -9028,7 +9029,9 @@ class SeasonManager:
                 # a mid-tier team or in the FA pool recovers over a season or two.
                 # Probabilistic 1-point step (fractional amount = chance of a move)
                 # so a small rate still shifts the integer attribute.
-                revertAmount = (ATTITUDE_NEUTRAL - current) * ATTITUDE_REVERT_RATE
+                # Revert toward THIS player's disposition baseline, not a global neutral.
+                _baseline = getattr(p.attributes, 'attitudeBaseline', 0) or ATTITUDE_NEUTRAL
+                revertAmount = (_baseline - current) * ATTITUDE_REVERT_RATE
                 step = int(revertAmount)
                 frac = abs(revertAmount - step)
                 if frac and _attFrac() < frac:
@@ -9046,7 +9049,8 @@ class SeasonManager:
             if attrs is None:
                 continue
             current = getattr(attrs, 'attitude', 80) or 80
-            revertAmount = (ATTITUDE_NEUTRAL - current) * ATTITUDE_REVERT_RATE
+            _baseline = getattr(attrs, 'attitudeBaseline', 0) or ATTITUDE_NEUTRAL
+            revertAmount = (_baseline - current) * ATTITUDE_REVERT_RATE
             step = int(revertAmount)
             frac = abs(revertAmount - step)
             if frac and _attFrac() < frac:
@@ -9348,10 +9352,13 @@ class SeasonManager:
             currencyRepo = CurrencyRepository(session)
             currency = currencyRepo.getByUser(userId)
             balance = currency.balance if currency else 0
-            if balance < amount:
-                raise ValueError(f"Insufficient balance ({balance}F available)")
 
-            # Resolve + validate the target BEFORE spending.
+            # Resolve + validate the target BEFORE spending. For an upkeep or project
+            # bar, clamp the contribution to what it still needs, so hitting "100F" on a
+            # bar that only needs 99F deducts 99F (no overfunding / wasted spend). The
+            # Treasury is an open pool, so it takes the full amount.
+            shareUnit = facilitiesManager.computeShareUnit(session, season - 1)
+            soloFunded = False  # user took a bar from empty to fully funded by themselves
             if target == 'upkeep':
                 if not facilityKey:
                     raise ValueError("facilityKey required for an upkeep contribution")
@@ -9359,6 +9366,12 @@ class SeasonManager:
                     team_id=teamId, facility_key=facilityKey).first()
                 if not fac:
                     raise ValueError("Facility not found")
+                priorFunded = fac.upkeep_funded or 0
+                need = max(0, facilitiesManager.upkeepCostFloobits(fac.level, shareUnit) - priorFunded)
+                if need <= 0:
+                    raise ValueError("Upkeep is already fully funded")
+                amount = min(amount, need)
+                soloFunded = (priorFunded == 0 and amount >= need)
                 desc = f'Facility upkeep ({facilityKey})'
             elif target == 'project':
                 if not projectId:
@@ -9367,11 +9380,20 @@ class SeasonManager:
                     id=projectId, team_id=teamId, status='open').first()
                 if not proj:
                     raise ValueError("Open project not found")
+                priorFunded = proj.funded or 0
+                need = max(0, facilitiesManager.projectCostFloobits(proj.cost_shares, shareUnit) - priorFunded)
+                if need <= 0:
+                    raise ValueError("Project is already fully funded")
+                amount = min(amount, need)
+                soloFunded = (priorFunded == 0 and amount >= need)
                 desc = f'Facility project (#{projectId})'
             elif target == 'treasury':
                 desc = 'Team Treasury'
             else:
                 raise ValueError(f"Unknown contribution target: {target}")
+
+            if balance < amount:
+                raise ValueError(f"Insufficient balance ({balance}F available)")
 
             currencyRepo.spendFunds(userId, amount, 'facility_contribution',
                                     description=desc, season=season)
@@ -9388,6 +9410,7 @@ class SeasonManager:
                         f"(target={target})")
             return {
                 'teamId': teamId, 'amount': amount, 'target': target,
+                'soloFunded': soloFunded,
                 'newBalance': currency.balance if currency else 0,
                 'treasury': facilitiesManager.getTreasury(session, teamId),
             }

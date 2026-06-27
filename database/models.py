@@ -251,6 +251,9 @@ class PlayerAttributes(Base):
     blocking: Mapped[int] = mapped_column(Integer)
     discipline: Mapped[int] = mapped_column(Integer)
     attitude: Mapped[int] = mapped_column(Integer)
+    # Per-player attitude anchor (their disposition). Drift mean-reverts toward THIS,
+    # not a global neutral, so a bad season is a recoverable dip, not a slide to toxic.
+    attitude_baseline: Mapped[int] = mapped_column(Integer, default=80)
     focus: Mapped[int] = mapped_column(Integer)
     instinct: Mapped[int] = mapped_column(Integer)
     creativity: Mapped[int] = mapped_column(Integer)
@@ -491,7 +494,7 @@ class TeamSeasonStats(Base):
     fumbles_recovered: Mapped[int] = mapped_column(Integer, default=0)
     total_yards_allowed: Mapped[int] = mapped_column(Integer, default=0)
 
-    # Cumulative count of WPA "big plays" (home or away WPA ≥ 10) in
+    # Cumulative count of WPA "big plays" (home or away WPA ≥ 7) in
     # games this team participated in. Drives the Highlight Reel card
     # projection (pays per favorite-team big play).
     big_plays: Mapped[int] = mapped_column(Integer, default=0)

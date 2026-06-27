@@ -965,6 +965,30 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # attitude_baseline — the disposition anchor the drift mean-reverts toward.
+        # Existing players have DRIFTED attitudes (a decade of losing-team souring),
+        # so anchoring to their current value would lock in the manufactured toxicity.
+        # Backfill estimates disposition by pulling the current attitude halfway back
+        # toward neutral (80): a drifted toxic recovers, a genuine sour stays low-ish.
+        # In the same try as the ADD COLUMN so the backfill runs ONCE (re-boots throw
+        # on the existing column and skip it).
+        try:
+            conn.execute(text("ALTER TABLE player_attributes ADD COLUMN attitude_baseline INTEGER DEFAULT 80"))
+            conn.execute(text(
+                "UPDATE player_attributes SET attitude_baseline = "
+                "CAST(ROUND(attitude + (80 - attitude) * 0.5) AS INTEGER) WHERE attitude IS NOT NULL"))
+            # One-time rebalance: snap the CURRENT attitude to the recovered baseline so the
+            # decade of manufactured toxicity clears immediately on deploy, rather than healing
+            # gradually over ~1.5 seasons of reversion. (Removes both the down-drift on soured
+            # players AND the up-drift inflation on perennial winners — everyone resets to their
+            # estimated disposition.) Validated on a prod copy: toxic 18% -> 2%.
+            conn.execute(text(
+                "UPDATE player_attributes SET attitude = attitude_baseline WHERE attitude IS NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added player_attributes.attitude_baseline (+ disposition backfill + rebalance)")
+        except Exception:
+            conn.rollback()
+
         # Retire the 'random' powerup slug on stashed achievement rewards.
         # Tycoon now grants income_boost; Veteran grants extra_swap. Map
         # existing 'random' rows by their achievement source so the user
@@ -2533,6 +2557,9 @@ def _seedAchievements():
             {"key": "stalwart", "name": "Stalwart", "category": "secret", "scope": "once", "sort_order": 680, "target": 1,
              "description": "Play an entire season with a full roster and zero roster swaps.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+            {"key": "underwriter", "name": "Underwriter", "category": "secret", "scope": "once", "sort_order": 685, "target": 5,
+             "description": "Single-handedly fund five facility bars, upkeep or project, from empty to full.",
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             # Card-upgrade secrets
             {"key": "overclocked", "name": "Overclocked", "category": "secret", "scope": "once", "sort_order": 690, "target": 1,
              "description": "Hold three max-tier (IV) cards in a single season.",

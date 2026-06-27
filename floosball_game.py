@@ -35,6 +35,8 @@ from constants import (
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
+    MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
+    MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K, MENTAL_DIVE_K,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
     FUMBLE_BASE_THRESHOLD, FUMBLE_CHOKE_FLOOR, FUMBLE_CHOKE_SWING_K, INT_CHOKE_BOOST_K,
     HAIL_MARY_COMPLETION_SCALE,
@@ -455,8 +457,8 @@ midIncompleteList = [
                     '{} and {} can\'t connect, incomplete',
                     '{} throws for {}, out of reach',
                     '{} misses {} on the route, incomplete',
-                    '{} can\'t find {} in coverage, incomplete',
-                    '{} under pressure, overthrows {}, incomplete',
+                    '{} just misses {}, incomplete',
+                    '{} and {} can\'t hook up, incomplete',
                 ]
 
 # Medium dropped — args: (passer.name, receiver.name)
@@ -474,7 +476,7 @@ deepIncompleteList = [
                     '{} goes deep for {}, can\'t connect',
                     '{} launches it for {}, overthrown',
                     '{} and {} can\'t hook up downfield, incomplete',
-                    '{} heaves it for {}, well covered, incomplete',
+                    '{} sends it deep for {}, incomplete',
                     '{} throws deep for {}, out of bounds',
                     '{} airs it out for {}, no good',
                 ]
@@ -2270,12 +2272,42 @@ class Game:
                 self.play.passPlay(self._selectPassPlay(passLength))
                 return
 
+        # Never punt from inside the opponent's 40 — a punt there nets almost
+        # nothing and hands over the ball. Kick a makeable FG, otherwise go for
+        # it. The one exception is a team protecting a lead in the final two
+        # minutes, which may still pin with a coffin-corner punt rather than risk
+        # a turnover or hand the ball back already in FG range — that case falls
+        # through to the normal logic below.
+        leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
+                       and self.gameClockSeconds <= 120)
+        if self.yardsToEndzone <= 40 and not leadingLate:
+            goForIt = not inFieldGoalRange  # no makeable FG → going for it is the only non-punt option
+            if inFieldGoalRange and self.yardsToFirstDown <= 2:
+                # 4th-and-short can still favor going for the first down / TD.
+                if batched_randint(1, 10) <= goForItThreshold:
+                    goForIt = True
+            if goForIt:
+                if self.yardsToFirstDown <= 3:
+                    self.play.runPlay()
+                else:
+                    self.play.passPlay(self._selectPassPlay(
+                        'medium' if self.yardsToFirstDown <= 12 else 'long'))
+            else:
+                self.play.playType = PlayType.FieldGoal
+            return
+
         if scoreDiff > 0:
             if self.currentQuarter == 4 and self.gameClockSeconds < 300:
-                # Leading with little time: burn clock, don't risk a FG miss
-                # Skip kneel inside own 2 to avoid backing into a safety —
-                # fall through and let the run/punt logic pick something safer.
-                if self.gameClockSeconds <= 40 and self.yardsToSafety > 2:
+                # Leading with little time: burn clock, don't risk a FG miss.
+                # A kneel on 4th down is a turnover on downs, so it's only safe
+                # when it actually ENDS the game: the opponent must have no
+                # timeouts to stop the clock, and the remaining time must fit in
+                # one kneel's drain — otherwise the kneel just hands them the ball
+                # back with time on the clock. Skip inside own 2 (safety risk);
+                # otherwise fall through to a safe run / punt.
+                _oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
+                if (self.gameClockSeconds <= self.gameRules.kneelDrainSeconds
+                        and self.yardsToSafety > 2 and _oppTimeouts == 0):
                     self.play.kneel()
                     return
                 if inFieldGoalRange and self.yardsToEndzone <= 40:
@@ -3091,7 +3123,13 @@ class Game:
             # 4-5 min is the "no coach does that" case the window used to allow.
             isLateGame = self.currentQuarter in (2, 4) or self.currentQuarter >= 5
             multiScore = scoreDiff <= -9
-            toWindow = (180 if (self.currentQuarter >= 4 and multiScore)
+            # A tied / one-score offense in (or a play away from) FG range must
+            # bank clock for a game-tying/winning FG — same 3:00 urgency as a
+            # multi-score team, not the 2:00 cap that let it bleed time before.
+            _toKicker = self.offensiveTeam.rosterDict.get('k')
+            _toKickerMaxFg = (_toKicker.maxFgDistance - self.gameRules.fgSnapDistance) if _toKicker else 0
+            fgStopPriority = scoreDiff <= 0 and self.yardsToEndzone <= _toKickerMaxFg + 8
+            toWindow = (180 if (self.currentQuarter >= 4 and (multiScore or fgStopPriority))
                         else self.gameRules.timeoutClockThreshold)
             twoMinImminent = (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
                               and self.gameRules.timeoutClockThreshold < secs
@@ -3101,12 +3139,17 @@ class Game:
                     and not twoMinImminent and not self._clockStoppedByWarning
                     and secs <= toWindow):
                 if secs <= self.gameRules.timeoutClockThreshold:
-                    # Inside 2:00 — high urgency
+                    # Inside 2:00 — high urgency. In FG range with a one-score/tied
+                    # deficit, a competent coach stops the clock near-deterministically.
                     toChance = 0.5 + 0.5 * gameIQ
+                    if fgStopPriority:
+                        toChance = max(toChance, 0.9)
                 else:
-                    # 2-3 min, multi-score only — urgency builds toward 2:00
+                    # 2-3 min — urgency builds toward 2:00. A one-score/tied team
+                    # in FG range gets a stronger pull than a multi-score chase.
                     urgency = max(0.0, (180 - secs) / 60)
-                    toChance = (0.2 + 0.45 * gameIQ) * urgency
+                    base = (0.5 + 0.4 * gameIQ) if fgStopPriority else (0.2 + 0.45 * gameIQ)
+                    toChance = base * urgency
                 if _random.random() < toChance:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'timeout',
@@ -3392,7 +3435,8 @@ class Game:
             play.scoreChange = True
             play.homeTeamScore = self.homeScore
             play.awayTeamScore = self.awayScore
-            if self.checkOvertimeEnd():
+            if self.checkOvertimeEnd(defensiveScore=True):
+                self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                 self.broadcastGameState(includeLastPlay=True)
                 return
             self.broadcastGameState(includeLastPlay=True)
@@ -3541,7 +3585,11 @@ class Game:
             runGap = self.play.insights.get('run', {}).get('selectedGap', 'B-gap')
             isOutside = runGap in ('C-gap', 'bounce')
             if self.play.isFumble:
-                yds = self.play.yardage
+                # On a lost fumble, _resolveReturn repurposes play.yardage to the NET
+                # (run yards minus the defense's return); add the return back so the
+                # narration shows the actual run yardage, not the net. (No return =
+                # returnYardage 0, so this is a no-op for recovered fumbles.)
+                yds = self.play.yardage + (getattr(self.play, 'returnYardage', 0) or 0)
                 gainText = 'no gain' if yds == 0 else 'a loss of {} yards'.format(abs(yds)) if yds < 0 else '{} yards'.format(yds)
                 if self.play.isFumbleLost:
                     forcedBy = self.play.forcedFumbleBy
@@ -3589,6 +3637,12 @@ class Game:
                 else:
                     text = choice(sackList).format(self.play.passer.name, sackerName, self.play.yardage)
             elif self.play.isPassCompletion:
+                # On a lost fumble after the catch, _resolveReturn repurposes
+                # play.yardage to the NET (catch yards minus the defense's return).
+                # Add the return back so the narration shows the actual receiving
+                # yards, not the net. (No return = returnYardage 0, so this is a
+                # no-op on a normal completion.)
+                rcvYds = self.play.yardage + (getattr(self.play, 'returnYardage', 0) or 0)
                 if getattr(self.play, 'isCheckdown', False):
                     reason = getattr(self.play, 'checkdownReason', '')
                     if reason == 'screen':
@@ -3598,31 +3652,31 @@ class Game:
                     else:
                         verb = 'checks down to'
                     text = '{} {} {} for {} yards'.format(
-                        self.play.passer.name, verb, self.play.receiver.name, self.play.yardage)
+                        self.play.passer.name, verb, self.play.receiver.name, rcvYds)
                 elif self.play.targetSideline:
                     if self.play.passType is PassType.short:
-                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineShortPassList), self.play.receiver.name, self.play.yardage)
+                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineShortPassList), self.play.receiver.name, rcvYds)
                     elif self.play.passType is PassType.long:
-                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineLongPassList), self.play.receiver.name, self.play.yardage)
+                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineLongPassList), self.play.receiver.name, rcvYds)
                     else:
-                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineMidPassList), self.play.receiver.name, self.play.yardage)
+                        text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(sidelineMidPassList), self.play.receiver.name, rcvYds)
                     # Don't append OOB on a TD — once the receiver crosses the
                     # goal line the play is dead by score, not by stepping out.
                     # The OOB flag stays True for clock-management purposes,
                     # but it shouldn't show up in the narration.
-                    if not self.play.isInBounds and not self.play.isTd:
+                    if not self.play.isInBounds and not self.play.isTd and not getattr(self.play, '_stretchNote', None):
                         text += ', out of bounds'
                 elif self.play.passType is PassType.short:
-                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(shortPassList), self.play.receiver.name, self.play.yardage)
+                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(shortPassList), self.play.receiver.name, rcvYds)
                 elif self.play.passType is PassType.long:
-                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(longPassList), self.play.receiver.name, self.play.yardage)
+                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(longPassList), self.play.receiver.name, rcvYds)
                 elif self.play.passType is PassType.hailMary:
                     # End-zone phrasing only when it actually scores; a hail mary
                     # caught short and tackled mustn't claim it reached the end zone.
                     hmPool = extraLongPassList if self.play.isTd else extraLongNonScoringPassList
-                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(hmPool), self.play.receiver.name, self.play.yardage)
+                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(hmPool), self.play.receiver.name, rcvYds)
                 else:
-                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(midPassList), self.play.receiver.name, self.play.yardage)
+                    text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(midPassList), self.play.receiver.name, rcvYds)
                 # Fumble after catch
                 if self.play.isFumble:
                     forcedBy = self.play.forcedFumbleBy
@@ -3764,6 +3818,33 @@ class Game:
             else:
                 ydText = 'returned {} yard{}'.format(returnYds, '' if returnYds == 1 else 's')
                 text += (' Defense ' + ydText + '.') if endsBang else (', ' + ydText)
+
+        # Surface a diving catch (a confident receiver laid out for a contested ball).
+        if getattr(self.play, '_diveCatch', False) and self.play.isPassCompletion and not self.play.isFumble:
+            text += ', a diving grab!'
+
+        # Surface the stretch-for-the-marker decision (see _stretchForFirst). Skip on
+        # a fumble (the reach popped it loose — the fumble text already tells that story).
+        _stNote = getattr(self.play, '_stretchNote', None)
+        if _stNote and not self.play.isFumble:
+            _stText = {
+                'stretch_first': ', and reaches the ball across the marker for the first down!',
+                'stretch_goal':  ', and stretches the ball across the goal line!',
+                'stretch_short': ', and lunges for the marker but comes up just short',
+            }.get(_stNote)
+            if _stText:
+                text += _stText
+
+        # Factual out-of-bounds for a ball-carrier run. The clock-aware sideline
+        # DECISION (_sidelineDecision) is mechanical; the text just states whether
+        # the run ended out of bounds — no intent narration ("to stop the clock").
+        # A player can be tackled AND pushed out, so this can sit after a "tackled
+        # by" clause. Passes get their out-of-bounds clause in the pass branch.
+        if (getattr(self.play, 'runner', None) is not None
+                and not self.play.isInBounds and not self.play.isTd
+                and not getattr(self.play, '_stretchNote', None)
+                and ', out of bounds' not in text):
+            text += ', out of bounds'
 
         self.play.playText = text
 
@@ -5061,7 +5142,8 @@ class Game:
                         self.play.awayTeamScore = self.awayScore
 
                         # Check if OT should end after score
-                        if self.checkOvertimeEnd():
+                        if self.checkOvertimeEnd(defensiveScore=True):
+                            self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                             self.broadcastGameState(includeLastPlay=True)
                             break
 
@@ -5174,7 +5256,8 @@ class Game:
                                 broadcaster.broadcast_sync(self.id, event)
 
                             # Check if OT should end after score
-                            if self.checkOvertimeEnd():
+                            if self.checkOvertimeEnd(defensiveScore=True):
+                                self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                                 break
 
                             if self._shouldGoForTwo(self.defensiveTeam):
@@ -5223,7 +5306,8 @@ class Game:
                                 broadcaster.broadcast_sync(self.id, event)
 
                             # Check if OT should end after score
-                            if self.checkOvertimeEnd():
+                            if self.checkOvertimeEnd(defensiveScore=True):
+                                self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                                 break
 
                             self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
@@ -5241,8 +5325,14 @@ class Game:
                             self.play.playResult = downPlayResult(self.down)
                             continue
                         else:
-                            self.play.playResult = PlayResult.TurnoverOnDowns
-                            self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
+                            # A victory-formation kneel that ran the clock to 0:00
+                            # ends the game — it's not a live turnover on downs, so
+                            # don't stamp the turnover label / momentum swing on it.
+                            kneelEndedGame = (self.play.playType is PlayType.Kneel
+                                              and self.gameClockSeconds <= 0)
+                            if not kneelEndedGame:
+                                self.play.playResult = PlayResult.TurnoverOnDowns
+                                self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
                             self.clockRunning = False  # Clock stops after turnover on downs
                             self.formatPlayText()
                             # Kneel and spike branches above (line ~4451) already
@@ -5740,7 +5830,7 @@ class Game:
         dragMagnitude = effectMagnitude * 0.3
         for player in suffering.rosterDict.values():
             if player is not None:
-                player.updateInGameConfidence(-dragMagnitude * 0.6)
+                player.updateInGameConfidence(-dragMagnitude * 0.6, source='scoreboard')
                 player.updateInGameDetermination(-dragMagnitude * 0.4)
 
     # ─── End Momentum System ────────────────────────────────────────────────
@@ -6311,11 +6401,16 @@ class Game:
                     rushCarries += p.gameStatsDict['rushing']['carries']
                     fumbleLost  += p.gameStatsDict['rushing']['fumblesLost']
 
-            # QB lost fumbles (sack-strips / scramble fumbles) count as turnovers
-            # too — the loop above only covers the skill positions.
-            qbFumblesLost = qb.gameStatsDict['rushing']['fumblesLost'] if qb else 0
-            turnovers = passInts + fumbleLost + qbFumblesLost
             defense   = team.gameDefenseStats
+            # Turnovers this team COMMITTED = the opponent defense's takeaways. The
+            # defense credits fumRec on every fumble recovery (rush, receiving catch-
+            # strip, sack-strip, special teams) and ints on every interception, so this
+            # counts every turnover source. Summing only the offense's rushing
+            # fumblesLost (the old way) missed receiving and other fumbles, so the box
+            # score under-reported turnovers.
+            _oppTeam = self.awayTeam if team is self.homeTeam else self.homeTeam
+            _oppDef = getattr(_oppTeam, 'gameDefenseStats', {}) or {}
+            turnovers = (_oppDef.get('ints', 0) or 0) + (_oppDef.get('fumRec', 0) or 0)
 
             def playerDict(p, statsKey):
                 if not p:
@@ -7899,9 +7994,10 @@ class Game:
         
         return expected_points
     
-    def checkOvertimeEnd(self) -> bool:
+    def checkOvertimeEnd(self, defensiveScore: bool = False) -> bool:
         """Check if scoring in OT should end the game.
-        1st OT: both teams must have had a possession before a score can end the game.
+        1st OT: both teams must have had a possession before an OFFENSIVE score can
+        end the game; a DEFENSIVE score (return TD or safety) is an immediate walk-off.
         2nd+ OT: sudden death — first score wins."""
         if self.currentQuarter < 5:
             return False
@@ -7912,7 +8008,15 @@ class Game:
         if self.otPeriod >= 2:
             return True
 
-        # 1st OT: game ends only after both teams have had their guaranteed possession
+        # A defensive/return TD or safety in OT is a walk-off the moment it happens
+        # (the scoring team did so on the opponent's possession). This ALSO sidesteps
+        # the ordering trap where the offense's possession-complete flag is only set
+        # in turnover(), which runs AFTER this check on a scoop-and-score.
+        if defensiveScore:
+            return True
+
+        # 1st OT: an offensive score ends the game only after both teams have had
+        # their guaranteed possession.
         if self.otSecondPossComplete:
             return True
 
@@ -8613,6 +8717,26 @@ class Play():
         self.playType = PlayType.Spike
         self.yardage = 0
         self.isPassCompletion = False
+        # The clock ran while the offense rushed to the line to spike — burn that short
+        # gather first. It's quick (the QB just slams it down, no play to run) and scales
+        # with the offense's tempo skill: coach clock-management IQ + the on-field
+        # offense's average discipline. A sharp, disciplined team snaps almost at once
+        # (~3s); a low-IQ, undisciplined one takes a beat to get set (~7s). Both on a
+        # 60-100 -> 0-1 scale (0.5 neutral), averaged. Without any of this the spike
+        # consumed zero clock, so the displayed time never moved off the previous play.
+        if self.game.clockRunning:
+            coach = getattr(self.game.offensiveTeam, 'coach', None)
+            clockIQ = self.game._coachClockIQ(coach)
+            _slots = ('qb', 'rb', 'wr1', 'wr2', 'te')
+            _discs = [getattr(getattr(self.game.offensiveTeam.rosterDict.get(s), 'gameAttributes', None), 'discipline', 80)
+                      for s in _slots if self.game.offensiveTeam.rosterDict.get(s)]
+            _avgDisc = (sum(_discs) / len(_discs)) if _discs else 80
+            discNorm = max(0.0, min(1.0, (_avgDisc - 60) / 40))
+            skill = (clockIQ + discNorm) / 2          # 0 worst .. 0.5 neutral .. 1 best
+            gather = round(7 - skill * 4) + batched_randint(-1, 1)
+            gatherTime = min(self.game.gameClockSeconds, max(3, gather))
+            self.game.consumeGameTime(gatherTime)
+            self.game.checkTwoMinuteWarning()
         self.game.clockRunning = False
         self.playResult = downPlayResult(self.game.down + 1)
 
@@ -8913,6 +9037,13 @@ class Play():
                     self.yardage += min(remaining, max(12, int(np.random.exponential(22))))
 
         self.yardage = min(self.yardage, self.yardsToEndzone)
+
+        # Stretch for the first down / goal line — a confident back reaches it out
+        # to convert; the reach can expose the ball (fumble bump, resolved below).
+        _stretchBonus, self._stretchNote, _stretchFumbleBump = self._stretchForFirst(self.runner)
+        if _stretchBonus:
+            self.yardage = min(self.yardage + _stretchBonus, self.yardsToEndzone)
+
         baseYards = self.yardage
 
         # Fumble check
@@ -8933,10 +9064,13 @@ class Play():
         # Runner choking under pressure lowers fumble threshold (high-pressure only).
         # DAMPENED: floor 95 (was 92) + swing 1.0 (was 2.0) so a clutch game nudges
         # fumbles up modestly instead of ~doubling them — the base rate is unchanged.
-        fumbleThreshold = FUMBLE_BASE_THRESHOLD
+        # _stretchFumbleBump: reaching for the marker exposes the ball.
+        fumbleThreshold = FUMBLE_BASE_THRESHOLD - _stretchFumbleBump
         if self.game.gamePressure >= CLUTCH_PRESSURE_THRESHOLD and runnerPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
             fumbleThreshold = max(FUMBLE_CHOKE_FLOOR,
                                   fumbleThreshold - int(abs(runnerPressureMod) * FUMBLE_CHOKE_SWING_K))
+        # Gunslinger tax — a confident, undisciplined back carries it too loose.
+        fumbleThreshold = max(88, fumbleThreshold - int(round(self._gunslingerTax(self.runner))))
 
         if (fumbleRoll + fumbleResistModifier) > fumbleThreshold:
             self.isFumble = True
@@ -8944,7 +9078,7 @@ class Play():
             if (self.defense.defenseRunCoverageRating + batched_randint(-5, 5)) >= \
                (self.runner.gameAttributes.overallRating + runnerRecoveryMod + batched_randint(-5, 5)):
                 self.runner.addFumble(self.game.isRegularSeasonGame)
-                self.runner.updateInGameConfidence(-.05)
+                self.runner.updateInGameConfidence(-.05, source='mistake')
                 self.defense.updateInGameConfidence(.02)
                 self.defense.gameDefenseStats['fumRec'] += 1
                 self.isFumbleLost = True
@@ -9012,15 +9146,17 @@ class Play():
         if self.yardage > self.yardsToEndzone:
             self.yardage = self.yardsToEndzone
 
-        # Determine if run went out of bounds (for clock management)
+        # Determine if run went out of bounds — clock-aware (see _sidelineDecision)
         if selectedGap['type'] == 'C-gap' or selectedGap['type'] == 'bounce':
             # Outside runs more likely to go out of bounds
             oobChance = 25 if selectedGap['type'] == 'bounce' else 15
         else:
             # Inside runs rarely go out
             oobChance = 5
-        
-        self.isInBounds = batched_randint(1, 100) > oobChance
+
+        self.isInBounds, self._sidelineNote, _sbonus = self._sidelineDecision(self.runner, oobChance)
+        if _sbonus:
+            self.yardage = min(self.yardage + _sbonus, self.yardsToEndzone - 1)
         
         # Update stats
         self.runner.addRushYards(self.yardage, self.game.isRegularSeasonGame)
@@ -9231,17 +9367,117 @@ class Play():
 
         return max(0.65, min(1.0, degradationFactor))
 
+    # ── Mental model — Confidence × Discipline (docs/MENTAL_MODEL.md) ──────────
+    def _confidenceState(self, player):
+        """Normalized confidence state in [-1, +1] (0 = neutral) from the in-game
+        ±5 confidence modifier. This is the single master mental state."""
+        try:
+            c = player.gameAttributes.confidenceModifier
+        except Exception:
+            return 0.0
+        return max(-1.0, min(1.0, c / 5.0))
+
+    def _undiscipline(self, player):
+        """How undisciplined a player is: 0 (controlled) .. 1 (gunslinger). The
+        gate that turns confidence into either production or chaos."""
+        try:
+            d = player.gameAttributes.discipline
+        except Exception:
+            return 0.0
+        return max(0.0, min(1.0, (80 - d) / 20.0))
+
+    def _confExecution(self, player):
+        """Confidence × Discipline execution term (rating points). High confidence
+        overperforms; low confidence underperforms, with an extra 'frozen' penalty
+        when the player is also undisciplined (misses the play in front of them)."""
+        C = self._confidenceState(player)
+        val = C * MENTAL_EXEC_GAIN
+        if C < 0:
+            val -= (-C) * self._undiscipline(player) * MENTAL_FROZEN_K
+        return val
+
+    def _gunslingerTax(self, player):
+        """Extra turnover odds (pp) for a confident, undisciplined player forcing
+        it — the high-C / low-D corner of the 2x2. Zero unless C > 0."""
+        if player is None:
+            return 0.0
+        C = self._confidenceState(player)
+        if C <= 0:
+            return 0.0
+        return C * self._undiscipline(player) * MENTAL_GUNSLINGER_K
+
+    def _sidelineDecision(self, carrier, baseOobChance):
+        """Clock-aware sideline decision for a ball-carrier near the boundary.
+        Returns (isInBounds, note, bonusYards). The game SITUATION sets the intent,
+        football IQ (instinct) gates whether the player acts on it, and discipline
+        decides whether they get out cleanly or greedily squeeze for more yards and
+        risk a tackle in bounds (which leaves the clock running). Outside a
+        late-game clock situation, it's the original play-type chance."""
+        g = self.game
+        late = (g.currentQuarter >= 4) and g.gameClockSeconds <= 120
+        if not late or carrier is None:
+            return (batched_randint(1, 100) > baseOobChance, None, 0)
+        offHome = self.offense is g.homeTeam
+        scoreDiff = (g.homeScore - g.awayScore) if offHome else (g.awayScore - g.homeScore)
+        nearSideline = batched_randint(1, 100) <= baseOobChance  # could the play reach the sideline?
+        iq = max(0.0, min(1.0, (getattr(carrier.gameAttributes, 'instinct', 80) - 60) / 40.0))
+        aware = batched_randint(1, 100) <= 40 + iq * 60          # IQ gates situational awareness
+
+        if scoreDiff < 0:  # trailing late — WANT the clock stopped: get out
+            if not nearSideline or not aware:
+                return (batched_randint(1, 100) > baseOobChance, None, 0)
+            und = self._undiscipline(carrier)
+            C = self._confidenceState(carrier)
+            if und > 0.5 and C > 0 and batched_randint(1, 100) <= int(und * (50 + 50 * C)):
+                # greedy: gamble for more yards instead of getting out immediately
+                if batched_randint(1, 100) <= 55:
+                    return (False, 'extra_oob', batched_randint(2, 6))     # got the yards AND out
+                return (True, 'tackled_inbounds', batched_randint(0, 3))   # dragged down in bounds, clock runs
+            return (False, 'smart_oob', 0)                                  # disciplined: out immediately
+
+        if scoreDiff > 0:  # leading late — WANT the clock running: stay in
+            if not nearSideline:
+                return (True, None, 0)
+            if aware:
+                return (True, 'stays_inbounds', 0)
+            return (False, 'blunder_oob', 0)                                # oblivious: stops own clock
+
+        return (batched_randint(1, 100) > baseOobChance, None, 0)
+
+    def _stretchForFirst(self, carrier):
+        """A confident ball-carrier ending JUST short of the first-down marker (or
+        goal line) reaches the ball across to convert. Returns
+        (bonusYards, note, fumbleBump). Confidence drives the reach; an undisciplined
+        reach exposes the ball (a fumble bump that the existing fumble check resolves).
+        Tentative carriers (C <= 0) just take the spot."""
+        if getattr(self, 'isTd', False) or carrier is None:
+            return (0, None, 0)
+        target = min(self.game.yardsToFirstDown, self.yardsToEndzone)  # marker or goal, whichever is live
+        short = target - self.yardage
+        if short < 1 or short > 2:           # only when within a reach
+            return (0, None, 0)
+        C = self._confidenceState(carrier)
+        if C <= 0:
+            return (0, None, 0)              # not confident enough to lunge for it
+        # Confidence drives the WILLINGNESS to reach; POWER drives the physical
+        # extension through contact (a strong back/big TE gets it there, a slight
+        # receiver doesn't). Discipline (below) drives the fumble risk on the reach.
+        powerNorm = max(-1.0, min(1.0, (getattr(carrier.gameAttributes, 'power', 80) - 80) / 20.0))
+        successChance = int(45 + 25 * C + 15 * powerNorm)   # ~5..85
+        if batched_randint(1, 100) > successChance:
+            return (0, 'stretch_short', 0)   # overreaches, comes up just short
+        note = 'stretch_goal' if target == self.yardsToEndzone else 'stretch_first'
+        fumbleBump = int(round(self._undiscipline(carrier) * 4 * C))  # 0 (disciplined) .. ~4 (gunslinger)
+        return (short, note, fumbleBump)
+
     def _mentalDrift(self, player, baseWeight=2, driftWeight=25):
-        """Calculate mental state effect from base personality + in-game drift.
-        Base personality (±2 each) provides moderate persistent influence.
-        In-game drift (small increments from TDs, drops, momentum) is amplified
-        to create visible frustration/flow state effects during the game.
-        """
-        baseConf = player.attributes.confidenceModifier
-        baseDet = player.attributes.determinationModifier
-        confDrift = player.gameAttributes.confidenceModifier - baseConf
-        detDrift = player.gameAttributes.determinationModifier - baseDet
-        return (baseConf + baseDet) * baseWeight + (confDrift + detDrift) * driftWeight
+        """Confidence-driven execution term, pre-scaled by 15 so the existing
+        callers' `/15` yields the rating-point execution value (Output B of the
+        Confidence × Discipline model). Determination/resilience no longer feed
+        this term — they gate confidence's DRIFT (see the per-play confidence
+        update). `baseWeight`/`driftWeight` are retained for signature compat but
+        unused."""
+        return self._confExecution(player) * 15
 
     def _defenderMentalMod(self, defender):
         """Combined mental swing for a defender on a single resolution.
@@ -9311,15 +9547,18 @@ class Play():
         openness = np.random.normal(meanOpenness, stdDev)
         return max(0, min(100, openness)), round(effectiveRouteRunning)
     
-    def selectPassTarget(self, targetList: list, qbVision: int, qbDiscipline: int, mustThrow: bool = False):
+    def selectPassTarget(self, targetList: list, qbVision: int, qbDiscipline: int, mustThrow: bool = False, aggression: float = 0.0):
         """
-        Stage 2: QB finds and selects a receiver based on vision and discipline.
-        High vision = accurately perceives receiver openness
-        Low vision = distorted perception (sees receivers as more/less open than they are)
-        High discipline = won't throw to covered receivers
+        Stage 2: QB finds and selects a receiver based on vision and aggression.
+        High vision = accurately perceives receiver openness.
+        aggression (confidence, [-1,1]) = willingness to force a throw into a tight
+        window vs check down / throw it away. A confident QB pulls the trigger more;
+        a rattled QB bails. (Discipline no longer gates the *willingness* — that's
+        confidence now; discipline is the gunslinger error tax on the outcome.)
         mustThrow = desperation: QB must attempt a throw (4th down trailing, time expiring, etc.)
         Returns: (selectedTarget, willThrowAway)
         """
+        aggrBonus = int(round(aggression * MENTAL_AGGR_ROLL_K))
         # Calculate how accurately QB perceives openness
         # High vision (90+): ±5% error, Medium (70-89): ±15% error, Low (<70): ±25% error
         if qbVision >= 90:
@@ -9354,23 +9593,20 @@ class Play():
         for target in sortedTargets:
             perceivedOpenness = target['openness']
 
-            # Discipline check using perceived openness
+            # Comfortable-throw thresholds by read quality; the "force it anyway"
+            # roll is shifted by aggression (confidence) — a confident QB pulls the
+            # trigger into tighter windows, a rattled one waits for someone open.
             if qbDiscipline >= 90:
-                # Elite: prefers 50+ openness, otherwise frequently throws
-                # to next-best read instead of stalling.
-                if perceivedOpenness >= 50 or batched_randint(1, 100) <= 50:
+                if perceivedOpenness >= 50 or batched_randint(1, 100) <= 50 + aggrBonus:
                     return (target, False)
             elif qbDiscipline >= 75:
-                # Good: throws to 30+ openness or rolls to throw anyway.
-                if perceivedOpenness >= 30 or batched_randint(1, 100) <= 70:
+                if perceivedOpenness >= 30 or batched_randint(1, 100) <= 70 + aggrBonus:
                     return (target, False)
             elif qbDiscipline >= 60:
-                # Average: throws to 15+, mostly forces it otherwise.
-                if perceivedOpenness >= 15 or batched_randint(1, 100) <= 85:
+                if perceivedOpenness >= 15 or batched_randint(1, 100) <= 85 + aggrBonus:
                     return (target, False)
             else:
-                # Low discipline: throws to anyone, risky
-                if batched_randint(1, 100) <= 95:
+                if batched_randint(1, 100) <= 95 + aggrBonus:
                     return (target, False)
 
         # No suitable receiver found - force throw to the most-open target
@@ -9379,11 +9615,10 @@ class Play():
         if mustThrow:
             return (sortedTargets[0], False)
         topOpenness = sortedTargets[0]['openness'] if sortedTargets else 0
-        # Disciplined QBs (80+) bail when no target is reasonably open.
-        # openness < 50 is the trigger — even a moderately covered top read
-        # is enough to throw away rather than force it. Below-80 discipline
-        # QBs always force the throw (they don't have the patience to bail).
-        if qbDiscipline >= 80 and topOpenness < 50:
+        # Disciplined QBs (80+) bail when no target is reasonably open — but a
+        # confident QB bails less readily (forces it), a rattled one bails sooner.
+        bailThreshold = 50 - aggression * MENTAL_AGGR_BAIL_K
+        if qbDiscipline >= 80 and topOpenness < bailThreshold:
             return (None, True)
         # Otherwise force the throw to the most-open option.
         return (sortedTargets[0], False)
@@ -9815,7 +10050,7 @@ class Play():
                 #fumble
                 self.isFumble = True
                 if (basePassRush + batched_randint(-5,5)) >= (self.passer.gameAttributes.power + self.passer.gameAttributes.luckModifier + batched_randint(-5,5)):
-                    self.passer.updateInGameConfidence(-.02)
+                    self.passer.updateInGameConfidence(-.02, source='mistake')
                     self.defense.updateInGameConfidence(.02)
                     self.defense.gameDefenseStats['fumRec'] += 1
                     self.isFumbleLost = True
@@ -9918,7 +10153,8 @@ class Play():
                 targetList,
                 self.passer.attributes.vision,
                 self.passer.gameAttributes.discipline,
-                mustThrow=mustThrow
+                mustThrow=mustThrow,
+                aggression=self._confidenceState(self.passer),
             )
             
             if willThrowAway or selectedTarget is None:
@@ -10065,6 +10301,24 @@ class Play():
                         chokeDropBoost = abs(receiverPressureMod) * 2.0
                         catchProbs['dropProb'] = min(30, catchProbs['dropProb'] + chokeDropBoost)
 
+                # Gunslinger tax — a confident, undisciplined QB forces throws into
+                # trouble (more INTs); same for an over-amped receiver (more drops).
+                # Confidence x Discipline model, docs/MENTAL_MODEL.md.
+                catchProbs['intProb'] = min(25, catchProbs['intProb'] + self._gunslingerTax(self.passer))
+                catchProbs['dropProb'] = min(30, catchProbs['dropProb'] + self._gunslingerTax(self.receiver))
+
+                # Dive for a tough ball — on a CONTESTED (catchable-but-hard) throw, a
+                # confident receiver lays out, extending their catch range. The
+                # gunslinger drop tax above already punishes a reckless (undisciplined)
+                # lay-out with more drops. Flag it so a resulting grab narrates the dive.
+                self._diveCatch = False
+                _diveC = self._confidenceState(self.receiver)
+                if _diveC > 0 and 15 <= catchProbs['catchProb'] <= 60:
+                    catchProbs['catchProb'] = min(85, catchProbs['catchProb'] + _diveC * MENTAL_DIVE_K)
+                    self._diveAttempt = True
+                else:
+                    self._diveAttempt = False
+
                 # Desperation-deep INT dampener — a trailing team forced to chuck it
                 # downfield in garbage time was minting 9-INT games (the Floos Bowl, a
                 # 44-0 sim game). A genuine catch-up heave is a low-percentage prayer, but
@@ -10102,7 +10356,7 @@ class Play():
                     self.yardage = min(randint(_intLo, _intHi), self.yardsToEndzone)
                     self.passer.addInterception(self.game.isRegularSeasonGame)
                     self.passer.addMissedPass(self.game.isRegularSeasonGame)
-                    self.passer.updateInGameConfidence(-.02)
+                    self.passer.updateInGameConfidence(-.02, source='mistake')
                     self.defense.updateInGameConfidence(.02)
                     self.defense.gameDefenseStats['ints'] += 1
                     self.isInterception = True
@@ -10123,6 +10377,9 @@ class Play():
                 # Check for catch
                 elif outcomeRoll <= (catchProbs['intProb'] + catchProbs['catchProb']):
                     # COMPLETION!
+                    # A grab off a lay-out on a contested ball gets the diving-catch tag.
+                    if getattr(self, '_diveAttempt', False):
+                        self._diveCatch = True
                     self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
                     
                     # Calculate air yards based on throw quality
@@ -10258,8 +10515,17 @@ class Play():
                         else:
                             oobChance = 15
 
-                    self.isInBounds = batched_randint(1, 100) > oobChance
-                    
+                    self.isInBounds, self._sidelineNote, _sbonus = self._sidelineDecision(self.receiver, oobChance)
+                    if _sbonus:
+                        self.yardage = min(self.yardage + _sbonus, self.yardsToEndzone - 1)
+
+                    # Stretch for the marker on the catch (mirrors the run side): a
+                    # confident receiver with the power to extend reaches it across;
+                    # an undisciplined reach feeds the strip-fumble check below.
+                    _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.receiver)
+                    if _stBonus:
+                        self.yardage = min(self.yardage + _stBonus, self.yardsToEndzone - 1)
+
                     # Update stats
                     self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)
                     self.passer.addCompletion(self.game.isRegularSeasonGame)
@@ -10305,10 +10571,10 @@ class Play():
                         primaryTackler = safetyPlayer  # Safety made the tackle on deep plays
                     # Surface tackler so play text can credit the defender
                     self.tackledBy = primaryTackler
-                    if primaryTackler and self.isInBounds and batched_randint(1, 100) > 97:
-                        # ~3% chance of fumble on catch — only in bounds; a
-                        # receiver who steps out of bounds can't be stripped
-                        # (the play is dead at the boundary).
+                    if primaryTackler and self.isInBounds and batched_randint(1, 100) > 97 - _stFumbleBump:
+                        # ~3% chance of fumble on catch (wider after a reach-for-the-marker
+                        # stretch — _stFumbleBump); only in bounds — a receiver who steps
+                        # out of bounds can't be stripped (the play is dead at the boundary).
                         rcvFumbleResist = round(self.receiver.gameAttributes.power * 0.7 + self.receiver.gameAttributes.discipline * 0.3)
                         defStripAbility = 70
                         if hasattr(primaryTackler, 'attributes'):
@@ -10329,7 +10595,7 @@ class Play():
                             rcvRecoveryMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)
                             if (self.defense.defensePassCoverageRating + batched_randint(-5, 5)) >= \
                                (self.receiver.gameAttributes.overallRating + rcvRecoveryMod + batched_randint(-5, 5)):
-                                self.receiver.updateInGameConfidence(-.02)
+                                self.receiver.updateInGameConfidence(-.02, source='mistake')
                                 self.defense.updateInGameConfidence(.02)
                                 self.defense.gameDefenseStats['fumRec'] += 1
                                 self.isFumbleLost = True
@@ -10349,7 +10615,7 @@ class Play():
                     # DROPPED PASS
                     self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
                     self.receiver.addPassDrop(self.game.isRegularSeasonGame)
-                    self.receiver.updateInGameConfidence(-.005)
+                    self.receiver.updateInGameConfidence(-.005, source='mistake')
                     self.defense.updateInGameConfidence(.005)
                     self.passIsDropped = True
                     self.yardage = 0

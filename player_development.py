@@ -21,7 +21,8 @@ from constants import (
     DEV_RISE_RANGE, DEV_PEAK_RANGE, DEV_DECLINE_RANGE,
     DEV_DECLINE_STEEPEN_PER_SEASON, DEV_DECLINE_PAST_LONGEVITY_KICK,
     DEV_DECLINE_MAX_STEEPEN, DEV_PROSPECT_SPREAD, DEV_PROSPECT_SEASONS,
-    DEV_ATTRIBUTE_FLOOR,
+    DEV_ATTRIBUTE_FLOOR, DEV_DECLINE_FACTOR_LOW, DEV_DECLINE_FACTOR_HIGH,
+    DEV_DECLINE_FACTOR_MODE,
 )
 from logger_config import get_logger
 
@@ -41,6 +42,7 @@ class DevContext:
     intensity: int        # decline steepening (0 while rising/at peak)
     isProspect: bool      # boom/bust volatility
     devBias: int          # coach + market-tier push (applied to the climb only)
+    declineFactor: float = 1.0  # per-player decline severity (gentle..cliff)
 
 
 class PlayerDevelopment:
@@ -58,6 +60,20 @@ class PlayerDevelopment:
         rng = random.Random((seed * 2654435761) & 0xFFFFFFFF)
         frac = rng.uniform(DEV_PEAK_FRACTION_LOW, DEV_PEAK_FRACTION_HIGH)
         return max(DEV_PEAK_SEASON_MIN, round(longevity * frac))
+
+    @staticmethod
+    def declineProfile(player: Any) -> float:
+        """Per-player decline severity, stable per player (seeded off id, and mixed
+        independently of peak timing). Low = ages gracefully / good for a long career;
+        ~1.0 = a normal gradual slide; high = falls off a cliff. So not every player
+        follows the same arc. No DB storage needed."""
+        pid = getattr(player, 'id', None)
+        seed = int(pid) if pid else (abs(hash(getattr(player, 'name', ''))) % (2 ** 31))
+        rng = random.Random((seed * 1099087573 + 12345) & 0xFFFFFFFF)
+        # Triangular around MODE so most players are gradual decliners, with the
+        # ageless (low) and cliff (high) ends as rarer tails.
+        return rng.triangular(DEV_DECLINE_FACTOR_LOW, DEV_DECLINE_FACTOR_HIGH,
+                              DEV_DECLINE_FACTOR_MODE)
 
     @staticmethod
     def careerContext(player: Any, devBias: int) -> DevContext:
@@ -85,7 +101,8 @@ class PlayerDevelopment:
             intensity = min(DEV_DECLINE_MAX_STEEPEN, steepen)
 
         return DevContext(phase=phase, intensity=intensity,
-                          isProspect=isProspect, devBias=devBias)
+                          isProspect=isProspect, devBias=devBias,
+                          declineFactor=PlayerDevelopment.declineProfile(player))
 
     @staticmethod
     def developAttribute(current: int, potential: int, ctx: DevContext) -> int:
@@ -113,6 +130,11 @@ class PlayerDevelopment:
             hi += DEV_PROSPECT_SPREAD + max(0, ctx.devBias)
 
         change = randint(lo, hi)
+        # Per-player decline severity: scale the drop so some players age gracefully
+        # and others fall off a cliff, instead of every vet following the same arc.
+        # Downside only — the rare early-decline uptick isn't amplified.
+        if ctx.phase == CareerPhase.DECLINING and change < 0:
+            change = round(change * ctx.declineFactor)
         # Positive growth is capped by the player's potential ceiling (so the
         # climb tapers as they approach it — realized peak height). Decline is
         # uncapped on the downside (to the floor).

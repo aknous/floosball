@@ -1493,7 +1493,7 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
                 "tdThreshold": 3}
     if effectName == "highlight_reel":
         return {"rewardType": "floobits", "rewardValue": int(round((6 + rn * 0.3) * editionScale)),
-                "wpaThreshold": 10.0}
+                "wpaThreshold": 7.0}
     if effectName == "workhorse":
         return {"rewardType": "fp", "perAttemptFP": round((0.6 + rn * 0.03) * editionScale, 2)}
     if effectName == "goal_line_vulture":

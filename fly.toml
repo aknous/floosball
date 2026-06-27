@@ -7,6 +7,9 @@ primary_region = "ord"
   PORT = "8080"
   DATABASE_DIR = "/data"
   TIMING_MODE = "scheduled"
+  # Keep fewer backups: the DB is ~90M and grows each season, so the default 7
+  # (~630M) overran the 974M volume. 3 leaves ample headroom and 3 recovery points.
+  BACKUP_KEEP = "3"
 
 [http_service]
   internal_port = 8080

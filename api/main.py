@@ -17,9 +17,10 @@ import os
 from logger_config import get_logger
 from api.websocket_manager import manager as ws_manager
 from api.event_models import GameEvent, SeasonEvent, StandingsEvent, SystemEvent, PlayerOffDayEvent
+from constants import CONTRIBUTION_TX_TYPES
 from api_response_builders import (
-    TeamResponseBuilder, 
-    PlayerResponseBuilder, 
+    TeamResponseBuilder,
+    PlayerResponseBuilder,
     GameResponseBuilder,
     LeagueResponseBuilder,
     build_success_response,
@@ -2928,7 +2929,7 @@ def _recapFundingLeaderboard(session, target):
                     DBUser.id, DBUser.username,
                     func.coalesce(func.sum(-CurrencyTransaction.amount), 0).label('total'))
                 .join(CurrencyTransaction, CurrencyTransaction.user_id == DBUser.id)
-                .filter(CurrencyTransaction.transaction_type == 'team_contribution',
+                .filter(CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
                         CurrencyTransaction.season == target)
                 .group_by(DBUser.id, DBUser.username)
                 .order_by(func.sum(-CurrencyTransaction.amount).desc())
@@ -5134,7 +5135,7 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
             PickEmPick.season == seasonNum).scalar()
         usersWhoFunded = session.query(func.count(func.distinct(CurrencyTransaction.user_id))).filter(
             CurrencyTransaction.season == seasonNum,
-            CurrencyTransaction.transaction_type == 'team_contribution',
+            CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
         ).scalar()
 
         # Beta funnel: users who signed up but never requested access
@@ -5631,6 +5632,27 @@ def contribute_to_facilities(team_id: int, payload: Dict[str, Any], user: _User 
             facilityKey=payload.get("facilityKey"),
             projectId=payload.get("projectId"),
         )
+        # Achievement hooks — patron (any contribution) + benefactor tiers (cumulative).
+        # Facility funding is a team contribution, same as the old /contribute path,
+        # which fires these too; without this, funding via facilities never unlocks them.
+        from database.connection import get_session as _getSessionFac
+        from managers import achievementManager as _am
+        _sm = floosball_app.seasonManager
+        _cs = _sm.currentSeason.seasonNumber if _sm and _sm.currentSeason else 0
+        _s = _getSessionFac()
+        try:
+            _am.onTeamContribution(_s, user.id)
+            if _cs:
+                _am.onSeasonTeamContributions(_s, user.id, _cs)
+            # Underwriter (secret) — fully funded a bar from empty to full single-handed.
+            if isinstance(result, dict) and result.get('soloFunded'):
+                _am.recordProgress(_s, user.id, 'underwriter', increment=1)
+            _s.commit()
+        except Exception as _e:
+            _s.rollback()
+            logger.warning(f"Achievement hook failed (facility contribution): {_e}")
+        finally:
+            _s.close()
         return build_success_response(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -6026,7 +6048,7 @@ def get_league_markets():
             )
             .join(CurrencyTransaction, CurrencyTransaction.user_id == User.id)
             .filter(
-                CurrencyTransaction.transaction_type == 'team_contribution',
+                CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
                 CurrencyTransaction.season == currentSeason,
                 User.favorite_team_id.isnot(None),
             )
@@ -6058,7 +6080,7 @@ def get_league_markets():
             )
             .join(CurrencyTransaction, CurrencyTransaction.user_id == User.id)
             .filter(
-                CurrencyTransaction.transaction_type == 'team_contribution',
+                CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
                 CurrencyTransaction.season == currentSeason,
                 User.favorite_team_id.isnot(None),
             )
@@ -8324,6 +8346,7 @@ def getCurrencyHistory(
 def getCardCollection(
     edition: Optional[str] = Query(default=None),
     position: Optional[int] = Query(default=None),
+    classification: Optional[str] = Query(default=None),
     activeOnly: bool = Query(default=False),
     vaulted: Optional[bool] = Query(default=None),
     sort: str = Query(default="recent"),
@@ -8332,6 +8355,8 @@ def getCardCollection(
     """Get user's card collection with optional filters and sorting.
 
     `vaulted`: None = all cards, True = Vault only, False = un-vaulted only.
+    `classification`: substring match on the card's classification (e.g. 'mvp' also
+    matches 'mvp_champion'); None = all classifications.
     `sort`: recent | rarity | rating | tier | name | team | position | manual.
     """
     from database.connection import get_session
@@ -8363,6 +8388,8 @@ def getCardCollection(
             if edition and tpl.edition != edition:
                 continue
             if position is not None and tpl.position != position:
+                continue
+            if classification and classification.lower() not in (tpl.classification or "").lower():
                 continue
             if activeOnly and tpl.season_created != currentSeason:
                 continue
@@ -8761,6 +8788,7 @@ def _buildShowcasePayload(session, cardManager, userId, currentSeason):
         "slotCount": len([s for s in slots if s["card"]]),
         "maxSlots": SHOWCASE_SLOTS,
         "grade": score["grade"],
+        "score": score["score"],
         "weeklyDividend": score["weeklyDividend"],
         "setBonus": score["setBonus"],
         "maxSetBonus": score["maxSetBonus"],
