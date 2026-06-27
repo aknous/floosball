@@ -1104,6 +1104,13 @@ REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
 #     explicit go from the owner.
 ANOMALY_CRITICALITY_ENABLED = False
 
+# Awakened (L4) signature powers — the mechanical L4 layer (docs/AWAKENED_POWERS_PLAN.md).
+# Separate gate from Criticality so the powers can be built + tested on a branch without going live.
+# When False: awakening assigns no signature abilities, nothing is surfaced, no game effect.
+# When True: awakened players get a fixed offensive + defensive ability + a per-game charge meter
+# that fires the ability (~1-2/game), with Criticality as the overdrive. Default OFF.
+ANOMALY_AWAKENED_POWERS_ENABLED = False
+
 # ── Glitch firing hygiene ─────────────────────────────────────────────────────
 # Per-play per-candidate glitch probability = min(CAP, attention / SCALE ×
 # instability). Tuned DOWN hard from last season (was attention/1000 with no

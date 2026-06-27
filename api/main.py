@@ -1500,12 +1500,24 @@ async def get_player_anomaly(player_id: int):
         ).first()
         if row is None or row.state in (None, 'stable'):
             return build_success_response(None)
+        # L4 awakened signature abilities (gated) — the player's permanent identity.
+        from constants import ANOMALY_AWAKENED_POWERS_ENABLED
+        awakenedAbilities = None
+        if ANOMALY_AWAKENED_POWERS_ENABLED and row.state == 'awakened':
+            from managers import awakenedPowers
+            offName = awakenedPowers.abilityName(row.offensive_ability) if row.offensive_ability else None
+            defName = awakenedPowers.abilityName(row.defensive_ability) if row.defensive_ability else None
+            awakenedAbilities = {
+                'offensive': {'key': row.offensive_ability, 'name': offName} if offName else None,
+                'defensive': {'key': row.defensive_ability, 'name': defName} if defName else None,
+            }
         return build_success_response({
             'state': row.state,
             'ability': row.ability,
             'abilityTier': row.ability_tier,
             'awakenedAtWeek': row.awakened_at_week,
             'seasonsCarried': row.seasons_carried,
+            'awakenedAbilities': awakenedAbilities,
         })
     finally:
         session.close()

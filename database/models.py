@@ -2150,10 +2150,16 @@ class AnomalyState(Base):
     season: Mapped[int] = mapped_column(Integer, nullable=False)
     # 'stable' | 'stirring' | 'erratic' | 'rampant' | 'awakened' | 'cleansed'
     state: Mapped[str] = mapped_column(String(16), default='stable', nullable=False)
-    # Ability slug — only populated once the player has awakened.
+    # Ability slug — only populated once the player has awakened. (Legacy single-ability stub;
+    # the L4 powers model uses offensive_ability/defensive_ability below.)
     ability: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     # 'tremor' | 'disturbance' | 'breach' | 'singularity'
     ability_tier: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # L4 signature abilities (docs/AWAKENED_POWERS_PLAN.md) — one fixed key per side, assigned once
+    # at awakening (managers/awakenedPowers.py catalog). defensive_ability is null for kickers.
+    # Only populated when ANOMALY_AWAKENED_POWERS_ENABLED.
+    offensive_ability: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    defensive_ability: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     awakened_at_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # How many seasons this player has carried an ability forward.
     # Drives end-of-season tier decay.

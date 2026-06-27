@@ -133,6 +133,15 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # L4 awakened signature abilities (offensive + defensive) on anomaly_state.
+        for _col in ("offensive_ability", "defensive_ability"):
+            try:
+                conn.execute(text(f"ALTER TABLE anomaly_state ADD COLUMN {_col} VARCHAR(40)"))
+                conn.commit()
+                logger.info(f"  Migration: added anomaly_state.{_col}")
+            except Exception:
+                conn.rollback()
+
         # Cores exchange threading on persisted league-news items, so multi-Core
         # conversations group under one header on refresh (not just live).
         for col, colDef in [
