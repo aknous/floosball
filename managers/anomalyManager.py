@@ -556,10 +556,10 @@ def getActiveCriticalityCore(seasonNumber: int, week: int) -> Optional[str]:
     is gated off until we flip the flag for the next season's payoff.
     """
     from constants import ANOMALY_CRITICALITY_ENABLED
-    if not ANOMALY_CRITICALITY_ENABLED:
-        return None
     session = get_session()
     try:
+        if not getAnomalySetting(session, 'criticality_enabled', ANOMALY_CRITICALITY_ENABLED):
+            return None
         state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
         if state is None:
             return None
@@ -1273,7 +1273,7 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
     silent. This is the season-long tease.
     """
     from constants import ANOMALY_CRITICALITY_ENABLED
-    if not ANOMALY_CRITICALITY_ENABLED:
+    if not getAnomalySetting(session, 'criticality_enabled', ANOMALY_CRITICALITY_ENABLED):
         _suppressCriticality(state, currentWeek, session=session)
         return
     overRatio = state.aggregate_score / max(1, state.threshold)
@@ -1359,7 +1359,7 @@ def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
     # so the league never gets stuck pinned at 100%. The cap only bites once the
     # real event is enabled.
     from constants import ANOMALY_CRITICALITY_ENABLED
-    if ANOMALY_CRITICALITY_ENABLED and priorPatches >= SUPPRESSION_MAX_PER_SEASON:
+    if getAnomalySetting(session, 'criticality_enabled', ANOMALY_CRITICALITY_ENABLED) and priorPatches >= SUPPRESSION_MAX_PER_SEASON:
         # Out of patches for the season — the Cores can't force it back again.
         # The league stays pinned critical (the instability dial sits at its
         # ceiling), but the event remains gated off, so nothing actually fires.
