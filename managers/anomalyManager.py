@@ -51,6 +51,34 @@ logger = get_logger("floosball.anomaly")
 _POSITION_ENUM = {0: 'QB', 1: 'RB', 2: 'WR', 3: 'TE', 4: 'K'}
 
 
+def getAnomalySetting(session, key, default):
+    """Read an app_settings override for an anomaly knob, coerced to the default's type, with the
+    constant `default` as fallback. Pass the caller's session to avoid new-session lock contention."""
+    try:
+        from database.models import AppSetting
+        row = session.query(AppSetting).filter_by(key=key).first()
+        if row is None or row.value is None:
+            return default
+        v = row.value
+        if isinstance(default, bool):
+            return str(v).lower() == 'true'
+        if isinstance(default, (int, float)):
+            try:
+                return type(default)(v)
+            except (TypeError, ValueError):
+                return default
+        return v  # strings (e.g. the intensity preset name) returned as-is
+    except Exception:
+        return default
+
+
+def getAnomalyIntensityMultiplier(session):
+    """Map the 'anomaly_intensity' preset to a numeric multiplier."""
+    from constants import ANOMALY_INTENSITY_PRESETS
+    preset = getAnomalySetting(session, 'anomaly_intensity', 'normal')
+    return ANOMALY_INTENSITY_PRESETS.get(str(preset).lower(), 1.0)
+
+
 def assignSignaturePower(session, player_id):
     """Assign the player's ONE career signature power at first awakening and store it on the Player.
     The power is kept for their whole career (their identity) — idempotent, so a re-awakening keeps
@@ -358,8 +386,11 @@ def isCriticalityWeek(seasonNumber: int, week: int) -> bool:
     A Criticality lasts 1 or 2 consecutive rounds starting at
     ``last_thinning_week``. Outside the window, returns False.
     """
+    from constants import ANOMALY_CRITICALITY_ENABLED
     session = get_session()
     try:
+        if not getAnomalySetting(session, 'criticality_enabled', ANOMALY_CRITICALITY_ENABLED):
+            return False
         state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
         if state is None or state.last_thinning_week is None:
             return False
@@ -796,7 +827,7 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
             # offensive ability (best offensive attribute) + defensive takeaway (position) at
             # awakening. When off, nothing is assigned (feature invisible).
             from constants import ANOMALY_AWAKENED_POWERS_ENABLED
-            if ANOMALY_AWAKENED_POWERS_ENABLED:
+            if getAnomalySetting(session, 'awakened_powers_enabled', ANOMALY_AWAKENED_POWERS_ENABLED):
                 power = assignSignaturePower(session, attn.player_id)
                 if power:
                     logger.info(f"Awakened: player {attn.player_id} signature power = {power}")

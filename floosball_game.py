@@ -832,12 +832,21 @@ class Game:
         self._anomalyAttention: Dict[int, float] = {}
         self._anomalyState: Dict[int, str] = {}
         self._anomalyAttentionLoaded: bool = False
+        # Runtime admin knobs (app_settings overrides), cached at snapshot load so
+        # the per-play hot path never touches the DB. Master gate + intensity scalar.
+        self._anomalyEnabled: bool = True
+        self._anomalyIntensity: float = 1.0
+        from constants import AWAKENED_INVOLVE_PER_GAME, AWAKENED_DEF_FIRE_CHANCE
+        self._awakenedInvolve: Dict[str, float] = dict(AWAKENED_INVOLVE_PER_GAME)  # per-game touches per pos (admin-tunable)
+        self._awakenedDefFireChance: float = float(AWAKENED_DEF_FIRE_CHANCE)        # defensive fire gate % (admin-tunable)
         # Awakened (L4) charge meter — per-game, gated. {pid: current charge}, {pid: # fills this
         # game}, {pid: {'off','def'} ability keys}. Populated for awakened players when the snapshot
         # loads (ANOMALY_AWAKENED_POWERS_ENABLED); empty otherwise.
         self._awakenedCharge: Dict[int, float] = {}
         self._awakenedFills: Dict[int, int] = {}     # actual fires this game (P3)
         self._awakenedReady: Dict[int, bool] = {}    # meter full + waiting to fire (P3)
+        self._awakenedPoweringUp: Dict[int, bool] = {}  # "powering up" beat emitted this charge cycle
+        self._awakenedSlot: Dict[int, str] = {}      # test-only: roster slot per force-awakened player
         self._awakenedPower: Dict[int, str] = {}     # pid -> career signature power key
         self._lastAwakenedFire: dict = None          # most recent fire, for PBP/feed
         # Multiplier on per-play anomaly probability. 1.0 normally, 5.0
@@ -7007,10 +7016,37 @@ class Game:
         if self._awakenedCharge:
             self._accumulateAwakenedCharge(play, pt)
 
+    def _setAwakenedStatus(self, play, pl, status):
+        """Attach a charge-status beat ('powering_up' / 'fully_charged') to the play for the feed."""
+        from managers import awakenedPowers
+        text = awakenedPowers.chargeStatusMessage(status)
+        if not text:
+            return
+        name = getattr(pl, 'name', None) or 'They'
+        play.awakenedStatus = {
+            'playerId': getattr(pl, 'id', None),
+            'playerName': getattr(pl, 'name', None),
+            'status': status,
+            'text': text.replace('{player}', name),
+        }
+
     def _accumulateAwakenedCharge(self, play, pt):
-        from constants import (AWAKENED_CHARGE_THRESHOLD, AWAKENED_CHARGE_PER_YARD,
-                               AWAKENED_CHARGE_QB_SHARE, AWAKENED_CHARGE_DEF_EVENT,
-                               AWAKENED_CHARGE_KICKER)
+        from constants import (AWAKENED_CHARGE_THRESHOLD,
+                               AWAKENED_CHARGE_DEF_EVENT, AWAKENED_POWERING_UP_PCT)
+        _slotPos = {'qb': 'QB', 'rb': 'RB', 'wr1': 'WR', 'wr2': 'WR', 'te': 'TE', 'k': 'K'}
+        off = getattr(play, 'offense', None)
+        def _posOf(pl):
+            # Reverse-look-up the player's position from the offense roster slot (reliable regardless of
+            # the Player.position field format).
+            if pl is None or off is None:
+                return ''
+            for slot, rp in off.rosterDict.items():
+                if rp is pl:
+                    return _slotPos.get(slot, '')
+            return ''
+        def _involve(pos):
+            exp = self._awakenedInvolve.get(pos)
+            return (AWAKENED_CHARGE_THRESHOLD / exp) if exp else 0.0
         def _charge(pl, amt):
             if pl is None or amt <= 0:
                 return
@@ -7022,16 +7058,29 @@ class Game:
             if self._awakenedReady.get(pid):
                 return
             self._awakenedCharge[pid] = min(AWAKENED_CHARGE_THRESHOLD, self._awakenedCharge[pid] + amt)
+            # Charge-status beats on the play feed: "powering up..." crossing the midpoint, "fully
+            # charged..." on reaching the threshold. Each fires once per charge cycle (reset on fire).
             if self._awakenedCharge[pid] >= AWAKENED_CHARGE_THRESHOLD:
                 self._awakenedReady[pid] = True
-        yds = max(0, getattr(play, 'yardage', 0) or 0)
+                self._setAwakenedStatus(play, pl, 'fully_charged')
+            elif (self._awakenedCharge[pid] >= AWAKENED_CHARGE_THRESHOLD * AWAKENED_POWERING_UP_PCT
+                  and not self._awakenedPoweringUp.get(pid)):
+                self._awakenedPoweringUp[pid] = True
+                self._setAwakenedStatus(play, pl, 'powering_up')
+        # Offense — a FLAT charge per play the player is INVOLVED in (carry / pass attempt / reception /
+        # kick), NOT scaled by yards, so the meter fills on touches and game-to-game variance is low.
+        # Per-position rate (THRESHOLD / typical involvements) -> each fills ~once over a normal game.
         if pt is PlayType.Run:
-            _charge(getattr(play, 'runner', None), yds * AWAKENED_CHARGE_PER_YARD)
-        elif pt is PlayType.Pass and getattr(play, 'isPassCompletion', False):
-            _charge(getattr(play, 'passer', None), yds * AWAKENED_CHARGE_PER_YARD * AWAKENED_CHARGE_QB_SHARE)
-            _charge(getattr(play, 'receiver', None), yds * AWAKENED_CHARGE_PER_YARD * (1.0 - AWAKENED_CHARGE_QB_SHARE))
-        elif pt in (PlayType.FieldGoal, PlayType.ExtraPoint) and getattr(play, 'isFgGood', False):
-            _charge(getattr(play, 'kicker', None), AWAKENED_CHARGE_KICKER)
+            r = getattr(play, 'runner', None)
+            _charge(r, _involve(_posOf(r)))
+        elif pt is PlayType.Pass:
+            _charge(getattr(play, 'passer', None), _involve('QB'))   # the QB threw it — involved on every attempt
+            if getattr(play, 'isPassCompletion', False):
+                rc = getattr(play, 'receiver', None)
+                _charge(rc, _involve(_posOf(rc)))
+        elif pt in (PlayType.FieldGoal, PlayType.ExtraPoint):
+            _charge(getattr(play, 'kicker', None), _involve('K'))
+        # Defense — a small flat charge per stop, so offense stays the dominant (and earlier) source.
         if pt in (PlayType.Run, PlayType.Pass):
             pm = (getattr(play, 'returner', None) or getattr(play, 'sackedBy', None)
                   or getattr(play, 'interceptedBy', None) or getattr(play, 'forcedFumbleBy', None)
@@ -7062,27 +7111,35 @@ class Game:
         }
         self._awakenedCharge[pid] = 0.0
         self._awakenedReady[pid] = False
+        self._awakenedPoweringUp[pid] = False   # re-arm the "powering up" beat for the next cycle
         self._awakenedFills[pid] = self._awakenedFills.get(pid, 0) + 1
         self._lastAwakenedFire = fire
         import os as _os
         if _os.environ.get('AWAKENED_TEST'):
-            print(f"[AWAKENED] {fire['playerName']} fired {fire['powerName']} ({situation})",
+            print(f"[AWAKENED] {fire['playerName']} [{self._awakenedSlot.get(pid, '?')}] fired {fire['powerName']} ({situation})",
                   file=__import__('sys').stderr)
         return fire
 
     def _pickReadyAwakenedDefender(self, team, situation):
-        """The first ready awakened player on `team` whose career power covers `situation` — 'pick'
-        on a pass, 'strip' on a run (the focal defender for a defensive fire), or None. Does NOT
-        discharge — the caller fires it."""
+        """The focal defender for a defensive fire (A-lite): a ready awakened player whose career power
+        covers `situation` AND whose defensive role fits the play — a run-strip comes from the front
+        seven (LB/DE = the rb/te roster spots), a pass-pick from the secondary (S/CB = the qb/wr spots),
+        so a corner can't 'strip' a run. Then a probability gate (AWAKENED_DEF_FIRE_CHANCE) so a ready
+        defender doesn't auto-discharge on the very next covered snap — keeping defense from dominating
+        offense, where the awakened player must BE the ball-handler. Does NOT discharge — the caller
+        fires it. Returns None when nothing is eligible or the gate misses."""
         if not self._awakenedReady or team is None:
             return None
         from managers import awakenedPowers
-        for pl in team.rosterDict.values():
-            if pl is None:
+        eligibleSlots = {'strip': ('rb', 'te'), 'pick': ('qb', 'wr1', 'wr2')}.get(situation, ())
+        for slot, pl in team.rosterDict.items():
+            if pl is None or slot not in eligibleSlots:
                 continue
             if self._awakenedReady.get(getattr(pl, 'id', None)):
                 pk = self._awakenedPower.get(pl.id)
                 if pk and awakenedPowers.powerCoversSituation(pk, situation):
+                    if batched_randint(1, 100) > self._awakenedDefFireChance:
+                        return None   # gate missed — stay charged, try again next covered snap
                     return pl
         return None
 
@@ -7210,6 +7267,7 @@ class Game:
                     'chokePerformers': list(getattr(playObj, 'chokePerformers', []) or []),
                     'insights': getattr(playObj, 'insights', None),
                     'awakenedFire': getattr(playObj, 'awakenedFire', None),
+                    'awakenedStatus': getattr(playObj, 'awakenedStatus', None),
                 }
         elif includeLastPlay and hasattr(self, 'play') and self.play:
             # WP/WPA, the momentum big-play bonus, and the clutch/choke WP-impact
@@ -7242,6 +7300,7 @@ class Game:
                 # Awakened (L4) fire — null unless an awakened player used their power on this play.
                 # When present: {playerId, playerName, power, powerName, situation, flavor}.
                 'awakenedFire': getattr(self.play, 'awakenedFire', None),
+                'awakenedStatus': getattr(self.play, 'awakenedStatus', None),
                 # Participant IDs — used by the frontend highlights feed
                 # to filter "plays involving players the user cares
                 # about." Null when the role didn't apply to this play.
@@ -8244,8 +8303,17 @@ class Game:
                 # THIS game's rosters who has a career signature power (players.signature_power).
                 import os as _os
                 from constants import ANOMALY_AWAKENED_POWERS_ENABLED
+                from managers.anomalyManager import getAnomalySetting, getAnomalyIntensityMultiplier
+                # Runtime admin knobs — cached here (same open session) for the per-play hot path.
+                self._anomalyEnabled = getAnomalySetting(session, 'anomalies_enabled', True)
+                self._anomalyIntensity = getAnomalyIntensityMultiplier(session)
+                _awakenedOn = getAnomalySetting(session, 'awakened_powers_enabled', ANOMALY_AWAKENED_POWERS_ENABLED)
+                # Awakened tuning dials (admin-tunable): per-position touches-per-game + the defensive fire gate.
+                self._awakenedInvolve = {pos: getAnomalySetting(session, f'awakened_involve_{pos.lower()}', base)
+                                         for pos, base in self._awakenedInvolve.items()}
+                self._awakenedDefFireChance = getAnomalySetting(session, 'awakened_def_fire_chance', self._awakenedDefFireChance)
                 _awTest = bool(_os.environ.get('AWAKENED_TEST'))
-                if ANOMALY_AWAKENED_POWERS_ENABLED or _awTest:
+                if _awakenedOn or _awTest:
                     rosterIds = {p.id for t in (self.homeTeam, self.awayTeam) if t
                                  for p in t.rosterDict.values() if p is not None}
                     awakenedIds = [r.player_id for r in stateRows
@@ -8266,14 +8334,15 @@ class Game:
                         for t in (self.homeTeam, self.awayTeam):
                             if not t:
                                 continue
-                            for slot in ('qb', 'rb'):
+                            for slot in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k'):
                                 pl = t.rosterDict.get(slot)
                                 if pl is None or pl.id in self._awakenedPower:
                                     continue
                                 self._awakenedPower[pl.id] = awakenedPowers.assignPower(_slotPos[slot])
                                 self._awakenedCharge[pl.id] = 0.0
                                 self._awakenedFills[pl.id] = 0
-                                self._awakenedReady[pl.id] = True   # ready now -> fires on the first covered play
+                                self._awakenedReady[pl.id] = False   # charge naturally over the game
+                                self._awakenedSlot[pl.id] = slot
             finally:
                 session.close()
             self._criticalityMultiplier = getCriticalityMultiplier(
@@ -8285,6 +8354,8 @@ class Game:
             self._anomalyAttention = {}
             self._anomalyState = {}
             self._criticalityMultiplier = 1.0
+            self._anomalyEnabled = True
+            self._anomalyIntensity = 1.0
             try:
                 from logger_config import get_logger
                 get_logger("floosball.anomaly").debug(
@@ -8311,6 +8382,8 @@ class Game:
         """
         if not self._anomalyAttentionLoaded:
             self._loadAnomalyAttention()
+        if not self._anomalyEnabled:
+            return
         if not self._anomalyAttention:
             return
         p = self.play
@@ -8331,7 +8404,9 @@ class Game:
                                ANOMALY_L2_WEIGHT_ERRATIC, ANOMALY_L2_WEIGHT_RAMPANT)
         # Per-game hygiene: stop once we've hit the per-game cap, and keep
         # glitches spaced by a cooldown so they never cluster in the feed.
-        if self._glitchCountThisGame >= ANOMALY_GLITCH_MAX_PER_GAME:
+        # The cap scales with the runtime intensity knob (Chaos = more, Low = fewer).
+        glitchCap = max(1, round(ANOMALY_GLITCH_MAX_PER_GAME * self._anomalyIntensity))
+        if self._glitchCountThisGame >= glitchCap:
             return
         playNum = getattr(p, 'playNumber', None)
         if (playNum is not None
@@ -8355,7 +8430,7 @@ class Game:
             attention = self._anomalyAttention.get(player.id, 0.0)
             if attention <= 0:
                 continue
-            prob = min(ANOMALY_GLITCH_PROB_CAP, (attention / ANOMALY_GLITCH_PROB_SCALE) * self._criticalityMultiplier)
+            prob = min(ANOMALY_GLITCH_PROB_CAP, (attention / ANOMALY_GLITCH_PROB_SCALE) * self._criticalityMultiplier * self._anomalyIntensity)
             if _random.random() < prob:
                 # Pick the layer based on the player's state:
                 #   stable / stirring  -> Layer 1 (subtle, "huh")
@@ -8493,6 +8568,8 @@ class Game:
         """
         if not self._anomalyAttentionLoaded:
             self._loadAnomalyAttention()
+        if not self._anomalyEnabled:
+            return
         if not self._anomalyAttention:
             return
         p = self.play
@@ -8523,13 +8600,15 @@ class Game:
                                ANOMALY_L3_MAX_NEG_PER_TEAM, ANOMALY_L3_LATE_QUARTER,
                                ANOMALY_L3_CLOSE_MARGIN)
         # Per-game hygiene: shared cap + cooldown with the cosmetic layers.
-        if self._glitchCountThisGame >= ANOMALY_GLITCH_MAX_PER_GAME:
+        # Cap scales with the runtime intensity knob, matching _maybeFireAnomalies.
+        glitchCap = max(1, round(ANOMALY_GLITCH_MAX_PER_GAME * self._anomalyIntensity))
+        if self._glitchCountThisGame >= glitchCap:
             return
         playNum = getattr(p, 'playNumber', None)
         if (playNum is not None
                 and playNum - self._lastGlitchPlayNumber < ANOMALY_GLITCH_COOLDOWN_PLAYS):
             return
-        if _random.random() >= ANOMALY_L3_TRIGGER_PROB * self._criticalityMultiplier:
+        if _random.random() >= ANOMALY_L3_TRIGGER_PROB * self._criticalityMultiplier * self._anomalyIntensity:
             return
 
         helpful = _random.random() < ANOMALY_L3_HELP_CHANCE
@@ -8635,6 +8714,7 @@ class Play():
         self.isFumbleLost = False
         self.isFumbleRecovered = False
         self.awakenedFire = None       # L4 fire dict for this play (P3), or None
+        self.awakenedStatus = None     # L4 charge-status beat ('powering up' / 'fully charged'), or None
         self._awakenedDefender = None  # the awakened defender on a defensive fire, or None
         self.isInterception = False
         self.isTd = False
@@ -9467,6 +9547,12 @@ class Play():
         mean = max(1.5, QB_SCRAMBLE_BASE_YARDS + (spd - QB_SCRAMBLE_SPEED_PIVOT) * QB_SCRAMBLE_YARDS_PER_SPEED)
         yds = int(round(np.random.exponential(mean))) + int(round((agi - 80) / 20.0))
         yds = max(0, yds)
+        # Awakened (L4) fire — a scramble is its own situation (escaping the pass rush). A QB whose
+        # power covers 'scramble' (the mobility/escape powers) fires here and breaks loose downfield.
+        self.awakenedFire = self.game._awakenedTryFire('scramble', self.passer)
+        if self.awakenedFire:
+            from constants import AWAKENED_FORCE_RUN_GAIN, AWAKENED_FORCE_GAIN_TAIL
+            yds = max(yds, AWAKENED_FORCE_RUN_GAIN + int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL)))
         if yds > self.yardsToEndzone:
             yds = self.yardsToEndzone
         self.yardage = yds
@@ -9485,8 +9571,8 @@ class Play():
         if tackler and hasattr(tackler, 'stat_tracker'):
             tackler.stat_tracker.add_tackle(isReg)
 
-        # Small fumble chance on the scramble (credit the tackler if lost).
-        if batched_randint(1, 100) > (100 - QB_SCRAMBLE_FUMBLE_CHANCE):
+        # Small fumble chance on the scramble (credit the tackler if lost) — never on an awakened fire.
+        if batched_randint(1, 100) > (100 - QB_SCRAMBLE_FUMBLE_CHANCE) and not self.awakenedFire:
             self.isFumble = True
             if batched_randint(1, 100) <= 50:
                 self.isFumbleLost = True

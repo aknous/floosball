@@ -1884,6 +1884,8 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'glitchPlayerName': getattr(play_data, 'glitchPlayerName', None),
                                 'glitchLayer': getattr(play_data, 'glitchLayer', None),
                                 'glitchYardDelta': getattr(play_data, 'glitchYardDelta', None),
+                                'awakenedFire': getattr(play_data, 'awakenedFire', None),
+                                'awakenedStatus': getattr(play_data, 'awakenedStatus', None),
                             }
                     serializable_plays.append(play_data)
                 elif 'event' in item:
@@ -3887,8 +3889,9 @@ async def get_app_settings():
     try:
         rows = session.query(AppSetting).all()
         settings = {row.key: row.value for row in rows}
-        # Coerce booleans for keys we know are boolean
-        for boolKey in ('feedback_visible', 'survey_visible'):
+        # Coerce booleans for keys we know are boolean (anomaly_intensity stays a string).
+        for boolKey in ('feedback_visible', 'survey_visible',
+                        'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled'):
             if boolKey in settings:
                 settings[boolKey] = str(settings[boolKey]).lower() == 'true'
         return settings
@@ -3905,7 +3908,10 @@ async def admin_update_app_settings(payload: Dict[str, Any], _auth: None = Depen
     if not isinstance(payload, dict) or not payload:
         raise HTTPException(status_code=400, detail="payload must be a non-empty object")
     allowed = {'feedback_url', 'feedback_visible', 'survey_url', 'survey_visible', 'survey_text',
-               'halftime_show_url', 'halftime_show_pause_seconds'}
+               'halftime_show_url', 'halftime_show_pause_seconds',
+               'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled', 'anomaly_intensity',
+               'awakened_involve_qb', 'awakened_involve_rb', 'awakened_involve_wr', 'awakened_involve_te',
+               'awakened_involve_k', 'awakened_def_fire_chance'}
     session = get_session()
     try:
         updated = []

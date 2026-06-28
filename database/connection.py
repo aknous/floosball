@@ -736,6 +736,19 @@ def _runPendingMigrations():
                 ('survey_url', 'https://forms.gle/s2ycdsBLxTpsWEk4A'),
                 ('halftime_show_url', ''),
                 ('halftime_show_pause_seconds', '120'),
+                # Anomaly / Criticality runtime knobs (override constants.py at runtime).
+                ('anomalies_enabled', 'true'),
+                ('criticality_enabled', 'false'),
+                ('awakened_powers_enabled', 'false'),
+                ('anomaly_intensity', 'normal'),
+                # Awakened tuning dials (override constants.py): per-position touches-per-game to fill
+                # the meter (lower = fires more often) + the defensive fire gate %.
+                ('awakened_involve_qb', '31'),
+                ('awakened_involve_rb', '19'),
+                ('awakened_involve_wr', '5.8'),
+                ('awakened_involve_te', '5.5'),
+                ('awakened_involve_k', '1.7'),
+                ('awakened_def_fire_chance', '35'),
             ]
             for k, v in defaults:
                 conn.execute(text(

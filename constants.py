@@ -1111,15 +1111,26 @@ ANOMALY_CRITICALITY_ENABLED = False
 # that fires the ability (~1-2/game), with Criticality as the overdrive. Default OFF.
 ANOMALY_AWAKENED_POWERS_ENABLED = False
 
+# Runtime anomaly-intensity presets — the 'anomaly_intensity' app_settings knob maps to one of these
+# numeric multipliers, applied to the per-play glitch probability AND the per-game glitch cap. 'normal'
+# is the design baseline (1.0); 'chaos' floods, 'low' dampens. Default preset is 'normal'.
+ANOMALY_INTENSITY_PRESETS = {'low': 0.5, 'normal': 1.0, 'high': 2.5, 'chaos': 5.0}
+
 # Awakened charge meter (P2) — a per-game bar per awakened player, fed by impact-weighted positive
 # involvement (yards on offense, stops on defense, made kicks). Fills ~1-2x/game for a focal player;
 # each fill = the signature ability is ready to fire (P3). Tuned in playtest (Criticality scales these
 # up via the instability dial in P5).
 AWAKENED_CHARGE_THRESHOLD = 100.0   # meter fills at this, then resets and the ability is "ready"
-AWAKENED_CHARGE_PER_YARD = 1.2      # offensive charge per positive yard (run / reception)
-AWAKENED_CHARGE_QB_SHARE = 0.4      # completion charge split QB / receiver (mirrors WPA_PASS_QB_SHARE)
-AWAKENED_CHARGE_DEF_EVENT = 18.0    # flat charge for a defensive playmaker stop (charges slower)
-AWAKENED_CHARGE_KICKER = 60.0       # per made FG — a kicker touches the ball rarely, so charges fast
+# Charge per PLAY THE PLAYER IS INVOLVED IN (a carry / pass attempt / reception / kick) — a FLAT amount,
+# NOT scaled by yards, so a 2-yarder and a 60-yarder charge the same and game-to-game variance is low.
+# Each value is the typical number of such involvements a position gets per game; the per-involvement
+# charge is THRESHOLD / value, so a position fills ~once over a normal game (late), and falls short on
+# a quiet game (so it can fail to fire). Tune these to move the rate per position.
+AWAKENED_INVOLVE_PER_GAME = {'QB': 31.0, 'RB': 19.0, 'WR': 5.8, 'TE': 5.5, 'K': 1.7}
+AWAKENED_CHARGE_DEF_EVENT = 0.0     # flat charge per defensive stop — kept small so offense dominates
+AWAKENED_POWERING_UP_PCT = 0.5      # charge fraction that triggers the "powering up..." feed beat
+AWAKENED_DEF_FIRE_CHANCE = 35       # % a ready, position-appropriate defender discharges on a covered snap
+                                    # (gates defensive fires so they don't dominate offense — A-lite)
 
 # Awakened fire outcomes (P3) — when a power fires, force a big breakaway: a base gain (run/pass)
 # PLUS an exponential tail for variance, capped at the end zone. So a fired play ranges (e.g. 45, 60,
