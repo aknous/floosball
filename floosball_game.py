@@ -2302,10 +2302,14 @@ class Game:
         # through to the normal logic below.
         leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
                        and self.gameClockSeconds <= 120)
-        # A charged awakened kicker is an automatic make from ANYWHERE — on 4th down take the free 3
-        # from any distance, leaving short-yardage / goal-line to the go-for-it logic below and a
-        # protected late lead to the clock-management logic.
-        if kickerCharged and not leadingLate and self.yardsToFirstDown > 2 and self.yardsToEndzone > 8:
+        # A charged awakened kicker is an automatic make from ANYWHERE — but STRATEGY comes first. Take
+        # the free 3 from any distance ONLY when a field goal actually helps: when trailing by more than
+        # a field goal late, a FG doesn't change the math, so fall through to the normal go-for-it logic
+        # rather than settling for it just because the kicker is charged. (Short-yardage / goal-line also
+        # defer to the go-for-it logic below; a protected late lead to clock management.)
+        fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+        if (kickerCharged and fgHelps and not leadingLate
+                and self.yardsToFirstDown > 2 and self.yardsToEndzone > 8):
             self.play.playType = PlayType.FieldGoal
             return
         if self.yardsToEndzone <= 40 and not leadingLate:
