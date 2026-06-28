@@ -1131,6 +1131,8 @@ AWAKENED_CHARGE_DEF_EVENT = 0.0     # flat charge per defensive stop — kept sm
 AWAKENED_POWERING_UP_PCT = 0.5      # charge fraction that triggers the "powering up..." feed beat
 AWAKENED_DEF_FIRE_CHANCE = 35       # % a ready, position-appropriate defender discharges on a covered snap
                                     # (gates defensive fires so they don't dominate offense — A-lite)
+AWAKENED_CRITICALITY_CHARGE_MULT = 4.0  # during a Criticality the charge meter fills this much faster
+                                        # (the OVERDRIVE: ~1/game normally -> ~several/game = "frequent")
 
 # Awakened fire outcomes (P3) — when a power fires, force a big breakaway: a base gain (run/pass)
 # PLUS an exponential tail for variance, capped at the end zone. So a fired play ranges (e.g. 45, 60,

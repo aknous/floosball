@@ -386,6 +386,9 @@ def isCriticalityWeek(seasonNumber: int, week: int) -> bool:
     A Criticality lasts 1 or 2 consecutive rounds starting at
     ``last_thinning_week``. Outside the window, returns False.
     """
+    import os as _os
+    if _os.environ.get('CRITICALITY_TEST'):
+        return True   # test hook: force every week to be a Criticality (exercise overdrive + event)
     from constants import ANOMALY_CRITICALITY_ENABLED
     session = get_session()
     try:

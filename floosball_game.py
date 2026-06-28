@@ -853,6 +853,7 @@ class Game:
         # if this game is happening inside an active Criticality window.
         # Set when attention is loaded.
         self._criticalityMultiplier: float = 1.0
+        self._criticalityActive: bool = False   # inside a fired Criticality window -> L4 charge overdrive
         # Per-game glitch hygiene: hard cap + cooldown so anomaly glitch
         # lines stay rare and spaced out instead of flooding the play feed.
         self._glitchCountThisGame: int = 0
@@ -7031,8 +7032,11 @@ class Game:
         }
 
     def _accumulateAwakenedCharge(self, play, pt):
-        from constants import (AWAKENED_CHARGE_THRESHOLD,
-                               AWAKENED_CHARGE_DEF_EVENT, AWAKENED_POWERING_UP_PCT)
+        from constants import (AWAKENED_CHARGE_THRESHOLD, AWAKENED_CHARGE_DEF_EVENT,
+                               AWAKENED_POWERING_UP_PCT, AWAKENED_CRITICALITY_CHARGE_MULT)
+        # OVERDRIVE: during a Criticality the meter fills several times faster, so awakened players fire
+        # their powers frequently (the event's chaos) instead of ~once a game.
+        critMult = AWAKENED_CRITICALITY_CHARGE_MULT if self._criticalityActive else 1.0
         _slotPos = {'qb': 'QB', 'rb': 'RB', 'wr1': 'WR', 'wr2': 'WR', 'te': 'TE', 'k': 'K'}
         off = getattr(play, 'offense', None)
         def _posOf(pl):
@@ -7046,7 +7050,7 @@ class Game:
             return ''
         def _involve(pos):
             exp = self._awakenedInvolve.get(pos)
-            return (AWAKENED_CHARGE_THRESHOLD / exp) if exp else 0.0
+            return (AWAKENED_CHARGE_THRESHOLD / exp * critMult) if exp else 0.0
         def _charge(pl, amt):
             if pl is None or amt <= 0:
                 return
@@ -8348,12 +8352,15 @@ class Game:
             self._criticalityMultiplier = getCriticalityMultiplier(
                 self.seasonNumber or 0, self.week or 0,
             )
+            from managers.anomalyManager import isCriticalityWeek
+            self._criticalityActive = isCriticalityWeek(self.seasonNumber or 0, self.week or 0)
         except Exception as e:
             # Anomaly system is purely additive — if anything fails,
             # play out the game as if no one had any attention.
             self._anomalyAttention = {}
             self._anomalyState = {}
             self._criticalityMultiplier = 1.0
+            self._criticalityActive = False
             self._anomalyEnabled = True
             self._anomalyIntensity = 1.0
             try:
@@ -8427,6 +8434,8 @@ class Game:
         _random.shuffle(candidates)
 
         for player in candidates:
+            if player.id in self._awakenedPower:
+                continue   # awakened players are in CONTROL — they fire powers, they do not glitch
             attention = self._anomalyAttention.get(player.id, 0.0)
             if attention <= 0:
                 continue
