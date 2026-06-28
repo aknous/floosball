@@ -2261,9 +2261,14 @@ class Game:
         kickerMaxDistance = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
-        # A charged awakened kicker (power covers 'kick') makes it from ANYWHERE — always "in range".
+        # A charged awakened kicker (power covers 'kick') makes it from ANYWHERE — but the charge only
+        # extends FG range when a field goal actually HELPS (fgHelps). When trailing by more than a FG
+        # late, treating them as "in range" would route them into the FG-biased trailing branch instead
+        # of going for the touchdown — so strategy gates the range, not just the early auto-kick below.
         kickerCharged = self._awakenedReadyFor(kicker, 'kick')
-        inFieldGoalRange = kickerCharged or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold)
+        fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+        inFieldGoalRange = ((kickerCharged and fgHelps)
+                            or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
 
         aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
         goForItThreshold = max(1, min(9, round(4 + aggrNorm * 3)))
@@ -2302,12 +2307,8 @@ class Game:
         # through to the normal logic below.
         leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
                        and self.gameClockSeconds <= 120)
-        # A charged awakened kicker is an automatic make from ANYWHERE — but STRATEGY comes first. Take
-        # the free 3 from any distance ONLY when a field goal actually helps: when trailing by more than
-        # a field goal late, a FG doesn't change the math, so fall through to the normal go-for-it logic
-        # rather than settling for it just because the kicker is charged. (Short-yardage / goal-line also
-        # defer to the go-for-it logic below; a protected late lead to clock management.)
-        fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+        # A charged awakened kicker takes the free 3 from any distance — but only when fgHelps (computed
+        # above) and not protecting a late lead; short-yardage / goal-line defer to the go-for-it logic.
         if (kickerCharged and fgHelps and not leadingLate
                 and self.yardsToFirstDown > 2 and self.yardsToEndzone > 8):
             self.play.playType = PlayType.FieldGoal
