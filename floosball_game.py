@@ -6605,6 +6605,15 @@ class Game:
                 defStats = p.gameStatsDict.get('defense', {})
                 if any(v > 0 for v in defStats.values() if isinstance(v, (int, float))):
                     result['defense'] = dict(defStats)
+                # Awakened charge — only for players awakened in THIS game.
+                # 'ready' = power meter is full/charged right now (drives the
+                # live gold name-glow in the box score). Omitted entirely for
+                # non-awakened players to keep the payload lean.
+                if p.id in self._awakenedReady:
+                    result['chargeStatus'] = {
+                        'ready': bool(self._awakenedReady.get(p.id)),
+                        'power': self._awakenedPower.get(p.id),
+                    }
                 return result
 
             return {
