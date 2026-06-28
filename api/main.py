@@ -528,6 +528,18 @@ async def get_team(team_id: int, response: Response):
                 DBTeamSeasonStats.team_id == team.id,
                 DBTeamSeasonStats.season < currentSeasonNum
             ).order_by(DBTeamSeasonStats.season.desc()).all()
+            # "Made the playoffs" = actually played a playoff game. The stored made_playoffs flag is
+            # a standings-time "qualified top-6" stamp; a mid-playoff crash/resume can delete the
+            # playoff games while leaving that flag, showing a phantom appearance. Derive it from the
+            # games so the displayed value can never disagree with what actually happened.
+            from database.models import Game as DBGame
+            playoffSeasons = {
+                s for (s,) in dbSession.query(DBGame.season).filter(
+                    DBGame.is_playoff == True,
+                    DBGame.status == 'final',
+                    (DBGame.home_team_id == team.id) | (DBGame.away_team_id == team.id),
+                ).distinct().all()
+            }
             for row in pastRows:
                 pastEntry = {
                     'season': row.season,
@@ -538,7 +550,7 @@ async def get_team(team_id: int, response: Response):
                     'winPerc': row.win_percentage or 0.0,
                     'streak': row.streak or 0,
                     'scoreDiff': row.score_differential or 0,
-                    'madePlayoffs': row.made_playoffs,
+                    'madePlayoffs': row.season in playoffSeasons,
                     'leagueChamp': row.league_champion,
                     'floosbowlChamp': row.floosball_champion,
                     'topSeed': row.top_seed,
