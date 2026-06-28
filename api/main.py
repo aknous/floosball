@@ -3550,6 +3550,22 @@ async def get_stat_leaders(
             filtered = [p for p in filtered if getattr(p, 'seasonPerformanceRating', 0) > 0 and getattr(p, 'gamesPlayed', 0) >= 1]
         filtered.sort(key=lambda p: extractStat(p, category), reverse=True)
 
+        # Awakened players (persistent L4 signature power) — one bulk query, for a blue name-glow.
+        awakenedIds = set()
+        try:
+            from database.connection import get_session as _gs
+            from database.models import AnomalyState as _AS
+            _sm = floosball_app.seasonManager
+            _seasonNum = _sm.currentSeason.seasonNumber if _sm and _sm.currentSeason else 0
+            _s = _gs()
+            try:
+                awakenedIds = {r.player_id for r in
+                               _s.query(_AS.player_id).filter_by(season=_seasonNum, state='awakened').all()}
+            finally:
+                _s.close()
+        except Exception:
+            awakenedIds = set()
+
         leaders = []
         for rank, player in enumerate(filtered[:limit], 1):
             sd = player.seasonStatsDict
@@ -3567,6 +3583,7 @@ async def get_stat_leaders(
                 'gamesPlayed': player.gamesPlayed,
                 'statValue': extractStat(player, category),
                 'fantasyPoints': sd.get('fantasyPoints', 0) + player.gameStatsDict.get('fantasyPoints', 0),
+                'awakened': player.id in awakenedIds,
             }
             # Include relevant secondary stats per position
             pos = entry['position']
