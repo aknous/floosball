@@ -2110,7 +2110,9 @@ class Game:
         """Handle play calling in overtime (Q5). Called only when currentQuarter == 5."""
         coach = getattr(self.offensiveTeam, 'coach', None)
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxFg = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
+        # A charged awakened kicker makes it from ANYWHERE — treat the whole field as in range.
+        kickerCharged = self._awakenedReadyFor(kicker, 'kick')
+        kickerMaxFg = 999 if kickerCharged else ((kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0)
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
 
@@ -2134,7 +2136,7 @@ class Game:
             aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
             # 60 aggr → 0.96 (chip shot only), 80 → 0.92, 100 → 0.88
             earlyDownFgThreshold = 0.92 - aggrNorm * 0.04
-            if fgProb >= earlyDownFgThreshold:
+            if kickerCharged or fgProb >= earlyDownFgThreshold:
                 self.play.playType = PlayType.FieldGoal
                 return
 
@@ -2144,7 +2146,7 @@ class Game:
             # yards-to-go is reachable, prefer going for it to get closer
             # for a higher-percentage attempt. Aggressive coaches roll the
             # dice on the conversion more often.
-            if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and fgProb >= fgThreshold:
+            if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or fgProb >= fgThreshold):
                 if fgProb < 0.55 and self.yardsToFirstDown <= 5:
                     aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
                     # 60 aggr → 15%, 80 → 45%, 100 → 75%
@@ -2259,7 +2261,9 @@ class Game:
         kickerMaxDistance = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
-        inFieldGoalRange = self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold
+        # A charged awakened kicker (power covers 'kick') makes it from ANYWHERE — always "in range".
+        kickerCharged = self._awakenedReadyFor(kicker, 'kick')
+        inFieldGoalRange = kickerCharged or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold)
 
         aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
         goForItThreshold = max(1, min(9, round(4 + aggrNorm * 3)))
@@ -2298,6 +2302,12 @@ class Game:
         # through to the normal logic below.
         leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
                        and self.gameClockSeconds <= 120)
+        # A charged awakened kicker is an automatic make from ANYWHERE — on 4th down take the free 3
+        # from any distance, leaving short-yardage / goal-line to the go-for-it logic below and a
+        # protected late lead to the clock-management logic.
+        if kickerCharged and not leadingLate and self.yardsToFirstDown > 2 and self.yardsToEndzone > 8:
+            self.play.playType = PlayType.FieldGoal
+            return
         if self.yardsToEndzone <= 40 and not leadingLate:
             goForIt = not inFieldGoalRange  # no makeable FG → going for it is the only non-punt option
             if inFieldGoalRange and self.yardsToFirstDown <= 2:
@@ -7124,6 +7134,20 @@ class Game:
                   file=__import__('sys').stderr)
         return fire
 
+    def _awakenedReadyFor(self, player, situation) -> bool:
+        """True if `player` is awakened, charged (ready), and their power covers `situation` — WITHOUT
+        discharging it. Lets a caller ANTICIPATE a fire: a charged kicker can make a FG from anywhere,
+        so the play-caller extends FG range and the kick can't be blocked, while the power itself only
+        discharges if the kick would actually miss."""
+        if not self._awakenedReady or player is None:
+            return False
+        pid = getattr(player, 'id', None)
+        if not self._awakenedReady.get(pid):
+            return False
+        from managers import awakenedPowers
+        pk = self._awakenedPower.get(pid)
+        return bool(pk and awakenedPowers.powerCoversSituation(pk, situation))
+
     def _pickReadyAwakenedDefender(self, team, situation):
         """The focal defender for a defensive fire (A-lite): a ready awakened player whose career power
         covers `situation` AND whose defensive role fits the play — a run-strip comes from the front
@@ -8879,19 +8903,29 @@ class Play():
         # the kicker; the game loop hands the loose ball to the defense (with a
         # possible return) via _resolveBlockedKick.
         from constants import FG_BLOCK_ENABLED, FG_BLOCK_CHANCE
-        self.isFgBlocked = FG_BLOCK_ENABLED and (batched_random() * 100 < FG_BLOCK_CHANCE)
-
-        # Awakened (L4) fire — a charged kicker whose power covers 'kick' makes it automatically,
-        # no block (P3). Returns None unless ANOMALY_AWAKENED_POWERS_ENABLED + they are ready.
-        self.awakenedFire = self.game._awakenedTryFire('kick', self.kicker)
+        # A charged awakened kicker (power covers 'kick') is an automatic make from anywhere, so their
+        # kick can't be blocked either — it resolves to good-or-miss and the power rescues the miss below.
+        kickerCharged = self.game._awakenedReadyFor(self.kicker, 'kick')
+        self.isFgBlocked = (FG_BLOCK_ENABLED and not kickerCharged
+                            and (batched_random() * 100 < FG_BLOCK_CHANCE))
 
         x = batched_randint(1,100)
 
-        if self.isFgBlocked and not self.awakenedFire:
+        # Resolve the kick NORMALLY first. A charged awakened kicker (whose power covers 'kick') only
+        # fires the power if the kick would otherwise MISS — so the ability lands on the impossible-
+        # length FGs it was actually needed for, never a chip shot that was already good (saving the
+        # charge for a real miss). A block is NOT rescued — the power bends distance/accuracy, not a
+        # defender already in the ball's path. None unless they are ready + the feature is on.
+        self.awakenedFire = None
+        if self.isFgBlocked:
             self.isFgGood = False
-            self.kicker.addMissedFg(self.fgDistance, self.game.isRegularSeasonGame)
-        elif self.awakenedFire or x <= probability:
+        elif x <= probability:
             self.isFgGood = True
+        else:
+            self.awakenedFire = self.game._awakenedTryFire('kick', self.kicker)
+            self.isFgGood = bool(self.awakenedFire)
+
+        if self.isFgGood:
             self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
             if yardsToFG > self.kicker.gameStatsDict['kicking']['longest']:
                 self.kicker.gameStatsDict['kicking']['longest'] = yardsToFG
