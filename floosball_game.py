@@ -9097,12 +9097,13 @@ class Play():
             self.game.consumeGameTime(gatherTime)
             self.game.checkTwoMinuteWarning()
         self.game.clockRunning = False
-        # Same clamp as kneel() — spike is gated off the final down today
-        # (spikeDownOK caps at 3rd), so down+1 can't exceed 4, but guard it
-        # anyway so the label never names a nonexistent down.
+        # Same guard as kneel() — a spike on the final down would surrender it
+        # (turnover on downs). Spike is gated off the final down today
+        # (spikeDownOK caps at 3rd), so this branch is currently unreachable,
+        # but keep the label honest so it never names a nonexistent down.
         self.playResult = (downPlayResult(self.game.down + 1)
                            if self.game.down < self.game.gameRules.downsPerSeries
-                           else downPlayResult(self.game.down))
+                           else PlayResult.TurnoverOnDowns)
 
     def kneel(self):
         """QB kneels to drain the clock. Loses 1 yard, ~4 seconds of game time.
@@ -9114,14 +9115,17 @@ class Play():
         # Only drain the actual play time (snap to knee-down)
         kneelDuration = min(4, self.game.gameClockSeconds)
         self.game.gameClockSeconds -= kneelDuration
-        # Label the NEXT down (1st->2nd...), but never a down that doesn't exist:
-        # a final-down kneel that ends the game would otherwise stamp a phantom
-        # "5th Down" (down+1) before the down-advancement section runs — and the
-        # game-ending kneel path deliberately skips overwriting it, so it leaks
-        # to the feed. Clamp to the current down on the final down.
+        # Label the NEXT down (1st->2nd...) on a non-final-down kneel. A kneel on
+        # the FINAL down surrenders the down, so it's a turnover on downs — the
+        # same label the down-advancement section stamps on a non-game-ending
+        # 4th-down kneel (:5432). Doing it here (vs. down+1 -> phantom "5th Down")
+        # gets the right label onto the play before it's broadcast at :5162; the
+        # game-ending kneel path skips its own re-label, so it would otherwise
+        # leak the phantom down. Momentum is still only applied off the
+        # non-game-ending path (:5431), so a victory kneel gets no spurious swing.
         self.playResult = (downPlayResult(self.game.down + 1)
                            if self.game.down < self.game.gameRules.downsPerSeries
-                           else downPlayResult(self.game.down))
+                           else PlayResult.TurnoverOnDowns)
 
     def calculateGapQuality(self, gapType: str, rbPower: int, rbAgility: int, blockingRating: int, defenseRunCoverage: int) -> float:
         """
