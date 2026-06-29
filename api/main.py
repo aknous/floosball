@@ -3911,6 +3911,19 @@ async def get_app_settings():
                         'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled'):
             if boolKey in settings:
                 settings[boolKey] = str(settings[boolKey]).lower() == 'true'
+        # Surface the awakened-charge dials at their EFFECTIVE value (an admin-set app_setting if present,
+        # otherwise the tuned constant) so the admin form mirrors what the sim actually uses — no hardcoded
+        # copy on the frontend to drift out of sync when these constants are retuned.
+        from constants import AWAKENED_INVOLVE_PER_GAME, AWAKENED_DEF_FIRE_CHANCE
+        for key, default in (
+            ('awakened_involve_qb', AWAKENED_INVOLVE_PER_GAME['QB']),
+            ('awakened_involve_rb', AWAKENED_INVOLVE_PER_GAME['RB']),
+            ('awakened_involve_wr', AWAKENED_INVOLVE_PER_GAME['WR']),
+            ('awakened_involve_te', AWAKENED_INVOLVE_PER_GAME['TE']),
+            ('awakened_involve_k', AWAKENED_INVOLVE_PER_GAME['K']),
+            ('awakened_def_fire_chance', AWAKENED_DEF_FIRE_CHANCE),
+        ):
+            settings.setdefault(key, default)
         return settings
     finally:
         session.close()
