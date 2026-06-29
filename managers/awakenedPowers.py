@@ -120,7 +120,7 @@ _POWERS = {
         'pick':  ['{player} ices the field over, the receiver slips, and {player} slides in for the pick'],
         'strip': ['{player} turns the turf to ice, the runner wipes out, and {player} skates off with the ball']},
 
-    'freestyle': {'name': 'Freestyle', 'concept': 'literally swims down the field',
+    'freestyle': {'name': 'Swim Move', 'concept': 'literally swims down the field',
         'run':   ['{player} dives into the field like its a pool and swims past the defense untouched for {yards} yards',
                   '{player} backstrokes past a diving tackle like it is open water, good for {yards} yards',
                   '{player} breaststrokes through the defensive line as the field ripples like water, gliding past tacklers for {yards} yards'],
