@@ -8212,6 +8212,8 @@ class SeasonManager:
             try:
                 currencyRepo = CurrencyRepository(session)
                 notifRepo = NotificationRepository(session)
+                from database.repositories.shop_repository import ShopPurchaseRepository
+                shopRepo = ShopPurchaseRepository(session)
                 # Pre-load Prosperity card flat-F bonuses per user
                 prosperityBonuses = {}
                 try:
@@ -8233,7 +8235,10 @@ class SeasonManager:
                         continue
                     userId = entry['userId']
                     # Endowment's +25% is applied uniformly at the bank (addFunds),
-                    # so the FP curve here is always the standard one.
+                    # so the FP curve here is always the standard one. We still look
+                    # up the boost here purely to stamp the notification's `boosted`
+                    # flag accurately.
+                    activeBoost = shopRepo.getActiveIncomeBoost(userId, season, week)
                     base = round(WEEKLY_FP_FLOOBIT_SCALE * (weekFp ** WEEKLY_FP_FLOOBIT_EXPONENT))
                     prosperity = prosperityBonuses.get(userId, 0)
                     reward = int(base + prosperity)
