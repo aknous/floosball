@@ -9097,7 +9097,12 @@ class Play():
             self.game.consumeGameTime(gatherTime)
             self.game.checkTwoMinuteWarning()
         self.game.clockRunning = False
-        self.playResult = downPlayResult(self.game.down + 1)
+        # Same clamp as kneel() — spike is gated off the final down today
+        # (spikeDownOK caps at 3rd), so down+1 can't exceed 4, but guard it
+        # anyway so the label never names a nonexistent down.
+        self.playResult = (downPlayResult(self.game.down + 1)
+                           if self.game.down < self.game.gameRules.downsPerSeries
+                           else downPlayResult(self.game.down))
 
     def kneel(self):
         """QB kneels to drain the clock. Loses 1 yard, ~4 seconds of game time.
@@ -9109,7 +9114,14 @@ class Play():
         # Only drain the actual play time (snap to knee-down)
         kneelDuration = min(4, self.game.gameClockSeconds)
         self.game.gameClockSeconds -= kneelDuration
-        self.playResult = downPlayResult(self.game.down + 1)
+        # Label the NEXT down (1st->2nd...), but never a down that doesn't exist:
+        # a final-down kneel that ends the game would otherwise stamp a phantom
+        # "5th Down" (down+1) before the down-advancement section runs — and the
+        # game-ending kneel path deliberately skips overwriting it, so it leaks
+        # to the feed. Clamp to the current down on the final down.
+        self.playResult = (downPlayResult(self.game.down + 1)
+                           if self.game.down < self.game.gameRules.downsPerSeries
+                           else downPlayResult(self.game.down))
 
     def calculateGapQuality(self, gapType: str, rbPower: int, rbAgility: int, blockingRating: int, defenseRunCoverage: int) -> float:
         """
