@@ -73,6 +73,8 @@ class ShopPurchaseRepository:
         # to currentWeek + 1 as the effective start). Visible immediately so
         # users see the slot after purchase, even though the duration doesn't
         # start counting until next week.
+        if currentWeek < 1:
+            return None  # offseason — see _OFFSEASON note below
         return self.session.query(ShopPurchase).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.season == season,
@@ -81,6 +83,8 @@ class ShopPurchaseRepository:
         ).first()
 
     def getActiveFortunesFavor(self, userId: int, season: int, currentWeek: int) -> Optional[ShopPurchase]:
+        if currentWeek < 1:
+            return None
         return self.session.query(ShopPurchase).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.season == season,
@@ -89,6 +93,8 @@ class ShopPurchaseRepository:
         ).first()
 
     def getActiveTempCardSlot(self, userId: int, season: int, currentWeek: int) -> Optional[ShopPurchase]:
+        if currentWeek < 1:
+            return None
         return self.session.query(ShopPurchase).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.season == season,
@@ -97,6 +103,8 @@ class ShopPurchaseRepository:
         ).first()
 
     def getActiveIncomeBoost(self, userId: int, season: int, currentWeek: int) -> Optional[ShopPurchase]:
+        if currentWeek < 1:
+            return None
         return self.session.query(ShopPurchase).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.season == season,
@@ -105,7 +113,15 @@ class ShopPurchaseRepository:
         ).first()
 
     def getActivePowerups(self, userId: int, season: int, currentWeek: int) -> List[ShopPurchase]:
-        """Get all active power-ups (either current week or with unexpired duration)."""
+        """Get all active power-ups (either current week or with unexpired duration).
+
+        _OFFSEASON: between the Floos Bowl and the next season, the league sets the current week to 0.
+        With `expires_at_week >= 0` always true, every still-on-the-books powerup (e.g. an Endowment
+        bought late) would read as active through the whole offseason and keep boosting offseason
+        income. No powerup is active once the season's games are over, so currentWeek < 1 -> nothing
+        active. (Cross-season is already safe: next season's rows carry a new `season`.)"""
+        if currentWeek < 1:
+            return []
         return self.session.query(ShopPurchase).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.season == season,

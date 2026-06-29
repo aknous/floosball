@@ -106,9 +106,16 @@ def testSuppressionMechanicsAndCap(session):
     assert state.suppression_window_ends_week == 20 + a.SUPPRESSION_WINDOW_WEEKS
     assert state.threshold == int(threshBefore * a.SUPPRESSION_THRESHOLD_BUMP), "threshold reinforced"
     assert state.last_reset_week == 20, "warning cycle re-armed"
-    # Over-cap fuel drained on every row.
+    # Over-cap fuel drained on every row. The drain targets SUPPRESSION_TARGET_RATIO * threshold (a deep
+    # ABSOLUTE drain when the aggregate overshot), never less aggressive than SUPPRESSION_AGGREGATE_DAMP —
+    # so with the aggregate seeded well over threshold the factor is the target-ratio one, not a flat 0.55.
+    # threshold is the post-bump value (state.threshold), aggregate the pre-drain 1200, bg = the week.
+    bg = 20.0
+    overCap = 1200.0 - bg
+    expectedDamp = max(0.0, min(a.SUPPRESSION_AGGREGATE_DAMP,
+                                max(0.0, a.SUPPRESSION_TARGET_RATIO * state.threshold - bg) / overCap))
     carries = [r.over_cap_carry for r in session.query(PlayerAttention).filter_by(season=season)]
-    assert all(abs(c - 200.0 * a.SUPPRESSION_AGGREGATE_DAMP) < 1e-6 for c in carries), "carry drained"
+    assert all(abs(c - 200.0 * expectedDamp) < 1e-6 for c in carries), "carry drained to target ratio"
 
     # Status during the window: number-free 'stabilizing' override.
     status = a.getCriticalityStatus(season, week=21)
@@ -121,14 +128,15 @@ def testSuppressionMechanicsAndCap(session):
     # Multiplier during the window is the floored value.
     assert a.getCriticalityMultiplier(season, week=21) == a.INSTABILITY_SUPPRESSED
 
-    # Cap: keep forcing crossings. Only SUPPRESSION_MAX_PER_SEASON patches land.
+    # No cap: every forced crossing lands a suppression. The near-miss beat stays frequent all season;
+    # real Criticalities are paced by the probabilistic break-through in _triggerCriticality
+    # (CRITICALITY_FIRE_CHANCE), not by a suppression cap.
     for wk in range(25, 40):
         a._suppressCriticality(state, currentWeek=wk, session=session)
     session.commit()
     sup = [e for e in state.cores_patches_applied if e.get('event') == 'suppression']
-    assert len(sup) == a.SUPPRESSION_MAX_PER_SEASON, \
-        f"cap not enforced: {len(sup)} patches vs cap {a.SUPPRESSION_MAX_PER_SEASON}"
-    print(f"  ok: suppression mechanics + cap ({a.SUPPRESSION_MAX_PER_SEASON}/season)")
+    assert len(sup) == 1 + 15, f"every crossing should suppress (no cap); got {len(sup)}"
+    print(f"  ok: suppression mechanics + uncapped near-miss beats ({len(sup)} forced)")
 
 
 def testStatusBands(session):
@@ -163,11 +171,12 @@ def testCoresExchanges():
     football-fan character split, and solo fallback."""
     import managers.coresManager as c
 
-    # The roster carries the orthogonal football-interest trait, with exactly
-    # one fanatic and a mix of into-it / not.
+    # The roster carries the orthogonal football-interest trait: TWO fanatics of different flavors
+    # (Cassian the stats-and-trends fanatic, Pyre the simple-minded fan of the sport) plus a mix of
+    # into-it / not.
     interests = {k: v['footballInterest'] for k, v in c.CORES.items()}
     fanatics = [k for k, v in interests.items() if v == 'fanatic']
-    assert len(fanatics) == 1, f"exactly one fanatic expected, got {fanatics}"
+    assert len(fanatics) == 2, f"two fanatics expected (cassian, pyre), got {fanatics}"
     assert any(v == 'none' for v in interests.values()), "some Cores are not into football"
     assert any(v in ('fond', 'secret') for v in interests.values()), "some Cores are into football"
 
