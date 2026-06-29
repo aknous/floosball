@@ -7063,6 +7063,10 @@ class Game:
         critMult = AWAKENED_CRITICALITY_CHARGE_MULT if self._criticalityActive else 1.0
         _slotPos = {'qb': 'QB', 'rb': 'RB', 'wr1': 'WR', 'wr2': 'WR', 'te': 'TE', 'k': 'K'}
         off = getattr(play, 'offense', None)
+        # The player who just FIRED a power on this play has discharged — don't let the SAME play
+        # re-charge them (that produced an instant "powering up..." right after using their power).
+        _af = getattr(play, 'awakenedFire', None)
+        firedPid = _af.get('playerId') if _af else None
         def _posOf(pl):
             # Reverse-look-up the player's position from the offense roster slot (reliable regardless of
             # the Player.position field format).
@@ -7079,7 +7083,7 @@ class Game:
             if pl is None or amt <= 0:
                 return
             pid = getattr(pl, 'id', None)
-            if pid not in self._awakenedCharge:
+            if pid == firedPid or pid not in self._awakenedCharge:
                 return
             # Fill toward the threshold; at full, the meter holds (ready) and waits to fire (P3).
             # It does NOT keep accumulating past full — the next covered play discharges it.
@@ -7095,18 +7099,19 @@ class Game:
                   and not self._awakenedPoweringUp.get(pid)):
                 self._awakenedPoweringUp[pid] = True
                 self._setAwakenedStatus(play, pl, 'powering_up')
-        # Offense — a FLAT charge per play the player is INVOLVED in (carry / pass attempt / reception /
-        # kick), NOT scaled by yards, so the meter fills on touches and game-to-game variance is low.
-        # Per-position rate (THRESHOLD / typical involvements) -> each fills ~once over a normal game.
-        if pt is PlayType.Run:
+        # Offense — a FLAT charge per POSITIVE play the player is involved in (a gain / completion /
+        # made kick), NOT scaled by yards. A failed play (loss/no-gain run, incompletion, missed FG)
+        # builds nothing — the meter only rewards productive snaps. Per-position rate
+        # (THRESHOLD / typical positive involvements) -> each fills ~once over a normal game.
+        yds = getattr(play, 'yardage', 0) or 0
+        if pt is PlayType.Run and yds > 0:
             r = getattr(play, 'runner', None)
             _charge(r, _involve(_posOf(r)))
-        elif pt is PlayType.Pass:
-            _charge(getattr(play, 'passer', None), _involve('QB'))   # the QB threw it — involved on every attempt
-            if getattr(play, 'isPassCompletion', False):
-                rc = getattr(play, 'receiver', None)
-                _charge(rc, _involve(_posOf(rc)))
-        elif pt in (PlayType.FieldGoal, PlayType.ExtraPoint):
+        elif pt is PlayType.Pass and getattr(play, 'isPassCompletion', False):
+            _charge(getattr(play, 'passer', None), _involve('QB'))
+            rc = getattr(play, 'receiver', None)
+            _charge(rc, _involve(_posOf(rc)))
+        elif pt in (PlayType.FieldGoal, PlayType.ExtraPoint) and getattr(play, 'isFgGood', False):
             _charge(getattr(play, 'kicker', None), _involve('K'))
         # Defense — a small flat charge per stop, so offense stays the dominant (and earlier) source.
         if pt in (PlayType.Run, PlayType.Pass):

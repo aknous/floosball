@@ -1126,7 +1126,7 @@ AWAKENED_CHARGE_THRESHOLD = 100.0   # meter fills at this, then resets and the a
 # Each value is the typical number of such involvements a position gets per game; the per-involvement
 # charge is THRESHOLD / value, so a position fills ~once over a normal game (late), and falls short on
 # a quiet game (so it can fail to fire). Tune these to move the rate per position.
-AWAKENED_INVOLVE_PER_GAME = {'QB': 31.0, 'RB': 19.0, 'WR': 5.8, 'TE': 5.5, 'K': 1.7}
+AWAKENED_INVOLVE_PER_GAME = {'QB': 16.0, 'RB': 13.0, 'WR': 5.5, 'TE': 5.5, 'K': 0.5}
 AWAKENED_CHARGE_DEF_EVENT = 0.0     # flat charge per defensive stop — kept small so offense dominates
 AWAKENED_POWERING_UP_PCT = 0.5      # charge fraction that triggers the "powering up..." feed beat
 AWAKENED_DEF_FIRE_CHANCE = 35       # % a ready, position-appropriate defender discharges on a covered snap
