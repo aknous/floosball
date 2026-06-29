@@ -187,8 +187,10 @@ THRESHOLD_DECAY_AFTER_CRITICALITY = 1.0
 # With the feature enabled, a threshold crossing does NOT automatically fire a Criticality. The
 # aggregate hits the bar roughly every 2-3 weeks, so firing on every crossing yields ~7-12/season —
 # far too many for a "rare league event". Instead each crossing fires with THIS probability and
-# otherwise SUPPRESSES (the Cores catch it — the common near-miss beat), pacing real events to ~1-2/season.
-CRITICALITY_FIRE_CHANCE = 0.15
+# otherwise SUPPRESSES (the Cores catch it — the common near-miss beat). Tuned against a realistic-
+# attention harness: 0.30 lands real prod at ~1.3 Criticalities/season (inside the target 1-2 band) with
+# ~85% odds of at least one, and still leaves ~6 near-miss suppressions a season for the Cores tension.
+CRITICALITY_FIRE_CHANCE = 0.30
 
 # Criticality duration — number of rounds (weeks) the Criticality is active.
 # 1 round for first Criticality, 2 rounds if the aggregate was 50%+ over
