@@ -179,9 +179,16 @@ THRESHOLD_JITTER = 0.10
 # is floored league-wide.
 SUPPRESSION_WINDOW_WEEKS = 2
 
-# Each subsequent Criticality in the same season triggers at a reduced
-# threshold so engaged leagues get multiple events.
-THRESHOLD_DECAY_AFTER_CRITICALITY = 0.75
+# Threshold change applied after a Criticality fires. Held at 1.0 (no change): the old <1.0 value
+# LOWERED the bar after each event, making repeats progressively EASIER — backwards for pacing a rare
+# event (the aggregate already re-crosses every ~2-3 weeks). Pacing now lives in CRITICALITY_FIRE_CHANCE.
+THRESHOLD_DECAY_AFTER_CRITICALITY = 1.0
+
+# With the feature enabled, a threshold crossing does NOT automatically fire a Criticality. The
+# aggregate hits the bar roughly every 2-3 weeks, so firing on every crossing yields ~7-12/season —
+# far too many for a "rare league event". Instead each crossing fires with THIS probability and
+# otherwise SUPPRESSES (the Cores catch it — the common near-miss beat), pacing real events to ~1-2/season.
+CRITICALITY_FIRE_CHANCE = 0.15
 
 # Criticality duration — number of rounds (weeks) the Criticality is active.
 # 1 round for first Criticality, 2 rounds if the aggregate was 50%+ over
@@ -207,16 +214,14 @@ INSTABILITY_RAMP_START = 0.40        # ratio below which the dial stays at basel
 INSTABILITY_SUPPRESSED = 0.45        # multiplier during a suppression window — pointedly quiet
 
 # ── Near-miss / patch beat (P3) ───────────────────────────────────────────────
-# When the aggregate crosses threshold while Criticality is gated, the Cores
-# scramble and force it back rather than letting the event fire. This is the
-# dramatized tease beat — each one quieter to recover from.
+# When the aggregate crosses threshold the Cores scramble and force it back rather
+# than letting the event fire — the dramatized "near-miss" tease beat.
 #
-# Cap behavior: while Criticality is GATED OFF, there is NO cap — the Cores
-# suppress every crossing, so the tease never "gives up" and pins the league at
-# 100% all season. Once Criticality is ENABLED, the cap applies (after this many
-# saves, the next crossing fires the real event). Enforced in
-# _suppressCriticality, conditional on ANOMALY_CRITICALITY_ENABLED.
-SUPPRESSION_MAX_PER_SEASON = 1  # cap once Criticality is enabled; unlimited while gated
+# There is NO per-season cap on suppressions, gated OR enabled: the Cores catch the
+# league on (almost) every crossing, so the near-miss beat stays frequent all
+# season — it's the common Cores-dialogue moment. What makes a real Criticality
+# RARE is the probabilistic break-through in _triggerCriticality
+# (CRITICALITY_FIRE_CHANCE): most crossings suppress, only ~1-2/season fire instead.
 SUPPRESSION_AGGREGATE_DAMP = 0.55    # minimum drain on a patch (knock off at least 45%)
 SUPPRESSION_TARGET_RATIO = 0.30      # but always drain down to AT LEAST this fraction of threshold
                                      # — below the warning floor, so a patch visibly stabilizes even
@@ -1127,9 +1132,12 @@ def _maybeFireReset(session: Session, seasonNumber: int, week: int) -> None:
     # Reset fires on the week immediately after the Criticality window ends.
     if week <= criticalityEndWeek:
         return  # Criticality still active
-    if state.last_reset_week == criticalityEndWeek + 1:
-        return  # Already handled this Criticality
     _fireReset(session, state, week)
+    # The Criticality is fully resolved (event fired + Reset issued) — clear the active flag so this
+    # Reset fires exactly ONCE. (The old dedup keyed off last_reset_week, but _suppressCriticality
+    # re-arms that field on every later suppression; with suppressions now uncapped a post-fire
+    # suppression would un-dedup the Reset and make it re-fire every week for the rest of the season.)
+    state.last_thinning_week = None
 
 
 def _fireReset(session: Session, state: LeagueAnomalyState, week: int) -> None:
@@ -1276,6 +1284,13 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
     if not getAnomalySetting(session, 'criticality_enabled', ANOMALY_CRITICALITY_ENABLED):
         _suppressCriticality(state, currentWeek, session=session)
         return
+    # Even with the feature ON, a crossing MOSTLY suppresses (the Cores catch it — the common near-miss
+    # beat, and the Cores dialogue it surfaces). Only occasionally does it break through and a
+    # Criticality actually FIRES, keeping it the rare ~1-2/season event it's meant to be (the aggregate
+    # re-crosses every ~2-3 weeks, so firing every time would mean ~7-12/season).
+    if random.random() >= CRITICALITY_FIRE_CHANCE:
+        _suppressCriticality(state, currentWeek, session=session)
+        return
     overRatio = state.aggregate_score / max(1, state.threshold)
     duration = (
         CRITICALITY_DURATION_RUNAWAY
@@ -1359,18 +1374,6 @@ def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
     # so the league never gets stuck pinned at 100%. The cap only bites once the
     # real event is enabled.
     from constants import ANOMALY_CRITICALITY_ENABLED
-    if getAnomalySetting(session, 'criticality_enabled', ANOMALY_CRITICALITY_ENABLED) and priorPatches >= SUPPRESSION_MAX_PER_SEASON:
-        # Out of patches for the season — the Cores can't force it back again.
-        # The league stays pinned critical (the instability dial sits at its
-        # ceiling), but the event remains gated off, so nothing actually fires.
-        logger.warning(
-            f"Criticality crossed threshold but suppression cap reached "
-            f"({priorPatches}/{SUPPRESSION_MAX_PER_SEASON}); league pinned critical "
-            f"(season={state.season}, week={currentWeek}, "
-            f"aggregate={state.aggregate_score:.1f})."
-        )
-        return
-
     patchNumber = priorPatches + 1
     # The Core that mechanically led the patch (recorded for getCriticalityStatus
     # / the control room). The narration below is a multi-Core scramble exchange
@@ -1431,7 +1434,7 @@ def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
     state.aggregate_score = backgroundPressure + currentOverCap * dampFactor
 
     logger.warning(
-        f"CRITICALITY SUPPRESSED (patch #{patchNumber}/{SUPPRESSION_MAX_PER_SEASON}, "
+        f"CRITICALITY SUPPRESSED (patch #{patchNumber}, "
         f"season={state.season}, week={currentWeek}): core={controllingCore}, "
         f"aggregate forced to {state.aggregate_score:.1f}, threshold reinforced to "
         f"{state.threshold}, quiet until week {state.suppression_window_ends_week} "

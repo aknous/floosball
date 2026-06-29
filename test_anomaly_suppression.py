@@ -121,14 +121,15 @@ def testSuppressionMechanicsAndCap(session):
     # Multiplier during the window is the floored value.
     assert a.getCriticalityMultiplier(season, week=21) == a.INSTABILITY_SUPPRESSED
 
-    # Cap: keep forcing crossings. Only SUPPRESSION_MAX_PER_SEASON patches land.
+    # No cap: every forced crossing lands a suppression. The near-miss beat stays frequent all season;
+    # real Criticalities are paced by the probabilistic break-through in _triggerCriticality
+    # (CRITICALITY_FIRE_CHANCE), not by a suppression cap.
     for wk in range(25, 40):
         a._suppressCriticality(state, currentWeek=wk, session=session)
     session.commit()
     sup = [e for e in state.cores_patches_applied if e.get('event') == 'suppression']
-    assert len(sup) == a.SUPPRESSION_MAX_PER_SEASON, \
-        f"cap not enforced: {len(sup)} patches vs cap {a.SUPPRESSION_MAX_PER_SEASON}"
-    print(f"  ok: suppression mechanics + cap ({a.SUPPRESSION_MAX_PER_SEASON}/season)")
+    assert len(sup) == 1 + 15, f"every crossing should suppress (no cap); got {len(sup)}"
+    print(f"  ok: suppression mechanics + uncapped near-miss beats ({len(sup)} forced)")
 
 
 def testStatusBands(session):
