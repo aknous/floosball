@@ -10120,7 +10120,11 @@ class Play():
         # because their throw quality runs lower.
         intOpenness = receiverActualOpenness if receiverActualOpenness is not None else receiverOpenness
         cov = defensePassCoverage
-        covFactor = cov / 100
+        # Soft-cap the coverage factor around an 80 baseline (half-slope) instead of reading absolute
+        # coverage (the old cov/100). An evolved league's elevated coverage (mean ~83 vs a young league's
+        # ~75) otherwise compounds the pick rate every season; centering on 80 keeps the INT contribution
+        # league-relative so the rate holds as attributes climb. Feeds pBadRead + pBadThrow below.
+        covFactor = 0.80 + (cov - 80) / 100 * 0.5
         openGap = max(0.0, 50 - intOpenness) / 50      # 0 open … 1 blanketed
         throwGap = max(0.0, 55 - throwQuality) / 55    # 0 sharp … 1 errant
         # Proximity: how reachable the ball is for a defender. Full effect when
@@ -10140,7 +10144,9 @@ class Play():
 
         pBadRead = openGap * covFactor * INT_BAD_READ_K
         pBadThrow = throwGap * (0.4 + 0.6 * covFactor) * proximity * INT_BAD_THROW_K
-        pDefPlay = max(0.0, (cov - 70) / 30) * openGap * INT_DEF_PLAY_K
+        # DB-jumps-the-throw path — the worst attribute over-scaler. Anchored at 72 / ÷50 (was 70 / ÷30)
+        # so an evolved league's high coverage doesn't ~2.6x this term in the 80-92 band where aged DBs live.
+        pDefPlay = max(0.0, (cov - 72) / 50) * openGap * INT_DEF_PLAY_K
 
         intFrac = 1 - (1 - pBadRead) * (1 - pBadThrow) * (1 - pDefPlay)
         intProb = intFrac * 100
