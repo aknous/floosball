@@ -1,10 +1,20 @@
 # Awakened Powers (L4) — Design Spec & Build Plan
 
-Status: **DESIGN LOCKED 2026-06-14**, not yet built. Backend `next-season`. The
-feature is the mechanical L4 layer of the anomaly system — see
+Status: **DESIGN LOCKED 2026-06-14**, not yet built. Backend `next-season`. **Sim-evolution STAGE 1**
+(awakened powers + un-gating Criticality; rule changes are Stage 2, chrome Stage 3 — see the staging
+note in `docs/SIM_EVOLUTION.md`. Goal is to ship Stages 1–2 together).
+The feature is the mechanical L4 layer of the anomaly system — see
 `docs`/CLAUDE.md "Anomaly System" + the `sim_evolution_anomaly` /
 `criticality_event_design` memories for the surrounding context (ladder, Cores,
 suppression cycle, instability dial, all already shipped + gated).
+
+> **Related:** `docs/SIM_EVOLUTION.md` — Criticality *aftermath* ideas (fan-voted rule mutation
+> by Aris / reversion by Pyre; player resurrection by Vera/Cassian, paid for in facility levels).
+> Those build on the machinery defined here.
+>
+> **Related:** `docs/CHROME.md` — the cyberpunk-chrome *character* layer (the Cores get bored and
+> start installing cybernetic augments into players). Top-down counterpart to this doc's bottom-up
+> awakening; leading proposal is chrome = the visible escalation of awakening.
 
 ## The reframe vs. the old design
 The earlier locked design had L4 powers as **Criticality-exclusive** (awakened

@@ -110,6 +110,15 @@ INT_DEF_PLAY_K = 0.065   # above-average DB jumps a contested throw
 # mustThrow), scale the computed INT probability by this factor. 1.0 = no dampening.
 INT_DESPERATION_DAMPEN = 0.55
 
+# Clutch turnover amplification — high-pressure games (gamePressure >= CLUTCH_PRESSURE_THRESHOLD)
+# spike both fumbles and INTs for a CHOKING player. The base rates are NFL-realistic; only this
+# clutch SPIKE was too hot (turnover-fest Floos Bowls), so it's DAMPENED here (not the base).
+FUMBLE_BASE_THRESHOLD = 98        # run-fumble roll threshold; > this = fumble (~2% base, was 97/~3%).
+FUMBLE_CHOKE_FLOOR = 95           # clutch choke can't drop the fumble threshold below this (was 92)
+FUMBLE_CHOKE_SWING_K = 1.0        # per-unit-of-choke drop on the threshold (was 2.0)
+INT_CHOKE_BOOST_K = 0.0           # clutch-choke INT-prob boost OFF (was 1.5) — the QB's throw-quality
+                                  # drop under pressure already raises clutch INTs; this extra boost double-counted.
+
 # Hail mary: a desperation end-zone heave into a crowd should connect only as a
 # rare miracle. The normal two-phase catch model lands a contested deep ball
 # well above that, so the hail-mary catch probability is scaled down to target
@@ -123,6 +132,17 @@ CLUTCH_MODIFIER_THRESHOLD = 2.0   # Min keyPressureMod for clutch
 CHOKE_MODIFIER_THRESHOLD = 1.5    # Min abs(keyPressureMod) for choke
 CLUTCH_WPA_THRESHOLD = 6.0        # Min WPA% impact for clutch plays
 CHOKE_WPA_THRESHOLD = 5.0         # Min WPA% impact for choke plays
+
+# Mental model — Confidence × Discipline (docs/MENTAL_MODEL.md). Starting values;
+# tune via /simcheck + the scenario harness.
+MENTAL_EXEC_GAIN = 3.0       # rating pts of execution per full confidence unit (C=±1)
+MENTAL_FROZEN_K = 2.0        # extra underperformance for low-confidence × undisciplined ("frozen")
+MENTAL_GUNSLINGER_K = 6.0    # pp added to turnover odds for high-confidence × undisciplined
+# Aggression (play-style): confidence drives a QB's willingness to force a throw
+# into a tight window vs check down / throw it away.
+MENTAL_AGGR_ROLL_K = 25      # +/- to the "force the throw" roll per full confidence unit
+MENTAL_AGGR_BAIL_K = 15      # shifts the throw-away bail threshold per full confidence unit
+MENTAL_DIVE_K = 10          # catch-prob (pp) a confident receiver gains laying out for a contested ball
 
 # WPA -> player value attribution (see docs/WPA_MVP_PLAN.md). Per-play win
 # probability swing is credited to the players involved and accumulated into a
@@ -584,9 +604,14 @@ NAME_REUSE_DELAY_SEASONS = 5
 # weaker than the active win/loss push, so a genuinely losing team still sours --
 # just slower -- while a soured player on a mid-tier team or in the FA pool recovers
 # (~+0.4/week at attitude 40 -> Sour in a season, Steady in two).
-ATTITUDE_NEUTRAL = 80              # resting attitude the reversion pulls toward
-ATTITUDE_REVERT_RATE = 0.01       # weekly reversion = this fraction of distance-to-neutral
-ATTITUDE_DRIFT_MAGNITUDE = 3      # win/loss drift multiplier on |winPct-0.5| (was 4)
+ATTITUDE_NEUTRAL = 80              # global fallback anchor (used only if a player has no baseline)
+# Reversion now pulls toward each player's attitude_baseline (their DISPOSITION), not a
+# global neutral — so attitude is a stable trait, and a bad season is a recoverable dip
+# rather than a slide into permanent toxicity. Rate raised 0.01 -> 0.05 so reversion
+# actually dominates the drift (the old 0.01 was glacial — veterans soured monotonically
+# with tenure because the drift accumulated faster than reversion could recover).
+ATTITUDE_REVERT_RATE = 0.05       # weekly reversion = this fraction of distance-to-BASELINE
+ATTITUDE_DRIFT_MAGNITUDE = 1.5    # win/loss drift multiplier on |winPct-0.5| (dampened 3 -> 1.5)
 
 # ---- Roster Supply Floor ----
 # After retirements are known, guarantee the league has enough living players at
@@ -1085,6 +1110,44 @@ REACTION_TYPES = {"hype", "love", "wow", "laugh", "cry", "mad"}
 #     land. Pushed back beyond the upcoming season. Do NOT enable without an
 #     explicit go from the owner.
 ANOMALY_CRITICALITY_ENABLED = False
+
+# Awakened (L4) signature powers — the mechanical L4 layer (docs/AWAKENED_POWERS_PLAN.md).
+# Separate gate from Criticality so the powers can be built + tested on a branch without going live.
+# When False: awakening assigns no signature abilities, nothing is surfaced, no game effect.
+# When True: awakened players get a fixed offensive + defensive ability + a per-game charge meter
+# that fires the ability (~1-2/game), with Criticality as the overdrive. Default OFF.
+ANOMALY_AWAKENED_POWERS_ENABLED = False
+
+# Runtime anomaly-intensity presets — the 'anomaly_intensity' app_settings knob maps to one of these
+# numeric multipliers, applied to the per-play glitch probability AND the per-game glitch cap. 'normal'
+# is the design baseline (1.0); 'chaos' floods, 'low' dampens. Default preset is 'normal'.
+ANOMALY_INTENSITY_PRESETS = {'low': 0.5, 'normal': 1.0, 'high': 2.5, 'chaos': 5.0}
+
+# Awakened charge meter (P2) — a per-game bar per awakened player, fed by impact-weighted positive
+# involvement (yards on offense, stops on defense, made kicks). Fills ~1-2x/game for a focal player;
+# each fill = the signature ability is ready to fire (P3). Tuned in playtest (Criticality scales these
+# up via the instability dial in P5).
+AWAKENED_CHARGE_THRESHOLD = 100.0   # meter fills at this, then resets and the ability is "ready"
+# Charge per PLAY THE PLAYER IS INVOLVED IN (a carry / pass attempt / reception / kick) — a FLAT amount,
+# NOT scaled by yards, so a 2-yarder and a 60-yarder charge the same and game-to-game variance is low.
+# Each value is the typical number of such involvements a position gets per game; the per-involvement
+# charge is THRESHOLD / value, so a position fills ~once over a normal game (late), and falls short on
+# a quiet game (so it can fail to fire). Tune these to move the rate per position.
+AWAKENED_INVOLVE_PER_GAME = {'QB': 16.0, 'RB': 13.0, 'WR': 5.5, 'TE': 5.5, 'K': 0.5}
+AWAKENED_CHARGE_DEF_EVENT = 0.0     # flat charge per defensive stop — kept small so offense dominates
+AWAKENED_POWERING_UP_PCT = 0.5      # charge fraction that triggers the "powering up..." feed beat
+AWAKENED_DEF_FIRE_CHANCE = 35       # % a ready, position-appropriate defender discharges on a covered snap
+                                    # (gates defensive fires so they don't dominate offense — A-lite)
+AWAKENED_CRITICALITY_CHARGE_MULT = 4.0  # during a Criticality the charge meter fills this much faster
+                                        # (the OVERDRIVE: ~1/game normally -> ~several/game = "frequent")
+
+# Awakened fire outcomes (P3) — when a power fires, force a big breakaway: a base gain (run/pass)
+# PLUS an exponential tail for variance, capped at the end zone. So a fired play ranges (e.g. 45, 60,
+# 78, or a house call) instead of always landing on the flat floor, and from scoring range it just
+# scores. Tail = the exponential mean of the bonus yardage.
+AWAKENED_FORCE_RUN_GAIN = 45
+AWAKENED_FORCE_PASS_GAIN = 40
+AWAKENED_FORCE_GAIN_TAIL = 20
 
 # ── Glitch firing hygiene ─────────────────────────────────────────────────────
 # Per-play per-candidate glitch probability = min(CAP, attention / SCALE ×

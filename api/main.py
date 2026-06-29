@@ -528,6 +528,18 @@ async def get_team(team_id: int, response: Response):
                 DBTeamSeasonStats.team_id == team.id,
                 DBTeamSeasonStats.season < currentSeasonNum
             ).order_by(DBTeamSeasonStats.season.desc()).all()
+            # "Made the playoffs" = actually played a playoff game. The stored made_playoffs flag is
+            # a standings-time "qualified top-6" stamp; a mid-playoff crash/resume can delete the
+            # playoff games while leaving that flag, showing a phantom appearance. Derive it from the
+            # games so the displayed value can never disagree with what actually happened.
+            from database.models import Game as DBGame
+            playoffSeasons = {
+                s for (s,) in dbSession.query(DBGame.season).filter(
+                    DBGame.is_playoff == True,
+                    DBGame.status == 'final',
+                    (DBGame.home_team_id == team.id) | (DBGame.away_team_id == team.id),
+                ).distinct().all()
+            }
             for row in pastRows:
                 pastEntry = {
                     'season': row.season,
@@ -538,7 +550,7 @@ async def get_team(team_id: int, response: Response):
                     'winPerc': row.win_percentage or 0.0,
                     'streak': row.streak or 0,
                     'scoreDiff': row.score_differential or 0,
-                    'madePlayoffs': row.made_playoffs,
+                    'madePlayoffs': row.season in playoffSeasons,
                     'leagueChamp': row.league_champion,
                     'floosbowlChamp': row.floosball_champion,
                     'topSeed': row.top_seed,
@@ -1500,12 +1512,28 @@ async def get_player_anomaly(player_id: int):
         ).first()
         if row is None or row.state in (None, 'stable'):
             return build_success_response(None)
+        # L4 awakened signature power (gated) — the player's ONE career power + the situations it works in.
+        from constants import ANOMALY_AWAKENED_POWERS_ENABLED
+        signaturePower = None
+        if ANOMALY_AWAKENED_POWERS_ENABLED and row.state == 'awakened':
+            from managers import awakenedPowers
+            from database.models import Player as _Player
+            player = session.query(_Player).filter_by(id=player_id).first()
+            key = player.signature_power if player else None
+            if key:
+                signaturePower = {
+                    'key': key,
+                    'name': awakenedPowers.powerName(key),
+                    'concept': awakenedPowers.powerConcept(key),
+                    'situations': awakenedPowers.coveredSituations(key),
+                }
         return build_success_response({
             'state': row.state,
             'ability': row.ability,
             'abilityTier': row.ability_tier,
             'awakenedAtWeek': row.awakened_at_week,
             'seasonsCarried': row.seasons_carried,
+            'signaturePower': signaturePower,
         })
     finally:
         session.close()
@@ -1856,6 +1884,8 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'glitchPlayerName': getattr(play_data, 'glitchPlayerName', None),
                                 'glitchLayer': getattr(play_data, 'glitchLayer', None),
                                 'glitchYardDelta': getattr(play_data, 'glitchYardDelta', None),
+                                'awakenedFire': getattr(play_data, 'awakenedFire', None),
+                                'awakenedStatus': getattr(play_data, 'awakenedStatus', None),
                             }
                     serializable_plays.append(play_data)
                 elif 'event' in item:
@@ -3520,6 +3550,22 @@ async def get_stat_leaders(
             filtered = [p for p in filtered if getattr(p, 'seasonPerformanceRating', 0) > 0 and getattr(p, 'gamesPlayed', 0) >= 1]
         filtered.sort(key=lambda p: extractStat(p, category), reverse=True)
 
+        # Awakened players (persistent L4 signature power) — one bulk query, for a blue name-glow.
+        awakenedIds = set()
+        try:
+            from database.connection import get_session as _gs
+            from database.models import AnomalyState as _AS
+            _sm = floosball_app.seasonManager
+            _seasonNum = _sm.currentSeason.seasonNumber if _sm and _sm.currentSeason else 0
+            _s = _gs()
+            try:
+                awakenedIds = {r.player_id for r in
+                               _s.query(_AS.player_id).filter_by(season=_seasonNum, state='awakened').all()}
+            finally:
+                _s.close()
+        except Exception:
+            awakenedIds = set()
+
         leaders = []
         for rank, player in enumerate(filtered[:limit], 1):
             sd = player.seasonStatsDict
@@ -3537,6 +3583,7 @@ async def get_stat_leaders(
                 'gamesPlayed': player.gamesPlayed,
                 'statValue': extractStat(player, category),
                 'fantasyPoints': sd.get('fantasyPoints', 0) + player.gameStatsDict.get('fantasyPoints', 0),
+                'awakened': player.id in awakenedIds,
             }
             # Include relevant secondary stats per position
             pos = entry['position']
@@ -3859,10 +3906,24 @@ async def get_app_settings():
     try:
         rows = session.query(AppSetting).all()
         settings = {row.key: row.value for row in rows}
-        # Coerce booleans for keys we know are boolean
-        for boolKey in ('feedback_visible', 'survey_visible'):
+        # Coerce booleans for keys we know are boolean (anomaly_intensity stays a string).
+        for boolKey in ('feedback_visible', 'survey_visible',
+                        'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled'):
             if boolKey in settings:
                 settings[boolKey] = str(settings[boolKey]).lower() == 'true'
+        # Surface the awakened-charge dials at their EFFECTIVE value (an admin-set app_setting if present,
+        # otherwise the tuned constant) so the admin form mirrors what the sim actually uses — no hardcoded
+        # copy on the frontend to drift out of sync when these constants are retuned.
+        from constants import AWAKENED_INVOLVE_PER_GAME, AWAKENED_DEF_FIRE_CHANCE
+        for key, default in (
+            ('awakened_involve_qb', AWAKENED_INVOLVE_PER_GAME['QB']),
+            ('awakened_involve_rb', AWAKENED_INVOLVE_PER_GAME['RB']),
+            ('awakened_involve_wr', AWAKENED_INVOLVE_PER_GAME['WR']),
+            ('awakened_involve_te', AWAKENED_INVOLVE_PER_GAME['TE']),
+            ('awakened_involve_k', AWAKENED_INVOLVE_PER_GAME['K']),
+            ('awakened_def_fire_chance', AWAKENED_DEF_FIRE_CHANCE),
+        ):
+            settings.setdefault(key, default)
         return settings
     finally:
         session.close()
@@ -3877,7 +3938,10 @@ async def admin_update_app_settings(payload: Dict[str, Any], _auth: None = Depen
     if not isinstance(payload, dict) or not payload:
         raise HTTPException(status_code=400, detail="payload must be a non-empty object")
     allowed = {'feedback_url', 'feedback_visible', 'survey_url', 'survey_visible', 'survey_text',
-               'halftime_show_url', 'halftime_show_pause_seconds'}
+               'halftime_show_url', 'halftime_show_pause_seconds',
+               'anomalies_enabled', 'criticality_enabled', 'awakened_powers_enabled', 'anomaly_intensity',
+               'awakened_involve_qb', 'awakened_involve_rb', 'awakened_involve_wr', 'awakened_involve_te',
+               'awakened_involve_k', 'awakened_def_fire_chance'}
     session = get_session()
     try:
         updated = []

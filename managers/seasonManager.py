@@ -84,11 +84,20 @@ class Season:
         self.currentWeekText = None
         self.startDate: datetime.datetime = datetime.datetime.utcnow()
         # Rule book for this season. Defaults to the standard ruleset.
-        # Future Cores' rule patches mutate this object via
-        # ``gameRules.applyPatch(...)`` and the patch propagates to
-        # every game scheduled in this season from that point forward.
-        from game_rules import GameRules
+        # Cores' rule patches (e.g. a fan-voted scoring change) are persisted
+        # in app_settings and hydrated here, so the mutated ruleset is in force
+        # from this season's first game and survives restarts. The patch then
+        # propagates to every game scheduled in this season (each Game holds a
+        # reference to this object). No-op when nothing is persisted.
+        from game_rules import GameRules, loadRuleOverrides
         self.gameRules = GameRules()
+        _ruleOverrides = loadRuleOverrides()
+        if _ruleOverrides:
+            _appliedRules = self.gameRules.applyOverrides(
+                _ruleOverrides, reason="season start", source="persisted")
+            if _appliedRules:
+                logger.info("  GameRules: applied persisted rule override(s): "
+                            f"{ {k: _ruleOverrides[k] for k in _appliedRules} }")
         self.activeGames = None
         self.completedWeekGames = None  # Finished games kept for display until next week
         self.schedule: List[Dict[str, FloosGame.Game]] = []
@@ -9030,7 +9039,9 @@ class SeasonManager:
                 # a mid-tier team or in the FA pool recovers over a season or two.
                 # Probabilistic 1-point step (fractional amount = chance of a move)
                 # so a small rate still shifts the integer attribute.
-                revertAmount = (ATTITUDE_NEUTRAL - current) * ATTITUDE_REVERT_RATE
+                # Revert toward THIS player's disposition baseline, not a global neutral.
+                _baseline = getattr(p.attributes, 'attitudeBaseline', 0) or ATTITUDE_NEUTRAL
+                revertAmount = (_baseline - current) * ATTITUDE_REVERT_RATE
                 step = int(revertAmount)
                 frac = abs(revertAmount - step)
                 if frac and _attFrac() < frac:
@@ -9048,7 +9059,8 @@ class SeasonManager:
             if attrs is None:
                 continue
             current = getattr(attrs, 'attitude', 80) or 80
-            revertAmount = (ATTITUDE_NEUTRAL - current) * ATTITUDE_REVERT_RATE
+            _baseline = getattr(attrs, 'attitudeBaseline', 0) or ATTITUDE_NEUTRAL
+            revertAmount = (_baseline - current) * ATTITUDE_REVERT_RATE
             step = int(revertAmount)
             frac = abs(revertAmount - step)
             if frac and _attFrac() < frac:

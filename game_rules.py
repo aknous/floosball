@@ -58,6 +58,12 @@ class GameRules:
     timeoutClockThreshold: int = 120    # Below this in Q2/Q4, timeout considered
     kneelDrainSeconds: int = 40         # Clock burned per kneel
 
+    # ── Clock stoppage (the Cores can flip these to a "running clock") ──
+    # When False, that event no longer stops the clock — the inter-play clock
+    # keeps draining, so games have far fewer plays. Defaults = standard football.
+    clockStopsOnIncompletePass: bool = True
+    clockStopsOnOutOfBounds: bool = True
+
     # ── Scoring values ─────────────────────────────────────────────
     touchdownPoints: int = 6
     fieldGoalPoints: int = 3
@@ -131,6 +137,8 @@ class GameRules:
             "spikeClockThreshold": self.spikeClockThreshold,
             "timeoutClockThreshold": self.timeoutClockThreshold,
             "kneelDrainSeconds": self.kneelDrainSeconds,
+            "clockStopsOnIncompletePass": self.clockStopsOnIncompletePass,
+            "clockStopsOnOutOfBounds": self.clockStopsOnOutOfBounds,
             "touchdownPoints": self.touchdownPoints,
             "fieldGoalPoints": self.fieldGoalPoints,
             "extraPointPoints": self.extraPointPoints,
@@ -142,8 +150,111 @@ class GameRules:
             "patchHistory": list(self.patchHistory),
         }
 
+    def applyOverrides(self, overrides: Dict[str, Any],
+                       reason: str = "persisted override",
+                       source: str = "core_patch") -> List[str]:
+        """Apply a ``{field: value}`` override map via ``applyPatch`` (audit-logged).
+
+        Only fields in ``MUTABLE_RULE_FIELDS`` are applied — the remaining
+        structural rules (field length / geometry, clock) are gated out until
+        the sim's heuristics are safe under non-default values. Unknown/blocked
+        fields are silently skipped. Returns the field names actually applied.
+        """
+        applied: List[str] = []
+        for fieldName, value in (overrides or {}).items():
+            if fieldName not in MUTABLE_RULE_FIELDS:
+                continue
+            if self.applyPatch(fieldName, value, reason=reason, source=source):
+                applied.append(fieldName)
+        return applied
+
 
 # Module-level default — used by code paths that need to fall back to
 # standard rules when no Season-scoped instance is available (tests,
 # isolated game sims, etc.).
 DEFAULT_RULES = GameRules()
+
+
+# ── Rule-override persistence (the Cores' rule-mutation layer) ──────────────
+# The current set of rules safe to mutate at runtime:
+#   - scoring values + the FG attempt threshold (proven: every _addScore site
+#     reads gameRules; see the rainbow-override proof);
+#   - structural rules #1 firstDownDistance and #2 downsPerSeries (proven: down
+#     distribution bounds at downsPerSeries, fresh-1st-down distance tracks the
+#     override, scoring moves monotonically).
+# STILL GATED OUT: field geometry (fieldLength / endZoneDepth / kickoffPosition)
+# and clock rules — these touch the field-position model + win-probability (which
+# feeds MVP/All-Pro/pick-em) and need an exhaustive sweep first. The next pass
+# should wire fieldLength together with kickoffPosition. See docs/SIM_EVOLUTION.md.
+MUTABLE_RULE_FIELDS = {
+    "touchdownPoints", "fieldGoalPoints", "extraPointPoints",
+    "twoPointConversionPoints", "safetyPoints", "fgMinAttemptProb",
+    # Structural rule #1 — yards needed to convert a first down. Core mechanic
+    # (reset/decrement/goal-to-go) reads gameRules; play-calling heuristics use
+    # the live yardsToFirstDown so they degrade gracefully at non-default values.
+    "firstDownDistance",
+    # Structural rule #2 — number of downs in a series. Core flow (possession
+    # loop bound, advance-vs-turnover, final-down punt/FG/go decision, kneel
+    # count, spike availability, down-text/PlayResult) all reference this.
+    # Down-text + PlayResult support up to 6 downs (downOrdinal/downPlayResult).
+    "downsPerSeries",
+    # Clock / FG knobs — already read from gameRules throughout the engine, so
+    # these are low-blast-radius scalars (the two-minute pressure heuristics are
+    # a separate concept and stay fixed). kneelDrainSeconds is the single source
+    # of truth for the per-kneel drain (snap 4s + play-clock kneelDrainSeconds-4).
+    "overtimeLengthSeconds", "timeoutClockThreshold", "spikeClockThreshold",
+    "kneelDrainSeconds", "fgSnapDistance",
+    # Running-clock rule — suppress the incompletion / out-of-bounds clock stops
+    # (gated in shouldClockRun). Far fewer plays per game. Clock-management
+    # play-calling heuristics still assume incompletions stop the clock, so they
+    # degrade gracefully (a later pass can make them rule-aware).
+    "clockStopsOnIncompletePass", "clockStopsOnOutOfBounds",
+}
+
+RULE_OVERRIDES_SETTING_KEY = "rule_overrides"
+
+
+def loadRuleOverrides() -> Dict[str, Any]:
+    """Read the persisted rule-override map from ``app_settings``.
+
+    Returns ``{}`` on any error (missing table, no row, bad JSON) so a fresh or
+    test DB simply runs the default ruleset.
+    """
+    try:
+        import json
+        from sqlalchemy import text
+        from database.connection import SessionLocal
+        session = SessionLocal()
+        try:
+            row = session.execute(
+                text("SELECT value FROM app_settings WHERE key = :k"),
+                {"k": RULE_OVERRIDES_SETTING_KEY},
+            ).fetchone()
+        finally:
+            session.close()
+        if not row or not row[0]:
+            return {}
+        data = json.loads(row[0])
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def saveRuleOverrides(overrides: Dict[str, Any]) -> None:
+    """Upsert the rule-override map into ``app_settings`` (the persistent store)."""
+    import json
+    from datetime import datetime
+    from sqlalchemy import text
+    from database.connection import SessionLocal
+    session = SessionLocal()
+    try:
+        session.execute(
+            text("INSERT INTO app_settings (key, value, updated_at) "
+                 "VALUES (:k, :v, :t) "
+                 "ON CONFLICT(key) DO UPDATE SET value = :v, updated_at = :t"),
+            {"k": RULE_OVERRIDES_SETTING_KEY, "v": json.dumps(overrides),
+             "t": datetime.utcnow()},
+        )
+        session.commit()
+    finally:
+        session.close()

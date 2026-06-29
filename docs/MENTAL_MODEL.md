@@ -322,3 +322,120 @@ holds after a pick).
 - **Chemistry magnitude / curve:** exactly how far below max the confidence ceiling drops for a fully
   toxic room (and how far above for a leader room) — a tuning task for `/simcheck` + the scenario harness.
 - **Toxic-vs-leader weighting in the average:** how much heavier toxics weigh than leaders.
+
+## Skill-player situational decisions (P2b — owner direction 2026-06-24)
+
+Beyond the QB read, ball-carriers make situational micro-decisions that the model should drive,
+surfaced in the play text so they're *felt*. The clock-aware sideline decision is the first built.
+
+- **Out of bounds (clock-aware).** Was pure RNG, situation-blind — a leading team could randomly
+  step out late and stop its own clock. Now `_sidelineDecision`: the SITUATION sets intent
+  (trailing+late → get out to stop the clock; leading+late → stay in to burn it), football IQ
+  (instinct) gates whether the player acts on it, and DISCIPLINE decides clean exit vs greedy
+  squeeze-for-more-yards (which risks a tackle in bounds, clock running). The DECISION is mechanical
+  (it drives `isInBounds`); the play text is **factual only — no intent narration** (owner direction:
+  don't editorialize motive like "to stop the clock"). Text just appends *out of bounds* when the run
+  ended out (a player can be tackled AND pushed out, so it can follow a "tackled by" clause). **Built
+  + tested** (run + catch sites).
+- **Stretch for the first down / pylon** (ball-carrier) — `_stretchForFirst`: a confident carrier
+  ending JUST short of the marker (or goal line) reaches the ball across to convert; an undisciplined
+  reach exposes the ball (a fumble bump fed into the existing fumble check); tentative carriers take
+  the spot. Narrated *reaches across the marker for the first down! / stretches across the goal line!
+  / lunges but comes up just short*. **Built + tested** (runs; catch-side reach not yet wired).
+- **Dive for a catch** (WR/TE) — on a CONTESTED ball (catch prob 15–60), a confident receiver lays
+  out, extending their catch range (`MENTAL_DIVE_K`); the gunslinger drop tax is the reckless-lay-out
+  risk; tentative receivers don't dive. Narrated *a diving grab!*. **Built + tested.**
+
+All three: Confidence × Discipline for the *risk/reward* choices, Football IQ for the *awareness*
+ones, the game situation as the trigger, and a play-text line on every one.
+
+## Build status & remaining backlog (as of 2026-06-24, branch `feature/mental-model`)
+
+The CORE model is built and tested — `feature/mental-model` off `development`, last build commit
+`feb8264`, 14 deterministic sections in `test_scenarios.py` (helper unit tests across QB/RB/WR/TE/K
+plus emergent + situational frequency checks). Determinism via `reseed()` (random + numpy +
+`clear_all_batch_caches`). **NOTE:** all the mental helpers live on the `Play` class (next to
+`_mentalDrift`), NOT `Game` — tests must call them on `scenario.game.play`.
+
+**Built + validated:**
+- **P1 — Confidence × Discipline core.** `_confExecution` (execution = C × `MENTAL_EXEC_GAIN`, minus
+  a frozen tax for low-C × undisciplined), `_gunslingerTax` (turnover bump for high-C × undisciplined),
+  via the redefined `_mentalDrift` = confidence-only execution × 15. Applies at every gate, all
+  positions. Catch-site INT/drop gunslinger taxes; run-fumble gunslinger bump.
+- **P2 — QB aggression.** `selectPassTarget(aggression=...)`: confidence shifts the force-it rolls
+  (`MENTAL_AGGR_ROLL_K`) and the throw-away bail threshold (`MENTAL_AGGR_BAIL_K`).
+- **P2b/c/d — situational ball-carrier decisions** (above): clock-aware OOB, stretch-for-first
+  (runs), dive-for-a-catch — all with play-text narration.
+- **P3 — Determination & Resilience shock absorbers.** Centralized in
+  `Player.updateInGameConfidence(value, source)`: `source='mistake'` scales the down-drift by
+  RESILIENCE; `source='scoreboard'` scales it by DETERMINATION (mapped to the existing `selfBelief`
+  attribute). Neutral attr (80) preserves today's drop; 100 shrugs off (0×), 60 spirals (2×); positive
+  drift never scaled. Tagged sites: fumble/INT/catch-fumble/drop = `mistake`; momentum drag = `scoreboard`.
+
+**Remaining — each is consolidation/tuning of an EXISTING, entangled system, not a clean build.
+Do them as focused, measured passes, not a marathon-session rush:**
+- **P4 — Attitude as a stable trait (BUILT 2026-06-24, commit `7914464`).** The toxic-prevalence fix
+  — the core motivation for the rework. Prod diagnosis: 18% TOXIC (attitude < 50), 44% negative, and
+  attitude soured *monotonically with tenure* (6% toxic at rookie → 50% by season 5). Confirmed only
+  `_driftAttitudes` writes attitude, so toxicity was MANUFACTURED by the win/loss drift accumulating
+  downward over a career while the `0.01` reversion was too glacial to recover anyone (and the FA pool
+  was a toxicity sink). Also found: `_propagateAttitudeContagion` writes `confidenceModifier` /
+  `determinationModifier`, NOT attitude — it's a morale effect, mislabeled (so it's *not* the attitude
+  down-force). Fix: new per-player `attitude_baseline` (disposition anchor; model + inline migration +
+  backfill + load/save); `_driftAttitudes` mean-reverts toward the baseline, not a global neutral;
+  `ATTITUDE_REVERT_RATE 0.01→0.05`, `ATTITUDE_DRIFT_MAGNITUDE 3→1.5`. Result: fresh sim toxic 18%→5%,
+  souring-with-tenure gone, `corr(attitude, disposition) 0.38→0.99`; prod backfill 18%→2%. The
+  fresh-generation ~5% toxic is the `lrPool` generation tail (`lrCenter = mentalSeed-7`) — a separate
+  lever if an even lower floor is wanted.
+- **P5 — Football IQ (DONE 2026-06-24 — presentational, no backend change).** focus/instinct/creativity
+  already feed the derived ratings (vision/playMaking/xFactor/defensive) and have NO direct game-sim
+  use — so mechanically they ALREADY are the skill-processing layer. The only issue was presentational:
+  the frontend listed them under MENTAL next to personality attributes. Decision (owner): the
+  conceptual reclassification is enough — adding new mechanical hooks was the re-complication this
+  rework set out to avoid. Done on the FRONTEND (`feature/football-iq-grouping`, commit `81d5aa4`):
+  `PlayerPage` attributes tab now splits them into a dedicated **FOOTBALL IQ** group (separate from the
+  MENTAL/temperament group) with hover explanations — Focus = execution sharpness, Instinct = reads,
+  Creativity = improvisation. No backend / mechanics change.
+- **P6 — Team form: REVIEWED 2026-06-24, decision = KEEP the multiplier (do NOT delete).** The spec's
+  premise (the form multiplier is a double-count to remove) is OUTDATED. Inspection of the actual values:
+  the double-counting states the review flagged were ALREADY hand-tuned away — `GETTING_HOT` boost
+  removed ("selection effect already covers it"), `SPIRALING` cut to 0.99 ("double-counted the ELO
+  signal"). What REMAINS — `COMPLACENT 0.92`, `RESOLUTE 1.04`, `COOLING_OFF 0.96` — is the deliberate
+  DRAMA / anti-runaway engine, not a double-count. Its purpose (owner): stop top teams running away,
+  give the league occasional upsets/storylines. The per-player confidence model does NOT reproduce it —
+  RESOLUTE's Cinderella boost has no confidence equivalent (confidence only prevents *collapse*, never
+  boosts a loser above baseline), and the gunslinger-tax "trap game" only fires on *undisciplined*
+  elites (a disciplined elite would just steamroll). A forms-ON vs forms-OFF sim confirmed the effect:
+  the league-wide win% spread barely moves, but the BEST team is capped at ~0.86 (24-4) in two
+  independent seasons with forms on vs ~0.93 (26-2) with them off — exactly the "elite gives a couple
+  back to trap games" dynamic. **Decision: leave `FORM_STATE_RATING_MULT` and the composites as-is.**
+  The badge could optionally be made confidence-aware (cosmetic) later; the mechanic stays.
+- **P7 — Cleanup (ASSESSED 2026-06-24, deferred). Reassessed into three parts — note the postgame
+  swing should NOT be touched:**
+  - `clutchFactor` — permanently 0; the frontend only has it in a `websocket.ts` *type*, nothing renders
+    it. SAFE to remove (attribute + insight emission + DB sync + the stale FE type). Not yet done.
+  - **selfBelief postgame swing (`floosball_player.py:266-305`) — KEEP, do NOT retire.** The spec's
+    premise (redundant with the P3 Determination dial) is WRONG, same lesson as P6: it's the confidence
+    SEASON-ARC engine — a win-streak boost / losing-streak drop (scaled by selfBelief + the composites)
+    that makes a team's confidence track its form *between* games. P3's det/res only gate confidence's
+    *in-game* drops; this drives the season-long master-state arc the whole new model reads. Retiring it
+    would flatten the confidence arc (confident teams would never actually become confident).
+  - quirk engine — genuinely dead (`quirk=None`, 0% chance) but threaded through ~59 references across
+    `personalityManager` + `personalityReactionEngine`. Removable, but a chunky refactor for ZERO
+    behavioral change. Low value; leave unless tidiness is worth it.
+  - **Decision: deferred.** If revisited, do `clutchFactor` only; keep the postgame swing; quirk is optional.
+
+## End-to-end validation (2026-06-24, 2.1-season fast sim)
+
+Beyond the 14 deterministic unit/frequency sections, the model was validated at SEASON SCALE on a
+fresh fast sim (778 games, ~2.1 seasons):
+- **Stability:** 0 tracebacks / 0 ERROR / 0 DB-lock over the whole run.
+- **Confidence stays bounded:** `confidence_modifier` spans exactly −5.00..+5.00 — the Det/Res
+  scaling did not break the clamp or cause runaway.
+- **Gunslinger tax emerges:** low-discipline QBs (61–75) throw **2.03%** INTs vs high-discipline
+  (83–99) **1.55%**; `corr(discipline, INT%) = −0.49`. Real and sensibly-sized.
+- **Shock absorbers emerge:** high-resilience players end at **+1.67** mean confidence vs
+  low-resilience **+0.14** (`corr(resilience, confidence)=+0.18`, `corr(selfBelief, confidence)=+0.19`)
+  — resilient/determined players resist the downswings as designed.
+- **Note:** league ppg ~15.2 — the situational-decision creep (stretch/dive convert a few extra
+  plays) persists; flagged for the tuning pass, still in a sane band.

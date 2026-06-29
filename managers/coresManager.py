@@ -26,7 +26,9 @@ informational — an open channel, a shared feed, a flag. Jokes that lean into t
 lack of a body are good ("you do not have lungs"); descriptions that give them
 one are not.
 An orthogonal trait runs across the roster: some Cores are genuinely into
-floosball, and one is a fanatic. See ``CORES`` for the per-Core breakdown.
+floosball, and two are fanatics of different flavors — Cassian for the stats and
+trends, Pyre as a simple-minded fan of the sport. See ``CORES`` for the per-Core
+breakdown.
 
 This module owns:
   * The Cores roster (5 individuals — 4 active patchers + 1 observer)
