@@ -35,7 +35,10 @@ from constants import (
     PRESSURE_BASE, PRESSURE_MAX_ADDITIONAL, PRESSURE_CALCULATION_DIVISOR,
     CLOSE_GAME_SCORE_THRESHOLD, CLUTCH_PRESSURE_THRESHOLD, CLUTCH_MODIFIER_THRESHOLD,
     CHOKE_MODIFIER_THRESHOLD, CLUTCH_WPA_THRESHOLD, CHOKE_WPA_THRESHOLD,
+    MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
+    MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K, MENTAL_DIVE_K,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
+    FUMBLE_BASE_THRESHOLD, FUMBLE_CHOKE_FLOOR, FUMBLE_CHOKE_SWING_K, INT_CHOKE_BOOST_K,
     HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
     COACH_ATTR_NEUTRAL, COACH_ATTR_RANGE, COACH_OFFENSIVE_MIND_FLOOR,
@@ -167,6 +170,8 @@ class PlayResult(enum.Enum):
     SecondDown = '2nd Down'
     ThirdDown = '3rd Down'
     FourthDown = '4th Down'
+    FifthDown = '5th Down'
+    SixthDown = '6th Down'
     Punt = 'Punt'
     TurnoverOnDowns = 'Turnover On Downs'
     FieldGoalGood = 'Field Goal is Good'
@@ -181,6 +186,27 @@ class PlayResult(enum.Enum):
     Safety = 'Safety'
     Fumble = 'Fumble'
     Interception = 'Interception'
+
+
+# ── Down helpers (downsPerSeries is a mutable rule — see game_rules.py) ──
+# The number of downs in a series is no longer fixed at 4, so down-number →
+# ordinal text and down-number → PlayResult enum are computed generically
+# instead of via hardcoded 1st/2nd/3rd/4th chains.
+_DOWN_ORDINALS = {1: '1st', 2: '2nd', 3: '3rd', 4: '4th', 5: '5th', 6: '6th'}
+_DOWN_PLAY_RESULTS = {
+    1: PlayResult.FirstDown, 2: PlayResult.SecondDown, 3: PlayResult.ThirdDown,
+    4: PlayResult.FourthDown, 5: PlayResult.FifthDown, 6: PlayResult.SixthDown,
+}
+
+
+def downOrdinal(down: int) -> str:
+    """'1st'..'6th' for known downs, else 'Nth' (defensive fallback)."""
+    return _DOWN_ORDINALS.get(down, '{0}th'.format(down))
+
+
+def downPlayResult(down: int) -> 'PlayResult':
+    """PlayResult enum for the given (non-first) down; FirstDown as fallback."""
+    return _DOWN_PLAY_RESULTS.get(down, PlayResult.FirstDown)
 
 
 # ── Inside run descriptions (A-gap, B-gap) ──
@@ -806,10 +832,28 @@ class Game:
         self._anomalyAttention: Dict[int, float] = {}
         self._anomalyState: Dict[int, str] = {}
         self._anomalyAttentionLoaded: bool = False
+        # Runtime admin knobs (app_settings overrides), cached at snapshot load so
+        # the per-play hot path never touches the DB. Master gate + intensity scalar.
+        self._anomalyEnabled: bool = True
+        self._anomalyIntensity: float = 1.0
+        from constants import AWAKENED_INVOLVE_PER_GAME, AWAKENED_DEF_FIRE_CHANCE
+        self._awakenedInvolve: Dict[str, float] = dict(AWAKENED_INVOLVE_PER_GAME)  # per-game touches per pos (admin-tunable)
+        self._awakenedDefFireChance: float = float(AWAKENED_DEF_FIRE_CHANCE)        # defensive fire gate % (admin-tunable)
+        # Awakened (L4) charge meter — per-game, gated. {pid: current charge}, {pid: # fills this
+        # game}, {pid: {'off','def'} ability keys}. Populated for awakened players when the snapshot
+        # loads (ANOMALY_AWAKENED_POWERS_ENABLED); empty otherwise.
+        self._awakenedCharge: Dict[int, float] = {}
+        self._awakenedFills: Dict[int, int] = {}     # actual fires this game (P3)
+        self._awakenedReady: Dict[int, bool] = {}    # meter full + waiting to fire (P3)
+        self._awakenedPoweringUp: Dict[int, bool] = {}  # "powering up" beat emitted this charge cycle
+        self._awakenedSlot: Dict[int, str] = {}      # test-only: roster slot per force-awakened player
+        self._awakenedPower: Dict[int, str] = {}     # pid -> career signature power key
+        self._lastAwakenedFire: dict = None          # most recent fire, for PBP/feed
         # Multiplier on per-play anomaly probability. 1.0 normally, 5.0
         # if this game is happening inside an active Criticality window.
         # Set when attention is loaded.
         self._criticalityMultiplier: float = 1.0
+        self._criticalityActive: bool = False   # inside a fired Criticality window -> L4 charge overdrive
         # Per-game glitch hygiene: hard cap + cooldown so anomaly glitch
         # lines stay rare and spaced out instead of flooding the play feed.
         self._glitchCountThisGame: int = 0
@@ -1202,17 +1246,8 @@ class Game:
             gameStatsDict['homeTeamPoss'] = False
             gameStatsDict['awayTeamPoss'] = True
         gameStatsDict['down'] = self.down
-        if self.down == 1:
-            down = '1st'
-        elif self.down == 2:
-            down = '2nd'
-        elif self.down == 3:
-            down = '3rd'
-        elif self.down == 4:
-            down = '4th'
-        else:
-            down = '1st'
-        if self.yardsToEndzone <= 10:
+        down = downOrdinal(self.down)
+        if self.yardsToEndzone <= self.gameRules.firstDownDistance:
             gameStatsDict['yardsTo1stDwn'] = self.yardsToEndzone
             gameStatsDict['downText'] = '{0} & Goal'.format(down)
         else:
@@ -1395,18 +1430,9 @@ class Game:
             gameStatsDict['homeTeamPoss'] = False
             gameStatsDict['awayTeamPoss'] = True
         gameStatsDict['down'] = self.down
-        if self.down == 1:
-            down = '1st'
-        elif self.down == 2:
-            down = '2nd'
-        elif self.down == 3:
-            down = '3rd'
-        elif self.down == 4:
-            down = '4th'
-        else:
-            down = '1st'
+        down = downOrdinal(self.down)
         gameStatsDict['downText'] = '{0} & {1}'.format(down, self.yardsToFirstDown)
-        if self.yardsToEndzone < 10:
+        if self.yardsToEndzone < self.gameRules.firstDownDistance:
             gameStatsDict['yardsTo1stDwn'] = self.yardsToEndzone
         else:
             gameStatsDict['yardsTo1stDwn'] = self.yardsToFirstDown
@@ -1843,7 +1869,7 @@ class Game:
         )
         # Realistic spike budget — using more would forfeit too many downs.
         # Down 1 or 2 → 1 spike between productive plays; 3rd down → 0.
-        spikesAvailable = 1 if self.down < 3 else 0
+        spikesAvailable = 1 if self.down < self.gameRules.downsPerSeries - 1 else 0
         plays = 0
         while secs > 5:
             plays += 1
@@ -2084,7 +2110,9 @@ class Game:
         """Handle play calling in overtime (Q5). Called only when currentQuarter == 5."""
         coach = getattr(self.offensiveTeam, 'coach', None)
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxFg = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
+        # A charged awakened kicker makes it from ANYWHERE — treat the whole field as in range.
+        kickerCharged = self._awakenedReadyFor(kicker, 'kick')
+        kickerMaxFg = 999 if kickerCharged else ((kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0)
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
 
@@ -2103,22 +2131,22 @@ class Game:
         # When a FG only ties (down by exactly 3) or it's the first
         # possession, play for TD on downs 1–3 and only kick on 4th.
         fgOnlyTies = (scoreDiff == -3)
-        if (self.down < 4 and scoreDiff >= -3 and not isFirstPoss and not fgOnlyTies
+        if (self.down < self.gameRules.downsPerSeries and scoreDiff >= -3 and not isFirstPoss and not fgOnlyTies
                 and self.yardsToEndzone <= kickerMaxFg):
             aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
             # 60 aggr → 0.96 (chip shot only), 80 → 0.92, 100 → 0.88
             earlyDownFgThreshold = 0.92 - aggrNorm * 0.04
-            if fgProb >= earlyDownFgThreshold:
+            if kickerCharged or fgProb >= earlyDownFgThreshold:
                 self.play.playType = PlayType.FieldGoal
                 return
 
-        if self.down == 4:
-            # Kick FG on 4th if probability is reasonable and it ties or wins.
+        if self.down == self.gameRules.downsPerSeries:
+            # Kick FG on the final down if probability is reasonable and it ties or wins.
             # Long-shot FG check: if the kick is low-probability AND the
             # yards-to-go is reachable, prefer going for it to get closer
             # for a higher-percentage attempt. Aggressive coaches roll the
             # dice on the conversion more often.
-            if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and fgProb >= fgThreshold:
+            if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or fgProb >= fgThreshold):
                 if fgProb < 0.55 and self.yardsToFirstDown <= 5:
                     aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
                     # 60 aggr → 15%, 80 → 45%, 100 → 75%
@@ -2233,7 +2261,14 @@ class Game:
         kickerMaxDistance = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
-        inFieldGoalRange = self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold
+        # A charged awakened kicker (power covers 'kick') makes it from ANYWHERE — but the charge only
+        # extends FG range when a field goal actually HELPS (fgHelps). When trailing by more than a FG
+        # late, treating them as "in range" would route them into the FG-biased trailing branch instead
+        # of going for the touchdown — so strategy gates the range, not just the early auto-kick below.
+        kickerCharged = self._awakenedReadyFor(kicker, 'kick')
+        fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+        inFieldGoalRange = ((kickerCharged and fgHelps)
+                            or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
 
         aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
         goForItThreshold = max(1, min(9, round(4 + aggrNorm * 3)))
@@ -2272,6 +2307,12 @@ class Game:
         # through to the normal logic below.
         leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
                        and self.gameClockSeconds <= 120)
+        # A charged awakened kicker takes the free 3 from any distance — but only when fgHelps (computed
+        # above) and not protecting a late lead; short-yardage / goal-line defer to the go-for-it logic.
+        if (kickerCharged and fgHelps and not leadingLate
+                and self.yardsToFirstDown > 2 and self.yardsToEndzone > 8):
+            self.play.playType = PlayType.FieldGoal
+            return
         if self.yardsToEndzone <= 40 and not leadingLate:
             goForIt = not inFieldGoalRange  # no makeable FG → going for it is the only non-punt option
             if inFieldGoalRange and self.yardsToFirstDown <= 2:
@@ -2942,8 +2983,8 @@ class Game:
                 }
         self.play.insights['_prePlayComposure'] = prePlayComposure
 
-        # Clock management — evaluated before any play selection on downs 1-3
-        if self.down <= 3:
+        # Clock management — evaluated before any play selection on non-final downs
+        if self.down < self.gameRules.downsPerSeries:
             # Kneel: Q4/OT, leading — only when guaranteed to drain the clock
             # Each kneel ~40 sec; opponent timeouts only matter when game is close (≤8 pts)
             # Field-position guard: kneel loses 1 yard, so on own 1 (or goal line) it
@@ -2952,7 +2993,7 @@ class Game:
             if ((self.currentQuarter == 4 or self.currentQuarter >= 5)
                     and scoreDiff > 0 and self.yardsToSafety > 2):
                 oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
-                availableKneels = 4 - self.down  # 1st→3, 2nd→2, 3rd→1
+                availableKneels = self.gameRules.downsPerSeries - self.down  # remaining downs
                 # Defense won't waste TOs in unwinnable games (matches _checkDefensiveTimeout)
                 maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
                 effectiveOppTos = oppTimeouts if scoreDiff <= maxComebackPts else 0
@@ -3124,10 +3165,10 @@ class Game:
             # into a 4th-down must-score).
             spikeKicker = self.offensiveTeam.rosterDict.get('k')
             spikeKickerMax = (spikeKicker.maxFgDistance - self.gameRules.fgSnapDistance) if spikeKicker else 0
-            spikeFgException = (self.down == 3 and -3 <= scoreDiff <= 0
+            spikeFgException = (self.down == self.gameRules.downsPerSeries - 1 and -3 <= scoreDiff <= 0
                                 and self.yardsToEndzone <= spikeKickerMax
                                 and secs <= 20)
-            spikeDownOK = self.down <= 2 or spikeFgException
+            spikeDownOK = self.down <= self.gameRules.downsPerSeries - 2 or spikeFgException
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
                     and secs <= self.gameRules.spikeClockThreshold
@@ -3241,7 +3282,7 @@ class Game:
         # End-of-half FG attempt (only if reasonable probability)
         endGameFgProb = self._estimateFgProbability()
         endGameFgThreshold = self._coachFgThreshold(coach)
-        if self.currentQuarter == 2 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == 4:
+        if self.currentQuarter == 2 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
             if self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 self.play.playType = PlayType.FieldGoal
                 return
@@ -3251,7 +3292,7 @@ class Game:
         # enough clock to run another play, prefer going for it to get
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
-        if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == 4:
+        if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
             if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
                 canAdvance = self.gameClockSeconds >= 30
                 if canAdvance and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
@@ -3293,8 +3334,8 @@ class Game:
                     self.play.targetSideline = False
                     return
 
-        # 4th down
-        if self.down == 4:
+        # Final down — punt / FG / go-for-it decision
+        if self.down == self.gameRules.downsPerSeries:
             self._fourthDownCaller(scoreDiff, coach, isHome)
             # Record decision after the fact
             if 'fourthDown' in self.play.insights:
@@ -3459,7 +3500,7 @@ class Game:
         if fieldAhead > 0 and returnYards >= fieldAhead:
             # Scoop-and-score (mirrors the defensive-TD branch; receiving team
             # starts at its own 20 → yardsToEndzone 80).
-            self._addScore(self.defensiveTeam, 6)
+            self._addScore(self.defensiveTeam, self.gameRules.touchdownPoints)
             self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
             play.playResult = PlayResult.Touchdown
             self.defensiveTeam.gameDefenseStats['fantasyPoints'] += 3
@@ -3696,7 +3737,7 @@ class Game:
                     # goal line the play is dead by score, not by stepping out.
                     # The OOB flag stays True for clock-management purposes,
                     # but it shouldn't show up in the narration.
-                    if not self.play.isInBounds and not self.play.isTd:
+                    if not self.play.isInBounds and not self.play.isTd and not getattr(self.play, '_stretchNote', None):
                         text += ', out of bounds'
                 elif self.play.passType is PassType.short:
                     text = '{} {} {} for {} yards'.format(self.play.passer.name, choice(shortPassList), self.play.receiver.name, rcvYds)
@@ -3850,6 +3891,58 @@ class Game:
             else:
                 ydText = 'returned {} yard{}'.format(returnYds, '' if returnYds == 1 else 's')
                 text += (' Defense ' + ydText + '.') if endsBang else (', ' + ydText)
+
+        # Surface a diving catch (a confident receiver laid out for a contested ball).
+        if getattr(self.play, '_diveCatch', False) and self.play.isPassCompletion and not self.play.isFumble:
+            text += ', a diving grab!'
+
+        # Surface the stretch-for-the-marker decision (see _stretchForFirst). Skip on
+        # a fumble (the reach popped it loose — the fumble text already tells that story).
+        _stNote = getattr(self.play, '_stretchNote', None)
+        if _stNote and not self.play.isFumble:
+            _stText = {
+                'stretch_first': ', and reaches the ball across the marker for the first down!',
+                'stretch_goal':  ', and stretches the ball across the goal line!',
+                'stretch_short': ', and lunges for the marker but comes up just short',
+            }.get(_stNote)
+            if _stText:
+                text += _stText
+
+        # Factual out-of-bounds for a ball-carrier run. The clock-aware sideline
+        # DECISION (_sidelineDecision) is mechanical; the text just states whether
+        # the run ended out of bounds — no intent narration ("to stop the clock").
+        # A player can be tackled AND pushed out, so this can sit after a "tackled
+        # by" clause. Passes get their out-of-bounds clause in the pass branch.
+        if (getattr(self.play, 'runner', None) is not None
+                and not self.play.isInBounds and not self.play.isTd
+                and not getattr(self.play, '_stretchNote', None)
+                and ', out of bounds' not in text):
+            text += ', out of bounds'
+
+        # Awakened (L4) fire — REPLACE the normal play text with the power line (no double narration).
+        # The flavor is a self-contained description with a {player} placeholder for the awakened
+        # player's name; a short result tag carries the yardage (the scoring badge handles TDs).
+        fire = getattr(self.play, 'awakenedFire', None)
+        if fire and fire.get('flavor'):
+            name = fire.get('playerName') or 'They'
+            line = fire['flavor'].replace('{player}', name)
+            # On a pass, name both the QB and the receiver ({passer}/{receiver}); the throw lines name
+            # the receiver, the catch lines name the passer.
+            if '{passer}' in line:
+                passer = getattr(self.play, 'passer', None)
+                line = line.replace('{passer}', passer.name if passer else 'the passer')
+            if '{receiver}' in line:
+                receiver = getattr(self.play, 'receiver', None)
+                line = line.replace('{receiver}', receiver.name if receiver else 'the receiver')
+            # Yardage is woven INTO the line via {yards} (offense), matching the normal narration's
+            # "...for N yards" tone rather than a bolted-on tag. Picks/strips get the return as a
+            # trailing clause, exactly like the normal turnover text ("..., returned N yards").
+            line = line.replace('{yards}', str(max(0, getattr(self.play, 'yardage', 0) or 0)))
+            if fire.get('situation') in ('pick', 'strip'):
+                ry = getattr(self.play, 'returnYardage', 0) or 0
+                if ry > 0:
+                    line += f", returned {ry} yards"
+            text = f"{fire['powerName']}: {line}"
 
         self.play.playText = text
 
@@ -4768,14 +4861,14 @@ class Game:
                         broadcaster.broadcast_sync(self.id, event)
 
             # Start new possession if needed
-            if self.down == 0 or self.down > 4:
+            if self.down == 0 or self.down > self.gameRules.downsPerSeries:
                 self.down = 1
                 self.yardsToFirstDown = self.gameRules.firstDownDistance
                 self.yardsToEndzone = 80
                 self.yardsToSafety = 20
 
             # Possession loop - while offense has downs
-            while self.down <= 4 and self.gameClockSeconds > 0:
+            while self.down <= self.gameRules.downsPerSeries and self.gameClockSeconds > 0:
                 # Show previous play if exists (unless already formatted at quarter transition)
                 # Update yardline display to current ball position (do this before broadcast and play creation)
                 if self.yardsToEndzone > 50:
@@ -4976,9 +5069,9 @@ class Game:
                         break
 
                     if self.play.isFgGood:
-                        self._addScore(self.offensiveTeam, 3)
+                        self._addScore(self.offensiveTeam, self.gameRules.fieldGoalPoints)
                         self._applyMomentumEvent(MOMENTUM_FG_MADE, self.offensiveTeam)
-                        self.defensiveTeam.gameDefenseStats['ptsAlwd'] += 3
+                        self.defensiveTeam.gameDefenseStats['ptsAlwd'] += self.gameRules.fieldGoalPoints
                         self.play.playResult = PlayResult.FieldGoalGood
                         self.play.scoreChange = True
                         self.play.homeTeamScore = self.homeScore
@@ -5076,8 +5169,11 @@ class Game:
                         if self._timeoutCalled and self.timingManager:
                             await self.timingManager.waitAfterTimeout()
                         if self.clockRunning and self.gameClockSeconds > 0:
-                            # No timeout called — drain the play clock (time between plays)
-                            playClockDrain = min(36, self.gameClockSeconds)
+                            # No timeout called — drain the play clock (time between plays).
+                            # Total kneel drain = snap (4s, in kneel()) + this play-clock
+                            # drain, so this is kneelDrainSeconds - 4 (keeps the AI's drain
+                            # prediction at _checkClockManagement in sync with the rule).
+                            playClockDrain = min(max(0, self.gameRules.kneelDrainSeconds - 4), self.gameClockSeconds)
                             self.consumeGameTime(playClockDrain)
                             self.checkTwoMinuteWarning()
 
@@ -5129,7 +5225,7 @@ class Game:
                         self.broadcastGameState(includeLastPlay=True)
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
-                        self._addScore(self.defensiveTeam, 6)
+                        self._addScore(self.defensiveTeam, self.gameRules.touchdownPoints)
                         self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
 
                         # Defensive TD: PAT/2-pt now runs as a separate no-time
@@ -5179,9 +5275,9 @@ class Game:
                             self.play.passer.updateInGameConfidence(.03)
                             self.play.receiver.updateInGameConfidence(.03)
 
-                        self.play.defense.gameDefenseStats['ptsAlwd'] += 6
+                        self.play.defense.gameDefenseStats['ptsAlwd'] += self.gameRules.touchdownPoints
 
-                        self._addScore(self.offensiveTeam, 6)
+                        self._addScore(self.offensiveTeam, self.gameRules.touchdownPoints)
                         self._applyMomentumEvent(MOMENTUM_TD, self.offensiveTeam)
 
                         # Broadcast TD as its own play, then run the PAT/2-pt
@@ -5224,7 +5320,7 @@ class Game:
                             self.away1stDownsTotal += 1
                             if downBefore == 3: self.away3rdDownConv += 1
                             elif downBefore == 4: self.away4thDownConv += 1
-                        if self.yardsToEndzone < 10:
+                        if self.yardsToEndzone < self.gameRules.firstDownDistance:
                             self.yardsToFirstDown = self.yardsToEndzone
                         else:
                             self.yardsToFirstDown = self.gameRules.firstDownDistance
@@ -5235,7 +5331,7 @@ class Game:
 
                     elif (self.yardsToSafety + self.play.yardage) <= 0:
                         if self.play.isFumbleLost:
-                            self._addScore(self.defensiveTeam, 6)
+                            self._addScore(self.defensiveTeam, self.gameRules.touchdownPoints)
                             self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
 
                             # Scoop-and-score TD: PAT/2-pt now fires as a
@@ -5270,7 +5366,7 @@ class Game:
                             self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                             break
                         else:
-                            self._addScore(self.defensiveTeam, 2)
+                            self._addScore(self.defensiveTeam, self.gameRules.safetyPoints)
                             self._applyMomentumEvent(MOMENTUM_SAFETY, self.defensiveTeam)
 
                             self.play.defense.gameDefenseStats['safeties'] += 1
@@ -5322,14 +5418,9 @@ class Game:
                         self.yardsToEndzone -= self.play.yardage
                         self.yardsToSafety += self.play.yardage
                         self.yardsToFirstDown -= self.play.yardage
-                        if self.down < 4:
+                        if self.down < self.gameRules.downsPerSeries:
                             self.down += 1
-                            if self.down == 2:
-                                self.play.playResult = PlayResult.SecondDown
-                            elif self.down == 3:
-                                self.play.playResult = PlayResult.ThirdDown
-                            elif self.down == 4:
-                                self.play.playResult = PlayResult.FourthDown
+                            self.play.playResult = downPlayResult(self.down)
                             continue
                         else:
                             # A victory-formation kneel that ran the clock to 0:00
@@ -5837,7 +5928,7 @@ class Game:
         dragMagnitude = effectMagnitude * 0.3
         for player in suffering.rosterDict.values():
             if player is not None:
-                player.updateInGameConfidence(-dragMagnitude * 0.6)
+                player.updateInGameConfidence(-dragMagnitude * 0.6, source='scoreboard')
                 player.updateInGameDetermination(-dragMagnitude * 0.4)
 
     # ─── End Momentum System ────────────────────────────────────────────────
@@ -6554,6 +6645,15 @@ class Game:
                 defStats = p.gameStatsDict.get('defense', {})
                 if any(v > 0 for v in defStats.values() if isinstance(v, (int, float))):
                     result['defense'] = dict(defStats)
+                # Awakened charge — only for players awakened in THIS game.
+                # 'ready' = power meter is full/charged right now (drives the
+                # live gold name-glow in the box score). Omitted entirely for
+                # non-awakened players to keep the payload lean.
+                if p.id in self._awakenedReady:
+                    result['chargeStatus'] = {
+                        'ready': bool(self._awakenedReady.get(p.id)),
+                        'power': self._awakenedPower.get(p.id),
+                    }
                 return result
 
             return {
@@ -6975,6 +7075,176 @@ class Game:
             for d in defenders:
                 d._gameDefWpaSnaps = int(getattr(d, '_gameDefWpaSnaps', 0)) + 1
 
+        # ── Awakened (L4) charge meter (P2, gated) — impact-weighted positive involvement.
+        # Only non-empty when an awakened player is in this game. Yards on offense, a flat stop on
+        # defense, a chunk per made FG. Each fill marks the ability ready (the fire lands in P3).
+        if self._awakenedCharge:
+            self._accumulateAwakenedCharge(play, pt)
+
+    def _setAwakenedStatus(self, play, pl, status):
+        """Attach a charge-status beat ('powering_up' / 'fully_charged') to the play for the feed."""
+        from managers import awakenedPowers
+        text = awakenedPowers.chargeStatusMessage(status)
+        if not text:
+            return
+        name = getattr(pl, 'name', None) or 'They'
+        play.awakenedStatus = {
+            'playerId': getattr(pl, 'id', None),
+            'playerName': getattr(pl, 'name', None),
+            'status': status,
+            'text': text.replace('{player}', name),
+        }
+
+    def _accumulateAwakenedCharge(self, play, pt):
+        from constants import (AWAKENED_CHARGE_THRESHOLD, AWAKENED_CHARGE_DEF_EVENT,
+                               AWAKENED_POWERING_UP_PCT, AWAKENED_CRITICALITY_CHARGE_MULT)
+        # OVERDRIVE: during a Criticality the meter fills several times faster, so awakened players fire
+        # their powers frequently (the event's chaos) instead of ~once a game.
+        critMult = AWAKENED_CRITICALITY_CHARGE_MULT if self._criticalityActive else 1.0
+        _slotPos = {'qb': 'QB', 'rb': 'RB', 'wr1': 'WR', 'wr2': 'WR', 'te': 'TE', 'k': 'K'}
+        off = getattr(play, 'offense', None)
+        # The player who just FIRED a power on this play has discharged — don't let the SAME play
+        # re-charge them (that produced an instant "powering up..." right after using their power).
+        _af = getattr(play, 'awakenedFire', None)
+        firedPid = _af.get('playerId') if _af else None
+        def _posOf(pl):
+            # Reverse-look-up the player's position from the offense roster slot (reliable regardless of
+            # the Player.position field format).
+            if pl is None or off is None:
+                return ''
+            for slot, rp in off.rosterDict.items():
+                if rp is pl:
+                    return _slotPos.get(slot, '')
+            return ''
+        def _involve(pos):
+            exp = self._awakenedInvolve.get(pos)
+            return (AWAKENED_CHARGE_THRESHOLD / exp * critMult) if exp else 0.0
+        def _charge(pl, amt):
+            if pl is None or amt <= 0:
+                return
+            pid = getattr(pl, 'id', None)
+            if pid == firedPid or pid not in self._awakenedCharge:
+                return
+            # Fill toward the threshold; at full, the meter holds (ready) and waits to fire (P3).
+            # It does NOT keep accumulating past full — the next covered play discharges it.
+            if self._awakenedReady.get(pid):
+                return
+            self._awakenedCharge[pid] = min(AWAKENED_CHARGE_THRESHOLD, self._awakenedCharge[pid] + amt)
+            # Charge-status beats on the play feed: "powering up..." crossing the midpoint, "fully
+            # charged..." on reaching the threshold. Each fires once per charge cycle (reset on fire).
+            if self._awakenedCharge[pid] >= AWAKENED_CHARGE_THRESHOLD:
+                self._awakenedReady[pid] = True
+                self._setAwakenedStatus(play, pl, 'fully_charged')
+            elif (self._awakenedCharge[pid] >= AWAKENED_CHARGE_THRESHOLD * AWAKENED_POWERING_UP_PCT
+                  and not self._awakenedPoweringUp.get(pid)):
+                self._awakenedPoweringUp[pid] = True
+                self._setAwakenedStatus(play, pl, 'powering_up')
+        # Offense — a FLAT charge per POSITIVE play the player is involved in (a gain / completion /
+        # made kick), NOT scaled by yards. A failed play (loss/no-gain run, incompletion, missed FG)
+        # builds nothing — the meter only rewards productive snaps. Per-position rate
+        # (THRESHOLD / typical positive involvements) -> each fills ~once over a normal game.
+        yds = getattr(play, 'yardage', 0) or 0
+        if pt is PlayType.Run and yds > 0:
+            r = getattr(play, 'runner', None)
+            _charge(r, _involve(_posOf(r)))
+        elif pt is PlayType.Pass and getattr(play, 'isPassCompletion', False):
+            _charge(getattr(play, 'passer', None), _involve('QB'))
+            rc = getattr(play, 'receiver', None)
+            _charge(rc, _involve(_posOf(rc)))
+        elif pt in (PlayType.FieldGoal, PlayType.ExtraPoint) and getattr(play, 'isFgGood', False):
+            _charge(getattr(play, 'kicker', None), _involve('K'))
+        # Defense — a small flat charge per stop, so offense stays the dominant (and earlier) source.
+        if pt in (PlayType.Run, PlayType.Pass):
+            pm = (getattr(play, 'returner', None) or getattr(play, 'sackedBy', None)
+                  or getattr(play, 'interceptedBy', None) or getattr(play, 'forcedFumbleBy', None)
+                  or getattr(play, 'tackledBy', None))
+            _charge(pm, AWAKENED_CHARGE_DEF_EVENT)
+
+    def _awakenedTryFire(self, situation, player):
+        """P3 firing. If `player` is awakened, their meter is full (ready), and their career power
+        covers `situation`, DISCHARGE it: reset the meter, record the fire, and return the fire dict
+        {playerId, playerName, power, powerName, situation, flavor} so the caller can force the outcome
+        + narrate. Returns None otherwise (zero overhead when nobody is charged / the feature is off)."""
+        if not self._awakenedReady or player is None:
+            return None
+        pid = getattr(player, 'id', None)
+        if not self._awakenedReady.get(pid):
+            return None
+        from managers import awakenedPowers
+        powerKey = self._awakenedPower.get(pid)
+        if not powerKey or not awakenedPowers.powerCoversSituation(powerKey, situation):
+            return None
+        fire = {
+            'playerId': pid,
+            'playerName': getattr(player, 'name', None),
+            'power': powerKey,
+            'powerName': awakenedPowers.powerName(powerKey),
+            'situation': situation,
+            'flavor': awakenedPowers.situationFlavor(powerKey, situation),
+        }
+        self._awakenedCharge[pid] = 0.0
+        self._awakenedReady[pid] = False
+        self._awakenedPoweringUp[pid] = False   # re-arm the "powering up" beat for the next cycle
+        self._awakenedFills[pid] = self._awakenedFills.get(pid, 0) + 1
+        self._lastAwakenedFire = fire
+        import os as _os
+        if _os.environ.get('AWAKENED_TEST'):
+            print(f"[AWAKENED] {fire['playerName']} [{self._awakenedSlot.get(pid, '?')}] fired {fire['powerName']} ({situation})",
+                  file=__import__('sys').stderr)
+        return fire
+
+    def _awakenedReadyFor(self, player, situation) -> bool:
+        """True if `player` is awakened, charged (ready), and their power covers `situation` — WITHOUT
+        discharging it. Lets a caller ANTICIPATE a fire: a charged kicker can make a FG from anywhere,
+        so the play-caller extends FG range and the kick can't be blocked, while the power itself only
+        discharges if the kick would actually miss."""
+        if not self._awakenedReady or player is None:
+            return False
+        pid = getattr(player, 'id', None)
+        if not self._awakenedReady.get(pid):
+            return False
+        from managers import awakenedPowers
+        pk = self._awakenedPower.get(pid)
+        return bool(pk and awakenedPowers.powerCoversSituation(pk, situation))
+
+    def _pickReadyAwakenedDefender(self, team, situation):
+        """The focal defender for a defensive fire (A-lite): a ready awakened player whose career power
+        covers `situation` AND whose defensive role fits the play — a run-strip comes from the front
+        seven (LB/DE = the rb/te roster spots), a pass-pick from the secondary (S/CB = the qb/wr spots),
+        so a corner can't 'strip' a run. Then a probability gate (AWAKENED_DEF_FIRE_CHANCE) so a ready
+        defender doesn't auto-discharge on the very next covered snap — keeping defense from dominating
+        offense, where the awakened player must BE the ball-handler. Does NOT discharge — the caller
+        fires it. Returns None when nothing is eligible or the gate misses."""
+        if not self._awakenedReady or team is None:
+            return None
+        from managers import awakenedPowers
+        eligibleSlots = {'strip': ('rb', 'te'), 'pick': ('qb', 'wr1', 'wr2')}.get(situation, ())
+        for slot, pl in team.rosterDict.items():
+            if pl is None or slot not in eligibleSlots:
+                continue
+            if self._awakenedReady.get(getattr(pl, 'id', None)):
+                pk = self._awakenedPower.get(pl.id)
+                if pk and awakenedPowers.powerCoversSituation(pk, situation):
+                    if batched_randint(1, 100) > self._awakenedDefFireChance:
+                        return None   # gate missed — stay charged, try again next covered snap
+                    return pl
+        return None
+
+    def awakenedChargeState(self) -> dict:
+        """Current awakened charge meter for this game. {pid: {charge, pct, ready, fires, power}}.
+        Empty unless awakened players are in the game (ANOMALY_AWAKENED_POWERS_ENABLED)."""
+        from constants import AWAKENED_CHARGE_THRESHOLD
+        return {
+            pid: {
+                'charge': round(charge, 1),
+                'pct': round(100.0 * charge / AWAKENED_CHARGE_THRESHOLD, 1),
+                'ready': bool(self._awakenedReady.get(pid)),
+                'fires': self._awakenedFills.get(pid, 0),
+                'power': self._awakenedPower.get(pid),
+            }
+            for pid, charge in self._awakenedCharge.items()
+        }
+
     def broadcastGameState(self, includeLastPlay: bool = True, eventMessage: dict = None, isPossessionChange: bool = False, isFinalBroadcast: bool = False):
         """
         Broadcast comprehensive game state after a play or game event.
@@ -7083,6 +7353,8 @@ class Game:
                     'clutchPerformers': list(getattr(playObj, 'clutchPerformers', []) or []),
                     'chokePerformers': list(getattr(playObj, 'chokePerformers', []) or []),
                     'insights': getattr(playObj, 'insights', None),
+                    'awakenedFire': getattr(playObj, 'awakenedFire', None),
+                    'awakenedStatus': getattr(playObj, 'awakenedStatus', None),
                 }
         elif includeLastPlay and hasattr(self, 'play') and self.play:
             # WP/WPA, the momentum big-play bonus, and the clutch/choke WP-impact
@@ -7112,6 +7384,10 @@ class Game:
                 'glitchPlayerName': getattr(self.play, 'glitchPlayerName', None),
                 'glitchLayer': getattr(self.play, 'glitchLayer', None),
                 'glitchYardDelta': getattr(self.play, 'glitchYardDelta', None),
+                # Awakened (L4) fire — null unless an awakened player used their power on this play.
+                # When present: {playerId, playerName, power, powerName, situation, flavor}.
+                'awakenedFire': getattr(self.play, 'awakenedFire', None),
+                'awakenedStatus': getattr(self.play, 'awakenedStatus', None),
                 # Participant IDs — used by the frontend highlights feed
                 # to filter "plays involving players the user cares
                 # about." Null when the role didn't apply to this play.
@@ -7485,7 +7761,7 @@ class Game:
 
         twoPointGood = self.play.yardage >= 2
         if twoPointGood:
-            self._addScore(scoringTeam, 2)
+            self._addScore(scoringTeam, self.gameRules.twoPointConversionPoints)
             self.play.playResult = PlayResult.Touchdown2PtGood
             self.play.scoreChange = True
         else:
@@ -7555,11 +7831,11 @@ class Game:
 
         self.play.extraPointTry(scoringTeam)
         if self.play.isXpGood:
-            self._addScore(scoringTeam, 1)
+            self._addScore(scoringTeam, self.gameRules.extraPointPoints)
             self.play.playResult = PlayResult.ExtraPointGood
             self.play.scoreChange = True
             if trackPtsAllowed:
-                opposingTeam.gameDefenseStats['ptsAlwd'] += 1
+                opposingTeam.gameDefenseStats['ptsAlwd'] += self.gameRules.extraPointPoints
         else:
             self.play.playResult = PlayResult.ExtraPointNoGood
             self.play.scoreChange = False
@@ -7612,17 +7888,21 @@ class Game:
         # Pass plays
         if self.play.playType == PlayType.Pass:
             if self.play.isPassCompletion:
-                # Completed pass - check if in bounds
-                return self.play.isInBounds
+                # Completed pass - in bounds keeps the clock; out of bounds stops
+                # it unless the running-clock rule suppresses OOB stoppage.
+                if self.play.isInBounds:
+                    return True
+                return not self.gameRules.clockStopsOnOutOfBounds
             else:
-                return False  # Incomplete stops clock
-        
-        # Run plays - clock runs unless out of bounds
+                # Incomplete stops the clock unless the running-clock rule is on.
+                return not self.gameRules.clockStopsOnIncompletePass
+
+        # Run plays - clock runs unless out of bounds (and the OOB rule stops it)
         if self.play.playType == PlayType.Run:
             if self.play.isInBounds:
                 return True  # Run in bounds, clock runs
             else:
-                return False  # Out of bounds stops clock
+                return not self.gameRules.clockStopsOnOutOfBounds
         
         # Kneel - clock always runs
         if self.play.playType == PlayType.Kneel:
@@ -8106,17 +8386,66 @@ class Game:
                 self._anomalyState = {
                     r.player_id: r.state for r in stateRows
                 }
+                # Awakened (L4) charge meter — gated. Init a per-game bar for each awakened player on
+                # THIS game's rosters who has a career signature power (players.signature_power).
+                import os as _os
+                from constants import ANOMALY_AWAKENED_POWERS_ENABLED
+                from managers.anomalyManager import getAnomalySetting, getAnomalyIntensityMultiplier
+                # Runtime admin knobs — cached here (same open session) for the per-play hot path.
+                self._anomalyEnabled = getAnomalySetting(session, 'anomalies_enabled', True)
+                self._anomalyIntensity = getAnomalyIntensityMultiplier(session)
+                _awakenedOn = getAnomalySetting(session, 'awakened_powers_enabled', ANOMALY_AWAKENED_POWERS_ENABLED)
+                # Awakened tuning dials (admin-tunable): per-position touches-per-game + the defensive fire gate.
+                self._awakenedInvolve = {pos: getAnomalySetting(session, f'awakened_involve_{pos.lower()}', base)
+                                         for pos, base in self._awakenedInvolve.items()}
+                self._awakenedDefFireChance = getAnomalySetting(session, 'awakened_def_fire_chance', self._awakenedDefFireChance)
+                _awTest = bool(_os.environ.get('AWAKENED_TEST'))
+                if _awakenedOn or _awTest:
+                    rosterIds = {p.id for t in (self.homeTeam, self.awayTeam) if t
+                                 for p in t.rosterDict.values() if p is not None}
+                    awakenedIds = [r.player_id for r in stateRows
+                                   if r.state == 'awakened' and r.player_id in rosterIds]
+                    if awakenedIds:
+                        from database.models import Player as _Player
+                        for pl in session.query(_Player).filter(_Player.id.in_(awakenedIds)).all():
+                            if pl.signature_power:
+                                self._awakenedCharge[pl.id] = 0.0
+                                self._awakenedFills[pl.id] = 0
+                                self._awakenedReady[pl.id] = False
+                                self._awakenedPower[pl.id] = pl.signature_power
+                    # AWAKENED_TEST — force-awaken a couple roster players per team (QB + RB) and start
+                    # them charged, so every game shows powers firing without the attention machinery.
+                    if _awTest:
+                        from managers import awakenedPowers
+                        _slotPos = {'qb': 'QB', 'rb': 'RB', 'wr1': 'WR', 'wr2': 'WR', 'te': 'TE', 'k': 'K'}
+                        for t in (self.homeTeam, self.awayTeam):
+                            if not t:
+                                continue
+                            for slot in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k'):
+                                pl = t.rosterDict.get(slot)
+                                if pl is None or pl.id in self._awakenedPower:
+                                    continue
+                                self._awakenedPower[pl.id] = awakenedPowers.assignPower(_slotPos[slot])
+                                self._awakenedCharge[pl.id] = 0.0
+                                self._awakenedFills[pl.id] = 0
+                                self._awakenedReady[pl.id] = False   # charge naturally over the game
+                                self._awakenedSlot[pl.id] = slot
             finally:
                 session.close()
             self._criticalityMultiplier = getCriticalityMultiplier(
                 self.seasonNumber or 0, self.week or 0,
             )
+            from managers.anomalyManager import isCriticalityWeek
+            self._criticalityActive = isCriticalityWeek(self.seasonNumber or 0, self.week or 0)
         except Exception as e:
             # Anomaly system is purely additive — if anything fails,
             # play out the game as if no one had any attention.
             self._anomalyAttention = {}
             self._anomalyState = {}
             self._criticalityMultiplier = 1.0
+            self._criticalityActive = False
+            self._anomalyEnabled = True
+            self._anomalyIntensity = 1.0
             try:
                 from logger_config import get_logger
                 get_logger("floosball.anomaly").debug(
@@ -8143,6 +8472,8 @@ class Game:
         """
         if not self._anomalyAttentionLoaded:
             self._loadAnomalyAttention()
+        if not self._anomalyEnabled:
+            return
         if not self._anomalyAttention:
             return
         p = self.play
@@ -8163,7 +8494,9 @@ class Game:
                                ANOMALY_L2_WEIGHT_ERRATIC, ANOMALY_L2_WEIGHT_RAMPANT)
         # Per-game hygiene: stop once we've hit the per-game cap, and keep
         # glitches spaced by a cooldown so they never cluster in the feed.
-        if self._glitchCountThisGame >= ANOMALY_GLITCH_MAX_PER_GAME:
+        # The cap scales with the runtime intensity knob (Chaos = more, Low = fewer).
+        glitchCap = max(1, round(ANOMALY_GLITCH_MAX_PER_GAME * self._anomalyIntensity))
+        if self._glitchCountThisGame >= glitchCap:
             return
         playNum = getattr(p, 'playNumber', None)
         if (playNum is not None
@@ -8184,10 +8517,12 @@ class Game:
         _random.shuffle(candidates)
 
         for player in candidates:
+            if player.id in self._awakenedPower:
+                continue   # awakened players are in CONTROL — they fire powers, they do not glitch
             attention = self._anomalyAttention.get(player.id, 0.0)
             if attention <= 0:
                 continue
-            prob = min(ANOMALY_GLITCH_PROB_CAP, (attention / ANOMALY_GLITCH_PROB_SCALE) * self._criticalityMultiplier)
+            prob = min(ANOMALY_GLITCH_PROB_CAP, (attention / ANOMALY_GLITCH_PROB_SCALE) * self._criticalityMultiplier * self._anomalyIntensity)
             if _random.random() < prob:
                 # Pick the layer based on the player's state:
                 #   stable / stirring  -> Layer 1 (subtle, "huh")
@@ -8325,6 +8660,8 @@ class Game:
         """
         if not self._anomalyAttentionLoaded:
             self._loadAnomalyAttention()
+        if not self._anomalyEnabled:
+            return
         if not self._anomalyAttention:
             return
         p = self.play
@@ -8355,13 +8692,15 @@ class Game:
                                ANOMALY_L3_MAX_NEG_PER_TEAM, ANOMALY_L3_LATE_QUARTER,
                                ANOMALY_L3_CLOSE_MARGIN)
         # Per-game hygiene: shared cap + cooldown with the cosmetic layers.
-        if self._glitchCountThisGame >= ANOMALY_GLITCH_MAX_PER_GAME:
+        # Cap scales with the runtime intensity knob, matching _maybeFireAnomalies.
+        glitchCap = max(1, round(ANOMALY_GLITCH_MAX_PER_GAME * self._anomalyIntensity))
+        if self._glitchCountThisGame >= glitchCap:
             return
         playNum = getattr(p, 'playNumber', None)
         if (playNum is not None
                 and playNum - self._lastGlitchPlayNumber < ANOMALY_GLITCH_COOLDOWN_PLAYS):
             return
-        if _random.random() >= ANOMALY_L3_TRIGGER_PROB * self._criticalityMultiplier:
+        if _random.random() >= ANOMALY_L3_TRIGGER_PROB * self._criticalityMultiplier * self._anomalyIntensity:
             return
 
         helpful = _random.random() < ANOMALY_L3_HELP_CHANCE
@@ -8374,7 +8713,7 @@ class Game:
             team = self.offensiveTeam.name
             if baseYardage >= self.yardsToEndzone or baseYardage >= self.yardsToFirstDown:
                 return
-            if self.down >= 4:
+            if self.down >= self.gameRules.downsPerSeries:
                 return
             if self._l3NegByTeam.get(team, 0) >= ANOMALY_L3_MAX_NEG_PER_TEAM:
                 return
@@ -8466,6 +8805,9 @@ class Play():
         self.isFumble = False
         self.isFumbleLost = False
         self.isFumbleRecovered = False
+        self.awakenedFire = None       # L4 fire dict for this play (P3), or None
+        self.awakenedStatus = None     # L4 charge-status beat ('powering up' / 'fully charged'), or None
+        self._awakenedDefender = None  # the awakened defender on a defensive fire, or None
         self.isInterception = False
         self.isTd = False
         self.isXpTry = False
@@ -8620,15 +8962,29 @@ class Play():
         # the kicker; the game loop hands the loose ball to the defense (with a
         # possible return) via _resolveBlockedKick.
         from constants import FG_BLOCK_ENABLED, FG_BLOCK_CHANCE
-        self.isFgBlocked = FG_BLOCK_ENABLED and (batched_random() * 100 < FG_BLOCK_CHANCE)
+        # A charged awakened kicker (power covers 'kick') is an automatic make from anywhere, so their
+        # kick can't be blocked either — it resolves to good-or-miss and the power rescues the miss below.
+        kickerCharged = self.game._awakenedReadyFor(self.kicker, 'kick')
+        self.isFgBlocked = (FG_BLOCK_ENABLED and not kickerCharged
+                            and (batched_random() * 100 < FG_BLOCK_CHANCE))
 
         x = batched_randint(1,100)
 
+        # Resolve the kick NORMALLY first. A charged awakened kicker (whose power covers 'kick') only
+        # fires the power if the kick would otherwise MISS — so the ability lands on the impossible-
+        # length FGs it was actually needed for, never a chip shot that was already good (saving the
+        # charge for a real miss). A block is NOT rescued — the power bends distance/accuracy, not a
+        # defender already in the ball's path. None unless they are ready + the feature is on.
+        self.awakenedFire = None
         if self.isFgBlocked:
             self.isFgGood = False
-            self.kicker.addMissedFg(self.fgDistance, self.game.isRegularSeasonGame)
         elif x <= probability:
             self.isFgGood = True
+        else:
+            self.awakenedFire = self.game._awakenedTryFire('kick', self.kicker)
+            self.isFgGood = bool(self.awakenedFire)
+
+        if self.isFgGood:
             self.kicker.addFg(self.fgDistance, self.game.isRegularSeasonGame)
             if yardsToFG > self.kicker.gameStatsDict['kicking']['longest']:
                 self.kicker.gameStatsDict['kicking']['longest'] = yardsToFG
@@ -8741,12 +9097,7 @@ class Play():
             self.game.consumeGameTime(gatherTime)
             self.game.checkTwoMinuteWarning()
         self.game.clockRunning = False
-        if self.game.down == 1:
-            self.playResult = PlayResult.SecondDown
-        elif self.game.down == 2:
-            self.playResult = PlayResult.ThirdDown
-        else:
-            self.playResult = PlayResult.FourthDown
+        self.playResult = downPlayResult(self.game.down + 1)
 
     def kneel(self):
         """QB kneels to drain the clock. Loses 1 yard, ~4 seconds of game time.
@@ -8758,12 +9109,7 @@ class Play():
         # Only drain the actual play time (snap to knee-down)
         kneelDuration = min(4, self.game.gameClockSeconds)
         self.game.gameClockSeconds -= kneelDuration
-        if self.game.down == 1:
-            self.playResult = PlayResult.SecondDown
-        elif self.game.down == 2:
-            self.playResult = PlayResult.ThirdDown
-        else:
-            self.playResult = PlayResult.FourthDown
+        self.playResult = downPlayResult(self.game.down + 1)
 
     def calculateGapQuality(self, gapType: str, rbPower: int, rbAgility: int, blockingRating: int, defenseRunCoverage: int) -> float:
         """
@@ -9050,6 +9396,27 @@ class Play():
                     self.yardage += min(remaining, max(12, int(np.random.exponential(22))))
 
         self.yardage = min(self.yardage, self.yardsToEndzone)
+
+        # Awakened (L4) fire — a charged runner whose power covers 'run' breaks free: force a big gain
+        # (or a TD if reachable) and no fumble (P3). None unless gated on + they are ready.
+        self.awakenedFire = self.game._awakenedTryFire('run', self.runner)
+        if self.awakenedFire:
+            from constants import AWAKENED_FORCE_RUN_GAIN, AWAKENED_FORCE_GAIN_TAIL
+            forced = AWAKENED_FORCE_RUN_GAIN + int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
+            self.yardage = min(self.yardsToEndzone, max(self.yardage, forced))
+        else:
+            # Defensive fire — a charged awakened defender strips the ball loose (forced fumble lost).
+            _dfn = self.game._pickReadyAwakenedDefender(self.defense, 'strip')
+            if _dfn and self.game._awakenedTryFire('strip', _dfn):
+                self.awakenedFire = self.game._lastAwakenedFire
+                self._awakenedDefender = _dfn
+
+        # Stretch for the first down / goal line — a confident back reaches it out
+        # to convert; the reach can expose the ball (fumble bump, resolved below).
+        _stretchBonus, self._stretchNote, _stretchFumbleBump = self._stretchForFirst(self.runner)
+        if _stretchBonus:
+            self.yardage = min(self.yardage + _stretchBonus, self.yardsToEndzone)
+
         baseYards = self.yardage
 
         # Fumble check
@@ -9067,23 +9434,40 @@ class Play():
         elif fumbleResist <= 67:
             fumbleResistModifier = 2
         
-        # Runner choking under pressure lowers fumble threshold (high-pressure only)
-        fumbleThreshold = 97
+        # Runner choking under pressure lowers fumble threshold (high-pressure only).
+        # DAMPENED: floor 95 (was 92) + swing 1.0 (was 2.0) so a clutch game nudges
+        # fumbles up modestly instead of ~doubling them — the base rate is unchanged.
+        # _stretchFumbleBump: reaching for the marker exposes the ball.
+        fumbleThreshold = FUMBLE_BASE_THRESHOLD - _stretchFumbleBump
         if self.game.gamePressure >= CLUTCH_PRESSURE_THRESHOLD and runnerPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
-            fumbleThreshold = max(92, fumbleThreshold - int(abs(runnerPressureMod) * 2))
+            fumbleThreshold = max(FUMBLE_CHOKE_FLOOR,
+                                  fumbleThreshold - int(abs(runnerPressureMod) * FUMBLE_CHOKE_SWING_K))
+        # Gunslinger tax — a confident, undisciplined back carries it too loose.
+        fumbleThreshold = max(88, fumbleThreshold - int(round(self._gunslingerTax(self.runner))))
 
-        if (fumbleRoll + fumbleResistModifier) > fumbleThreshold:
+        _defFire = bool(self.awakenedFire and self.awakenedFire.get('situation') == 'strip')
+        _offFire = bool(self.awakenedFire) and not _defFire
+        if _defFire:
+            # Forced strip — the awakened defender rips it loose and recovers (a guaranteed takeaway).
+            self.isFumble = True
+            self.isFumbleLost = True
+            self.runner.addFumble(self.game.isRegularSeasonGame)
+            self.runner.updateInGameConfidence(-.05, source='mistake')
+            self.defense.updateInGameConfidence(.02)
+            self.defense.gameDefenseStats['fumRec'] += 1
+            self.playResult = PlayResult.Fumble
+        elif (fumbleRoll + fumbleResistModifier) > fumbleThreshold and not _offFire:
             self.isFumble = True
             runnerRecoveryMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
             if (self.defense.defenseRunCoverageRating + batched_randint(-5, 5)) >= \
                (self.runner.gameAttributes.overallRating + runnerRecoveryMod + batched_randint(-5, 5)):
                 self.runner.addFumble(self.game.isRegularSeasonGame)
-                self.runner.updateInGameConfidence(-.05)
+                self.runner.updateInGameConfidence(-.05, source='mistake')
                 self.defense.updateInGameConfidence(.02)
                 self.defense.gameDefenseStats['fumRec'] += 1
                 self.isFumbleLost = True
                 self.playResult = PlayResult.Fumble
-        
+
         # Identify primary tackler from defensive gameplan
         defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
         coverageAssignments = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
@@ -9093,8 +9477,10 @@ class Play():
             self.tackledBy = lbPlayer  # Inside runs: LB is primary tackler
         else:
             self.tackledBy = passRusherRun  # Edge runs: DE is primary tackler
+        if _defFire and self._awakenedDefender:
+            self.tackledBy = self._awakenedDefender  # the awakened defender made the play
         if self.isFumble and self.isFumbleLost:
-            self.forcedFumbleBy = self.tackledBy
+            self.forcedFumbleBy = self._awakenedDefender if _defFire else self.tackledBy
 
         # Per-player defensive stats for run plays
         isReg = self.game.isRegularSeasonGame
@@ -9146,15 +9532,17 @@ class Play():
         if self.yardage > self.yardsToEndzone:
             self.yardage = self.yardsToEndzone
 
-        # Determine if run went out of bounds (for clock management)
+        # Determine if run went out of bounds — clock-aware (see _sidelineDecision)
         if selectedGap['type'] == 'C-gap' or selectedGap['type'] == 'bounce':
             # Outside runs more likely to go out of bounds
             oobChance = 25 if selectedGap['type'] == 'bounce' else 15
         else:
             # Inside runs rarely go out
             oobChance = 5
-        
-        self.isInBounds = batched_randint(1, 100) > oobChance
+
+        self.isInBounds, self._sidelineNote, _sbonus = self._sidelineDecision(self.runner, oobChance)
+        if _sbonus:
+            self.yardage = min(self.yardage + _sbonus, self.yardsToEndzone - 1)
         
         # Update stats
         self.runner.addRushYards(self.yardage, self.game.isRegularSeasonGame)
@@ -9261,6 +9649,12 @@ class Play():
         mean = max(1.5, QB_SCRAMBLE_BASE_YARDS + (spd - QB_SCRAMBLE_SPEED_PIVOT) * QB_SCRAMBLE_YARDS_PER_SPEED)
         yds = int(round(np.random.exponential(mean))) + int(round((agi - 80) / 20.0))
         yds = max(0, yds)
+        # Awakened (L4) fire — a scramble is its own situation (escaping the pass rush). A QB whose
+        # power covers 'scramble' (the mobility/escape powers) fires here and breaks loose downfield.
+        self.awakenedFire = self.game._awakenedTryFire('scramble', self.passer)
+        if self.awakenedFire:
+            from constants import AWAKENED_FORCE_RUN_GAIN, AWAKENED_FORCE_GAIN_TAIL
+            yds = max(yds, AWAKENED_FORCE_RUN_GAIN + int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL)))
         if yds > self.yardsToEndzone:
             yds = self.yardsToEndzone
         self.yardage = yds
@@ -9279,8 +9673,8 @@ class Play():
         if tackler and hasattr(tackler, 'stat_tracker'):
             tackler.stat_tracker.add_tackle(isReg)
 
-        # Small fumble chance on the scramble (credit the tackler if lost).
-        if batched_randint(1, 100) > (100 - QB_SCRAMBLE_FUMBLE_CHANCE):
+        # Small fumble chance on the scramble (credit the tackler if lost) — never on an awakened fire.
+        if batched_randint(1, 100) > (100 - QB_SCRAMBLE_FUMBLE_CHANCE) and not self.awakenedFire:
             self.isFumble = True
             if batched_randint(1, 100) <= 50:
                 self.isFumbleLost = True
@@ -9365,17 +9759,117 @@ class Play():
 
         return max(0.65, min(1.0, degradationFactor))
 
+    # ── Mental model — Confidence × Discipline (docs/MENTAL_MODEL.md) ──────────
+    def _confidenceState(self, player):
+        """Normalized confidence state in [-1, +1] (0 = neutral) from the in-game
+        ±5 confidence modifier. This is the single master mental state."""
+        try:
+            c = player.gameAttributes.confidenceModifier
+        except Exception:
+            return 0.0
+        return max(-1.0, min(1.0, c / 5.0))
+
+    def _undiscipline(self, player):
+        """How undisciplined a player is: 0 (controlled) .. 1 (gunslinger). The
+        gate that turns confidence into either production or chaos."""
+        try:
+            d = player.gameAttributes.discipline
+        except Exception:
+            return 0.0
+        return max(0.0, min(1.0, (80 - d) / 20.0))
+
+    def _confExecution(self, player):
+        """Confidence × Discipline execution term (rating points). High confidence
+        overperforms; low confidence underperforms, with an extra 'frozen' penalty
+        when the player is also undisciplined (misses the play in front of them)."""
+        C = self._confidenceState(player)
+        val = C * MENTAL_EXEC_GAIN
+        if C < 0:
+            val -= (-C) * self._undiscipline(player) * MENTAL_FROZEN_K
+        return val
+
+    def _gunslingerTax(self, player):
+        """Extra turnover odds (pp) for a confident, undisciplined player forcing
+        it — the high-C / low-D corner of the 2x2. Zero unless C > 0."""
+        if player is None:
+            return 0.0
+        C = self._confidenceState(player)
+        if C <= 0:
+            return 0.0
+        return C * self._undiscipline(player) * MENTAL_GUNSLINGER_K
+
+    def _sidelineDecision(self, carrier, baseOobChance):
+        """Clock-aware sideline decision for a ball-carrier near the boundary.
+        Returns (isInBounds, note, bonusYards). The game SITUATION sets the intent,
+        football IQ (instinct) gates whether the player acts on it, and discipline
+        decides whether they get out cleanly or greedily squeeze for more yards and
+        risk a tackle in bounds (which leaves the clock running). Outside a
+        late-game clock situation, it's the original play-type chance."""
+        g = self.game
+        late = (g.currentQuarter >= 4) and g.gameClockSeconds <= 120
+        if not late or carrier is None:
+            return (batched_randint(1, 100) > baseOobChance, None, 0)
+        offHome = self.offense is g.homeTeam
+        scoreDiff = (g.homeScore - g.awayScore) if offHome else (g.awayScore - g.homeScore)
+        nearSideline = batched_randint(1, 100) <= baseOobChance  # could the play reach the sideline?
+        iq = max(0.0, min(1.0, (getattr(carrier.gameAttributes, 'instinct', 80) - 60) / 40.0))
+        aware = batched_randint(1, 100) <= 40 + iq * 60          # IQ gates situational awareness
+
+        if scoreDiff < 0:  # trailing late — WANT the clock stopped: get out
+            if not nearSideline or not aware:
+                return (batched_randint(1, 100) > baseOobChance, None, 0)
+            und = self._undiscipline(carrier)
+            C = self._confidenceState(carrier)
+            if und > 0.5 and C > 0 and batched_randint(1, 100) <= int(und * (50 + 50 * C)):
+                # greedy: gamble for more yards instead of getting out immediately
+                if batched_randint(1, 100) <= 55:
+                    return (False, 'extra_oob', batched_randint(2, 6))     # got the yards AND out
+                return (True, 'tackled_inbounds', batched_randint(0, 3))   # dragged down in bounds, clock runs
+            return (False, 'smart_oob', 0)                                  # disciplined: out immediately
+
+        if scoreDiff > 0:  # leading late — WANT the clock running: stay in
+            if not nearSideline:
+                return (True, None, 0)
+            if aware:
+                return (True, 'stays_inbounds', 0)
+            return (False, 'blunder_oob', 0)                                # oblivious: stops own clock
+
+        return (batched_randint(1, 100) > baseOobChance, None, 0)
+
+    def _stretchForFirst(self, carrier):
+        """A confident ball-carrier ending JUST short of the first-down marker (or
+        goal line) reaches the ball across to convert. Returns
+        (bonusYards, note, fumbleBump). Confidence drives the reach; an undisciplined
+        reach exposes the ball (a fumble bump that the existing fumble check resolves).
+        Tentative carriers (C <= 0) just take the spot."""
+        if getattr(self, 'isTd', False) or carrier is None:
+            return (0, None, 0)
+        target = min(self.game.yardsToFirstDown, self.yardsToEndzone)  # marker or goal, whichever is live
+        short = target - self.yardage
+        if short < 1 or short > 2:           # only when within a reach
+            return (0, None, 0)
+        C = self._confidenceState(carrier)
+        if C <= 0:
+            return (0, None, 0)              # not confident enough to lunge for it
+        # Confidence drives the WILLINGNESS to reach; POWER drives the physical
+        # extension through contact (a strong back/big TE gets it there, a slight
+        # receiver doesn't). Discipline (below) drives the fumble risk on the reach.
+        powerNorm = max(-1.0, min(1.0, (getattr(carrier.gameAttributes, 'power', 80) - 80) / 20.0))
+        successChance = int(45 + 25 * C + 15 * powerNorm)   # ~5..85
+        if batched_randint(1, 100) > successChance:
+            return (0, 'stretch_short', 0)   # overreaches, comes up just short
+        note = 'stretch_goal' if target == self.yardsToEndzone else 'stretch_first'
+        fumbleBump = int(round(self._undiscipline(carrier) * 4 * C))  # 0 (disciplined) .. ~4 (gunslinger)
+        return (short, note, fumbleBump)
+
     def _mentalDrift(self, player, baseWeight=2, driftWeight=25):
-        """Calculate mental state effect from base personality + in-game drift.
-        Base personality (±2 each) provides moderate persistent influence.
-        In-game drift (small increments from TDs, drops, momentum) is amplified
-        to create visible frustration/flow state effects during the game.
-        """
-        baseConf = player.attributes.confidenceModifier
-        baseDet = player.attributes.determinationModifier
-        confDrift = player.gameAttributes.confidenceModifier - baseConf
-        detDrift = player.gameAttributes.determinationModifier - baseDet
-        return (baseConf + baseDet) * baseWeight + (confDrift + detDrift) * driftWeight
+        """Confidence-driven execution term, pre-scaled by 15 so the existing
+        callers' `/15` yields the rating-point execution value (Output B of the
+        Confidence × Discipline model). Determination/resilience no longer feed
+        this term — they gate confidence's DRIFT (see the per-play confidence
+        update). `baseWeight`/`driftWeight` are retained for signature compat but
+        unused."""
+        return self._confExecution(player) * 15
 
     def _defenderMentalMod(self, defender):
         """Combined mental swing for a defender on a single resolution.
@@ -9445,15 +9939,18 @@ class Play():
         openness = np.random.normal(meanOpenness, stdDev)
         return max(0, min(100, openness)), round(effectiveRouteRunning)
     
-    def selectPassTarget(self, targetList: list, qbVision: int, qbDiscipline: int, mustThrow: bool = False):
+    def selectPassTarget(self, targetList: list, qbVision: int, qbDiscipline: int, mustThrow: bool = False, aggression: float = 0.0):
         """
-        Stage 2: QB finds and selects a receiver based on vision and discipline.
-        High vision = accurately perceives receiver openness
-        Low vision = distorted perception (sees receivers as more/less open than they are)
-        High discipline = won't throw to covered receivers
+        Stage 2: QB finds and selects a receiver based on vision and aggression.
+        High vision = accurately perceives receiver openness.
+        aggression (confidence, [-1,1]) = willingness to force a throw into a tight
+        window vs check down / throw it away. A confident QB pulls the trigger more;
+        a rattled QB bails. (Discipline no longer gates the *willingness* — that's
+        confidence now; discipline is the gunslinger error tax on the outcome.)
         mustThrow = desperation: QB must attempt a throw (4th down trailing, time expiring, etc.)
         Returns: (selectedTarget, willThrowAway)
         """
+        aggrBonus = int(round(aggression * MENTAL_AGGR_ROLL_K))
         # Calculate how accurately QB perceives openness
         # High vision (90+): ±5% error, Medium (70-89): ±15% error, Low (<70): ±25% error
         if qbVision >= 90:
@@ -9488,23 +9985,20 @@ class Play():
         for target in sortedTargets:
             perceivedOpenness = target['openness']
 
-            # Discipline check using perceived openness
+            # Comfortable-throw thresholds by read quality; the "force it anyway"
+            # roll is shifted by aggression (confidence) — a confident QB pulls the
+            # trigger into tighter windows, a rattled one waits for someone open.
             if qbDiscipline >= 90:
-                # Elite: prefers 50+ openness, otherwise frequently throws
-                # to next-best read instead of stalling.
-                if perceivedOpenness >= 50 or batched_randint(1, 100) <= 50:
+                if perceivedOpenness >= 50 or batched_randint(1, 100) <= 50 + aggrBonus:
                     return (target, False)
             elif qbDiscipline >= 75:
-                # Good: throws to 30+ openness or rolls to throw anyway.
-                if perceivedOpenness >= 30 or batched_randint(1, 100) <= 70:
+                if perceivedOpenness >= 30 or batched_randint(1, 100) <= 70 + aggrBonus:
                     return (target, False)
             elif qbDiscipline >= 60:
-                # Average: throws to 15+, mostly forces it otherwise.
-                if perceivedOpenness >= 15 or batched_randint(1, 100) <= 85:
+                if perceivedOpenness >= 15 or batched_randint(1, 100) <= 85 + aggrBonus:
                     return (target, False)
             else:
-                # Low discipline: throws to anyone, risky
-                if batched_randint(1, 100) <= 95:
+                if batched_randint(1, 100) <= 95 + aggrBonus:
                     return (target, False)
 
         # No suitable receiver found - force throw to the most-open target
@@ -9513,11 +10007,10 @@ class Play():
         if mustThrow:
             return (sortedTargets[0], False)
         topOpenness = sortedTargets[0]['openness'] if sortedTargets else 0
-        # Disciplined QBs (80+) bail when no target is reasonably open.
-        # openness < 50 is the trigger — even a moderately covered top read
-        # is enough to throw away rather than force it. Below-80 discipline
-        # QBs always force the throw (they don't have the patience to bail).
-        if qbDiscipline >= 80 and topOpenness < 50:
+        # Disciplined QBs (80+) bail when no target is reasonably open — but a
+        # confident QB bails less readily (forces it), a rattled one bails sooner.
+        bailThreshold = 50 - aggression * MENTAL_AGGR_BAIL_K
+        if qbDiscipline >= 80 and topOpenness < bailThreshold:
             return (None, True)
         # Otherwise force the throw to the most-open option.
         return (sortedTargets[0], False)
@@ -9667,7 +10160,11 @@ class Play():
         # because their throw quality runs lower.
         intOpenness = receiverActualOpenness if receiverActualOpenness is not None else receiverOpenness
         cov = defensePassCoverage
-        covFactor = cov / 100
+        # Soft-cap the coverage factor around an 80 baseline (half-slope) instead of reading absolute
+        # coverage (the old cov/100). An evolved league's elevated coverage (mean ~83 vs a young league's
+        # ~75) otherwise compounds the pick rate every season; centering on 80 keeps the INT contribution
+        # league-relative so the rate holds as attributes climb. Feeds pBadRead + pBadThrow below.
+        covFactor = 0.80 + (cov - 80) / 100 * 0.5
         openGap = max(0.0, 50 - intOpenness) / 50      # 0 open … 1 blanketed
         throwGap = max(0.0, 55 - throwQuality) / 55    # 0 sharp … 1 errant
         # Proximity: how reachable the ball is for a defender. Full effect when
@@ -9687,7 +10184,9 @@ class Play():
 
         pBadRead = openGap * covFactor * INT_BAD_READ_K
         pBadThrow = throwGap * (0.4 + 0.6 * covFactor) * proximity * INT_BAD_THROW_K
-        pDefPlay = max(0.0, (cov - 70) / 30) * openGap * INT_DEF_PLAY_K
+        # DB-jumps-the-throw path — the worst attribute over-scaler. Anchored at 72 / ÷50 (was 70 / ÷30)
+        # so an evolved league's high coverage doesn't ~2.6x this term in the 80-92 band where aged DBs live.
+        pDefPlay = max(0.0, (cov - 72) / 50) * openGap * INT_DEF_PLAY_K
 
         intFrac = 1 - (1 - pBadRead) * (1 - pBadThrow) * (1 - pDefPlay)
         intProb = intFrac * 100
@@ -9949,7 +10448,7 @@ class Play():
                 #fumble
                 self.isFumble = True
                 if (basePassRush + batched_randint(-5,5)) >= (self.passer.gameAttributes.power + self.passer.gameAttributes.luckModifier + batched_randint(-5,5)):
-                    self.passer.updateInGameConfidence(-.02)
+                    self.passer.updateInGameConfidence(-.02, source='mistake')
                     self.defense.updateInGameConfidence(.02)
                     self.defense.gameDefenseStats['fumRec'] += 1
                     self.isFumbleLost = True
@@ -10042,7 +10541,7 @@ class Play():
             isTrailing = (self.offense == self.game.homeTeam and self.game.homeScore < self.game.awayScore) or \
                          (self.offense == self.game.awayTeam and self.game.awayScore < self.game.homeScore)
             isTied = self.game.homeScore == self.game.awayScore
-            isFourthDown = self.game.down == 4
+            isFourthDown = self.game.down == self.game.gameRules.downsPerSeries
             isTimeExpiring = self.game.gameClockSeconds <= 30
             isLateGame = self.game.currentQuarter >= 4
             mustThrow = isFourthDown and (isTrailing or (isTied and self.game.currentQuarter >= 5))
@@ -10052,7 +10551,8 @@ class Play():
                 targetList,
                 self.passer.attributes.vision,
                 self.passer.gameAttributes.discipline,
-                mustThrow=mustThrow
+                mustThrow=mustThrow,
+                aggression=self._confidenceState(self.passer),
             )
             
             if willThrowAway or selectedTarget is None:
@@ -10121,6 +10621,17 @@ class Play():
                 self.qbPressureMod = qbPressureMod
                 self.rcvPressureMod = receiverPressureMod
 
+                # Awakened (L4) fire — a charged QB (throw) or the targeted receiver (catch) forces
+                # this completion (no INT, no drop) and a big gain (P3). None unless gated on + ready.
+                self.awakenedFire = (self.game._awakenedTryFire('throw', self.passer)
+                                     or self.game._awakenedTryFire('catch', self.receiver))
+                if not self.awakenedFire:
+                    # Defensive fire — a charged awakened defender picks it off.
+                    _dfn = self.game._pickReadyAwakenedDefender(self.defense, 'pick')
+                    if _dfn and self.game._awakenedTryFire('pick', _dfn):
+                        self.awakenedFire = self.game._lastAwakenedFire
+                        self._awakenedDefender = _dfn
+
                 # STAGE 3: Calculate throw quality
                 throwQuality = self.calculateThrowQuality(
                     self.passType,
@@ -10187,15 +10698,35 @@ class Play():
 
                 # Choke boosts only in high-pressure situations (Q4 close games, etc.)
                 if self.game.gamePressure >= CLUTCH_PRESSURE_THRESHOLD:
-                    # QB choking under pressure increases INT risk
+                    # QB choking under pressure increases INT risk. DAMPENED: boost
+                    # K 0.75 (was 1.5) so a clutch choke nudges INT risk up modestly
+                    # instead of spiking it — the base INT rate is unchanged.
                     if qbPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
-                        chokeIntBoost = abs(qbPressureMod) * 1.5
+                        chokeIntBoost = abs(qbPressureMod) * INT_CHOKE_BOOST_K
                         catchProbs['intProb'] = min(25, catchProbs['intProb'] + chokeIntBoost)
 
                     # Receiver choking under pressure increases drop risk
                     if receiverPressureMod <= -CHOKE_MODIFIER_THRESHOLD:
                         chokeDropBoost = abs(receiverPressureMod) * 2.0
                         catchProbs['dropProb'] = min(30, catchProbs['dropProb'] + chokeDropBoost)
+
+                # Gunslinger tax — a confident, undisciplined QB forces throws into
+                # trouble (more INTs); same for an over-amped receiver (more drops).
+                # Confidence x Discipline model, docs/MENTAL_MODEL.md.
+                catchProbs['intProb'] = min(25, catchProbs['intProb'] + self._gunslingerTax(self.passer))
+                catchProbs['dropProb'] = min(30, catchProbs['dropProb'] + self._gunslingerTax(self.receiver))
+
+                # Dive for a tough ball — on a CONTESTED (catchable-but-hard) throw, a
+                # confident receiver lays out, extending their catch range. The
+                # gunslinger drop tax above already punishes a reckless (undisciplined)
+                # lay-out with more drops. Flag it so a resulting grab narrates the dive.
+                self._diveCatch = False
+                _diveC = self._confidenceState(self.receiver)
+                if _diveC > 0 and 15 <= catchProbs['catchProb'] <= 60:
+                    catchProbs['catchProb'] = min(85, catchProbs['catchProb'] + _diveC * MENTAL_DIVE_K)
+                    self._diveAttempt = True
+                else:
+                    self._diveAttempt = False
 
                 # Desperation-deep INT dampener — a trailing team forced to chuck it
                 # downfield in garbage time was minting 9-INT games (the Floos Bowl, a
@@ -10210,6 +10741,18 @@ class Play():
                         else (self.game.homeScore - self.game.awayScore)
                     if mustThrow or offDeficit >= 14:
                         catchProbs['intProb'] = round(catchProbs['intProb'] * INT_DESPERATION_DAMPEN, 1)
+
+                # An awakened fire forces the outcome below (the roll keys off intProb + catchProb):
+                # an offensive fire forces the completion; a defensive fire forces the interception.
+                if self.awakenedFire:
+                    if self.awakenedFire.get('situation') == 'pick':
+                        catchProbs['intProb'] = 100
+                        catchProbs['catchProb'] = 0
+                        catchProbs['dropProb'] = 0
+                    else:
+                        catchProbs['intProb'] = 0
+                        catchProbs['dropProb'] = 0
+                        catchProbs['catchProb'] = 100
 
                 # Roll for outcome
                 outcomeRoll = batched_randint(1, 100)
@@ -10234,7 +10777,7 @@ class Play():
                     self.yardage = min(randint(_intLo, _intHi), self.yardsToEndzone)
                     self.passer.addInterception(self.game.isRegularSeasonGame)
                     self.passer.addMissedPass(self.game.isRegularSeasonGame)
-                    self.passer.updateInGameConfidence(-.02)
+                    self.passer.updateInGameConfidence(-.02, source='mistake')
                     self.defense.updateInGameConfidence(.02)
                     self.defense.gameDefenseStats['ints'] += 1
                     self.isInterception = True
@@ -10247,6 +10790,9 @@ class Play():
                         self.interceptedBy = safetyPlayer
                     else:
                         self.interceptedBy = coveringDefender
+                    # A defensive fire credits the awakened defender with the pick.
+                    if self.awakenedFire and self.awakenedFire.get('situation') == 'pick' and self._awakenedDefender:
+                        self.interceptedBy = self._awakenedDefender
                     if self.interceptedBy:
                         self.insights['pass']['interceptedBy'] = self.interceptedBy.name
                         if hasattr(self.interceptedBy, 'stat_tracker'):
@@ -10255,6 +10801,9 @@ class Play():
                 # Check for catch
                 elif outcomeRoll <= (catchProbs['intProb'] + catchProbs['catchProb']):
                     # COMPLETION!
+                    # A grab off a lay-out on a contested ball gets the diving-catch tag.
+                    if getattr(self, '_diveAttempt', False):
+                        self._diveCatch = True
                     self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
                     
                     # Calculate air yards based on throw quality
@@ -10355,6 +10904,13 @@ class Play():
                         yac = self.yardsToEndzone - passYards
                         self.yardage = self.yardsToEndzone
 
+                    # Awakened fire — force a big varied breakaway (or the end zone), keeping yac coherent.
+                    if self.awakenedFire:
+                        from constants import AWAKENED_FORCE_PASS_GAIN, AWAKENED_FORCE_GAIN_TAIL
+                        forced = AWAKENED_FORCE_PASS_GAIN + int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
+                        self.yardage = min(self.yardsToEndzone, max(self.yardage, forced))
+                        yac = max(0, self.yardage - passYards)
+
                     self.insights['pass']['airYards'] = passYards
                     self.insights['pass']['yac'] = yac
 
@@ -10390,8 +10946,17 @@ class Play():
                         else:
                             oobChance = 15
 
-                    self.isInBounds = batched_randint(1, 100) > oobChance
-                    
+                    self.isInBounds, self._sidelineNote, _sbonus = self._sidelineDecision(self.receiver, oobChance)
+                    if _sbonus:
+                        self.yardage = min(self.yardage + _sbonus, self.yardsToEndzone - 1)
+
+                    # Stretch for the marker on the catch (mirrors the run side): a
+                    # confident receiver with the power to extend reaches it across;
+                    # an undisciplined reach feeds the strip-fumble check below.
+                    _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.receiver)
+                    if _stBonus:
+                        self.yardage = min(self.yardage + _stBonus, self.yardsToEndzone - 1)
+
                     # Update stats
                     self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)
                     self.passer.addCompletion(self.game.isRegularSeasonGame)
@@ -10437,10 +11002,11 @@ class Play():
                         primaryTackler = safetyPlayer  # Safety made the tackle on deep plays
                     # Surface tackler so play text can credit the defender
                     self.tackledBy = primaryTackler
-                    if primaryTackler and self.isInBounds and batched_randint(1, 100) > 97:
-                        # ~3% chance of fumble on catch — only in bounds; a
-                        # receiver who steps out of bounds can't be stripped
-                        # (the play is dead at the boundary).
+                    if (primaryTackler and self.isInBounds and not self.awakenedFire
+                            and batched_randint(1, 100) > 97 - _stFumbleBump):
+                        # ~3% chance of fumble on catch (wider after a reach-for-the-marker
+                        # stretch — _stFumbleBump); only in bounds — a receiver who steps
+                        # out of bounds can't be stripped (the play is dead at the boundary).
                         rcvFumbleResist = round(self.receiver.gameAttributes.power * 0.7 + self.receiver.gameAttributes.discipline * 0.3)
                         defStripAbility = 70
                         if hasattr(primaryTackler, 'attributes'):
@@ -10461,7 +11027,7 @@ class Play():
                             rcvRecoveryMod = self.receiver.attributes.getPressureModifier(self.game.gamePressure)
                             if (self.defense.defensePassCoverageRating + batched_randint(-5, 5)) >= \
                                (self.receiver.gameAttributes.overallRating + rcvRecoveryMod + batched_randint(-5, 5)):
-                                self.receiver.updateInGameConfidence(-.02)
+                                self.receiver.updateInGameConfidence(-.02, source='mistake')
                                 self.defense.updateInGameConfidence(.02)
                                 self.defense.gameDefenseStats['fumRec'] += 1
                                 self.isFumbleLost = True
@@ -10481,7 +11047,7 @@ class Play():
                     # DROPPED PASS
                     self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
                     self.receiver.addPassDrop(self.game.isRegularSeasonGame)
-                    self.receiver.updateInGameConfidence(-.005)
+                    self.receiver.updateInGameConfidence(-.005, source='mistake')
                     self.defense.updateInGameConfidence(.005)
                     self.passIsDropped = True
                     self.yardage = 0

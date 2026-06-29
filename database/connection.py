@@ -133,6 +133,24 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # L4 awakened signature abilities (offensive + defensive) on anomaly_state — legacy from an
+        # earlier P1 model; the live model stores the single career power on players.signature_power.
+        for _col in ("offensive_ability", "defensive_ability"):
+            try:
+                conn.execute(text(f"ALTER TABLE anomaly_state ADD COLUMN {_col} VARCHAR(40)"))
+                conn.commit()
+                logger.info(f"  Migration: added anomaly_state.{_col}")
+            except Exception:
+                conn.rollback()
+
+        # L4 awakened signature power — the player's ONE career power.
+        try:
+            conn.execute(text("ALTER TABLE players ADD COLUMN signature_power VARCHAR(40)"))
+            conn.commit()
+            logger.info("  Migration: added players.signature_power")
+        except Exception:
+            conn.rollback()
+
         # Cores exchange threading on persisted league-news items, so multi-Core
         # conversations group under one header on refresh (not just live).
         for col, colDef in [
@@ -718,6 +736,19 @@ def _runPendingMigrations():
                 ('survey_url', 'https://forms.gle/s2ycdsBLxTpsWEk4A'),
                 ('halftime_show_url', ''),
                 ('halftime_show_pause_seconds', '120'),
+                # Anomaly / Criticality runtime knobs (override constants.py at runtime).
+                ('anomalies_enabled', 'true'),
+                ('criticality_enabled', 'false'),
+                ('awakened_powers_enabled', 'false'),
+                ('anomaly_intensity', 'normal'),
+                # Awakened tuning dials (override constants.py): per-position touches-per-game to fill
+                # the meter (lower = fires more often) + the defensive fire gate %.
+                ('awakened_involve_qb', '31'),
+                ('awakened_involve_rb', '19'),
+                ('awakened_involve_wr', '5.8'),
+                ('awakened_involve_te', '5.5'),
+                ('awakened_involve_k', '1.7'),
+                ('awakened_def_fire_chance', '35'),
             ]
             for k, v in defaults:
                 conn.execute(text(
@@ -976,6 +1007,30 @@ def _runPendingMigrations():
             conn.execute(text("ALTER TABLE player_attributes ADD COLUMN self_belief INTEGER DEFAULT 80"))
             conn.commit()
             logger.info("  Migration: added player_attributes.self_belief")
+        except Exception:
+            conn.rollback()
+
+        # attitude_baseline — the disposition anchor the drift mean-reverts toward.
+        # Existing players have DRIFTED attitudes (a decade of losing-team souring),
+        # so anchoring to their current value would lock in the manufactured toxicity.
+        # Backfill estimates disposition by pulling the current attitude halfway back
+        # toward neutral (80): a drifted toxic recovers, a genuine sour stays low-ish.
+        # In the same try as the ADD COLUMN so the backfill runs ONCE (re-boots throw
+        # on the existing column and skip it).
+        try:
+            conn.execute(text("ALTER TABLE player_attributes ADD COLUMN attitude_baseline INTEGER DEFAULT 80"))
+            conn.execute(text(
+                "UPDATE player_attributes SET attitude_baseline = "
+                "CAST(ROUND(attitude + (80 - attitude) * 0.5) AS INTEGER) WHERE attitude IS NOT NULL"))
+            # One-time rebalance: snap the CURRENT attitude to the recovered baseline so the
+            # decade of manufactured toxicity clears immediately on deploy, rather than healing
+            # gradually over ~1.5 seasons of reversion. (Removes both the down-drift on soured
+            # players AND the up-drift inflation on perennial winners — everyone resets to their
+            # estimated disposition.) Validated on a prod copy: toxic 18% -> 2%.
+            conn.execute(text(
+                "UPDATE player_attributes SET attitude = attitude_baseline WHERE attitude IS NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added player_attributes.attitude_baseline (+ disposition backfill + rebalance)")
         except Exception:
             conn.rollback()
 

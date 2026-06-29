@@ -442,6 +442,7 @@ class PlayerManager:
                 player.attributes.blocking = attrs.blocking
                 player.attributes.discipline = attrs.discipline
                 player.attributes.attitude = attrs.attitude
+                player.attributes.attitudeBaseline = getattr(attrs, 'attitude_baseline', None) or attrs.attitude
                 player.attributes.focus = attrs.focus
                 player.attributes.instinct = attrs.instinct
                 player.attributes.creativity = attrs.creativity
@@ -1632,6 +1633,7 @@ class PlayerManager:
                             blocking=attrs.blocking,
                             discipline=attrs.discipline,
                             attitude=attrs.attitude,
+                            attitude_baseline=getattr(attrs, 'attitudeBaseline', 0) or attrs.attitude,
                             focus=attrs.focus,
                             instinct=attrs.instinct,
                             creativity=attrs.creativity,
@@ -1682,6 +1684,7 @@ class PlayerManager:
                         db_attrs.blocking = attrs.blocking
                         db_attrs.discipline = attrs.discipline
                         db_attrs.attitude = attrs.attitude
+                        db_attrs.attitude_baseline = getattr(attrs, 'attitudeBaseline', 0) or attrs.attitude
                         db_attrs.focus = attrs.focus
                         db_attrs.instinct = attrs.instinct
                         db_attrs.creativity = attrs.creativity
