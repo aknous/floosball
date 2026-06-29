@@ -62,9 +62,9 @@
             "city": "Pittsburgh",
             "name": "Melons",
             "abbr": "PIT",
-            "color": "#2ECC71",
-            "secondaryColor": "#FF4081",
-            "tertiaryColor": "#7EE2A8"
+            "color": "#FF4081",
+            "secondaryColor": "#76FF03",
+            "tertiaryColor": "#FF80AB"
         },
         {
             "city": "Cleveland",
@@ -94,9 +94,9 @@
             "city": "Minnesota",
             "name": "Blouses",
             "abbr": "MIN",
-            "color": "#7B1FA2",
+            "color": "#D500F9",
             "secondaryColor": "#00E5FF",
-            "tertiaryColor": "#B14BDC"
+            "tertiaryColor": "#E040FB"
         },
         {
             "city": "Seattle",
@@ -126,9 +126,9 @@
             "city": "Austin",
             "name": "Moonlight",
             "abbr": "AUS",
-            "color": "#B0BEC5",
-            "secondaryColor": "#1A237E",
-            "tertiaryColor": "#EBEEF0"
+            "color": "#FF6D00",
+            "secondaryColor": "#6200EA",
+            "tertiaryColor": "#FF9E40"
         },
         {
             "city": "Kansas City",
@@ -182,9 +182,9 @@
             "city": "Portland",
             "name": "Lattes",
             "abbr": "POR",
-            "color": "#F5F5F5",
-            "secondaryColor": "#00838F",
-            "tertiaryColor": "#CFD8DC"
+            "color": "#E91E63",
+            "secondaryColor": "#00BCD4",
+            "tertiaryColor": "#F06292"
         },
         {
             "city": "Miami",
@@ -198,17 +198,17 @@
             "city": "San Francisco",
             "name": "Phones",
             "abbr": "SFP",
-            "color": "#5C6BC0",
-            "secondaryColor": "#FF5252",
-            "tertiaryColor": "#A6AEDC"
+            "color": "#0071E3",
+            "secondaryColor": "#FF3B30",
+            "tertiaryColor": "#409EFF"
         },
         {
             "city": "Tampa",
             "name": "Babies",
             "abbr": "TAM",
-            "color": "#CE93D8",
-            "secondaryColor": "#4FC3F7",
-            "tertiaryColor": "#F0DEF3"
+            "color": "#FFC107",
+            "secondaryColor": "#7B1FA2",
+            "tertiaryColor": "#FFD54F"
         },
         {
             "city": "Georgia",
