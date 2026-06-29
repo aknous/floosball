@@ -171,11 +171,12 @@ def testCoresExchanges():
     football-fan character split, and solo fallback."""
     import managers.coresManager as c
 
-    # The roster carries the orthogonal football-interest trait, with exactly
-    # one fanatic and a mix of into-it / not.
+    # The roster carries the orthogonal football-interest trait: TWO fanatics of different flavors
+    # (Cassian the stats-and-trends fanatic, Pyre the simple-minded fan of the sport) plus a mix of
+    # into-it / not.
     interests = {k: v['footballInterest'] for k, v in c.CORES.items()}
     fanatics = [k for k, v in interests.items() if v == 'fanatic']
-    assert len(fanatics) == 1, f"exactly one fanatic expected, got {fanatics}"
+    assert len(fanatics) == 2, f"two fanatics expected (cassian, pyre), got {fanatics}"
     assert any(v == 'none' for v in interests.values()), "some Cores are not into football"
     assert any(v in ('fond', 'secret') for v in interests.values()), "some Cores are into football"
 
