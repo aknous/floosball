@@ -106,9 +106,16 @@ def testSuppressionMechanicsAndCap(session):
     assert state.suppression_window_ends_week == 20 + a.SUPPRESSION_WINDOW_WEEKS
     assert state.threshold == int(threshBefore * a.SUPPRESSION_THRESHOLD_BUMP), "threshold reinforced"
     assert state.last_reset_week == 20, "warning cycle re-armed"
-    # Over-cap fuel drained on every row.
+    # Over-cap fuel drained on every row. The drain targets SUPPRESSION_TARGET_RATIO * threshold (a deep
+    # ABSOLUTE drain when the aggregate overshot), never less aggressive than SUPPRESSION_AGGREGATE_DAMP —
+    # so with the aggregate seeded well over threshold the factor is the target-ratio one, not a flat 0.55.
+    # threshold is the post-bump value (state.threshold), aggregate the pre-drain 1200, bg = the week.
+    bg = 20.0
+    overCap = 1200.0 - bg
+    expectedDamp = max(0.0, min(a.SUPPRESSION_AGGREGATE_DAMP,
+                                max(0.0, a.SUPPRESSION_TARGET_RATIO * state.threshold - bg) / overCap))
     carries = [r.over_cap_carry for r in session.query(PlayerAttention).filter_by(season=season)]
-    assert all(abs(c - 200.0 * a.SUPPRESSION_AGGREGATE_DAMP) < 1e-6 for c in carries), "carry drained"
+    assert all(abs(c - 200.0 * expectedDamp) < 1e-6 for c in carries), "carry drained to target ratio"
 
     # Status during the window: number-free 'stabilizing' override.
     status = a.getCriticalityStatus(season, week=21)
