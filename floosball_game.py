@@ -38,6 +38,7 @@ from constants import (
     MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
     MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K, MENTAL_DIVE_K,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
+    LEAGUE_COVERAGE_BASELINE,
     FUMBLE_BASE_THRESHOLD, FUMBLE_CHOKE_FLOOR, FUMBLE_CHOKE_SWING_K, INT_CHOKE_BOOST_K,
     HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
@@ -9926,9 +9927,13 @@ class Play():
         pressureMod = receiver.attributes.getPressureModifier(self.game.gamePressure)
         pressureEffect = pressureMod * 5  # ±5 points
 
-        # 2. Coverage disruption: elite defenses physically contest routes
-        #    Defense 60 = no effect, 90 = up to -6 points
-        coverageDisruption = -max(0, (defensePassCoverage - 60) * 0.2)
+        # 2. Coverage disruption: above-baseline defenses physically contest routes.
+        #    Anchored on LEAGUE_COVERAGE_BASELINE (80) so a league-average defender
+        #    disrupts ~0 every season and only above-average coverage bites — this
+        #    stops the term from compounding as the league's coverage drifts up with
+        #    age (the old 60 anchor made even an average defense disrupt -4, growing
+        #    every season and inflating the pick rate). Baseline = up to -2 at 90.
+        coverageDisruption = -max(0, (defensePassCoverage - LEAGUE_COVERAGE_BASELINE) * 0.2)
 
         # 3. Mental state: base personality + amplified in-game drift (frustration / momentum)
         # Scale by /15 to keep drift within ±1-3 on the 0-100 rating scale
@@ -10200,9 +10205,12 @@ class Play():
 
         pBadRead = openGap * covFactor * INT_BAD_READ_K
         pBadThrow = throwGap * (0.4 + 0.6 * covFactor) * proximity * INT_BAD_THROW_K
-        # DB-jumps-the-throw path — the worst attribute over-scaler. Anchored at 72 / ÷50 (was 70 / ÷30)
-        # so an evolved league's high coverage doesn't ~2.6x this term in the 80-92 band where aged DBs live.
-        pDefPlay = max(0.0, (cov - 72) / 50) * openGap * INT_DEF_PLAY_K
+        # DB-jumps-the-throw path — the worst attribute over-scaler. Anchored on
+        # LEAGUE_COVERAGE_BASELINE (80, was a fixed 72) so a league-average defender
+        # contributes ~0 here every season and only above-baseline coverage jumps
+        # the throw — keeps an aging league's rising coverage from compounding this
+        # term in the 80-92 band where evolved DBs live.
+        pDefPlay = max(0.0, (cov - LEAGUE_COVERAGE_BASELINE) / 50) * openGap * INT_DEF_PLAY_K
 
         intFrac = 1 - (1 - pBadRead) * (1 - pBadThrow) * (1 - pDefPlay)
         intProb = intFrac * 100
