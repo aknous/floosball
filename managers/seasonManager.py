@@ -2307,15 +2307,15 @@ class SeasonManager:
                     # Cracking → computeFinalOutput uses the standard
                     # bonus-additive formula (next-season's aggregator).
                     try:
-                        from managers.anomalyManager import getActiveCrackingCore
-                        crackingCore = getActiveCrackingCore(season, week)
+                        from managers.anomalyManager import getActiveCriticalityCore
+                        criticalityCore = getActiveCriticalityCore(season, week)
                     except Exception:
-                        crackingCore = None
+                        criticalityCore = None
 
                     from managers.coreEquations import computeFinalOutput, equationTemplate
                     rawTotalFP, totalEquation = computeFinalOutput(
                         weekRawFP, result.totalBonusFP, result.multFactors,
-                        coreKey=crackingCore,
+                        coreKey=criticalityCore,
                     )
                     # Subtract raw FP so we store only the card bonus portion
                     totalFP = round(rawTotalFP - weekRawFP, 2)
@@ -2391,9 +2391,9 @@ class SeasonManager:
                                 "weekRawFP": round(weekRawFP, 1),
                                 "totalBonusFP": round(result.totalBonusFP, 2),
                                 "multFactors": [round(f, 2) for f in result.multFactors],
-                                "crackingCore": crackingCore,
-                                "crackingEquation": totalEquation if crackingCore else None,
-                                "crackingEquationTemplate": equationTemplate(crackingCore) if crackingCore else None,
+                                "criticalityCore": criticalityCore,
+                                "criticalityEquation": totalEquation if criticalityCore else None,
+                                "criticalityEquationTemplate": equationTemplate(criticalityCore) if criticalityCore else None,
                             },
                         })
                         weekBonus = WeeklyCardBonus(
