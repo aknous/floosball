@@ -1753,6 +1753,98 @@ async def get_current_games(response: Response):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/weekGames", response_model=List[Dict[str, Any]])
+async def get_week_games(week: int, response: Response):
+    """Final scores for a completed week of the CURRENT season.
+
+    Reads persisted game rows (authoritative + restart-safe) and styles them with
+    the live team objects, emitting the same card shape the scoreboard already
+    consumes (see GameResponseBuilder.buildGameWithProbabilities). Powers the
+    scoreboard's back/forward week navigation so users can browse past scores
+    without digging into a team's schedule. Live/current week stays on
+    /api/currentGames; this serves finished weeks only.
+    """
+    response.headers["Cache-Control"] = "public, max-age=30"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    try:
+        season_mgr = floosball_app.seasonManager
+        current_season = season_mgr.currentSeason
+        if current_season is None:
+            return []
+        seasonNum = current_season.seasonNumber
+        teamMgr = floosball_app.teamManager
+
+        from database.connection import get_session
+        from database.models import Game as _DBGame
+        session = get_session()
+        try:
+            rows = (session.query(_DBGame)
+                    .filter_by(season=seasonNum, week=week, status='final')
+                    .all())
+        finally:
+            session.close()
+
+        def _teamObj(teamId):
+            t = teamMgr.getTeamById(teamId) if hasattr(teamMgr, 'getTeamById') else \
+                next((x for x in teamMgr.teams if x.id == teamId), None)
+            if t is None:
+                return {'id': str(teamId), 'name': 'Unknown', 'city': '', 'abbr': '?',
+                        'color': '#64748b', 'secondaryColor': '#64748b', 'tertiaryColor': '#64748b',
+                        'record': '', 'elo': 1500}
+            abbr = t.abbr if getattr(t, 'abbr', None) else t.name[:3].upper()
+            return {
+                'id': str(t.id), 'name': t.name, 'city': getattr(t, 'city', ''), 'abbr': abbr,
+                'color': t.color,
+                'secondaryColor': getattr(t, 'secondaryColor', t.color),
+                'tertiaryColor': getattr(t, 'tertiaryColor', t.color),
+                'record': f"{t.seasonTeamStats.get('wins', 0)}-{t.seasonTeamStats.get('losses', 0)}"
+                          if hasattr(t, 'seasonTeamStats') else '',
+                'elo': getattr(t, 'elo', 1500),
+            }
+
+        result = []
+        for g in rows:
+            homeWon = g.home_score > g.away_score
+            awayWon = g.away_score > g.home_score
+            homeTeam = _teamObj(g.home_team_id)
+            awayTeam = _teamObj(g.away_team_id)
+            winner = homeTeam['name'] if homeWon else (awayTeam['name'] if awayWon else None)
+            result.append({
+                'id': str(g.id),
+                'seasonNumber': g.season,
+                'week': g.week,
+                'playoffRound': g.playoff_round,
+                'gameType': 'playoff' if g.is_playoff else 'regular',
+                'homeTeam': homeTeam,
+                'awayTeam': awayTeam,
+                'status': 'Final',
+                'homeScore': g.home_score,
+                'awayScore': g.away_score,
+                'quarterScores': {
+                    'home': {'q1': g.home_score_q1, 'q2': g.home_score_q2,
+                             'q3': g.home_score_q3, 'q4': g.home_score_q4},
+                    'away': {'q1': g.away_score_q1, 'q2': g.away_score_q2,
+                             'q3': g.away_score_q3, 'q4': g.away_score_q4},
+                },
+                'quarter': 4,
+                'timeRemaining': '0:00',
+                # Win probability intentionally omitted for finished past games —
+                # the scoreboard hides the gauge for completed weeks (the card
+                # reserves the height so sizing stays consistent).
+                'isComplete': True,
+                'winningTeam': winner,
+                'isUpsetAlert': False,
+                'isFeatured': False,
+            })
+        # Stable order: featured/upset not relevant here, sort by game id (kickoff order)
+        result.sort(key=lambda x: int(x['id']))
+        return result
+    except Exception as e:
+        logger.error(f"Error getting week games (week={week}): {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _buildMatchupPreview(game) -> dict:
     """Build pre-game matchup comparison from season team stats."""
     def _teamStats(team):
