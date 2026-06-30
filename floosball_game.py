@@ -8433,11 +8433,17 @@ class Game:
                                 self._awakenedSlot[pl.id] = slot
             finally:
                 session.close()
+            # self.week is 0-indexed (createSchedule convention), but the anomaly
+            # system keys Criticality on the 1-indexed week (nextWeek / start_week /
+            # currentSeason.currentWeek). Convert so the game's glitch multiplier and
+            # awakened-overdrive flag line up with the active Criticality window —
+            # otherwise a week-N game queries week N-1 and misses the event entirely.
+            _critWeek = (self.week or 0) + 1
             self._criticalityMultiplier = getCriticalityMultiplier(
-                self.seasonNumber or 0, self.week or 0,
+                self.seasonNumber or 0, _critWeek,
             )
             from managers.anomalyManager import isCriticalityWeek
-            self._criticalityActive = isCriticalityWeek(self.seasonNumber or 0, self.week or 0)
+            self._criticalityActive = isCriticalityWeek(self.seasonNumber or 0, _critWeek)
         except Exception as e:
             # Anomaly system is purely additive — if anything fails,
             # play out the game as if no one had any attention.
