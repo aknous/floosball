@@ -102,6 +102,16 @@ INT_BAD_READ_K = 0.175   # QB throws into coverage (actual openness × coverage)
 INT_BAD_THROW_K = 0.20   # errant ball (throw quality), gated by defender proximity
 INT_DEF_PLAY_K = 0.065   # above-average DB jumps a contested throw
 
+# League coverage baseline — the value in-game pass coverage centers on (the
+# LEAGUE_COMPRESSION_MEAN target). Absolute coverage terms anchor here so they
+# don't creep as the league ages: an evolved league's compressed coverage drifts
+# up from this baseline, and a fixed sub-baseline anchor (the old 60 / 72) made
+# every defender's contribution grow season over season, compounding the pick
+# rate. Anchoring on the baseline keeps a league-average defender's contribution
+# stable across seasons while still rewarding above-average coverage. Matches the
+# 80 covFactor already centers on (see calculateCatchProbability).
+LEAGUE_COVERAGE_BASELINE = 80
+
 # Desperation-deep INT dampener — a trailing team forced to chuck it deep in garbage
 # time was minting 9-INT games (the Floos Bowl, a 44-0 sim game). A genuine desperation
 # heave is a low-percentage prayer, but it shouldn't get PICKED at the full contested-
