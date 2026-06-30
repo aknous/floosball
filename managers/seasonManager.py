@@ -7806,30 +7806,48 @@ class SeasonManager:
                     logger.info(f"Weekly modifier already set for S{season}W{week}: {existing.modifier}")
                     return existing.modifier
 
-                # Get recent modifiers to avoid repeats
-                recentMods = (
+                # Shuffle-bag selection: EVERY modifier must appear once before
+                # any repeats. Replay this season's prior picks to find which
+                # modifiers are still unused in the current cycle and draw from
+                # those; when a cycle completes (all have appeared) a fresh bag
+                # opens. Weights only bias WHICH unused modifier comes up next
+                # (so heavier ones tend to land earlier in a cycle) — every
+                # modifier still appears exactly once per cycle, so over a season
+                # frequencies are uniform and none can be starved. (The old
+                # 3-week-window roll could legitimately leave a modifier absent
+                # an entire season — see payday in S11.)
+                allMods = list(self.MODIFIER_WEIGHTS.keys())
+                priorRows = (
                     session.query(WeeklyModifier.modifier)
                     .filter_by(season=season)
-                    .filter(WeeklyModifier.week >= max(1, week - 3))
                     .filter(WeeklyModifier.week < week)
+                    .order_by(WeeklyModifier.week)
                     .all()
                 )
-                recentSet = {r[0] for r in recentMods}
-
-                # Build weighted pool excluding recent
-                pool = []
-                weights = []
-                for mod, weight in self.MODIFIER_WEIGHTS.items():
-                    if mod not in recentSet:
-                        pool.append(mod)
-                        weights.append(weight)
-
-                # If all modifiers are excluded (shouldn't happen with 11 mods and 3-week window), use full pool
-                if not pool:
-                    pool = list(self.MODIFIER_WEIGHTS.keys())
-                    weights = list(self.MODIFIER_WEIGHTS.values())
-
-                selected = _random.choices(pool, weights=weights, k=1)[0]
+                # Ignore legacy/retired modifier keys (e.g. cascade/spotlight) so
+                # they don't distort the cycle bookkeeping.
+                prior = [r[0] for r in priorRows if r[0] in self.MODIFIER_WEIGHTS]
+                used = set()
+                for m in prior:
+                    if m in used:
+                        # A repeat before the cycle finished means the prior data
+                        # didn't follow the bag rule (legacy 3-week-window picks);
+                        # restart the cycle from this pick so the bag takes over.
+                        used = {m}
+                    else:
+                        used.add(m)
+                        if len(used) >= len(allMods):
+                            used = set()  # full cycle complete — reshuffle the bag
+                available = [m for m in allMods if m not in used]
+                if not available:
+                    available = list(allMods)
+                # On a freshly reshuffled bag, avoid immediately repeating the
+                # last pick of the cycle that just closed (a back-to-back repeat).
+                if (len(available) == len(allMods) and prior
+                        and prior[-1] in available and len(available) > 1):
+                    available.remove(prior[-1])
+                weights = [self.MODIFIER_WEIGHTS[m] for m in available]
+                selected = _random.choices(available, weights=weights, k=1)[0]
 
                 # Persist
                 session.add(WeeklyModifier(season=season, week=week, modifier=selected))
