@@ -47,8 +47,12 @@ from managers import awakenedPowers
 
 logger = get_logger("floosball.anomaly")
 
-# Player.position enum (QB=0, RB=1, WR=2, TE=3, K=4) -> catalog position string.
-_POSITION_ENUM = {0: 'QB', 1: 'RB', 2: 'WR', 3: 'TE', 4: 'K'}
+# Player.position enum value (QB=1, RB=2, WR=3, TE=4, K=5 — see floosball_player.Position)
+# -> catalog position string. NOTE: the enum is 1-indexed; a 0-indexed map here shifted
+# every player to the NEXT position's power pool (QB drew RB powers, TE drew K powers,
+# kickers drew nothing), so a player could be handed a power that never covers their
+# primary situation and thus could never fire.
+_POSITION_ENUM = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
 
 
 def getAnomalySetting(session, key, default):
