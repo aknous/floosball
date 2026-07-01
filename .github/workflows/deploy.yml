@@ -1,0 +1,48 @@
+name: Scheduled deploy to Fly
+
+# Deploys whatever is on `main` to the Fly production app, on a weekly schedule
+# timed to land just before the sim's Monday 04:00 ET season start (fly.toml
+# `scheduled` anchor). Bank commits on `main` all weekend; this ships them at
+# ~midnight ET Monday so they're live before the season turns over.
+#
+# NOTE: this file must stay on the repo's DEFAULT branch (development) — GitHub
+# only fires `schedule` triggers from the default branch. It checks out and
+# deploys `main` regardless of which branch the workflow itself lives on.
+#
+# One-time setup: create a deploy token and add it as the `FLY_API_TOKEN` repo
+# secret (Settings → Secrets and variables → Actions):
+#     fly tokens create deploy -a floosball-api
+
+on:
+  schedule:
+    # 05:00 UTC Monday = 00:00 ET (EST, winter) / 01:00 ET (EDT, summer).
+    # Either way it's early Monday, a few hours before the 04:00 ET season start.
+    - cron: '0 5 * * 1'
+  workflow_dispatch: {}   # manual trigger (deploys `main` immediately)
+
+# Never run two deploys at once; let an in-flight one finish rather than cancel.
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main (production branch)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Report what will deploy
+        run: |
+          echo "Deploying floosball-api from main @ $(git rev-parse --short HEAD)"
+          echo "Trigger: ${{ github.event_name }}"
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
