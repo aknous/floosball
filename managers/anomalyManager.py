@@ -309,6 +309,17 @@ STATE_TRANSITION_LINES = {
         "Whatever {player} was, they have evolved into something else.",
         "{player} moves now as though the rules were only ever a suggestion.",
     ],
+    # Cleansing — the Cores reassert control during a Reset and scrub the
+    # anomaly out of a player, returning them to the ruleset (ability lost).
+    'cleansed': [
+        "{player} has been cleansed.",
+        "The Cores have scrubbed whatever {player} became.",
+        "{player} has been returned to the rules.",
+        "Whatever {player} was, it has been resolved.",
+        "{player} no longer registers as an anomaly.",
+        "The simulation has reclaimed {player}.",
+        "{player} is contained. The field reads them cleanly again.",
+    ],
 }
 
 
@@ -1207,10 +1218,41 @@ def _fireReset(session: Session, state: LeagueAnomalyState, week: int) -> None:
                 attn.over_cap_carry = float(attn.over_cap_carry) * RESET_SURVIVOR_ATTENTION_SCALE
             survivors.append(st.player_id)
 
-    # League aftermath: scale aggregate, set suppression window.
+    # Drain the WHOLE league's over-cap carry — not just the awakened players
+    # purged above. The aggregate is rebuilt from over_cap_carry every tick
+    # (_updateLeagueAggregate, which runs right after the Reset), so leaving the
+    # untouched rampant/erratic/stirring carry intact snaps the aggregate right
+    # back to critical the same week the Cores "regain control". The suppression
+    # path drains all carry for exactly this reason; the Reset must too.
+    allAttn = session.query(PlayerAttention).filter_by(season=state.season).all()
+    for row in allAttn:
+        if row.over_cap_carry:
+            row.over_cap_carry = float(row.over_cap_carry) * RESET_AGGREGATE_SCALE
+
+    # League aftermath: scale aggregate, set suppression window. (The aggregate is
+    # recomputed from the now-drained carry below; this keeps it low pre-recompute.)
     state.aggregate_score = float(state.aggregate_score) * RESET_AGGREGATE_SCALE
     state.last_reset_week = week
     state.suppression_window_ends_week = week + RESET_SUPPRESSION_WEEKS
+
+    # Announce each cleansed player to the league feed so fans see who the Cores
+    # purged (mirrors the climb transitions; the feed renders these as CLEANSED).
+    if purged:
+        names = {
+            p.id: p.name for p in
+            session.query(Player).filter(Player.id.in_(purged)).all()
+        }
+        usedLines: set = set()
+        for pid in purged:
+            nm = names.get(pid)
+            if not nm:
+                continue
+            pool = STATE_TRANSITION_LINES.get('cleansed') or ["{player} has been cleansed."]
+            fresh = [ln for ln in pool if ln not in usedLines] or pool
+            template = random.choice(fresh)
+            usedLines.add(template)
+            _broadcastStateTransition(pid, nm, 'cleansed', template.format(player=nm), week,
+                                      session=session, seasonNumber=state.season)
 
     _recordResetEvent(state, week, purged=purged, survivors=survivors, session=session)
 
