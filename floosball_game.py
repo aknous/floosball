@@ -9254,7 +9254,21 @@ class Play():
                 # Tends to bounce outside looking for big play
                 bounceGap = next((g for g in sortedGaps if g['type'] == 'bounce'), bestPerceivedGap)
                 return bounceGap
-    
+
+    def _awakenedForcedGain(self) -> int:
+        """Yardage for an awakened-forced offensive play (run/scramble/pass).
+
+        Always a SUCCESSFUL play: at least a first down (the current
+        yardsToFirstDown, floored at AWAKENED_FORCE_MIN_GAIN), plus an
+        exponential tail so longer breakaways get progressively rarer rather
+        than every fire being a 40+ bomb. Capped at the end zone — reaching it
+        is a TD. Goal-to-go gains just reach the score.
+        """
+        from constants import AWAKENED_FORCE_MIN_GAIN, AWAKENED_FORCE_GAIN_TAIL
+        floor = max(AWAKENED_FORCE_MIN_GAIN, int(self.game.yardsToFirstDown or 0))
+        tail = int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
+        return int(min(self.yardsToEndzone, floor + tail))
+
     def runPlay(self):
         """
         Improved running play using multi-stage system similar to passing:
@@ -9424,9 +9438,7 @@ class Play():
         # (or a TD if reachable) and no fumble (P3). None unless gated on + they are ready.
         self.awakenedFire = self.game._awakenedTryFire('run', self.runner)
         if self.awakenedFire:
-            from constants import AWAKENED_FORCE_RUN_GAIN, AWAKENED_FORCE_GAIN_TAIL
-            forced = AWAKENED_FORCE_RUN_GAIN + int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
-            self.yardage = min(self.yardsToEndzone, max(self.yardage, forced))
+            self.yardage = min(self.yardsToEndzone, max(self.yardage, self._awakenedForcedGain()))
         else:
             # Defensive fire — a charged awakened defender strips the ball loose (forced fumble lost).
             _dfn = self.game._pickReadyAwakenedDefender(self.defense, 'strip')
@@ -9676,8 +9688,7 @@ class Play():
         # power covers 'scramble' (the mobility/escape powers) fires here and breaks loose downfield.
         self.awakenedFire = self.game._awakenedTryFire('scramble', self.passer)
         if self.awakenedFire:
-            from constants import AWAKENED_FORCE_RUN_GAIN, AWAKENED_FORCE_GAIN_TAIL
-            yds = max(yds, AWAKENED_FORCE_RUN_GAIN + int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL)))
+            yds = max(yds, self._awakenedForcedGain())
         if yds > self.yardsToEndzone:
             yds = self.yardsToEndzone
         self.yardage = yds
@@ -10934,11 +10945,10 @@ class Play():
                         yac = self.yardsToEndzone - passYards
                         self.yardage = self.yardsToEndzone
 
-                    # Awakened fire — force a big varied breakaway (or the end zone), keeping yac coherent.
+                    # Awakened fire — force a successful play (first down or end zone), tapering
+                    # toward shorter gains so it's not always a bomb; keep yac coherent.
                     if self.awakenedFire:
-                        from constants import AWAKENED_FORCE_PASS_GAIN, AWAKENED_FORCE_GAIN_TAIL
-                        forced = AWAKENED_FORCE_PASS_GAIN + int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
-                        self.yardage = min(self.yardsToEndzone, max(self.yardage, forced))
+                        self.yardage = min(self.yardsToEndzone, max(self.yardage, self._awakenedForcedGain()))
                         yac = max(0, self.yardage - passYards)
 
                     self.insights['pass']['airYards'] = passYards

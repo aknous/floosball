@@ -1151,13 +1151,13 @@ AWAKENED_DEF_FIRE_CHANCE = 35       # % a ready, position-appropriate defender d
 AWAKENED_CRITICALITY_CHARGE_MULT = 4.0  # during a Criticality the charge meter fills this much faster
                                         # (the OVERDRIVE: ~1/game normally -> ~several/game = "frequent")
 
-# Awakened fire outcomes (P3) — when a power fires, force a big breakaway: a base gain (run/pass)
-# PLUS an exponential tail for variance, capped at the end zone. So a fired play ranges (e.g. 45, 60,
-# 78, or a house call) instead of always landing on the flat floor, and from scoring range it just
-# scores. Tail = the exponential mean of the bonus yardage.
-AWAKENED_FORCE_RUN_GAIN = 45
-AWAKENED_FORCE_PASS_GAIN = 40
-AWAKENED_FORCE_GAIN_TAIL = 20
+# Awakened fire outcomes (P3) — when a power fires (run/scramble/pass) the play is always SUCCESSFUL:
+# it gains at least a first down (floored at AWAKENED_FORCE_MIN_GAIN), PLUS an exponential tail so
+# longer breakaways are progressively rarer instead of every fire being a 40+ bomb. Capped at the end
+# zone (reaching it = a TD). So a fired play is usually a clean conversion, occasionally a chunk play,
+# rarely a house call. Tail = the exponential mean of the bonus yardage above the first-down floor.
+AWAKENED_FORCE_MIN_GAIN = 10   # floor: never less than a first down's worth (max'd with yardsToFirstDown)
+AWAKENED_FORCE_GAIN_TAIL = 12  # exponential mean of bonus yards beyond the floor (lower = tighter to the floor)
 
 # ── Glitch firing hygiene ─────────────────────────────────────────────────────
 # Per-play per-candidate glitch probability = min(CAP, attention / SCALE ×
