@@ -8506,12 +8506,15 @@ def getCardCollection(
     classification: Optional[str] = Query(default=None),
     activeOnly: bool = Query(default=False),
     vaulted: Optional[bool] = Query(default=None),
+    equipped: Optional[bool] = Query(default=None),
     sort: str = Query(default="recent"),
     user: _User = Depends(_getCurrentUser),
 ):
     """Get user's card collection with optional filters and sorting.
 
     `vaulted`: None = all cards, True = Vault only, False = un-vaulted only.
+    `equipped`: None = all cards, True = currently-equipped only, False = un-equipped
+    only (equipped status is for the current season/week).
     `classification`: substring match on the card's classification (e.g. 'mvp' also
     matches 'mvp_champion'); None = all classifications.
     `sort`: recent | rarity | rating | tier | name | team | position | manual.
@@ -8551,6 +8554,8 @@ def getCardCollection(
             if activeOnly and tpl.season_created != currentSeason:
                 continue
             if vaulted is not None and bool(getattr(card, "vaulted", False)) != vaulted:
+                continue
+            if equipped is not None and (card.id in equippedCardIds) != equipped:
                 continue
             data = cardManager.serializeCard(card, currentSeason)
             data["isEquipped"] = card.id in equippedCardIds
