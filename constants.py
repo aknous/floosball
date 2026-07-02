@@ -112,6 +112,26 @@ INT_DEF_PLAY_K = 0.065   # above-average DB jumps a contested throw
 # 80 covFactor already centers on (see calculateCatchProbability).
 LEAGUE_COVERAGE_BASELINE = 80
 
+# Pass-completion coverage suppression (calculateCatchProbability, Phase 1/contact).
+# Both knobs feed contactProb, i.e. COMPLETION probability ONLY — they do NOT touch
+# the INT paths, so raising them adds coverage breakups / incompletions WITHOUT more
+# interceptions. Tuned on a developed-league (prod S12) resume sim: the old 18 / 0.10
+# ran ~74% completion (INT ~2.0%); raised to 40 / 0.45 to land ~66-67% (INT held
+# ~2.1%). DISRUPTION_K is openness- and tier-scaled (short passes barely affected, so
+# the short game stays reliable for catch-up drives); BASELINE_SLOPE is a flat
+# per-point pressure that does most of the aggregate work.
+# ANCHORING (done): coverageBaseline is now SYMMETRIC around LEAGUE_COVERAGE_BASELINE
+# (see calculateCatchProbability) instead of a fixed 70 anchor. Below the league mean
+# it REFUNDS completion (raises young/expansion leagues), above it SUPPRESSES (holds
+# mature leagues) — so completion stays flat as coverage climbs rather than creeping.
+# This is the same pattern the INT model uses (covFactor centered on the baseline).
+# The offense side (baseContact from throwQuality) is still absolute; the symmetric
+# coverage term is what keeps the offense-vs-defense balance league-relative here.
+# Tuned on paired young-league (fresh) + mature (prod S12 resume) sims to hold
+# completion ~66-67% at BOTH ends.
+PASS_COVERAGE_DISRUPTION_K = 15      # x tier x (1-openness) x (coverage/100) -> contact loss
+PASS_COVERAGE_BASELINE_SLOPE = 1.9   # symmetric contact loss/gain per coverage point off the mean
+
 # Desperation-deep INT dampener — a trailing team forced to chuck it deep in garbage
 # time was minting 9-INT games (the Floos Bowl, a 44-0 sim game). A genuine desperation
 # heave is a low-percentage prayer, but it shouldn't get PICKED at the full contested-

@@ -38,7 +38,7 @@ from constants import (
     MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
     MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K, MENTAL_DIVE_K,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
-    LEAGUE_COVERAGE_BASELINE,
+    LEAGUE_COVERAGE_BASELINE, PASS_COVERAGE_DISRUPTION_K, PASS_COVERAGE_BASELINE_SLOPE,
     FUMBLE_BASE_THRESHOLD, FUMBLE_CHOKE_FLOOR, FUMBLE_CHOKE_SWING_K, INT_CHOKE_BOOST_K,
     HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
@@ -2239,25 +2239,11 @@ class Game:
         # Set sideline targeting for any pass plays called in this method
         self.play.targetSideline = self._shouldTargetSideline(scoreDiff, coach)
 
-        # Deep own territory: default punt, but override if trailing late in Q4
-        # (or Q2 end-of-half past midfield)
-        if self.yardsToSafety <= 35:
-            isLateGameDesperation = (
-                (self.currentQuarter == 4 and scoreDiff < 0 and self.gameClockSeconds < 150)
-                or (self.currentQuarter == 2 and scoreDiff <= 0
-                    and self.gameClockSeconds < 60 and self.yardsToSafety > 50)
-            )
-            if not isLateGameDesperation:
-                self.play.playType = PlayType.Punt
-                return
-            # Under 60 seconds trailing: NEVER punt — no time to get ball back
-            if not (self.currentQuarter == 4 and scoreDiff < 0 and self.gameClockSeconds < 60):
-                gameIQ = self._coachClockIQ(coach)
-                if _random.random() >= 0.5 + 0.5 * gameIQ:
-                    # Bad coach punts in desperation — terrible decision
-                    self.play.playType = PlayType.Punt
-                    return
-
+        # Kicker range + charged state — computed UP FRONT (before the deep-own-
+        # territory punt below) so a powered-up kicker is considered from anywhere
+        # on the field, not just at normal field position. kickerMaxDistance reads
+        # kicker.maxFgDistance, which now reflects the in-game (possibly boosted)
+        # leg via updateInGameRating.
         kicker = self.offensiveTeam.rosterDict.get('k')
         kickerMaxDistance = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
         fgProb = self._estimateFgProbability()
@@ -2270,6 +2256,38 @@ class Game:
         fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
         inFieldGoalRange = ((kickerCharged and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
+        leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
+                       and self.gameClockSeconds <= 120)
+
+        # Deep own territory: default punt, but override if trailing late in Q4
+        # (or Q2 end-of-half past midfield)
+        if self.yardsToSafety <= 35:
+            # A charged awakened kicker makes it from anywhere — take the free 3
+            # rather than auto-punting, when a FG helps and we're not protecting a
+            # late lead (mirrors the normal charged-kick branch below). Without
+            # this, a powered-up kicker deep in own territory was always punted.
+            if kickerCharged and fgHelps and not leadingLate:
+                self.play.playType = PlayType.FieldGoal
+                return
+            isLateGameDesperation = (
+                (self.currentQuarter == 4 and scoreDiff < 0 and self.gameClockSeconds < 150)
+                or (self.currentQuarter == 2 and scoreDiff <= 0
+                    and self.gameClockSeconds < 60 and self.yardsToSafety > 50)
+            )
+            if not isLateGameDesperation:
+                self.play.playType = PlayType.Punt
+                return
+            # Under 2 minutes trailing in Q4: NEVER punt — there's no realistic way
+            # to get the ball back and still score, so go for it regardless of coach.
+            if not (self.currentQuarter == 4 and scoreDiff < 0 and self.gameClockSeconds < 120):
+                gameIQ = self._coachClockIQ(coach)
+                # Only a genuinely poor clock-manager concedes with a punt here; an
+                # average-or-better coach goes for it. (The old gate let an average
+                # coach punt ~25% of the time — basically conceding the game.)
+                if _random.random() >= 0.85 + 0.15 * gameIQ:
+                    # Poor coach punts in desperation — a bad decision
+                    self.play.playType = PlayType.Punt
+                    return
 
         aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
         goForItThreshold = max(1, min(9, round(4 + aggrNorm * 3)))
@@ -2305,9 +2323,7 @@ class Game:
         # it. The one exception is a team protecting a lead in the final two
         # minutes, which may still pin with a coffin-corner punt rather than risk
         # a turnover or hand the ball back already in FG range — that case falls
-        # through to the normal logic below.
-        leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
-                       and self.gameClockSeconds <= 120)
+        # through to the normal logic below. (leadingLate computed at the top.)
         # A charged awakened kicker takes the free 3 from any distance — but only when fgHelps (computed
         # above) and not protecting a late lead; short-yardage / goal-line defer to the go-for-it logic.
         if (kickerCharged and fgHelps and not leadingLate
@@ -2316,6 +2332,11 @@ class Game:
             return
         if self.yardsToEndzone <= 40 and not leadingLate:
             goForIt = not inFieldGoalRange  # no makeable FG → going for it is the only non-punt option
+            # A FG that can't help — trailing by more than a field goal, late — must
+            # never be the auto-choice inside the 40: settling for 3 when you need a
+            # TD to win loses the game. Go for the first down / TD instead.
+            if not fgHelps:
+                goForIt = True
             if inFieldGoalRange and self.yardsToFirstDown <= 2:
                 # 4th-and-short can still favor going for the first down / TD.
                 if batched_randint(1, 10) <= goForItThreshold:
@@ -3276,15 +3297,18 @@ class Game:
             self.play.insights['coach'] = coachInsights
             return
 
-        # End-of-half / end-of-game FG attempts — compute kicker range once
+        # End-of-half / end-of-game FG attempts — compute kicker range once. A
+        # charged awakened kicker makes it from ANYWHERE (mirrors OT / 4th down),
+        # so the end-game FG / Hail-Mary logic below must see the extended range.
         kicker = self.offensiveTeam.rosterDict.get('k')
-        kickerMaxFg = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
+        kickerCharged = self._awakenedReadyFor(kicker, 'kick')
+        kickerMaxFg = 999 if kickerCharged else ((kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0)
 
         # End-of-half FG attempt (only if reasonable probability)
         endGameFgProb = self._estimateFgProbability()
         endGameFgThreshold = self._coachFgThreshold(coach)
         if self.currentQuarter == 2 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
-            if self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
+            if self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
                 self.play.playType = PlayType.FieldGoal
                 return
 
@@ -3294,9 +3318,10 @@ class Game:
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
         if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
-            if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and endGameFgProb >= endGameFgThreshold:
+            if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
                 canAdvance = self.gameClockSeconds >= 30
-                if canAdvance and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
+                # A charged kicker's 3 is a sure thing — never gamble it on a conversion.
+                if canAdvance and not kickerCharged and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
                     aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
                     goForItChance = 0.45 + aggrNorm * 0.30
                     if _random.random() < goForItChance:
@@ -3305,6 +3330,29 @@ class Game:
                         else:
                             self.play.passPlay(self._selectPassPlay('short'))
                         return
+                self.play.playType = PlayType.FieldGoal
+                return
+
+        # Rule 2: a charged awakened kicker on the LAST play of a half takes the
+        # FG from ANY distance and ANY down — it makes it from anywhere, so this
+        # beats a Hail Mary and beats a normal play that lets the clock expire.
+        #   - End of GAME (Q4): kick when a FG ties or wins (scoreDiff -3..0).
+        #   - End of the FIRST HALF (Q2): kick the free 3 — points before the break.
+        # Gated on _estimateAvailablePlays() == 0 (the engine's "last play" signal)
+        # so it does NOT fire on an early down when there's still time to take a
+        # shot at the winning TD first. (Non-charged kickers never reach here.)
+        if (kickerCharged and self.currentQuarter in (2, 4)
+                and self._estimateAvailablePlays() == 0):
+            fgWorthwhile = (self.currentQuarter == 2) or (-3 <= scoreDiff <= 0)
+            if fgWorthwhile:
+                self.play.insights['clockMgmt'] = {
+                    'decision': 'chargedLastPlayFG',
+                    'reason': 'Powered-up kicker takes the FG on the last play of the half',
+                    'clockRemaining': self.gameClockSeconds,
+                    'yardsToEndzone': self.yardsToEndzone,
+                    'scoreDiff': scoreDiff,
+                    'down': self.down,
+                }
                 self.play.playType = PlayType.FieldGoal
                 return
 
@@ -3338,6 +3386,15 @@ class Game:
         # Final down — punt / FG / go-for-it decision
         if self.down == self.gameRules.downsPerSeries:
             self._fourthDownCaller(scoreDiff, coach, isHome)
+            # Rule 1: a charged awakened kicker never punts — it makes the FG from
+            # ANY field position. If the 4th-down logic chose to punt (i.e. it's
+            # not a go-for-it and not a game-ending kneel), take the sure 3 instead,
+            # regardless of field position. Gated by fgHelps so it stays a punt only
+            # when a FG can't help (down >3 late, when only a TD matters).
+            if self.play.playType == PlayType.Punt and kickerCharged:
+                fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+                if fgHelps:
+                    self.play.playType = PlayType.FieldGoal
             # Record decision after the fact
             if 'fourthDown' in self.play.insights:
                 pt = self.play.playType
@@ -10149,12 +10206,12 @@ class Play():
             PassType.hailMary: 1.30,
         } if passType is not None else None
         tierMult = tierDisruptionMult.get(passType, 1.0) if tierDisruptionMult else 1.0
-        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 18 * tierMult
+        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * PASS_COVERAGE_DISRUPTION_K * tierMult
         # Baseline coverage pressure: always applies, scales modestly with
         # defensive rating. Anchored at 70 (league-average) so elite defenses
         # cost a couple contact points; weak defenses refund a bit. Light touch
         # to keep the structural lever without crushing baseline completion.
-        coverageBaseline = (defensePassCoverage - 70) * 0.1
+        coverageBaseline = (defensePassCoverage - LEAGUE_COVERAGE_BASELINE) * PASS_COVERAGE_BASELINE_SLOPE
         contactProb = min(96, max(5, baseContact + reachFactor - coverageDisruption - coverageBaseline))
 
         # PHASE 2: Secure — given contact, do they catch it?
