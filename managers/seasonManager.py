@@ -325,7 +325,15 @@ class SeasonManager:
         # last season. Must run BEFORE starter-pack reprovision and deferred
         # achievement processing so the rewards those create aren't caught by
         # the sweep.
-        self._sweepExpiredAchievementRewards()
+        #
+        # ONLY at a genuine new-season start (resumeFromWeek == 0). startNewSeason
+        # is ALSO the mid-season resume path (resumeFromWeek > 0) called on every
+        # server restart / deploy, and the sweep deletes every undeferred unclaimed
+        # reward — so running it on a restart wiped the CURRENT season's rewards.
+        # That cleared users' unclaimed rewards on every deploy and on the weekly
+        # Monday auto-deploy restart. Skip it when resuming mid-season.
+        if resumeFromWeek == 0:
+            self._sweepExpiredAchievementRewards()
 
         # Re-provision starter packs for users who lost them in a fresh start
         # (users table is preserved but currency/cards are cleared)
