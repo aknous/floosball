@@ -433,6 +433,19 @@ def isCriticalityWeek(seasonNumber: int, week: int) -> bool:
         session.close()
 
 
+def _sumOverCapCarry(session: Session, seasonNumber: int) -> float:
+    """Sum every player's over-cap carry for the season — the live fuel behind
+    the league aggregate. Shared by the weekly recompute (_updateLeagueAggregate)
+    and the status read (getCriticalityStatus) so both see the same number. The
+    status MUST NOT trust the stored aggregate_score alone: it's only rewritten
+    on the weekly tick, so after a Criticality resolves (a Reset drains the carry
+    but leaves the pre-drain aggregate persisted) the stored value stays high and
+    pins the status on 'critical' until the next tick. Summing carry live keeps
+    the displayed band honest between ticks."""
+    rows = session.query(PlayerAttention.over_cap_carry).filter_by(season=seasonNumber).all()
+    return sum(float(r[0] or 0.0) for r in rows)
+
+
 def _bandRatio(state: Optional[LeagueAnomalyState]) -> float:
     """How close the league is to its hidden Criticality threshold (aggregate /
     threshold). 0 = quiet, 1.0 = at the line, >1.0 = over. Internal only — this
@@ -522,6 +535,21 @@ def getCriticalityStatus(seasonNumber: int, week: int) -> Dict:
     session = get_session()
     try:
         state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
+        # Band ratio comes from a LIVE carry sum, not the stored aggregate_score,
+        # which can lag reality between weekly ticks (see _sumOverCapCarry). If
+        # the stored value has drifted from the live one (the usual cause of a
+        # "stuck critical" status after a Reset), self-heal it here so the glitch
+        # dial and future reads recover too — a cheap, idempotent correction.
+        liveAggregate = 0.0
+        if state is not None:
+            liveAggregate = _sumOverCapCarry(session, seasonNumber) + float(week or 0)
+            if abs(float(state.aggregate_score or 0.0) - liveAggregate) > 1.0:
+                state.aggregate_score = liveAggregate
+                session.commit()
+                # commit expires attributes; reload so the reads below (which run
+                # after session.close(), on the now-detached instance) don't trip
+                # a lazy refresh.
+                session.refresh(state)
     finally:
         session.close()
 
@@ -531,7 +559,7 @@ def getCriticalityStatus(seasonNumber: int, week: int) -> Dict:
     ] if state is not None else []
     inSuppression = _inSuppressionWindow(state, week)
 
-    ratio = _bandRatio(state)
+    ratio = liveAggregate / max(1, (state.threshold if state is not None else 1))
     # Show 'stabilizing' only while the patch has actually quieted things (ratio
     # below the warning floor). If the aggregate has already re-climbed into a
     # warning band during the suppression window, reflect that band instead —
@@ -1006,13 +1034,8 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
         session.add(state)
         logger.info(f"Seeded LeagueAnomalyState season={seasonNumber} threshold={threshold} (hidden)")
 
-    # Sum over-cap carry across all players.
-    rows = (
-        session.query(PlayerAttention.over_cap_carry)
-        .filter_by(season=seasonNumber)
-        .all()
-    )
-    overCapSum = sum(float(r[0]) for r in rows)
+    # Sum over-cap carry across all players (shared with the status read).
+    overCapSum = _sumOverCapCarry(session, seasonNumber)
     backgroundPressure = float(week) * 1.0
 
     state.aggregate_score = overCapSum + backgroundPressure
