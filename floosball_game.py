@@ -2706,6 +2706,7 @@ class Game:
         weights = self._applySituationalMods(weights, scoreDiff, coach)
         weights = self._applyMatchupMods(weights, coach)
         weights = self._applyCoachMods(weights, coach)
+        weights = self._applyAwakenedMods(weights)
 
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
         # moving. Avoid downfield passes (incomplete = clock stop).
@@ -2960,6 +2961,40 @@ class Game:
             weights.append(max(0.1, weight))
 
         return _random.choices(pool, weights=weights, k=1)[0]
+
+    def _awakenedOffenseSlots(self) -> set:
+        """Roster slots on the CURRENT offense held by an awakened (powered-up)
+        player. A player is awakened for this game iff seeded into _awakenedCharge.
+        Empty when the awakened system is off, so this is a no-op in normal sims."""
+        if not self._awakenedCharge:
+            return set()
+        team = self.offensiveTeam
+        if team is None:
+            return set()
+        slots = set()
+        for slot, pl in team.rosterDict.items():
+            if pl is not None and getattr(pl, 'id', None) in self._awakenedCharge:
+                slots.add(slot)
+        return slots
+
+    def _applyAwakenedMods(self, weights: dict) -> dict:
+        """Bias the play call toward an awakened skill player so the offense
+        feeds the star. An awakened RB pushes run weight up; an awakened WR/TE
+        pushes the pass tiers up (receiver-side targeting is nudged separately in
+        selectPassTarget). QB/K need no play-type bias — the QB touches every
+        pass already, and a charged kicker is handled by the FG-range logic.
+        Multiplicative, so the situational/clock layers above still dominate
+        desperation (a run bias can't override last-2-min trailing passing)."""
+        slots = self._awakenedOffenseSlots()
+        if not slots:
+            return weights
+        from constants import AWAKENED_PLAYCALL_RUN_BIAS, AWAKENED_PLAYCALL_PASS_BIAS
+        if 'rb' in slots:
+            weights['run'] = weights.get('run', 0) * AWAKENED_PLAYCALL_RUN_BIAS
+        if slots & {'wr1', 'wr2', 'te'}:
+            for tier in ('short', 'medium', 'long', 'deep'):
+                weights[tier] = weights.get(tier, 0) * AWAKENED_PLAYCALL_PASS_BIAS
+        return weights
 
     def _executeWeightedPlay(self, weights: dict, targetSideline: bool = False):
         """Sample from the weight distribution and execute the chosen play."""
@@ -4000,6 +4035,13 @@ class Game:
                 ry = getattr(self.play, 'returnYardage', 0) or 0
                 if ry > 0:
                     line += f", returned {ry} yards"
+            # A made FG needs its distance in the text. The kick flavor is
+            # distance-agnostic, so weave the yardage in as a trailing clause,
+            # the same way offense lines carry "...for N yards".
+            elif fire.get('situation') == 'kick':
+                fgDist = getattr(self.play, 'fgDistance', None)
+                if fgDist:
+                    line = line.rstrip('.') + f", good from {fgDist} yards"
             text = f"{fire['powerName']}: {line}"
 
         self.play.playText = text
@@ -10055,13 +10097,24 @@ class Play():
         else:
             visionErrorRange = 25
         
+        # Awakened (powered-up) receivers get the QB's attention: a perceived-
+        # openness nudge so the read favors them. Empty set when the awakened
+        # system is off, so this is a no-op in normal sims.
+        awakenedCharge = getattr(self.game, '_awakenedCharge', None) or {}
+        awakenedBonus = 0
+        if awakenedCharge:
+            from constants import AWAKENED_RECEIVER_OPENNESS_BONUS
+            awakenedBonus = AWAKENED_RECEIVER_OPENNESS_BONUS
+
         # Create perceived targets with vision-adjusted openness
         perceivedTargets = []
         for target in targetList:
             actualOpenness = target['openness']
             visionError = batched_randint(-visionErrorRange, visionErrorRange)
             perceivedOpenness = max(0, min(100, actualOpenness + visionError))
-            
+            if awakenedBonus and getattr(target['receiver'], 'id', None) in awakenedCharge:
+                perceivedOpenness = min(100, perceivedOpenness + awakenedBonus)
+
             perceivedTargets.append({
                 'receiver': target['receiver'],
                 'openness': perceivedOpenness,  # What QB thinks

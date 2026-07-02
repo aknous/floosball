@@ -24,7 +24,8 @@ TOKENS the engine substitutes into each line (NO apostrophes around them — the
   {yards}     — the yardage gained; put in OFFENSE lines only (throw/run/catch/scramble), woven "...for {yards} yards"
   {receiver}  — the receiver's name; put in THROW lines (where {player} is the QB)
   {passer}    — the QB's name; put in CATCH lines (where {player} is the receiver)
-  kick lines take no yardage; pick/strip lines take no {yards} (the engine appends ", returned N yards").
+  kick lines take no {yards} (the engine weaves the FG distance in as a trailing clause, "..., good from N yards");
+  pick/strip lines take no {yards} either (the engine appends ", returned N yards").
 
 THE SITUATIONS — what the player is doing when the power fires:
   throw    — the QB completes the pass          run   — the ball-carrier breaks free

@@ -1169,6 +1169,18 @@ AWAKENED_POWERING_UP_PCT = 0.5      # charge fraction that triggers the "powerin
 AWAKENED_DEF_FIRE_CHANCE = 35       # % a ready, position-appropriate defender discharges on a covered snap
                                     # (gates defensive fires so they don't dominate offense — A-lite)
 AWAKENED_CRITICALITY_CHARGE_MULT = 4.0  # during a Criticality the charge meter fills this much faster
+
+# Play-calling bias toward an AWAKENED (powered-up) skill player — the offense
+# feeds the star. Without this the play-caller ignores awakened state entirely,
+# so a powered-up RB could sit through six straight passes. Applied as a weight
+# multiplier on the play type that targets the awakened player, and (for pass
+# catchers) a perceived-openness nudge so the QB actually looks their way.
+# Moderate on purpose: it steers the game toward the awakened player without
+# making the offense one-dimensional, and it stacks multiplicatively under the
+# situational/clock layers so desperation passing still overrides a run bias.
+AWAKENED_PLAYCALL_RUN_BIAS = 2.2        # awakened RB: run-weight multiplier
+AWAKENED_PLAYCALL_PASS_BIAS = 1.7       # awakened WR/TE: pass-tier (short/medium/long/deep) multiplier
+AWAKENED_RECEIVER_OPENNESS_BONUS = 22   # awakened receiver: perceived-openness nudge (0-100 scale)
                                         # (the OVERDRIVE: ~1/game normally -> ~several/game = "frequent")
 
 # Awakened fire outcomes (P3) — when a power fires (run/scramble/pass) the play is always SUCCESSFUL:
