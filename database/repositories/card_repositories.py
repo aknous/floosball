@@ -563,6 +563,18 @@ class PackTypeRepository:
                 desc=f'Reveal 3, keep 2. Only {blurb}.',
             ))
 
+        # Rookie-themed: this season's rookie draft class. theme_value is unused
+        # (resolved at draw time from is_rookie on the current-season pool). No
+        # rarity guarantee — the rookie classification stamps onto every edition
+        # including base, so a base-only pack still delivers the theme.
+        defaults.append(makeThemed(
+            name='themed_rookie',
+            displayName='Rookie Pack',
+            themeType='rookie',
+            themeValue=None,
+            desc='Reveal 3, keep 2. This season’s rookie class only.',
+        ))
+
         # Prestige themed packs — bigger reveal pool, special player filter.
         # theme_value is resolved at draw time from Season state (last
         # season's champion roster / all-pro selection). Once-per-season
