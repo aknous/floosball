@@ -1162,6 +1162,13 @@ class PlayerK(Player):
         self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*3) + (self.gameAttributes.playMakingAbility) + (self.gameAttributes.xFactor))/5)
         if self.gameAttributes.overallRating > 100:
             self.gameAttributes.overallRating = 100
+        # FG range must track the IN-GAME leg. Funding/morale, team disposition,
+        # form, and rally-driven boosts all lift gameAttributes.legStrength, and
+        # fieldGoalTry() resolves the attempt off the boosted rating — so recompute
+        # maxFgDistance here (same formula as updateRating) to keep the 4th-down /
+        # OT / end-of-half FG-range gates consistent with what actually kicks.
+        # (Only read in-game; never serialized, so overwriting the base is safe.)
+        self.maxFgDistance = round(50 + (self.gameAttributes.legStrength - 60) * 0.4)
 
     def updateRating(self):
         self.attributes.calculateIntangibles()
