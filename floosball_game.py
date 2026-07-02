@@ -38,7 +38,7 @@ from constants import (
     MENTAL_EXEC_GAIN, MENTAL_FROZEN_K, MENTAL_GUNSLINGER_K,
     MENTAL_AGGR_ROLL_K, MENTAL_AGGR_BAIL_K, MENTAL_DIVE_K,
     INT_BAD_READ_K, INT_BAD_THROW_K, INT_DEF_PLAY_K, INT_DESPERATION_DAMPEN,
-    LEAGUE_COVERAGE_BASELINE,
+    LEAGUE_COVERAGE_BASELINE, PASS_COVERAGE_DISRUPTION_K, PASS_COVERAGE_BASELINE_SLOPE,
     FUMBLE_BASE_THRESHOLD, FUMBLE_CHOKE_FLOOR, FUMBLE_CHOKE_SWING_K, INT_CHOKE_BOOST_K,
     HAIL_MARY_COMPLETION_SCALE,
     RECEIVER_MATCHUP_SCALE,
@@ -10206,12 +10206,12 @@ class Play():
             PassType.hailMary: 1.30,
         } if passType is not None else None
         tierMult = tierDisruptionMult.get(passType, 1.0) if tierDisruptionMult else 1.0
-        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * 18 * tierMult
+        coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * PASS_COVERAGE_DISRUPTION_K * tierMult
         # Baseline coverage pressure: always applies, scales modestly with
         # defensive rating. Anchored at 70 (league-average) so elite defenses
         # cost a couple contact points; weak defenses refund a bit. Light touch
         # to keep the structural lever without crushing baseline completion.
-        coverageBaseline = (defensePassCoverage - 70) * 0.1
+        coverageBaseline = (defensePassCoverage - LEAGUE_COVERAGE_BASELINE) * PASS_COVERAGE_BASELINE_SLOPE
         contactProb = min(96, max(5, baseContact + reachFactor - coverageDisruption - coverageBaseline))
 
         # PHASE 2: Secure — given contact, do they catch it?
