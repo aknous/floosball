@@ -1221,6 +1221,36 @@ async def debug_anomaly_state():
         session.close()
 
 
+@app.get("/api/rules", response_model=Dict[str, Any])
+async def get_rules():
+    """The league's CURRENT ruleset — the mutation target the Cores will one day
+    reshape. Returns effective values (defaults + any persisted override), the
+    pristine defaults (so the UI can show 'was X'), the set of fields that CAN
+    change (`mutable` — the foreshadowing: everything else is fixed for now),
+    which fields have already been changed, and the patch history. Public and
+    number-friendly on purpose: this is the one place the raw rules ARE the point.
+    """
+    from game_rules import GameRules, loadRuleOverrides, RULEBOOK_EXPOSED_FIELDS
+    defaults = GameRules().toDict()
+    rules = GameRules()
+    overrides = loadRuleOverrides()
+    if overrides:
+        rules.applyOverrides(overrides, reason="current ruleset view", source="persisted")
+    current = rules.toDict()
+    skip = {"patchHistory", "fieldGoalUprights"}
+    changed = [k for k, v in current.items()
+               if k not in skip and defaults.get(k) != v]
+    # `mutable` = what the Rulebook currently exposes as changeable (a curated
+    # subset of the engine's full capability — see RULEBOOK_EXPOSED_FIELDS).
+    return build_success_response({
+        "rules": current,
+        "defaults": defaults,
+        "mutable": sorted(RULEBOOK_EXPOSED_FIELDS),
+        "changed": changed,
+        "patchHistory": current.get("patchHistory", []),
+    })
+
+
 @app.get("/api/cores/status", response_model=Dict[str, Any])
 async def cores_status():
     """Public, number-free Criticality status for the Cores control room.
