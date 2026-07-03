@@ -211,6 +211,23 @@ MUTABLE_RULE_FIELDS = {
     "clockStopsOnIncompletePass", "clockStopsOnOutOfBounds",
 }
 
+# ── What the Rulebook currently EXPOSES as changeable ───────────────────────
+# A deliberately small, curated subset of MUTABLE_RULE_FIELDS: the rules we
+# actually intend to surface as changeable RIGHT NOW (foreshadowed in the
+# Rulebook UI). The engine can safely mutate everything in MUTABLE_RULE_FIELDS,
+# but the design surface starts narrow and grows. For now: downs, the core
+# scoring values (TD / FG / safety), and the two clock-STOPPAGE rules only.
+# Deliberately EXCLUDED: extraPointPoints + twoPointConversionPoints (those fall
+# under the future "Conversion Ladder" mechanic, not standalone value tweaks);
+# clock TIMING (OT length, spike/timeout windows, kneel drain) and FG geometry
+# stay hidden until we choose to expose them. Intersected with
+# MUTABLE_RULE_FIELDS so this can never claim a rule the engine can't apply.
+RULEBOOK_EXPOSED_FIELDS = {
+    "downsPerSeries", "firstDownDistance",
+    "touchdownPoints", "fieldGoalPoints", "safetyPoints",
+    "clockStopsOnIncompletePass", "clockStopsOnOutOfBounds",
+} & MUTABLE_RULE_FIELDS
+
 RULE_OVERRIDES_SETTING_KEY = "rule_overrides"
 
 

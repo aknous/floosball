@@ -369,6 +369,33 @@ is no "long kick"; the ladder is purely a menu of conversion plays.
 - **Effort: M.** The conversion sim already exists; work is the list rule + mutator, the N-option
   chooser AI, threading distance/points through, and PBP/stat/frontend.
 
+### D. Sideline goals — Quidditch-style throw targets (2026-07-02, concept)
+A scoring avenue that ISN'T the end zone: standing goals (hoops / targets) placed off the field —
+on or beyond a sideline — that a passer can attempt to throw the ball THROUGH for a fixed point
+value. Turns the QB's arm into a second, optional scoring path, independent of reaching the end
+zone. This is the concrete form of the long-teased "new scoring zones" structural rule.
+
+- **Rule (list-typed):** `sidelineGoals: List[{spot, points, difficulty}]`, default `[]` (none).
+  Each goal has a field position (which yard line / which sideline it sits at), a point value, and
+  a base difficulty. Off by default; a Criticality lights them up.
+- **The decision:** a new option in the play-caller — when a goal is in range and the situation
+  fits (a broken play, a desperation down, or a gambling coach), the offense can attempt a
+  goal-throw instead of a normal pass. Cleanest first cut: a dedicated play type
+  (`PlayType.GoalThrow`) chosen by a heuristic (points-needed + arm/accuracy + goal range), so it
+  needn't be woven into every dropback.
+- **Resolution:** an accuracy-vs-difficulty roll off the passer's arm strength + accuracy + xFactor,
+  attenuated by distance to the goal (mirror the FG make-probability curve, but keyed to a throw).
+  Make → award `points`, possession changes (like a made FG). Miss → incompletion or turnover
+  (design choice: live ball vs. turnover at the spot).
+- **Stats / PBP / WPA:** new `goalThrows` sub-dict (attempts / makes) credited to the passer; a
+  narration pool ("threads it through the ring!", "clangs off the rim!"). WPA rides the existing
+  scoreChange swing.
+- **Open questions:** does the ball stay live on a miss? can defenders contest the throw lane? one
+  goal or several (each sideline, different values)? QB-only or can any thrower attempt it?
+- **Effort: L–XL.** New play type + range/accuracy resolution + a new scoring path + possession
+  handling + AI chooser + PBP/stats/frontend (rendering the goal on the field graphic). The most
+  "different game" of the scoring ideas — which is the point.
+
 ### Rule-architecture note (how mutation/reversion works)
 The live ruleset = `GameRules()` defaults + a **sparse override delta** persisted in
 `app_settings['rule_overrides']` (only changed fields), re-applied each season in `Season.__init__`.
