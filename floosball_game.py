@@ -11213,10 +11213,17 @@ class Play():
 
                     # Stretch for the marker on the catch (mirrors the run side): a
                     # confident receiver with the power to extend reaches it across;
-                    # an undisciplined reach feeds the strip-fumble check below.
-                    _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.receiver)
-                    if _stBonus:
-                        self.yardage = min(self.yardage + _stBonus, self.yardsToEndzone - 1)
+                    # an undisciplined reach feeds the strip-fumble check below. A
+                    # receiver who just laid out for a DIVING grab is already extended
+                    # on the ground and can't ALSO reach for the marker — the two
+                    # read as contradictory on the same play, so skip the stretch
+                    # (mechanics + narration) when it was a diving catch.
+                    self._stretchNote = None
+                    _stFumbleBump = 0
+                    if not getattr(self, '_diveCatch', False):
+                        _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.receiver)
+                        if _stBonus:
+                            self.yardage = min(self.yardage + _stBonus, self.yardsToEndzone - 1)
 
                     # Update stats
                     self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)
