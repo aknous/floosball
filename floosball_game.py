@@ -2405,23 +2405,12 @@ class Game:
         if scoreDiff > 0:
             if self.currentQuarter == 4 and self.gameClockSeconds < 300:
                 # Leading with little time: burn clock, don't risk a FG miss.
-                # A kneel on 4th down is a turnover on downs, so it's only safe
-                # when it actually ENDS the game: the opponent must have no
-                # timeouts to stop the clock, and the remaining time must fit in
-                # one kneel's drain — otherwise the kneel just hands them the ball
-                # back with time on the clock. Skip inside own 2 (safety risk);
-                # otherwise fall through to a safe run / punt.
-                _oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
-                # The clock must be RUNNING for a kneel to drain it — from a stopped
-                # clock (e.g. after a timeout) a kneel burns only ~4s, so on 4th down
-                # it just hands the opponent the ball with time left. Kneel only when
-                # a single kneel genuinely ends it: clock running, one kneel's drain
-                # covers the remainder, not near our own goal, opponent out of TOs.
-                if (self.clockRunning
-                        and self.gameClockSeconds <= self.gameRules.kneelDrainSeconds
-                        and self.yardsToSafety > 2 and _oppTimeouts == 0):
-                    self.play.kneel()
-                    return
+                # NEVER kneel on 4th down — a kneel there is a turnover on downs, so
+                # a team should run an ACTUAL play (or kick / punt) instead. Running
+                # the clock out via kneels only happens on downs 1-3 (see the kneel
+                # gate in playCaller, which requires the kneels to reach 0:00 before
+                # 4th down). Here, take a makeable FG, sneak a very short 4th-and-1
+                # in the open field, otherwise punt.
                 if inFieldGoalRange and self.yardsToEndzone <= 40:
                     self.play.playType = PlayType.FieldGoal
                     return
