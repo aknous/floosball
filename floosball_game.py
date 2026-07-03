@@ -1974,6 +1974,43 @@ class Game:
         self.gameFeed.insert(0, {'event': timeoutEvent})
         self.broadcastGameState(includeLastPlay=False, eventMessage=timeoutEvent)
 
+    def _maybeCallTimeoutToSaveSnap(self):
+        """End-of-half/game safety net, evaluated just before the pre-snap huddle.
+
+        If the clock is running and the ~8s+ huddle would burn it before this
+        play runs, spend a timeout to SAVE the snap — provided the offense still
+        has one and actually wants this play. This is what stops a scoring drive
+        from dying with three timeouts in its pocket: playCaller's own timeout
+        logic runs only on downs 1-3, so a running clock on 4th down (or any
+        last snap) would otherwise expire during the huddle and the play never
+        happens. End of HALF fires regardless of score (a leading team still
+        wants points before the break); end of GAME (Q4/OT) only fires when
+        trailing/tied (a leading team correctly lets the clock run out)."""
+        if not self.clockRunning:
+            return
+        if self.play.playType in (PlayType.Punt, PlayType.Kneel, PlayType.Spike):
+            return  # not trying to preserve time for a score
+        if self.gameClockSeconds > 15:
+            return  # plenty of clock — the normal huddle won't expire it
+        isHome = (self.offensiveTeam == self.homeTeam)
+        timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
+        if timeoutsLeft <= 0:
+            return
+        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        if self._isGarbageTime(scoreDiff):
+            return
+        endOfHalf = self.currentQuarter == 2
+        endOfGameNeed = (self.currentQuarter == 4 or self.currentQuarter >= 5) and scoreDiff <= 0
+        if not (endOfHalf or endOfGameNeed):
+            return
+        self.play.insights['clockMgmt'] = {
+            'decision': 'saveSnapTimeout',
+            'reason': 'Stop the clock so the play gets off before time expires',
+            'clockRemaining': self.gameClockSeconds,
+            'timeoutsLeft': timeoutsLeft,
+        }
+        self._callTimeout(isHome)
+
     def _checkDefensiveTimeout(self):
         """Defense calls timeout to stop the clock when trailing and the offense is milking clock.
 
@@ -3073,6 +3110,36 @@ class Game:
             # Bad coaches (IQ~0.0) frequently miss the correct situational play.
             gameIQ = self._coachClockIQ(coach)
 
+            # ── End of the FIRST HALF: always try to score, REGARDLESS of the
+            # score. A half ends the same whether you're up or down, so a live
+            # drive should push for points (there's no clock to "protect" — it
+            # resets at the break). Mirrors the defense's Q2 "get the ball back
+            # regardless of score" timeout logic. endOfHalfPush unlocks the
+            # offensive timeout + spike below for any score; on the LAST play in
+            # FG range, take the free points here. Q2 ONLY — at end of GAME a
+            # leading team correctly DRAINS instead (those branches stay
+            # score-gated). Garbage time (a blowout) is excluded.
+            _eohKicker = self.offensiveTeam.rosterDict.get('k')
+            _eohKickerMax = (_eohKicker.maxFgDistance - self.gameRules.fgSnapDistance) if _eohKicker else 0
+            endOfHalfPush = (self.currentQuarter == 2
+                             and self.gameClockSeconds <= 120
+                             and not self._isGarbageTime(scoreDiff)
+                             and self.yardsToEndzone <= _eohKickerMax + 25)
+            if (endOfHalfPush and self.gameClockSeconds <= 45
+                    and self.yardsToEndzone <= _eohKickerMax):
+                eohPlaysAvailable = self._estimateAvailablePlays()
+                if self.down == self.gameRules.downsPerSeries or eohPlaysAvailable <= 1:
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'endOfHalfFG',
+                        'reason': 'End of half — take the FG on the last play (any score)',
+                        'clockRemaining': self.gameClockSeconds,
+                        'playsAvailable': eohPlaysAvailable,
+                        'down': self.down,
+                        'coachClockIQ': round(gameIQ, 2),
+                    }
+                    self.play.playType = PlayType.FieldGoal
+                    return
+
             # Late-game FG, trailing by ≤3, in range. Decision hinges on whether
             # this is the LAST realistic play — NOT a fixed clock threshold. The
             # ≤45s here is just a coarse entry filter; the real gate is
@@ -3222,14 +3289,16 @@ class Game:
             # into a 4th-down must-score).
             spikeKicker = self.offensiveTeam.rosterDict.get('k')
             spikeKickerMax = (spikeKicker.maxFgDistance - self.gameRules.fgSnapDistance) if spikeKicker else 0
-            spikeFgException = (self.down == self.gameRules.downsPerSeries - 1 and -3 <= scoreDiff <= 0
+            spikeFgException = (self.down == self.gameRules.downsPerSeries - 1
+                                and (self.currentQuarter == 2 or -3 <= scoreDiff <= 0)
                                 and self.yardsToEndzone <= spikeKickerMax
                                 and secs <= 20)
             spikeDownOK = self.down <= self.gameRules.downsPerSeries - 2 or spikeFgException
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
                     and secs <= self.gameRules.spikeClockThreshold
-                    and timeoutsLeft == 0 and scoreDiff <= 0
+                    and timeoutsLeft == 0
+                    and (scoreDiff <= 0 or self.currentQuarter == 2)  # Q2: stop the clock regardless of score
                     and spikeDownOK
                     and not self._isGarbageTime(scoreDiff)):
                 if secs <= 30:
@@ -3258,13 +3327,18 @@ class Game:
             # multi-score team, not the 2:00 cap that let it bleed time before.
             _toKicker = self.offensiveTeam.rosterDict.get('k')
             _toKickerMaxFg = (_toKicker.maxFgDistance - self.gameRules.fgSnapDistance) if _toKicker else 0
-            fgStopPriority = scoreDiff <= 0 and self.yardsToEndzone <= _toKickerMaxFg + 8
+            # In FG range and it matters: trailing/tied any quarter, OR Q2 at any
+            # score (score before the half). Drives the high-urgency timeout.
+            fgStopPriority = (scoreDiff <= 0 or self.currentQuarter == 2) and self.yardsToEndzone <= _toKickerMaxFg + 8
             toWindow = (180 if (self.currentQuarter >= 4 and (multiScore or fgStopPriority))
                         else self.gameRules.timeoutClockThreshold)
             twoMinImminent = (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
                               and self.gameRules.timeoutClockThreshold < secs
                               <= self.gameRules.timeoutClockThreshold + 15)
-            if (isLateGame and scoreDiff <= 0 and self.clockRunning
+            # Q2: stop the clock regardless of score (endOfHalfPush) — a leading
+            # team still wants to score before the break. Q4/OT stays trailing/
+            # tied-gated so a leading team drains the clock instead.
+            if (isLateGame and (scoreDiff <= 0 or endOfHalfPush) and self.clockRunning
                     and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)
                     and not twoMinImminent and not self._clockStoppedByWarning
                     and secs <= toWindow):
@@ -3283,7 +3357,8 @@ class Game:
                 if _random.random() < toChance:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'timeout',
-                        'reason': 'Stop clock while trailing/tied',
+                        'reason': ('Stop clock to score before the half' if (endOfHalfPush and scoreDiff > 0)
+                                   else 'Stop clock while trailing/tied'),
                         'clockRemaining': secs,
                         'timeoutsLeft': timeoutsLeft,
                         'coachClockIQ': round(gameIQ, 2),
@@ -5128,6 +5203,10 @@ class Game:
 
                 # PRE-SNAP: Consume huddle/snap time AFTER play type is known.
                 # Skip for kneels and spikes — they handle their own clock internally.
+                if self.clockRunning and self.play.playType not in (PlayType.Kneel, PlayType.Spike):
+                    # Safety net: spend a timeout to save the snap if the huddle
+                    # would otherwise burn the clock (may set clockRunning False).
+                    self._maybeCallTimeoutToSaveSnap()
                 if self.clockRunning and self.play.playType not in (PlayType.Kneel, PlayType.Spike):
                     preSnapTime = self.calculatePreSnapTime()
                     self.consumeGameTime(preSnapTime)
