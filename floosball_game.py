@@ -2412,7 +2412,13 @@ class Game:
                 # back with time on the clock. Skip inside own 2 (safety risk);
                 # otherwise fall through to a safe run / punt.
                 _oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
-                if (self.gameClockSeconds <= self.gameRules.kneelDrainSeconds
+                # The clock must be RUNNING for a kneel to drain it — from a stopped
+                # clock (e.g. after a timeout) a kneel burns only ~4s, so on 4th down
+                # it just hands the opponent the ball with time left. Kneel only when
+                # a single kneel genuinely ends it: clock running, one kneel's drain
+                # covers the remainder, not near our own goal, opponent out of TOs.
+                if (self.clockRunning
+                        and self.gameClockSeconds <= self.gameRules.kneelDrainSeconds
                         and self.yardsToSafety > 2 and _oppTimeouts == 0):
                     self.play.kneel()
                     return
@@ -5363,8 +5369,12 @@ class Game:
                         self._checkDefensiveTimeout()
                         if self._timeoutCalled and self.timingManager:
                             await self.timingManager.waitAfterTimeout()
-                        if self.clockRunning and self.gameClockSeconds > 0:
-                            # No timeout called — drain the play clock (time between plays).
+                        # Drain the between-plays play clock ONLY if the clock was
+                        # running before the snap (getattr guard) AND no post-kneel
+                        # timeout stopped it. After a prior stoppage the kneel burns
+                        # just its ~4s (already consumed in kneel()).
+                        if (getattr(self, '_kneelClockWasRunning', True)
+                                and self.clockRunning and self.gameClockSeconds > 0):
                             # Total kneel drain = snap (4s, in kneel()) + this play-clock
                             # drain, so this is kneelDrainSeconds - 4 (keeps the AI's drain
                             # prediction at _checkClockManagement in sync with the rule).
@@ -9321,6 +9331,14 @@ class Play():
         AFTER the defense gets a chance to call timeout."""
         self.playType = PlayType.Kneel
         self.yardage = -1
+        # The extra play-clock drain (~36s, applied post-play in the game loop)
+        # only happens if the clock was RUNNING before the snap. After a stoppage
+        # (timeout / 2-min warning) the pre-snap play clock does NOT run the game
+        # clock — a kneel then burns only the ~4s below (clock restarts at the
+        # snap, ball is immediately dead). Capture the pre-kneel state so the loop
+        # can honor it; a kneel is an in-bounds play, so the clock runs AFTER the
+        # snap either way.
+        self.game._kneelClockWasRunning = self.game.clockRunning
         self.game.clockRunning = True
         # Only drain the actual play time (snap to knee-down)
         kneelDuration = min(4, self.game.gameClockSeconds)
