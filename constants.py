@@ -1170,6 +1170,14 @@ AWAKENED_DEF_FIRE_CHANCE = 35       # % a ready, position-appropriate defender d
                                     # (gates defensive fires so they don't dominate offense — A-lite)
 AWAKENED_CRITICALITY_CHARGE_MULT = 4.0  # during a Criticality the charge meter fills this much faster
 
+# A charged awakened kicker extends their FG range, but NOT to infinity — an
+# 87-yard attempt reads as broken even for a powered kicker. This is the max
+# KICK distance (yardsToEndzone + fgSnapDistance) a charged kicker will attempt;
+# their in-range check uses max(normal max, this). ~70 = a huge-but-believable
+# "superpowered" boot (the real record is 66). Set very high to restore the old
+# "from anywhere" behavior.
+AWAKENED_FG_MAX_YARDS = 70
+
 # Play-calling bias toward an AWAKENED (powered-up) skill player — the offense
 # feeds the star. Without this the play-caller ignores awakened state entirely,
 # so a powered-up RB could sit through six straight passes. Applied as a weight

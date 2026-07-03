@@ -2093,6 +2093,16 @@ class Game:
             return 0
         return round((gameplan.runPassRatio - 0.5) * 16)
 
+    def _chargedKickerMaxFg(self, kicker) -> int:
+        """Max yardsToEndzone a CHARGED awakened kicker will attempt from: their
+        normal range extended to — but capped at — a AWAKENED_FG_MAX_YARDS kick
+        distance. Big but finite (the old behavior treated the whole field as in
+        range, which produced absurd ~87-yard attempts)."""
+        if not kicker:
+            return 0
+        from constants import AWAKENED_FG_MAX_YARDS
+        return max(kicker.maxFgDistance, AWAKENED_FG_MAX_YARDS) - self.gameRules.fgSnapDistance
+
     def _estimateFgProbability(self):
         """Estimate FG make probability for the current field position and kicker."""
         kicker = self.offensiveTeam.rosterDict.get('k')
@@ -2150,7 +2160,7 @@ class Game:
         kicker = self.offensiveTeam.rosterDict.get('k')
         # A charged awakened kicker makes it from ANYWHERE — treat the whole field as in range.
         kickerCharged = self._awakenedReadyFor(kicker, 'kick')
-        kickerMaxFg = 999 if kickerCharged else ((kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0)
+        kickerMaxFg = self._chargedKickerMaxFg(kicker) if kickerCharged else ((kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0)
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
 
@@ -2290,8 +2300,11 @@ class Game:
         # late, treating them as "in range" would route them into the FG-biased trailing branch instead
         # of going for the touchdown — so strategy gates the range, not just the early auto-kick below.
         kickerCharged = self._awakenedReadyFor(kicker, 'kick')
+        # A charged kicker's range is extended but CAPPED (see _chargedKickerMaxFg)
+        # — "from anywhere" up to that cap, not a literal 87-yarder.
+        chargedInRange = kickerCharged and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)
         fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
-        inFieldGoalRange = ((kickerCharged and fgHelps)
+        inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
         leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
                        and self.gameClockSeconds <= 120)
@@ -2299,11 +2312,11 @@ class Game:
         # Deep own territory: default punt, but override if trailing late in Q4
         # (or Q2 end-of-half past midfield)
         if self.yardsToSafety <= 35:
-            # A charged awakened kicker makes it from anywhere — take the free 3
-            # rather than auto-punting, when a FG helps and we're not protecting a
-            # late lead (mirrors the normal charged-kick branch below). Without
-            # this, a powered-up kicker deep in own territory was always punted.
-            if kickerCharged and fgHelps and not leadingLate:
+            # A charged awakened kicker takes the free 3 rather than auto-punting,
+            # when a FG helps and we're not protecting a late lead (mirrors the
+            # normal charged-kick branch below). Range is capped (chargedInRange),
+            # so this only fires within the awakened kicker's extended reach.
+            if chargedInRange and fgHelps and not leadingLate:
                 self.play.playType = PlayType.FieldGoal
                 return
             isLateGameDesperation = (
@@ -2361,9 +2374,10 @@ class Game:
         # minutes, which may still pin with a coffin-corner punt rather than risk
         # a turnover or hand the ball back already in FG range — that case falls
         # through to the normal logic below. (leadingLate computed at the top.)
-        # A charged awakened kicker takes the free 3 from any distance — but only when fgHelps (computed
-        # above) and not protecting a late lead; short-yardage / goal-line defer to the go-for-it logic.
-        if (kickerCharged and fgHelps and not leadingLate
+        # A charged awakened kicker takes the free 3 within its (capped) extended
+        # range — but only when fgHelps (computed above) and not protecting a late
+        # lead; short-yardage / goal-line defer to the go-for-it logic.
+        if (chargedInRange and fgHelps and not leadingLate
                 and self.yardsToFirstDown > 2 and self.yardsToEndzone > 8):
             self.play.playType = PlayType.FieldGoal
             return
@@ -3412,7 +3426,7 @@ class Game:
         # so the end-game FG / Hail-Mary logic below must see the extended range.
         kicker = self.offensiveTeam.rosterDict.get('k')
         kickerCharged = self._awakenedReadyFor(kicker, 'kick')
-        kickerMaxFg = 999 if kickerCharged else ((kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0)
+        kickerMaxFg = self._chargedKickerMaxFg(kicker) if kickerCharged else ((kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0)
 
         # End-of-half FG attempt (only if reasonable probability)
         endGameFgProb = self._estimateFgProbability()
@@ -3452,6 +3466,7 @@ class Game:
         # so it does NOT fire on an early down when there's still time to take a
         # shot at the winning TD first. (Non-charged kickers never reach here.)
         if (kickerCharged and self.currentQuarter in (2, 4)
+                and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)
                 and self._estimateAvailablePlays() == 0):
             fgWorthwhile = (self.currentQuarter == 2) or (-3 <= scoreDiff <= 0)
             if fgWorthwhile:
@@ -3496,12 +3511,13 @@ class Game:
         # Final down — punt / FG / go-for-it decision
         if self.down == self.gameRules.downsPerSeries:
             self._fourthDownCaller(scoreDiff, coach, isHome)
-            # Rule 1: a charged awakened kicker never punts — it makes the FG from
-            # ANY field position. If the 4th-down logic chose to punt (i.e. it's
-            # not a go-for-it and not a game-ending kneel), take the sure 3 instead,
-            # regardless of field position. Gated by fgHelps so it stays a punt only
-            # when a FG can't help (down >3 late, when only a TD matters).
-            if self.play.playType == PlayType.Punt and kickerCharged:
+            # Rule 1: a charged awakened kicker prefers the sure 3 over a punt from
+            # WITHIN its (capped) extended range. If the 4th-down logic chose to
+            # punt (not a go-for-it, not a game-ending kneel), take the FG instead.
+            # Gated by fgHelps so it stays a punt when a FG can't help, and by the
+            # range cap so it doesn't attempt an absurd distance.
+            if (self.play.playType == PlayType.Punt and kickerCharged
+                    and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)):
                 fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
                 if fgHelps:
                     self.play.playType = PlayType.FieldGoal
@@ -9161,8 +9177,17 @@ class Play():
         # charge for a real miss). A block is NOT rescued — the power bends distance/accuracy, not a
         # defender already in the ball's path. None unless they are ready + the feature is on.
         self.awakenedFire = None
+        # A charged kicker attempting BEYOND their normal range: any make is the
+        # POWER, not a normal-roll fluke. Base make-prob is floored at 5%, so
+        # without this an impossible-length kick could roll a plain make and
+        # render with NO power flavor — i.e. look like a "regular" 87-yard kick.
+        # Route those through the power so a long make always narrates as one.
+        beyondNormalRange = kickerCharged and yardsToFG > (self.kicker.maxFgDistance if self.kicker else 0)
         if self.isFgBlocked:
             self.isFgGood = False
+        elif beyondNormalRange:
+            self.awakenedFire = self.game._awakenedTryFire('kick', self.kicker)
+            self.isFgGood = bool(self.awakenedFire)
         elif x <= probability:
             self.isFgGood = True
         else:
