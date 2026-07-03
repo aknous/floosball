@@ -2898,6 +2898,23 @@ class Game:
                 _mul('long',   1 - 0.5 * protectUrgency)
                 _mul('deep',   1 - 0.7 * protectUrgency)
 
+        # ── LEAD-PROTECTION FLOOR (any Q4/OT lead) ──
+        # Independent of coach archetype AND clock-IQ: no team should be chucking
+        # deep with a 4th-quarter lead — an incompletion stops your OWN clock. The
+        # branches above differentiate HOW WELL a coach drains (archetype) and how
+        # hard (clock-IQ via _mul); this guarantees a run lean + deep/long
+        # suppression for EVERYONE, ramping as the clock winds down. Uses _flat
+        # (no clock-IQ scaling) so even a poor clock-manager stops firing deep.
+        # Stacks on the mods above. Not Q2 — the half ends either way (handled
+        # below); this is about protecting a lead, which only exists end-of-GAME.
+        if scoreDiff > 0 and q >= 4:
+            floorUrg = 1.0 if secs <= 120 else (0.6 if secs <= 300 else 0.25)
+            _flat('run',    1 + 0.6 * floorUrg)
+            _flat('short',  1 + 0.15 * floorUrg)
+            _flat('medium', 1 - 0.2 * floorUrg)
+            _flat('long',   1 - 0.6 * floorUrg)
+            _flat('deep',   1 - 0.8 * floorUrg)
+
         # Q2 two-minute drill: REGARDLESS of score, push to score before the
         # half. A leading team does NOT sit on the ball in Q2 (clock-milking is
         # a Q4 behavior — the half ends either way, so there's no lead to
