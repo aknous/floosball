@@ -3180,6 +3180,8 @@ class Game:
             self.play.targetSideline = targetSideline
             self.play.playAction = self._selectPlayAction(playCall)
             self.play.insights['playAction'] = self.play.playAction
+            self.play.passConcept = self._selectPassConcept(playCall)
+            self.play.insights['passConcept'] = self.play.passConcept
             self.play.passPlay(self._selectPassPlay(playCall))
 
     def _selectRunConcept(self) -> str:
@@ -3244,6 +3246,40 @@ class Game:
         p += max(0.0, (scouting - 60) / 40.0) * (runFocus - 0.5) * 0.6   # read a run-keying D
         p *= 0.7 + max(0.0, (offMind - 60) / 40.0) * 0.6                 # good minds use it more
         return _random.random() < max(0.0, min(0.6, p))
+
+    def _selectPassConcept(self, tier: str) -> str:
+        """The coach's route-concept call: read the defense's coverage tendency and
+        pick the concept that beats it — mesh vs a man-heavy D, flood vs zone,
+        screen vs a blitz-happy D. Scaled by `scouting` (reading the look) and
+        `offensiveMind` (how much concept vs vanilla). Screens skew short; mesh
+        skews shorter; deep shots stay mostly standard."""
+        from constants import PASS_CONCEPT_ENABLED, PASS_CONCEPTS
+        if not PASS_CONCEPT_ENABLED:
+            return 'standard'
+        isHome = self.offensiveTeam is self.homeTeam
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
+        covTend = getattr(defGp, 'coverageTendency', None) or {}
+        blitzFreq = getattr(defGp, 'blitzFrequency', 0.25) if defGp is not None else 0.25
+        manW = zoneW = 0.4
+        for ct, w in covTend.items():
+            n = getattr(ct, 'name', str(ct)).upper()
+            if 'MAN' in n: manW = w
+            elif 'ZONE' in n: zoneW = w
+        scouting = getattr(coach, 'scouting', 80) if coach else 80
+        offMind = getattr(coach, 'offensiveMind', 80) if coach else 80
+        scoutRead = max(0.0, (scouting - 60) / 40.0)
+        offLean = 0.6 + max(0.0, (offMind - 60) / 40.0) * 0.7   # good minds lean into concepts
+        w = {n: PASS_CONCEPTS[n]['base'] for n in PASS_CONCEPTS}
+        w['mesh'] *= (1 + scoutRead * manW * 1.6) * offLean
+        w['flood'] *= (1 + scoutRead * zoneW * 1.6) * offLean
+        w['screen'] *= (1 + scoutRead * blitzFreq * 2.4) * offLean
+        if tier == 'short':
+            w['screen'] *= 1.9; w['flood'] *= 0.6
+        elif tier in ('long', 'deep'):
+            w['screen'] *= 0.15; w['mesh'] *= 0.5   # mesh/screen are shorter concepts
+        names = list(w)
+        return _random.choices(names, weights=[max(0.01, w[n]) for n in names], k=1)[0]
 
     def playCaller(self):
         isHome = (self.offensiveTeam == self.homeTeam)
@@ -4253,6 +4289,17 @@ class Game:
                 text = text.replace(' and and ', ' and ')  # "...handoff and and X can't connect"
             else:
                 text = ('Play-action fake. ' if getattr(self.play, 'paWorked', False) else 'Play-action. ') + text
+
+        # Route-concept flavor (skipped when it's play-action to avoid double narration).
+        if (text and self.play.playType is PlayType.Pass
+                and not getattr(self.play, 'playAction', False)
+                and getattr(self.play, 'passer', None) is not None):
+            _lead2 = {'mesh': 'works the mesh and', 'flood': 'floods the zone and',
+                      'screen': 'sets up a screen and'}.get(getattr(self.play, 'passConcept', 'standard'))
+            if _lead2:
+                _pn2 = self.play.passer.name
+                if text.startswith(_pn2 + ' '):
+                    text = '{} {} {}'.format(_pn2, _lead2, text[len(_pn2) + 1:]).replace(' and and ', ' and ')
 
         if text and self.play.blitzKind and self.play.playType == PlayType.Pass:
             pressureFelt = (
@@ -10513,9 +10560,11 @@ class Play():
 
         # Mean openness shifts based on skill differential
         meanOpenness = 50 + (skillDifferential / 2)  # Range roughly 30-70
-        # Play-action: a sold fake pulled the second level up, springing receivers
-        # open for real (0 for non-PA plays, and for PA that didn't fool the D).
+        # Play-action (sold fake pulled the second level up) + a route concept that
+        # beat the coverage it faced — both spring receivers genuinely open. 0 for
+        # standard dropbacks / when the fake or concept didn't beat the look.
         meanOpenness += getattr(self, '_paOpennessBonus', 0.0)
+        meanOpenness += getattr(self, '_passConceptOpennessBonus', 0.0)
         meanOpenness = max(10, min(90, meanOpenness))  # Clamp to reasonable range
 
         # Standard deviation - better receivers have more consistent separation
@@ -10931,6 +10980,37 @@ class Play():
                 if _runFocus < 0.45 and not _blitz:      # D was sitting on the pass — fake wasted
                     effectivePassRush *= (1 + PLAY_ACTION_BACKFIRE)
                 self.insights['playActionWorked'] = self.paWorked
+
+        # --- Route concept: springs receivers open when it beats the coverage it
+        # faces (mesh vs man, flood vs zone, screen vs blitz). Applied per receiver
+        # in the coverage loop below; here we set the beaten look + the relief
+        # magnitude (execution-scaled). MATCH coverage blunts it.
+        # Its coverage matchup is known now (coverageType is rolled for the play),
+        # so resolve the openness bonus once — a concept that beats the look springs
+        # receivers open (added in calculateReceiverOpenness, the completion driver).
+        self._passConceptOpennessBonus = 0.0
+        self.passConceptHit = False
+        _pc = getattr(self, 'passConcept', 'standard')
+        if _pc and _pc != 'standard':
+            from constants import (PASS_CONCEPT_ENABLED, PASS_CONCEPTS,
+                                   PASS_CONCEPT_OPENNESS, PASS_CONCEPT_MATCH_DAMP, PASS_CONCEPT_EXEC)
+            if PASS_CONCEPT_ENABLED and GAMEPLAN_AVAILABLE:
+                _beats = PASS_CONCEPTS.get(_pc, {}).get('beats')
+                _ct = scheme.get('coverageType')
+                _bp = scheme.get('blitzPackage')
+                _factor = 0.0
+                if _beats == 'man':
+                    _factor = 1.0 if _ct == CoverageType.MAN else (PASS_CONCEPT_MATCH_DAMP if _ct == CoverageType.MATCH else 0.0)
+                elif _beats == 'zone':
+                    _factor = 1.0 if _ct == CoverageType.ZONE else (PASS_CONCEPT_MATCH_DAMP if _ct == CoverageType.MATCH else 0.0)
+                elif _beats == 'blitz':
+                    _factor = 1.0 if _bp is not None else 0.0
+                if _factor > 0:
+                    _qa = getattr(self.passer, 'gameAttributes', None) or self.passer.attributes
+                    _ex = sum(getattr(_qa, a, 70) * w for a, w in PASS_CONCEPT_EXEC.items())
+                    _exq = max(0.0, min(1.0, (_ex - 60) / 40.0))
+                    self._passConceptOpennessBonus = (0.35 + 0.65 * _exq) * PASS_CONCEPT_OPENNESS * _factor
+                    self.passConceptHit = True
 
         # Track first-half pass attempts for halftime adjustment
         if self.game.currentQuarter <= 2:

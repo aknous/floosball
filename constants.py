@@ -341,6 +341,26 @@ PLAY_ACTION_RUSH_RELIEF = 0.18    # how much a sold fake slows the pass rush (LB
 PLAY_ACTION_BACKFIRE = 0.10       # extra pass rush when PA is called vs a pass-committed D (wasted fake)
 PLAY_ACTION_EXEC = {'creativity': 0.5, 'focus': 0.3, 'agility': 0.2}  # QB sells the fake
 
+# ---------------------------------------------------------------------------
+# Route concepts (pass concepts vs COVERAGE — Phase 2, see docs/PLAYBOOK_PLAN.md)
+# ---------------------------------------------------------------------------
+# A route concept that beats the coverage it faces springs receivers open —
+# mesh (crossers/rubs) beats MAN, flood (overload) beats ZONE, screen beats the
+# BLITZ (rushers upfield). Vs the wrong look it's neutral; MATCH coverage (the
+# hybrid) blunts concepts. The coach calls the concept that beats the defense's
+# coverage tendency (scouting read); a smart QB executes it (reads/times it).
+PASS_CONCEPT_ENABLED = True
+PASS_CONCEPT_OPENNESS = 20        # receiver openness points on a matched, well-run concept (× execution)
+PASS_CONCEPT_MATCH_DAMP = 0.4     # concept effect vs MATCH coverage (it's built to handle concepts)
+PASS_CONCEPT_EXEC = {'instinct': 0.4, 'creativity': 0.35, 'focus': 0.25}  # QB reads/times the concept
+# base = call propensity before the coach's scouting read; `beats` = the look it defeats.
+PASS_CONCEPTS = {
+    'standard': {'base': 0.55, 'beats': None},
+    'mesh':     {'base': 0.15, 'beats': 'man'},
+    'flood':    {'base': 0.15, 'beats': 'zone'},
+    'screen':   {'base': 0.15, 'beats': 'blitz'},
+}
+
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
 CLINCH_TOPSEED_REWARD = 50
