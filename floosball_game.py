@@ -8145,12 +8145,57 @@ class Game:
                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                 })
     
+    def _maybeReadjustGameplans(self):
+        """Mid-game (non-halftime) gameplan re-assessment, gated by ADAPTABILITY.
+
+        The universal halftime adjustment re-plans every team once. This adds
+        EXTRA re-planning at the Q2 and Q4 boundaries for coaches adaptable enough
+        to change on the fly: highly-adaptable coaches re-plan often (more so when
+        the offense is sputtering — they "sense it isn't working"); low-
+        adaptability coaches ride the same plan all game. Reuses the halftime
+        adjust functions with the running (cumulative) stats — those already scale
+        the MAGNITUDE by adaptability, so this only gates the FREQUENCY."""
+        if not GAMEPLAN_AVAILABLE:
+            return
+        homeOffStats = {
+            'runPlays': self.homeHalfRunPlays, 'runYards': self.homeHalfRunYards,
+            'passAttempts': self.homeHalfPassAttempts, 'passYards': self.homeHalfPassYards,
+            'wr1Yards': self.homeHalfWr1Yards, 'wr2Yards': self.homeHalfWr2Yards,
+        }
+        awayOffStats = {
+            'runPlays': self.awayHalfRunPlays, 'runYards': self.awayHalfRunYards,
+            'passAttempts': self.awayHalfPassAttempts, 'passYards': self.awayHalfPassYards,
+            'wr1Yards': self.awayHalfWr1Yards, 'wr2Yards': self.awayHalfWr2Yards,
+        }
+        for team, offPlan, defPlan, offStats, oppOffStats in (
+            (self.homeTeam, self.homeOffGameplan, self.homeDefGameplan, homeOffStats, awayOffStats),
+            (self.awayTeam, self.awayOffGameplan, self.awayDefGameplan, awayOffStats, homeOffStats),
+        ):
+            coach = getattr(team, 'coach', None)
+            if coach is None or offPlan is None:
+                continue
+            # Attributes are 60-100. Only adaptable coaches re-plan mid-game:
+            # adaptFactor 0 at 60 -> 1 at 100; below ~0.4 (adapt 76) they never do,
+            # then the chance ramps to ~0.7 at max adaptability.
+            adaptFactor = max(0.0, min(1.0, (coach.adaptability - 60) / 40))
+            replanChance = max(0.0, (adaptFactor - 0.4) / 0.6) * 0.7
+            # Sputtering offense -> more likely to shake it up (senses it's failing).
+            plays = offStats['runPlays'] + offStats['passAttempts']
+            if plays >= 8:
+                ypp = (offStats['runYards'] + offStats['passYards']) / plays
+                if ypp < 4.5:
+                    replanChance = min(1.0, replanChance * 1.6)
+            if replanChance > 0 and _random.random() < replanChance:
+                adjustOffensiveGameplan(offPlan, coach, offStats)
+                adjustDefensiveGameplan(defPlan, coach, oppOffStats)
+
     def advanceQuarter(self):
         """Transition to next quarter"""
         if self.currentQuarter == 1:
             self.currentQuarter = 2
             self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
+            self._maybeReadjustGameplans()  # adaptive coaches re-plan on the fly
         elif self.currentQuarter == 2:
             # Halftime
             self.currentQuarter = 3
@@ -8164,6 +8209,7 @@ class Game:
             self.currentQuarter = 4
             self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
+            self._maybeReadjustGameplans()  # adaptive coaches re-plan on the fly
         elif self.currentQuarter == 4:
             # Check for overtime
             if self.homeScore == self.awayScore:
