@@ -268,6 +268,14 @@ REPLAN_FULL_CONFIDENCE_PLAYS = 30 # plays at which the adjustment runs at full m
 QUICKGAME_SUPPRESS_DEFICIT = 9    # 2nd half: behind by 2+ scores -> need chunks, drop the quick game
 QUICKGAME_LATE_DEFICIT = 3       # Q4/OT: behind by a FG or more -> need to hurry, drop the quick game
 
+# runPassRatio wiring (see Game._applyGameplanMods). The offensive gameplan's
+# runPassRatio (0.25-0.75, 0.5 neutral, higher = more run) was never consumed by
+# play selection; these map its deviation from neutral into multiplicative nudges
+# on the run weight (up) and the four pass-tier weights (down), so the mid-game
+# adjustment toward "what's working" actually shifts the run/pass mix.
+RUNPASS_RUN_SWING = 1.2          # run-weight multiplier = 1 + (ratio-0.5)*this  (r=0.75 -> run x1.30)
+RUNPASS_PASS_SWING = 1.0         # pass-tier multiplier = 1 - (ratio-0.5)*this   (r=0.75 -> pass x0.75)
+
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
 CLINCH_TOPSEED_REWARD = 50

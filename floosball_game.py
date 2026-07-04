@@ -2781,28 +2781,42 @@ class Game:
         return weights
 
     def _applyGameplanMods(self, weights: dict) -> dict:
-        """Apply the offensive gameplan's mid-game pass-depth bias to the tier
-        weights. `passDepthBias` (set by adjustOffensiveGameplan when a smart coach
-        senses the offense is stalling) is a signed scalar: positive = dial into a
-        quick, high-percentage passing game (favor short, cut deep) to move the
-        chains and build rhythm; negative would lean the other way. This is the
-        multiplicative inverse of the aggressiveness deep-lean in _applyCoachMods,
-        so it composes cleanly on top. Runs BEFORE the awakened/FG-drain layers so
-        a powered-up feed or an end-game clock drain still overrides it.
-
-        (Note: this is the first offensive-gameplan field wired into play
-        selection — runPassRatio remains display-only.)"""
-        if not _PASSDEPTH_ENABLED:
+        """Apply the OFFENSIVE gameplan's mix signals to the play-call weights —
+        the run/pass balance (`runPassRatio`) and the mid-game pass-depth bias
+        (`passDepthBias`). These were the two offensive gameplan fields never
+        consumed by play selection; this is where they take effect. Runs BEFORE
+        the awakened / FG-drain layers so a powered-up feed or an end-game clock
+        drain still overrides them. Gated by the module master switch
+        `gameplan.WIRING_ENABLED` (experiments toggle it)."""
+        import gameplan as _gp
+        if not _gp.WIRING_ENABLED:
             return weights
         offPlan = self.homeOffGameplan if self.offensiveTeam is self.homeTeam else self.awayOffGameplan
-        bias = getattr(offPlan, 'passDepthBias', 0.0) if offPlan else 0.0
-        if not bias:
+        if offPlan is None:
+            return weights
+
+        # --- runPassRatio: shift the run vs pass balance toward what's working ---
+        # (adjustOffensiveGameplan moves runPassRatio toward the more productive
+        # attack; higher ratio = more run.) A pure multiplicative nudge: run up,
+        # the four pass tiers down (or vice versa), composing under the situational
+        # / desperation layers that already ran.
+        from constants import (RUNPASS_RUN_SWING, RUNPASS_PASS_SWING,
+                               QUICKGAME_SUPPRESS_DEFICIT, QUICKGAME_LATE_DEFICIT)
+        ratio = getattr(offPlan, 'runPassRatio', 0.5)
+        if ratio != 0.5:
+            weights['run'] = weights.get('run', 0) * max(0.4, 1 + (ratio - 0.5) * RUNPASS_RUN_SWING)
+            passMul = max(0.4, 1 - (ratio - 0.5) * RUNPASS_PASS_SWING)
+            for k in ('short', 'medium', 'long', 'deep'):
+                weights[k] = weights.get(k, 0) * passMul
+
+        # --- passDepthBias: quick, high-percentage passing when the offense stalls ---
+        bias = getattr(offPlan, 'passDepthBias', 0.0)
+        if not (_PASSDEPTH_ENABLED and bias):
             return weights
         # Quick-game is a rhythm / ball-control tool. In catch-up mode the offense
         # needs chunk plays, so suppress the short bias there and let the deep /
         # desperation play-calling ride (a 2+-score 2nd-half hole, or any deficit
         # late). When close or ahead, the quick game applies.
-        from constants import QUICKGAME_SUPPRESS_DEFICIT, QUICKGAME_LATE_DEFICIT
         isHome = self.offensiveTeam is self.homeTeam
         deficit = (self.awayScore - self.homeScore) if isHome else (self.homeScore - self.awayScore)
         q = self.currentQuarter

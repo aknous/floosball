@@ -14,6 +14,12 @@ from enum import Enum
 
 from constants import RATING_SCALE_MIN, RATING_RANGE
 
+# Master switch for ALL gameplan influence on play (the offensive weight mods in
+# Game._applyGameplanMods AND the per-play defensive scheme below). Experiments
+# toggle this to measure the gameplan system's total contribution; production
+# leaves it True.
+WIRING_ENABLED = True
+
 
 # ---------------------------------------------------------------------------
 # Coverage & Blitz enums
@@ -41,7 +47,8 @@ class OffensiveGameplan:
     def __init__(self):
         self.runPassRatio: float = 0.5            # 0=all pass, 1=all run
         self.gapDistribution: dict = {'A-gap': 0.33, 'B-gap': 0.33, 'C-gap': 0.34}
-        self.passDepthDistribution: dict = {'short': 0.50, 'medium': 0.35, 'long': 0.15}
+        # (passDepthDistribution retired 2026-07 — it was never read; pass depth is
+        #  driven by the play-weight table + passDepthBias below.)
         # Mid-game pass-depth bias (set by adjustOffensiveGameplan when a smart
         # coach senses the offense is stalling). +1 = full quick/short game to
         # move the chains; 0 = neutral. Consumed by Game._applyGameplanMods.
@@ -336,8 +343,8 @@ def getDefensiveScheme(defGameplan, down: int, yardsToGo: int, fieldPos: int,
         'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0,
         'coverageType': CoverageType.MAN, 'blitzPackage': None,
     }
-    if defGameplan is None:
-        return neutral
+    if defGameplan is None or not WIRING_ENABLED:
+        return dict(neutral)
 
     blitz = defGameplan.blitzFrequency
     runFocus = defGameplan.runStopFocus
