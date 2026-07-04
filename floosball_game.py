@@ -4136,7 +4136,40 @@ class Game:
             self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety - returnYards)
 
 
+    def _buildPlaybookInsight(self):
+        """Consolidate the play's design decision into a single insights['playbook']
+        object for the Play Insights panel — which concept/trick was called and how
+        it turned out. A play is one thing: a trick, an RPO, a run concept, or a
+        pass concept (play-action and/or route concept)."""
+        p = self.play
+        pb = None
+        trick = getattr(p, 'trickPlay', None)
+        if trick:
+            pb = {'kind': 'trick', 'name': trick, 'worked': bool(getattr(p, 'trickWorked', False))}
+        elif getattr(p, 'isRpo', False):
+            pb = {'kind': 'rpo', 'read': 'pass' if getattr(p, 'rpoThrow', False) else 'run',
+                  'correct': bool(getattr(p, 'rpoCorrect', False))}
+        elif p.playType is PlayType.Run and not getattr(p, 'isScramble', False):
+            c = getattr(p, 'runConcept', None)
+            if c and c != 'power':
+                pb = {'kind': 'run_concept', 'concept': c,
+                      'telegraphed': bool(getattr(p, 'conceptTelegraphed', False))}
+        elif p.playType is PlayType.Pass:
+            pa = getattr(p, 'playAction', False)
+            pc = getattr(p, 'passConcept', None)
+            if pa or (pc and pc != 'standard'):
+                pb = {'kind': 'pass_concept'}
+                if pa:
+                    pb['playAction'] = True
+                    pb['playActionWorked'] = bool(getattr(p, 'paWorked', False))
+                if pc and pc != 'standard':
+                    pb['passConcept'] = pc
+                    pb['passConceptHit'] = bool(getattr(p, 'passConceptHit', False))
+        if pb is not None:
+            self.play.insights['playbook'] = pb
+
     def formatPlayText(self):
+        self._buildPlaybookInsight()
         self._evaluateClutchChoke()
 
         # Snapshot clock state for the feed. By this point clockRunning has
