@@ -4294,7 +4294,10 @@ class Game:
         if (text and self.play.playType is PlayType.Pass
                 and not getattr(self.play, 'playAction', False)
                 and getattr(self.play, 'passer', None) is not None):
-            _lead2 = {'mesh': 'works the mesh and', 'flood': 'floods the zone and',
+            # Describe the ACTION (not just the concept name) so the play-by-play
+            # reads clearly for any fan — mesh = crossing routes, flood = overload.
+            _lead2 = {'mesh': 'works the crossing routes and',
+                      'flood': 'floods the zone and',
                       'screen': 'sets up a screen and'}.get(getattr(self.play, 'passConcept', 'standard'))
             if _lead2:
                 _pn2 = self.play.passer.name
