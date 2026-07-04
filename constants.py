@@ -303,7 +303,11 @@ RUN_CONCEPTS = {
                 'edge': {'blitz': 0.45, 'runFocus': -0.45, 'aggr': 0.10},
                 'gaps': {'A-gap': 0.45, 'B-gap': 0.40, 'C-gap': 0.15}},
     'counter': {'base': 0.16, 'deception': 0.70, 'exec': {'agility': 0.5, 'creativity': 0.5},
-                'edge': {'blitz': 0.10, 'runFocus': -0.10, 'aggr': 0.55},
+                # `flat` = inherent misdirection value (harder to defend than a straight run);
+                # runFocus POSITIVE = the counter beats a run-committed D that over-flows to the
+                # fake; aggr POSITIVE = beats over-pursuit. Defenses average ~0.4 aggr, so the
+                # flat + runFocus terms keep counter viable when the aggr term is negative.
+                'edge': {'flat': 0.05, 'blitz': 0.10, 'runFocus': 0.10, 'aggr': 0.30},
                 'gaps': {'A-gap': 0.15, 'B-gap': 0.45, 'C-gap': 0.40}},
     'sweep':   {'base': 0.22, 'deception': 0.40, 'exec': {'speed': 0.4, 'agility': 0.3, 'blocking': 0.3},
                 'edge': {'blitz': 0.05, 'runFocus': 0.35, 'aggr': -0.45},

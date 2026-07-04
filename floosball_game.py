@@ -119,7 +119,8 @@ def _runConceptEdge(conceptName, scheme, defGameplan):
     blitzOn = 1.0 if (scheme and scheme.get('blitzPackage') is not None) else 0.0
     runFocus = getattr(defGameplan, 'runStopFocus', 0.5) if defGameplan is not None else 0.5
     aggr = getattr(defGameplan, 'aggressiveness', 0.5) if defGameplan is not None else 0.5
-    return e['blitz'] * blitzOn + e['runFocus'] * (runFocus - 0.5) + e['aggr'] * (aggr - 0.5)
+    return (e.get('flat', 0.0) + e['blitz'] * blitzOn
+            + e['runFocus'] * (runFocus - 0.5) + e['aggr'] * (aggr - 0.5))
 
 
 class PlayType(enum.Enum):
