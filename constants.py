@@ -326,6 +326,21 @@ RUN_CONCEPTS = {
 DEF_COUNTER_STRENGTH = 0.6        # scales the whole counter adjustment
 DEF_COUNTER_MIN_RUNS = 5          # need this many run-concept samples before countering
 
+# ---------------------------------------------------------------------------
+# Play-action (pass concept — Phase 2, see docs/PLAYBOOK_PLAN.md)
+# ---------------------------------------------------------------------------
+# A pass off a run fake. The pass-side of "exploit the defense's commitment":
+# when the fake is SOLD (QB execution) against a run-committed / blitzing defense,
+# the linebackers and safeties bite -> receivers come open and the rush is slower.
+# Vs a pass-committed defense nobody bites (no benefit) and the wasted fake time
+# lets the rush get home (the downside that makes it a real decision).
+PLAY_ACTION_ENABLED = True
+PLAY_ACTION_OPENNESS = 22         # receiver openness points at a fully-sold PA vs a run-committed D
+                                  # (added to REAL openness -> completion; scaled by paEffect 0-1)
+PLAY_ACTION_RUSH_RELIEF = 0.18    # how much a sold fake slows the pass rush (LBs frozen)
+PLAY_ACTION_BACKFIRE = 0.10       # extra pass rush when PA is called vs a pass-committed D (wasted fake)
+PLAY_ACTION_EXEC = {'creativity': 0.5, 'focus': 0.3, 'agility': 0.2}  # QB sells the fake
+
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
 CLINCH_TOPSEED_REWARD = 50

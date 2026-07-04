@@ -3178,6 +3178,8 @@ class Game:
             self.play.runPlay()
         else:
             self.play.targetSideline = targetSideline
+            self.play.playAction = self._selectPlayAction(playCall)
+            self.play.insights['playAction'] = self.play.playAction
             self.play.passPlay(self._selectPassPlay(playCall))
 
     def _selectRunConcept(self) -> str:
@@ -3218,6 +3220,30 @@ class Game:
             weights[name] = max(0.01, w)
         names = list(weights)
         return _random.choices(names, weights=[weights[n] for n in names], k=1)[0]
+
+    def _selectPlayAction(self, tier: str) -> bool:
+        """Decide whether this pass is play-action. The coach calls it to exploit a
+        run-committed defense — more on early downs (run is credible), on deeper
+        shots (the fake buys time), when a scouting read says the D is keying the
+        run, and for sharp offensive minds. Not on quick/short throws (no time to
+        fake). Gated so it stays a situational call, not the norm."""
+        from constants import PLAY_ACTION_ENABLED
+        if not PLAY_ACTION_ENABLED or tier == 'short':
+            return False
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        isHome = self.offensiveTeam is self.homeTeam
+        defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
+        runFocus = getattr(defGp, 'runStopFocus', 0.5) if defGp is not None else 0.5
+        offMind = getattr(coach, 'offensiveMind', 80) if coach else 80
+        scouting = getattr(coach, 'scouting', 80) if coach else 80
+        p = 0.13
+        if self.down <= 2:
+            p += 0.10                                   # run is credible early
+        if tier in ('long', 'deep'):
+            p += 0.08                                   # PA + shot combo
+        p += max(0.0, (scouting - 60) / 40.0) * (runFocus - 0.5) * 0.6   # read a run-keying D
+        p *= 0.7 + max(0.0, (offMind - 60) / 40.0) * 0.6                 # good minds use it more
+        return _random.random() < max(0.0, min(0.6, p))
 
     def playCaller(self):
         isHome = (self.offensiveTeam == self.homeTeam)
@@ -4213,6 +4239,20 @@ class Game:
                 _name = self.play.runner.name
                 _leadIn = '{} {} {} and '.format(_name, _verb, _phrase)
                 text = (_leadIn + text[len(_name) + 1:]) if text.startswith(_name + ' ') else (_leadIn + text)
+
+        # Play-action flavor: weave the fake into the pass narration; when it worked
+        # the fake froze the second level, otherwise it's just a play-action look.
+        if (text and self.play.playType is PlayType.Pass
+                and getattr(self.play, 'playAction', False)
+                and getattr(self.play, 'passer', None) is not None):
+            _pn = self.play.passer.name
+            _lead = '{} fakes the handoff and '.format(_pn) if getattr(self.play, 'paWorked', False) \
+                else '{} off play-action '.format(_pn)
+            if text.startswith(_pn + ' '):
+                text = _lead + text[len(_pn) + 1:]
+                text = text.replace(' and and ', ' and ')  # "...handoff and and X can't connect"
+            else:
+                text = ('Play-action fake. ' if getattr(self.play, 'paWorked', False) else 'Play-action. ') + text
 
         if text and self.play.blitzKind and self.play.playType == PlayType.Pass:
             pressureFelt = (
@@ -10473,6 +10513,9 @@ class Play():
 
         # Mean openness shifts based on skill differential
         meanOpenness = 50 + (skillDifferential / 2)  # Range roughly 30-70
+        # Play-action: a sold fake pulled the second level up, springing receivers
+        # open for real (0 for non-PA plays, and for PA that didn't fool the D).
+        meanOpenness += getattr(self, '_paOpennessBonus', 0.0)
         meanOpenness = max(10, min(90, meanOpenness))  # Clamp to reasonable range
 
         # Standard deviation - better receivers have more consistent separation
@@ -10860,6 +10903,34 @@ class Play():
         effectivePassRush = basePassRush * scheme['passRushMult']
         # Team-level pass coverage as fallback (individual matchups applied per-receiver below)
         effectivePassDef = self.defense.defensePassCoverageRating * scheme['passDefMult']
+
+        # --- Play-action: a sold fake vs a run-committed defense freezes the second
+        # level -> receivers open (softer coverage) and the rush is slower. Vs a
+        # pass-committed D nobody bites and the wasted fake time lets the rush home.
+        self.playAction = getattr(self, 'playAction', False)
+        self.paWorked = False
+        self._paOpennessBonus = 0.0
+        if self.playAction:
+            from constants import (PLAY_ACTION_ENABLED, PLAY_ACTION_OPENNESS,
+                                   PLAY_ACTION_RUSH_RELIEF, PLAY_ACTION_BACKFIRE, PLAY_ACTION_EXEC)
+            if PLAY_ACTION_ENABLED:
+                _isHome = self.game.offensiveTeam is self.game.homeTeam
+                _defGp = self.game.awayDefGameplan if _isHome else self.game.homeDefGameplan
+                _runFocus = getattr(_defGp, 'runStopFocus', 0.5) if _defGp is not None else 0.5
+                _blitz = scheme.get('blitzPackage') is not None
+                _runCommit = max(0.0, (_runFocus - 0.5) * 2) + (0.25 if _blitz else 0.0)
+                _qa = getattr(self.passer, 'gameAttributes', None) or self.passer.attributes
+                _exec = sum(getattr(_qa, a, 70) * w for a, w in PLAY_ACTION_EXEC.items())
+                _execQ = max(0.0, min(1.0, (_exec - 60) / 40.0))
+                _paEffect = min(1.0, _runCommit) * (0.3 + 0.7 * _execQ)   # sold fake vs a run-keying D
+                # Real receiver openness — the second level bit on the fake. Applied
+                # per-receiver in calculateReceiverOpenness (the actual completion driver).
+                self._paOpennessBonus = _paEffect * PLAY_ACTION_OPENNESS
+                effectivePassRush *= (1 - _paEffect * PLAY_ACTION_RUSH_RELIEF)   # LBs frozen, slower rush
+                self.paWorked = _paEffect > 0.15
+                if _runFocus < 0.45 and not _blitz:      # D was sitting on the pass — fake wasted
+                    effectivePassRush *= (1 + PLAY_ACTION_BACKFIRE)
+                self.insights['playActionWorked'] = self.paWorked
 
         # Track first-half pass attempts for halftime adjustment
         if self.game.currentQuarter <= 2:

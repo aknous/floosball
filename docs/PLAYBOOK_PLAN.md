@@ -47,8 +47,9 @@ Concept set (start ~4–5; `power` is the vanilla baseline):
 
 **Attach points (from engine map):** `runPlay` `~:9638` (concept edge + execution + blitz hook), `_executeWeightedPlay` `~:3127` / a new run-concept selector (selection), `adjustDefensiveGameplan` in `gameplan.py` (counter-adaptation), `formatPlayText` `~:3787` (PBP), a `runConcept` tag + concept flags on `Play`.
 
-## Phase 2 — Play-action & RPO (sketch)
-- **Play-action pass**: a pass concept that exploits *run*-commitment (LBs bite → receiver openness up, pass-rush down). Attaches in `passPlay`; `runStopFocus` already softens coverage via `passDefMult` — PA amplifies it, gated by execution.
+## Phase 2 — Play-action & RPO
+**Play-action BUILT (2026-07-04).** `Game._selectPlayAction` (coach call — more on early downs, deeper shots, a scouting read of a run-keying D, sharp offensive minds; ~15% of passes, never on short/quick). In `passPlay`: a QB execution roll (`PLAY_ACTION_EXEC`: creativity/focus/agility) × the D's run-commitment (runStopFocus + blitz) = `paEffect`; a sold fake vs a run-committed D adds REAL receiver openness (`_paOpennessBonus` into `calculateReceiverOpenness`, the actual completion driver — NOT the fallback `effectivePassDef`) and slows the rush (LBs frozen); vs a pass-committed D it backfires (wasted fake → more rush). Validated: fake works 88% vs run-committed Ds, +6.3% completion (medium) / +5.2% (deep) there; **net-neutral overall** (PA on/off completion 69.0/68.7) — redistributes, doesn't inflate. PBP weaves it in ("fakes the handoff and..." / "off play-action..."). Consts `PLAY_ACTION_*`, master toggle `PLAY_ACTION_ENABLED`.
+- **RPO** (still to build): a pre-snap read that branches run/pass on the box.
 - **RPO**: a pre-snap read that branches run/pass on the box. **Structural hook:** the defensive `scheme` is currently rolled *after* the run/pass decision (only inside the resolvers). RPO needs `getDefensiveScheme` lifted to pre-snap (`_executeWeightedPlay`) so the read can pick the resolver, with the rolled scheme threaded down (no double-roll). Both resolvers reused verbatim.
 
 ## Phase 3 — Trick plays (sketch)
