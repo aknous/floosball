@@ -3180,6 +3180,7 @@ class Game:
         self.play._trickRunRelief = 0.0
         self.play._trickSackMult = 1.0
         self.play._forcedRunner = None
+        self.play._forcedGap = None
 
         _trick = self._selectTrickPlay()
         if _trick:
@@ -3448,7 +3449,10 @@ class Game:
                 self.play._trickSackMult = 1.0 + spec['sack_backfire']    # and the play took forever -> rush home
             self.play.passPlay(self._selectPassPlay('long'))   # downfield shot, but catchable enough to pay off
         else:
-            self.play.runConcept = 'power'
+            self.play.runConcept = 'power'   # vanilla concept (trick block handles the narration)
+            # Statue and reverse are EDGE plays — force an outside gap so the
+            # direction reads right ("races to the edge", not "up the middle").
+            self.play._forcedGap = {'A-gap': 0.02, 'B-gap': 0.13, 'C-gap': 0.85}
             if spec['carrier'] == 'wr':
                 self.play._forcedRunner = self.offensiveTeam.rosterDict.get('wr1')
             self.play._trickRunRelief = spec['relief'] if works else -spec['backfire']   # payoff or stuffed/loss
@@ -10100,7 +10104,11 @@ class Play():
         from constants import RUN_CONCEPT_ENABLED as _RC_ON, RUN_CONCEPTS as _RCS
         _conceptName = getattr(self, 'runConcept', None)
         _conceptGaps = _RCS.get(_conceptName, {}).get('gaps') if _RC_ON else None
-        if activeOffGameplan is not None:
+        _forcedGap = getattr(self, '_forcedGap', None)   # trick plays (statue/reverse) force the edge
+        if _forcedGap:
+            gapDist = dict(_forcedGap)
+            designedGapType = _random.choices(list(gapDist.keys()), weights=list(gapDist.values()), k=1)[0]
+        elif activeOffGameplan is not None:
             gapDist = dict(_conceptGaps) if _conceptGaps else dict(activeOffGameplan.gapDistribution)
             # Short yardage / goal line: power inside — but a deliberately-called
             # perimeter concept (a called sweep on the goal line) stays true to itself.
