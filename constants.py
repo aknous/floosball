@@ -285,8 +285,10 @@ RUNPASS_PASS_SWING = 1.0         # pass-tier multiplier = 1 - (ratio-0.5)*this  
 # lands (full edge) or telegraphs (edge reversed). `conceptEdge` > 0 => weaker
 # effective run defense => more yards.
 RUN_CONCEPT_ENABLED = True        # master toggle (A/B the whole concept layer)
-RUN_CONCEPT_EDGE_STRENGTH = 0.55  # scales realized edge into the effectiveRunDef multiplier
-RUN_VS_BLITZ_BONUS = 0.12         # realism fix: ANY run vs an active blitz gashes the vacated front
+RUN_CONCEPT_EDGE_STRENGTH = 0.30  # scales realized edge into the effectiveRunDef multiplier.
+                                  # Kept modest so concepts REDISTRIBUTE yards (gain vs the wrong
+                                  # defense, lose vs the right one) rather than inflate the run game.
+RUN_VS_BLITZ_BONUS = 0.06         # realism fix: ANY run vs an active blitz gashes the vacated front
                                   # (was missing — runDefMult ignored the blitz). Concepts stack on top.
 
 # Per concept: `deception` (0=execution-flat like power, ~0.8=swings hard on execution),
