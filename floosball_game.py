@@ -4527,21 +4527,24 @@ class Game:
                 and getattr(self.play, 'passer', None) is not None):
             _pn = self.play.passer.name
             _lead = '{} fakes the handoff and '.format(_pn) if getattr(self.play, 'paWorked', False) \
-                else '{} off play-action '.format(_pn)
+                else '{} shows play-action and '.format(_pn)
             if text.startswith(_pn + ' '):
                 text = _lead + text[len(_pn) + 1:]
                 text = text.replace(' and and ', ' and ')  # "...handoff and and X can't connect"
             else:
                 text = ('Play-action fake. ' if getattr(self.play, 'paWorked', False) else 'Play-action. ') + text
 
-        # Route-concept flavor (skipped when it's play-action to avoid double narration).
+        # Route-concept flavor (skipped when it's play-action, or when the pass
+        # became a dump-off/RB screen — the checkdown path narrates that itself,
+        # so we'd otherwise get "sets up a screen and throws a screen").
         if (text and self.play.playType is PlayType.Pass
                 and not getattr(self.play, 'playAction', False)
+                and not getattr(self.play, 'checkdownReason', None)
                 and getattr(self.play, 'passer', None) is not None):
             # Describe the ACTION (not just the concept name) so the play-by-play
             # reads clearly for any fan — mesh = crossing routes, flood = overload.
             _lead2 = {'mesh': 'works the crossing routes and',
-                      'flood': 'floods the zone and',
+                      'flood': 'reads the overloaded side and',
                       'screen': 'sets up a screen and'}.get(getattr(self.play, 'passConcept', 'standard'))
             if _lead2:
                 _pn2 = self.play.passer.name
@@ -10639,7 +10642,8 @@ class Play():
         spd = rb.gameAttributes.speed
         agi = rb.gameAttributes.agility
         isScreen = reason == 'screen'
-        airYards = randint(-3, 1) if isScreen else randint(-1, 4)
+        # A screen is thrown at the line — 0 air yards, the whole gain is YAC.
+        airYards = 0 if isScreen else randint(-1, 4)
         baseYac = RB_SCREEN_BASE_YAC if isScreen else RB_CHECKDOWN_BASE_YAC
         yacMean = max(1.0, baseYac + (spd - 78) * RB_CHECKDOWN_YAC_PER_SPEED)
         yac = max(0, int(round(np.random.exponential(yacMean))) + int((agi - 80) / 25))
@@ -11175,6 +11179,12 @@ class Play():
             PassType.deep:     {'mean': 24,   'stdDev': 4.5},
             PassType.hailMary: {'mean': 45,   'stdDev': 8.0},
         }
+        # A called screen (route concept) is a throw at or behind the line — the
+        # gain is all run-after-catch, so air yards are ~0 regardless of the
+        # target's nominal route depth.
+        if getattr(self, 'passConcept', 'standard') == 'screen':
+            return max(0, int(np.random.normal(0.4, 0.8)))
+
         params = passTypeParams.get(passType, passTypeParams[PassType.medium])
         airYards = int(np.random.normal(params['mean'], params['stdDev']))
         return max(0, airYards)
