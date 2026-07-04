@@ -42,6 +42,10 @@ class OffensiveGameplan:
         self.runPassRatio: float = 0.5            # 0=all pass, 1=all run
         self.gapDistribution: dict = {'A-gap': 0.33, 'B-gap': 0.33, 'C-gap': 0.34}
         self.passDepthDistribution: dict = {'short': 0.50, 'medium': 0.35, 'long': 0.15}
+        # Mid-game pass-depth bias (set by adjustOffensiveGameplan when a smart
+        # coach senses the offense is stalling). +1 = full quick/short game to
+        # move the chains; 0 = neutral. Consumed by Game._applyGameplanMods.
+        self.passDepthBias: float = 0.0
         self.aggressiveness: float = 0.5          # affects 4th-down go-for-it thresholds
 
 
@@ -412,7 +416,7 @@ def getDefensiveScheme(defGameplan, down: int, yardsToGo: int, fieldPos: int,
 # Halftime adjustments
 # ---------------------------------------------------------------------------
 
-def adjustOffensiveGameplan(plan: OffensiveGameplan, coach, offStats: dict) -> None:
+def adjustOffensiveGameplan(plan: OffensiveGameplan, coach, offStats: dict, confidence: float = 1.0) -> None:
     """
     Mutate plan in-place based on first-half offensive performance.
 
@@ -420,6 +424,11 @@ def adjustOffensiveGameplan(plan: OffensiveGameplan, coach, offStats: dict) -> N
 
     High-adaptability coaches make larger corrections; low-adaptability coaches
     stay closer to the original gameplan.
+
+    `confidence` (0-1) scales the magnitude of every correction — used by the
+    mid-game re-plan to shrink adjustments made on a thin sample (few plays) so a
+    fluky quarter doesn't yank the plan. Defaults to 1.0 (the halftime call, which
+    has a full half of data, is unchanged).
     """
     if coach is None or plan is None:
         return
@@ -434,14 +443,14 @@ def adjustOffensiveGameplan(plan: OffensiveGameplan, coach, offStats: dict) -> N
     passSignal = max(-1.0, min(1.0, (ypa - 6.0) / 6.0))
 
     # Shift runPassRatio toward what worked; max shift ±0.25 at full adaptability
-    shift = (runSignal - passSignal) * adaptFactor * 0.25
+    shift = (runSignal - passSignal) * adaptFactor * 0.25 * confidence
     plan.runPassRatio = float(np.clip(plan.runPassRatio + shift, 0.25, 0.75))
 
     # If run game was consistently stuffed, diversify away from the overused gap
     if ypc < 3.0 and offStats['runPlays'] >= 5 and adaptFactor > 0.25:
         overusedGap = max(plan.gapDistribution, key=plan.gapDistribution.get)
         newDist = dict(plan.gapDistribution)
-        redirectAmount = adaptFactor * 0.18
+        redirectAmount = adaptFactor * 0.18 * confidence
         newDist[overusedGap] = max(0.20, newDist[overusedGap] - redirectAmount)
         others = [g for g in newDist if g != overusedGap]
         for g in others:
@@ -449,13 +458,34 @@ def adjustOffensiveGameplan(plan: OffensiveGameplan, coach, offStats: dict) -> N
         total = sum(newDist.values())
         plan.gapDistribution = {k: v / total for k, v in newDist.items()}
 
+    # Stalling offense -> a SMART coach dials into a quick, high-percentage passing
+    # game (move the chains, build rhythm) instead of pressing deep. Knowing the
+    # plan isn't working is easy; knowing HOW to fix it is the offensive mind — so
+    # the quality of this shift is gated by offensiveMind. A low-offensiveMind
+    # coach flails (near-zero bias); a sharp one finds the quick game. Fires only
+    # when BOTH attacks are below average (nothing is working); otherwise the bias
+    # relaxes so the offense rides its normal (and deep) looks.
+    offMindFactor = max(0.0, min(1.0, (coach.offensiveMind - RATING_SCALE_MIN) / RATING_RANGE))
+    if runSignal < 0 and passSignal < 0:
+        stall = min(1.0, (abs(runSignal) + abs(passSignal)) / 2.0)  # how replacement-level it looks
+        target = min(1.0, offMindFactor * adaptFactor * stall * confidence * 1.6)
+    else:
+        target = 0.0
+    # Ease toward the target rather than snapping, so a single fluky window doesn't
+    # over-commit and a recovering offense unwinds the quick game smoothly.
+    plan.passDepthBias = float(np.clip(plan.passDepthBias + (target - plan.passDepthBias) * 0.6, 0.0, 1.0))
 
-def adjustDefensiveGameplan(plan: DefensiveGameplan, coach, oppOffStats: dict) -> None:
+
+def adjustDefensiveGameplan(plan: DefensiveGameplan, coach, oppOffStats: dict, confidence: float = 1.0) -> None:
     """
     Mutate plan in-place based on what the opponent's offense did in the first half.
 
     oppOffStats keys: runPlays, runYards, passAttempts, passYards,
                       wr1Yards (optional), wr2Yards (optional)
+
+    `confidence` (0-1) scales every correction — the mid-game re-plan passes a
+    sub-1.0 value when acting on a thin sample. Defaults to 1.0 (halftime call
+    unchanged).
     """
     if coach is None or plan is None:
         return
@@ -469,11 +499,11 @@ def adjustDefensiveGameplan(plan: DefensiveGameplan, coach, oppOffStats: dict) -
     passThreat = max(-1.0, min(1.0, (oppYPA - 6.0) / 6.0))
 
     # Shift run/pass focus toward stopping what the opponent did well
-    focusShift = (runThreat - passThreat) * adaptFactor * 0.30
+    focusShift = (runThreat - passThreat) * adaptFactor * 0.30 * confidence
     plan.runStopFocus = float(np.clip(plan.runStopFocus + focusShift, 0.20, 0.80))
 
     # Blitz more if opponent QB struggled, less if they thrived
-    blitzShift = -passThreat * adaptFactor * 0.15
+    blitzShift = -passThreat * adaptFactor * 0.15 * confidence
     plan.blitzFrequency = float(np.clip(plan.blitzFrequency + blitzShift, 0.05, 0.50))
 
     # --- Coverage tendency adjustment ---
@@ -482,13 +512,13 @@ def adjustDefensiveGameplan(plan: DefensiveGameplan, coach, oppOffStats: dict) -
     if adaptFactor > 0.3:
         if passThreat > 0.3:
             # Opponent passing well → more zone to take away deep shots
-            shift = passThreat * adaptFactor * 0.15
+            shift = passThreat * adaptFactor * 0.15 * confidence
             plan.coverageTendency[CoverageType.ZONE] += shift
             plan.coverageTendency[CoverageType.MAN] -= shift * 0.7
             plan.coverageTendency[CoverageType.MATCH] -= shift * 0.3
         elif passThreat < -0.3:
             # Opponent struggling to pass → more man, keep it tight
-            shift = abs(passThreat) * adaptFactor * 0.10
+            shift = abs(passThreat) * adaptFactor * 0.10 * confidence
             plan.coverageTendency[CoverageType.MAN] += shift
             plan.coverageTendency[CoverageType.ZONE] -= shift
         # Renormalize

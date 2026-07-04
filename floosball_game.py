@@ -75,6 +75,21 @@ except ImportError:
     getDefensiveScheme = None
 
 
+# Mid-game re-plan behaviour (see Game._maybeReadjustGameplans). Module-level so
+# experiments can A/B variants without threading flags through the engine; these
+# defaults are the production configuration.
+_REPLAN_CONFIG = {
+    'enabled': True,        # master switch for the mid-game re-plan
+    'fire_q1q2': True,      # re-plan at the Q1->Q2 boundary (thin, one-quarter sample)
+    'fire_q3q4': True,      # re-plan at the Q3->Q4 boundary (rich, three-quarter sample)
+    'sample_aware': True,   # skip below REPLAN_MIN_PLAYS + scale magnitude by confidence
+}
+
+# Master switch for the offensive pass-depth (quick-game) bias in
+# _applyGameplanMods. Experiments toggle this to isolate the lever.
+_PASSDEPTH_ENABLED = True
+
+
 class PlayType(enum.Enum):
     Run = 'Run'
     Pass = 'Pass'
@@ -2752,6 +2767,7 @@ class Game:
         weights = self._applySituationalMods(weights, scoreDiff, coach)
         weights = self._applyMatchupMods(weights, coach)
         weights = self._applyCoachMods(weights, coach)
+        weights = self._applyGameplanMods(weights)
         weights = self._applyAwakenedMods(weights)
 
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
@@ -2762,6 +2778,41 @@ class Game:
             weights['medium'] = weights.get('medium', 0) * 0.3
             weights['long'] = weights.get('long', 0) * 0.15
             weights['deep'] = weights.get('deep', 0) * 0.05
+        return weights
+
+    def _applyGameplanMods(self, weights: dict) -> dict:
+        """Apply the offensive gameplan's mid-game pass-depth bias to the tier
+        weights. `passDepthBias` (set by adjustOffensiveGameplan when a smart coach
+        senses the offense is stalling) is a signed scalar: positive = dial into a
+        quick, high-percentage passing game (favor short, cut deep) to move the
+        chains and build rhythm; negative would lean the other way. This is the
+        multiplicative inverse of the aggressiveness deep-lean in _applyCoachMods,
+        so it composes cleanly on top. Runs BEFORE the awakened/FG-drain layers so
+        a powered-up feed or an end-game clock drain still overrides it.
+
+        (Note: this is the first offensive-gameplan field wired into play
+        selection — runPassRatio remains display-only.)"""
+        if not _PASSDEPTH_ENABLED:
+            return weights
+        offPlan = self.homeOffGameplan if self.offensiveTeam is self.homeTeam else self.awayOffGameplan
+        bias = getattr(offPlan, 'passDepthBias', 0.0) if offPlan else 0.0
+        if not bias:
+            return weights
+        # Quick-game is a rhythm / ball-control tool. In catch-up mode the offense
+        # needs chunk plays, so suppress the short bias there and let the deep /
+        # desperation play-calling ride (a 2+-score 2nd-half hole, or any deficit
+        # late). When close or ahead, the quick game applies.
+        from constants import QUICKGAME_SUPPRESS_DEFICIT, QUICKGAME_LATE_DEFICIT
+        isHome = self.offensiveTeam is self.homeTeam
+        deficit = (self.awayScore - self.homeScore) if isHome else (self.homeScore - self.awayScore)
+        q = self.currentQuarter
+        catchUp = (q >= 3 and deficit >= QUICKGAME_SUPPRESS_DEFICIT) or (q >= 4 and deficit >= QUICKGAME_LATE_DEFICIT)
+        if catchUp:
+            return weights
+        weights['short'] = weights.get('short', 0) * (1 + 0.6 * bias)
+        weights['medium'] = weights.get('medium', 0) * (1 + 0.2 * bias)
+        weights['long'] = weights.get('long', 0) * max(0.3, 1 - 0.4 * bias)
+        weights['deep'] = weights.get('deep', 0) * max(0.2, 1 - 0.6 * bias)
         return weights
 
     def _applySituationalMods(self, weights: dict, scoreDiff: int, coach=None) -> dict:
@@ -8145,18 +8196,32 @@ class Game:
                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                 })
     
-    def _maybeReadjustGameplans(self):
+    def _maybeReadjustGameplans(self, boundary='q3q4'):
         """Mid-game (non-halftime) gameplan re-assessment, gated by ADAPTABILITY.
 
         The universal halftime adjustment re-plans every team once. This adds
         EXTRA re-planning at the Q2 and Q4 boundaries for coaches adaptable enough
         to change on the fly: highly-adaptable coaches re-plan often (more so when
         the offense is sputtering — they "sense it isn't working"); low-
-        adaptability coaches ride the same plan all game. Reuses the halftime
-        adjust functions with the running (cumulative) stats — those already scale
-        the MAGNITUDE by adaptability, so this only gates the FREQUENCY."""
-        if not GAMEPLAN_AVAILABLE:
+        adaptability coaches ride the same plan all game.
+
+        `boundary` is 'q1q2' or 'q3q4'. The read here is the running (cumulative)
+        box score, which is a THIN sample at the Q1->Q2 boundary (one quarter) —
+        re-planning off one noisy quarter chased variance and cost wins, so the
+        correction is SAMPLE-AWARE: a side is only re-adjusted once it has
+        REPLAN_MIN_PLAYS plays, and the magnitude scales with confidence
+        (plays / REPLAN_FULL_CONFIDENCE_PLAYS, capped at 1.0). So a Q1->Q2 tweak
+        is gentle and a Q3->Q4 tweak (three quarters of data) runs at full force.
+        Adaptability still gates the FREQUENCY. Behaviour is configurable via the
+        module-level `_REPLAN_CONFIG` (defaults are production)."""
+        if not GAMEPLAN_AVAILABLE or not _REPLAN_CONFIG.get('enabled', True):
             return
+        if boundary == 'q1q2' and not _REPLAN_CONFIG.get('fire_q1q2', True):
+            return
+        if boundary == 'q3q4' and not _REPLAN_CONFIG.get('fire_q3q4', True):
+            return
+        from constants import REPLAN_MIN_PLAYS, REPLAN_FULL_CONFIDENCE_PLAYS
+        sampleAware = _REPLAN_CONFIG.get('sample_aware', True)
         homeOffStats = {
             'runPlays': self.homeHalfRunPlays, 'runYards': self.homeHalfRunYards,
             'passAttempts': self.homeHalfPassAttempts, 'passYards': self.homeHalfPassYards,
@@ -8167,6 +8232,10 @@ class Game:
             'passAttempts': self.awayHalfPassAttempts, 'passYards': self.awayHalfPassYards,
             'wr1Yards': self.awayHalfWr1Yards, 'wr2Yards': self.awayHalfWr2Yards,
         }
+
+        def _confidence(plays):
+            return max(0.0, min(1.0, plays / REPLAN_FULL_CONFIDENCE_PLAYS))
+
         for team, offPlan, defPlan, offStats, oppOffStats in (
             (self.homeTeam, self.homeOffGameplan, self.homeDefGameplan, homeOffStats, awayOffStats),
             (self.awayTeam, self.awayOffGameplan, self.awayDefGameplan, awayOffStats, homeOffStats),
@@ -8179,15 +8248,25 @@ class Game:
             # then the chance ramps to ~0.7 at max adaptability.
             adaptFactor = max(0.0, min(1.0, (coach.adaptability - 60) / 40))
             replanChance = max(0.0, (adaptFactor - 0.4) / 0.6) * 0.7
+            offPlays = offStats['runPlays'] + offStats['passAttempts']
             # Sputtering offense -> more likely to shake it up (senses it's failing).
-            plays = offStats['runPlays'] + offStats['passAttempts']
-            if plays >= 8:
-                ypp = (offStats['runYards'] + offStats['passYards']) / plays
+            if offPlays >= 8:
+                ypp = (offStats['runYards'] + offStats['passYards']) / offPlays
                 if ypp < 4.5:
                     replanChance = min(1.0, replanChance * 1.6)
-            if replanChance > 0 and _random.random() < replanChance:
+            if not (replanChance > 0 and _random.random() < replanChance):
+                continue
+            if not sampleAware:
                 adjustOffensiveGameplan(offPlan, coach, offStats)
                 adjustDefensiveGameplan(defPlan, coach, oppOffStats)
+                continue
+            # Sample-aware: re-adjust each side only with enough plays to trust the
+            # read, and shrink the correction toward zero on a thin sample.
+            if offPlays >= REPLAN_MIN_PLAYS:
+                adjustOffensiveGameplan(offPlan, coach, offStats, confidence=_confidence(offPlays))
+            oppPlays = oppOffStats['runPlays'] + oppOffStats['passAttempts']
+            if oppPlays >= REPLAN_MIN_PLAYS:
+                adjustDefensiveGameplan(defPlan, coach, oppOffStats, confidence=_confidence(oppPlays))
 
     def advanceQuarter(self):
         """Transition to next quarter"""
@@ -8195,7 +8274,7 @@ class Game:
             self.currentQuarter = 2
             self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
-            self._maybeReadjustGameplans()  # adaptive coaches re-plan on the fly
+            self._maybeReadjustGameplans('q1q2')  # adaptive coaches re-plan on the fly
         elif self.currentQuarter == 2:
             # Halftime
             self.currentQuarter = 3
@@ -8209,7 +8288,7 @@ class Game:
             self.currentQuarter = 4
             self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
-            self._maybeReadjustGameplans()  # adaptive coaches re-plan on the fly
+            self._maybeReadjustGameplans('q3q4')  # adaptive coaches re-plan on the fly
         elif self.currentQuarter == 4:
             # Check for overtime
             if self.homeScore == self.awayScore:

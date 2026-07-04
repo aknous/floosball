@@ -252,6 +252,22 @@ COACH_OFFENSIVE_MIND_FLOOR = 60 # offensiveMind below this value gives zero matc
 # player returning as a coach), instead of drawing a fresh name from the pool.
 COACH_RETIRED_NAME_CHANCE = 0.30
 
+# Mid-game re-plan (see floosball_game._maybeReadjustGameplans). The mid-game
+# adjustment reads the running (cumulative) box score, which is a THIN sample
+# early in the game — re-planning off one noisy quarter chased variance and cost
+# wins. These make the correction sample-aware: skip it below a floor of plays,
+# and scale its magnitude by how much data backs the read.
+REPLAN_MIN_PLAYS = 10             # a side needs >= this many plays before its plan is re-adjusted
+REPLAN_FULL_CONFIDENCE_PLAYS = 30 # plays at which the adjustment runs at full magnitude (confidence=1.0)
+
+# Quick-game (short-pass) suppression. The struggling-offense adjustment sets a
+# pass-depth bias toward quick, high-percentage throws to build rhythm — but that
+# is a rhythm/ball-control tool, WRONG in catch-up mode where the offense needs
+# chunk plays. _applyGameplanMods suppresses the bias when the offense is in
+# catch-up mode (let the deep/desperation play-calling ride instead).
+QUICKGAME_SUPPRESS_DEFICIT = 9    # 2nd half: behind by 2+ scores -> need chunks, drop the quick game
+QUICKGAME_LATE_DEFICIT = 3       # Q4/OT: behind by a FG or more -> need to hurry, drop the quick game
+
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
 CLINCH_TOPSEED_REWARD = 50
