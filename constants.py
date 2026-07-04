@@ -276,6 +276,34 @@ QUICKGAME_LATE_DEFICIT = 3       # Q4/OT: behind by a FG or more -> need to hurr
 RUNPASS_RUN_SWING = 1.2          # run-weight multiplier = 1 + (ratio-0.5)*this  (r=0.75 -> run x1.30)
 RUNPASS_PASS_SWING = 1.0         # pass-tier multiplier = 1 - (ratio-0.5)*this   (r=0.75 -> pass x0.75)
 
+# ---------------------------------------------------------------------------
+# Run-play CONCEPTS (playbook diversification Phase 1 — see docs/PLAYBOOK_PLAN.md)
+# ---------------------------------------------------------------------------
+# Every run is now a CONCEPT that exploits (or is punished by) the defense's
+# commitment. The coach calls the concept (fit to personnel + expected defense);
+# a per-play EXECUTION roll on player attributes decides whether the deception
+# lands (full edge) or telegraphs (edge reversed). `conceptEdge` > 0 => weaker
+# effective run defense => more yards.
+RUN_CONCEPT_ENABLED = True        # master toggle (A/B the whole concept layer)
+RUN_CONCEPT_EDGE_STRENGTH = 0.55  # scales realized edge into the effectiveRunDef multiplier
+RUN_VS_BLITZ_BONUS = 0.12         # realism fix: ANY run vs an active blitz gashes the vacated front
+                                  # (was missing — runDefMult ignored the blitz). Concepts stack on top.
+
+# Per concept: `deception` (0=execution-flat like power, ~0.8=swings hard on execution),
+# `exec` (player-attribute weights for the execution roll, summing ~1),
+# `edge` (matchup vs the live defensive scheme: blitz on/off, runStopFocus dev from 0.5,
+#         aggressiveness dev from 0.5). base = baseline call propensity before coach/personnel/read.
+RUN_CONCEPTS = {
+    'power':   {'base': 0.46, 'deception': 0.10, 'exec': {'power': 0.6, 'discipline': 0.4},
+                'edge': {'blitz': 0.00, 'runFocus': -0.35, 'aggr': 0.00}},
+    'draw':    {'base': 0.16, 'deception': 0.80, 'exec': {'creativity': 0.4, 'focus': 0.3, 'vision': 0.3},
+                'edge': {'blitz': 0.45, 'runFocus': -0.45, 'aggr': 0.10}},
+    'counter': {'base': 0.16, 'deception': 0.70, 'exec': {'agility': 0.5, 'creativity': 0.5},
+                'edge': {'blitz': 0.10, 'runFocus': -0.10, 'aggr': 0.55}},
+    'sweep':   {'base': 0.22, 'deception': 0.40, 'exec': {'speed': 0.4, 'agility': 0.3, 'blocking': 0.3},
+                'edge': {'blitz': 0.05, 'runFocus': 0.35, 'aggr': -0.45}},
+}
+
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
 CLINCH_TOPSEED_REWARD = 50

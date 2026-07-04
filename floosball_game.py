@@ -90,6 +90,38 @@ _REPLAN_CONFIG = {
 _PASSDEPTH_ENABLED = True
 
 
+def _runConceptExecQ(player, conceptName):
+    """Execution quality [0,1] for a ball-handler running `conceptName`: the
+    weighted blend of the concept's execution attributes, normalized (60->0,
+    100->1). This is the "deceive vs telegraph" skill — a shifty, cerebral back
+    sells a draw; a plodder tips it. Uses in-game (fatigue/morale-adjusted)
+    attributes."""
+    from constants import RUN_CONCEPTS
+    c = RUN_CONCEPTS.get(conceptName)
+    if not c or player is None:
+        return 0.5
+    attrs = getattr(player, 'gameAttributes', None) or player.attributes
+    total = 0.0
+    for attr, w in c['exec'].items():
+        total += getattr(attrs, attr, 70) * w
+    return max(0.0, min(1.0, (total - 60) / 40))
+
+
+def _runConceptEdge(conceptName, scheme, defGameplan):
+    """Matchup edge of `conceptName` vs the live defensive commitment. >0 means
+    the concept beats what the defense did (draw vs blitz, counter vs pursuit),
+    <0 means the defense is aligned to stop it."""
+    from constants import RUN_CONCEPTS
+    c = RUN_CONCEPTS.get(conceptName)
+    if not c:
+        return 0.0
+    e = c['edge']
+    blitzOn = 1.0 if (scheme and scheme.get('blitzPackage') is not None) else 0.0
+    runFocus = getattr(defGameplan, 'runStopFocus', 0.5) if defGameplan is not None else 0.5
+    aggr = getattr(defGameplan, 'aggressiveness', 0.5) if defGameplan is not None else 0.5
+    return e['blitz'] * blitzOn + e['runFocus'] * (runFocus - 0.5) + e['aggr'] * (aggr - 0.5)
+
+
 class PlayType(enum.Enum):
     Run = 'Run'
     Pass = 'Pass'
@@ -3135,10 +3167,51 @@ class Game:
         self.play.insights['playCall'] = playCall
 
         if playCall == 'run':
+            self.play.runConcept = self._selectRunConcept()
+            self.play.insights['runConcept'] = self.play.runConcept
             self.play.runPlay()
         else:
             self.play.targetSideline = targetSideline
             self.play.passPlay(self._selectPassPlay(playCall))
+
+    def _selectRunConcept(self) -> str:
+        """The COACH's call: pick the run concept that fits his personnel + the
+        expected defense. Weighted by (1) the coach's lean toward deception
+        (aggressive/offensive-minded coaches call more draws/counters), (2) the
+        RB's execution fit (favor concepts this back runs well), and (3) a
+        scouting read of the opponent's defensive tendencies (blitz-happy D ->
+        draw; over-aggressive D -> counter), scaled by the coach's `scouting`.
+        Short-yardage collapses toward power. The concept lives with the coach,
+        not the team."""
+        from constants import (RUN_CONCEPTS, RUN_CONCEPT_ENABLED)
+        if not RUN_CONCEPT_ENABLED:
+            return 'power'
+        isHome = (self.offensiveTeam is self.homeTeam)
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        rb = self.offensiveTeam.rosterDict.get('rb')
+        defGameplan = self.awayDefGameplan if isHome else self.homeDefGameplan
+        shortYardage = (self.yardsToFirstDown <= 2 or self.yardsToEndzone <= 5)
+        offMind = getattr(coach, 'offensiveMind', 80) if coach else 80
+        aggrC = getattr(coach, 'aggressiveness', 80) if coach else 80
+        scouting = getattr(coach, 'scouting', 80) if coach else 80
+        decLean = max(0.0, ((offMind - 80) + (aggrC - 80)) / 40.0)   # 0 neutral -> ~1 both high
+        scoutRead = max(0.0, (scouting - 60) / 40.0)                  # 0-1
+        bf = getattr(defGameplan, 'blitzFrequency', 0.25) if defGameplan is not None else 0.25
+        weights = {}
+        for name, c in RUN_CONCEPTS.items():
+            w = c['base']
+            if shortYardage:
+                w *= 2.4 if name == 'power' else 0.35   # power territory
+            w *= 1 + decLean * c['deception']            # coach calls more deception
+            if rb is not None:
+                w *= 0.55 + _runConceptExecQ(rb, name)   # personnel fit (0.55-1.55)
+            if defGameplan is not None and scoutRead > 0:
+                # expected edge vs the opponent's tendencies (approx blitz via its rate)
+                expEdge = _runConceptEdge(name, None, defGameplan) + c['edge']['blitz'] * bf
+                w *= 1 + scoutRead * max(-0.6, min(0.8, expEdge)) * 0.9
+            weights[name] = max(0.01, w)
+        names = list(weights)
+        return _random.choices(names, weights=[weights[n] for n in names], k=1)[0]
 
     def playCaller(self):
         isHome = (self.offensiveTeam == self.homeTeam)
@@ -4115,6 +4188,26 @@ class Game:
         # Blitz callout — only when the blitz actually put pressure on the QB
         # (sack, or defense winning the rush matchup). Pass plays only; runs
         # don't have a QB facing pressure even if a blitz was called.
+        # Run-concept flavor: name the concept (playbook variety) and call out
+        # the deception outcome — did it fool the defense or get telegraphed?
+        # 'power' is the vanilla default and stays unnarrated; scrambles excluded.
+        if (text and self.play.playType is PlayType.Run
+                and not getattr(self.play, 'isScramble', False)):
+            _concept = getattr(self.play, 'runConcept', 'power')
+            _leads = {
+                'draw': ['Draw play', 'On the draw', 'Draw handoff'],
+                'counter': ['Counter', 'Counter run', 'Misdirection, counter'],
+                'sweep': ['Sweep', 'On the sweep', 'Toss sweep'],
+            }.get(_concept)
+            if _leads:
+                _lead = choice(_leads)
+                if getattr(self.play, 'conceptTelegraphed', False):
+                    text = '{}, but the defense reads it. {}'.format(_lead, text)
+                elif getattr(self.play, 'conceptEdge', 0.0) > 0.12 and self.play.yardage >= 6:
+                    text = '{}, and the fake works. {}'.format(_lead, text)
+                else:
+                    text = '{}. {}'.format(_lead, text)
+
         if text and self.play.blitzKind and self.play.playType == PlayType.Pass:
             pressureFelt = (
                 self.play.isSack
@@ -9690,6 +9783,31 @@ class Play():
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         self._captureBlitzer(scheme, defGameplan if GAMEPLAN_AVAILABLE else None)
         effectiveRunDef = self.defense.defenseRunCoverageRating * scheme['runDefMult']
+
+        # --- Run CONCEPT: deception vs the defense's commitment, gated by execution ---
+        # The coach called the concept (self.runConcept). Its matchup edge vs the
+        # live scheme is realized only if the ball-handler EXECUTES it (sells the
+        # fake); a telegraphed deception concept reverses the edge (defense reads
+        # it). Also fixes the realism gap where a run was blind to the blitz.
+        from constants import (RUN_CONCEPT_ENABLED, RUN_CONCEPTS,
+                               RUN_CONCEPT_EDGE_STRENGTH, RUN_VS_BLITZ_BONUS)
+        conceptName = getattr(self, 'runConcept', None) or 'power'
+        self.runConcept = conceptName
+        self.conceptTelegraphed = False
+        self.conceptEdge = 0.0
+        if RUN_CONCEPT_ENABLED:
+            if scheme.get('blitzPackage') is not None:
+                effectiveRunDef *= (1 - RUN_VS_BLITZ_BONUS)   # vacated front — any run gashes it
+            edge = _runConceptEdge(conceptName, scheme, defGameplan)
+            d = RUN_CONCEPTS.get(conceptName, {}).get('deception', 0.1)
+            execQ = _runConceptExecQ(self.runner, conceptName)
+            execFactor = (1 - d) + d * (-0.4 + 1.6 * execQ)   # deception concepts swing on execution
+            realizedEdge = max(-0.35, min(0.5, edge)) * execFactor * RUN_CONCEPT_EDGE_STRENGTH
+            effectiveRunDef *= (1 - realizedEdge)
+            self.conceptEdge = realizedEdge
+            self.conceptTelegraphed = (d >= 0.5 and execQ < 0.35 and edge > 0)
+            self.insights['runConcept'] = conceptName
+            self.insights['conceptEdge'] = round(realizedEdge, 3)
 
         # Track first-half run plays for halftime adjustment
         if self.game.currentQuarter <= 2:
