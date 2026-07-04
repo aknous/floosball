@@ -379,6 +379,33 @@ RPO_OPENNESS = 16                # receiver openness points on a correctly-read 
 RPO_EXEC = {'instinct': 0.5, 'vision': 0.5}   # QB reads the box
 RPO_QB_FIT = {'instinct': 0.35, 'vision': 0.3, 'agility': 0.35}  # which QBs run RPOs well
 
+# ---------------------------------------------------------------------------
+# Trick plays (Phase 3, see docs/PLAYBOOK_PLAN.md) — high-variance CALLED SHOTS
+# ---------------------------------------------------------------------------
+# Rare gadgets a BOLD coach calls when the matchup is right and the game lets him
+# afford the risk. Each beats a specific defensive commitment; if that commitment
+# ISN'T there (or the players don't execute), it blows up (sack / stuff / big loss).
+# "When" rules (in _selectTrickPlay): only aggressive coaches, keyed to the D's
+# tendency, in a manageable field-position band, NOT in hurry-up / short-yardage /
+# red zone / backed up, and NOT as a desperation heave (called shots only).
+TRICK_PLAY_ENABLED = True
+TRICK_PLAY_BASE = 0.11            # base rate for a max-aggressive coach in an ideal spot (scaled way down)
+TRICK_FIELD_MIN_YTE = 21         # not in the red zone (yardsToEndzone must exceed this)
+TRICK_FIELD_MAX_YTE = 85         # not backed up in own territory (must be at/under this)
+# resolves: 'run'|'pass'; trigger: which D commitment it beats; exec: the key
+# player's attributes (the deceiver / ball-carrier); payoff/backfire magnitudes.
+TRICK_PLAYS = {
+    'flea_flicker': {'resolves': 'pass', 'trigger': 'run_commit', 'carrier': 'qb',
+                     'exec': {'creativity': 0.4, 'instinct': 0.3, 'armStrength': 0.3},
+                     'openness': 42, 'sack_backfire': 0.35},
+    'statue':       {'resolves': 'run', 'trigger': 'rush', 'carrier': 'rb',
+                     'exec': {'creativity': 0.5, 'focus': 0.5},
+                     'relief': 0.38, 'backfire': 0.28},
+    'reverse':      {'resolves': 'run', 'trigger': 'pursuit', 'carrier': 'wr',
+                     'exec': {'speed': 0.4, 'agility': 0.4, 'creativity': 0.2},
+                     'relief': 0.42, 'backfire': 0.40},
+}
+
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
 CLINCH_TOPSEED_REWARD = 50

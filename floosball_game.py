@@ -3171,11 +3171,20 @@ class Game:
         )[0]
 
         self.play.insights['playCall'] = playCall
-        # Reset per-play RPO state (set only by _executeRpo below).
+        # Reset per-play RPO / trick state (set only by _executeRpo / _executeTrickPlay).
         self.play.isRpo = False
         self.play._rpoOpennessBonus = 0.0
         self.play._rpoRunRelief = 0.0
+        self.play.trickPlay = None
+        self.play._trickOpennessBonus = 0.0
+        self.play._trickRunRelief = 0.0
+        self.play._trickSackMult = 1.0
+        self.play._forcedRunner = None
 
+        _trick = self._selectTrickPlay()
+        if _trick:
+            self._executeTrickPlay(_trick)
+            return
         if playCall == 'run' and self._selectRpo():
             self._executeRpo()
             return
@@ -3343,6 +3352,106 @@ class Game:
             self.play.runConcept = 'power'
             if correct:
                 self.play._rpoRunRelief = RPO_BONUS          # ball into a light box
+            self.play.runPlay()
+
+    def _selectTrickPlay(self):
+        """A bold coach's called shot. Returns a trick name or None. Gated by the
+        'when' rules — only aggressive coaches, keyed to the defense's tendency, in
+        a manageable field-position band, and only when the game lets you afford
+        the gamble (NOT hurry-up / short-yardage / red zone / backed up, and NOT a
+        desperation heave down 2+ scores late)."""
+        from constants import (TRICK_PLAY_ENABLED, TRICK_PLAY_BASE, TRICK_PLAYS,
+                               TRICK_FIELD_MIN_YTE, TRICK_FIELD_MAX_YTE)
+        if not TRICK_PLAY_ENABLED or self._isHurryUp():
+            return None
+        yte = self.yardsToEndzone
+        if self.yardsToFirstDown <= 2 or yte <= TRICK_FIELD_MIN_YTE or yte > TRICK_FIELD_MAX_YTE:
+            return None    # short-yardage / red zone / backed up in own territory
+        isHome = self.offensiveTeam is self.homeTeam
+        sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        q = self.currentQuarter
+        # Called shots only — a big deficit late goes to standard offense, not gadgets.
+        if q == 4 and (sd <= -9 or (sd < 0 and self.gameClockSeconds < 300)):
+            return None
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
+        aggrLean = max(0.0, (aggr - 78) / 22.0)   # only bold coaches (0 at 78, 1 at 100)
+        if aggrLean <= 0:
+            return None
+        defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
+        runFocus = getattr(defGp, 'runStopFocus', 0.5) if defGp is not None else 0.5
+        aggrD = getattr(defGp, 'aggressiveness', 0.5) if defGp is not None else 0.5
+        blitzF = getattr(defGp, 'blitzFrequency', 0.25) if defGp is not None else 0.25
+        # Match the trick to the D's tendency (scouting read of what it's committing to).
+        # Centered near the league-average tendencies (aggr ~0.45) so statue/reverse
+        # are reachable, not just flea flicker.
+        scores = {
+            'flea_flicker': max(0.0, (runFocus - 0.5) * 1.7),   # a run-committed D bites the fake
+            'statue': max(0.0, blitzF * 1.8),                   # a BLITZ flies upfield (blitz-driven)
+            'reverse': max(0.0, (aggrD - 0.48) * 2.6),          # over-PURSUIT (aggression-driven)
+        }
+        best = max(scores, key=scores.get)
+        if scores[best] < 0.06:
+            return None    # no favorable tendency to exploit — don't gadget for its own sake
+        scouting = getattr(coach, 'scouting', 80) if coach else 80
+        scoutRead = max(0.0, (scouting - 60) / 40.0)
+        p = TRICK_PLAY_BASE * aggrLean * (0.4 + 0.6 * scoutRead) * min(1.5, scores[best] * 4)
+        return best if _random.random() < min(0.16, p) else None
+
+    def _executeTrickPlay(self, trick: str):
+        """Resolve a trick: roll the scheme, check whether the defensive commitment
+        it targets is actually there, gate on the key player's execution, and apply
+        a big payoff (works) or a backfire (blown up). Reuses runPlay/passPlay via
+        pre-rolled scheme + play-level bonuses; the reverse swaps in a WR carrier."""
+        from constants import TRICK_PLAYS
+        spec = TRICK_PLAYS[trick]
+        isHome = self.offensiveTeam is self.homeTeam
+        defGameplan = self.awayDefGameplan if isHome else self.homeDefGameplan
+        if GAMEPLAN_AVAILABLE and defGameplan is not None:
+            sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+            scheme = getDefensiveScheme(defGameplan, self.down, self.yardsToFirstDown,
+                                        100 - self.yardsToEndzone, sd,
+                                        self.currentQuarter, self.gameClockSeconds)
+        else:
+            scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
+        runFocus = getattr(defGameplan, 'runStopFocus', 0.5) if defGameplan is not None else 0.5
+        aggrD = getattr(defGameplan, 'aggressiveness', 0.5) if defGameplan is not None else 0.5
+        blitz = scheme.get('blitzPackage') is not None
+        trig = spec['trigger']
+        if trig == 'run_commit':
+            triggered = runFocus >= 0.52
+        elif trig == 'rush':
+            triggered = blitz or aggrD >= 0.5
+        else:  # pursuit
+            triggered = aggrD >= 0.48
+        # Key player's execution (the deceiver / carrier).
+        carrier = self.offensiveTeam.rosterDict.get(spec['carrier'] if spec['carrier'] != 'wr' else 'wr1')
+        ca = (getattr(carrier, 'gameAttributes', None) or carrier.attributes) if carrier else None
+        execQ = 0.5
+        if ca:
+            execQ = max(0.0, min(1.0, (sum(getattr(ca, a, 70) * w for a, w in spec['exec'].items()) - 60) / 40.0))
+        works = triggered and (_random.random() < 0.35 + 0.6 * execQ)
+        self.play.trickPlay = trick
+        self.play.trickWorked = works
+        self.play._preRolledScheme = scheme
+        self.play._trickOpennessBonus = 0.0
+        self.play._trickRunRelief = 0.0
+        self.play._forcedRunner = None
+        self.play.insights['trickPlay'] = {'name': trick, 'worked': works}
+        if spec['resolves'] == 'pass':
+            self.play.playAction = False
+            self.play.passConcept = 'standard'
+            if works:
+                self.play._trickOpennessBonus = spec['openness']       # receiver wide open deep
+            else:
+                self.play._trickOpennessBonus = -spec['openness'] * 0.45  # D didn't bite — coverage intact
+                self.play._trickSackMult = 1.0 + spec['sack_backfire']    # and the play took forever -> rush home
+            self.play.passPlay(self._selectPassPlay('long'))   # downfield shot, but catchable enough to pay off
+        else:
+            self.play.runConcept = 'power'
+            if spec['carrier'] == 'wr':
+                self.play._forcedRunner = self.offensiveTeam.rosterDict.get('wr1')
+            self.play._trickRunRelief = spec['relief'] if works else -spec['backfire']   # payoff or stuffed/loss
             self.play.runPlay()
 
     def _selectPassConcept(self, tier: str) -> str:
@@ -4412,6 +4521,23 @@ class Game:
                 _pn3 = self.play.passer.name
                 if text.startswith(_pn3 + ' '):
                     text = '{} reads the box, pulls it and {}'.format(_pn3, text[len(_pn3) + 1:]).replace(' and and ', ' and ')
+
+        # Trick-play flavor — rare gadgets get a distinctive callout.
+        _trick = getattr(self.play, 'trickPlay', None)
+        if text and _trick:
+            _worked = getattr(self.play, 'trickWorked', False)
+            if _trick == 'flea_flicker' and getattr(self.play, 'passer', None) is not None:
+                _pn4 = self.play.passer.name
+                _lead = ('{} pulls off a flea flicker and'.format(_pn4) if _worked
+                         else '{} tries a flea flicker but'.format(_pn4))
+                if text.startswith(_pn4 + ' '):
+                    text = '{} {}'.format(_lead, text[len(_pn4) + 1:])
+                    text = text.replace(' and and ', ' and ').replace(' but and ', ' but ').replace(' but but ', ' but ')
+            elif _trick in ('statue', 'reverse') and getattr(self.play, 'runner', None) is not None:
+                _rn4 = self.play.runner.name
+                _phrase = 'the Statue of Liberty and' if _trick == 'statue' else 'the reverse and'
+                if text.startswith(_rn4 + ' '):
+                    text = '{} takes {} {}'.format(_rn4, _phrase, text[len(_rn4) + 1:]).replace(' and and ', ' and ')
 
         if text and self.play.blitzKind and self.play.playType == PlayType.Pass:
             pressureFelt = (
@@ -9947,7 +10073,8 @@ class Play():
         5. Breakaway potential (second level yards)
         """
         self.playType = PlayType.Run
-        self.runner = self.offense.rosterDict['rb']
+        # A trick play (reverse) can hand the ball to a WR instead of the RB.
+        self.runner = getattr(self, '_forcedRunner', None) or self.offense.rosterDict['rb']
         if self.runner is None:
             logging.error(f"Team {self.offense.name} has no RB - run play yields 0 yards")
             self.yardage = 0
@@ -10037,6 +10164,13 @@ class Play():
         if _rpoRelief:
             effectiveRunDef *= (1 - _rpoRelief)
             self._rpoRunRelief = 0.0
+
+        # Trick play (statue / reverse): a big payoff when the D's commitment was
+        # there, a stuff/loss when it wasn't (relief can be negative = backfire).
+        _trickRelief = getattr(self, '_trickRunRelief', 0.0)
+        if _trickRelief:
+            effectiveRunDef *= (1 - _trickRelief)
+            self._trickRunRelief = 0.0
 
         # Track first-half run plays for halftime adjustment
         if self.game.currentQuarter <= 2:
@@ -10687,6 +10821,7 @@ class Play():
         meanOpenness += getattr(self, '_paOpennessBonus', 0.0)
         meanOpenness += getattr(self, '_passConceptOpennessBonus', 0.0)
         meanOpenness += getattr(self, '_rpoOpennessBonus', 0.0)   # RPO throw into a vacated box
+        meanOpenness += getattr(self, '_trickOpennessBonus', 0.0)  # flea flicker: receiver open deep
         meanOpenness = max(10, min(90, meanOpenness))  # Clamp to reasonable range
 
         # Standard deviation - better receivers have more consistent separation
@@ -11075,6 +11210,8 @@ class Play():
         else:
             basePassRush = self.defense.defensePassRushRating
         effectivePassRush = basePassRush * scheme['passRushMult']
+        effectivePassRush *= getattr(self, '_trickSackMult', 1.0)  # flea flicker blown up -> rush gets home
+        self._trickSackMult = 1.0
         # Team-level pass coverage as fallback (individual matchups applied per-receiver below)
         effectivePassDef = self.defense.defensePassCoverageRating * scheme['passDefMult']
 
