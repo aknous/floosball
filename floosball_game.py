@@ -3269,9 +3269,15 @@ class Game:
         coach = getattr(self.offensiveTeam, 'coach', None)
         qa = getattr(qb, 'gameAttributes', None) or qb.attributes
         fit = max(0.0, min(1.0, (sum(getattr(qa, a, 70) * w for a, w in RPO_QB_FIT.items()) - 60) / 40.0))
+        # AGGRESSIVENESS gates adoption: a conservative coach sticks to standard
+        # run/pass; an aggressive coach leans into the modern wrinkle. offensiveMind
+        # is secondary (sophistication to run it), not the willingness to try it.
+        aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
         offMind = getattr(coach, 'offensiveMind', 80) if coach else 80
-        p = (0.06 + 0.20 * fit) * (0.7 + max(0.0, (offMind - 60) / 40.0) * 0.6)
-        return _random.random() < max(0.0, min(0.30, p))
+        aggrLean = max(0.0, (aggr - 60) / 40.0)              # 0 conservative -> 1 aggressive
+        offLean = 0.6 + max(0.0, (offMind - 60) / 40.0) * 0.4
+        p = (0.05 + 0.22 * fit) * (0.35 + 1.0 * aggrLean) * offLean
+        return _random.random() < max(0.0, min(0.40, p))
 
     def _executeRpo(self):
         """Read the box pre-snap and branch: loaded front -> pull it and throw a
