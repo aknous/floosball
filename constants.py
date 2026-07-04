@@ -310,6 +310,16 @@ RUN_CONCEPTS = {
                 'gaps': {'A-gap': 0.05, 'B-gap': 0.25, 'C-gap': 0.70}},
 }
 
+# Defensive counter-adaptation (Phase 1b): the D-coach reads the offense's run-
+# concept tendencies during the game and adjusts to take them away — lean on
+# draws and the D stops blitzing; lean on counters and it plays disciplined;
+# power/inside and it stacks the box; sweeps and it seals the edge. Applied inside
+# adjustDefensiveGameplan, gated by the D-coach's adaptability. Counter and sweep
+# pull aggressiveness in OPPOSITE directions, so a balanced ground game can't be
+# fully countered (the cat-and-mouse).
+DEF_COUNTER_STRENGTH = 0.6        # scales the whole counter adjustment
+DEF_COUNTER_MIN_RUNS = 5          # need this many run-concept samples before countering
+
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
 CLINCH_TOPSEED_REWARD = 50

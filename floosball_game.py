@@ -955,6 +955,11 @@ class Game:
         self.homeTurnoversTotal = 0
         self.awayTurnoversTotal = 0
 
+        # Run-concept usage per offense (cumulative) — the defense reads these
+        # tendencies and counters them (Phase 1b, see adjustDefensiveGameplan).
+        self.homeConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0}
+        self.awayConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0}
+
         # First-half tracking for halftime gameplan adjustments
         self.homeHalfRunPlays = 0
         self.homeHalfRunYards = 0
@@ -5045,9 +5050,11 @@ class Game:
                         homeCoach = getattr(self.homeTeam, 'coach', None)
                         awayCoach = getattr(self.awayTeam, 'coach', None)
                         adjustOffensiveGameplan(self.homeOffGameplan, homeCoach, homeOffStats)
-                        adjustDefensiveGameplan(self.homeDefGameplan, homeCoach, awayOffStats)
+                        adjustDefensiveGameplan(self.homeDefGameplan, homeCoach, awayOffStats,
+                                                oppConcepts=self.awayConceptCounts)
                         adjustOffensiveGameplan(self.awayOffGameplan, awayCoach, awayOffStats)
-                        adjustDefensiveGameplan(self.awayDefGameplan, awayCoach, homeOffStats)
+                        adjustDefensiveGameplan(self.awayDefGameplan, awayCoach, homeOffStats,
+                                                oppConcepts=self.homeConceptCounts)
 
                     # Halftime dampens momentum toward neutral. Streak is
                     # halved (truncated toward zero) rather than wiped — a
@@ -8350,6 +8357,7 @@ class Game:
             coach = getattr(team, 'coach', None)
             if coach is None or offPlan is None:
                 continue
+            oppConcepts = self.awayConceptCounts if team is self.homeTeam else self.homeConceptCounts
             # Attributes are 60-100. Only adaptable coaches re-plan mid-game:
             # adaptFactor 0 at 60 -> 1 at 100; below ~0.4 (adapt 76) they never do,
             # then the chance ramps to ~0.7 at max adaptability.
@@ -8365,7 +8373,7 @@ class Game:
                 continue
             if not sampleAware:
                 adjustOffensiveGameplan(offPlan, coach, offStats)
-                adjustDefensiveGameplan(defPlan, coach, oppOffStats)
+                adjustDefensiveGameplan(defPlan, coach, oppOffStats, oppConcepts=oppConcepts)
                 continue
             # Sample-aware: re-adjust each side only with enough plays to trust the
             # read, and shrink the correction toward zero on a thin sample.
@@ -8373,7 +8381,8 @@ class Game:
                 adjustOffensiveGameplan(offPlan, coach, offStats, confidence=_confidence(offPlays))
             oppPlays = oppOffStats['runPlays'] + oppOffStats['passAttempts']
             if oppPlays >= REPLAN_MIN_PLAYS:
-                adjustDefensiveGameplan(defPlan, coach, oppOffStats, confidence=_confidence(oppPlays))
+                adjustDefensiveGameplan(defPlan, coach, oppOffStats, confidence=_confidence(oppPlays),
+                                        oppConcepts=oppConcepts)
 
     def advanceQuarter(self):
         """Transition to next quarter"""
@@ -9803,6 +9812,9 @@ class Play():
         self.runConcept = conceptName
         self.conceptTelegraphed = False
         self.conceptEdge = 0.0
+        # Log this concept for the defense's tendency read (Phase 1b).
+        _cc = self.game.homeConceptCounts if isHomePossession else self.game.awayConceptCounts
+        _cc[conceptName] = _cc.get(conceptName, 0) + 1
         if RUN_CONCEPT_ENABLED:
             if scheme.get('blitzPackage') is not None:
                 effectiveRunDef *= (1 - RUN_VS_BLITZ_BONUS)   # vacated front — any run gashes it

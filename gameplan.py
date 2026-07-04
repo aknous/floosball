@@ -483,12 +483,16 @@ def adjustOffensiveGameplan(plan: OffensiveGameplan, coach, offStats: dict, conf
     plan.passDepthBias = float(np.clip(plan.passDepthBias + (target - plan.passDepthBias) * 0.6, 0.0, 1.0))
 
 
-def adjustDefensiveGameplan(plan: DefensiveGameplan, coach, oppOffStats: dict, confidence: float = 1.0) -> None:
+def adjustDefensiveGameplan(plan: DefensiveGameplan, coach, oppOffStats: dict, confidence: float = 1.0,
+                            oppConcepts: dict = None) -> None:
     """
     Mutate plan in-place based on what the opponent's offense did in the first half.
 
     oppOffStats keys: runPlays, runYards, passAttempts, passYards,
                       wr1Yards (optional), wr2Yards (optional)
+    oppConcepts: cumulative run-concept usage by the opponent offense
+                 {power, draw, counter, sweep} — the D-coach reads these
+                 tendencies and counters them (Phase 1b).
 
     `confidence` (0-1) scales every correction — the mid-game re-plan passes a
     sub-1.0 value when acting on a thin sample. Defaults to 1.0 (halftime call
@@ -498,6 +502,25 @@ def adjustDefensiveGameplan(plan: DefensiveGameplan, coach, oppOffStats: dict, c
         return
 
     adaptFactor = (coach.adaptability - RATING_SCALE_MIN) / RATING_RANGE  # 0.0 at 60, 1.0 at 100
+
+    # --- Counter the opponent's RUN-CONCEPT tendencies (playbook cat-and-mouse) ---
+    # Shift the plan toward what BEATS each concept the offense leans on, scaled by
+    # how adaptable the D-coach is. Draws punish the blitz -> blitz less; power/draws
+    # hit inside -> stack the box; counters punish over-pursuit -> play disciplined;
+    # sweeps need the edge sealed -> pursue harder. (counter vs sweep tug aggression
+    # opposite ways, so a mixed ground game can't be fully taken away.)
+    if oppConcepts:
+        from constants import DEF_COUNTER_STRENGTH, DEF_COUNTER_MIN_RUNS
+        _total = sum(oppConcepts.values())
+        if _total >= DEF_COUNTER_MIN_RUNS:
+            fdraw = oppConcepts.get('draw', 0) / _total
+            fcounter = oppConcepts.get('counter', 0) / _total
+            fsweep = oppConcepts.get('sweep', 0) / _total
+            fpower = oppConcepts.get('power', 0) / _total
+            a = adaptFactor * confidence * DEF_COUNTER_STRENGTH
+            plan.blitzFrequency = float(np.clip(plan.blitzFrequency - a * fdraw * 0.9, 0.05, 0.50))
+            plan.runStopFocus = float(np.clip(plan.runStopFocus + a * (fpower + fdraw * 0.5) * 0.7, 0.20, 0.80))
+            plan.aggressiveness = float(np.clip(plan.aggressiveness + a * (fsweep - fcounter) * 0.8, 0.0, 1.0))
 
     oppYPC = oppOffStats['runYards'] / max(1, oppOffStats['runPlays'])
     oppYPA = oppOffStats['passYards'] / max(1, oppOffStats['passAttempts'])
