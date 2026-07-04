@@ -9758,10 +9758,18 @@ class Play():
         # Determine designed play gap — weighted by coach's offensive gameplan
         isHomePossession = (self.game.offensiveTeam == self.game.homeTeam)
         activeOffGameplan = self.game.homeOffGameplan if isHomePossession else self.game.awayOffGameplan
+        # The called run CONCEPT steers which gap it attacks so the narrated
+        # direction matches the play (dives inside, sweeps to the edge). Falls
+        # back to the coach's gap tendencies when concepts are off.
+        from constants import RUN_CONCEPT_ENABLED as _RC_ON, RUN_CONCEPTS as _RCS
+        _conceptName = getattr(self, 'runConcept', None)
+        _conceptGaps = _RCS.get(_conceptName, {}).get('gaps') if _RC_ON else None
         if activeOffGameplan is not None:
-            gapDist = dict(activeOffGameplan.gapDistribution)
-            # Short yardage / goal line: power inside
-            if self.game.yardsToFirstDown <= 2 or self.game.yardsToEndzone <= 5:
+            gapDist = dict(_conceptGaps) if _conceptGaps else dict(activeOffGameplan.gapDistribution)
+            # Short yardage / goal line: power inside — but a deliberately-called
+            # perimeter concept (a called sweep on the goal line) stays true to itself.
+            if ((self.game.yardsToFirstDown <= 2 or self.game.yardsToEndzone <= 5)
+                    and _conceptName in (None, 'power')):
                 gapDist = {'A-gap': 0.60, 'B-gap': 0.30, 'C-gap': 0.10}
             designedGapType = _random.choices(
                 list(gapDist.keys()), weights=list(gapDist.values()), k=1

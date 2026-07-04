@@ -292,16 +292,22 @@ RUN_VS_BLITZ_BONUS = 0.12         # realism fix: ANY run vs an active blitz gash
 # Per concept: `deception` (0=execution-flat like power, ~0.8=swings hard on execution),
 # `exec` (player-attribute weights for the execution roll, summing ~1),
 # `edge` (matchup vs the live defensive scheme: blitz on/off, runStopFocus dev from 0.5,
-#         aggressiveness dev from 0.5). base = baseline call propensity before coach/personnel/read.
+#         aggressiveness dev from 0.5), `gaps` (which run gap the concept attacks, so the
+#         narrated direction matches the concept — dives go inside, sweeps go to the edge).
+# base = baseline call propensity before coach/personnel/read.
 RUN_CONCEPTS = {
     'power':   {'base': 0.46, 'deception': 0.10, 'exec': {'power': 0.6, 'discipline': 0.4},
-                'edge': {'blitz': 0.00, 'runFocus': -0.35, 'aggr': 0.00}},
+                'edge': {'blitz': 0.00, 'runFocus': -0.35, 'aggr': 0.00},
+                'gaps': {'A-gap': 0.60, 'B-gap': 0.30, 'C-gap': 0.10}},
     'draw':    {'base': 0.16, 'deception': 0.80, 'exec': {'creativity': 0.4, 'focus': 0.3, 'vision': 0.3},
-                'edge': {'blitz': 0.45, 'runFocus': -0.45, 'aggr': 0.10}},
+                'edge': {'blitz': 0.45, 'runFocus': -0.45, 'aggr': 0.10},
+                'gaps': {'A-gap': 0.45, 'B-gap': 0.40, 'C-gap': 0.15}},
     'counter': {'base': 0.16, 'deception': 0.70, 'exec': {'agility': 0.5, 'creativity': 0.5},
-                'edge': {'blitz': 0.10, 'runFocus': -0.10, 'aggr': 0.55}},
+                'edge': {'blitz': 0.10, 'runFocus': -0.10, 'aggr': 0.55},
+                'gaps': {'A-gap': 0.15, 'B-gap': 0.45, 'C-gap': 0.40}},
     'sweep':   {'base': 0.22, 'deception': 0.40, 'exec': {'speed': 0.4, 'agility': 0.3, 'blocking': 0.3},
-                'edge': {'blitz': 0.05, 'runFocus': 0.35, 'aggr': -0.45}},
+                'edge': {'blitz': 0.05, 'runFocus': 0.35, 'aggr': -0.45},
+                'gaps': {'A-gap': 0.05, 'B-gap': 0.25, 'C-gap': 0.70}},
 }
 
 # Floobits Economy — earning amounts
