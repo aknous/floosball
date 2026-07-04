@@ -4188,25 +4188,25 @@ class Game:
         # Blitz callout — only when the blitz actually put pressure on the QB
         # (sack, or defense winning the rush matchup). Pass plays only; runs
         # don't have a QB facing pressure even if a blitz was called.
-        # Run-concept flavor: name the concept (playbook variety) and call out
-        # the deception outcome — did it fool the defense or get telegraphed?
+        # Run-concept flavor: weave the concept into the sentence (playbook variety)
+        # and let the verb carry the deception outcome — sold, telegraphed, or clean.
+        # E.g. "Jett Duke takes the draw handoff and runs wide for 5 yards."
         # 'power' is the vanilla default and stays unnarrated; scrambles excluded.
         if (text and self.play.playType is PlayType.Run
-                and not getattr(self.play, 'isScramble', False)):
+                and not getattr(self.play, 'isScramble', False)
+                and getattr(self.play, 'runner', None) is not None):
             _concept = getattr(self.play, 'runConcept', 'power')
-            _leads = {
-                'draw': ['Draw play', 'On the draw', 'Draw handoff'],
-                'counter': ['Counter', 'Counter run', 'Misdirection, counter'],
-                'sweep': ['Sweep', 'On the sweep', 'Toss sweep'],
-            }.get(_concept)
-            if _leads:
-                _lead = choice(_leads)
+            _phrase = {'draw': 'draw handoff', 'counter': 'counter', 'sweep': 'pitch'}.get(_concept)
+            if _phrase:
                 if getattr(self.play, 'conceptTelegraphed', False):
-                    text = '{}, but the defense reads it. {}'.format(_lead, text)
+                    _verb = 'telegraphs the'          # defense read it
                 elif getattr(self.play, 'conceptEdge', 0.0) > 0.12 and self.play.yardage >= 6:
-                    text = '{}, and the fake works. {}'.format(_lead, text)
+                    _verb = 'sells the'               # the fake works
                 else:
-                    text = '{}. {}'.format(_lead, text)
+                    _verb = 'takes the'
+                _name = self.play.runner.name
+                _leadIn = '{} {} {} and '.format(_name, _verb, _phrase)
+                text = (_leadIn + text[len(_name) + 1:]) if text.startswith(_name + ' ') else (_leadIn + text)
 
         if text and self.play.blitzKind and self.play.playType == PlayType.Pass:
             pressureFelt = (
