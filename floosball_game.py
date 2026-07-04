@@ -3191,6 +3191,22 @@ class Game:
             self.play.insights['passConcept'] = self.play.passConcept
             self.play.passPlay(self._selectPassPlay(playCall))
 
+    def _isHurryUp(self) -> bool:
+        """The offense is racing the clock — a 2-minute drill trailing in Q4, or an
+        end-of-half push in Q2. In hurry-up you want quick, decisive plays; fakes
+        and reads that eat seconds (play-action, RPO, the delayed draw) are off."""
+        if getattr(self, 'isOvertime', False):
+            return False
+        q = self.currentQuarter
+        secs = self.gameClockSeconds
+        isHome = self.offensiveTeam is self.homeTeam
+        sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        if q == 4 and sd <= 0 and secs <= 150 and not self._isGarbageTime(sd):
+            return True                       # 2-minute drill: need to score, no clock to waste
+        if q == 2 and secs <= 120 and sd < 14:
+            return True                       # end-of-half push: score before the break
+        return False
+
     def _selectRunConcept(self) -> str:
         """The COACH's call: pick the run concept that fits his personnel + the
         expected defense. Weighted by (1) the coach's lean toward deception
@@ -3214,11 +3230,15 @@ class Game:
         decLean = max(0.0, ((offMind - 80) + (aggrC - 80)) / 40.0)   # 0 neutral -> ~1 both high
         scoutRead = max(0.0, (scouting - 60) / 40.0)                  # 0-1
         bf = getattr(defGameplan, 'blitzFrequency', 0.25) if defGameplan is not None else 0.25
+        hurry = self._isHurryUp()
         weights = {}
         for name, c in RUN_CONCEPTS.items():
             w = c['base']
             if shortYardage:
                 w *= 2.4 if name == 'power' else 0.35   # power territory
+            if hurry:
+                # racing the clock: no delayed draw; a sweep can get out of bounds
+                w *= {'draw': 0.08, 'counter': 0.4, 'sweep': 1.3}.get(name, 1.0)
             w *= 1 + decLean * c['deception']            # coach calls more deception
             if rb is not None:
                 w *= 0.55 + _runConceptExecQ(rb, name)   # personnel fit (0.55-1.55)
@@ -3239,6 +3259,8 @@ class Game:
         from constants import PLAY_ACTION_ENABLED
         if not PLAY_ACTION_ENABLED or tier == 'short':
             return False
+        if self._isHurryUp():
+            return False   # no time to sell a fake in a 2-minute drill
         coach = getattr(self.offensiveTeam, 'coach', None)
         isHome = self.offensiveTeam is self.homeTeam
         defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
@@ -3263,6 +3285,8 @@ class Game:
             return False
         if self.yardsToFirstDown <= 2 or self.yardsToEndzone <= 3:
             return False   # short-yardage / goal line is downhill power, not RPO
+        if self._isHurryUp():
+            return False   # the read-and-give burns clock — go straight dropback in hurry-up
         qb = self.offensiveTeam.rosterDict.get('qb')
         if qb is None:
             return False
