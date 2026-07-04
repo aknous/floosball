@@ -3171,7 +3171,14 @@ class Game:
         )[0]
 
         self.play.insights['playCall'] = playCall
+        # Reset per-play RPO state (set only by _executeRpo below).
+        self.play.isRpo = False
+        self.play._rpoOpennessBonus = 0.0
+        self.play._rpoRunRelief = 0.0
 
+        if playCall == 'run' and self._selectRpo():
+            self._executeRpo()
+            return
         if playCall == 'run':
             self.play.runConcept = self._selectRunConcept()
             self.play.insights['runConcept'] = self.play.runConcept
@@ -3246,6 +3253,67 @@ class Game:
         p += max(0.0, (scouting - 60) / 40.0) * (runFocus - 0.5) * 0.6   # read a run-keying D
         p *= 0.7 + max(0.0, (offMind - 60) / 40.0) * 0.6                 # good minds use it more
         return _random.random() < max(0.0, min(0.6, p))
+
+    def _selectRpo(self) -> bool:
+        """Does the coach call an RPO on this run look? Needs a QB who can read the
+        box and throw on the move (instinct/vision/agility), a coach who uses it
+        (offensiveMind), and a normal down (not short-yardage power / desperation)."""
+        from constants import RPO_ENABLED, RPO_QB_FIT
+        if not RPO_ENABLED:
+            return False
+        if self.yardsToFirstDown <= 2 or self.yardsToEndzone <= 3:
+            return False   # short-yardage / goal line is downhill power, not RPO
+        qb = self.offensiveTeam.rosterDict.get('qb')
+        if qb is None:
+            return False
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        qa = getattr(qb, 'gameAttributes', None) or qb.attributes
+        fit = max(0.0, min(1.0, (sum(getattr(qa, a, 70) * w for a, w in RPO_QB_FIT.items()) - 60) / 40.0))
+        offMind = getattr(coach, 'offensiveMind', 80) if coach else 80
+        p = (0.06 + 0.20 * fit) * (0.7 + max(0.0, (offMind - 60) / 40.0) * 0.6)
+        return _random.random() < max(0.0, min(0.30, p))
+
+    def _executeRpo(self):
+        """Read the box pre-snap and branch: loaded front -> pull it and throw a
+        quick pass into the vacated coverage; light box -> hand it off. The QB's
+        read skill decides whether he picks right; a correct read gets the numbers
+        advantage (a modest relief on the chosen option)."""
+        from constants import (RPO_LOADED_RUNFOCUS, RPO_READ_BASE, RPO_READ_SKILL,
+                               RPO_BONUS, RPO_OPENNESS, RPO_EXEC)
+        isHome = self.offensiveTeam is self.homeTeam
+        defGameplan = self.awayDefGameplan if isHome else self.homeDefGameplan
+        if GAMEPLAN_AVAILABLE and defGameplan is not None:
+            sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+            scheme = getDefensiveScheme(defGameplan, self.down, self.yardsToFirstDown,
+                                        100 - self.yardsToEndzone, sd,
+                                        self.currentQuarter, self.gameClockSeconds)
+        else:
+            scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
+        runFocus = getattr(defGameplan, 'runStopFocus', 0.5) if defGameplan is not None else 0.5
+        loaded = (runFocus >= RPO_LOADED_RUNFOCUS) or (scheme.get('blitzPackage') is not None)
+        qb = self.offensiveTeam.rosterDict.get('qb')
+        qa = getattr(qb, 'gameAttributes', None) or qb.attributes
+        readQ = max(0.0, min(1.0, (sum(getattr(qa, a, 70) * w for a, w in RPO_EXEC.items()) - 60) / 40.0))
+        correct = _random.random() < (RPO_READ_BASE + RPO_READ_SKILL * readQ)
+        throw = loaded if correct else (not loaded)   # right read exploits the box; a misread feeds its strength
+        self.play._preRolledScheme = scheme
+        self.play.isRpo = True
+        self.play.rpoThrow = throw
+        self.play.rpoCorrect = correct
+        self.play.insights['rpo'] = {'read': 'pass' if throw else 'run', 'correct': correct}
+        self.play._rpoOpennessBonus = 0.0
+        self.play._rpoRunRelief = 0.0
+        if throw:
+            self.play.playAction = False
+            self.play.passConcept = 'standard'
+            if correct:
+                self.play._rpoOpennessBonus = RPO_OPENNESS   # box loaded -> coverage thin, quick throw open
+            self.play.passPlay(self._selectPassPlay('short'))
+        else:
+            self.play.runConcept = 'power'
+            if correct:
+                self.play._rpoRunRelief = RPO_BONUS          # ball into a light box
+            self.play.runPlay()
 
     def _selectPassConcept(self, tier: str) -> str:
         """The coach's route-concept call: read the defense's coverage tendency and
@@ -4303,6 +4371,17 @@ class Game:
                 _pn2 = self.play.passer.name
                 if text.startswith(_pn2 + ' '):
                     text = '{} {} {}'.format(_pn2, _lead2, text[len(_pn2) + 1:]).replace(' and and ', ' and ')
+
+        # RPO flavor — the QB read the box and chose the give or the pull.
+        if text and getattr(self.play, 'isRpo', False):
+            if self.play.playType is PlayType.Run and getattr(self.play, 'runner', None) is not None:
+                _rn3 = self.play.runner.name
+                if text.startswith(_rn3 + ' '):
+                    text = '{} takes the give on the RPO and {}'.format(_rn3, text[len(_rn3) + 1:]).replace(' and and ', ' and ')
+            elif self.play.playType is PlayType.Pass and getattr(self.play, 'passer', None) is not None:
+                _pn3 = self.play.passer.name
+                if text.startswith(_pn3 + ' '):
+                    text = '{} reads the box, pulls it and {}'.format(_pn3, text[len(_pn3) + 1:]).replace(' and and ', ' and ')
 
         if text and self.play.blitzKind and self.play.playType == PlayType.Pass:
             pressureFelt = (
@@ -9879,7 +9958,10 @@ class Play():
 
         # Get per-play defensive scheme multipliers
         defGameplan = self.game.awayDefGameplan if isHomePossession else self.game.homeDefGameplan
-        if GAMEPLAN_AVAILABLE and defGameplan is not None:
+        if getattr(self, '_preRolledScheme', None) is not None:
+            scheme = self._preRolledScheme   # RPO already rolled + read this scheme pre-snap
+            self._preRolledScheme = None
+        elif GAMEPLAN_AVAILABLE and defGameplan is not None:
             offScoreDiff = (self.game.homeScore - self.game.awayScore if isHomePossession
                             else self.game.awayScore - self.game.homeScore)
             scheme = getDefensiveScheme(
@@ -9919,6 +10001,12 @@ class Play():
             self.conceptTelegraphed = (d >= 0.5 and execQ < 0.35 and edge > 0)
             self.insights['runConcept'] = conceptName
             self.insights['conceptEdge'] = round(realizedEdge, 3)
+
+        # RPO give into a correctly-read light box — the numbers favor the run.
+        _rpoRelief = getattr(self, '_rpoRunRelief', 0.0)
+        if _rpoRelief:
+            effectiveRunDef *= (1 - _rpoRelief)
+            self._rpoRunRelief = 0.0
 
         # Track first-half run plays for halftime adjustment
         if self.game.currentQuarter <= 2:
@@ -10568,6 +10656,7 @@ class Play():
         # standard dropbacks / when the fake or concept didn't beat the look.
         meanOpenness += getattr(self, '_paOpennessBonus', 0.0)
         meanOpenness += getattr(self, '_passConceptOpennessBonus', 0.0)
+        meanOpenness += getattr(self, '_rpoOpennessBonus', 0.0)   # RPO throw into a vacated box
         meanOpenness = max(10, min(90, meanOpenness))  # Clamp to reasonable range
 
         # Standard deviation - better receivers have more consistent separation
@@ -10931,7 +11020,10 @@ class Play():
         # Get per-play defensive scheme multipliers
         isHomePossession = (self.game.offensiveTeam == self.game.homeTeam)
         defGameplan = self.game.awayDefGameplan if isHomePossession else self.game.homeDefGameplan
-        if GAMEPLAN_AVAILABLE and defGameplan is not None:
+        if getattr(self, '_preRolledScheme', None) is not None:
+            scheme = self._preRolledScheme   # RPO already rolled + read this scheme pre-snap
+            self._preRolledScheme = None
+        elif GAMEPLAN_AVAILABLE and defGameplan is not None:
             offScoreDiff = (self.game.homeScore - self.game.awayScore if isHomePossession
                             else self.game.awayScore - self.game.homeScore)
             scheme = getDefensiveScheme(

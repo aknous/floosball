@@ -361,6 +361,24 @@ PASS_CONCEPTS = {
     'screen':   {'base': 0.15, 'beats': 'blitz'},
 }
 
+# ---------------------------------------------------------------------------
+# RPO — run-pass option (Phase 2, see docs/PLAYBOOK_PLAN.md)
+# ---------------------------------------------------------------------------
+# A run look where the QB reads the box AT THE SNAP and either hands it off (into
+# a light box) or pulls it and throws a quick pass (into the box a loaded front
+# vacated). The offense always has the numbers IF the QB reads it right — so the
+# value is the READ (gated by QB instinct/vision), not a big per-play bonus. The
+# defensive scheme is rolled pre-snap (in _executeRpo) and reused by the resolver.
+RPO_ENABLED = True
+RPO_LOADED_RUNFOCUS = 0.63        # runStopFocus above this (or a blitz) = a genuinely loaded box -> throw;
+                                  # otherwise the give is the default (keeps RPOs run-first, not pass-heavy)
+RPO_READ_BASE = 0.55             # base chance the QB reads the box correctly
+RPO_READ_SKILL = 0.40            # + up to this from QB read skill (instinct/vision) -> ~0.95 for an elite QB
+RPO_BONUS = 0.14                 # relief for the CORRECT option (run vs light box / pass vs vacated coverage)
+RPO_OPENNESS = 16                # receiver openness points on a correctly-read RPO throw
+RPO_EXEC = {'instinct': 0.5, 'vision': 0.5}   # QB reads the box
+RPO_QB_FIT = {'instinct': 0.35, 'vision': 0.3, 'agility': 0.35}  # which QBs run RPOs well
+
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
 CLINCH_TOPSEED_REWARD = 50
