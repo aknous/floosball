@@ -311,6 +311,13 @@ EFFECT_EDITION_TIER = {
 _BAL_FP_MULT  = 0.5    # scales FP outputs (chips) added by the Balatro pass
 _BAL_FPX_MULT = 0.5    # scales FPx deltas (multiplier portions) added by the Balatro pass
 
+# Rookie Hype pays flat FP per rookie in the fantasy lineup, uncapped by roster
+# size — so a rookie-stacked lineup could multiply it past any tier ceiling, and
+# legacy cards carry mis-scaled per-rookie values (~40-57). Cap the TOTAL payout
+# to the holographic-tier band so both new and old cards stay bounded (a full
+# ~4-rookie stack at the current per-rookie value lands right at the cap).
+_ROOKIE_HYPE_MAX_FP = 22.0
+
 
 # ─── Position Conditionals (same as current system) ─────────────────────────
 
@@ -1327,7 +1334,11 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "patient":
         return {"baseFP": round((10.2 + rn * 0.27) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "rookie_hype":
-        return {"perRookieFP": round((75.0 + rn * 2.0) * editionScale * _BAL_FP_MULT, 1)}
+        # Per-rookie flat FP. Calibrated (against the dampened rating rn) to ~5.5
+        # at a mid holo rating, ranging ~4.5-6.8 — in line with sibling per-count
+        # effects (Wanderer) and the holo tier. Old constant (75 + rn*2) produced
+        # a broken ~40-57/rookie. Total is capped at _ROOKIE_HYPE_MAX_FP at compute.
+        return {"perRookieFP": round((8.4 + rn * 0.27) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "wanderer":
         return {"perTeamFP": round((12.9 + rn * 0.34) * editionScale * _BAL_FP_MULT, 1)}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"baseFP": round(13.5 * editionScale * _BAL_FP_MULT, 1)}
@@ -2834,8 +2845,12 @@ def _computeRookieHype(primary, ctx, cardPlayerId, eqId):
                 if rookieFlags.get(pid))
     if count == 0:
         return EffectResult(equation="No rookies on roster")
-    fp = round(perRookieFP * count, 1)
-    eq = f"+{perRookieFP}/rookie × {count} = +{fp} FP"
+    raw = round(perRookieFP * count, 1)
+    fp = min(raw, _ROOKIE_HYPE_MAX_FP)
+    if fp < raw:
+        eq = f"+{perRookieFP}/rookie × {count} = +{raw} → capped at +{fp} FP"
+    else:
+        eq = f"+{perRookieFP}/rookie × {count} = +{fp} FP"
     return EffectResult(fpBonus=fp, equation=eq)
 
 
