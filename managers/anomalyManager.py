@@ -717,10 +717,23 @@ def _applyWeeklyContributions(session: Session, seasonNumber: int, week: int) ->
         deltas[f.player_id] = deltas.get(f.player_id, 0.0) + ATTENTION_PER_FOLLOWER
 
     # ── Favorite-team fan presence ──
-    # Each user with a favorite team contributes a small drip to every
-    # active player on that team. Diffuse but accumulates.
+    # Each user with a favorite team contributes a small drip to every player
+    # on that team. Diffuse but accumulates. Count only ACTIVE fans — users who
+    # logged in within the activity window — so a historically-popular team's
+    # long-dormant fanbase doesn't hand its whole roster a permanent awakening
+    # faucet (all-time fan count tracks past success → rich-get-richer). Same
+    # recency rule _countActiveUsers uses for the Criticality threshold. Fast/sim
+    # mode keeps counting all: sim users never log in, and sims lean on cards/
+    # fantasy for attention anyway.
     favTeamCounts: Dict[int, int] = {}
-    for u in session.query(User).filter(User.favorite_team_id.isnot(None)).all():
+    favQuery = session.query(User).filter(User.favorite_team_id.isnot(None))
+    if not _ANOMALY_FAST:
+        from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
+        cutoff = datetime.utcnow() - timedelta(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
+        favQuery = favQuery.filter(
+            User.last_login_at.isnot(None), User.last_login_at >= cutoff,
+        )
+    for u in favQuery.all():
         favTeamCounts[u.favorite_team_id] = favTeamCounts.get(u.favorite_team_id, 0) + 1
     if favTeamCounts:
         # Find players on those teams.
