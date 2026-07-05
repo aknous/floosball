@@ -389,7 +389,7 @@ RPO_QB_FIT = {'instinct': 0.35, 'vision': 0.3, 'agility': 0.35}  # which QBs run
 # tendency, in a manageable field-position band, NOT in hurry-up / short-yardage /
 # red zone / backed up, and NOT as a desperation heave (called shots only).
 TRICK_PLAY_ENABLED = True
-TRICK_PLAY_BASE = 0.11            # base rate for a max-aggressive coach in an ideal spot (scaled way down)
+TRICK_PLAY_BASE = 0.02            # base rate for a max-aggressive coach in an ideal spot (per-eligible-play; rolls compound over a game, so kept low — gadgets are a rare called shot, a few per team per SEASON)
 TRICK_FIELD_MIN_YTE = 21         # not in the red zone (yardsToEndzone must exceed this)
 TRICK_FIELD_MAX_YTE = 85         # not backed up in own territory (must be at/under this)
 # resolves: 'run'|'pass'; trigger: which D commitment it beats; exec: the key

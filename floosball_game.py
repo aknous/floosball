@@ -3387,17 +3387,17 @@ class Game:
         # Centered near the league-average tendencies (aggr ~0.45) so statue/reverse
         # are reachable, not just flea flicker.
         scores = {
-            'flea_flicker': max(0.0, (runFocus - 0.5) * 1.7),   # a run-committed D bites the fake
-            'statue': max(0.0, blitzF * 1.8),                   # a BLITZ flies upfield (blitz-driven)
-            'reverse': max(0.0, (aggrD - 0.48) * 2.6),          # over-PURSUIT (aggression-driven)
+            'flea_flicker': max(0.0, (runFocus - 0.5) * 1.9),   # a run-committed D bites the fake
+            'statue': max(0.0, (blitzF - 0.16) * 1.9),          # a BLITZ flies upfield (blitz-driven)
+            'reverse': max(0.0, (aggrD - 0.55) * 1.9),          # over-PURSUIT (aggression-driven)
         }
         best = max(scores, key=scores.get)
-        if scores[best] < 0.06:
-            return None    # no favorable tendency to exploit — don't gadget for its own sake
+        if scores[best] < 0.10:
+            return None    # no clear tendency to exploit — don't gadget for its own sake
         scouting = getattr(coach, 'scouting', 80) if coach else 80
         scoutRead = max(0.0, (scouting - 60) / 40.0)
         p = TRICK_PLAY_BASE * aggrLean * (0.4 + 0.6 * scoutRead) * min(1.5, scores[best] * 4)
-        return best if _random.random() < min(0.16, p) else None
+        return best if _random.random() < min(0.04, p) else None
 
     def _executeTrickPlay(self, trick: str):
         """Resolve a trick: roll the scheme, check whether the defensive commitment
@@ -4541,10 +4541,11 @@ class Game:
                 and not getattr(self.play, 'playAction', False)
                 and not getattr(self.play, 'checkdownReason', None)
                 and getattr(self.play, 'passer', None) is not None):
-            # Describe the ACTION (not just the concept name) so the play-by-play
-            # reads clearly for any fan — mesh = crossing routes, flood = overload.
+            # Light, natural receiver-action flavor only — mesh = crossing routes,
+            # screen = the quick throw. The scheme detail (incl. flood/overload,
+            # which reads as coordinator jargon) lives in the Play Insights "Play
+            # Design" row, not the play-by-play.
             _lead2 = {'mesh': 'works the crossing routes and',
-                      'flood': 'reads the overloaded side and',
                       'screen': 'sets up a screen and'}.get(getattr(self.play, 'passConcept', 'standard'))
             if _lead2:
                 _pn2 = self.play.passer.name
