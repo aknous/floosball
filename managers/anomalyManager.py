@@ -183,10 +183,12 @@ THRESHOLD_JITTER = 0.10
 # is floored league-wide.
 SUPPRESSION_WINDOW_WEEKS = 2
 
-# Threshold change applied after a Criticality fires. Held at 1.0 (no change): the old <1.0 value
-# LOWERED the bar after each event, making repeats progressively EASIER — backwards for pacing a rare
-# event (the aggregate already re-crosses every ~2-3 weeks). Pacing now lives in CRITICALITY_FIRE_CHANCE.
-THRESHOLD_DECAY_AFTER_CRITICALITY = 1.0
+# Threshold change applied after a Criticality fires. >1.0 RAISES the bar after each event so the next
+# one needs a fresh, longer buildup — the aggregate otherwise re-crosses every ~2-3 weeks and criticalities
+# bunch up. (An old <1.0 value LOWERED it, making repeats progressively EASIER — backwards.) Works with
+# CRITICALITY_FIRE_CHANCE (fire-vs-suppress odds) + RESET_SURVIVOR_ATTENTION_SCALE (rebuild speed) to space
+# events out. 1.25 = each fired Criticality lifts the bar 25%.
+THRESHOLD_DECAY_AFTER_CRITICALITY = 1.25
 
 # With the feature enabled, a threshold crossing does NOT automatically fire a Criticality. The
 # aggregate hits the bar roughly every 2-3 weeks, so firing on every crossing yields ~7-12/season —
@@ -251,8 +253,11 @@ PARTIALLY_AWARE_PERSONALITIES = {'paranoid', 'mystic'}
 RESET_AGGREGATE_SCALE = 0.2
 
 # After a Reset, surviving (non-purged) Awakened players drop to Rampant
-# state and have their attention halved. Their ability is retained.
-RESET_SURVIVOR_ATTENTION_SCALE = 0.5
+# state and have their attention knocked down. Their ability is retained. Lower =
+# survivors fall further below the cap, so the aggregate takes longer to re-climb
+# (they must re-earn attention before their over-cap carry resumes feeding it) —
+# the main lever against criticalities re-firing back-to-back. 0.3 = knock to 30%.
+RESET_SURVIVOR_ATTENTION_SCALE = 0.3
 
 # Post-Reset suppression window — the Cores actively dampen anomaly
 # rates league-wide for this many weeks. During suppression, no Criticality
