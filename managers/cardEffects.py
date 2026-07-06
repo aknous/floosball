@@ -312,11 +312,11 @@ _BAL_FP_MULT  = 0.5    # scales FP outputs (chips) added by the Balatro pass
 _BAL_FPX_MULT = 0.5    # scales FPx deltas (multiplier portions) added by the Balatro pass
 
 # Rookie Hype pays flat FP per rookie in the fantasy lineup, uncapped by roster
-# size — so a rookie-stacked lineup could multiply it past any tier ceiling, and
-# legacy cards carry mis-scaled per-rookie values (~40-57). Cap the TOTAL payout
-# to the holographic-tier band so both new and old cards stay bounded (a full
-# ~4-rookie stack at the current per-rookie value lands right at the cap).
-_ROOKIE_HYPE_MAX_FP = 22.0
+# size. It is intentionally left uncapped: rookies are usually weak, low-FP
+# players, so a rare rookie-stacked lineup that pushes past the holo-tier ceiling
+# is compensating for the meager base production those players contribute. The
+# per-rookie value (~8.0, see _buildCrossPositionParams) is intentionally strong
+# for the tier so that rostering usually-weak rookies is worthwhile.
 
 
 # ─── Position Conditionals (same as current system) ─────────────────────────
@@ -1334,11 +1334,13 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     if effectName == "patient":
         return {"baseFP": round((10.2 + rn * 0.27) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "rookie_hype":
-        # Per-rookie flat FP. Calibrated (against the dampened rating rn) to ~5.5
-        # at a mid holo rating, ranging ~4.5-6.8 — in line with sibling per-count
-        # effects (Wanderer) and the holo tier. Old constant (75 + rn*2) produced
-        # a broken ~40-57/rookie. Total is capped at _ROOKIE_HYPE_MAX_FP at compute.
-        return {"perRookieFP": round((8.4 + rn * 0.27) * editionScale * _BAL_FP_MULT, 1)}
+        # Per-rookie flat FP. Calibrated (against the dampened rating rn) to ~8.0
+        # at a mid holo rating, ranging ~7.9-8.1. Deliberately generous for the
+        # tier — rookies are usually weak, low-FP players, so a strong per-rookie
+        # payout is what makes rostering them worthwhile. Old constant (75 + rn*2)
+        # produced a broken ~40-57/rookie. Uncapped by design (a rare rookie stack
+        # overshooting the holo ceiling makes up for weak base production).
+        return {"perRookieFP": round((13.7 + rn * 0.27) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "wanderer":
         return {"perTeamFP": round((12.9 + rn * 0.34) * editionScale * _BAL_FP_MULT, 1)}
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"baseFP": round(13.5 * editionScale * _BAL_FP_MULT, 1)}
@@ -2845,12 +2847,8 @@ def _computeRookieHype(primary, ctx, cardPlayerId, eqId):
                 if rookieFlags.get(pid))
     if count == 0:
         return EffectResult(equation="No rookies on roster")
-    raw = round(perRookieFP * count, 1)
-    fp = min(raw, _ROOKIE_HYPE_MAX_FP)
-    if fp < raw:
-        eq = f"+{perRookieFP}/rookie × {count} = +{raw} → capped at +{fp} FP"
-    else:
-        eq = f"+{perRookieFP}/rookie × {count} = +{fp} FP"
+    fp = round(perRookieFP * count, 1)
+    eq = f"+{perRookieFP}/rookie × {count} = +{fp} FP"
     return EffectResult(fpBonus=fp, equation=eq)
 
 
