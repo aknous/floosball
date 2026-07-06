@@ -9506,16 +9506,23 @@ class Game:
         carrier = p.runner if playType is PlayType.Run else getattr(p, 'receiver', None)
         if carrier is None or getattr(carrier, 'id', None) is None:
             return
-        if self._anomalyState.get(carrier.id, 'stable') not in ('rampant', 'awakened'):
-            return
-        if self._anomalyAttention.get(carrier.id, 0.0) <= 0:
+        # Who can warp reality? Normally only CULTIVATED players — rampant/awakened
+        # with attention. DURING A CRITICALITY the break is league-wide: ANY carrier
+        # can glitch (the parity floor, so every team is in the chaos, not just the
+        # teams that happened to have awakened players). Cultivated players still fire
+        # at the full rate; everyone else fires at a muted fraction — the retained edge
+        # for players fans actually built up. (This layer is already two-sided:
+        # helpful surge vs stumble, so broad glitching adds variance, not free wins.)
+        _cultivated = (self._anomalyState.get(carrier.id, 'stable') in ('rampant', 'awakened')
+                       and self._anomalyAttention.get(carrier.id, 0.0) > 0)
+        if not self._criticalityActive and not _cultivated:
             return
 
         from constants import (ANOMALY_GLITCH_MAX_PER_GAME, ANOMALY_GLITCH_COOLDOWN_PLAYS,
                                ANOMALY_L3_TRIGGER_PROB, ANOMALY_L3_HELP_CHANCE,
                                ANOMALY_L3_POS_YARDS, ANOMALY_L3_NEG_YARDS,
                                ANOMALY_L3_MAX_NEG_PER_TEAM, ANOMALY_L3_LATE_QUARTER,
-                               ANOMALY_L3_CLOSE_MARGIN)
+                               ANOMALY_L3_CLOSE_MARGIN, CRITICALITY_L3_FLOOR_FRACTION)
         # Per-game hygiene: shared cap + cooldown with the cosmetic layers.
         # Cap scales with the runtime intensity knob, matching _maybeFireAnomalies.
         glitchCap = max(1, round(ANOMALY_GLITCH_MAX_PER_GAME * self._anomalyIntensity))
@@ -9525,7 +9532,10 @@ class Game:
         if (playNum is not None
                 and playNum - self._lastGlitchPlayNumber < ANOMALY_GLITCH_COOLDOWN_PLAYS):
             return
-        if _random.random() >= ANOMALY_L3_TRIGGER_PROB * self._criticalityMultiplier * self._anomalyIntensity:
+        _triggerProb = ANOMALY_L3_TRIGGER_PROB * self._criticalityMultiplier * self._anomalyIntensity
+        if self._criticalityActive and not _cultivated:
+            _triggerProb *= CRITICALITY_L3_FLOOR_FRACTION   # baseline chaos for the non-cultivated
+        if _random.random() >= _triggerProb:
             return
 
         helpful = _random.random() < ANOMALY_L3_HELP_CHANCE

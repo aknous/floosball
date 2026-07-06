@@ -1383,6 +1383,11 @@ ANOMALY_L3_NEG_YARDS = (2, 5)        # stumble loss range (field position only)
 ANOMALY_L3_MAX_NEG_PER_TEAM = 1      # cap stumbles per team per game
 ANOMALY_L3_LATE_QUARTER = 4          # Q4+ counts as "late"
 ANOMALY_L3_CLOSE_MARGIN = 8          # within this margin in a late game → no stumbles
+# During a Criticality the mechanical glitch spreads league-wide: ANY carrier can
+# warp (parity — every team is in the chaos), but non-cultivated players (not
+# rampant/awakened) fire at this fraction of the full rate, so genuinely-awakened
+# players still trigger more (the retained edge). 1.0 = full parity, 0 = old behavior.
+CRITICALITY_L3_FLOOR_FRACTION = 0.4
 
 REACTION_TARGET_TYPES = {"play", "sideline_quote"}
 
