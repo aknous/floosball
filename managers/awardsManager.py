@@ -90,6 +90,21 @@ class AwardsManager:
             return 0
         return self.playerManager._computeHofPoints(player)[0]
 
+    def _isRetiringOrRetired(self, player) -> bool:
+        """A HoF candidate must actually be leaving the field. True if the player
+        is locked to retire (`willRetire`, still set through the week-22 farewell
+        run) OR has already executed retirement (`serviceTime` Retired, by the
+        offseason induction step). A still-active player returns False — e.g. one
+        whose willRetire was reverted (longevity retune) or who re-signed in free
+        agency after being seeded at week 22 — and must never be shown on the
+        ballot or enshrined while rostered."""
+        if player is None:
+            return False
+        if getattr(player, 'willRetire', False):
+            return True
+        from floosball_player import PlayerServiceTime
+        return getattr(player, 'serviceTime', None) == PlayerServiceTime.Retired
+
     def seedHofBallot(self, season: int, retirees: List) -> List:
         """Add this season's qualifying retirees to the rolling ballot. Each is
         pre-filtered by HoF points so the ballot holds only real contenders.
@@ -120,6 +135,12 @@ class AwardsManager:
         mark the ballot entry inducted. Records the hof_induction recap event so
         ballot-path inductees show up in the Season Recap's Hall of Fame list +
         the league feed (the non-ballot safety net already does this)."""
+        # Defense-in-depth: resolveHofInductions already filters out active
+        # players, but never let ANY path stamp is_hof on someone still on a
+        # roster / not actually retiring.
+        if not self._isRetiringOrRetired(player):
+            logger.warning(f"HoF induct skipped: player {playerId} is active / not retiring")
+            return
         if player is not None and not getattr(player, 'is_hof', False):
             if player not in self.playerManager.hallOfFame:
                 self.playerManager.hallOfFame.append(player)
@@ -172,6 +193,16 @@ class AwardsManager:
         for e in already:
             self.ballotRepo.markInducted(e.player_id, getattr(byId.get(e.player_id), 'hof_season', season) or season)
         active = [e for e in active if e not in already]
+        # Pull anyone who is no longer actually retiring off the ballot before we
+        # rank — a candidate seeded at week 22 whose willRetire was later reverted
+        # (longevity retune) or who re-signed in free agency is an ACTIVE player and
+        # must never be enshrined. Drop the stale entry so it also stops accruing
+        # fan votes. (This is what let an active roster player get inducted.)
+        stale = [e for e in active if not self._isRetiringOrRetired(byId.get(e.player_id))]
+        for e in stale:
+            self.ballotRepo.markDropped(e.player_id)
+            logger.info(f"HoF ballot: dropped stale candidate {e.player_id} — no longer retiring (active)")
+        active = [e for e in active if e not in stale]
         if not active:
             return []
         voters = self.voteRepo.getVoterCount(season, 'hof')
@@ -224,6 +255,11 @@ class AwardsManager:
             # Defense-in-depth: never show an already-enshrined player on the
             # ballot, even if one slipped onto it (the seed already skips is_hof).
             if player is not None and getattr(player, 'is_hof', False):
+                continue
+            # Hide candidates who are no longer retiring (willRetire reverted or
+            # re-signed in FA) so an active player can't collect approval votes.
+            # Genuine farewell-run candidates still carry willRetire and remain.
+            if not self._isRetiringOrRetired(player):
                 continue
             pts, breakdown = (self.playerManager._computeHofPoints(player)
                               if player is not None else (0, {}))

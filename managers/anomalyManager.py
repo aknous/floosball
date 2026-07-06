@@ -183,10 +183,12 @@ THRESHOLD_JITTER = 0.10
 # is floored league-wide.
 SUPPRESSION_WINDOW_WEEKS = 2
 
-# Threshold change applied after a Criticality fires. Held at 1.0 (no change): the old <1.0 value
-# LOWERED the bar after each event, making repeats progressively EASIER — backwards for pacing a rare
-# event (the aggregate already re-crosses every ~2-3 weeks). Pacing now lives in CRITICALITY_FIRE_CHANCE.
-THRESHOLD_DECAY_AFTER_CRITICALITY = 1.0
+# Threshold change applied after a Criticality fires. >1.0 RAISES the bar after each event so the next
+# one needs a fresh, longer buildup — the aggregate otherwise re-crosses every ~2-3 weeks and criticalities
+# bunch up. (An old <1.0 value LOWERED it, making repeats progressively EASIER — backwards.) Works with
+# CRITICALITY_FIRE_CHANCE (fire-vs-suppress odds) + RESET_SURVIVOR_ATTENTION_SCALE (rebuild speed) to space
+# events out. 1.25 = each fired Criticality lifts the bar 25%.
+THRESHOLD_DECAY_AFTER_CRITICALITY = 1.25
 
 # With the feature enabled, a threshold crossing does NOT automatically fire a Criticality. The
 # aggregate hits the bar roughly every 2-3 weeks, so firing on every crossing yields ~7-12/season —
@@ -251,8 +253,11 @@ PARTIALLY_AWARE_PERSONALITIES = {'paranoid', 'mystic'}
 RESET_AGGREGATE_SCALE = 0.2
 
 # After a Reset, surviving (non-purged) Awakened players drop to Rampant
-# state and have their attention halved. Their ability is retained.
-RESET_SURVIVOR_ATTENTION_SCALE = 0.5
+# state and have their attention knocked down. Their ability is retained. Lower =
+# survivors fall further below the cap, so the aggregate takes longer to re-climb
+# (they must re-earn attention before their over-cap carry resumes feeding it) —
+# the main lever against criticalities re-firing back-to-back. 0.3 = knock to 30%.
+RESET_SURVIVOR_ATTENTION_SCALE = 0.3
 
 # Post-Reset suppression window — the Cores actively dampen anomaly
 # rates league-wide for this many weeks. During suppression, no Criticality
@@ -717,10 +722,23 @@ def _applyWeeklyContributions(session: Session, seasonNumber: int, week: int) ->
         deltas[f.player_id] = deltas.get(f.player_id, 0.0) + ATTENTION_PER_FOLLOWER
 
     # ── Favorite-team fan presence ──
-    # Each user with a favorite team contributes a small drip to every
-    # active player on that team. Diffuse but accumulates.
+    # Each user with a favorite team contributes a small drip to every player
+    # on that team. Diffuse but accumulates. Count only ACTIVE fans — users who
+    # logged in within the activity window — so a historically-popular team's
+    # long-dormant fanbase doesn't hand its whole roster a permanent awakening
+    # faucet (all-time fan count tracks past success → rich-get-richer). Same
+    # recency rule _countActiveUsers uses for the Criticality threshold. Fast/sim
+    # mode keeps counting all: sim users never log in, and sims lean on cards/
+    # fantasy for attention anyway.
     favTeamCounts: Dict[int, int] = {}
-    for u in session.query(User).filter(User.favorite_team_id.isnot(None)).all():
+    favQuery = session.query(User).filter(User.favorite_team_id.isnot(None))
+    if not _ANOMALY_FAST:
+        from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
+        cutoff = datetime.utcnow() - timedelta(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
+        favQuery = favQuery.filter(
+            User.last_login_at.isnot(None), User.last_login_at >= cutoff,
+        )
+    for u in favQuery.all():
         favTeamCounts[u.favorite_team_id] = favTeamCounts.get(u.favorite_team_id, 0) + 1
     if favTeamCounts:
         # Find players on those teams.

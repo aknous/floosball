@@ -75,6 +75,54 @@ except ImportError:
     getDefensiveScheme = None
 
 
+# Mid-game re-plan behaviour (see Game._maybeReadjustGameplans). Module-level so
+# experiments can A/B variants without threading flags through the engine; these
+# defaults are the production configuration.
+_REPLAN_CONFIG = {
+    'enabled': True,        # master switch for the mid-game re-plan
+    'fire_q1q2': True,      # re-plan at the Q1->Q2 boundary (thin, one-quarter sample)
+    'fire_q3q4': True,      # re-plan at the Q3->Q4 boundary (rich, three-quarter sample)
+    'sample_aware': True,   # skip below REPLAN_MIN_PLAYS + scale magnitude by confidence
+}
+
+# Master switch for the offensive pass-depth (quick-game) bias in
+# _applyGameplanMods. Experiments toggle this to isolate the lever.
+_PASSDEPTH_ENABLED = True
+
+
+def _runConceptExecQ(player, conceptName):
+    """Execution quality [0,1] for a ball-handler running `conceptName`: the
+    weighted blend of the concept's execution attributes, normalized (60->0,
+    100->1). This is the "deceive vs telegraph" skill — a shifty, cerebral back
+    sells a draw; a plodder tips it. Uses in-game (fatigue/morale-adjusted)
+    attributes."""
+    from constants import RUN_CONCEPTS
+    c = RUN_CONCEPTS.get(conceptName)
+    if not c or player is None:
+        return 0.5
+    attrs = getattr(player, 'gameAttributes', None) or player.attributes
+    total = 0.0
+    for attr, w in c['exec'].items():
+        total += getattr(attrs, attr, 70) * w
+    return max(0.0, min(1.0, (total - 60) / 40))
+
+
+def _runConceptEdge(conceptName, scheme, defGameplan):
+    """Matchup edge of `conceptName` vs the live defensive commitment. >0 means
+    the concept beats what the defense did (draw vs blitz, counter vs pursuit),
+    <0 means the defense is aligned to stop it."""
+    from constants import RUN_CONCEPTS
+    c = RUN_CONCEPTS.get(conceptName)
+    if not c:
+        return 0.0
+    e = c['edge']
+    blitzOn = 1.0 if (scheme and scheme.get('blitzPackage') is not None) else 0.0
+    runFocus = getattr(defGameplan, 'runStopFocus', 0.5) if defGameplan is not None else 0.5
+    aggr = getattr(defGameplan, 'aggressiveness', 0.5) if defGameplan is not None else 0.5
+    return (e.get('flat', 0.0) + e['blitz'] * blitzOn
+            + e['runFocus'] * (runFocus - 0.5) + e['aggr'] * (aggr - 0.5))
+
+
 class PlayType(enum.Enum):
     Run = 'Run'
     Pass = 'Pass'
@@ -907,6 +955,11 @@ class Game:
         self.away4thDownConv = 0
         self.homeTurnoversTotal = 0
         self.awayTurnoversTotal = 0
+
+        # Run-concept usage per offense (cumulative) — the defense reads these
+        # tendencies and counters them (Phase 1b, see adjustDefensiveGameplan).
+        self.homeConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0}
+        self.awayConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0}
 
         # First-half tracking for halftime gameplan adjustments
         self.homeHalfRunPlays = 0
@@ -1974,6 +2027,43 @@ class Game:
         self.gameFeed.insert(0, {'event': timeoutEvent})
         self.broadcastGameState(includeLastPlay=False, eventMessage=timeoutEvent)
 
+    def _maybeCallTimeoutToSaveSnap(self):
+        """End-of-half/game safety net, evaluated just before the pre-snap huddle.
+
+        If the clock is running and the ~8s+ huddle would burn it before this
+        play runs, spend a timeout to SAVE the snap — provided the offense still
+        has one and actually wants this play. This is what stops a scoring drive
+        from dying with three timeouts in its pocket: playCaller's own timeout
+        logic runs only on downs 1-3, so a running clock on 4th down (or any
+        last snap) would otherwise expire during the huddle and the play never
+        happens. End of HALF fires regardless of score (a leading team still
+        wants points before the break); end of GAME (Q4/OT) only fires when
+        trailing/tied (a leading team correctly lets the clock run out)."""
+        if not self.clockRunning:
+            return
+        if self.play.playType in (PlayType.Punt, PlayType.Kneel, PlayType.Spike):
+            return  # not trying to preserve time for a score
+        if self.gameClockSeconds > 15:
+            return  # plenty of clock — the normal huddle won't expire it
+        isHome = (self.offensiveTeam == self.homeTeam)
+        timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
+        if timeoutsLeft <= 0:
+            return
+        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        if self._isGarbageTime(scoreDiff):
+            return
+        endOfHalf = self.currentQuarter == 2
+        endOfGameNeed = (self.currentQuarter == 4 or self.currentQuarter >= 5) and scoreDiff <= 0
+        if not (endOfHalf or endOfGameNeed):
+            return
+        self.play.insights['clockMgmt'] = {
+            'decision': 'saveSnapTimeout',
+            'reason': 'Stop the clock so the play gets off before time expires',
+            'clockRemaining': self.gameClockSeconds,
+            'timeoutsLeft': timeoutsLeft,
+        }
+        self._callTimeout(isHome)
+
     def _checkDefensiveTimeout(self):
         """Defense calls timeout to stop the clock when trailing and the offense is milking clock.
 
@@ -2056,6 +2146,16 @@ class Game:
             return 0
         return round((gameplan.runPassRatio - 0.5) * 16)
 
+    def _chargedKickerMaxFg(self, kicker) -> int:
+        """Max yardsToEndzone a CHARGED awakened kicker will attempt from: their
+        normal range extended to — but capped at — a AWAKENED_FG_MAX_YARDS kick
+        distance. Big but finite (the old behavior treated the whole field as in
+        range, which produced absurd ~87-yard attempts)."""
+        if not kicker:
+            return 0
+        from constants import AWAKENED_FG_MAX_YARDS
+        return max(kicker.maxFgDistance, AWAKENED_FG_MAX_YARDS) - self.gameRules.fgSnapDistance
+
     def _estimateFgProbability(self):
         """Estimate FG make probability for the current field position and kicker."""
         kicker = self.offensiveTeam.rosterDict.get('k')
@@ -2113,7 +2213,7 @@ class Game:
         kicker = self.offensiveTeam.rosterDict.get('k')
         # A charged awakened kicker makes it from ANYWHERE — treat the whole field as in range.
         kickerCharged = self._awakenedReadyFor(kicker, 'kick')
-        kickerMaxFg = 999 if kickerCharged else ((kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0)
+        kickerMaxFg = self._chargedKickerMaxFg(kicker) if kickerCharged else ((kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0)
         fgProb = self._estimateFgProbability()
         fgThreshold = self._coachFgThreshold(coach)
 
@@ -2253,8 +2353,11 @@ class Game:
         # late, treating them as "in range" would route them into the FG-biased trailing branch instead
         # of going for the touchdown — so strategy gates the range, not just the early auto-kick below.
         kickerCharged = self._awakenedReadyFor(kicker, 'kick')
+        # A charged kicker's range is extended but CAPPED (see _chargedKickerMaxFg)
+        # — "from anywhere" up to that cap, not a literal 87-yarder.
+        chargedInRange = kickerCharged and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)
         fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
-        inFieldGoalRange = ((kickerCharged and fgHelps)
+        inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
         leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
                        and self.gameClockSeconds <= 120)
@@ -2262,11 +2365,11 @@ class Game:
         # Deep own territory: default punt, but override if trailing late in Q4
         # (or Q2 end-of-half past midfield)
         if self.yardsToSafety <= 35:
-            # A charged awakened kicker makes it from anywhere — take the free 3
-            # rather than auto-punting, when a FG helps and we're not protecting a
-            # late lead (mirrors the normal charged-kick branch below). Without
-            # this, a powered-up kicker deep in own territory was always punted.
-            if kickerCharged and fgHelps and not leadingLate:
+            # A charged awakened kicker takes the free 3 rather than auto-punting,
+            # when a FG helps and we're not protecting a late lead (mirrors the
+            # normal charged-kick branch below). Range is capped (chargedInRange),
+            # so this only fires within the awakened kicker's extended reach.
+            if chargedInRange and fgHelps and not leadingLate:
                 self.play.playType = PlayType.FieldGoal
                 return
             isLateGameDesperation = (
@@ -2324,9 +2427,10 @@ class Game:
         # minutes, which may still pin with a coffin-corner punt rather than risk
         # a turnover or hand the ball back already in FG range — that case falls
         # through to the normal logic below. (leadingLate computed at the top.)
-        # A charged awakened kicker takes the free 3 from any distance — but only when fgHelps (computed
-        # above) and not protecting a late lead; short-yardage / goal-line defer to the go-for-it logic.
-        if (kickerCharged and fgHelps and not leadingLate
+        # A charged awakened kicker takes the free 3 within its (capped) extended
+        # range — but only when fgHelps (computed above) and not protecting a late
+        # lead; short-yardage / goal-line defer to the go-for-it logic.
+        if (chargedInRange and fgHelps and not leadingLate
                 and self.yardsToFirstDown > 2 and self.yardsToEndzone > 8):
             self.play.playType = PlayType.FieldGoal
             return
@@ -2354,17 +2458,12 @@ class Game:
         if scoreDiff > 0:
             if self.currentQuarter == 4 and self.gameClockSeconds < 300:
                 # Leading with little time: burn clock, don't risk a FG miss.
-                # A kneel on 4th down is a turnover on downs, so it's only safe
-                # when it actually ENDS the game: the opponent must have no
-                # timeouts to stop the clock, and the remaining time must fit in
-                # one kneel's drain — otherwise the kneel just hands them the ball
-                # back with time on the clock. Skip inside own 2 (safety risk);
-                # otherwise fall through to a safe run / punt.
-                _oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
-                if (self.gameClockSeconds <= self.gameRules.kneelDrainSeconds
-                        and self.yardsToSafety > 2 and _oppTimeouts == 0):
-                    self.play.kneel()
-                    return
+                # NEVER kneel on 4th down — a kneel there is a turnover on downs, so
+                # a team should run an ACTUAL play (or kick / punt) instead. Running
+                # the clock out via kneels only happens on downs 1-3 (see the kneel
+                # gate in playCaller, which requires the kneels to reach 0:00 before
+                # 4th down). Here, take a makeable FG, sneak a very short 4th-and-1
+                # in the open field, otherwise punt.
                 if inFieldGoalRange and self.yardsToEndzone <= 40:
                     self.play.playType = PlayType.FieldGoal
                     return
@@ -2706,6 +2805,7 @@ class Game:
         weights = self._applySituationalMods(weights, scoreDiff, coach)
         weights = self._applyMatchupMods(weights, coach)
         weights = self._applyCoachMods(weights, coach)
+        weights = self._applyGameplanMods(weights)
         weights = self._applyAwakenedMods(weights)
 
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
@@ -2716,6 +2816,55 @@ class Game:
             weights['medium'] = weights.get('medium', 0) * 0.3
             weights['long'] = weights.get('long', 0) * 0.15
             weights['deep'] = weights.get('deep', 0) * 0.05
+        return weights
+
+    def _applyGameplanMods(self, weights: dict) -> dict:
+        """Apply the OFFENSIVE gameplan's mix signals to the play-call weights —
+        the run/pass balance (`runPassRatio`) and the mid-game pass-depth bias
+        (`passDepthBias`). These were the two offensive gameplan fields never
+        consumed by play selection; this is where they take effect. Runs BEFORE
+        the awakened / FG-drain layers so a powered-up feed or an end-game clock
+        drain still overrides them. Gated by the module master switch
+        `gameplan.WIRING_ENABLED` (experiments toggle it)."""
+        import gameplan as _gp
+        if not _gp.WIRING_ENABLED:
+            return weights
+        offPlan = self.homeOffGameplan if self.offensiveTeam is self.homeTeam else self.awayOffGameplan
+        if offPlan is None:
+            return weights
+
+        # --- runPassRatio: shift the run vs pass balance toward what's working ---
+        # (adjustOffensiveGameplan moves runPassRatio toward the more productive
+        # attack; higher ratio = more run.) A pure multiplicative nudge: run up,
+        # the four pass tiers down (or vice versa), composing under the situational
+        # / desperation layers that already ran.
+        from constants import (RUNPASS_RUN_SWING, RUNPASS_PASS_SWING,
+                               QUICKGAME_SUPPRESS_DEFICIT, QUICKGAME_LATE_DEFICIT)
+        ratio = getattr(offPlan, 'runPassRatio', 0.5)
+        if ratio != 0.5:
+            weights['run'] = weights.get('run', 0) * max(0.4, 1 + (ratio - 0.5) * RUNPASS_RUN_SWING)
+            passMul = max(0.4, 1 - (ratio - 0.5) * RUNPASS_PASS_SWING)
+            for k in ('short', 'medium', 'long', 'deep'):
+                weights[k] = weights.get(k, 0) * passMul
+
+        # --- passDepthBias: quick, high-percentage passing when the offense stalls ---
+        bias = getattr(offPlan, 'passDepthBias', 0.0)
+        if not (_PASSDEPTH_ENABLED and bias):
+            return weights
+        # Quick-game is a rhythm / ball-control tool. In catch-up mode the offense
+        # needs chunk plays, so suppress the short bias there and let the deep /
+        # desperation play-calling ride (a 2+-score 2nd-half hole, or any deficit
+        # late). When close or ahead, the quick game applies.
+        isHome = self.offensiveTeam is self.homeTeam
+        deficit = (self.awayScore - self.homeScore) if isHome else (self.homeScore - self.awayScore)
+        q = self.currentQuarter
+        catchUp = (q >= 3 and deficit >= QUICKGAME_SUPPRESS_DEFICIT) or (q >= 4 and deficit >= QUICKGAME_LATE_DEFICIT)
+        if catchUp:
+            return weights
+        weights['short'] = weights.get('short', 0) * (1 + 0.6 * bias)
+        weights['medium'] = weights.get('medium', 0) * (1 + 0.2 * bias)
+        weights['long'] = weights.get('long', 0) * max(0.3, 1 - 0.4 * bias)
+        weights['deep'] = weights.get('deep', 0) * max(0.2, 1 - 0.6 * bias)
         return weights
 
     def _applySituationalMods(self, weights: dict, scoreDiff: int, coach=None) -> dict:
@@ -2851,6 +3000,23 @@ class Game:
                 _mul('medium', 1 - 0.1 * protectUrgency)
                 _mul('long',   1 - 0.5 * protectUrgency)
                 _mul('deep',   1 - 0.7 * protectUrgency)
+
+        # ── LEAD-PROTECTION FLOOR (any Q4/OT lead) ──
+        # Independent of coach archetype AND clock-IQ: no team should be chucking
+        # deep with a 4th-quarter lead — an incompletion stops your OWN clock. The
+        # branches above differentiate HOW WELL a coach drains (archetype) and how
+        # hard (clock-IQ via _mul); this guarantees a run lean + deep/long
+        # suppression for EVERYONE, ramping as the clock winds down. Uses _flat
+        # (no clock-IQ scaling) so even a poor clock-manager stops firing deep.
+        # Stacks on the mods above. Not Q2 — the half ends either way (handled
+        # below); this is about protecting a lead, which only exists end-of-GAME.
+        if scoreDiff > 0 and q >= 4:
+            floorUrg = 1.0 if secs <= 120 else (0.6 if secs <= 300 else 0.25)
+            _flat('run',    1 + 0.6 * floorUrg)
+            _flat('short',  1 + 0.15 * floorUrg)
+            _flat('medium', 1 - 0.2 * floorUrg)
+            _flat('long',   1 - 0.6 * floorUrg)
+            _flat('deep',   1 - 0.8 * floorUrg)
 
         # Q2 two-minute drill: REGARDLESS of score, push to score before the
         # half. A leading team does NOT sit on the ball in Q2 (clock-milking is
@@ -3005,12 +3171,326 @@ class Game:
         )[0]
 
         self.play.insights['playCall'] = playCall
+        # Reset per-play RPO / trick state (set only by _executeRpo / _executeTrickPlay).
+        self.play.isRpo = False
+        self.play._rpoOpennessBonus = 0.0
+        self.play._rpoRunRelief = 0.0
+        self.play.trickPlay = None
+        self.play._trickOpennessBonus = 0.0
+        self.play._trickRunRelief = 0.0
+        self.play._trickSackMult = 1.0
+        self.play._forcedRunner = None
+        self.play._forcedGap = None
 
+        _trick = self._selectTrickPlay()
+        if _trick:
+            self._executeTrickPlay(_trick)
+            return
+        if playCall == 'run' and self._selectRpo():
+            self._executeRpo()
+            return
         if playCall == 'run':
+            self.play.runConcept = self._selectRunConcept()
+            self.play.insights['runConcept'] = self.play.runConcept
             self.play.runPlay()
         else:
             self.play.targetSideline = targetSideline
+            self.play.playAction = self._selectPlayAction(playCall)
+            self.play.insights['playAction'] = self.play.playAction
+            self.play.passConcept = self._selectPassConcept(playCall)
+            self.play.insights['passConcept'] = self.play.passConcept
             self.play.passPlay(self._selectPassPlay(playCall))
+
+    def _isHurryUp(self) -> bool:
+        """The offense is racing the clock — a 2-minute drill trailing in Q4, or an
+        end-of-half push in Q2. In hurry-up you want quick, decisive plays; fakes
+        and reads that eat seconds (play-action, RPO, the delayed draw) are off."""
+        if getattr(self, 'isOvertime', False):
+            return False
+        q = self.currentQuarter
+        secs = self.gameClockSeconds
+        isHome = self.offensiveTeam is self.homeTeam
+        sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        if q == 4 and sd <= 0 and secs <= 150 and not self._isGarbageTime(sd):
+            return True                       # 2-minute drill: need to score, no clock to waste
+        if q == 2 and secs <= 120 and sd < 14:
+            return True                       # end-of-half push: score before the break
+        return False
+
+    def _selectRunConcept(self) -> str:
+        """The COACH's call: pick the run concept that fits his personnel + the
+        expected defense. Weighted by (1) the coach's lean toward deception
+        (aggressive/offensive-minded coaches call more draws/counters), (2) the
+        RB's execution fit (favor concepts this back runs well), and (3) a
+        scouting read of the opponent's defensive tendencies (blitz-happy D ->
+        draw; over-aggressive D -> counter), scaled by the coach's `scouting`.
+        Short-yardage collapses toward power. The concept lives with the coach,
+        not the team."""
+        from constants import (RUN_CONCEPTS, RUN_CONCEPT_ENABLED)
+        if not RUN_CONCEPT_ENABLED:
+            return 'power'
+        isHome = (self.offensiveTeam is self.homeTeam)
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        rb = self.offensiveTeam.rosterDict.get('rb')
+        defGameplan = self.awayDefGameplan if isHome else self.homeDefGameplan
+        shortYardage = (self.yardsToFirstDown <= 2 or self.yardsToEndzone <= 5)
+        offMind = getattr(coach, 'offensiveMind', 80) if coach else 80
+        aggrC = getattr(coach, 'aggressiveness', 80) if coach else 80
+        scouting = getattr(coach, 'scouting', 80) if coach else 80
+        decLean = max(0.0, ((offMind - 80) + (aggrC - 80)) / 40.0)   # 0 neutral -> ~1 both high
+        scoutRead = max(0.0, (scouting - 60) / 40.0)                  # 0-1
+        bf = getattr(defGameplan, 'blitzFrequency', 0.25) if defGameplan is not None else 0.25
+        hurry = self._isHurryUp()
+        weights = {}
+        for name, c in RUN_CONCEPTS.items():
+            w = c['base']
+            if shortYardage:
+                w *= 2.4 if name == 'power' else 0.35   # power territory
+            if hurry:
+                # racing the clock: no delayed draw; a sweep can get out of bounds
+                w *= {'draw': 0.08, 'counter': 0.4, 'sweep': 1.3}.get(name, 1.0)
+            w *= 1 + decLean * c['deception']            # coach calls more deception
+            if rb is not None:
+                w *= 0.55 + _runConceptExecQ(rb, name)   # personnel fit (0.55-1.55)
+            if defGameplan is not None and scoutRead > 0:
+                # expected edge vs the opponent's tendencies (approx blitz via its rate)
+                expEdge = _runConceptEdge(name, None, defGameplan) + c['edge']['blitz'] * bf
+                w *= 1 + scoutRead * max(-0.6, min(0.8, expEdge)) * 0.9
+            weights[name] = max(0.01, w)
+        names = list(weights)
+        return _random.choices(names, weights=[weights[n] for n in names], k=1)[0]
+
+    def _selectPlayAction(self, tier: str) -> bool:
+        """Decide whether this pass is play-action. The coach calls it to exploit a
+        run-committed defense — more on early downs (run is credible), on deeper
+        shots (the fake buys time), when a scouting read says the D is keying the
+        run, and for sharp offensive minds. Not on quick/short throws (no time to
+        fake). Gated so it stays a situational call, not the norm."""
+        from constants import PLAY_ACTION_ENABLED
+        if not PLAY_ACTION_ENABLED or tier == 'short':
+            return False
+        if self._isHurryUp():
+            return False   # no time to sell a fake in a 2-minute drill
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        isHome = self.offensiveTeam is self.homeTeam
+        defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
+        runFocus = getattr(defGp, 'runStopFocus', 0.5) if defGp is not None else 0.5
+        offMind = getattr(coach, 'offensiveMind', 80) if coach else 80
+        scouting = getattr(coach, 'scouting', 80) if coach else 80
+        p = 0.13
+        if self.down <= 2:
+            p += 0.10                                   # run is credible early
+        if tier in ('long', 'deep'):
+            p += 0.08                                   # PA + shot combo
+        p += max(0.0, (scouting - 60) / 40.0) * (runFocus - 0.5) * 0.6   # read a run-keying D
+        p *= 0.7 + max(0.0, (offMind - 60) / 40.0) * 0.6                 # good minds use it more
+        return _random.random() < max(0.0, min(0.6, p))
+
+    def _selectRpo(self) -> bool:
+        """Does the coach call an RPO on this run look? Needs a QB who can read the
+        box and throw on the move (instinct/vision/agility), a coach who uses it
+        (offensiveMind), and a normal down (not short-yardage power / desperation)."""
+        from constants import RPO_ENABLED, RPO_QB_FIT
+        if not RPO_ENABLED:
+            return False
+        if self.yardsToFirstDown <= 2 or self.yardsToEndzone <= 3:
+            return False   # short-yardage / goal line is downhill power, not RPO
+        if self._isHurryUp():
+            return False   # the read-and-give burns clock — go straight dropback in hurry-up
+        qb = self.offensiveTeam.rosterDict.get('qb')
+        if qb is None:
+            return False
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        qa = getattr(qb, 'gameAttributes', None) or qb.attributes
+        fit = max(0.0, min(1.0, (sum(getattr(qa, a, 70) * w for a, w in RPO_QB_FIT.items()) - 60) / 40.0))
+        # AGGRESSIVENESS gates adoption: a conservative coach sticks to standard
+        # run/pass; an aggressive coach leans into the modern wrinkle. offensiveMind
+        # is secondary (sophistication to run it), not the willingness to try it.
+        aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
+        offMind = getattr(coach, 'offensiveMind', 80) if coach else 80
+        aggrLean = max(0.0, (aggr - 60) / 40.0)              # 0 conservative -> 1 aggressive
+        offLean = 0.6 + max(0.0, (offMind - 60) / 40.0) * 0.4
+        p = (0.05 + 0.22 * fit) * (0.35 + 1.0 * aggrLean) * offLean
+        return _random.random() < max(0.0, min(0.40, p))
+
+    def _executeRpo(self):
+        """Read the box pre-snap and branch: loaded front -> pull it and throw a
+        quick pass into the vacated coverage; light box -> hand it off. The QB's
+        read skill decides whether he picks right; a correct read gets the numbers
+        advantage (a modest relief on the chosen option)."""
+        from constants import (RPO_LOADED_RUNFOCUS, RPO_READ_BASE, RPO_READ_SKILL,
+                               RPO_BONUS, RPO_OPENNESS, RPO_EXEC)
+        isHome = self.offensiveTeam is self.homeTeam
+        defGameplan = self.awayDefGameplan if isHome else self.homeDefGameplan
+        if GAMEPLAN_AVAILABLE and defGameplan is not None:
+            sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+            scheme = getDefensiveScheme(defGameplan, self.down, self.yardsToFirstDown,
+                                        100 - self.yardsToEndzone, sd,
+                                        self.currentQuarter, self.gameClockSeconds)
+        else:
+            scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
+        runFocus = getattr(defGameplan, 'runStopFocus', 0.5) if defGameplan is not None else 0.5
+        loaded = (runFocus >= RPO_LOADED_RUNFOCUS) or (scheme.get('blitzPackage') is not None)
+        qb = self.offensiveTeam.rosterDict.get('qb')
+        qa = getattr(qb, 'gameAttributes', None) or qb.attributes
+        readQ = max(0.0, min(1.0, (sum(getattr(qa, a, 70) * w for a, w in RPO_EXEC.items()) - 60) / 40.0))
+        correct = _random.random() < (RPO_READ_BASE + RPO_READ_SKILL * readQ)
+        throw = loaded if correct else (not loaded)   # right read exploits the box; a misread feeds its strength
+        self.play._preRolledScheme = scheme
+        self.play.isRpo = True
+        self.play.rpoThrow = throw
+        self.play.rpoCorrect = correct
+        self.play.insights['rpo'] = {'read': 'pass' if throw else 'run', 'correct': correct}
+        self.play._rpoOpennessBonus = 0.0
+        self.play._rpoRunRelief = 0.0
+        if throw:
+            self.play.playAction = False
+            self.play.passConcept = 'standard'
+            if correct:
+                self.play._rpoOpennessBonus = RPO_OPENNESS   # box loaded -> coverage thin, quick throw open
+            self.play.passPlay(self._selectPassPlay('short'))
+        else:
+            self.play.runConcept = 'power'
+            if correct:
+                self.play._rpoRunRelief = RPO_BONUS          # ball into a light box
+            self.play.runPlay()
+
+    def _selectTrickPlay(self):
+        """A bold coach's called shot. Returns a trick name or None. Gated by the
+        'when' rules — only aggressive coaches, keyed to the defense's tendency, in
+        a manageable field-position band, and only when the game lets you afford
+        the gamble (NOT hurry-up / short-yardage / red zone / backed up, and NOT a
+        desperation heave down 2+ scores late)."""
+        from constants import (TRICK_PLAY_ENABLED, TRICK_PLAY_BASE, TRICK_PLAYS,
+                               TRICK_FIELD_MIN_YTE, TRICK_FIELD_MAX_YTE)
+        if not TRICK_PLAY_ENABLED or self._isHurryUp():
+            return None
+        yte = self.yardsToEndzone
+        if self.yardsToFirstDown <= 2 or yte <= TRICK_FIELD_MIN_YTE or yte > TRICK_FIELD_MAX_YTE:
+            return None    # short-yardage / red zone / backed up in own territory
+        isHome = self.offensiveTeam is self.homeTeam
+        sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        q = self.currentQuarter
+        # Called shots only — a big deficit late goes to standard offense, not gadgets.
+        if q == 4 and (sd <= -9 or (sd < 0 and self.gameClockSeconds < 300)):
+            return None
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
+        aggrLean = max(0.0, (aggr - 78) / 22.0)   # only bold coaches (0 at 78, 1 at 100)
+        if aggrLean <= 0:
+            return None
+        defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
+        runFocus = getattr(defGp, 'runStopFocus', 0.5) if defGp is not None else 0.5
+        aggrD = getattr(defGp, 'aggressiveness', 0.5) if defGp is not None else 0.5
+        blitzF = getattr(defGp, 'blitzFrequency', 0.25) if defGp is not None else 0.25
+        # Match the trick to the D's tendency (scouting read of what it's committing to).
+        # Centered near the league-average tendencies (aggr ~0.45) so statue/reverse
+        # are reachable, not just flea flicker.
+        scores = {
+            'flea_flicker': max(0.0, (runFocus - 0.5) * 1.9),   # a run-committed D bites the fake
+            'statue': max(0.0, (blitzF - 0.16) * 1.9),          # a BLITZ flies upfield (blitz-driven)
+            'reverse': max(0.0, (aggrD - 0.55) * 1.9),          # over-PURSUIT (aggression-driven)
+        }
+        best = max(scores, key=scores.get)
+        if scores[best] < 0.10:
+            return None    # no clear tendency to exploit — don't gadget for its own sake
+        scouting = getattr(coach, 'scouting', 80) if coach else 80
+        scoutRead = max(0.0, (scouting - 60) / 40.0)
+        p = TRICK_PLAY_BASE * aggrLean * (0.4 + 0.6 * scoutRead) * min(1.5, scores[best] * 4)
+        return best if _random.random() < min(0.04, p) else None
+
+    def _executeTrickPlay(self, trick: str):
+        """Resolve a trick: roll the scheme, check whether the defensive commitment
+        it targets is actually there, gate on the key player's execution, and apply
+        a big payoff (works) or a backfire (blown up). Reuses runPlay/passPlay via
+        pre-rolled scheme + play-level bonuses; the reverse swaps in a WR carrier."""
+        from constants import TRICK_PLAYS
+        spec = TRICK_PLAYS[trick]
+        isHome = self.offensiveTeam is self.homeTeam
+        defGameplan = self.awayDefGameplan if isHome else self.homeDefGameplan
+        if GAMEPLAN_AVAILABLE and defGameplan is not None:
+            sd = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+            scheme = getDefensiveScheme(defGameplan, self.down, self.yardsToFirstDown,
+                                        100 - self.yardsToEndzone, sd,
+                                        self.currentQuarter, self.gameClockSeconds)
+        else:
+            scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
+        runFocus = getattr(defGameplan, 'runStopFocus', 0.5) if defGameplan is not None else 0.5
+        aggrD = getattr(defGameplan, 'aggressiveness', 0.5) if defGameplan is not None else 0.5
+        blitz = scheme.get('blitzPackage') is not None
+        trig = spec['trigger']
+        if trig == 'run_commit':
+            triggered = runFocus >= 0.52
+        elif trig == 'rush':
+            triggered = blitz or aggrD >= 0.5
+        else:  # pursuit
+            triggered = aggrD >= 0.48
+        # Key player's execution (the deceiver / carrier).
+        carrier = self.offensiveTeam.rosterDict.get(spec['carrier'] if spec['carrier'] != 'wr' else 'wr1')
+        ca = (getattr(carrier, 'gameAttributes', None) or carrier.attributes) if carrier else None
+        execQ = 0.5
+        if ca:
+            execQ = max(0.0, min(1.0, (sum(getattr(ca, a, 70) * w for a, w in spec['exec'].items()) - 60) / 40.0))
+        works = triggered and (_random.random() < 0.35 + 0.6 * execQ)
+        self.play.trickPlay = trick
+        self.play.trickWorked = works
+        self.play._preRolledScheme = scheme
+        self.play._trickOpennessBonus = 0.0
+        self.play._trickRunRelief = 0.0
+        self.play._forcedRunner = None
+        self.play.insights['trickPlay'] = {'name': trick, 'worked': works}
+        if spec['resolves'] == 'pass':
+            self.play.playAction = False
+            self.play.passConcept = 'standard'
+            if works:
+                self.play._trickOpennessBonus = spec['openness']       # receiver wide open deep
+            else:
+                self.play._trickOpennessBonus = -spec['openness'] * 0.45  # D didn't bite — coverage intact
+                self.play._trickSackMult = 1.0 + spec['sack_backfire']    # and the play took forever -> rush home
+            self.play.passPlay(self._selectPassPlay('long'))   # downfield shot, but catchable enough to pay off
+        else:
+            self.play.runConcept = 'power'   # vanilla concept (trick block handles the narration)
+            # Statue and reverse are EDGE plays — force an outside gap so the
+            # direction reads right ("races to the edge", not "up the middle").
+            self.play._forcedGap = {'A-gap': 0.02, 'B-gap': 0.13, 'C-gap': 0.85}
+            if spec['carrier'] == 'wr':
+                self.play._forcedRunner = self.offensiveTeam.rosterDict.get('wr1')
+            self.play._trickRunRelief = spec['relief'] if works else -spec['backfire']   # payoff or stuffed/loss
+            self.play.runPlay()
+
+    def _selectPassConcept(self, tier: str) -> str:
+        """The coach's route-concept call: read the defense's coverage tendency and
+        pick the concept that beats it — mesh vs a man-heavy D, flood vs zone,
+        screen vs a blitz-happy D. Scaled by `scouting` (reading the look) and
+        `offensiveMind` (how much concept vs vanilla). Screens skew short; mesh
+        skews shorter; deep shots stay mostly standard."""
+        from constants import PASS_CONCEPT_ENABLED, PASS_CONCEPTS
+        if not PASS_CONCEPT_ENABLED:
+            return 'standard'
+        isHome = self.offensiveTeam is self.homeTeam
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
+        covTend = getattr(defGp, 'coverageTendency', None) or {}
+        blitzFreq = getattr(defGp, 'blitzFrequency', 0.25) if defGp is not None else 0.25
+        manW = zoneW = 0.4
+        for ct, w in covTend.items():
+            n = getattr(ct, 'name', str(ct)).upper()
+            if 'MAN' in n: manW = w
+            elif 'ZONE' in n: zoneW = w
+        scouting = getattr(coach, 'scouting', 80) if coach else 80
+        offMind = getattr(coach, 'offensiveMind', 80) if coach else 80
+        scoutRead = max(0.0, (scouting - 60) / 40.0)
+        offLean = 0.6 + max(0.0, (offMind - 60) / 40.0) * 0.7   # good minds lean into concepts
+        w = {n: PASS_CONCEPTS[n]['base'] for n in PASS_CONCEPTS}
+        w['mesh'] *= (1 + scoutRead * manW * 1.6) * offLean
+        w['flood'] *= (1 + scoutRead * zoneW * 1.6) * offLean
+        w['screen'] *= (1 + scoutRead * blitzFreq * 2.4) * offLean
+        if tier == 'short':
+            w['screen'] *= 1.9; w['flood'] *= 0.6
+        elif tier in ('long', 'deep'):
+            w['screen'] *= 0.15; w['mesh'] *= 0.5   # mesh/screen are shorter concepts
+        names = list(w)
+        return _random.choices(names, weights=[max(0.01, w[n]) for n in names], k=1)[0]
 
     def playCaller(self):
         isHome = (self.offensiveTeam == self.homeTeam)
@@ -3072,6 +3552,36 @@ class Game:
             # Good coaches (IQ~1.0) almost always make the right call.
             # Bad coaches (IQ~0.0) frequently miss the correct situational play.
             gameIQ = self._coachClockIQ(coach)
+
+            # ── End of the FIRST HALF: always try to score, REGARDLESS of the
+            # score. A half ends the same whether you're up or down, so a live
+            # drive should push for points (there's no clock to "protect" — it
+            # resets at the break). Mirrors the defense's Q2 "get the ball back
+            # regardless of score" timeout logic. endOfHalfPush unlocks the
+            # offensive timeout + spike below for any score; on the LAST play in
+            # FG range, take the free points here. Q2 ONLY — at end of GAME a
+            # leading team correctly DRAINS instead (those branches stay
+            # score-gated). Garbage time (a blowout) is excluded.
+            _eohKicker = self.offensiveTeam.rosterDict.get('k')
+            _eohKickerMax = (_eohKicker.maxFgDistance - self.gameRules.fgSnapDistance) if _eohKicker else 0
+            endOfHalfPush = (self.currentQuarter == 2
+                             and self.gameClockSeconds <= 120
+                             and not self._isGarbageTime(scoreDiff)
+                             and self.yardsToEndzone <= _eohKickerMax + 25)
+            if (endOfHalfPush and self.gameClockSeconds <= 45
+                    and self.yardsToEndzone <= _eohKickerMax):
+                eohPlaysAvailable = self._estimateAvailablePlays()
+                if self.down == self.gameRules.downsPerSeries or eohPlaysAvailable <= 1:
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'endOfHalfFG',
+                        'reason': 'End of half — take the FG on the last play (any score)',
+                        'clockRemaining': self.gameClockSeconds,
+                        'playsAvailable': eohPlaysAvailable,
+                        'down': self.down,
+                        'coachClockIQ': round(gameIQ, 2),
+                    }
+                    self.play.playType = PlayType.FieldGoal
+                    return
 
             # Late-game FG, trailing by ≤3, in range. Decision hinges on whether
             # this is the LAST realistic play — NOT a fixed clock threshold. The
@@ -3222,14 +3732,16 @@ class Game:
             # into a 4th-down must-score).
             spikeKicker = self.offensiveTeam.rosterDict.get('k')
             spikeKickerMax = (spikeKicker.maxFgDistance - self.gameRules.fgSnapDistance) if spikeKicker else 0
-            spikeFgException = (self.down == self.gameRules.downsPerSeries - 1 and -3 <= scoreDiff <= 0
+            spikeFgException = (self.down == self.gameRules.downsPerSeries - 1
+                                and (self.currentQuarter == 2 or -3 <= scoreDiff <= 0)
                                 and self.yardsToEndzone <= spikeKickerMax
                                 and secs <= 20)
             spikeDownOK = self.down <= self.gameRules.downsPerSeries - 2 or spikeFgException
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
                     and secs <= self.gameRules.spikeClockThreshold
-                    and timeoutsLeft == 0 and scoreDiff <= 0
+                    and timeoutsLeft == 0
+                    and (scoreDiff <= 0 or self.currentQuarter == 2)  # Q2: stop the clock regardless of score
                     and spikeDownOK
                     and not self._isGarbageTime(scoreDiff)):
                 if secs <= 30:
@@ -3258,13 +3770,18 @@ class Game:
             # multi-score team, not the 2:00 cap that let it bleed time before.
             _toKicker = self.offensiveTeam.rosterDict.get('k')
             _toKickerMaxFg = (_toKicker.maxFgDistance - self.gameRules.fgSnapDistance) if _toKicker else 0
-            fgStopPriority = scoreDiff <= 0 and self.yardsToEndzone <= _toKickerMaxFg + 8
+            # In FG range and it matters: trailing/tied any quarter, OR Q2 at any
+            # score (score before the half). Drives the high-urgency timeout.
+            fgStopPriority = (scoreDiff <= 0 or self.currentQuarter == 2) and self.yardsToEndzone <= _toKickerMaxFg + 8
             toWindow = (180 if (self.currentQuarter >= 4 and (multiScore or fgStopPriority))
                         else self.gameRules.timeoutClockThreshold)
             twoMinImminent = (self.currentQuarter in (2, 4) and not self.twoMinuteWarningShown
                               and self.gameRules.timeoutClockThreshold < secs
                               <= self.gameRules.timeoutClockThreshold + 15)
-            if (isLateGame and scoreDiff <= 0 and self.clockRunning
+            # Q2: stop the clock regardless of score (endOfHalfPush) — a leading
+            # team still wants to score before the break. Q4/OT stays trailing/
+            # tied-gated so a leading team drains the clock instead.
+            if (isLateGame and (scoreDiff <= 0 or endOfHalfPush) and self.clockRunning
                     and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)
                     and not twoMinImminent and not self._clockStoppedByWarning
                     and secs <= toWindow):
@@ -3283,7 +3800,8 @@ class Game:
                 if _random.random() < toChance:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'timeout',
-                        'reason': 'Stop clock while trailing/tied',
+                        'reason': ('Stop clock to score before the half' if (endOfHalfPush and scoreDiff > 0)
+                                   else 'Stop clock while trailing/tied'),
                         'clockRemaining': secs,
                         'timeoutsLeft': timeoutsLeft,
                         'coachClockIQ': round(gameIQ, 2),
@@ -3337,7 +3855,7 @@ class Game:
         # so the end-game FG / Hail-Mary logic below must see the extended range.
         kicker = self.offensiveTeam.rosterDict.get('k')
         kickerCharged = self._awakenedReadyFor(kicker, 'kick')
-        kickerMaxFg = 999 if kickerCharged else ((kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0)
+        kickerMaxFg = self._chargedKickerMaxFg(kicker) if kickerCharged else ((kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0)
 
         # End-of-half FG attempt (only if reasonable probability)
         endGameFgProb = self._estimateFgProbability()
@@ -3377,6 +3895,7 @@ class Game:
         # so it does NOT fire on an early down when there's still time to take a
         # shot at the winning TD first. (Non-charged kickers never reach here.)
         if (kickerCharged and self.currentQuarter in (2, 4)
+                and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)
                 and self._estimateAvailablePlays() == 0):
             fgWorthwhile = (self.currentQuarter == 2) or (-3 <= scoreDiff <= 0)
             if fgWorthwhile:
@@ -3421,12 +3940,13 @@ class Game:
         # Final down — punt / FG / go-for-it decision
         if self.down == self.gameRules.downsPerSeries:
             self._fourthDownCaller(scoreDiff, coach, isHome)
-            # Rule 1: a charged awakened kicker never punts — it makes the FG from
-            # ANY field position. If the 4th-down logic chose to punt (i.e. it's
-            # not a go-for-it and not a game-ending kneel), take the sure 3 instead,
-            # regardless of field position. Gated by fgHelps so it stays a punt only
-            # when a FG can't help (down >3 late, when only a TD matters).
-            if self.play.playType == PlayType.Punt and kickerCharged:
+            # Rule 1: a charged awakened kicker prefers the sure 3 over a punt from
+            # WITHIN its (capped) extended range. If the 4th-down logic chose to
+            # punt (not a go-for-it, not a game-ending kneel), take the FG instead.
+            # Gated by fgHelps so it stays a punt when a FG can't help, and by the
+            # range cap so it doesn't attempt an absurd distance.
+            if (self.play.playType == PlayType.Punt and kickerCharged
+                    and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)):
                 fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
                 if fgHelps:
                     self.play.playType = PlayType.FieldGoal
@@ -3616,7 +4136,40 @@ class Game:
             self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety - returnYards)
 
 
+    def _buildPlaybookInsight(self):
+        """Consolidate the play's design decision into a single insights['playbook']
+        object for the Play Insights panel — which concept/trick was called and how
+        it turned out. A play is one thing: a trick, an RPO, a run concept, or a
+        pass concept (play-action and/or route concept)."""
+        p = self.play
+        pb = None
+        trick = getattr(p, 'trickPlay', None)
+        if trick:
+            pb = {'kind': 'trick', 'name': trick, 'worked': bool(getattr(p, 'trickWorked', False))}
+        elif getattr(p, 'isRpo', False):
+            pb = {'kind': 'rpo', 'read': 'pass' if getattr(p, 'rpoThrow', False) else 'run',
+                  'correct': bool(getattr(p, 'rpoCorrect', False))}
+        elif p.playType is PlayType.Run and not getattr(p, 'isScramble', False):
+            c = getattr(p, 'runConcept', None)
+            if c and c != 'power':
+                pb = {'kind': 'run_concept', 'concept': c,
+                      'telegraphed': bool(getattr(p, 'conceptTelegraphed', False))}
+        elif p.playType is PlayType.Pass:
+            pa = getattr(p, 'playAction', False)
+            pc = getattr(p, 'passConcept', None)
+            if pa or (pc and pc != 'standard'):
+                pb = {'kind': 'pass_concept'}
+                if pa:
+                    pb['playAction'] = True
+                    pb['playActionWorked'] = bool(getattr(p, 'paWorked', False))
+                if pc and pc != 'standard':
+                    pb['passConcept'] = pc
+                    pb['passConceptHit'] = bool(getattr(p, 'passConceptHit', False))
+        if pb is not None:
+            self.play.insights['playbook'] = pb
+
     def formatPlayText(self):
+        self._buildPlaybookInsight()
         self._evaluateClutchChoke()
 
         # Snapshot clock state for the feed. By this point clockRunning has
@@ -3947,6 +4500,86 @@ class Game:
         # Blitz callout — only when the blitz actually put pressure on the QB
         # (sack, or defense winning the rush matchup). Pass plays only; runs
         # don't have a QB facing pressure even if a blitz was called.
+        # Run-concept flavor: weave the concept into the sentence (playbook variety)
+        # and let the verb carry the deception outcome — sold, telegraphed, or clean.
+        # E.g. "Jett Duke takes the draw handoff and runs wide for 5 yards."
+        # 'power' is the vanilla default and stays unnarrated; scrambles excluded.
+        if (text and self.play.playType is PlayType.Run
+                and not getattr(self.play, 'isScramble', False)
+                and getattr(self.play, 'runner', None) is not None):
+            _concept = getattr(self.play, 'runConcept', 'power')
+            _phrase = {'draw': 'draw handoff', 'counter': 'counter', 'sweep': 'pitch'}.get(_concept)
+            if _phrase:
+                if getattr(self.play, 'conceptTelegraphed', False):
+                    _verb = 'telegraphs the'          # defense read it
+                elif getattr(self.play, 'conceptEdge', 0.0) > 0.12 and self.play.yardage >= 6:
+                    _verb = 'sells the'               # the fake works
+                else:
+                    _verb = 'takes the'
+                _name = self.play.runner.name
+                _leadIn = '{} {} {} and '.format(_name, _verb, _phrase)
+                text = (_leadIn + text[len(_name) + 1:]) if text.startswith(_name + ' ') else (_leadIn + text)
+
+        # Play-action flavor: weave the fake into the pass narration; when it worked
+        # the fake froze the second level, otherwise it's just a play-action look.
+        if (text and self.play.playType is PlayType.Pass
+                and getattr(self.play, 'playAction', False)
+                and getattr(self.play, 'passer', None) is not None):
+            _pn = self.play.passer.name
+            _lead = '{} fakes the handoff and '.format(_pn) if getattr(self.play, 'paWorked', False) \
+                else '{} shows play-action and '.format(_pn)
+            if text.startswith(_pn + ' '):
+                text = _lead + text[len(_pn) + 1:]
+                text = text.replace(' and and ', ' and ')  # "...handoff and and X can't connect"
+            else:
+                text = ('Play-action fake. ' if getattr(self.play, 'paWorked', False) else 'Play-action. ') + text
+
+        # Route-concept flavor (skipped when it's play-action, or when the pass
+        # became a dump-off/RB screen — the checkdown path narrates that itself,
+        # so we'd otherwise get "sets up a screen and throws a screen").
+        if (text and self.play.playType is PlayType.Pass
+                and not getattr(self.play, 'playAction', False)
+                and not getattr(self.play, 'checkdownReason', None)
+                and getattr(self.play, 'passer', None) is not None):
+            # Light, natural receiver-action flavor only — mesh = crossing routes,
+            # screen = the quick throw. The scheme detail (incl. flood/overload,
+            # which reads as coordinator jargon) lives in the Play Insights "Play
+            # Design" row, not the play-by-play.
+            _lead2 = {'mesh': 'works the crossing routes and',
+                      'screen': 'sets up a screen and'}.get(getattr(self.play, 'passConcept', 'standard'))
+            if _lead2:
+                _pn2 = self.play.passer.name
+                if text.startswith(_pn2 + ' '):
+                    text = '{} {} {}'.format(_pn2, _lead2, text[len(_pn2) + 1:]).replace(' and and ', ' and ')
+
+        # RPO flavor — the QB read the box and chose the give or the pull.
+        if text and getattr(self.play, 'isRpo', False):
+            if self.play.playType is PlayType.Run and getattr(self.play, 'runner', None) is not None:
+                _rn3 = self.play.runner.name
+                if text.startswith(_rn3 + ' '):
+                    text = '{} takes the give on the RPO and {}'.format(_rn3, text[len(_rn3) + 1:]).replace(' and and ', ' and ')
+            elif self.play.playType is PlayType.Pass and getattr(self.play, 'passer', None) is not None:
+                _pn3 = self.play.passer.name
+                if text.startswith(_pn3 + ' '):
+                    text = '{} reads the box, pulls it and {}'.format(_pn3, text[len(_pn3) + 1:]).replace(' and and ', ' and ')
+
+        # Trick-play flavor — rare gadgets get a distinctive callout.
+        _trick = getattr(self.play, 'trickPlay', None)
+        if text and _trick:
+            _worked = getattr(self.play, 'trickWorked', False)
+            if _trick == 'flea_flicker' and getattr(self.play, 'passer', None) is not None:
+                _pn4 = self.play.passer.name
+                _lead = ('{} pulls off a flea flicker and'.format(_pn4) if _worked
+                         else '{} tries a flea flicker but'.format(_pn4))
+                if text.startswith(_pn4 + ' '):
+                    text = '{} {}'.format(_lead, text[len(_pn4) + 1:])
+                    text = text.replace(' and and ', ' and ').replace(' but and ', ' but ').replace(' but but ', ' but ')
+            elif _trick in ('statue', 'reverse') and getattr(self.play, 'runner', None) is not None:
+                _rn4 = self.play.runner.name
+                _phrase = 'the Statue of Liberty and' if _trick == 'statue' else 'the reverse and'
+                if text.startswith(_rn4 + ' '):
+                    text = '{} takes {} {}'.format(_rn4, _phrase, text[len(_rn4) + 1:]).replace(' and and ', ' and ')
+
         if text and self.play.blitzKind and self.play.playType == PlayType.Pass:
             pressureFelt = (
                 self.play.isSack
@@ -4784,9 +5417,11 @@ class Game:
                         homeCoach = getattr(self.homeTeam, 'coach', None)
                         awayCoach = getattr(self.awayTeam, 'coach', None)
                         adjustOffensiveGameplan(self.homeOffGameplan, homeCoach, homeOffStats)
-                        adjustDefensiveGameplan(self.homeDefGameplan, homeCoach, awayOffStats)
+                        adjustDefensiveGameplan(self.homeDefGameplan, homeCoach, awayOffStats,
+                                                oppConcepts=self.awayConceptCounts)
                         adjustOffensiveGameplan(self.awayOffGameplan, awayCoach, awayOffStats)
-                        adjustDefensiveGameplan(self.awayDefGameplan, awayCoach, homeOffStats)
+                        adjustDefensiveGameplan(self.awayDefGameplan, awayCoach, homeOffStats,
+                                                oppConcepts=self.homeConceptCounts)
 
                     # Halftime dampens momentum toward neutral. Streak is
                     # halved (truncated toward zero) rather than wiped — a
@@ -5129,6 +5764,10 @@ class Game:
                 # PRE-SNAP: Consume huddle/snap time AFTER play type is known.
                 # Skip for kneels and spikes — they handle their own clock internally.
                 if self.clockRunning and self.play.playType not in (PlayType.Kneel, PlayType.Spike):
+                    # Safety net: spend a timeout to save the snap if the huddle
+                    # would otherwise burn the clock (may set clockRunning False).
+                    self._maybeCallTimeoutToSaveSnap()
+                if self.clockRunning and self.play.playType not in (PlayType.Kneel, PlayType.Spike):
                     preSnapTime = self.calculatePreSnapTime()
                     self.consumeGameTime(preSnapTime)
                     self.checkTwoMinuteWarning()
@@ -5268,8 +5907,12 @@ class Game:
                         self._checkDefensiveTimeout()
                         if self._timeoutCalled and self.timingManager:
                             await self.timingManager.waitAfterTimeout()
-                        if self.clockRunning and self.gameClockSeconds > 0:
-                            # No timeout called — drain the play clock (time between plays).
+                        # Drain the between-plays play clock ONLY if the clock was
+                        # running before the snap (getattr guard) AND no post-kneel
+                        # timeout stopped it. After a prior stoppage the kneel burns
+                        # just its ~4s (already consumed in kneel()).
+                        if (getattr(self, '_kneelClockWasRunning', True)
+                                and self.clockRunning and self.gameClockSeconds > 0):
                             # Total kneel drain = snap (4s, in kneel()) + this play-clock
                             # drain, so this is kneelDrainSeconds - 4 (keeps the AI's drain
                             # prediction at _checkClockManagement in sync with the rule).
@@ -8034,12 +8677,87 @@ class Game:
                     'timeRemaining': self.formatTime(self.gameClockSeconds)
                 })
     
+    def _maybeReadjustGameplans(self, boundary='q3q4'):
+        """Mid-game (non-halftime) gameplan re-assessment, gated by ADAPTABILITY.
+
+        The universal halftime adjustment re-plans every team once. This adds
+        EXTRA re-planning at the Q2 and Q4 boundaries for coaches adaptable enough
+        to change on the fly: highly-adaptable coaches re-plan often (more so when
+        the offense is sputtering — they "sense it isn't working"); low-
+        adaptability coaches ride the same plan all game.
+
+        `boundary` is 'q1q2' or 'q3q4'. The read here is the running (cumulative)
+        box score, which is a THIN sample at the Q1->Q2 boundary (one quarter) —
+        re-planning off one noisy quarter chased variance and cost wins, so the
+        correction is SAMPLE-AWARE: a side is only re-adjusted once it has
+        REPLAN_MIN_PLAYS plays, and the magnitude scales with confidence
+        (plays / REPLAN_FULL_CONFIDENCE_PLAYS, capped at 1.0). So a Q1->Q2 tweak
+        is gentle and a Q3->Q4 tweak (three quarters of data) runs at full force.
+        Adaptability still gates the FREQUENCY. Behaviour is configurable via the
+        module-level `_REPLAN_CONFIG` (defaults are production)."""
+        if not GAMEPLAN_AVAILABLE or not _REPLAN_CONFIG.get('enabled', True):
+            return
+        if boundary == 'q1q2' and not _REPLAN_CONFIG.get('fire_q1q2', True):
+            return
+        if boundary == 'q3q4' and not _REPLAN_CONFIG.get('fire_q3q4', True):
+            return
+        from constants import REPLAN_MIN_PLAYS, REPLAN_FULL_CONFIDENCE_PLAYS
+        sampleAware = _REPLAN_CONFIG.get('sample_aware', True)
+        homeOffStats = {
+            'runPlays': self.homeHalfRunPlays, 'runYards': self.homeHalfRunYards,
+            'passAttempts': self.homeHalfPassAttempts, 'passYards': self.homeHalfPassYards,
+            'wr1Yards': self.homeHalfWr1Yards, 'wr2Yards': self.homeHalfWr2Yards,
+        }
+        awayOffStats = {
+            'runPlays': self.awayHalfRunPlays, 'runYards': self.awayHalfRunYards,
+            'passAttempts': self.awayHalfPassAttempts, 'passYards': self.awayHalfPassYards,
+            'wr1Yards': self.awayHalfWr1Yards, 'wr2Yards': self.awayHalfWr2Yards,
+        }
+
+        def _confidence(plays):
+            return max(0.0, min(1.0, plays / REPLAN_FULL_CONFIDENCE_PLAYS))
+
+        for team, offPlan, defPlan, offStats, oppOffStats in (
+            (self.homeTeam, self.homeOffGameplan, self.homeDefGameplan, homeOffStats, awayOffStats),
+            (self.awayTeam, self.awayOffGameplan, self.awayDefGameplan, awayOffStats, homeOffStats),
+        ):
+            coach = getattr(team, 'coach', None)
+            if coach is None or offPlan is None:
+                continue
+            oppConcepts = self.awayConceptCounts if team is self.homeTeam else self.homeConceptCounts
+            # Attributes are 60-100. Only adaptable coaches re-plan mid-game:
+            # adaptFactor 0 at 60 -> 1 at 100; below ~0.4 (adapt 76) they never do,
+            # then the chance ramps to ~0.7 at max adaptability.
+            adaptFactor = max(0.0, min(1.0, (coach.adaptability - 60) / 40))
+            replanChance = max(0.0, (adaptFactor - 0.4) / 0.6) * 0.7
+            offPlays = offStats['runPlays'] + offStats['passAttempts']
+            # Sputtering offense -> more likely to shake it up (senses it's failing).
+            if offPlays >= 8:
+                ypp = (offStats['runYards'] + offStats['passYards']) / offPlays
+                if ypp < 4.5:
+                    replanChance = min(1.0, replanChance * 1.6)
+            if not (replanChance > 0 and _random.random() < replanChance):
+                continue
+            if not sampleAware:
+                adjustOffensiveGameplan(offPlan, coach, offStats)
+                adjustDefensiveGameplan(defPlan, coach, oppOffStats, oppConcepts=oppConcepts)
+                continue
+            # Sample-aware: re-adjust each side only with enough plays to trust the
+            # read, and shrink the correction toward zero on a thin sample.
+            if offPlays >= REPLAN_MIN_PLAYS:
+                adjustOffensiveGameplan(offPlan, coach, offStats, confidence=_confidence(offPlays))
+            oppPlays = oppOffStats['runPlays'] + oppOffStats['passAttempts']
+            if oppPlays >= REPLAN_MIN_PLAYS:
+                adjustDefensiveGameplan(defPlan, coach, oppOffStats, confidence=_confidence(oppPlays),
+                                        oppConcepts=oppConcepts)
+
     def advanceQuarter(self):
         """Transition to next quarter"""
         if self.currentQuarter == 1:
             self.currentQuarter = 2
             self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
+            self._maybeReadjustGameplans('q1q2')  # adaptive coaches re-plan on the fly
         elif self.currentQuarter == 2:
             # Halftime
             self.currentQuarter = 3
@@ -8053,6 +8771,7 @@ class Game:
             self.currentQuarter = 4
             self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
+            self._maybeReadjustGameplans('q3q4')  # adaptive coaches re-plan on the fly
         elif self.currentQuarter == 4:
             # Check for overtime
             if self.homeScore == self.awayScore:
@@ -8787,16 +9506,23 @@ class Game:
         carrier = p.runner if playType is PlayType.Run else getattr(p, 'receiver', None)
         if carrier is None or getattr(carrier, 'id', None) is None:
             return
-        if self._anomalyState.get(carrier.id, 'stable') not in ('rampant', 'awakened'):
-            return
-        if self._anomalyAttention.get(carrier.id, 0.0) <= 0:
+        # Who can warp reality? Normally only CULTIVATED players — rampant/awakened
+        # with attention. DURING A CRITICALITY the break is league-wide: ANY carrier
+        # can glitch (the parity floor, so every team is in the chaos, not just the
+        # teams that happened to have awakened players). Cultivated players still fire
+        # at the full rate; everyone else fires at a muted fraction — the retained edge
+        # for players fans actually built up. (This layer is already two-sided:
+        # helpful surge vs stumble, so broad glitching adds variance, not free wins.)
+        _cultivated = (self._anomalyState.get(carrier.id, 'stable') in ('rampant', 'awakened')
+                       and self._anomalyAttention.get(carrier.id, 0.0) > 0)
+        if not self._criticalityActive and not _cultivated:
             return
 
         from constants import (ANOMALY_GLITCH_MAX_PER_GAME, ANOMALY_GLITCH_COOLDOWN_PLAYS,
                                ANOMALY_L3_TRIGGER_PROB, ANOMALY_L3_HELP_CHANCE,
                                ANOMALY_L3_POS_YARDS, ANOMALY_L3_NEG_YARDS,
                                ANOMALY_L3_MAX_NEG_PER_TEAM, ANOMALY_L3_LATE_QUARTER,
-                               ANOMALY_L3_CLOSE_MARGIN)
+                               ANOMALY_L3_CLOSE_MARGIN, CRITICALITY_L3_FLOOR_FRACTION)
         # Per-game hygiene: shared cap + cooldown with the cosmetic layers.
         # Cap scales with the runtime intensity knob, matching _maybeFireAnomalies.
         glitchCap = max(1, round(ANOMALY_GLITCH_MAX_PER_GAME * self._anomalyIntensity))
@@ -8806,7 +9532,10 @@ class Game:
         if (playNum is not None
                 and playNum - self._lastGlitchPlayNumber < ANOMALY_GLITCH_COOLDOWN_PLAYS):
             return
-        if _random.random() >= ANOMALY_L3_TRIGGER_PROB * self._criticalityMultiplier * self._anomalyIntensity:
+        _triggerProb = ANOMALY_L3_TRIGGER_PROB * self._criticalityMultiplier * self._anomalyIntensity
+        if self._criticalityActive and not _cultivated:
+            _triggerProb *= CRITICALITY_L3_FLOOR_FRACTION   # baseline chaos for the non-cultivated
+        if _random.random() >= _triggerProb:
             return
 
         helpful = _random.random() < ANOMALY_L3_HELP_CHANCE
@@ -9082,8 +9811,17 @@ class Play():
         # charge for a real miss). A block is NOT rescued — the power bends distance/accuracy, not a
         # defender already in the ball's path. None unless they are ready + the feature is on.
         self.awakenedFire = None
+        # A charged kicker attempting BEYOND their normal range: any make is the
+        # POWER, not a normal-roll fluke. Base make-prob is floored at 5%, so
+        # without this an impossible-length kick could roll a plain make and
+        # render with NO power flavor — i.e. look like a "regular" 87-yard kick.
+        # Route those through the power so a long make always narrates as one.
+        beyondNormalRange = kickerCharged and yardsToFG > (self.kicker.maxFgDistance if self.kicker else 0)
         if self.isFgBlocked:
             self.isFgGood = False
+        elif beyondNormalRange:
+            self.awakenedFire = self.game._awakenedTryFire('kick', self.kicker)
+            self.isFgGood = bool(self.awakenedFire)
         elif x <= probability:
             self.isFgGood = True
         else:
@@ -9217,6 +9955,14 @@ class Play():
         AFTER the defense gets a chance to call timeout."""
         self.playType = PlayType.Kneel
         self.yardage = -1
+        # The extra play-clock drain (~36s, applied post-play in the game loop)
+        # only happens if the clock was RUNNING before the snap. After a stoppage
+        # (timeout / 2-min warning) the pre-snap play clock does NOT run the game
+        # clock — a kneel then burns only the ~4s below (clock restarts at the
+        # snap, ball is immediately dead). Capture the pre-kneel state so the loop
+        # can honor it; a kneel is an in-bounds play, so the clock runs AFTER the
+        # snap either way.
+        self.game._kneelClockWasRunning = self.game.clockRunning
         self.game.clockRunning = True
         # Only drain the actual play time (snap to knee-down)
         kneelDuration = min(4, self.game.gameClockSeconds)
@@ -9378,7 +10124,8 @@ class Play():
         5. Breakaway potential (second level yards)
         """
         self.playType = PlayType.Run
-        self.runner = self.offense.rosterDict['rb']
+        # A trick play (reverse) can hand the ball to a WR instead of the RB.
+        self.runner = getattr(self, '_forcedRunner', None) or self.offense.rosterDict['rb']
         if self.runner is None:
             logging.error(f"Team {self.offense.name} has no RB - run play yields 0 yards")
             self.yardage = 0
@@ -9398,10 +10145,22 @@ class Play():
         # Determine designed play gap — weighted by coach's offensive gameplan
         isHomePossession = (self.game.offensiveTeam == self.game.homeTeam)
         activeOffGameplan = self.game.homeOffGameplan if isHomePossession else self.game.awayOffGameplan
-        if activeOffGameplan is not None:
-            gapDist = dict(activeOffGameplan.gapDistribution)
-            # Short yardage / goal line: power inside
-            if self.game.yardsToFirstDown <= 2 or self.game.yardsToEndzone <= 5:
+        # The called run CONCEPT steers which gap it attacks so the narrated
+        # direction matches the play (dives inside, sweeps to the edge). Falls
+        # back to the coach's gap tendencies when concepts are off.
+        from constants import RUN_CONCEPT_ENABLED as _RC_ON, RUN_CONCEPTS as _RCS
+        _conceptName = getattr(self, 'runConcept', None)
+        _conceptGaps = _RCS.get(_conceptName, {}).get('gaps') if _RC_ON else None
+        _forcedGap = getattr(self, '_forcedGap', None)   # trick plays (statue/reverse) force the edge
+        if _forcedGap:
+            gapDist = dict(_forcedGap)
+            designedGapType = _random.choices(list(gapDist.keys()), weights=list(gapDist.values()), k=1)[0]
+        elif activeOffGameplan is not None:
+            gapDist = dict(_conceptGaps) if _conceptGaps else dict(activeOffGameplan.gapDistribution)
+            # Short yardage / goal line: power inside — but a deliberately-called
+            # perimeter concept (a called sweep on the goal line) stays true to itself.
+            if ((self.game.yardsToFirstDown <= 2 or self.game.yardsToEndzone <= 5)
+                    and _conceptName in (None, 'power')):
                 gapDist = {'A-gap': 0.60, 'B-gap': 0.30, 'C-gap': 0.10}
             designedGapType = _random.choices(
                 list(gapDist.keys()), weights=list(gapDist.values()), k=1
@@ -9411,7 +10170,10 @@ class Play():
 
         # Get per-play defensive scheme multipliers
         defGameplan = self.game.awayDefGameplan if isHomePossession else self.game.homeDefGameplan
-        if GAMEPLAN_AVAILABLE and defGameplan is not None:
+        if getattr(self, '_preRolledScheme', None) is not None:
+            scheme = self._preRolledScheme   # RPO already rolled + read this scheme pre-snap
+            self._preRolledScheme = None
+        elif GAMEPLAN_AVAILABLE and defGameplan is not None:
             offScoreDiff = (self.game.homeScore - self.game.awayScore if isHomePossession
                             else self.game.awayScore - self.game.homeScore)
             scheme = getDefensiveScheme(
@@ -9423,6 +10185,47 @@ class Play():
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         self._captureBlitzer(scheme, defGameplan if GAMEPLAN_AVAILABLE else None)
         effectiveRunDef = self.defense.defenseRunCoverageRating * scheme['runDefMult']
+
+        # --- Run CONCEPT: deception vs the defense's commitment, gated by execution ---
+        # The coach called the concept (self.runConcept). Its matchup edge vs the
+        # live scheme is realized only if the ball-handler EXECUTES it (sells the
+        # fake); a telegraphed deception concept reverses the edge (defense reads
+        # it). Also fixes the realism gap where a run was blind to the blitz.
+        from constants import (RUN_CONCEPT_ENABLED, RUN_CONCEPTS,
+                               RUN_CONCEPT_EDGE_STRENGTH, RUN_VS_BLITZ_BONUS)
+        conceptName = getattr(self, 'runConcept', None) or 'power'
+        self.runConcept = conceptName
+        self.conceptTelegraphed = False
+        self.conceptEdge = 0.0
+        # Log this concept for the defense's tendency read (Phase 1b).
+        _cc = self.game.homeConceptCounts if isHomePossession else self.game.awayConceptCounts
+        _cc[conceptName] = _cc.get(conceptName, 0) + 1
+        if RUN_CONCEPT_ENABLED:
+            if scheme.get('blitzPackage') is not None:
+                effectiveRunDef *= (1 - RUN_VS_BLITZ_BONUS)   # vacated front — any run gashes it
+            edge = _runConceptEdge(conceptName, scheme, defGameplan)
+            d = RUN_CONCEPTS.get(conceptName, {}).get('deception', 0.1)
+            execQ = _runConceptExecQ(self.runner, conceptName)
+            execFactor = (1 - d) + d * (-0.4 + 1.6 * execQ)   # deception concepts swing on execution
+            realizedEdge = max(-0.35, min(0.5, edge)) * execFactor * RUN_CONCEPT_EDGE_STRENGTH
+            effectiveRunDef *= (1 - realizedEdge)
+            self.conceptEdge = realizedEdge
+            self.conceptTelegraphed = (d >= 0.5 and execQ < 0.35 and edge > 0)
+            self.insights['runConcept'] = conceptName
+            self.insights['conceptEdge'] = round(realizedEdge, 3)
+
+        # RPO give into a correctly-read light box — the numbers favor the run.
+        _rpoRelief = getattr(self, '_rpoRunRelief', 0.0)
+        if _rpoRelief:
+            effectiveRunDef *= (1 - _rpoRelief)
+            self._rpoRunRelief = 0.0
+
+        # Trick play (statue / reverse): a big payoff when the D's commitment was
+        # there, a stuff/loss when it wasn't (relief can be negative = backfire).
+        _trickRelief = getattr(self, '_trickRunRelief', 0.0)
+        if _trickRelief:
+            effectiveRunDef *= (1 - _trickRelief)
+            self._trickRunRelief = 0.0
 
         # Track first-half run plays for halftime adjustment
         if self.game.currentQuarter <= 2:
@@ -9524,12 +10327,16 @@ class Play():
                 # Broke through: 5-12 more yards (avg 8)
                 self.yardage += max(4, min(12, int(np.random.normal(8.0, 2.0))))
                 if batched_randint(1, 100) > gate3Chance:
-                    # Chased down by deep coverage: 6-20 more yards (avg 11)
-                    self.yardage += max(4, min(22, int(np.random.normal(11.0, 4.0))))
+                    # Chased down by deep coverage: trimmed (avg 11→8.5, cap 22→16)
+                    self.yardage += max(4, min(16, int(np.random.normal(8.5, 3.0))))
                 else:
-                    # Housecall — exponential tail (housecall avg ~20)
+                    # Housecall — exponential tail, TRIMMED (mean 22→14, min 12→10)
+                    # so a full game rarely tops ~7 ypc and the 400-yard freak lines
+                    # go away. The average ypc is ~unchanged (the tail is a small
+                    # slice of runs, so it barely moves the mean); this only clips
+                    # the boom-run magnitudes, keeping the RB's normal workload/impact.
                     remaining = self.yardsToEndzone - self.yardage
-                    self.yardage += min(remaining, max(12, int(np.random.exponential(22))))
+                    self.yardage += min(remaining, max(10, int(np.random.exponential(14))))
 
         self.yardage = min(self.yardage, self.yardsToEndzone)
 
@@ -9850,7 +10657,8 @@ class Play():
         spd = rb.gameAttributes.speed
         agi = rb.gameAttributes.agility
         isScreen = reason == 'screen'
-        airYards = randint(-3, 1) if isScreen else randint(-1, 4)
+        # A screen is thrown at the line — 0 air yards, the whole gain is YAC.
+        airYards = 0 if isScreen else randint(-1, 4)
         baseYac = RB_SCREEN_BASE_YAC if isScreen else RB_CHECKDOWN_BASE_YAC
         yacMean = max(1.0, baseYac + (spd - 78) * RB_CHECKDOWN_YAC_PER_SPEED)
         yac = max(0, int(round(np.random.exponential(yacMean))) + int((agi - 80) / 25))
@@ -10067,6 +10875,13 @@ class Play():
 
         # Mean openness shifts based on skill differential
         meanOpenness = 50 + (skillDifferential / 2)  # Range roughly 30-70
+        # Play-action (sold fake pulled the second level up) + a route concept that
+        # beat the coverage it faced — both spring receivers genuinely open. 0 for
+        # standard dropbacks / when the fake or concept didn't beat the look.
+        meanOpenness += getattr(self, '_paOpennessBonus', 0.0)
+        meanOpenness += getattr(self, '_passConceptOpennessBonus', 0.0)
+        meanOpenness += getattr(self, '_rpoOpennessBonus', 0.0)   # RPO throw into a vacated box
+        meanOpenness += getattr(self, '_trickOpennessBonus', 0.0)  # flea flicker: receiver open deep
         meanOpenness = max(10, min(90, meanOpenness))  # Clamp to reasonable range
 
         # Standard deviation - better receivers have more consistent separation
@@ -10379,6 +11194,12 @@ class Play():
             PassType.deep:     {'mean': 24,   'stdDev': 4.5},
             PassType.hailMary: {'mean': 45,   'stdDev': 8.0},
         }
+        # A called screen (route concept) is a throw at or behind the line — the
+        # gain is all run-after-catch, so air yards are ~0 regardless of the
+        # target's nominal route depth.
+        if getattr(self, 'passConcept', 'standard') == 'screen':
+            return max(0, int(np.random.normal(0.4, 0.8)))
+
         params = passTypeParams.get(passType, passTypeParams[PassType.medium])
         airYards = int(np.random.normal(params['mean'], params['stdDev']))
         return max(0, airYards)
@@ -10430,7 +11251,10 @@ class Play():
         # Get per-play defensive scheme multipliers
         isHomePossession = (self.game.offensiveTeam == self.game.homeTeam)
         defGameplan = self.game.awayDefGameplan if isHomePossession else self.game.homeDefGameplan
-        if GAMEPLAN_AVAILABLE and defGameplan is not None:
+        if getattr(self, '_preRolledScheme', None) is not None:
+            scheme = self._preRolledScheme   # RPO already rolled + read this scheme pre-snap
+            self._preRolledScheme = None
+        elif GAMEPLAN_AVAILABLE and defGameplan is not None:
             offScoreDiff = (self.game.homeScore - self.game.awayScore if isHomePossession
                             else self.game.awayScore - self.game.homeScore)
             scheme = getDefensiveScheme(
@@ -10452,8 +11276,69 @@ class Play():
         else:
             basePassRush = self.defense.defensePassRushRating
         effectivePassRush = basePassRush * scheme['passRushMult']
+        effectivePassRush *= getattr(self, '_trickSackMult', 1.0)  # flea flicker blown up -> rush gets home
+        self._trickSackMult = 1.0
         # Team-level pass coverage as fallback (individual matchups applied per-receiver below)
         effectivePassDef = self.defense.defensePassCoverageRating * scheme['passDefMult']
+
+        # --- Play-action: a sold fake vs a run-committed defense freezes the second
+        # level -> receivers open (softer coverage) and the rush is slower. Vs a
+        # pass-committed D nobody bites and the wasted fake time lets the rush home.
+        self.playAction = getattr(self, 'playAction', False)
+        self.paWorked = False
+        self._paOpennessBonus = 0.0
+        if self.playAction:
+            from constants import (PLAY_ACTION_ENABLED, PLAY_ACTION_OPENNESS,
+                                   PLAY_ACTION_RUSH_RELIEF, PLAY_ACTION_BACKFIRE, PLAY_ACTION_EXEC)
+            if PLAY_ACTION_ENABLED:
+                _isHome = self.game.offensiveTeam is self.game.homeTeam
+                _defGp = self.game.awayDefGameplan if _isHome else self.game.homeDefGameplan
+                _runFocus = getattr(_defGp, 'runStopFocus', 0.5) if _defGp is not None else 0.5
+                _blitz = scheme.get('blitzPackage') is not None
+                _runCommit = max(0.0, (_runFocus - 0.5) * 2) + (0.25 if _blitz else 0.0)
+                _qa = getattr(self.passer, 'gameAttributes', None) or self.passer.attributes
+                _exec = sum(getattr(_qa, a, 70) * w for a, w in PLAY_ACTION_EXEC.items())
+                _execQ = max(0.0, min(1.0, (_exec - 60) / 40.0))
+                _paEffect = min(1.0, _runCommit) * (0.3 + 0.7 * _execQ)   # sold fake vs a run-keying D
+                # Real receiver openness — the second level bit on the fake. Applied
+                # per-receiver in calculateReceiverOpenness (the actual completion driver).
+                self._paOpennessBonus = _paEffect * PLAY_ACTION_OPENNESS
+                effectivePassRush *= (1 - _paEffect * PLAY_ACTION_RUSH_RELIEF)   # LBs frozen, slower rush
+                self.paWorked = _paEffect > 0.15
+                if _runFocus < 0.45 and not _blitz:      # D was sitting on the pass — fake wasted
+                    effectivePassRush *= (1 + PLAY_ACTION_BACKFIRE)
+                self.insights['playActionWorked'] = self.paWorked
+
+        # --- Route concept: springs receivers open when it beats the coverage it
+        # faces (mesh vs man, flood vs zone, screen vs blitz). Applied per receiver
+        # in the coverage loop below; here we set the beaten look + the relief
+        # magnitude (execution-scaled). MATCH coverage blunts it.
+        # Its coverage matchup is known now (coverageType is rolled for the play),
+        # so resolve the openness bonus once — a concept that beats the look springs
+        # receivers open (added in calculateReceiverOpenness, the completion driver).
+        self._passConceptOpennessBonus = 0.0
+        self.passConceptHit = False
+        _pc = getattr(self, 'passConcept', 'standard')
+        if _pc and _pc != 'standard':
+            from constants import (PASS_CONCEPT_ENABLED, PASS_CONCEPTS,
+                                   PASS_CONCEPT_OPENNESS, PASS_CONCEPT_MATCH_DAMP, PASS_CONCEPT_EXEC)
+            if PASS_CONCEPT_ENABLED and GAMEPLAN_AVAILABLE:
+                _beats = PASS_CONCEPTS.get(_pc, {}).get('beats')
+                _ct = scheme.get('coverageType')
+                _bp = scheme.get('blitzPackage')
+                _factor = 0.0
+                if _beats == 'man':
+                    _factor = 1.0 if _ct == CoverageType.MAN else (PASS_CONCEPT_MATCH_DAMP if _ct == CoverageType.MATCH else 0.0)
+                elif _beats == 'zone':
+                    _factor = 1.0 if _ct == CoverageType.ZONE else (PASS_CONCEPT_MATCH_DAMP if _ct == CoverageType.MATCH else 0.0)
+                elif _beats == 'blitz':
+                    _factor = 1.0 if _bp is not None else 0.0
+                if _factor > 0:
+                    _qa = getattr(self.passer, 'gameAttributes', None) or self.passer.attributes
+                    _ex = sum(getattr(_qa, a, 70) * w for a, w in PASS_CONCEPT_EXEC.items())
+                    _exq = max(0.0, min(1.0, (_ex - 60) / 40.0))
+                    self._passConceptOpennessBonus = (0.35 + 0.65 * _exq) * PASS_CONCEPT_OPENNESS * _factor
+                    self.passConceptHit = True
 
         # Track first-half pass attempts for halftime adjustment
         if self.game.currentQuarter <= 2:
@@ -11102,10 +11987,17 @@ class Play():
 
                     # Stretch for the marker on the catch (mirrors the run side): a
                     # confident receiver with the power to extend reaches it across;
-                    # an undisciplined reach feeds the strip-fumble check below.
-                    _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.receiver)
-                    if _stBonus:
-                        self.yardage = min(self.yardage + _stBonus, self.yardsToEndzone - 1)
+                    # an undisciplined reach feeds the strip-fumble check below. A
+                    # receiver who just laid out for a DIVING grab is already extended
+                    # on the ground and can't ALSO reach for the marker — the two
+                    # read as contradictory on the same play, so skip the stretch
+                    # (mechanics + narration) when it was a diving catch.
+                    self._stretchNote = None
+                    _stFumbleBump = 0
+                    if not getattr(self, '_diveCatch', False):
+                        _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.receiver)
+                        if _stBonus:
+                            self.yardage = min(self.yardage + _stBonus, self.yardsToEndzone - 1)
 
                     # Update stats
                     self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)

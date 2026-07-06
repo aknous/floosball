@@ -252,6 +252,160 @@ COACH_OFFENSIVE_MIND_FLOOR = 60 # offensiveMind below this value gives zero matc
 # player returning as a coach), instead of drawing a fresh name from the pool.
 COACH_RETIRED_NAME_CHANCE = 0.30
 
+# Mid-game re-plan (see floosball_game._maybeReadjustGameplans). The mid-game
+# adjustment reads the running (cumulative) box score, which is a THIN sample
+# early in the game — re-planning off one noisy quarter chased variance and cost
+# wins. These make the correction sample-aware: skip it below a floor of plays,
+# and scale its magnitude by how much data backs the read.
+REPLAN_MIN_PLAYS = 10             # a side needs >= this many plays before its plan is re-adjusted
+REPLAN_FULL_CONFIDENCE_PLAYS = 30 # plays at which the adjustment runs at full magnitude (confidence=1.0)
+
+# Quick-game (short-pass) suppression. The struggling-offense adjustment sets a
+# pass-depth bias toward quick, high-percentage throws to build rhythm — but that
+# is a rhythm/ball-control tool, WRONG in catch-up mode where the offense needs
+# chunk plays. _applyGameplanMods suppresses the bias when the offense is in
+# catch-up mode (let the deep/desperation play-calling ride instead).
+QUICKGAME_SUPPRESS_DEFICIT = 9    # 2nd half: behind by 2+ scores -> need chunks, drop the quick game
+QUICKGAME_LATE_DEFICIT = 3       # Q4/OT: behind by a FG or more -> need to hurry, drop the quick game
+
+# runPassRatio wiring (see Game._applyGameplanMods). The offensive gameplan's
+# runPassRatio (0.25-0.75, 0.5 neutral, higher = more run) was never consumed by
+# play selection; these map its deviation from neutral into multiplicative nudges
+# on the run weight (up) and the four pass-tier weights (down), so the mid-game
+# adjustment toward "what's working" actually shifts the run/pass mix.
+RUNPASS_RUN_SWING = 1.2          # run-weight multiplier = 1 + (ratio-0.5)*this  (r=0.75 -> run x1.30)
+RUNPASS_PASS_SWING = 1.0         # pass-tier multiplier = 1 - (ratio-0.5)*this   (r=0.75 -> pass x0.75)
+
+# ---------------------------------------------------------------------------
+# Run-play CONCEPTS (playbook diversification Phase 1 — see docs/PLAYBOOK_PLAN.md)
+# ---------------------------------------------------------------------------
+# Every run is now a CONCEPT that exploits (or is punished by) the defense's
+# commitment. The coach calls the concept (fit to personnel + expected defense);
+# a per-play EXECUTION roll on player attributes decides whether the deception
+# lands (full edge) or telegraphs (edge reversed). `conceptEdge` > 0 => weaker
+# effective run defense => more yards.
+RUN_CONCEPT_ENABLED = True        # master toggle (A/B the whole concept layer)
+RUN_CONCEPT_EDGE_STRENGTH = 0.30  # scales realized edge into the effectiveRunDef multiplier.
+                                  # Kept modest so concepts REDISTRIBUTE yards (gain vs the wrong
+                                  # defense, lose vs the right one) rather than inflate the run game.
+RUN_VS_BLITZ_BONUS = 0.06         # realism fix: ANY run vs an active blitz gashes the vacated front
+                                  # (was missing — runDefMult ignored the blitz). Concepts stack on top.
+
+# Per concept: `deception` (0=execution-flat like power, ~0.8=swings hard on execution),
+# `exec` (player-attribute weights for the execution roll, summing ~1),
+# `edge` (matchup vs the live defensive scheme: blitz on/off, runStopFocus dev from 0.5,
+#         aggressiveness dev from 0.5), `gaps` (which run gap the concept attacks, so the
+#         narrated direction matches the concept — dives go inside, sweeps go to the edge).
+# base = baseline call propensity before coach/personnel/read.
+RUN_CONCEPTS = {
+    'power':   {'base': 0.46, 'deception': 0.10, 'exec': {'power': 0.6, 'discipline': 0.4},
+                'edge': {'blitz': 0.00, 'runFocus': -0.35, 'aggr': 0.00},
+                'gaps': {'A-gap': 0.60, 'B-gap': 0.30, 'C-gap': 0.10}},
+    'draw':    {'base': 0.16, 'deception': 0.80, 'exec': {'creativity': 0.4, 'focus': 0.3, 'vision': 0.3},
+                'edge': {'blitz': 0.45, 'runFocus': -0.45, 'aggr': 0.10},
+                'gaps': {'A-gap': 0.45, 'B-gap': 0.40, 'C-gap': 0.15}},
+    'counter': {'base': 0.16, 'deception': 0.70, 'exec': {'agility': 0.5, 'creativity': 0.5},
+                # `flat` = inherent misdirection value (harder to defend than a straight run);
+                # runFocus POSITIVE = the counter beats a run-committed D that over-flows to the
+                # fake; aggr POSITIVE = beats over-pursuit. Defenses average ~0.4 aggr, so the
+                # flat + runFocus terms keep counter viable when the aggr term is negative.
+                'edge': {'flat': 0.05, 'blitz': 0.10, 'runFocus': 0.10, 'aggr': 0.30},
+                'gaps': {'A-gap': 0.15, 'B-gap': 0.45, 'C-gap': 0.40}},
+    'sweep':   {'base': 0.22, 'deception': 0.40, 'exec': {'speed': 0.4, 'agility': 0.3, 'blocking': 0.3},
+                'edge': {'blitz': 0.05, 'runFocus': 0.35, 'aggr': -0.45},
+                'gaps': {'A-gap': 0.05, 'B-gap': 0.25, 'C-gap': 0.70}},
+}
+
+# Defensive counter-adaptation (Phase 1b): the D-coach reads the offense's run-
+# concept tendencies during the game and adjusts to take them away — lean on
+# draws and the D stops blitzing; lean on counters and it plays disciplined;
+# power/inside and it stacks the box; sweeps and it seals the edge. Applied inside
+# adjustDefensiveGameplan, gated by the D-coach's adaptability. Counter and sweep
+# pull aggressiveness in OPPOSITE directions, so a balanced ground game can't be
+# fully countered (the cat-and-mouse).
+DEF_COUNTER_STRENGTH = 0.6        # scales the whole counter adjustment
+DEF_COUNTER_MIN_RUNS = 5          # need this many run-concept samples before countering
+
+# ---------------------------------------------------------------------------
+# Play-action (pass concept — Phase 2, see docs/PLAYBOOK_PLAN.md)
+# ---------------------------------------------------------------------------
+# A pass off a run fake. The pass-side of "exploit the defense's commitment":
+# when the fake is SOLD (QB execution) against a run-committed / blitzing defense,
+# the linebackers and safeties bite -> receivers come open and the rush is slower.
+# Vs a pass-committed defense nobody bites (no benefit) and the wasted fake time
+# lets the rush get home (the downside that makes it a real decision).
+PLAY_ACTION_ENABLED = True
+PLAY_ACTION_OPENNESS = 22         # receiver openness points at a fully-sold PA vs a run-committed D
+                                  # (added to REAL openness -> completion; scaled by paEffect 0-1)
+PLAY_ACTION_RUSH_RELIEF = 0.18    # how much a sold fake slows the pass rush (LBs frozen)
+PLAY_ACTION_BACKFIRE = 0.10       # extra pass rush when PA is called vs a pass-committed D (wasted fake)
+PLAY_ACTION_EXEC = {'creativity': 0.5, 'focus': 0.3, 'agility': 0.2}  # QB sells the fake
+
+# ---------------------------------------------------------------------------
+# Route concepts (pass concepts vs COVERAGE — Phase 2, see docs/PLAYBOOK_PLAN.md)
+# ---------------------------------------------------------------------------
+# A route concept that beats the coverage it faces springs receivers open —
+# mesh (crossers/rubs) beats MAN, flood (overload) beats ZONE, screen beats the
+# BLITZ (rushers upfield). Vs the wrong look it's neutral; MATCH coverage (the
+# hybrid) blunts concepts. The coach calls the concept that beats the defense's
+# coverage tendency (scouting read); a smart QB executes it (reads/times it).
+PASS_CONCEPT_ENABLED = True
+PASS_CONCEPT_OPENNESS = 20        # receiver openness points on a matched, well-run concept (× execution)
+PASS_CONCEPT_MATCH_DAMP = 0.4     # concept effect vs MATCH coverage (it's built to handle concepts)
+PASS_CONCEPT_EXEC = {'instinct': 0.4, 'creativity': 0.35, 'focus': 0.25}  # QB reads/times the concept
+# base = call propensity before the coach's scouting read; `beats` = the look it defeats.
+PASS_CONCEPTS = {
+    'standard': {'base': 0.55, 'beats': None},
+    'mesh':     {'base': 0.15, 'beats': 'man'},
+    'flood':    {'base': 0.15, 'beats': 'zone'},
+    'screen':   {'base': 0.15, 'beats': 'blitz'},
+}
+
+# ---------------------------------------------------------------------------
+# RPO — run-pass option (Phase 2, see docs/PLAYBOOK_PLAN.md)
+# ---------------------------------------------------------------------------
+# A run look where the QB reads the box AT THE SNAP and either hands it off (into
+# a light box) or pulls it and throws a quick pass (into the box a loaded front
+# vacated). The offense always has the numbers IF the QB reads it right — so the
+# value is the READ (gated by QB instinct/vision), not a big per-play bonus. The
+# defensive scheme is rolled pre-snap (in _executeRpo) and reused by the resolver.
+RPO_ENABLED = True
+RPO_LOADED_RUNFOCUS = 0.63        # runStopFocus above this (or a blitz) = a genuinely loaded box -> throw;
+                                  # otherwise the give is the default (keeps RPOs run-first, not pass-heavy)
+RPO_READ_BASE = 0.55             # base chance the QB reads the box correctly
+RPO_READ_SKILL = 0.40            # + up to this from QB read skill (instinct/vision) -> ~0.95 for an elite QB
+RPO_BONUS = 0.14                 # relief for the CORRECT option (run vs light box / pass vs vacated coverage)
+RPO_OPENNESS = 16                # receiver openness points on a correctly-read RPO throw
+RPO_EXEC = {'instinct': 0.5, 'vision': 0.5}   # QB reads the box
+RPO_QB_FIT = {'instinct': 0.35, 'vision': 0.3, 'agility': 0.35}  # which QBs run RPOs well
+
+# ---------------------------------------------------------------------------
+# Trick plays (Phase 3, see docs/PLAYBOOK_PLAN.md) — high-variance CALLED SHOTS
+# ---------------------------------------------------------------------------
+# Rare gadgets a BOLD coach calls when the matchup is right and the game lets him
+# afford the risk. Each beats a specific defensive commitment; if that commitment
+# ISN'T there (or the players don't execute), it blows up (sack / stuff / big loss).
+# "When" rules (in _selectTrickPlay): only aggressive coaches, keyed to the D's
+# tendency, in a manageable field-position band, NOT in hurry-up / short-yardage /
+# red zone / backed up, and NOT as a desperation heave (called shots only).
+TRICK_PLAY_ENABLED = True
+TRICK_PLAY_BASE = 0.02            # base rate for a max-aggressive coach in an ideal spot (per-eligible-play; rolls compound over a game, so kept low — gadgets are a rare called shot, a few per team per SEASON)
+TRICK_FIELD_MIN_YTE = 21         # not in the red zone (yardsToEndzone must exceed this)
+TRICK_FIELD_MAX_YTE = 85         # not backed up in own territory (must be at/under this)
+# resolves: 'run'|'pass'; trigger: which D commitment it beats; exec: the key
+# player's attributes (the deceiver / ball-carrier); payoff/backfire magnitudes.
+TRICK_PLAYS = {
+    'flea_flicker': {'resolves': 'pass', 'trigger': 'run_commit', 'carrier': 'qb',
+                     'exec': {'creativity': 0.4, 'instinct': 0.3, 'armStrength': 0.3},
+                     'openness': 42, 'sack_backfire': 0.35},
+    'statue':       {'resolves': 'run', 'trigger': 'rush', 'carrier': 'rb',
+                     'exec': {'creativity': 0.5, 'focus': 0.5},
+                     'relief': 0.38, 'backfire': 0.28},
+    'reverse':      {'resolves': 'run', 'trigger': 'pursuit', 'carrier': 'wr',
+                     'exec': {'speed': 0.4, 'agility': 0.4, 'creativity': 0.2},
+                     'relief': 0.42, 'backfire': 0.40},
+}
+
 # Floobits Economy — earning amounts
 CLINCH_PLAYOFF_REWARD = 25
 CLINCH_TOPSEED_REWARD = 50
@@ -1170,6 +1324,14 @@ AWAKENED_DEF_FIRE_CHANCE = 35       # % a ready, position-appropriate defender d
                                     # (gates defensive fires so they don't dominate offense — A-lite)
 AWAKENED_CRITICALITY_CHARGE_MULT = 4.0  # during a Criticality the charge meter fills this much faster
 
+# A charged awakened kicker extends their FG range, but NOT to infinity — an
+# 87-yard attempt reads as broken even for a powered kicker. This is the max
+# KICK distance (yardsToEndzone + fgSnapDistance) a charged kicker will attempt;
+# their in-range check uses max(normal max, this). ~70 = a huge-but-believable
+# "superpowered" boot (the real record is 66). Set very high to restore the old
+# "from anywhere" behavior.
+AWAKENED_FG_MAX_YARDS = 70
+
 # Play-calling bias toward an AWAKENED (powered-up) skill player — the offense
 # feeds the star. Without this the play-caller ignores awakened state entirely,
 # so a powered-up RB could sit through six straight passes. Applied as a weight
@@ -1221,6 +1383,11 @@ ANOMALY_L3_NEG_YARDS = (2, 5)        # stumble loss range (field position only)
 ANOMALY_L3_MAX_NEG_PER_TEAM = 1      # cap stumbles per team per game
 ANOMALY_L3_LATE_QUARTER = 4          # Q4+ counts as "late"
 ANOMALY_L3_CLOSE_MARGIN = 8          # within this margin in a late game → no stumbles
+# During a Criticality the mechanical glitch spreads league-wide: ANY carrier can
+# warp (parity — every team is in the chaos), but non-cultivated players (not
+# rampant/awakened) fire at this fraction of the full rate, so genuinely-awakened
+# players still trigger more (the retained edge). 1.0 = full parity, 0 = old behavior.
+CRITICALITY_L3_FLOOR_FRACTION = 0.4
 
 REACTION_TARGET_TYPES = {"play", "sideline_quote"}
 
