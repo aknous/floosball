@@ -273,8 +273,19 @@ QUICKGAME_LATE_DEFICIT = 3       # Q4/OT: behind by a FG or more -> need to hurr
 # play selection; these map its deviation from neutral into multiplicative nudges
 # on the run weight (up) and the four pass-tier weights (down), so the mid-game
 # adjustment toward "what's working" actually shifts the run/pass mix.
-RUNPASS_RUN_SWING = 1.2          # run-weight multiplier = 1 + (ratio-0.5)*this  (r=0.75 -> run x1.30)
-RUNPASS_PASS_SWING = 1.0         # pass-tier multiplier = 1 - (ratio-0.5)*this   (r=0.75 -> pass x0.75)
+RUNPASS_RUN_SWING = 1.8          # run-weight multiplier = 1 + (ratio-0.5)*this  (r=0.75 -> run x1.45)
+RUNPASS_PASS_SWING = 1.5         # pass-tier multiplier = 1 - (ratio-0.5)*this   (r=0.75 -> pass x0.625)
+
+# --- Read-the-box: the offense exploits the defense's committed run/pass tilt ---
+# The defense's runStopFocus (0.20 pass-focused/light box .. 0.80 run-focused/stacked
+# box, halftime-adjusted toward whatever the offense did well) is readable pre-snap.
+# A smart offense runs into a light box and passes against a stacked one — which
+# closes the cat-and-mouse loop: over-passing pushes the defense pass-focused, the
+# offense then punishes the light box on the ground, forcing the defense back and
+# reopening the pass. run *= (1 - boxTilt*S*read), pass *= (1 + boxTilt*S*read).
+BOXREAD_STRENGTH = 1.2           # swing scale; boxTilt in [-0.30,+0.30] -> up to ~36% at full read
+BOXREAD_BASE_READ = 0.5          # every coach reads the box at least this much (0..1)
+BOXREAD_SCOUT_BONUS = 0.5        # extra read scaled by scouting above neutral (80 -> +0, 100 -> +this)
 
 # ---------------------------------------------------------------------------
 # Run-play CONCEPTS (playbook diversification Phase 1 — see docs/PLAYBOOK_PLAN.md)

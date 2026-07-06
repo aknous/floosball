@@ -2771,32 +2771,33 @@ class Game:
         """
         ytg = self.yardsToFirstDown
         if self.down == 1:
-            # 1st down: balanced 50/50 base. Most plays happen here, so
-            # this is the biggest lever on overall pass/run ratio.
-            return {'run': 50.0, 'short': 22.0, 'medium': 18.0, 'long': 8.0, 'deep': 2.0}
+            # 1st down: run-leaning base (55/45). Most plays happen here, so this
+            # is the biggest lever on the overall mix — trimmed from 50/50 to pull
+            # the league pass rate down off the ~65% it was drifting to.
+            return {'run': 55.0, 'short': 20.0, 'medium': 15.0, 'long': 8.0, 'deep': 2.0}
         elif self.down == 2:
             if ytg <= 4:
-                # 2nd & short — run preferred (was already).
-                return {'run': 58.0, 'short': 28.0, 'medium': 10.0, 'long': 4.0, 'deep': 0.0}
+                # 2nd & short — run preferred.
+                return {'run': 62.0, 'short': 26.0, 'medium': 8.0, 'long': 4.0, 'deep': 0.0}
             elif ytg <= 9:
-                # 2nd & medium — closer to balanced, was 35/65 too pass-heavy.
-                return {'run': 45.0, 'short': 20.0, 'medium': 25.0, 'long': 9.0, 'deep': 1.0}
+                # 2nd & medium — run-leaning balanced (was 45/55).
+                return {'run': 52.0, 'short': 18.0, 'medium': 21.0, 'long': 8.0, 'deep': 1.0}
             else:
-                # 2nd & long — obvious passing situation.
-                return {'run': 22.0, 'short': 20.0, 'medium': 28.0, 'long': 26.0, 'deep': 4.0}
+                # 2nd & long — a passing down, but a draw is live.
+                return {'run': 26.0, 'short': 20.0, 'medium': 28.0, 'long': 22.0, 'deep': 4.0}
         else:
             if ytg <= 3:
                 # 3rd & short — run is the percentage call.
-                return {'run': 60.0, 'short': 32.0, 'medium': 4.0, 'long': 4.0, 'deep': 0.0}
+                return {'run': 65.0, 'short': 28.0, 'medium': 4.0, 'long': 3.0, 'deep': 0.0}
             elif ytg <= 5:
-                # 3rd & medium-short — was 20% run, bump to 25%.
-                return {'run': 25.0, 'short': 45.0, 'medium': 21.0, 'long': 9.0, 'deep': 0.0}
+                # 3rd & medium-short — pass-leaning but the draw is real (was 25% run).
+                return {'run': 32.0, 'short': 40.0, 'medium': 20.0, 'long': 8.0, 'deep': 0.0}
             elif ytg <= 12:
-                # 3rd & medium-long — still mostly pass but a draw is realistic.
-                return {'run': 12.0, 'short': 15.0, 'medium': 48.0, 'long': 23.0, 'deep': 2.0}
+                # 3rd & medium-long — mostly pass, a draw is realistic.
+                return {'run': 18.0, 'short': 16.0, 'medium': 43.0, 'long': 21.0, 'deep': 2.0}
             else:
                 # 3rd & extra long — almost always pass.
-                return {'run': 6.0, 'short': 10.0, 'medium': 15.0, 'long': 61.0, 'deep': 8.0}
+                return {'run': 8.0, 'short': 12.0, 'medium': 16.0, 'long': 56.0, 'deep': 8.0}
 
     def _computePlayWeights(self, scoreDiff: int, coach) -> dict:
         """Compute play call probability weights for downs 1–3."""
@@ -2806,6 +2807,7 @@ class Game:
         weights = self._applyMatchupMods(weights, coach)
         weights = self._applyCoachMods(weights, coach)
         weights = self._applyGameplanMods(weights)
+        weights = self._applyBoxReadMods(weights, coach)
         weights = self._applyAwakenedMods(weights)
 
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
@@ -2865,6 +2867,38 @@ class Game:
         weights['medium'] = weights.get('medium', 0) * (1 + 0.2 * bias)
         weights['long'] = weights.get('long', 0) * max(0.3, 1 - 0.4 * bias)
         weights['deep'] = weights.get('deep', 0) * max(0.2, 1 - 0.6 * bias)
+        return weights
+
+    def _applyBoxReadMods(self, weights: dict, coach) -> dict:
+        """Read the defense's committed run/pass tilt and exploit it.
+
+        The defensive gameplan's `runStopFocus` (0.20 = pass-focused / light box ..
+        0.80 = run-focused / stacked box) is halftime-adjusted toward whatever the
+        offense has done well, and it's readable pre-snap. A smart offense RUNS into
+        a light box and PASSES against a stacked one. This closes the run/pass
+        cat-and-mouse: over-passing pushes the defense pass-focused, the offense then
+        punishes the resulting light box on the ground, which forces the defense back
+        toward the run and reopens the pass — so a credible run threat is what keeps
+        the box honest, exactly the 'establish the run' dynamic. Gated by the gameplan
+        master switch (A/B), and scaled by the coach's scouting (box-recognition)."""
+        import gameplan as _gp
+        if not _gp.WIRING_ENABLED:
+            return weights
+        defGp = self.awayDefGameplan if self.offensiveTeam is self.homeTeam else self.homeDefGameplan
+        if defGp is None:
+            return weights
+        from constants import BOXREAD_STRENGTH, BOXREAD_BASE_READ, BOXREAD_SCOUT_BONUS
+        runFocus = getattr(defGp, 'runStopFocus', 0.5)
+        boxTilt = runFocus - 0.5  # + = stacked box (run defended) ; - = light box (run open)
+        if abs(boxTilt) < 1e-6:
+            return weights
+        scouting = getattr(coach, 'scouting', COACH_ATTR_NEUTRAL) if coach else COACH_ATTR_NEUTRAL
+        read = BOXREAD_BASE_READ + BOXREAD_SCOUT_BONUS * max(0.0, (scouting - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE)
+        swing = boxTilt * BOXREAD_STRENGTH * read
+        weights['run'] = weights.get('run', 0) * max(0.35, 1 - swing)   # stacked -> less run ; light -> more run
+        passMul = max(0.35, 1 + swing)                                  # stacked -> more pass ; light -> less pass
+        for k in ('short', 'medium', 'long', 'deep'):
+            weights[k] = weights.get(k, 0) * passMul
         return weights
 
     def _applySituationalMods(self, weights: dict, scoreDiff: int, coach=None) -> dict:
@@ -3531,7 +3565,11 @@ class Game:
                     and scoreDiff > 0 and self.yardsToSafety > 2):
                 oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
                 availableKneels = self.gameRules.downsPerSeries - self.down  # remaining downs
-                # Defense won't waste TOs in unwinnable games (matches _checkDefensiveTimeout)
+                # Each kneel drains ~40s: the snap (~4s) + the play-clock runoff (~36s)
+                # that runs before the next snap or the game ending — true whether the
+                # clock was running or stopped before this kneel (a stopped-clock kneel
+                # STARTS the clock, then the play clock runs off; see the drain in the
+                # game loop). A timed-out kneel drains only the 4s snap.
                 maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
                 effectiveOppTos = oppTimeouts if scoreDiff <= maxComebackPts else 0
                 # TO'd kneels still drain 4s (snap time); free kneels drain full ~40s
@@ -4619,7 +4657,11 @@ class Game:
                 text += (' Defense ' + ydText + '.') if endsBang else (', ' + ydText)
 
         # Surface a diving catch (a confident receiver laid out for a contested ball).
-        if getattr(self.play, '_diveCatch', False) and self.play.isPassCompletion and not self.play.isFumble:
+        # Never on a screen or dump-off — those are caught in stride at the line.
+        if (getattr(self.play, '_diveCatch', False) and self.play.isPassCompletion
+                and not self.play.isFumble
+                and getattr(self.play, 'passConcept', 'standard') != 'screen'
+                and not getattr(self.play, 'checkdownReason', None)):
             text += ', a diving grab!'
 
         # Surface the stretch-for-the-marker decision (see _stretchForFirst). Skip on
@@ -5907,12 +5949,18 @@ class Game:
                         self._checkDefensiveTimeout()
                         if self._timeoutCalled and self.timingManager:
                             await self.timingManager.waitAfterTimeout()
-                        # Drain the between-plays play clock ONLY if the clock was
-                        # running before the snap (getattr guard) AND no post-kneel
-                        # timeout stopped it. After a prior stoppage the kneel burns
-                        # just its ~4s (already consumed in kneel()).
-                        if (getattr(self, '_kneelClockWasRunning', True)
-                                and self.clockRunning and self.gameClockSeconds > 0):
+                        # Drain the play-clock runoff (~36s) whenever the clock is
+                        # RUNNING after the snap and no post-kneel timeout stopped it.
+                        # This runs off regardless of whether the clock was running
+                        # BEFORE the snap: a kneel from a stopped clock STARTS the clock,
+                        # then the offense lets the play clock run (or the game ends)
+                        # before the next snap, so that ~36s runs off too. (Gating this
+                        # on the pre-snap clock under-drained a dead-clock kneel to ~4s,
+                        # which made the offense kneel once and then get stuck / need a
+                        # second kneel that should have run the clock out.) A timeout
+                        # above sets clockRunning False, so a timed-out kneel still only
+                        # burns its ~4s.
+                        if self.clockRunning and self.gameClockSeconds > 0:
                             # Total kneel drain = snap (4s, in kneel()) + this play-clock
                             # drain, so this is kneelDrainSeconds - 4 (keeps the AI's drain
                             # prediction at _checkClockManagement in sync with the rule).
@@ -9955,14 +10003,11 @@ class Play():
         AFTER the defense gets a chance to call timeout."""
         self.playType = PlayType.Kneel
         self.yardage = -1
-        # The extra play-clock drain (~36s, applied post-play in the game loop)
-        # only happens if the clock was RUNNING before the snap. After a stoppage
-        # (timeout / 2-min warning) the pre-snap play clock does NOT run the game
-        # clock — a kneel then burns only the ~4s below (clock restarts at the
-        # snap, ball is immediately dead). Capture the pre-kneel state so the loop
-        # can honor it; a kneel is an in-bounds play, so the clock runs AFTER the
-        # snap either way.
-        self.game._kneelClockWasRunning = self.game.clockRunning
+        # A kneel snaps the ball dead immediately (~4s below) and leaves the clock
+        # RUNNING — so the ~36s play-clock runoff before the next snap (or the game
+        # ending) is drained post-play in the game loop, unless the defense calls a
+        # timeout there. This holds whether the clock was running or stopped before
+        # the snap: a stopped clock simply RESTARTS at the snap, then runs off.
         self.game.clockRunning = True
         # Only drain the actual play time (snap to knee-down)
         kneelDuration = min(4, self.game.gameClockSeconds)
@@ -11758,7 +11803,11 @@ class Play():
                 # lay-out with more drops. Flag it so a resulting grab narrates the dive.
                 self._diveCatch = False
                 _diveC = self._confidenceState(self.receiver)
-                if _diveC > 0 and 15 <= catchProbs['catchProb'] <= 60:
+                # A screen or dump-off is caught in stride at/behind the line — never
+                # a diving catch. Only a contested downfield throw draws a lay-out.
+                _screenOrDump = (getattr(self, 'passConcept', 'standard') == 'screen'
+                                 or getattr(self, 'isCheckdown', False))
+                if _diveC > 0 and 15 <= catchProbs['catchProb'] <= 60 and not _screenOrDump:
                     catchProbs['catchProb'] = min(85, catchProbs['catchProb'] + _diveC * MENTAL_DIVE_K)
                     self._diveAttempt = True
                 else:
