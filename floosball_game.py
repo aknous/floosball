@@ -2807,6 +2807,7 @@ class Game:
         weights = self._applyMatchupMods(weights, coach)
         weights = self._applyCoachMods(weights, coach)
         weights = self._applyGameplanMods(weights)
+        weights = self._applyBoxReadMods(weights, coach)
         weights = self._applyAwakenedMods(weights)
 
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
@@ -2866,6 +2867,38 @@ class Game:
         weights['medium'] = weights.get('medium', 0) * (1 + 0.2 * bias)
         weights['long'] = weights.get('long', 0) * max(0.3, 1 - 0.4 * bias)
         weights['deep'] = weights.get('deep', 0) * max(0.2, 1 - 0.6 * bias)
+        return weights
+
+    def _applyBoxReadMods(self, weights: dict, coach) -> dict:
+        """Read the defense's committed run/pass tilt and exploit it.
+
+        The defensive gameplan's `runStopFocus` (0.20 = pass-focused / light box ..
+        0.80 = run-focused / stacked box) is halftime-adjusted toward whatever the
+        offense has done well, and it's readable pre-snap. A smart offense RUNS into
+        a light box and PASSES against a stacked one. This closes the run/pass
+        cat-and-mouse: over-passing pushes the defense pass-focused, the offense then
+        punishes the resulting light box on the ground, which forces the defense back
+        toward the run and reopens the pass — so a credible run threat is what keeps
+        the box honest, exactly the 'establish the run' dynamic. Gated by the gameplan
+        master switch (A/B), and scaled by the coach's scouting (box-recognition)."""
+        import gameplan as _gp
+        if not _gp.WIRING_ENABLED:
+            return weights
+        defGp = self.awayDefGameplan if self.offensiveTeam is self.homeTeam else self.homeDefGameplan
+        if defGp is None:
+            return weights
+        from constants import BOXREAD_STRENGTH, BOXREAD_BASE_READ, BOXREAD_SCOUT_BONUS
+        runFocus = getattr(defGp, 'runStopFocus', 0.5)
+        boxTilt = runFocus - 0.5  # + = stacked box (run defended) ; - = light box (run open)
+        if abs(boxTilt) < 1e-6:
+            return weights
+        scouting = getattr(coach, 'scouting', COACH_ATTR_NEUTRAL) if coach else COACH_ATTR_NEUTRAL
+        read = BOXREAD_BASE_READ + BOXREAD_SCOUT_BONUS * max(0.0, (scouting - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE)
+        swing = boxTilt * BOXREAD_STRENGTH * read
+        weights['run'] = weights.get('run', 0) * max(0.35, 1 - swing)   # stacked -> less run ; light -> more run
+        passMul = max(0.35, 1 + swing)                                  # stacked -> more pass ; light -> less pass
+        for k in ('short', 'medium', 'long', 'deep'):
+            weights[k] = weights.get(k, 0) * passMul
         return weights
 
     def _applySituationalMods(self, weights: dict, scoreDiff: int, coach=None) -> dict:
