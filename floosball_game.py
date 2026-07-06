@@ -3531,13 +3531,28 @@ class Game:
                     and scoreDiff > 0 and self.yardsToSafety > 2):
                 oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
                 availableKneels = self.gameRules.downsPerSeries - self.down  # remaining downs
+                kneelDrain = self.gameRules.kneelDrainSeconds
+                # A kneel from a STOPPED clock burns only the ~4s snap — there's no
+                # between-plays play clock to drain (it was already stopped), and the
+                # snap merely STARTS the clock (mirrors the _kneelClockWasRunning gate in
+                # the actual drain). So the first kneel is a cheap 4s and only the
+                # SUBSEQUENT kneels (now on a running clock) drain the full amount or can
+                # be timed out. Without this the AI over-counts a dead-clock first kneel as
+                # a full ~40s, kneels when it CAN'T actually run the clock out, then reverts
+                # to real plays on the next down (the reported bug).
+                if self.clockRunning:
+                    runningKneels = availableKneels
+                    deadClockDrain = 0
+                else:
+                    runningKneels = max(0, availableKneels - 1)  # first kneel = the 4s below
+                    deadClockDrain = 4
                 # Defense won't waste TOs in unwinnable games (matches _checkDefensiveTimeout)
                 maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
                 effectiveOppTos = oppTimeouts if scoreDiff <= maxComebackPts else 0
                 # TO'd kneels still drain 4s (snap time); free kneels drain full ~40s
-                toadKneels = min(effectiveOppTos, availableKneels)
-                freeKneels = availableKneels - toadKneels
-                drainableSeconds = toadKneels * 4 + freeKneels * self.gameRules.kneelDrainSeconds
+                toadKneels = min(effectiveOppTos, runningKneels)
+                freeKneels = runningKneels - toadKneels
+                drainableSeconds = deadClockDrain + toadKneels * 4 + freeKneels * kneelDrain
                 if drainableSeconds >= self.gameClockSeconds:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'kneel',
