@@ -2,13 +2,21 @@
 
 > Living list of features targeted for the next season cutover. **Keep this updated as features land** — move items to "Shipped" with the commit/version, and link each in-flight item to its design doc. Owner-curated.
 
-_Last updated: 2026-07-05_
+_Last updated: 2026-07-06_
 
 ## In progress
 
 _(nothing in flight)_
 
 ## Planned
+
+### League parity package — star scarcity + salary cap (design locked 2026-07-06)
+The league is top-heavy (Cranes ~26-2, 80% titles in S13 sims, 3 of last 4 Floos Bowls). Two roots: **star oversupply** (of ~245 live players, **40% are 4-5★** vs a healthy ~15-20%; pool centered at rating 81) and **concentration** (Cranes hold the best 6). In-game compression (`LEAGUE_COMPRESSION_FACTOR`) was tested at 0.7/0.6/0.5 and **rejected** — barely moved the Cranes, only lowered scoring; concentration, not per-player gap, is the driver. Three complementary levers, all **between-season (at the rollover), never in-season**:
+1. **Fix the creep at the source** — generation seed `normal(78,7)` → ~`normal(74,8)` (lower/wider; rookies avg 79.5 is too high) + flatten development rise `DEV_RISE_RANGE (-1,5)` → `(-2,3)`. Target ~15-20% 4-5★.
+2. **One-time rank-preserving percentile re-map** of the current pool onto the target distribution (#1 stays #1, fewer qualify as 4-5★) so there's no multi-season two-era transition. Owner-agreed. Between-season timing insulates owned cards (templates mint rating at season creation).
+3. **Salary cap — model B**: salary = star tier **locked at signing** (`cap_hit` column already exists/populated; today it's recomputed live = model A). Cheap rookies → expensive at re-sign. Cap **~24** / floor **~19** (calibrated to the 15-27/avg-22 team-salary spread). Offseason-enforced; unmanaged teams auto-shed/sign via the existing FA logic.
+- **Build order:** distribution (1+2) first + multi-season sim to confirm the star %, then the cap (3) on top. Full design + measurements: memory `league-parity-rebalance`.
+- **Status:** design locked, not built.
 
 ### New prognostication feature — Survivor
 A survivor-style contest layer on top of pick-em (last-one-standing elimination), part of the broader prognosticator progression direction.
