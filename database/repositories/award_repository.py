@@ -106,14 +106,24 @@ class HofBallotRepository:
 
     def addEntry(self, playerId: int, firstEligibleSeason: int,
                  seasonsRemaining: int) -> Optional[HofBallotEntry]:
-        """Seed a new ballot entry. Idempotent — returns None if the player is
-        already (or was ever) on the ballot."""
+        """Seed a new ballot entry. Idempotent for players currently on the ballot
+        or already inducted (returns None). A previously *dropped* entry is
+        REACTIVATED: someone pulled off the ballot for going active (willRetire
+        reverted / re-signed) who later retires for real gets a fresh ballot run
+        rather than being silently barred forever."""
         existing = (
             self.session.query(HofBallotEntry)
             .filter(HofBallotEntry.player_id == playerId)
             .first()
         )
         if existing:
+            if existing.status == "dropped":
+                existing.status = "on_ballot"
+                existing.first_eligible_season = firstEligibleSeason
+                existing.seasons_remaining = seasonsRemaining
+                existing.inducted_season = None
+                self.session.flush()
+                return existing
             return None
         entry = HofBallotEntry(
             player_id=playerId,
@@ -153,6 +163,18 @@ class HofBallotRepository:
             entry.status = "inducted"
             entry.inducted_season = season
             self.session.flush()
+
+    def markDropped(self, playerId: int) -> bool:
+        """Pull a still-on-ballot entry off the ballot because the player is no
+        longer a retirement candidate (re-signed in free agency, or had their
+        willRetire reverted after being seeded). Same terminal status as a
+        tenure-expiry drop; returns True if an entry was dropped."""
+        entry = self.getEntry(playerId)
+        if entry and entry.status == "on_ballot":
+            entry.status = "dropped"
+            self.session.flush()
+            return True
+        return False
 
     def decrementAndDrop(self) -> List[int]:
         """End-of-vote upkeep: decrement seasons_remaining on every still-on-ballot

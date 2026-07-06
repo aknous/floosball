@@ -177,6 +177,12 @@ def _applyThemeFilter(templates: list, themeType: str, themeValue: str,
         return [t for t in templates if t.team_id == teamIdInt]
     if themeType == 'output':
         return [t for t in templates if getattr(t, 'output_type', None) == themeValue]
+    if themeType == 'rookie':
+        # This season's rookie class. `templates` is already scoped to the
+        # current season (getBySeason), and each season's veteran templates are
+        # regenerated with is_rookie=False, so is_rookie==True here is exactly
+        # the current draft class — no season/date math needed.
+        return [t for t in templates if getattr(t, 'is_rookie', False)]
     if themeType in ('champion', 'allpro'):
         if session is None or currentSeason <= 1:
             return []
@@ -2082,6 +2088,9 @@ class CardManager:
         'humble':    50,
         'position':  25,
         'output':    25,
+        # Rookie-class pack — always-available themed gamble on the new draft
+        # class. Weighted a touch below position/output (narrower pool).
+        'rookie':    20,
         # Grand and Exquisite cut down from 8/3 — testing showed they
         # appeared "pretty consistently" even early in the season,
         # which conflicts with the prestige framing. Combined with the
@@ -2186,7 +2195,7 @@ class CardManager:
             # is the only team-flavored pack and lives in the 'champion'
             # category. Legacy themed_team_* rows are pruned at seed time
             # so they don't show up here even if some still exist.
-            if pt.theme_type in ('position', 'output', 'champion', 'allpro'):
+            if pt.theme_type in ('position', 'output', 'rookie', 'champion', 'allpro'):
                 return pt.theme_type
             if pt.name in ('humble', 'grand', 'exquisite'):
                 return pt.name
