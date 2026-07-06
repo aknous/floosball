@@ -10327,12 +10327,16 @@ class Play():
                 # Broke through: 5-12 more yards (avg 8)
                 self.yardage += max(4, min(12, int(np.random.normal(8.0, 2.0))))
                 if batched_randint(1, 100) > gate3Chance:
-                    # Chased down by deep coverage: 6-20 more yards (avg 11)
-                    self.yardage += max(4, min(22, int(np.random.normal(11.0, 4.0))))
+                    # Chased down by deep coverage: trimmed (avg 11→8.5, cap 22→16)
+                    self.yardage += max(4, min(16, int(np.random.normal(8.5, 3.0))))
                 else:
-                    # Housecall — exponential tail (housecall avg ~20)
+                    # Housecall — exponential tail, TRIMMED (mean 22→14, min 12→10)
+                    # so a full game rarely tops ~7 ypc and the 400-yard freak lines
+                    # go away. The average ypc is ~unchanged (the tail is a small
+                    # slice of runs, so it barely moves the mean); this only clips
+                    # the boom-run magnitudes, keeping the RB's normal workload/impact.
                     remaining = self.yardsToEndzone - self.yardage
-                    self.yardage += min(remaining, max(12, int(np.random.exponential(22))))
+                    self.yardage += min(remaining, max(10, int(np.random.exponential(14))))
 
         self.yardage = min(self.yardage, self.yardsToEndzone)
 
