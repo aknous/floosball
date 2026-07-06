@@ -4624,7 +4624,11 @@ class Game:
                 text += (' Defense ' + ydText + '.') if endsBang else (', ' + ydText)
 
         # Surface a diving catch (a confident receiver laid out for a contested ball).
-        if getattr(self.play, '_diveCatch', False) and self.play.isPassCompletion and not self.play.isFumble:
+        # Never on a screen or dump-off — those are caught in stride at the line.
+        if (getattr(self.play, '_diveCatch', False) and self.play.isPassCompletion
+                and not self.play.isFumble
+                and getattr(self.play, 'passConcept', 'standard') != 'screen'
+                and not getattr(self.play, 'checkdownReason', None)):
             text += ', a diving grab!'
 
         # Surface the stretch-for-the-marker decision (see _stretchForFirst). Skip on
@@ -11766,7 +11770,11 @@ class Play():
                 # lay-out with more drops. Flag it so a resulting grab narrates the dive.
                 self._diveCatch = False
                 _diveC = self._confidenceState(self.receiver)
-                if _diveC > 0 and 15 <= catchProbs['catchProb'] <= 60:
+                # A screen or dump-off is caught in stride at/behind the line — never
+                # a diving catch. Only a contested downfield throw draws a lay-out.
+                _screenOrDump = (getattr(self, 'passConcept', 'standard') == 'screen'
+                                 or getattr(self, 'isCheckdown', False))
+                if _diveC > 0 and 15 <= catchProbs['catchProb'] <= 60 and not _screenOrDump:
                     catchProbs['catchProb'] = min(85, catchProbs['catchProb'] + _diveC * MENTAL_DIVE_K)
                     self._diveAttempt = True
                 else:
