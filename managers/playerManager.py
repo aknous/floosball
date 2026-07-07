@@ -4049,6 +4049,13 @@ class PlayerManager:
                         setattr(p.attributes, attr, int(np.clip(cur - runway, 45, cur)))  # debut BELOW, grow up into trueSkill
                 p.updateRating()   # rating reflects the lowered debut level for the young
                 p.attributes.potentialSkillRating = p.attributes.skillRating
+                # Re-price the contract to the DEFLATED tier (salary cap, model B):
+                # the one-time re-rating resets cap_hit to the new reality so a team
+                # isn't stuck paying star money for a now-deflated role player. From
+                # the deflated CURRENT rating (playerTier may be stale until the next
+                # sort). Re-prices UP normally at future re-signs (the ratchet).
+                r = p.playerRating or 0
+                p.capHit = 5 if r >= 92 else 4 if r >= 84 else 3 if r >= 76 else 2 if r >= 68 else 1
                 total += 1
 
         logger.info(f"Parity re-map: deflated {total} players onto the true-skill curve (rising debut below & grow in, peak/declining frozen)")
@@ -4487,18 +4494,27 @@ class PlayerManager:
         # and the reservation makes a genuine over-cap fill rare). Under-floor teams
         # naturally spend up toward the cap because selection stays best-rated within
         # budget. See docs/PARITY_PROSPECT_PLAN.md Phase 5.
-        from constants import SALARY_CAP_ENABLED
+        from constants import SALARY_CAP_ENABLED, MIN_CAP_HIT
         if SALARY_CAP_ENABLED:
             usable = self.usableCapForSigning(team)
             affordable = [c for c in candidates if self._calculateCapHit(c[1]) <= usable]
             if affordable:
                 candidates = affordable
-            else:
-                # Nothing on the board fits the budget. NEVER overspend or cut —
-                # sign nothing this turn so the last-resort path mints a minimum-
-                # cost (cap-1) filler, which the per-slot reservation guarantees
-                # fits. The team stays at or under the cap by construction.
+            elif usable >= MIN_CAP_HIT:
+                # Under cap but the board's cheapest is too rich for the reserved
+                # budget. NEVER overspend or cut — sign nothing so the last-resort
+                # mints a minimum-cost (cap-1) filler, which the reservation
+                # guarantees fits. A team never signs itself over the cap.
                 return False
+            else:
+                # Already OVER cap (grandfathered — e.g. a stacked team right after
+                # the one-time re-map deploy). It must still fill its open slot, so
+                # take the CHEAPEST available (minimum overage) — never cut a player
+                # to make room. The team converges under the cap over the next few
+                # offseasons as contracts expire and the re-sign pass won't renew
+                # into an over-cap roster. See docs/PARITY_PROSPECT_PLAN.md Phase 5.
+                minHit = min(self._calculateCapHit(c[1]) for c in candidates)
+                candidates = [c for c in candidates if self._calculateCapHit(c[1]) == minHit]
 
         def _rating(c):
             return getattr(c[1], 'playerRating', getattr(c[1].attributes, 'skillRating', 0))
