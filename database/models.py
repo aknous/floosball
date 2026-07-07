@@ -248,7 +248,19 @@ class PlayerAttributes(Base):
     potential_accuracy: Mapped[int] = mapped_column(Integer)
     potential_leg_strength: Mapped[int] = mapped_column(Integer)
     potential_skill_rating: Mapped[int] = mapped_column(Integer)
-    
+
+    # True-skill attributes — the mature level a player develops INTO (the
+    # generated attr value). current <= trueSkill <= potential. Rookies debut
+    # below trueSkill and grow into it. See docs/PARITY_PROSPECT_PLAN.md.
+    true_skill_speed: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_hands: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_reach: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_agility: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_power: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_arm_strength: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_accuracy: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_leg_strength: Mapped[int] = mapped_column(Integer, default=0)
+
     # Mental/skill attributes
     route_running: Mapped[int] = mapped_column(Integer)
     vision: Mapped[int] = mapped_column(Integer)

@@ -24,6 +24,26 @@ FIELD_LENGTH = 100
 MIN_ATTRIBUTE_VALUE = 60
 MAX_ATTRIBUTE_VALUE = 100
 
+# ---- Rating generation: parity + prospect true-skill model (docs/PARITY_PROSPECT_PLAN.md) ----
+# The generated attribute distribution now defines a player's TRUE SKILL — the
+# mature level they reliably develop INTO, not their entry level. Three tiers:
+#   current (plays now) <= trueSkill (mature target) <= potential (rare ceiling).
+# Calibrated to a 14-season fresh sim (whole active pool): (76,8) settled ~8%
+# 4-5-star / mean 74 with ZERO creep; (78,10) lands the steady-state ~16-17% (in
+# the 15-20% target) with a wider spread (healthy scrub tail for differentiation).
+# The mean only shifts the FIXED distribution up — it does not affect the no-creep
+# mechanism (the dev arc caps growth at true skill regardless).
+GEN_TRUESKILL_MEAN = 78
+GEN_TRUESKILL_STD = 10
+# potential = trueSkill + randint(0, POTENTIAL_HEADROOM). Narrowed from the old
+# 30: true skill is the reliable target; potential is the occasional overshoot.
+POTENTIAL_HEADROOM = 15
+# Rookies/prospects DEBUT this many attribute points below their true skill and
+# develop up into it over their early seasons (~6-9 rating pts; calibrate). A
+# future 5-star looks like a solid 3-4-star as a rookie. Founding/FA-generated
+# (non-rookie) players skip the discount — they enter already at their level.
+PROSPECT_ENTRY_DISCOUNT = 11
+
 # ---- Career-arc development (player_development.py) ----
 # Players rise toward a per-player PEAK season (a jittered fraction of their
 # longevity), plateau, then decline — decline is decoupled from the retirement
@@ -57,6 +77,15 @@ DEV_DECLINE_FACTOR_MODE = 0.85
 # (positive devBias) skews the spread toward boom.
 DEV_PROSPECT_SPREAD = 4
 DEV_PROSPECT_SEASONS = 1         # seasonsPlayed <= this (or is_prospect) → volatile
+# A rising player climbs reliably toward their TRUE SKILL (the growth cap). Each
+# non-declining season there's a gated chance they OVERSHOOT past true skill
+# toward their potential ceiling — the overachiever who exceeds projection. Good
+# coaching/facilities (devBias) raise the odds. Most players settle at true skill.
+# See docs/PARITY_PROSPECT_PLAN.md. NOTE: DEV_RISE_RANGE is intentionally NOT
+# flattened — the true-skill cap is the parity lever; the rise rate just sets how
+# fast a rookie closes the entry discount (~2-3 seasons).
+DEV_OVERSHOOT_BASE_CHANCE = 0.12     # per rising/peak season, per attribute
+DEV_OVERSHOOT_BIAS_PER_POINT = 0.05  # each devBias point added to that chance
 # Trained attributes can fade this low in decline (below MIN_ATTRIBUTE_VALUE so
 # aging vets actually drop into lower tiers and the league spreads out).
 DEV_ATTRIBUTE_FLOOR = 55

@@ -437,6 +437,17 @@ class PlayerManager:
                 player.attributes.potentialAccuracy = attrs.potential_accuracy
                 player.attributes.potentialLegStrength = attrs.potential_leg_strength
                 player.attributes.potentialSkillRating = attrs.potential_skill_rating
+                # True skill: fall back to the current attr when unset (0/null) —
+                # pre-migration players and any not yet percentile-remapped start
+                # with trueSkill == current so the dev arc has a valid target.
+                player.attributes.trueSkillSpeed = getattr(attrs, 'true_skill_speed', 0) or player.attributes.speed
+                player.attributes.trueSkillHands = getattr(attrs, 'true_skill_hands', 0) or player.attributes.hands
+                player.attributes.trueSkillReach = getattr(attrs, 'true_skill_reach', 0) or player.attributes.reach
+                player.attributes.trueSkillAgility = getattr(attrs, 'true_skill_agility', 0) or player.attributes.agility
+                player.attributes.trueSkillPower = getattr(attrs, 'true_skill_power', 0) or player.attributes.power
+                player.attributes.trueSkillArmStrength = getattr(attrs, 'true_skill_arm_strength', 0) or player.attributes.armStrength
+                player.attributes.trueSkillAccuracy = getattr(attrs, 'true_skill_accuracy', 0) or player.attributes.accuracy
+                player.attributes.trueSkillLegStrength = getattr(attrs, 'true_skill_leg_strength', 0) or player.attributes.legStrength
                 player.attributes.routeRunning = attrs.route_running
                 player.attributes.vision = attrs.vision
                 player.attributes.blocking = attrs.blocking
@@ -711,9 +722,12 @@ class PlayerManager:
         import numpy as np
         from random import randint
 
-        # Generate dual seeds (physical + mental) from normal distribution
-        meanPlayerSkill = 80
-        stdDevPlayerSkill = 7
+        # Generate dual seeds (physical + mental) from normal distribution.
+        # Parity distribution (docs/PARITY_PROSPECT_PLAN.md); founding players
+        # are established, so they enter at their true skill (no entry discount).
+        from constants import GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD
+        meanPlayerSkill = GEN_TRUESKILL_MEAN
+        stdDevPlayerSkill = GEN_TRUESKILL_STD
         physicalSeeds = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, totalPlayers)
         physicalSeeds = np.clip(physicalSeeds, 60, 100).tolist()
         mentalSeeds = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, totalPlayers)
@@ -820,6 +834,7 @@ class PlayerManager:
         """Create a single player of specified position"""
         from random import randint
         import numpy as np
+        from constants import GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD
 
         name = self.popUniqueName()
         if name is None:
@@ -830,9 +845,9 @@ class PlayerManager:
         # distribution as the league-balanced rookie class so one-off
         # player creations match the compressed talent curve.
         if physicalSeed is None:
-            physicalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
+            physicalSeed = int(np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD), 60, 100))
         if mentalSeed is None:
-            mentalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
+            mentalSeed = int(np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD), 60, 100))
         
         # Create player based on position with dual seeds
         player = None
@@ -1628,6 +1643,14 @@ class PlayerManager:
                             potential_accuracy=attrs.potentialAccuracy,
                             potential_leg_strength=attrs.potentialLegStrength,
                             potential_skill_rating=attrs.potentialSkillRating,
+                            true_skill_speed=getattr(attrs, 'trueSkillSpeed', 0),
+                            true_skill_hands=getattr(attrs, 'trueSkillHands', 0),
+                            true_skill_reach=getattr(attrs, 'trueSkillReach', 0),
+                            true_skill_agility=getattr(attrs, 'trueSkillAgility', 0),
+                            true_skill_power=getattr(attrs, 'trueSkillPower', 0),
+                            true_skill_arm_strength=getattr(attrs, 'trueSkillArmStrength', 0),
+                            true_skill_accuracy=getattr(attrs, 'trueSkillAccuracy', 0),
+                            true_skill_leg_strength=getattr(attrs, 'trueSkillLegStrength', 0),
                             route_running=attrs.routeRunning,
                             vision=attrs.vision,
                             blocking=attrs.blocking,
@@ -1679,6 +1702,14 @@ class PlayerManager:
                         db_attrs.potential_accuracy = attrs.potentialAccuracy
                         db_attrs.potential_leg_strength = attrs.potentialLegStrength
                         db_attrs.potential_skill_rating = attrs.potentialSkillRating
+                        db_attrs.true_skill_speed = getattr(attrs, 'trueSkillSpeed', 0)
+                        db_attrs.true_skill_hands = getattr(attrs, 'trueSkillHands', 0)
+                        db_attrs.true_skill_reach = getattr(attrs, 'trueSkillReach', 0)
+                        db_attrs.true_skill_agility = getattr(attrs, 'trueSkillAgility', 0)
+                        db_attrs.true_skill_power = getattr(attrs, 'trueSkillPower', 0)
+                        db_attrs.true_skill_arm_strength = getattr(attrs, 'trueSkillArmStrength', 0)
+                        db_attrs.true_skill_accuracy = getattr(attrs, 'trueSkillAccuracy', 0)
+                        db_attrs.true_skill_leg_strength = getattr(attrs, 'trueSkillLegStrength', 0)
                         db_attrs.route_running = attrs.routeRunning
                         db_attrs.vision = attrs.vision
                         db_attrs.blocking = attrs.blocking
@@ -3844,11 +3875,13 @@ class PlayerManager:
         """
         import numpy as np
         from random import randint
-        from constants import ROOKIE_DRAFT_CLASS_SIZE
+        from constants import ROOKIE_DRAFT_CLASS_SIZE, GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD
 
         numRookies = ROOKIE_DRAFT_CLASS_SIZE
-        meanSkill = 78
-        stdDev = 10
+        # The generated seed is the rookie's TRUE SKILL (mature target); they
+        # debut below it via the entry discount below. Parity distribution.
+        meanSkill = GEN_TRUESKILL_MEAN
+        stdDev = GEN_TRUESKILL_STD
         physicalSeeds = np.clip(np.random.normal(meanSkill, stdDev, numRookies), 60, 100).tolist()
         mentalSeeds = np.clip(np.random.normal(meanSkill, stdDev, numRookies), 60, 100).tolist()
 
@@ -3878,6 +3911,9 @@ class PlayerManager:
             # Rookie flags — not in FA pool yet; drafted into prospects or placed into FA below
             player.seasonsPlayed = 0
             player.team = 'Unsigned'
+            # Debut below true skill; the dev arc grows them into it.
+            from constants import PROSPECT_ENTRY_DISCOUNT
+            player.applyEntryDiscount(PROSPECT_ENTRY_DISCOUNT)
             rookies.append(player)
         logger.info(f"Generated rookie class of {len(rookies)} for season {currentSeason}")
         return rookies

@@ -539,6 +539,21 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()
 
+        # True-skill columns on player_attributes (parity + prospect model,
+        # docs/PARITY_PROSPECT_PLAN.md). Default 0 → loader backfills to the
+        # current attr until the one-time percentile re-map sets them.
+        for col in [
+            'true_skill_speed', 'true_skill_hands', 'true_skill_reach',
+            'true_skill_agility', 'true_skill_power', 'true_skill_arm_strength',
+            'true_skill_accuracy', 'true_skill_leg_strength',
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE player_attributes ADD COLUMN {col} INTEGER DEFAULT 0"))
+                conn.commit()
+                logger.info(f"  Migration: added player_attributes.{col}")
+            except Exception:
+                conn.rollback()
+
         # Ensure denormalized stat columns exist on player_season_stats
         # (create_all only creates tables, doesn't add columns to existing ones)
         for tbl, cols in [

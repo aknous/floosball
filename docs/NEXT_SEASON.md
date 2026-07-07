@@ -6,11 +6,12 @@ _Last updated: 2026-07-06_
 
 ## In progress
 
-_(nothing in flight)_
+### League parity + prospect true-skill package (design locked 2026-07-07) — `docs/PARITY_PROSPECT_PLAN.md`
+The parity package (below) **plus** a prospect-ratings rework, folded together because they touch the same generation/development/rating code. New **three-tier rating model**: `current` (plays now) < **`trueSkill`** (mature target, new per-attribute layer) < `potential` (rarely-reached ceiling). Rookies debut ~6-9 rating pts **below** their true skill and develop into it over ~2-3 seasons; a lucky few overshoot toward potential. This strengthens parity (league leans younger/cheaper, stars are earned not pre-formed). **Build order:** Phase 1 schema+generation → Phase 2 dev arc → Phase 3 one-time percentile re-map of live pool → Phase 4 multi-season sim gate (~15-20% mature 4-5★) → **Phase 5 salary cap (model B)**. Full design + anchors in the plan doc.
 
 ## Planned
 
-### League parity package — star scarcity + salary cap (design locked 2026-07-06)
+### League parity package — star scarcity + salary cap (design locked 2026-07-06) — folded into the in-progress item above
 The league is top-heavy (Cranes ~26-2, 80% titles in S13 sims, 3 of last 4 Floos Bowls). Two roots: **star oversupply** (of ~245 live players, **40% are 4-5★** vs a healthy ~15-20%; pool centered at rating 81) and **concentration** (Cranes hold the best 6). In-game compression (`LEAGUE_COMPRESSION_FACTOR`) was tested at 0.7/0.6/0.5 and **rejected** — barely moved the Cranes, only lowered scoring; concentration, not per-player gap, is the driver. Three complementary levers, all **between-season (at the rollover), never in-season**:
 1. **Fix the creep at the source** — generation seed `normal(78,7)` → ~`normal(74,8)` (lower/wider; rookies avg 79.5 is too high) + flatten development rise `DEV_RISE_RANGE (-1,5)` → `(-2,3)`. Target ~15-20% 4-5★.
 2. **One-time rank-preserving percentile re-map** of the current pool onto the target distribution (#1 stays #1, fewer qualify as 4-5★) so there's no multi-season two-era transition. Owner-agreed. Between-season timing insulates owned cards (templates mint rating at season creation).
@@ -29,7 +30,7 @@ Tie the anomaly/awakening theme into the card system: when a player awakens (or 
 ## Backlog (owner notes, unspecced — 2026-07-02)
 Rough capture; each needs a design pass before building.
 
-- **First iteration of rule changes** — take the rule-mutation layer from tooling to an actual live, Cores-driven rule change in a season. The mutable-rule plumbing already exists (data-driven scoring rules + persisted override layer; mutable `firstDownDistance`/`downsPerSeries`; clock/FG knobs; running-clock rule) — see `docs/SIM_EVOLUTION.md` and the `Rule mutation:` commits. Pick the FIRST rule to actually change, how it's triggered (Cores?), and how it's surfaced to players (the "current rules" UI foreshadowing).
+- **First iteration of rule changes** (Workstream B — owner mechanic specced 2026-07-07) — take the rule-mutation layer from tooling to an actual live, Cores-driven rule change. **Mechanic:** the Core **Aris** opens a mid-season CHANGE vote (a list of candidate rules, each showing current value → proposed new value; most-voted change goes live); later the Core **Halverson** opens a REVERT vote (pick changed rules to restore). Plumbing already exists (data-driven scoring rules + persisted override layer; mutable `firstDownDistance`/`downsPerSeries`; clock/FG knobs; running-clock rule; `GET /api/rules` + "current rules" UI shipped as foreshadowing) — see `docs/SIM_EVOLUTION.md`, the `Rule mutation:` commits, and memory `rule-mutation-future-ideas`. OPEN: vote timing in the season, how many rules per cycle, who picks the proposed new values, vote cost, Criticality interaction. Blast radius (WP model / pick-em / scoreboard all read rule+score state) is bigger than the parity package — scope after Workstream A's distribution work is underway.
 - **New attention sources** — expand what feeds player "attention" beyond the current four (equipped cards, fantasy roster slots, follows, favorite-team fans; all in `anomalyManager._applyWeeklyContributions`). Brainstorm additional user-driven signals so attention concentration has more inputs (keeps it user-generated, not sim-driven).
 
 ## Bugs / smaller fixes

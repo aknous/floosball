@@ -8,6 +8,7 @@ from stats_optimization import OptimizedPlayerStats, get_optimized_stats
 import numpy as np
 import floosball_methods as FloosMethods
 from floosball_team import Team
+from constants import POTENTIAL_HEADROOM
 from stat_tracker import StatTracker
 from player_development import PlayerDevelopment
 from rating_cache import CachedRatingMixin
@@ -33,6 +34,22 @@ DEFENSIVE_POSITION_MAP = {
     Position.TE: DefensivePosition.DE,
     Position.K: None,  # Kickers don't play defense
 }
+
+# The 8 physical skill attributes that develop, each paired with its
+# trueSkill / potential attribute names. Single source of truth for the
+# three-tier rating model (current <= trueSkill <= potential). See
+# docs/PARITY_PROSPECT_PLAN.md.
+_TRUESKILL_ATTR_TRIPLES = [
+    ('speed', 'trueSkillSpeed', 'potentialSpeed'),
+    ('power', 'trueSkillPower', 'potentialPower'),
+    ('agility', 'trueSkillAgility', 'potentialAgility'),
+    ('reach', 'trueSkillReach', 'potentialReach'),
+    ('hands', 'trueSkillHands', 'potentialHands'),
+    ('armStrength', 'trueSkillArmStrength', 'potentialArmStrength'),
+    ('accuracy', 'trueSkillAccuracy', 'potentialAccuracy'),
+    ('legStrength', 'trueSkillLegStrength', 'potentialLegStrength'),
+]
+_TRUESKILL_ATTR_PAIRS = [(a, t) for (a, t, _p) in _TRUESKILL_ATTR_TRIPLES]
 
 class PlayerTier(enum.Enum):
     TierS = 5
@@ -340,6 +357,21 @@ class Player:
     def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
         pass
 
+    def applyEntryDiscount(self, discount: int):
+        """Debut a rookie BELOW their true skill so they develop up into it.
+        Lowers each generated physical skill attribute by `discount` (floored at
+        the generation floor), leaving trueSkill/potential intact, then refreshes
+        the rating. No-op for discount <= 0 or an unset true-skill snapshot.
+        See docs/PARITY_PROSPECT_PLAN.md."""
+        if discount <= 0:
+            return
+        for attr, trueName in _TRUESKILL_ATTR_PAIRS:
+            trueVal = getattr(self.attributes, trueName, 0) or 0
+            if trueVal <= 0:
+                continue
+            setattr(self.attributes, attr, int(np.clip(trueVal - discount, 60, 100)))
+        self.updateRating()
+
     def computeCeilingRating(self):
         """Projected ceiling rating: what this player's rating would be with every
         physical skill attribute developed to its potential. Only the physical
@@ -515,6 +547,19 @@ class PlayerAttributes:
         self.potentialAccuracy = 0
         self.potentialLegStrength = 0
         self.potentialSkillRating = 0
+
+        # True skill: the mature level a player develops INTO (the generated
+        # attribute value). current starts here for veterans, BELOW it for
+        # rookies (entry discount); potential sits above it. See
+        # docs/PARITY_PROSPECT_PLAN.md.
+        self.trueSkillSpeed = 0
+        self.trueSkillHands = 0
+        self.trueSkillReach = 0
+        self.trueSkillAgility = 0
+        self.trueSkillPower = 0
+        self.trueSkillArmStrength = 0
+        self.trueSkillAccuracy = 0
+        self.trueSkillLegStrength = 0
 
         #physical skills
         self.routeRunning = 0
@@ -745,10 +790,11 @@ class PlayerAttributes:
         # to a Gaussian centered at 78 so the seed distribution itself
         # is bell-shaped — players with no seed passed in (legacy paths,
         # one-off creations) now match the league-balanced curve.
+        from constants import GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD
         if physicalSeed is None:
-            physicalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
+            physicalSeed = int(np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD), 60, 100))
         if mentalSeed is None:
-            mentalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
+            mentalSeed = int(np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD), 60, 100))
 
         # Physical skills: tight variance around the seed. stdDev was 5
         # → 3, narrowing the spread of attribute values around the
@@ -845,6 +891,13 @@ class PlayerAttributes:
             if val == 0:
                 generated = int(np.clip(np.random.normal(physicalSeed, stdDev), 60, 100))
                 setattr(self, attr, generated)
+
+        # Snapshot TRUE SKILL from the generated physical attrs — the mature
+        # target. current == trueSkill at generation; a rookie entry discount
+        # (applyEntryDiscount) later lowers current below it. Only the physical
+        # skill attrs develop, so only they carry a true-skill target.
+        for attr, trueName in _TRUESKILL_ATTR_PAIRS:
+            setattr(self, trueName, getattr(self, attr, 0))
 
         # Personality (personality + quirk + mood) is assigned by personalityManager
         # via playerManager after this method returns, since OVR-tiered variant
@@ -952,9 +1005,9 @@ class PlayerQB(Player, CachedRatingMixin):
         self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
 
-        self.attributes.potentialArmStrength = self.attributes.armStrength + randint(0,30)
-        self.attributes.potentialAccuracy = self.attributes.accuracy + randint(0,30)
-        self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
+        self.attributes.potentialArmStrength = self.attributes.armStrength + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialAccuracy = self.attributes.accuracy + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialAgility = self.attributes.agility + randint(0, POTENTIAL_HEADROOM)
         if self.attributes.potentialArmStrength > 100:
             self.attributes.potentialArmStrength = 100
         if self.attributes.potentialAccuracy > 100:
@@ -1012,10 +1065,10 @@ class PlayerRB(Player):
         self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
 
-        self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
-        self.attributes.potentialPower = self.attributes.power + randint(0,30)
-        self.attributes.potentialReach = self.attributes.reach + randint(0,30)
-        self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
+        self.attributes.potentialSpeed = self.attributes.speed + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialPower = self.attributes.power + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialReach = self.attributes.reach + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialAgility = self.attributes.agility + randint(0, POTENTIAL_HEADROOM)
         if self.attributes.potentialSpeed > 100:
             self.attributes.potentialSpeed = 100
         if self.attributes.potentialPower > 100:
@@ -1057,10 +1110,10 @@ class PlayerWR(Player):
         self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
 
-        self.attributes.potentialSpeed = self.attributes.speed + randint(0,30)
-        self.attributes.potentialHands = self.attributes.hands + randint(0,30)
-        self.attributes.potentialReach = self.attributes.reach + randint(0,30)
-        self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
+        self.attributes.potentialSpeed = self.attributes.speed + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialHands = self.attributes.hands + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialReach = self.attributes.reach + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialAgility = self.attributes.agility + randint(0, POTENTIAL_HEADROOM)
         if self.attributes.potentialSpeed > 100:
             self.attributes.potentialSpeed = 100
         if self.attributes.potentialHands > 100:
@@ -1102,10 +1155,10 @@ class PlayerTE(Player):
         self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
 
-        self.attributes.potentialHands = self.attributes.hands + randint(0,30)
-        self.attributes.potentialReach = self.attributes.reach + randint(0,30)
-        self.attributes.potentialPower = self.attributes.power + randint(0,30)
-        self.attributes.potentialAgility = self.attributes.agility + randint(0,30)
+        self.attributes.potentialHands = self.attributes.hands + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialReach = self.attributes.reach + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialPower = self.attributes.power + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialAgility = self.attributes.agility + randint(0, POTENTIAL_HEADROOM)
         if self.attributes.potentialHands > 100:
             self.attributes.potentialHands = 100
         if self.attributes.potentialReach > 100:
@@ -1147,8 +1200,8 @@ class PlayerK(Player):
         self.attributes.getPlayerAttributes(self.position, physicalSeed, mentalSeed)
         self.updateRating()
 
-        self.attributes.potentialLegStrength = self.attributes.legStrength + randint(0,30)
-        self.attributes.potentialAccuracy = self.attributes.accuracy + randint(0,30)
+        self.attributes.potentialLegStrength = self.attributes.legStrength + randint(0, POTENTIAL_HEADROOM)
+        self.attributes.potentialAccuracy = self.attributes.accuracy + randint(0, POTENTIAL_HEADROOM)
         if self.attributes.potentialLegStrength > 100:
             self.attributes.potentialLegStrength = 100
         if self.attributes.potentialAccuracy > 100:
