@@ -4972,6 +4972,15 @@ class SeasonManager:
                     if team.coach:
                         teamManager._saveCoachToDatabase(team)
 
+            # STEP 2.7: Cap-aware re-sign — per team, decide which EXPIRING players
+            # to keep within the salary cap (re-signing re-prices them to their
+            # current tier — the model-B ratchet), reserving room to fill any
+            # resulting open slots. The rest WALK to FA. Sets _gmResigned flags that
+            # STEP 3 consumes. Fan resign votes are honored first, then auto-keep by
+            # value. See docs/PARITY_PROSPECT_PLAN.md Phase 5.
+            logger.info("Step 2.7: Cap-aware re-sign decisions")
+            self._applyCapAwareResign()
+
             # STEP 3: Process contract decrements and retirements for rostered players
             logger.info("Step 3: Contract decrements and team retirements")
             await self._processRosteredPlayerContracts()
@@ -6132,6 +6141,51 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"clear recap events failed: {e}")
 
+    def _applyCapAwareResign(self) -> None:
+        """Per team, decide which EXPIRING players (contract up this offseason) to
+        keep within the salary cap. Kept players are flagged `_gmResigned` (STEP 3
+        renews them and re-prices their cap hit to current tier); the rest walk to
+        FA. Proactive budgeting reserves MIN_CAP_HIT for each slot that would still
+        need filling, so a team never keeps itself into an unfillable/over-cap
+        roster. Fan resign votes are honored first (in value order), then value-
+        based auto-keep fills remaining budget. See PARITY_PROSPECT_PLAN.md P5."""
+        from constants import SALARY_CAP_ENABLED, SALARY_CAP, MIN_CAP_HIT
+        if not SALARY_CAP_ENABLED:
+            return
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return
+        pm = self.playerManager
+        for team in teamManager.teams:
+            nonExpiring, expiring = [], []
+            for p in team.rosterDict.values():
+                if p is None or getattr(p, 'willRetire', False):
+                    continue  # empty slot, or retires in STEP 3 (vacates)
+                if (getattr(p, 'termRemaining', 0) or 0) > 1:
+                    nonExpiring.append(p)   # stays on current (frozen) deal
+                else:
+                    expiring.append(p)      # contract up → keep-or-walk
+            committed = sum(int(getattr(p, 'capHit', 0) or 0) for p in nonExpiring)
+            # Priority: fan-voted keeps first, then by player value; each value-desc.
+            expiring.sort(key=lambda p: (0 if getattr(p, '_gmResigned', False) else 1,
+                                         -(getattr(p, 'playerRating', 0) or 0)))
+            kept, keptCost = [], 0
+            for p in expiring:
+                cost = pm._calculateCapHit(p)   # re-sign at CURRENT tier (the ratchet)
+                openAfter = 6 - len(nonExpiring) - (len(kept) + 1)
+                salaryLB = committed + keptCost + cost + MIN_CAP_HIT * max(0, openAfter)
+                if salaryLB <= SALARY_CAP:
+                    p._gmResigned = True
+                    p._capWalked = False
+                    kept.append(p); keptCost += cost
+                else:
+                    # Can't afford — walk (overriding any fan resign vote, flagged
+                    # so the Front Office can surface "couldn't afford to keep").
+                    p._capWalked = bool(getattr(p, '_gmResigned', False))
+                    p._gmResigned = False
+            logger.info(f"Cap re-sign {team.name}: kept {len(kept)}/{len(expiring)} expiring, "
+                        f"walked {len(expiring) - len(kept)}, salary {committed + keptCost}/{SALARY_CAP}")
+
     async def _processRosteredPlayerContracts(self) -> None:
         """Process contract decrements and retirements for players on team rosters"""
         from random import randint
@@ -6165,7 +6219,11 @@ class SeasonManager:
                     # Player retires (overrides re-sign)
                     self._executePlayerRetirement(player, team, position, leagueHighlights)
                 elif getattr(player, '_gmResigned', False):
-                    # GM Mode: re-signed via vote — renew contract
+                    # GM Mode / cap-aware keep: re-signed — renew contract.
+                    # _getPlayerTerm re-prices cap_hit to the player's CURRENT tier
+                    # (the model-B ratchet: a rookie signed cheap now re-signs at
+                    # their developed tier, so a dynasty's salary climbs until it
+                    # can't keep everyone).
                     player.term = self.playerManager._getPlayerTerm(player)
                     player.termRemaining = player.term
                     player._gmResigned = False

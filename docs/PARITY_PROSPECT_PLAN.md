@@ -76,9 +76,31 @@ Rework `player_development.py::developAttribute`:
 - Extend `s13_multisim.py` (resumes from `data/_s13_seed_src.db`) to report the **star distribution** (% 4-5★ at maturity) and **parity** (champion concentration, top-team win totals) across N seasons.
 - Gate: ~15-20% mature 4-5★, Cranes-type dynasty broken up over a few seasons. Tune the generation center/width + entry discount here before touching the cap.
 
-### Phase 5 — Salary cap (model B)
-- Freeze `cap_hit` **at signing** (today it's recomputed live from tier = model A; enforcement is dormant — `# TODO: capHit feature not fully developed`). Cheap rookies → expensive at re-sign is the parity engine that breaks dynasties.
-- Cap **~24** / floor **~19** (calibrated to the 15-27 / avg-22 spread). Offseason-enforced (re-sign → FA → cut); managed teams GM-constrained; unmanaged teams' existing auto-FA logic made cap-aware (auto-shed lowest-value over cap, auto-sign best under floor).
+### Phase 5 — Salary cap (model B) — BACKEND BUILT + VALIDATED 2026-07-07
+**Status:** backend logic done + validated on fresh sims. Cap UI (Front Office) remains (P5d). Implementation:
+- **Freeze/ratchet:** `_getPlayerTerm` (playerManager, the single choke point all signings route through) stamps `capHit = tier.value` at every signing/promote/re-sign. Rostered = frozen by omission; re-sign re-prices (the ratchet).
+- **Cap-aware re-sign** (`seasonManager._applyCapAwareResign`, STEP 2.7 before contract decrement): per team, keep highest-value expiring players within cap (fan votes first, then value), reserving MIN per open slot; rest WALK. Sets `_gmResigned`.
+- **Budget gate** (`playerManager._attemptRosterFill`): filter candidates to affordable within `usableCapForSigning` (= CAP − salary − MIN×other-open-slots). **NEVER overspend or auto-cut** (owner directive) — if nothing affordable, sign nothing → last-resort mints a MIN-tier (cap-1) filler, which the reservation guarantees fits. `generateLastResortFreeAgent` now mints a D-tier (cap-1) replacement.
+- **Short star contracts** (`_getPlayerTerm`): S/A veteran deals 4-6/3-4 → **2-3 yrs** so the ratchet re-prices a built core faster (the real dynasty-breaker for draft-and-develop teams).
+- Helpers: `teamSalary` / `capSpace` / `usableCapForSigning` (on-demand from frozen cap_hits — no stored state, sidesteps the front-office marker/resume caveat).
+- **Constants:** `SALARY_CAP=18`, `SALARY_FLOOR=14`, `MIN_CAP_HIT=1`, `SALARY_CAP_ENABLED` master switch.
+- **Validated (fresh 12-season sim):** 7 distinct champions, top team 2 titles, longest streak 2 (vs original ~permanent Cranes dynasty, and vs cap-20/6-yr's 3 champions/7 titles). **0 teams over cap** (hard cap holds by construction, no auto-cuts), rosters 24/24 full, salaries 13-18 (biting), 2 under floor, min-filler fired 30× cleanly.
+
+#### Original design notes (refined 2026-07-07)
+**Model B:** `cap_hit` **frozen at signing** (today recomputed live from tier = model A; enforcement dormant — `# TODO: capHit feature not fully developed`, `playerManager.py:4667`). Rookie signs cheap and stays cheap on that contract; re-signing re-prices to the player's *current* (developed) tier. The ratchet at re-sign is the dynasty-breaker.
+
+**PROACTIVE budgeting, NOT reactive force-cuts (owner concern 2026-07-07).** The naive "sign freely then auto-cut over-cap teams" model is rejected — bad-feeling automated cuts + stuck loops (spend on 2 signings, no room for a 3rd, forced cut, still stuck). Instead every signing/re-signing reserves cap for the team's remaining open slots:
+`usable cap for THIS signing = teamCap − current roster salary − (MIN_HIT × other open slots)` — so a team can **never sign itself into an unfillable corner**. Phases:
+- **Re-sign** (primary pressure): expiring contracts re-price to current tier; team keeps the **highest-value set that fits** `cap − reserved-for-open-slots`, the rest **WALK to FA** (declining to renew, not a cut). Owner-chosen unmanaged auto keep-rule: **highest value within cap** (fixed 6-slot structure prevents positional gaps — a walked QB's slot fills cheaply in FA).
+- **Fill**: open slots filled within the per-slot budget; always finishes a full roster.
+- **Cut**: stays a **deliberate GM/fan vote** (existing `cut_player`), never automated from overspend.
+- Managed teams: existing GM/fan votes made cap-aware (a vote that busts cap/reservation is surfaced as unaffordable, with the reason). Unmanaged: transparent value-based auto.
+
+**UI (owner wants it):** surface each team's cap space / committed salary / open-slot reservations in the Front Office. Backend exposes cap data; frontend displays (floosball-react).
+
+**⚠️ Recalibrate cap/floor.** The old **~24 / ~19** was for the OLD 40%-star spread (15-27 / avg 22). Parity dropped the league to ~16-19% stars → team salaries now run **lower** → those numbers would strand most teams under the floor. **Measure the new team-salary spread first, then set cap ≈ 1.1× avg, floor ≈ 0.85× avg.** Floor = yes (owner) — forces weak teams to spend, absorbing shed stars.
+
+**Build order:** (1) freeze cap_hit at signing → (2) cap-aware re-sign + fill (proactive budgeting) → (3) expose cap data + FO UI → (4) measurement sim to set cap/floor + confirm dynasties break without gutting rosters.
 - Separate phase — only after the distribution is validated, so the cap is calibrated against the new rating spread.
 
 ## Key anchors (from the code map)
