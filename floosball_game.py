@@ -2771,33 +2771,32 @@ class Game:
         """
         ytg = self.yardsToFirstDown
         if self.down == 1:
-            # 1st down: run-leaning base (55/45). Most plays happen here, so this
-            # is the biggest lever on the overall mix — trimmed from 50/50 to pull
-            # the league pass rate down off the ~65% it was drifting to.
-            return {'run': 55.0, 'short': 20.0, 'medium': 15.0, 'long': 8.0, 'deep': 2.0}
+            # 1st down: balanced 50/50 base. Most plays happen here, so
+            # this is the biggest lever on overall pass/run ratio.
+            return {'run': 50.0, 'short': 22.0, 'medium': 18.0, 'long': 8.0, 'deep': 2.0}
         elif self.down == 2:
             if ytg <= 4:
-                # 2nd & short — run preferred.
-                return {'run': 62.0, 'short': 26.0, 'medium': 8.0, 'long': 4.0, 'deep': 0.0}
+                # 2nd & short — run preferred (was already).
+                return {'run': 58.0, 'short': 28.0, 'medium': 10.0, 'long': 4.0, 'deep': 0.0}
             elif ytg <= 9:
-                # 2nd & medium — run-leaning balanced (was 45/55).
-                return {'run': 52.0, 'short': 18.0, 'medium': 21.0, 'long': 8.0, 'deep': 1.0}
+                # 2nd & medium — closer to balanced, was 35/65 too pass-heavy.
+                return {'run': 45.0, 'short': 20.0, 'medium': 25.0, 'long': 9.0, 'deep': 1.0}
             else:
-                # 2nd & long — a passing down, but a draw is live.
-                return {'run': 26.0, 'short': 20.0, 'medium': 28.0, 'long': 22.0, 'deep': 4.0}
+                # 2nd & long — obvious passing situation.
+                return {'run': 22.0, 'short': 20.0, 'medium': 28.0, 'long': 26.0, 'deep': 4.0}
         else:
             if ytg <= 3:
                 # 3rd & short — run is the percentage call.
-                return {'run': 65.0, 'short': 28.0, 'medium': 4.0, 'long': 3.0, 'deep': 0.0}
+                return {'run': 60.0, 'short': 32.0, 'medium': 4.0, 'long': 4.0, 'deep': 0.0}
             elif ytg <= 5:
-                # 3rd & medium-short — pass-leaning but the draw is real (was 25% run).
-                return {'run': 32.0, 'short': 40.0, 'medium': 20.0, 'long': 8.0, 'deep': 0.0}
+                # 3rd & medium-short — was 20% run, bump to 25%.
+                return {'run': 25.0, 'short': 45.0, 'medium': 21.0, 'long': 9.0, 'deep': 0.0}
             elif ytg <= 12:
-                # 3rd & medium-long — mostly pass, a draw is realistic.
-                return {'run': 18.0, 'short': 16.0, 'medium': 43.0, 'long': 21.0, 'deep': 2.0}
+                # 3rd & medium-long — still mostly pass but a draw is realistic.
+                return {'run': 12.0, 'short': 15.0, 'medium': 48.0, 'long': 23.0, 'deep': 2.0}
             else:
                 # 3rd & extra long — almost always pass.
-                return {'run': 8.0, 'short': 12.0, 'medium': 16.0, 'long': 56.0, 'deep': 8.0}
+                return {'run': 6.0, 'short': 10.0, 'medium': 15.0, 'long': 61.0, 'deep': 8.0}
 
     def _computePlayWeights(self, scoreDiff: int, coach) -> dict:
         """Compute play call probability weights for downs 1–3."""

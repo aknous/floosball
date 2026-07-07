@@ -273,8 +273,8 @@ QUICKGAME_LATE_DEFICIT = 3       # Q4/OT: behind by a FG or more -> need to hurr
 # play selection; these map its deviation from neutral into multiplicative nudges
 # on the run weight (up) and the four pass-tier weights (down), so the mid-game
 # adjustment toward "what's working" actually shifts the run/pass mix.
-RUNPASS_RUN_SWING = 1.8          # run-weight multiplier = 1 + (ratio-0.5)*this  (r=0.75 -> run x1.45)
-RUNPASS_PASS_SWING = 1.5         # pass-tier multiplier = 1 - (ratio-0.5)*this   (r=0.75 -> pass x0.625)
+RUNPASS_RUN_SWING = 1.2          # run-weight multiplier = 1 + (ratio-0.5)*this  (r=0.75 -> run x1.30)
+RUNPASS_PASS_SWING = 1.0         # pass-tier multiplier = 1 - (ratio-0.5)*this   (r=0.75 -> pass x0.75)
 
 # --- Read-the-box: the offense exploits the defense's committed run/pass tilt ---
 # The defense's runStopFocus (0.20 pass-focused/light box .. 0.80 run-focused/stacked
