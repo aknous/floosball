@@ -3059,6 +3059,17 @@ class Game:
                 if k in weights:
                     weights[k] *= boost
 
+        # Feed a talented back: lean the run weight toward a strong RB (and off a
+        # weak one) EVERY down, independent of the defense read and the coach —
+        # so a stud actually gets carries instead of standing around while the
+        # offense passes. Scaled off the RB's offensive rating vs a baseline.
+        from constants import RB_FEED_NEUTRAL, RB_FEED_RANGE, RB_FEED_STRENGTH, RB_FEED_MIN_MULT
+        rb = self.offensiveTeam.rosterDict.get('rb')
+        if rb is not None:
+            rbRating = getattr(rb, 'offensiveRating', 0) or getattr(getattr(rb, 'attributes', None), 'overallRating', RB_FEED_NEUTRAL)
+            rbNorm = (rbRating - RB_FEED_NEUTRAL) / RB_FEED_RANGE
+            weights['run'] *= max(RB_FEED_MIN_MULT, 1 + RB_FEED_STRENGTH * rbNorm)
+
         return weights
 
     def _applyCoachMods(self, weights: dict, coach) -> dict:
@@ -3071,8 +3082,11 @@ class Game:
         aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         offMindNorm = (coach.offensiveMind - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
 
-        weights['deep']   = weights.get('deep', 0) * max(0.1, 1 + 1.8 * aggrNorm)
-        weights['long']   *= max(0.2, 1 + 0.5 * aggrNorm)
+        # Aggressiveness pass tail tamed: deep 1.8->1.2, long 0.5->0.35 so an
+        # aggressive coach still takes more shots but doesn't skew the whole
+        # offense pass-heavy (max-aggr deep was x2.8, now x2.2).
+        weights['deep']   = weights.get('deep', 0) * max(0.1, 1 + 1.2 * aggrNorm)
+        weights['long']   *= max(0.2, 1 + 0.35 * aggrNorm)
         weights['medium'] *= max(0.5, 1 + 0.15 * aggrNorm)
         # Run/short nerf softened: was 0.2/0.5 and 0.1/0.5 — combined with
         # the pass-heavy base that produced 85/15 splits in games where a

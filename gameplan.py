@@ -72,15 +72,23 @@ def generateOffensiveGameplan(coach, offenseTeam, defenseTeam) -> OffensiveGamep
     rb = getattr(offenseTeam, 'rosterDict', {}).get('rb', None)
     rbPower = getattr(getattr(rb, 'attributes', None), 'power', 50) if rb else 50
     rbSpeed = getattr(getattr(rb, 'attributes', None), 'speed', 50) if rb else 50
+    # Talent signal uses the RB's OVERALL offensive rating (not just power+speed)
+    # so a genuinely elite back — receiving, vision, the works — leans the plan run.
+    rbTalent = getattr(getattr(rb, 'attributes', None), 'overallRating', (rbPower + rbSpeed) / 2.0) if rb else 50
     oppRunDef = getattr(defenseTeam, 'defenseRunCoverageRating', 50)
 
-    rbAvg = (rbPower + rbSpeed) / 2.0
-    runAdvantage = (rbAvg - oppRunDef) / 100.0   # roughly -0.5 to +0.5
-
-    plan.runPassRatio = float(np.clip(
-        0.5 + runAdvantage * 0.3 + np.random.normal(0, noise),
-        0.25, 0.75
-    ))
+    runAdvantage = (rbTalent - oppRunDef) / 100.0   # roughly -0.5 to +0.5
+    # Stronger coefficient (0.3->0.5) + smaller ratio noise so a great RB isn't
+    # washed out by a low-offensiveMind coach's randomness.
+    ratioNoise = (1.0 - accuracy) * 0.10
+    ratio = 0.5 + runAdvantage * 0.5 + np.random.normal(0, ratioNoise)
+    # Talent floor for STUDS ONLY (>88 ~ 4-5-star): a genuinely elite back gets a
+    # run-lean starting plan regardless of matchup/noise, so he's never handed a
+    # pass-first script. Average/weak backs get no floor (their plan can be
+    # pass-leaning). 90 -> 0.525, 96 -> 0.60, 100 -> 0.65. The live RB feed in
+    # Game._applyMatchupMods is what keeps him fed if the run gets stuffed.
+    talentFloor = (0.5 + (rbTalent - 88) / 80.0) if rbTalent > 88 else 0.0
+    plan.runPassRatio = float(np.clip(max(ratio, talentFloor), 0.25, 0.80))
 
     # Gap distribution: speed back → edge (C-gap), power back → inside (A-gap)
     isSpeedBack = rbSpeed > rbPower
