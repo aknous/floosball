@@ -276,6 +276,15 @@ QUICKGAME_LATE_DEFICIT = 3       # Q4/OT: behind by a FG or more -> need to hurr
 RUNPASS_RUN_SWING = 1.2          # run-weight multiplier = 1 + (ratio-0.5)*this  (r=0.75 -> run x1.30)
 RUNPASS_PASS_SWING = 1.0         # pass-tier multiplier = 1 - (ratio-0.5)*this   (r=0.75 -> pass x0.75)
 
+# Live RB feed (Game._applyMatchupMods): the play-caller leans on a talented
+# back every down, not just via the pre-game gameplan. run weight is scaled by
+# the RB's offensive rating vs a neutral baseline, so a stud gets meaningfully
+# more carries and a weak back fewer. Independent of the defense read.
+RB_FEED_NEUTRAL = 80             # RB offensive rating at which the feed is neutral (x1.0)
+RB_FEED_RANGE = 20               # rating spread mapped to +/- one unit of the swing
+RB_FEED_STRENGTH = 0.5           # run *= 1 + STRENGTH*(rating-NEUTRAL)/RANGE  (rating 90 -> run x1.25)
+RB_FEED_MIN_MULT = 0.7           # floor so a weak back still runs sometimes
+
 # ---------------------------------------------------------------------------
 # Run-play CONCEPTS (playbook diversification Phase 1 — see docs/PLAYBOOK_PLAN.md)
 # ---------------------------------------------------------------------------
