@@ -3918,6 +3918,125 @@ class PlayerManager:
         logger.info(f"Generated rookie class of {len(rookies)} for season {currentSeason}")
         return rookies
 
+    def parityStarFraction(self) -> float:
+        """Fraction of the non-retired pool at 4-5-star (rating >= 84). Used to
+        detect an OLD inflated pool (needs the one-time parity re-map) vs a
+        fresh/already-re-mapped one already on the true-skill curve."""
+        pool = [p for p in self.activePlayers
+                if getattr(p, 'serviceTime', None) != FloosPlayer.PlayerServiceTime.Retired
+                and getattr(p, 'playerRating', 0)]
+        if not pool:
+            return 0.0
+        return sum(1 for p in pool if p.playerRating >= 84) / len(pool)
+
+    def remapPoolToTrueSkill(self) -> int:
+        """One-time between-season re-map of the existing (inflated) pool onto
+        the new true-skill distribution, rank-preserving PER POSITION (QB/RB/WR/
+        TE/K sit on different rating scales, so a pooled map would distort them).
+
+        Deflates every non-retired player (rostered / FA / prospect / upcoming
+        rookie) onto the parity curve and FREEZES them: trueSkill = potential =
+        current. Freezing is essential — leaving any overshoot headroom (or an
+        old inflated potential on the excluded prospect cohort) lets the pool
+        climb straight back up over a few seasons (measured: 19% -> 25%). With
+        the freeze, only NEW post-cutover rookies develop under the full
+        three-tier model; the existing pool holds its deflated ratings and ages
+        out. Migration for the parity package — the caller guards it to run once.
+        Validated on a prod-copy boot (held ~20%, no creep). See
+        docs/PARITY_PROSPECT_PLAN.md Phase 3.
+        """
+        import numpy as np
+        from random import randint
+        from constants import (GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD,
+                               PROSPECT_ENTRY_DISCOUNT, POTENTIAL_HEADROOM)
+        from floosball_player import _TRUESKILL_ATTR_TRIPLES
+        from player_development import PlayerDevelopment
+
+        PHYS = ['speed', 'power', 'agility', 'reach', 'hands', 'armStrength', 'accuracy', 'legStrength']
+        posClass = {
+            FloosPlayer.Position.QB: FloosPlayer.PlayerQB,
+            FloosPlayer.Position.RB: FloosPlayer.PlayerRB,
+            FloosPlayer.Position.WR: FloosPlayer.PlayerWR,
+            FloosPlayer.Position.TE: FloosPlayer.PlayerTE,
+            FloosPlayer.Position.K:  FloosPlayer.PlayerK,
+        }
+        pool = [p for p in self.activePlayers
+                if getattr(p, 'serviceTime', None) != FloosPlayer.PlayerServiceTime.Retired
+                and getattr(p, 'playerRating', 0) and getattr(p, 'position', None) in posClass]
+        if not pool:
+            return 0
+
+        def refCurve(posEnum, M=3000):
+            ctor = posClass[posEnum]
+            vals = []
+            for _ in range(M):
+                s = int(np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD), 60, 100))
+                m = int(np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD), 60, 100))
+                vals.append(ctor(s, m).playerRating)
+            vals.sort()
+            return vals
+
+        def setToRating(p, target):
+            # Shift physical athletic attrs to move playerRating toward target
+            # (rating moves ~0.8x per unit shift; iterate on the residual).
+            # Preserves each player's relative attribute shape.
+            for _ in range(12):
+                d = target - p.playerRating
+                if d == 0:
+                    break
+                for attr in PHYS:
+                    v = getattr(p.attributes, attr, 0)
+                    if v > 0:
+                        setattr(p.attributes, attr, int(np.clip(v + d, 45, 100)))
+                p.updateRating()
+
+        byPos = {}
+        for p in pool:
+            byPos.setdefault(p.position, []).append(p)
+
+        total = 0
+        for posEnum, players in byPos.items():
+            ref = refCurve(posEnum)
+            M = len(ref); N = len(players)
+            order = sorted(range(N), key=lambda i: players[i].playerRating)  # low -> high
+            for rank, i in enumerate(order):
+                p = players[i]
+                pct = (rank + 0.5) / N
+                setToRating(p, ref[min(M - 1, int(pct * M))])  # rank places them on the mature curve
+                # Career stage decides development runway. The rank above is the
+                # player's MATURE level (their spot on the new curve). RISING
+                # players (below their peak season) debut BELOW it and develop UP
+                # into it — trueSkill = mature rank, current lowered by a bounded
+                # runway, potential a touch above. So the aggregate lands ON the
+                # curve at maturity (no re-inflation), while young players still
+                # visibly grow. PEAK/DECLINING players are FROZEN at their mature
+                # rank (trueSkill = potential = current): done growing, and the
+                # freeze is what stops the pool climbing back up. Runway is capped
+                # at the entry discount new rookies get.
+                peak = PlayerDevelopment.peakSeason(p)
+                seasons = getattr(p, 'seasonsPlayed', 0) or 0
+                if seasons < peak:
+                    runway = int(round(PROSPECT_ENTRY_DISCOUNT * (peak - seasons) / max(1, peak)))
+                else:
+                    runway = 0
+                for attr, trueName, potName in _TRUESKILL_ATTR_TRIPLES:
+                    cur = getattr(p.attributes, attr, 0)
+                    if cur <= 0:
+                        setattr(p.attributes, trueName, 0)
+                        setattr(p.attributes, potName, 0)
+                        continue
+                    setattr(p.attributes, trueName, cur)   # trueSkill = mature rank
+                    pot = int(np.clip(cur + (randint(0, POTENTIAL_HEADROOM) if runway > 0 else 0), cur, 100))
+                    setattr(p.attributes, potName, pot)    # overshoot room only where there's runway
+                    if runway > 0:
+                        setattr(p.attributes, attr, int(np.clip(cur - runway, 45, cur)))  # debut BELOW, grow up into trueSkill
+                p.updateRating()   # rating reflects the lowered debut level for the young
+                p.attributes.potentialSkillRating = p.attributes.skillRating
+                total += 1
+
+        logger.info(f"Parity re-map: deflated {total} players onto the true-skill curve (rising debut below & grow in, peak/declining frozen)")
+        return total
+
     def countTeamProspectsAtPosition(self, team, position) -> int:
         """How many prospects this team already holds at a given Position enum."""
         return sum(1 for p in getattr(team, 'prospects', []) if p.position == position)

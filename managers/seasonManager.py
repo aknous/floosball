@@ -318,6 +318,13 @@ class SeasonManager:
         teamMgr = self.serviceContainer.getService('team_manager')
         teamMgr.setPressureModifiersForNewSeason(seasonNumber)
 
+        # One-time parity re-map: at a genuine new-season cutover, deflate an
+        # inflated legacy pool onto the new true-skill curve BEFORE card templates
+        # mint off the (now corrected) ratings. Guarded to run exactly once; auto-
+        # skips a fresh / already-on-curve pool. See docs/PARITY_PROSPECT_PLAN.md.
+        if resumeFromWeek == 0:
+            self._maybeRunParityRemap()
+
         # Generate card templates for the new season
         self._generateCardTemplates(seasonNumber)
 
@@ -5495,6 +5502,36 @@ class SeasonManager:
             logger.info(f"Re-provisioned starter packs for {len(usersWithoutCurrency)} existing user(s)")
         except Exception as e:
             logger.warning(f"Could not re-provision starter packs: {e}")
+
+    def _maybeRunParityRemap(self) -> None:
+        """One-time parity migration: deflate an inflated legacy pool onto the
+        new true-skill curve and freeze it. Runs exactly once (persisted marker),
+        auto-skips a pool already on the curve (fresh start or already re-mapped),
+        and persists the re-rated players before marking done so a crash can't
+        leave the marker set with the old ratings still on disk. See
+        docs/PARITY_PROSPECT_PLAN.md Phase 3."""
+        from database.models import AppSetting
+        KEY = 'parity_remap_done'
+        try:
+            row = self.db_session.query(AppSetting).filter_by(key=KEY).first()
+            if row is not None and row.value == '1':
+                return
+            frac = self.playerManager.parityStarFraction()
+            # Old inflated pools sit ~40% 4-5-star; fresh/re-mapped pools ~19-21%.
+            if frac > 0.28:
+                n = self.playerManager.remapPoolToTrueSkill()
+                self.playerManager.savePlayerData()   # persist BEFORE marking done
+                logger.info(f"Parity re-map applied to {n} players (pool was {frac:.0%} 4-5-star)")
+            else:
+                logger.info(f"Parity re-map skipped — pool already on curve ({frac:.0%} 4-5-star)")
+            if row is None:
+                self.db_session.add(AppSetting(key=KEY, value='1'))
+            else:
+                row.value = '1'
+            self.db_session.commit()
+        except Exception as e:
+            # Don't set the marker on failure — retry at the next cutover.
+            logger.error(f"Parity re-map failed (will retry next cutover): {e}")
 
     def _generateCardTemplates(self, seasonNumber: int) -> None:
         """Generate card templates for all active players for a season.

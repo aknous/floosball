@@ -4,7 +4,18 @@
 > **(1) league parity (skill redistribution)**, **(2) prospect ratings rework (enter-low, develop-into-true-skill)**, **(3) salary cap**.
 > All changes are **between-season** (applied at the rollover), never in-season. Design locked 2026-07-07.
 
-_Status: Phases 1, 2, 4 done + validated. Phase 3 (live-pool re-map) and Phase 5 (cap) remain. Owner-agreed forks recorded below._
+_Status: Phases 1, 2, 3, 4 done + validated. Phase 5 (salary cap) remains. Owner-agreed forks recorded below._
+
+## Phase 3 — re-map: built + validated on a prod copy (2026-07-07)
+`playerManager.remapPoolToTrueSkill()` + guarded one-time call `seasonManager._maybeRunParityRemap()` (fires in `startNewSeason` when `resumeFromWeek==0`, BEFORE card gen; persisted `AppSetting` marker `parity_remap_done`; auto-skips a pool already on-curve via `parityStarFraction() > 0.28`; persists players before marking done).
+- **Scope = ALL non-retired players** (rostered + FA + prospects + upcoming), rank-preserving PER POSITION onto a freshly-generated mature reference curve.
+- **Career-staged freeze/runway (final design):** rank places each player on the mature curve. **RISING** players (below their peak season) debut BELOW that rank (current lowered by a bounded runway, capped at `PROSPECT_ENTRY_DISCOUNT`) and develop UP into it — trueSkill = mature rank, potential a touch higher. **PEAK/DECLINING** players are FROZEN at their rank (trueSkill = potential = current). So genuinely-young players keep a real development arc while the pool still converges ON the curve at maturity (no re-inflation).
+- **Two key findings from prod-copy boots (both fixed):**
+  1. An early version re-mapped only the active pool + left `potential=trueSkill+headroom`; the excluded prospect cohort kept OLD inflated potentials and re-mapped players had overshoot room → **re-inflated 19%→25% over 4 seasons**. Fix: re-map ALL non-retired + freeze peak/declining.
+  2. First runway attempt set rising players' trueSkill ABOVE their deflated current (runway added on top) → they developed ABOVE the curve → **re-inflated 18%→26%**. Fix: rising players debut BELOW the rank and grow UP into it (runway subtracts from current, not adds to trueSkill).
+- **Validated (corrected runway):** prod-copy boot **44% → converges 12.6→16.5% and plateaus ~16-17% whole-pool (~19-20% active), no creep**. Owner forks: full re-map (no blend); rising keep runway, peak/declining frozen.
+- **League-metrics side effect (owner ACCEPTED, 2026-07-07):** the deflation cools offense over the transition — pts/g ~20→17, passing yards ~280→234 (−15%), rushing steady ~96. Owner chose to accept it (fewer stars = less offense, more realistic); no compression compensation. NOTE: this was measured on the transitional prod-resume; fresh new-model steady-state scoring was not separately measured.
+- Validated end-to-end on the WIRED path: raw prod copy boot → migration adds `true_skill_*` → re-map fires at cutover → marker set → holds. Minor edge: ~2% of frozen players drift 1pt past potential (dev-arc rounding); no aggregate effect.
 
 ## Validation results (Phases 1+2 via fresh 10-14 season fast sims, 2026-07-07)
 - **No creep — confirmed.** A fresh league run 14 seasons at `(76,8)` held the whole-pool mean rating flat at ~74 with the 4-5★ % oscillating in a band (no upward trend). The rare-overshoot ceiling does NOT inflate the league — the dev arc's true-skill growth cap is the anchor. (Owner chose "rare overshoot ceiling" for the potential's role; `DEV_OVERSHOOT_BASE_CHANCE=0.12`.)
