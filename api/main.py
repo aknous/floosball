@@ -1240,6 +1240,10 @@ async def get_rules():
     skip = {"patchHistory", "fieldGoalUprights"}
     changed = [k for k, v in current.items()
                if k not in skip and defaults.get(k) != v]
+    # The most recent Cores-vote change (drives the Rulebook pill's "what changed"
+    # line + its notification dot). Sourced from the persisted rule-vote windows so
+    # it survives restarts (patchHistory is in-memory only).
+    lastChange = _lastRuleChange()
     # `mutable` = what the Rulebook currently exposes as changeable (a curated
     # subset of the engine's full capability — see RULEBOOK_EXPOSED_FIELDS).
     return build_success_response({
@@ -1248,7 +1252,223 @@ async def get_rules():
         "mutable": sorted(RULEBOOK_EXPOSED_FIELDS),
         "changed": changed,
         "patchHistory": current.get("patchHistory", []),
+        "lastChange": lastChange,
+        "changeCount": len(changed),
     })
+
+
+# ── Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ───────────────────────
+class _RuleVoteRequest(BaseModel):
+    optionKey: str   # a candidate field key, or 'none'
+
+
+def _currentSeasonNumber() -> Optional[int]:
+    sm = floosball_app.seasonManager if floosball_app else None
+    if sm and sm.currentSeason:
+        return sm.currentSeason.seasonNumber
+    return None
+
+
+def _liveGameRules():
+    sm = floosball_app.seasonManager if floosball_app else None
+    if sm and sm.currentSeason and getattr(sm.currentSeason, 'gameRules', None):
+        return sm.currentSeason.gameRules
+    from game_rules import GameRules, loadRuleOverrides
+    g = GameRules()
+    ov = loadRuleOverrides()
+    if ov:
+        g.applyOverrides(ov, reason="rules view", source="persisted")
+    return g
+
+
+def _lastRuleChange():
+    """The most recent applied Cores-vote change, or None, for the Rulebook pill."""
+    season = _currentSeasonNumber()
+    if season is None:
+        return None
+    from database.connection import get_session
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    from constants import RULE_VOTE_CANDIDATES
+    import game_rules as _gr
+    session = get_session()
+    try:
+        w = RuleVoteRepository(session).lastResolvedApplied(season)
+        if not w or not w.winner_key or w.winner_key == 'none':
+            return None
+        field = w.winner_key
+        dflt = _gr.defaultRuleValue(field)
+        alt = RULE_VOTE_CANDIDATES.get(field, {}).get('alternate')
+        return {
+            "field": field,
+            "label": RULE_VOTE_CANDIDATES.get(field, {}).get('label', field),
+            "kind": w.kind,                       # 'change' | 'revert'
+            "core": w.core,                       # 'aris' | 'pyre'
+            "from": (alt if w.kind == 'revert' else dflt),
+            "to": (dflt if w.kind == 'revert' else alt),
+        }
+    except Exception:
+        return None
+    finally:
+        session.close()
+
+
+def _coreDisplayName(coreKey: Optional[str]) -> Optional[str]:
+    if not coreKey:
+        return None
+    try:
+        from managers.coresManager import CORES
+        return CORES.get(coreKey, {}).get('displayName', coreKey.title())
+    except Exception:
+        return coreKey.title()
+
+
+def _isVotingOpen(window) -> bool:
+    """A window accepts votes while it's unresolved and before its close time."""
+    if window is None or window.resolved:
+        return False
+    if window.closes_at is None:
+        return True
+    return datetime.datetime.utcnow() < window.closes_at
+
+
+def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:
+    """Build the ballot's option views (current -> proposed) for a window."""
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    from constants import RULE_VOTE_CANDIDATES
+    import game_rules as _gr
+    out = []
+    for field in RuleVoteRepository.optionsOf(window):
+        current = getattr(gameRules, field, None)
+        proposed = (_gr.defaultRuleValue(field) if window.kind == 'revert'
+                    else RULE_VOTE_CANDIDATES.get(field, {}).get('alternate'))
+        out.append({
+            "field": field,
+            "label": RULE_VOTE_CANDIDATES.get(field, {}).get('label', field),
+            "current": current,
+            "proposed": proposed,
+        })
+    return out
+
+
+@app.get("/api/rules/vote/status")
+def get_rule_vote_status():
+    """Is a Cores rule-change vote open? Drives the nav badge + the dashboard popup."""
+    season = _currentSeasonNumber()
+    if season is None:
+        return build_success_response({"open": False})
+    from database.connection import get_session
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    session = get_session()
+    try:
+        w = RuleVoteRepository(session).getOpenWindow(season)
+        if not w:
+            return build_success_response({"open": False, "season": season})
+        return build_success_response({
+            "open": True,
+            "season": season,
+            "windowId": w.id,
+            "kind": w.kind,
+            "core": w.core,
+            "coreDisplayName": _coreDisplayName(w.core),
+            "closesAt": (w.closes_at.isoformat() + 'Z') if w.closes_at else None,
+            "votingOpen": _isVotingOpen(w),
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/rules/vote/ballot")
+def get_rule_vote_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
+    """The open vote's Core conversation, options (current -> proposed), live totals,
+    the user's current pick, and close time. Totals are shown live (unlike awards)."""
+    season = _currentSeasonNumber()
+    if season is None:
+        return build_success_response({"open": False})
+    from database.connection import get_session
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    session = get_session()
+    try:
+        repo = RuleVoteRepository(session)
+        w = repo.getOpenWindow(season)
+        if not w:
+            return build_success_response({"open": False, "season": season})
+        options = _ruleVoteOptions(w, _liveGameRules())
+        return build_success_response({
+            "open": True,
+            "season": season,
+            "windowId": w.id,
+            "kind": w.kind,
+            "core": w.core,
+            "coreDisplayName": _coreDisplayName(w.core),
+            "prompt": w.prompt_line,
+            "reactPick": w.react_pick_line,
+            "reactNone": w.react_none_line,
+            "options": options,
+            "totals": repo.tally(w.id),
+            "myPick": repo.getUserVote(user.id, w.id) if user else None,
+            "closesAt": (w.closes_at.isoformat() + 'Z') if w.closes_at else None,
+            "votingOpen": _isVotingOpen(w),
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/rules/vote")
+def cast_rule_vote(req: _RuleVoteRequest, user: _User = Depends(_getCurrentUser)):
+    """Cast (or change) the user's single pick in the open rule-change vote. Free.
+    The pick must be 'none' or one of the offered options, and voting must be open."""
+    season = _currentSeasonNumber()
+    if season is None:
+        raise HTTPException(400, "No active season")
+    from database.connection import get_session
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    session = get_session()
+    try:
+        repo = RuleVoteRepository(session)
+        w = repo.getOpenWindow(season)
+        if not w:
+            raise HTTPException(400, "No rule-change vote is open right now")
+        if not _isVotingOpen(w):
+            raise HTTPException(400, "Voting has closed for this rule change")
+        valid = set(RuleVoteRepository.optionsOf(w)) | {"none"}
+        if req.optionKey not in valid:
+            raise HTTPException(400, "That option is not on the ballot")
+        repo.castVote(user.id, w.id, req.optionKey)
+        session.commit()
+        return build_success_response({
+            "season": season,
+            "windowId": w.id,
+            "myPick": req.optionKey,
+            "totals": repo.tally(w.id),
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/rules/vote/withdraw")
+def withdraw_rule_vote(user: _User = Depends(_getCurrentUser)):
+    """Clear the user's pick in the open rule-change vote."""
+    season = _currentSeasonNumber()
+    if season is None:
+        raise HTTPException(400, "No active season")
+    from database.connection import get_session
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    session = get_session()
+    try:
+        repo = RuleVoteRepository(session)
+        w = repo.getOpenWindow(season)
+        if not w:
+            raise HTTPException(400, "No rule-change vote is open right now")
+        if not _isVotingOpen(w):
+            raise HTTPException(400, "Voting has closed for this rule change")
+        repo.withdrawVote(user.id, w.id)
+        session.commit()
+        return build_success_response({
+            "season": season, "windowId": w.id, "myPick": None,
+            "totals": repo.tally(w.id),
+        })
+    finally:
+        session.close()
 
 
 @app.get("/api/cores/status", response_model=Dict[str, Any])
