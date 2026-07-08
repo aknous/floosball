@@ -846,22 +846,7 @@ ATTITUDE_DRIFT_MAGNITUDE = 1.5    # win/loss drift multiplier on |winPct-0.5| (d
 # don't re-open a gap. Only matters when a position is genuinely short.
 ROSTER_SUPPLY_BUFFER_PER_POSITION = 3
 
-# ---- Salary cap (parity model B — docs/PARITY_PROSPECT_PLAN.md Phase 5) ----
-# cap_hit = the player's star tier FROZEN at signing (S=5..D=1). A rookie signs
-# cheap and stays cheap; re-signing re-prices to the CURRENT tier (the ratchet
-# that breaks dynasties). Team salary = sum of the 6 rostered cap_hits. All
-# enforcement is BETWEEN-SEASON and PROACTIVE: every signing reserves MIN_CAP_HIT
-# for each remaining open slot so a team can never sign itself into an unfillable
-# corner. Cap pressure surfaces as "let a player walk at re-sign", never a forced
-# cut. NOTE: these are placeholders — recalibrate against the new deflated
-# distribution's team-salary spread (P5e sim): cap ~= 1.1x avg, floor ~= 0.85x avg.
-SALARY_CAP_ENABLED = False        # RETIRED in favour of the retention limits below
-                                  # (kept behind this switch — flip True to A/B the cap).
-SALARY_CAP = 18                   # max team salary (sum of tier cap_hits) — HARD cap
-SALARY_FLOOR = 14                 # min team salary; under-floor teams must spend
-MIN_CAP_HIT = 1                   # a min-tier (D) player; reserved per open slot when budgeting
-
-# ---- Retention limits (parity — simpler alternative/complement to the cap) ----
+# ---- Retention limits (parity — docs/PARITY_PROSPECT_PLAN.md Phase 5) ----
 # Force stacked teams to break up by limiting RETENTION, not salary. Two levers,
 # each independently switchable, applied in the offseason re-sign pass:
 #  - Re-sign-once: a team may re-sign a given player only RESIGN_ONCE_LIMIT times;

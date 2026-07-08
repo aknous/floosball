@@ -936,13 +936,6 @@ class PlayerManager:
         tier = player.playerTier
         seasonsPlayed = getattr(player, 'seasonsPlayed', 0) or 0
 
-        # FREEZE the cap hit at signing (model B): a player's salary is their tier
-        # at the moment they sign / promote / re-sign, and stays frozen while
-        # rostered. Every signing path routes through here, so this is the single
-        # stamp. A cheap rookie who develops re-prices only when they re-sign (the
-        # ratchet that breaks dynasties). See docs/PARITY_PROSPECT_PLAN.md Phase 5.
-        player.capHit = tier.value
-
         # First contract: fixed rookie deal so diamond prospects/rookies don't
         # get six-year commitments before playing a snap.
         if seasonsPlayed == 0:
@@ -953,10 +946,9 @@ class PlayerManager:
             return 2  # B / C
 
         # Veteran: roll by tier, then clamp to expected career runway.
-        # Star (S/A) deals are SHORT (was 4-6 / 3-4) so the salary-cap re-sign
-        # ratchet bites sooner — a team can't lock a developing core cheap for
-        # six years; each re-sign re-prices it up, forcing a built dynasty to
-        # shed talent faster. See docs/PARITY_PROSPECT_PLAN.md Phase 5.
+        # Star (S/A) deals are SHORT (2-3, was 4-6 / 3-4) so a player cycles through
+        # their ~2 contracts (re-sign-once retention limit) in ~4-5 years rather than
+        # a decade — keeps talent circulating for parity. See PARITY_PROSPECT_PLAN.md P5.
         if tier == FloosPlayer.PlayerTier.TierS:
             base = randint(2, 3)
         elif tier == FloosPlayer.PlayerTier.TierA:
@@ -3753,20 +3745,14 @@ class PlayerManager:
         (tier + added to the FA/active/position pools). Last-resort safety used
         by the live FA draft when a team is on the clock with an open slot and
         the pool at that position is genuinely empty — guarantees the draft can
-        never leave a roster hole. Returns the new player (or None on failure).
-
-        Mints a MINIMUM-tier (D, cap_hit 1) replacement-level player: a last resort
-        is a scrub by nature, and a cap-1 filler is guaranteed to fit the salary
-        cap's per-slot reservation (usable cap is always >= MIN_CAP_HIT), so a
-        cap-constrained team can always complete its roster without overspending
-        or cutting anyone. See docs/PARITY_PROSPECT_PLAN.md Phase 5."""
+        never leave a roster hole. Returns the new player (or None on failure)."""
         import numpy as np
         try:
             pos = FloosPlayer.Position(posValue)
         except Exception:
             return None
-        phys = int(np.clip(np.random.normal(62, 2), 60, 100))
-        ment = int(np.clip(np.random.normal(62, 2), 60, 100))
+        phys = int(np.clip(np.random.normal(78, 7), 60, 100))
+        ment = int(np.clip(np.random.normal(78, 7), 60, 100))
         newPlayer = self.createPlayer(pos, phys, ment)
         if not newPlayer:
             return None
@@ -4052,13 +4038,6 @@ class PlayerManager:
                         setattr(p.attributes, attr, int(np.clip(cur - runway, 45, cur)))  # debut BELOW, grow up into trueSkill
                 p.updateRating()   # rating reflects the lowered debut level for the young
                 p.attributes.potentialSkillRating = p.attributes.skillRating
-                # Re-price the contract to the DEFLATED tier (salary cap, model B):
-                # the one-time re-rating resets cap_hit to the new reality so a team
-                # isn't stuck paying star money for a now-deflated role player. From
-                # the deflated CURRENT rating (playerTier may be stale until the next
-                # sort). Re-prices UP normally at future re-signs (the ratchet).
-                r = p.playerRating or 0
-                p.capHit = 5 if r >= 92 else 4 if r >= 84 else 3 if r >= 76 else 2 if r >= 68 else 1
                 total += 1
 
         logger.info(f"Parity re-map: deflated {total} players onto the true-skill curve (rising debut below & grow in, peak/declining frozen)")
@@ -4490,35 +4469,6 @@ class PlayerManager:
         if not candidates:
             return False  # open slots exist but no FAs or prospects to fill them
 
-        # SALARY CAP (model B): keep only candidates the team can AFFORD for THIS
-        # signing, reserving MIN_CAP_HIT for each other still-open slot (proactive
-        # budgeting — a team never signs itself into an unfillable/over-cap roster).
-        # If nothing fits, sign the CHEAPEST available (a filled slot beats a hole,
-        # and the reservation makes a genuine over-cap fill rare). Under-floor teams
-        # naturally spend up toward the cap because selection stays best-rated within
-        # budget. See docs/PARITY_PROSPECT_PLAN.md Phase 5.
-        from constants import SALARY_CAP_ENABLED, MIN_CAP_HIT
-        if SALARY_CAP_ENABLED:
-            usable = self.usableCapForSigning(team)
-            affordable = [c for c in candidates if self._calculateCapHit(c[1]) <= usable]
-            if affordable:
-                candidates = affordable
-            elif usable >= MIN_CAP_HIT:
-                # Under cap but the board's cheapest is too rich for the reserved
-                # budget. NEVER overspend or cut — sign nothing so the last-resort
-                # mints a minimum-cost (cap-1) filler, which the reservation
-                # guarantees fits. A team never signs itself over the cap.
-                return False
-            else:
-                # Already OVER cap (grandfathered — e.g. a stacked team right after
-                # the one-time re-map deploy). It must still fill its open slot, so
-                # take the CHEAPEST available (minimum overage) — never cut a player
-                # to make room. The team converges under the cap over the next few
-                # offseasons as contracts expire and the re-sign pass won't renew
-                # into an over-cap roster. See docs/PARITY_PROSPECT_PLAN.md Phase 5.
-                minHit = min(self._calculateCapHit(c[1]) for c in candidates)
-                candidates = [c for c in candidates if self._calculateCapHit(c[1]) == minHit]
-
         def _rating(c):
             return getattr(c[1], 'playerRating', getattr(c[1].attributes, 'skillRating', 0))
 
@@ -4844,30 +4794,6 @@ class PlayerManager:
         }
         
         return tier_cap_hits.get(player.playerTier, 2)
-
-    # ---- Salary-cap helpers (model B, computed on-demand from frozen cap_hits) ----
-    def teamSalary(self, team) -> int:
-        """Committed salary = sum of the rostered players' FROZEN cap hits."""
-        return sum(int(getattr(p, 'capHit', 0) or 0)
-                   for p in team.rosterDict.values() if p is not None)
-
-    def teamOpenSlots(self, team) -> int:
-        """Count of empty roster slots (rosterDict values that are None)."""
-        return sum(1 for v in team.rosterDict.values() if v is None)
-
-    def capSpace(self, team) -> int:
-        """Remaining cap space = SALARY_CAP - committed salary."""
-        from constants import SALARY_CAP
-        return SALARY_CAP - self.teamSalary(team)
-
-    def usableCapForSigning(self, team) -> int:
-        """Cap available for ONE signing right now, RESERVING MIN_CAP_HIT for each
-        OTHER still-open slot so the team can always fill its remaining roster
-        (proactive budgeting — never sign into an unfillable corner). See
-        docs/PARITY_PROSPECT_PLAN.md Phase 5."""
-        from constants import SALARY_CAP, MIN_CAP_HIT
-        reserveForOthers = MIN_CAP_HIT * max(0, self.teamOpenSlots(team) - 1)
-        return SALARY_CAP - self.teamSalary(team) - reserveForOthers
 
     def validateSalaryCaps(self) -> Dict[str, Any]:
         """

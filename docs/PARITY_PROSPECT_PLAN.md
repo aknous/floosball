@@ -94,10 +94,9 @@ Rework `player_development.py::developAttribute`:
 **Remaining:** wire the "you can re-sign this player one more time" / "protected this offseason" state into the Front Office UI (replaces the old cap-space UI idea). The parity ENGINE is done + validated.
 
 ---
-_Below: the salary-cap implementation (built + validated, now behind `SALARY_CAP_ENABLED=False`; kept for A/B or a future pivot back)._
-
-### Phase 5 (legacy) — Salary cap (model B) — BACKEND BUILT + VALIDATED 2026-07-07
-**Status:** backend logic done + validated on fresh sims. Retired behind the switch. Implementation:
+### Phase 5 (HISTORICAL — salary cap, built then REMOVED 2026-07-08)
+The salary cap (model B) was fully built + validated (7 champions / top 2, 0 over cap, no forced cuts, ~2-season prod migration) but then **deleted from the code** in favour of the simpler retention-limits model above — same parity, far less machinery. The notes below are kept only as a record of what was tried; **the cap code no longer exists** (`grep SALARY_CAP` → gone). To resurrect it, see git history around commits `3a30b60` / `79cbb8d` (removal in the retire-cap commit).
+**Original status (for the record):** backend logic done + validated on fresh sims. Implementation was:
 - **Freeze/ratchet:** `_getPlayerTerm` (playerManager, the single choke point all signings route through) stamps `capHit = tier.value` at every signing/promote/re-sign. Rostered = frozen by omission; re-sign re-prices (the ratchet).
 - **Cap-aware re-sign** (`seasonManager._applyCapAwareResign`, STEP 2.7 before contract decrement): per team, keep highest-value expiring players within cap (fan votes first, then value), reserving MIN per open slot; rest WALK. Sets `_gmResigned`.
 - **Budget gate** (`playerManager._attemptRosterFill`): filter candidates to affordable within `usableCapForSigning` (= CAP − salary − MIN×other-open-slots). **NEVER overspend or auto-cut** (owner directive) — if nothing affordable, sign nothing → last-resort mints a MIN-tier (cap-1) filler, which the reservation guarantees fits. `generateLastResortFreeAgent` now mints a D-tier (cap-1) replacement.
