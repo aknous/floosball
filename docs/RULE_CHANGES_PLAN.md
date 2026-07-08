@@ -201,15 +201,16 @@ that vote.
   field goal; reverts move toward the 6/3 defaults, which already satisfy it given the
   candidate ranges (FG 1–5, TD 4–9). So a FG can never out-value a TD, and the "teams should
   chase the higher-value FG" scenario simply can't arise.
-- **Decision-tree rule-awareness:** the play-caller's win/tie + how-many-scores logic reads
-  the live values via `_fgValue()`/`_oneScore()`/`_maxPossession()` — the 4th-down caller,
-  OT caller, catch-up/lead weighting, Hail Mary, desperation-FG "win vs tie", and the
-  one-score checks. All reduce to today's behavior at the default rules. **Deliberately left
-  calibrated for near-default scoring (v1):** softer urgency heuristics — the two-point
-  conversion chart, garbage-time deficit tiers, hurry-up/timeout timing, and momentum-decay
-  buckets — still use conventional constants. They degrade gracefully (the TD>FG invariant
-  keeps scoring in a sane band) and generalizing them (esp. the 2-pt chart) is a separate
-  effort; revisit if wild scoring looks off in play.
+- **Decision-tree rule-awareness (full pass):** the play-caller reads the live values via
+  `_fgValue()`/`_oneScore()`/`_maxPossession()` everywhere a scoring assumption drove a
+  choice — the 4th-down caller, OT caller, catch-up/lead weighting, Hail Mary, desperation-FG
+  "win vs tie", one-score checks, garbage-time tiers, hurry-up/timeout timing, momentum-decay
+  buckets, comeback urgency, and the down-based pressure gauge (`downsPerSeries`). The
+  two-point decision is now computed from the live extra-point / two-point / touchdown values
+  (possessions-to-erase) instead of a fixed chart. Scalar bands reduce to today's behavior at
+  the default rules; the 2-pt logic is close to the old chart at default and smarter off it.
+  The only remaining literals are the labeled 3rd/4th-down **stat counters** (display, not
+  decisions).
 - `applyOverrides`/`applyPatch` already filter to `MUTABLE_RULE_FIELDS` and audit-log every
   patch (`patchHistory`), so an out-of-set key is a no-op, and every change is traceable.
 - Same-day/immediate is the owner's chosen v1 ("let's see how that works first"); the window

@@ -1954,13 +1954,13 @@ class Game:
             return False  # first half — plenty of time
         secs = self.gameClockSeconds
         if q == 3:
-            return deficit > 35   # 5 TDs with a full quarter ahead
+            return deficit > 5 * self._oneScore()   # 5 TDs with a full quarter ahead
         # Q4: scale by time remaining
         if secs > 300:
-            return deficit > 28   # 4 TDs in 5+ min
+            return deficit > 4 * self._oneScore()   # 4 TDs in 5+ min
         if secs > 120:
-            return deficit > 21   # 3 TDs in 2-5 min
-        return deficit > 16       # 2+ scores in under 2 min
+            return deficit > 3 * self._oneScore()   # 3 TDs in 2-5 min
+        return deficit > 2 * self._maxPossession()       # 2+ scores in under 2 min
 
     def _shouldTargetSideline(self, scoreDiff: int, coach) -> bool:
         """Decide whether this pass should target the sideline to stop the clock.
@@ -2006,7 +2006,7 @@ class Game:
             baseProb *= 0.5
 
         # Large deficits: need chunk plays over clock stops
-        if scoreDiff < -16:
+        if scoreDiff < -2 * self._maxPossession():
             baseProb *= 0.7
 
         return _random.random() < baseProb * coachScale
@@ -3637,7 +3637,7 @@ class Game:
                     # WINS, trailing 3 TIES — and a chip shot is near-automatic, so
                     # kicking beats gambling the final play on a TD. Kick even a
                     # long shot here: it's the only remaining chance.
-                    if self.down == 4 or playsAvailable <= 1:
+                    if self.down == self.gameRules.downsPerSeries or playsAvailable <= 1:
                         self.play.insights['clockMgmt'] = {
                             'decision': 'desperationFG',
                             'reason': 'Last play — kick the FG to ' + ('win' if scoreDiff > -self._fgValue() else 'tie'),
@@ -3682,7 +3682,7 @@ class Game:
                                 'coachClockIQ': round(gameIQ, 2),
                             }
                         # Either way, fall through to a play this snap (kick comes on the last play).
-                    elif self.down < 4:
+                    elif self.down < self.gameRules.downsPerSeries:
                         # TYING FG (trailing 3) with 2+ plays — the FG only ties, so
                         # try for the TD to win outright; FG stays as the fallback.
                         playsBonus = min(0.04, (playsAvailable - 2) * 0.02)
@@ -3728,7 +3728,7 @@ class Game:
                         # before the clock forces the kick (playsAvailable <= 1).
                         # A tied team kicking a chip shot wins outright; gambling
                         # the final play on a TD is wrong.
-                        if self.down == 4 or playsAvailable <= 1:
+                        if self.down == self.gameRules.downsPerSeries or playsAvailable <= 1:
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'gameWinningFG',
                                 'reason': 'Tied, in chip-shot range, kick to win',
@@ -6470,9 +6470,9 @@ class Game:
         pressure += scorePressure * quarterScale.get(self.currentQuarter, 1.0)
 
         # Down and distance pressure (0-20)
-        if self.down == 4:
+        if self.down == self.gameRules.downsPerSeries:
             pressure += 20  # Fourth down
-        elif self.down == 3:
+        elif self.down == self.gameRules.downsPerSeries - 1:
             pressure += 15  # Third down
         elif self.down == 2:
             pressure += 5   # Second down
@@ -6485,9 +6485,9 @@ class Game:
 
         # Blowout dampening — large leads make the game feel decided,
         # sharply reducing pressure regardless of other factors
-        if scoreDiff > 21:
+        if scoreDiff > 3 * self._oneScore():
             pressure *= 0.1   # Game is effectively over
-        elif scoreDiff > 14:
+        elif scoreDiff > 2 * self._oneScore():
             pressure *= 0.3   # Comfortable lead, unlikely comeback
 
         # Early-game dampening — Q1/Q2/Q3 plays rarely define a game,
@@ -6534,9 +6534,9 @@ class Game:
     def _decayMomentum(self):
         """Decay momentum toward neutral each play."""
         scoreDiff = abs(self.homeScore - self.awayScore)
-        if scoreDiff > 21:
+        if scoreDiff > 3 * self._oneScore():
             decayRate = MOMENTUM_BLOWOUT_DECAY_RATE
-        elif scoreDiff > 14:
+        elif scoreDiff > 2 * self._oneScore():
             decayRate = MOMENTUM_MIDGAP_DECAY_RATE
         else:
             decayRate = MOMENTUM_DECAY_RATE
@@ -6666,7 +6666,7 @@ class Game:
         benefitingScore = self.homeScore if benefitingTeam is self.homeTeam else self.awayScore
         opposingScore = self.awayScore if benefitingTeam is self.homeTeam else self.homeScore
         deficit = opposingScore - benefitingScore
-        comebackUrgency = 1.15 if (self.currentQuarter >= 3 and deficit >= 10) else 1.0
+        comebackUrgency = 1.15 if (self.currentQuarter >= 3 and deficit >= self._oneScore() + self._fgValue()) else 1.0
 
         finalDelta = rawDelta * cascadeMultiplier * gapDamp * mentalResist * streakInertia * lateGameMultiplier * comebackUrgency
 
@@ -8344,13 +8344,13 @@ class Game:
         if q == 2 and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0:
             return ('hurryUp', 15)  # End-of-half trailing or tied
         if q >= 3 and secs <= 300 and scoreDiff < 0 and not garbageTime:
-            return ('hurryUp', 15 if scoreDiff <= -8 else 25)  # Mid-late deficit
+            return ('hurryUp', 15 if scoreDiff <= -self._maxPossession() else 25)  # Mid-late deficit
         # Burn-clock only kicks in late Q3 / Q4 onward. The clock resets to
         # 900s each quarter, so without a quarter gate a team up 8+ in Q1
         # at 4:30 would wrongly enter burn-clock mode.
-        if q == 3 and secs <= 300 and scoreDiff > 14:
+        if q == 3 and secs <= 300 and scoreDiff > 2 * self._oneScore():
             return ('burnClock', 40)  # Late Q3 with two-score lead
-        if q >= 4 and scoreDiff > 8:
+        if q >= 4 and scoreDiff > self._maxPossession():
             return ('burnClock', 40)  # Q4/OT comfortable lead
         if q >= 4 and scoreDiff > 0 and secs <= 300:
             return ('burnClock', 38)  # Q4/OT any lead inside 5:00 — protect it
@@ -8475,7 +8475,7 @@ class Game:
 
         # Time threshold: 4 min for any deficit, 8 min for large deficits (14+)
         # Aggressive coaches extend the window by up to 60s; conservative coaches shrink it
-        baseThreshold = 480 if deficit >= 14 else 240
+        baseThreshold = 480 if deficit >= 2 * self._oneScore() else 240
         timeThreshold = baseThreshold + int(aggressNorm * 60)
         if self.gameClockSeconds >= timeThreshold:
             return False
@@ -8498,12 +8498,25 @@ class Game:
         if deficit <= 0:
             return False
 
-        # Base probability by score deficit
-        if deficit == 2:             basePct = 0.85  # Kick = down 1; 2-pt = tied
-        elif deficit == 8:           basePct = 0.70  # Next TD + 2-pt can tie
-        elif deficit in (11, 17, 20): basePct = 0.50  # Multi-score math works out
-        elif 1 <= deficit <= 5:      basePct = 0.25  # Close game, occasional aggression
-        else:                        return False
+        # Base probability, computed from the LIVE scoring values (mutable-rule
+        # aware) instead of a fixed 6/1/2 chart. Compare the gap left after a kick
+        # (extra point) vs a two-point try, by how many normal scoring possessions
+        # each leaves to erase. Reduces to sensible behavior at the default values.
+        import math
+        xp = float(getattr(self.gameRules, 'extraPointPoints', 1))
+        two = float(getattr(self.gameRules, 'twoPointConversionPoints', 2))
+        one = self._oneScore()
+        afterXp = deficit - xp
+        afterTwo = deficit - two
+        need = lambda gap: math.ceil(gap / one) if gap > 0 else 0
+        if afterTwo <= 0 < afterXp:
+            basePct = 0.85   # a two-pointer ties or wins now, the kick leaves you behind
+        elif need(afterTwo) < need(afterXp):
+            basePct = 0.60   # the two-pointer saves a whole possession
+        elif deficit <= self._maxPossession():
+            basePct = 0.25   # still a one-score game — occasional aggression
+        else:
+            return False
 
         # Coach aggressiveness shifts probability ±0.15
         coach = getattr(scoringTeam, 'coach', None)
