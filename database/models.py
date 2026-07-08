@@ -158,6 +158,9 @@ class Player(Base):
     term: Mapped[Optional[int]] = mapped_column(Integer)
     term_remaining: Mapped[Optional[int]] = mapped_column(Integer)
     cap_hit: Mapped[Optional[int]] = mapped_column(Integer)
+    # Times the CURRENT team has re-signed this player (retention limit / re-sign-once;
+    # resets to 0 when the player walks to FA). See docs/PARITY_PROSPECT_PLAN.md.
+    team_resign_count: Mapped[int] = mapped_column(Integer, default=0)
     player_rating: Mapped[Optional[int]] = mapped_column(Integer)
     offensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     defensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

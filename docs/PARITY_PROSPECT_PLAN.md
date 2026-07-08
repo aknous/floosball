@@ -76,8 +76,28 @@ Rework `player_development.py::developAttribute`:
 - Extend `s13_multisim.py` (resumes from `data/_s13_seed_src.db`) to report the **star distribution** (% 4-5★ at maturity) and **parity** (champion concentration, top-team win totals) across N seasons.
 - Gate: ~15-20% mature 4-5★, Cranes-type dynasty broken up over a few seasons. Tune the generation center/width + entry discount here before touching the cap.
 
-### Phase 5 — Salary cap (model B) — BACKEND BUILT + VALIDATED 2026-07-07
-**Status:** backend logic done + validated on fresh sims. Cap UI (Front Office) remains (P5d). Implementation:
+### Phase 5 — Concentration control — PIVOTED from salary cap → RETENTION LIMITS (2026-07-08)
+**FINAL APPROACH: retention limits, NOT the salary cap.** The salary cap was built + validated (below), but investigation showed a simpler model gives the same parity with far less machinery, so **the cap is RETIRED behind `SALARY_CAP_ENABLED=False`** (code kept for A/B).
+
+**Two levers that replace it** (`seasonManager._applyRetentionLimits`, STEP 2.7; each independently switchable, composable with the cap):
+- **Re-sign-once** (`RESIGN_ONCE_ENABLED`, `RESIGN_ONCE_LIMIT=1`): a team may re-sign a player at most once; after that the player is FORCED to walk (overrides fan votes). Guarantees a homegrown core disperses — a player stays ~2 contracts (~4-5 yrs) with a team, then circulates. Tracked via the new `players.team_resign_count` column (increments on renewal, resets to 0 on walk). **This is the real dynasty-breaker.**
+- **Count limit** (`RESIGN_LIMIT_ENABLED`, `RESIGN_LIMIT_PER_OFFSEASON=2`): keep at most N expiring players per offseason; the rest walk. Forces an annual "who do we protect?" decision.
+
+**Also this session:** FA draft order changed from **appeal-first** (a fund→appeal→first-pick→consolidate loop) to **cap-space-first** (`_faOrderKey`) — which collapses to worst-first when the cap is off. So with the retirement config, FA order = worst-first (parity).
+
+**Validation (fresh sims, cap off):**
+- No retention control: 5 champions / top team **5 titles** (a 3-star built core, 28-0) — worst-first drafts ALONE do not stop dynasties.
+- **Re-sign-once + count-2 (CHOSEN): 7 champions / top 4 / streak 2 / rosters 24/24 full.** ✅ ≈ the salary cap's parity, far simpler.
+- Re-sign-TWICE + count-2: 5 champions / top **6** / streak **6** (a 6-peat re-emerged) — loosening the once-limit reintroduces dynasties, so `RESIGN_ONCE_LIMIT=1` matters.
+- Salary cap only (for reference): 6-7 champions / top 2-3.
+
+**Remaining:** wire the "you can re-sign this player one more time" / "protected this offseason" state into the Front Office UI (replaces the old cap-space UI idea). The parity ENGINE is done + validated.
+
+---
+_Below: the salary-cap implementation (built + validated, now behind `SALARY_CAP_ENABLED=False`; kept for A/B or a future pivot back)._
+
+### Phase 5 (legacy) — Salary cap (model B) — BACKEND BUILT + VALIDATED 2026-07-07
+**Status:** backend logic done + validated on fresh sims. Retired behind the switch. Implementation:
 - **Freeze/ratchet:** `_getPlayerTerm` (playerManager, the single choke point all signings route through) stamps `capHit = tier.value` at every signing/promote/re-sign. Rostered = frozen by omission; re-sign re-prices (the ratchet).
 - **Cap-aware re-sign** (`seasonManager._applyCapAwareResign`, STEP 2.7 before contract decrement): per team, keep highest-value expiring players within cap (fan votes first, then value), reserving MIN per open slot; rest WALK. Sets `_gmResigned`.
 - **Budget gate** (`playerManager._attemptRosterFill`): filter candidates to affordable within `usableCapForSigning` (= CAP − salary − MIN×other-open-slots). **NEVER overspend or auto-cut** (owner directive) — if nothing affordable, sign nothing → last-resort mints a MIN-tier (cap-1) filler, which the reservation guarantees fits. `generateLastResortFreeAgent` now mints a D-tier (cap-1) replacement.

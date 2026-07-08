@@ -4972,14 +4972,13 @@ class SeasonManager:
                     if team.coach:
                         teamManager._saveCoachToDatabase(team)
 
-            # STEP 2.7: Cap-aware re-sign — per team, decide which EXPIRING players
-            # to keep within the salary cap (re-signing re-prices them to their
-            # current tier — the model-B ratchet), reserving room to fill any
-            # resulting open slots. The rest WALK to FA. Sets _gmResigned flags that
-            # STEP 3 consumes. Fan resign votes are honored first, then auto-keep by
-            # value. See docs/PARITY_PROSPECT_PLAN.md Phase 5.
-            logger.info("Step 2.7: Cap-aware re-sign decisions")
-            self._applyCapAwareResign()
+            # STEP 2.7: Retention limits — per team, decide which EXPIRING players
+            # to keep, applying whichever levers are enabled (re-sign-once, per-
+            # offseason count limit, salary cap). The rest WALK to FA. Sets
+            # _gmResigned flags that STEP 3 consumes. Fan resign votes honored first.
+            # See docs/PARITY_PROSPECT_PLAN.md Phase 5.
+            logger.info("Step 2.7: Retention (re-sign) decisions")
+            self._applyRetentionLimits()
 
             # STEP 3: Process contract decrements and retirements for rostered players
             logger.info("Step 3: Contract decrements and team retirements")
@@ -6141,28 +6140,37 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"clear recap events failed: {e}")
 
-    def _applyCapAwareResign(self) -> None:
+    def _applyRetentionLimits(self) -> None:
         """Per team, decide which EXPIRING players (contract up this offseason) to
-        keep within the salary cap. Kept players are flagged `_gmResigned` (STEP 3
-        renews them and re-prices their cap hit to current tier); the rest walk to
-        FA. Proactive budgeting reserves MIN_CAP_HIT for each slot that would still
-        need filling, so a team never keeps itself into an unfillable/over-cap
-        roster. Fan resign votes are honored first (in value order), then value-
-        based auto-keep fills remaining budget. See PARITY_PROSPECT_PLAN.md P5."""
-        from constants import SALARY_CAP_ENABLED, SALARY_CAP, MIN_CAP_HIT
-        if not SALARY_CAP_ENABLED:
+        keep, applying whichever retention levers are enabled (each independently
+        switchable — they compose):
+          - RE-SIGN-ONCE: a player who has already been re-signed the limit number
+            of times by this team is FORCED to walk (cannot be kept — overrides
+            fan votes). Guarantees a homegrown core disperses.
+          - COUNT LIMIT: keep at most RESIGN_LIMIT_PER_OFFSEASON expiring players;
+            the rest walk. Forces an annual "who do we protect?" choice.
+          - SALARY CAP: keep within the cap, reserving MIN per remaining open slot.
+        Kept players are flagged `_gmResigned` (STEP 3 renews them + increments
+        their re-sign count); the rest walk to FA. Fan resign votes are honored
+        first (in value order), then value-based auto-keep. See PARITY_PROSPECT_PLAN.md P5."""
+        from constants import (SALARY_CAP_ENABLED, SALARY_CAP, MIN_CAP_HIT,
+                               RESIGN_ONCE_ENABLED, RESIGN_ONCE_LIMIT,
+                               RESIGN_LIMIT_ENABLED, RESIGN_LIMIT_PER_OFFSEASON)
+        if not (SALARY_CAP_ENABLED or RESIGN_ONCE_ENABLED or RESIGN_LIMIT_ENABLED):
             return
         teamManager = self.serviceContainer.getService('team_manager')
         if not teamManager:
             return
         pm = self.playerManager
         for team in teamManager.teams:
-            nonExpiring, expiring = [], []
+            nonExpiring, expiring, forcedWalk = [], [], []
             for p in team.rosterDict.values():
                 if p is None or getattr(p, 'willRetire', False):
                     continue  # empty slot, or retires in STEP 3 (vacates)
                 if (getattr(p, 'termRemaining', 0) or 0) > 1:
-                    nonExpiring.append(p)   # stays on current (frozen) deal
+                    nonExpiring.append(p)   # stays on current deal
+                elif RESIGN_ONCE_ENABLED and (getattr(p, 'teamResignCount', 0) or 0) >= RESIGN_ONCE_LIMIT:
+                    forcedWalk.append(p)    # re-sign limit reached — must walk
                 else:
                     expiring.append(p)      # contract up → keep-or-walk
             committed = sum(int(getattr(p, 'capHit', 0) or 0) for p in nonExpiring)
@@ -6171,20 +6179,26 @@ class SeasonManager:
                                          -(getattr(p, 'playerRating', 0) or 0)))
             kept, keptCost = [], 0
             for p in expiring:
-                cost = pm._calculateCapHit(p)   # re-sign at CURRENT tier (the ratchet)
-                openAfter = 6 - len(nonExpiring) - (len(kept) + 1)
-                salaryLB = committed + keptCost + cost + MIN_CAP_HIT * max(0, openAfter)
-                if salaryLB <= SALARY_CAP:
-                    p._gmResigned = True
-                    p._capWalked = False
-                    kept.append(p); keptCost += cost
-                else:
-                    # Can't afford — walk (overriding any fan resign vote, flagged
-                    # so the Front Office can surface "couldn't afford to keep").
-                    p._capWalked = bool(getattr(p, '_gmResigned', False))
-                    p._gmResigned = False
-            logger.info(f"Cap re-sign {team.name}: kept {len(kept)}/{len(expiring)} expiring, "
-                        f"walked {len(expiring) - len(kept)}, salary {committed + keptCost}/{SALARY_CAP}")
+                # COUNT LIMIT: at most N re-signs per offseason.
+                if RESIGN_LIMIT_ENABLED and len(kept) >= RESIGN_LIMIT_PER_OFFSEASON:
+                    p._capWalked = bool(getattr(p, '_gmResigned', False)); p._gmResigned = False
+                    continue
+                # SALARY CAP: keep within budget, reserving MIN per remaining open slot.
+                if SALARY_CAP_ENABLED:
+                    cost = pm._calculateCapHit(p)
+                    openAfter = 6 - len(nonExpiring) - (len(kept) + 1)
+                    if committed + keptCost + cost + MIN_CAP_HIT * max(0, openAfter) > SALARY_CAP:
+                        p._capWalked = bool(getattr(p, '_gmResigned', False)); p._gmResigned = False
+                        continue
+                    keptCost += cost
+                p._gmResigned = True
+                p._capWalked = False
+                kept.append(p)
+            for p in forcedWalk:
+                p._gmResigned = False   # re-sign-once override, even against a fan vote
+            logger.info(f"Retention {team.name}: kept {len(kept)}, forced-walk {len(forcedWalk)}, "
+                        f"other-walk {len(expiring) - len(kept)}"
+                        + (f", salary {committed + keptCost}/{SALARY_CAP}" if SALARY_CAP_ENABLED else ""))
 
     async def _processRosteredPlayerContracts(self) -> None:
         """Process contract decrements and retirements for players on team rosters"""
@@ -6226,6 +6240,7 @@ class SeasonManager:
                     # can't keep everyone).
                     player.term = self.playerManager._getPlayerTerm(player)
                     player.termRemaining = player.term
+                    player.teamResignCount = int(getattr(player, 'teamResignCount', 0) or 0) + 1
                     player._gmResigned = False
                     leagueHighlights.insert(0, {
                         'event': {'text': f'{player.name} re-signed with {team.name} for {player.term} season(s) (GM vote)'}
@@ -6236,8 +6251,7 @@ class SeasonManager:
                 elif player.termRemaining <= 0:
                     # Contract expired - move to free agency
                     player.previousTeam = team.name
-                    # TODO: capHit feature not fully developed - disabled for now
-                    # team.playerCap -= getattr(player, 'capHit', 0)
+                    player.teamResignCount = 0   # tenure ended; next team starts fresh
                     if player.currentNumber in team.playerNumbersList:
                         team.playerNumbersList.remove(player.currentNumber)
                     player.team = 'Free Agent'
@@ -6839,24 +6853,27 @@ class SeasonManager:
         if not self.currentSeason:
             return
 
-        # FA draft order = team APPEAL (facilities-derived, Markets→Facilities):
-        # higher Appeal drafts free agents first ("players prefer better-equipped
-        # clubs"). At activation Appeal reproduces the old tier order, since the
-        # grandfather migration seeds facility levels from tier — so nobody loses
-        # FA position. Ties in Appeal break by REVERSE STANDINGS (the rookie-draft
-        # order — worse teams pick first) for parity. (effective_funding was the
-        # old within-Appeal tiebreaker; dropped post-cutover now that funding is
-        # no longer a competitive lever.)
-        from managers import facilitiesManager
+        # FA draft order = CAP SPACE (salary cap, model B): the team with the most
+        # room under the cap drafts free agents first. Realistic (a team with cap
+        # space is the active FA buyer) AND parity-positive — a capped-out dynasty
+        # picks LAST (it kept its stars, so it can't also grab the best FAs), while
+        # a team that shed talent picks first and rebuilds. This deliberately
+        # REPLACES the old appeal-first order, which was a rich-get-richer loop
+        # (fund → appeal → first pick → consolidate skill). Ties break by REVERSE
+        # STANDINGS (rookie-draft order — worse teams first) for parity. Appeal now
+        # only affects fan-facing rewards, not competitive FA position. See
+        # docs/PARITY_PROSPECT_PLAN.md Phase 5.
+        from managers import facilitiesManager  # (still used for the display payload)
+        from constants import SALARY_CAP_ENABLED
         rookieDraftOrder = self.currentSeason.freeAgencyOrder
         rookieOrderIdx = {
             getattr(t, 'id', None): idx for idx, t in enumerate(rookieDraftOrder)
         }
-        def _appealKey(t):
-            appeal = facilitiesManager.computeAppeal(getattr(t, 'facilities', {}) or {})
-            # higher Appeal drafts FIRST; ties → reverse standings (rookie order)
-            return (-appeal, rookieOrderIdx.get(getattr(t, 'id', None), 999))
-        freeAgencyOrder = sorted(rookieDraftOrder, key=_appealKey)
+        def _faOrderKey(t):
+            # Most cap space FIRST; ties → reverse standings (rookie order).
+            space = self.playerManager.capSpace(t) if SALARY_CAP_ENABLED else 0
+            return (-space, rookieOrderIdx.get(getattr(t, 'id', None), 999))
+        freeAgencyOrder = sorted(rookieDraftOrder, key=_faOrderKey)
         self._pendingFaDraftOrder = freeAgencyOrder
 
         if not (BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled()):
@@ -6870,9 +6887,11 @@ class SeasonManager:
                     'abbr': getattr(t, 'abbr', t.name[:3].upper()),
                     'id': getattr(t, 'id', None),
                     'color': getattr(t, 'color', None),
-                    # FA order is by Appeal (facilities-derived), not market tier —
-                    # the board renders a single Appeal-ranked list, no tier groups.
+                    # FA order is now by CAP SPACE (most room drafts first). appeal
+                    # kept for reference/legacy display; capSpace/salary drive the board.
                     'appeal': round(facilitiesManager.computeAppeal(getattr(t, 'facilities', {}) or {}), 1),
+                    'capSpace': self.playerManager.capSpace(t),
+                    'salary': self.playerManager.teamSalary(t),
                 }
                 for t in freeAgencyOrder
             ]

@@ -381,6 +381,7 @@ class PlayerManager:
             player.term = db_player.term
             player.termRemaining = db_player.term_remaining
             player.capHit = db_player.cap_hit
+            player.teamResignCount = int(getattr(db_player, 'team_resign_count', 0) or 0)
             player.playerRating = db_player.player_rating
             player.freeAgentYears = db_player.free_agent_years
             # Prospect pipeline state
@@ -1578,6 +1579,7 @@ class PlayerManager:
                         term=player.term,
                         term_remaining=player.termRemaining,
                         cap_hit=player.capHit,
+                        team_resign_count=int(getattr(player, 'teamResignCount', 0) or 0),
                         player_rating=player.playerRating,
                         offensive_rating=getattr(player, 'offensiveRating', None),
                         defensive_rating=getattr(player, 'defensiveRating', None),
@@ -1609,6 +1611,7 @@ class PlayerManager:
                     db_player.term = player.term
                     db_player.term_remaining = player.termRemaining
                     db_player.cap_hit = player.capHit
+                    db_player.team_resign_count = int(getattr(player, 'teamResignCount', 0) or 0)
                     db_player.player_rating = player.playerRating
                     db_player.offensive_rating = getattr(player, 'offensiveRating', None)
                     db_player.defensive_rating = getattr(player, 'defensiveRating', None)

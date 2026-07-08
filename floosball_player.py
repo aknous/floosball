@@ -214,6 +214,7 @@ class Player:
         self.term = 0
         self.termRemaining = 0
         self.capHit = 0
+        self.teamResignCount = 0   # times current team has re-signed (retention limit)
         # willRetire: set during the regular season when a retirement-eligible
         # player is determined to be calling it after this season. Surfaces
         # in the UI well before the offseason so users can plan replacements.

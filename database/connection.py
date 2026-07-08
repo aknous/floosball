@@ -195,6 +195,15 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Retention limit / re-sign-once (parity): times the current team has
+        # re-signed this player (resets to 0 on a walk to FA).
+        try:
+            conn.execute(text("ALTER TABLE players ADD COLUMN team_resign_count INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added players.team_resign_count")
+        except Exception:
+            conn.rollback()
+
         # Team funding breakdown columns (v0.8) — clear old records and re-add columns
         try:
             # Check if new columns already exist

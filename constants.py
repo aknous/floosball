@@ -855,10 +855,28 @@ ROSTER_SUPPLY_BUFFER_PER_POSITION = 3
 # corner. Cap pressure surfaces as "let a player walk at re-sign", never a forced
 # cut. NOTE: these are placeholders — recalibrate against the new deflated
 # distribution's team-salary spread (P5e sim): cap ~= 1.1x avg, floor ~= 0.85x avg.
-SALARY_CAP_ENABLED = True         # master switch (A/B the whole cap layer)
+SALARY_CAP_ENABLED = False        # RETIRED in favour of the retention limits below
+                                  # (kept behind this switch — flip True to A/B the cap).
 SALARY_CAP = 18                   # max team salary (sum of tier cap_hits) — HARD cap
 SALARY_FLOOR = 14                 # min team salary; under-floor teams must spend
 MIN_CAP_HIT = 1                   # a min-tier (D) player; reserved per open slot when budgeting
+
+# ---- Retention limits (parity — simpler alternative/complement to the cap) ----
+# Force stacked teams to break up by limiting RETENTION, not salary. Two levers,
+# each independently switchable, applied in the offseason re-sign pass:
+#  - Re-sign-once: a team may re-sign a given player only RESIGN_ONCE_LIMIT times;
+#    after that the player is FORCED to walk to FA (a homegrown core can't be kept
+#    forever — guaranteed circulation). Tracked per player via team_resign_count,
+#    which increments on each re-sign and resets to 0 when the player walks.
+#  - Re-sign count limit: a team may re-sign at most RESIGN_LIMIT_PER_OFFSEASON
+#    players in a single offseason; the rest of its expiring players walk. Forces
+#    an annual "who do we protect?" decision.
+RESIGN_ONCE_ENABLED = True
+RESIGN_ONCE_LIMIT = 1             # re-signs allowed with the SAME team before a forced walk
+                                  # (1 = a player stays ~2 contracts / 4-5 yrs, then walks —
+                                  # this is the real dynasty-breaker; 2 let a 6-peat re-emerge)
+RESIGN_LIMIT_ENABLED = True
+RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
 
 # ---- Player Fatigue ----
 # Accumulation rate is unchanged — fatigue gauge still climbs visibly
