@@ -1523,7 +1523,7 @@ class Game:
             return False
         isHome = (self.offensiveTeam is self.homeTeam)
         scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
-        if not (-3 <= scoreDiff <= 0):
+        if not (-self._fgValue() <= scoreDiff <= 0):
             return False
         if self._isGarbageTime(scoreDiff):
             return False
@@ -2101,7 +2101,7 @@ class Game:
         # to 3:00 only when down multiple scores (genuinely needs the clock).
         # Calling them at 4-5 min in a tight game is the "no coach does that" case.
         isEndGame = self.currentQuarter == 4 or self.currentQuarter >= 5
-        multiScore = deficit >= 9
+        multiScore = deficit > self._maxPossession()
         if isEndGame:
             threshold = 180 if multiScore else self.gameRules.timeoutClockThreshold
         else:
@@ -2207,6 +2207,23 @@ class Game:
 
         return max(0.10, min(0.35, threshold))
 
+    def _fgValue(self) -> float:
+        """Current field-goal point value (a mutable rule). Used by the decision
+        tree to recognize when a FG ties/wins instead of assuming 3."""
+        return float(getattr(self.gameRules, 'fieldGoalPoints', 3))
+
+    def _oneScore(self) -> float:
+        """Points from a normal scoring possession (TD + extra point) — the unit for
+        'how many scores ahead/behind'. 7 at the default rules."""
+        return float(getattr(self.gameRules, 'touchdownPoints', 6)
+                     + getattr(self.gameRules, 'extraPointPoints', 1))
+
+    def _maxPossession(self) -> float:
+        """Most points one possession can yield (TD + two-point conversion) — the
+        'still a one-score game' bound. 8 at the default rules."""
+        return float(getattr(self.gameRules, 'touchdownPoints', 6)
+                     + getattr(self.gameRules, 'twoPointConversionPoints', 2))
+
     def _otPlayCaller(self, scoreDiff: int):
         """Handle play calling in overtime (Q5). Called only when currentQuarter == 5."""
         coach = getattr(self.offensiveTeam, 'coach', None)
@@ -2231,8 +2248,8 @@ class Game:
         # take ~88% kicks, conservative coaches demand near-automatic.
         # When a FG only ties (down by exactly 3) or it's the first
         # possession, play for TD on downs 1–3 and only kick on 4th.
-        fgOnlyTies = (scoreDiff == -3)
-        if (self.down < self.gameRules.downsPerSeries and scoreDiff >= -3 and not isFirstPoss and not fgOnlyTies
+        fgOnlyTies = (scoreDiff == -self._fgValue())
+        if (self.down < self.gameRules.downsPerSeries and scoreDiff >= -self._fgValue() and not isFirstPoss and not fgOnlyTies
                 and self.yardsToEndzone <= kickerMaxFg):
             aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
             # 60 aggr → 0.96 (chip shot only), 80 → 0.92, 100 → 0.88
@@ -2247,7 +2264,7 @@ class Game:
             # yards-to-go is reachable, prefer going for it to get closer
             # for a higher-percentage attempt. Aggressive coaches roll the
             # dice on the conversion more often.
-            if scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or fgProb >= fgThreshold):
+            if scoreDiff >= -self._fgValue() and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or fgProb >= fgThreshold):
                 if fgProb < 0.55 and self.yardsToFirstDown <= 5:
                     aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
                     # 60 aggr → 15%, 80 → 45%, 100 → 75%
@@ -2356,7 +2373,7 @@ class Game:
         # A charged kicker's range is extended but CAPPED (see _chargedKickerMaxFg)
         # — "from anywhere" up to that cap, not a literal 87-yarder.
         chargedInRange = kickerCharged and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)
-        fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+        fgHelps = scoreDiff >= -self._fgValue() or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
         inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
         leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
@@ -2502,7 +2519,7 @@ class Game:
             aggrNorm = (coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE if coach else 0.0
             if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold:
                 gameIQ = self._coachClockIQ(coach)
-                if deficit <= 3:
+                if deficit <= self._fgValue():
                     # FG ties or wins — chip shots are automatic, longer FGs nearly so
                     if self.yardsToEndzone <= 10:
                         # Inside the 10: always kick the chip shot
@@ -2517,7 +2534,7 @@ class Game:
                     else:
                         self.play.passPlay(self._selectPassPlay('medium'))
                     return
-                elif deficit <= 8:
+                elif deficit <= self._maxPossession():
                     # Down 4-8: FG doesn't tie — need a TD eventually
                     # With more time, bad coaches may still settle for FG to "stay close"
                     # As time dwindles, FG becomes pointless — below 45 sec, no one kicks
@@ -2589,7 +2606,7 @@ class Game:
 
                 # 2.5–5 min: go for it based on deficit and distance
                 if secs <= 300:
-                    if deficit <= 8:
+                    if deficit <= self._maxPossession():
                         # Down 1 score: go for it on short/medium yardage
                         if self.yardsToFirstDown <= 3:
                             self.play.passPlay(self._selectPassPlay('short'))
@@ -2602,7 +2619,7 @@ class Game:
                             if _random.random() < 0.3 + 0.5 * gameIQ + aggrMod:
                                 self.play.passPlay(self._selectPassPlay('long'))
                                 return
-                    elif deficit <= 16:
+                    elif deficit <= 2 * self._maxPossession():
                         if self.yardsToFirstDown <= 3:
                             self.play.passPlay(self._selectPassPlay('short'))
                             return
@@ -2620,10 +2637,10 @@ class Game:
                         return
 
                 # 5+ min: standard trailing behavior
-                if deficit <= 8 and self.yardsToFirstDown <= 2:
+                if deficit <= self._maxPossession() and self.yardsToFirstDown <= 2:
                     self.play.passPlay(self._selectPassPlay('short'))
                     return
-                elif deficit <= 8 and self.yardsToFirstDown <= 5:
+                elif deficit <= self._maxPossession() and self.yardsToFirstDown <= 5:
                     # Aggressive coaches willing to attempt short yardage with time
                     if _random.random() < max(0, 0.1 + aggrMod):
                         self.play.passPlay(self._selectPassPlay('short'))
@@ -2639,7 +2656,7 @@ class Game:
                     self.play.passPlay(self._selectPassPlay('long'))
                 return
 
-            elif self.currentQuarter == 3 and deficit <= 8 and self.yardsToFirstDown <= 2:
+            elif self.currentQuarter == 3 and deficit <= self._maxPossession() and self.yardsToFirstDown <= 2:
                 self.play.passPlay(self._selectPassPlay('short'))
                 return
             self.play.playType = PlayType.Punt
@@ -2737,7 +2754,7 @@ class Game:
         else:
             # Tied or trailing (outside Q4 urgency), out of FG range
             if self.yardsToFirstDown == 1:
-                if self.yardsToSafety >= 50 or (scoreDiff < -14 and self.currentQuarter >= 3):
+                if self.yardsToSafety >= 50 or (scoreDiff < -2 * self._oneScore() and self.currentQuarter >= 3):
                     x = batched_randint(1, 10)
                     if x <= max(1, min(7, goForItThreshold - 1)):
                         self.play.runPlay()
@@ -2745,7 +2762,7 @@ class Game:
                 self.play.playType = PlayType.Punt
                 return
             elif self.yardsToFirstDown == 2:
-                if (self.yardsToSafety >= 50 and goForItThreshold >= 5) or (scoreDiff < -21 and self.currentQuarter == 4 and self.gameClockSeconds < 600):
+                if (self.yardsToSafety >= 50 and goForItThreshold >= 5) or (scoreDiff < -3 * self._oneScore() and self.currentQuarter == 4 and self.gameClockSeconds < 600):
                     x = batched_randint(1, 10)
                     if x <= max(1, min(5, goForItThreshold - 3)):
                         self.play.passPlay(self._selectPassPlay('short'))
@@ -2753,7 +2770,7 @@ class Game:
                 self.play.playType = PlayType.Punt
                 return
             else:
-                if (self.yardsToSafety >= 55 and self.yardsToFirstDown <= goForItThreshold and goForItThreshold >= 6) or (scoreDiff < -17 and self.currentQuarter == 4 and self.gameClockSeconds < 300):
+                if (self.yardsToSafety >= 55 and self.yardsToFirstDown <= goForItThreshold and goForItThreshold >= 6) or (scoreDiff < round(-2.4 * self._oneScore()) and self.currentQuarter == 4 and self.gameClockSeconds < 300):
                     x = batched_randint(1, 10)
                     if x <= max(1, min(4, goForItThreshold - 4)):
                         self.play.passPlay(self._selectPassPlay('medium'))
@@ -2913,11 +2930,11 @@ class Game:
         # medium. Aggressive-undisciplined coaches panic into deep shots — the
         # shutout pattern: chuck deep, miss, drives die, deficit compounds.
         # Same direction (more pass) but quality of pass selection differs.
-        elif scoreDiff < -7 and (q == 3 or (q == 4 and secs >= 120)):
+        elif scoreDiff < -self._oneScore() and (q == 3 or (q == 4 and secs >= 120)):
             deficit = abs(scoreDiff)
-            if deficit <= 14:
+            if deficit <= 2 * self._oneScore():
                 deficitTier = 0.4
-            elif deficit <= 21:
+            elif deficit <= 3 * self._oneScore():
                 deficitTier = 0.7
             else:
                 deficitTier = 1.0
@@ -2947,10 +2964,10 @@ class Game:
         # (low aggr + high adapt) drains the clock professionally. Reckless
         # (high aggr + low adapt) keeps chucking deep, sets up the comeback.
         # Cruise (low both) coasts on the default playbook.
-        elif scoreDiff > 7 and (q == 3 or q == 4):
-            if scoreDiff <= 14:
+        elif scoreDiff > self._oneScore() and (q == 3 or q == 4):
+            if scoreDiff <= 2 * self._oneScore():
                 leadTier = 0.4
-            elif scoreDiff <= 21:
+            elif scoreDiff <= 3 * self._oneScore():
                 leadTier = 0.7
             else:
                 leadTier = 1.0
@@ -2987,7 +3004,7 @@ class Game:
         # bleed clock and force the opponent to spend timeouts — incompletions
         # would stop your own clock. Ramps as the clock winds down; coach-scaled
         # via _mul so poor clock managers protect less.
-        elif 0 < scoreDiff <= 7 and q >= 4:
+        elif 0 < scoreDiff <= self._oneScore() and q >= 4:
             if secs <= 120:
                 protectUrgency = 1.0
             elif secs <= 300:
@@ -3623,7 +3640,7 @@ class Game:
                     if self.down == 4 or playsAvailable <= 1:
                         self.play.insights['clockMgmt'] = {
                             'decision': 'desperationFG',
-                            'reason': 'Last play — kick the FG to ' + ('win' if scoreDiff >= -2 else 'tie'),
+                            'reason': 'Last play — kick the FG to ' + ('win' if scoreDiff > -self._fgValue() else 'tie'),
                             'clockRemaining': self.gameClockSeconds,
                             'playsAvailable': playsAvailable,
                             'down': self.down,
@@ -3635,7 +3652,7 @@ class Game:
                     # 2+ plays remain. A long shot → keep advancing to get closer.
                     if despFgProb < despThreshold and self.gameClockSeconds > 8:
                         pass  # fall through to the play caller (try to gain yards)
-                    elif self.down < 4 and scoreDiff >= -2:
+                    elif self.down < self.gameRules.downsPerSeries and scoreDiff > -self._fgValue():
                         # WINNING FG (trailing 1-2) with 2+ plays — the FG already
                         # wins, so the smart play is to DRAIN the clock and kick on
                         # the last snap, NOT gamble the ball on a TD. Clock-mgmt
@@ -3782,7 +3799,7 @@ class Game:
             # — extended to 3:00 only when down multiple scores. Calling them at
             # 4-5 min is the "no coach does that" case the window used to allow.
             isLateGame = self.currentQuarter in (2, 4) or self.currentQuarter >= 5
-            multiScore = scoreDiff <= -9
+            multiScore = scoreDiff < -self._maxPossession()
             # A tied / one-score offense in (or a play away from) FG range must
             # bank clock for a game-tying/winning FG — same 3:00 urgency as a
             # multi-score team, not the 2:00 cap that let it bleed time before.
@@ -3889,7 +3906,7 @@ class Game:
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
         if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
-            if -3 <= scoreDiff <= 3 and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
+            if -self._fgValue() <= scoreDiff <= self._fgValue() and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
                 canAdvance = self.gameClockSeconds >= 30
                 # A charged kicker's 3 is a sure thing — never gamble it on a conversion.
                 if canAdvance and not kickerCharged and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
@@ -3933,7 +3950,7 @@ class Game:
         if (self.currentQuarter == 4 and scoreDiff < 0
                 and self.yardsToEndzone >= 30
                 and not self._isGarbageTime(scoreDiff)):
-            fgCanHelp = (scoreDiff >= -3 and self.yardsToEndzone <= kickerMaxFg)
+            fgCanHelp = (scoreDiff >= -self._fgValue() and self.yardsToEndzone <= kickerMaxFg)
             if not fgCanHelp:
                 # Only when it's guaranteed to be the last play. The hail mary
                 # itself burns ~8-12s (calculatePlayDuration), so if the clock is
@@ -3965,7 +3982,7 @@ class Game:
             # range cap so it doesn't attempt an absurd distance.
             if (self.play.playType == PlayType.Punt and kickerCharged
                     and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)):
-                fgHelps = scoreDiff >= -3 or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+                fgHelps = scoreDiff >= -self._fgValue() or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
                 if fgHelps:
                     self.play.playType = PlayType.FieldGoal
             # Record decision after the fact
@@ -6441,11 +6458,11 @@ class Game:
         scorePressure = 0
         if scoreDiff == 0:
             scorePressure = 30  # Tie game
-        elif scoreDiff <= 3:
+        elif scoreDiff <= self._fgValue():
             scorePressure = 25  # One field goal difference
-        elif scoreDiff <= 7:
+        elif scoreDiff <= self._oneScore():
             scorePressure = 20  # One possession game
-        elif scoreDiff <= 14:
+        elif scoreDiff <= 2 * self._oneScore():
             scorePressure = 10  # Two possession game
 
         # Scale score pressure by quarter: Q1=25%, Q2=50%, Q3=75%, Q4/OT=100%
@@ -6535,7 +6552,7 @@ class Game:
         or the game is tied. Pass None for legacy callers that want the
         symmetric blowout-decay behavior (used by _decayMomentum)."""
         scoreDiff = abs(self.homeScore - self.awayScore)
-        if scoreDiff <= 14:
+        if scoreDiff <= 2 * self._oneScore():
             return 1.0
         if benefitingTeam is not None:
             leadingTeam = self.homeTeam if self.homeScore > self.awayScore else (
@@ -6543,9 +6560,9 @@ class Game:
             )
             if benefitingTeam is not leadingTeam:
                 return 1.0
-        if scoreDiff <= 21:
+        if scoreDiff <= 3 * self._oneScore():
             return 0.7
-        elif scoreDiff <= 28:
+        elif scoreDiff <= 4 * self._oneScore():
             return 0.4
         return 0.2
 

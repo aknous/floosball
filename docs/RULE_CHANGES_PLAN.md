@@ -196,6 +196,20 @@ that vote.
   today's behavior at the default rules. The score-margin term already used real scores.
 - **Pick-em** underdog multiplier uses pre-game ELO (rule-agnostic); **MVP/WPA** attribution
   is symmetric across both teams. So the fairness-sensitive consumers stay sound.
+- **TD > FG invariant:** the value sampler (`ruleVoteManager._respectsScoreOrder`) never
+  proposes a field goal worth ≥ the current touchdown, nor a touchdown worth ≤ the current
+  field goal; reverts move toward the 6/3 defaults, which already satisfy it given the
+  candidate ranges (FG 1–5, TD 4–9). So a FG can never out-value a TD, and the "teams should
+  chase the higher-value FG" scenario simply can't arise.
+- **Decision-tree rule-awareness:** the play-caller's win/tie + how-many-scores logic reads
+  the live values via `_fgValue()`/`_oneScore()`/`_maxPossession()` — the 4th-down caller,
+  OT caller, catch-up/lead weighting, Hail Mary, desperation-FG "win vs tie", and the
+  one-score checks. All reduce to today's behavior at the default rules. **Deliberately left
+  calibrated for near-default scoring (v1):** softer urgency heuristics — the two-point
+  conversion chart, garbage-time deficit tiers, hurry-up/timeout timing, and momentum-decay
+  buckets — still use conventional constants. They degrade gracefully (the TD>FG invariant
+  keeps scoring in a sane band) and generalizing them (esp. the 2-pt chart) is a separate
+  effort; revisit if wild scoring looks off in play.
 - `applyOverrides`/`applyPatch` already filter to `MUTABLE_RULE_FIELDS` and audit-log every
   patch (`patchHistory`), so an out-of-set key is a no-op, and every change is traceable.
 - Same-day/immediate is the owner's chosen v1 ("let's see how that works first"); the window

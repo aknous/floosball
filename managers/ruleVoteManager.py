@@ -35,29 +35,43 @@ class RuleVoteManager:
         from database.repositories.rule_vote_repository import RuleVoteRepository
         return RuleVoteRepository(session)
 
-    def _pickProposedValue(self, field: str, current):
+    def _respectsScoreOrder(self, field: str, value, gameRules) -> bool:
+        """Enforce the invariant TOUCHDOWN > FIELD GOAL: a proposed field-goal value
+        must stay strictly below the current touchdown value, and a proposed touchdown
+        value strictly above the current field-goal value. (Reverts move toward the
+        defaults 6/3, which already satisfy this given the candidate ranges.)"""
+        if field == 'fieldGoalPoints':
+            return value < float(getattr(gameRules, 'touchdownPoints', 6))
+        if field == 'touchdownPoints':
+            return value > float(getattr(gameRules, 'fieldGoalPoints', 3))
+        return True
+
+    def _pickProposedValue(self, field: str, current, gameRules):
         """Choose a specific CHANGE value for a field from its alternate space —
         always different from the current value AND the default (so a change moves a
-        rule to a genuinely new value; returning to default is REVERT's job). Returns
-        None if no such value exists (e.g. a bool already flipped off)."""
+        rule to a genuinely new value; returning to default is REVERT's job), and
+        always keeping TD > FG. Returns None if no such value exists (e.g. a bool
+        already flipped off, or no in-range value keeps TD above FG)."""
         import game_rules as gr
         from constants import RULE_VOTE_CANDIDATES
         spec = RULE_VOTE_CANDIDATES.get(field, {})
         default = gr.defaultRuleValue(field)
         if 'values' in spec:
-            pool = [v for v in spec['values'] if v != current and v != default]
+            pool = [v for v in spec['values']
+                    if v != current and v != default
+                    and self._respectsScoreOrder(field, v, gameRules)]
             return random.choice(pool) if pool else None
         rng = spec.get('range')
         if not rng:
             return None
         lo, hi = rng
         isFloat = bool(spec.get('float'))
-        for _ in range(25):
+        for _ in range(30):
             if isFloat and random.random() < 0.5:
                 v = round(random.uniform(lo, hi), 1)      # e.g. 6.4
             else:
                 v = random.randint(int(lo), int(hi))       # e.g. 5
-            if v != current and v != default:
+            if v != current and v != default and self._respectsScoreOrder(field, v, gameRules):
                 return v
         return None
 
@@ -67,7 +81,7 @@ class RuleVoteManager:
         from constants import RULE_VOTE_CANDIDATES
         out = []
         for f in RULE_VOTE_CANDIDATES:
-            v = self._pickProposedValue(f, getattr(gameRules, f, None))
+            v = self._pickProposedValue(f, getattr(gameRules, f, None), gameRules)
             if v is not None:
                 out.append({"field": f, "value": v})
         return out
