@@ -6150,7 +6150,7 @@ class SeasonManager:
           - RE-SIGN-ONCE: a player already re-signed the limit number of times by
             this team is FORCED to walk even if fans voted to keep them.
           - COUNT LIMIT: at most RESIGN_LIMIT_PER_OFFSEASON re-signs per offseason;
-            if fans voted for more, only the highest-rated fit (rest walk).
+            if fans voted for more, only the most-voted keep (rest walk).
         Kept players stay flagged `_gmResigned` (STEP 3 renews them + increments the
         re-sign count); the rest are cleared and walk. See PARITY_PROSPECT_PLAN.md P5."""
         from constants import (RESIGN_ONCE_ENABLED, RESIGN_ONCE_LIMIT,
@@ -6172,7 +6172,7 @@ class SeasonManager:
                     continue  # empty slot, or retires in STEP 3 (vacates)
                 if (getattr(p, 'termRemaining', 0) or 0) > 1:
                     continue  # stays on current deal
-                if RESIGN_ONCE_ENABLED and (getattr(p, 'teamResignCount', 0) or 0) >= RESIGN_ONCE_LIMIT:
+                if self.playerManager.hasReachedResignLimit(p):
                     forcedWalk.append(p)    # re-sign limit reached — must walk
                 else:
                     expiring.append(p)      # contract up → keep only if voted
@@ -6181,9 +6181,14 @@ class SeasonManager:
                 for p in sorted(expiring, key=lambda x: -(getattr(x, 'playerRating', 0) or 0))[:limit]:
                     p._gmResigned = True
             # Keep only players fans voted to re-sign (real votes, or the sim's
-            # stand-in above), capped at the count limit — highest-rated fit first.
+            # stand-in above), capped at the count limit. Tiebreak on net votes so
+            # the most-supported stay; fall back to rating for the sim stand-in
+            # (no real vote tallies) and any legacy flag without a stored count.
+            def _resignRank(p):
+                nv = getattr(p, '_gmResignNetVotes', None)
+                return nv if nv is not None else (getattr(p, 'playerRating', 0) or 0)
             voted = sorted((p for p in expiring if getattr(p, '_gmResigned', False)),
-                           key=lambda x: -(getattr(x, 'playerRating', 0) or 0))
+                           key=lambda x: -_resignRank(x))
             kept = voted[:limit]
             keptIds = {id(p) for p in kept}
             for p in expiring:
@@ -6192,9 +6197,9 @@ class SeasonManager:
                 p._gmResigned = False                # re-sign-once override
             logger.info(f"Retention {team.name}: re-signed {len(kept)}, forced-walk {len(forcedWalk)}, "
                         f"walked {len(expiring) - len(kept)}")
-            # RETENTION_DEBUG: show the actual decision — which players (by rating)
-            # were re-signed as the best-N-eligible, and who walked and why. Off by
-            # default; a harness sets the env var to make the re-sign logic visible.
+            # RETENTION_DEBUG: show the actual decision — which players were
+            # re-signed (most-voted, capped at the limit) and who walked and why.
+            # Off by default; a harness sets the env var to surface the logic.
             if os.environ.get('RETENTION_DEBUG'):
                 def _fmt(pl): return f"{pl.name}({getattr(pl,'playerRating',0)})"
                 keptStr = ", ".join(_fmt(p) for p in kept) or "-"

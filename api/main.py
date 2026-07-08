@@ -10951,6 +10951,10 @@ def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
                 raise HTTPException(400, "Player does not have an expiring contract")
             if req.voteType == "resign_player" and getattr(player, 'will_retire', False):
                 raise HTTPException(400, "Player has announced retirement and cannot be re-signed")
+            if req.voteType == "resign_player":
+                from constants import RESIGN_ONCE_ENABLED, RESIGN_ONCE_LIMIT
+                if RESIGN_ONCE_ENABLED and int(getattr(player, 'team_resign_count', 0) or 0) >= RESIGN_ONCE_LIMIT:
+                    raise HTTPException(400, "Player has reached the re-sign limit and must enter free agency")
         elif req.voteType == "hire_coach":
             if not req.targetPlayerId:
                 raise HTTPException(400, "targetPlayerId (coach ID) required for hire_coach")
@@ -11298,6 +11302,7 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
 
         # Rostered players (for cut votes — all players eligible)
         from floosball_player import Position as _Pos
+        from constants import RESIGN_ONCE_LIMIT, RESIGN_LIMIT_PER_OFFSEASON
         rosteredPlayers = []
         players = session.query(Player).filter_by(team_id=teamId).all()
         for p in players:
@@ -11313,14 +11318,18 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                 "tier": p.tier,
                 "termRemaining": p.term_remaining,
                 "willRetire": bool(getattr(p, 'will_retire', False)),
+                "resignCount": int(getattr(p, 'team_resign_count', 0) or 0),
             })
 
-        # Expiring contract players that haven't announced retirement —
-        # those are the only ones eligible for a resign vote.
-        expiringPlayers = [
+        # Expiring, non-retiring players split by re-sign eligibility. A player who
+        # has already been re-signed the limit number of times must walk to free
+        # agency and cannot be voted on — those go in a separate read-only list.
+        expiring = [
             p for p in rosteredPlayers
             if p["termRemaining"] == 1 and not p["willRetire"]
         ]
+        expiringPlayers = [p for p in expiring if p["resignCount"] < RESIGN_ONCE_LIMIT]
+        resignIneligiblePlayers = [p for p in expiring if p["resignCount"] >= RESIGN_ONCE_LIMIT]
         retiringPlayers = [p for p in rosteredPlayers if p["willRetire"]]
 
         return build_success_response({
@@ -11329,7 +11338,10 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
             "coachCandidates": coachCandidates,
             "rosteredPlayers": rosteredPlayers,
             "expiringPlayers": expiringPlayers,
+            "resignIneligiblePlayers": resignIneligiblePlayers,
             "retiringPlayers": retiringPlayers,
+            "resignOnceLimit": RESIGN_ONCE_LIMIT,
+            "resignPerOffseasonLimit": RESIGN_LIMIT_PER_OFFSEASON,
         })
     finally:
         session.close()

@@ -2,22 +2,9 @@
 
 > Living list of features targeted for the next season cutover. **Keep this updated as features land** — move items to "Shipped" with the commit/version, and link each in-flight item to its design doc. Owner-curated.
 
-_Last updated: 2026-07-06_
-
-## In progress
-
-### League parity + prospect true-skill package (design locked 2026-07-07) — `docs/PARITY_PROSPECT_PLAN.md`
-The parity package (below) **plus** a prospect-ratings rework, folded together because they touch the same generation/development/rating code. New **three-tier rating model**: `current` (plays now) < **`trueSkill`** (mature target, new per-attribute layer) < `potential` (rarely-reached ceiling). Rookies debut ~6-9 rating pts **below** their true skill and develop into it over ~2-3 seasons; a lucky few overshoot toward potential. This strengthens parity (league leans younger/cheaper, stars are earned not pre-formed). **Build order:** Phase 1 schema+generation → Phase 2 dev arc → Phase 3 one-time percentile re-map of live pool → Phase 4 multi-season sim gate (~15-20% mature 4-5★) → **Phase 5 salary cap (model B)**. Full design + anchors in the plan doc.
+_Last updated: 2026-07-08_
 
 ## Planned
-
-### League parity package — star scarcity + salary cap (design locked 2026-07-06) — folded into the in-progress item above
-The league is top-heavy (Cranes ~26-2, 80% titles in S13 sims, 3 of last 4 Floos Bowls). Two roots: **star oversupply** (of ~245 live players, **40% are 4-5★** vs a healthy ~15-20%; pool centered at rating 81) and **concentration** (Cranes hold the best 6). In-game compression (`LEAGUE_COMPRESSION_FACTOR`) was tested at 0.7/0.6/0.5 and **rejected** — barely moved the Cranes, only lowered scoring; concentration, not per-player gap, is the driver. Three complementary levers, all **between-season (at the rollover), never in-season**:
-1. **Fix the creep at the source** — generation seed `normal(78,7)` → ~`normal(74,8)` (lower/wider; rookies avg 79.5 is too high) + flatten development rise `DEV_RISE_RANGE (-1,5)` → `(-2,3)`. Target ~15-20% 4-5★.
-2. **One-time rank-preserving percentile re-map** of the current pool onto the target distribution (#1 stays #1, fewer qualify as 4-5★) so there's no multi-season two-era transition. Owner-agreed. Between-season timing insulates owned cards (templates mint rating at season creation).
-3. **Salary cap — model B**: salary = star tier **locked at signing** (`cap_hit` column already exists/populated; today it's recomputed live = model A). Cheap rookies → expensive at re-sign. Cap **~24** / floor **~19** (calibrated to the 15-27/avg-22 team-salary spread). Offseason-enforced; unmanaged teams auto-shed/sign via the existing FA logic.
-- **Build order:** distribution (1+2) first + multi-season sim to confirm the star %, then the cap (3) on top. Full design + measurements: memory `league-parity-rebalance`.
-- **Status:** design locked, not built.
 
 ### New prognostication feature — Survivor
 A survivor-style contest layer on top of pick-em (last-one-standing elimination), part of the broader prognosticator progression direction.
@@ -37,6 +24,7 @@ Rough capture; each needs a design pass before building.
 - **Showcase dividend rate balance pass** — `SHOWCASE_DIVIDEND_RATE` (0.13) was a calibrated starting point (sustained S ≈ the old ~3000 lump/season, top end uncapped); still wants an owner balance pass.
 
 ## Shipped (this cycle)
+- **League parity + prospect true-skill package** ✅ — the top-heavy-league fix (Cranes ~26-2, 80% titles in S13 sims). **Distribution levers:** lower/wider generation seed + flattened dev rise (target ~15-20% 4-5★) and a one-time **rank-preserving percentile re-map** of the live pool at the cutover (Phase 3). **Prospect true-skill model:** three-tier ratings (`current` < `trueSkill` < `potential`) — rookies debut below their mature target and grow into it over 2-3 seasons (Phases 1-2). **Salary cap SCRATCHED** — Phase 5 built model B (`3a30b60`), then **pivoted to retention limits** as the parity model instead (re-signs are fan-vote-driven; cap code removed). Commits `674ed92`/`7e687e3`/`3a30b60`→`c8e1ec7`/`af9d51c`. Plan: `docs/PARITY_PROSPECT_PLAN.md`.
 - **Playbook diversification** ✅ — a real offensive playbook layered on the sim: run concepts (power/draw/counter/sweep) with deception + execution rolls, gap coherence, and defensive counter-adaptation; play-action; route concepts (mesh/flood/screen vs coverage); RPO (QB reads the box pre-snap); trick plays (flea flicker / statue / reverse) as rare called shots. Coach-gated (aggressiveness = experimental adoption / offensiveMind = standard sophistication), situationally aware, balance-measured (concept ON/OFF for inflation), self-describing PBP with the scheme detail in the Play Insights "Play Design" row. Commits `a3e92ef`…`5c7d077`. Plan: `docs/PLAYBOOK_PLAN.md`. (Tuning `5c7d077`: flood out of PBP → insights only; trick plays cut to ~3.4/team/season from ~42.)
 - **Coaching / play-calling depth** ✅ — gameplan wiring made real: `runPassRatio` + a master gameplan switch, situational pass-depth quick-game lever, adaptable coaches re-plan mid-game (not just at halftime), and a Q4 lead-protection floor so every team runs the clock better with a lead. Commits `67e60f3`/`dd03fef`/`6d93c2f`/`20b75ea`.
 - **Clock / kneel / FG fixes** ✅ — score before the half + never let a scoring snap die with timeouts; kneel rules (no 4th-down kneel, no draining a stopped clock); cap awakened-kicker range; PBP: a diving catch no longer also stretches for the marker. Commits `deb11ee`/`26328c9`/`6c69afb`/`0c5cb25`/`1cab194`.

@@ -924,6 +924,16 @@ class PlayerManager:
         if player in playerList:
             playerList.remove(player)
     
+    def hasReachedResignLimit(self, player) -> bool:
+        """True if this team can no longer re-sign the player (re-sign-once limit
+        reached). Single source of truth for re-sign eligibility, shared by the
+        offseason retention pass, the eligible-targets API, and vote validation.
+        An expiring player who hits the limit is forced to walk to free agency."""
+        from constants import RESIGN_ONCE_ENABLED, RESIGN_ONCE_LIMIT
+        if not RESIGN_ONCE_ENABLED:
+            return False
+        return (getattr(player, 'teamResignCount', 0) or 0) >= RESIGN_ONCE_LIMIT
+
     def _getPlayerTerm(self, player) -> int:
         """Decide contract term for a signing / promotion / re-sign.
 
