@@ -6141,17 +6141,18 @@ class SeasonManager:
             logger.warning(f"clear recap events failed: {e}")
 
     def _applyRetentionLimits(self) -> None:
-        """Per team, decide which EXPIRING players (contract up this offseason) to
-        keep, applying whichever retention levers are enabled (each independently
-        switchable — they compose):
-          - RE-SIGN-ONCE: a player who has already been re-signed the limit number
-            of times by this team is FORCED to walk (cannot be kept — overrides
-            fan votes). Guarantees a homegrown core disperses.
-          - COUNT LIMIT: keep at most RESIGN_LIMIT_PER_OFFSEASON expiring players;
-            the rest walk. Forces an annual "who do we protect?" choice.
-        Kept players are flagged `_gmResigned` (STEP 3 renews them + increments
-        their re-sign count); the rest walk to FA. Fan resign votes are honored
-        first (in value order), then value-based auto-keep. See PARITY_PROSPECT_PLAN.md P5."""
+        """Per team, decide which EXPIRING players (contract up this offseason) get
+        RE-SIGNED vs walk to FA. FAN-DRIVEN — a player is only kept if fans voted to
+        re-sign them (`_gmResigned`, set by the resign vote in STEP 2). There is NO
+        auto-keep: with no vote, a player walks (fans may deliberately let players
+        go, or simply not vote; unmanaged teams circulate their talent faster). Two
+        limits apply on top:
+          - RE-SIGN-ONCE: a player already re-signed the limit number of times by
+            this team is FORCED to walk even if fans voted to keep them.
+          - COUNT LIMIT: at most RESIGN_LIMIT_PER_OFFSEASON re-signs per offseason;
+            if fans voted for more, only the highest-rated fit (rest walk).
+        Kept players stay flagged `_gmResigned` (STEP 3 renews them + increments the
+        re-sign count); the rest are cleared and walk. See PARITY_PROSPECT_PLAN.md P5."""
         from constants import (RESIGN_ONCE_ENABLED, RESIGN_ONCE_LIMIT,
                                RESIGN_LIMIT_ENABLED, RESIGN_LIMIT_PER_OFFSEASON)
         if not (RESIGN_ONCE_ENABLED or RESIGN_LIMIT_ENABLED):
@@ -6159,6 +6160,11 @@ class SeasonManager:
         teamManager = self.serviceContainer.getService('team_manager')
         if not teamManager:
             return
+        # SIM-ONLY: model fan behaviour (re-sign your best eligible players) so a
+        # userless sim isn't an all-walk extreme. Prod is unaffected — it's driven
+        # by real fan votes. Gated by env; set by retention_harness.py.
+        simulateFans = bool(os.environ.get('SIMULATE_FAN_RESIGNS'))
+        limit = RESIGN_LIMIT_PER_OFFSEASON if RESIGN_LIMIT_ENABLED else 99
         for team in teamManager.teams:
             expiring, forcedWalk = [], []
             for p in team.rosterDict.values():
@@ -6169,22 +6175,34 @@ class SeasonManager:
                 if RESIGN_ONCE_ENABLED and (getattr(p, 'teamResignCount', 0) or 0) >= RESIGN_ONCE_LIMIT:
                     forcedWalk.append(p)    # re-sign limit reached — must walk
                 else:
-                    expiring.append(p)      # contract up → keep-or-walk
-            # Priority: fan-voted keeps first, then by player value; each value-desc.
-            expiring.sort(key=lambda p: (0 if getattr(p, '_gmResigned', False) else 1,
-                                         -(getattr(p, 'playerRating', 0) or 0)))
-            kept = []
+                    expiring.append(p)      # contract up → keep only if voted
+            if simulateFans:
+                # Stand in for fan resign votes: keep the best `limit` eligible.
+                for p in sorted(expiring, key=lambda x: -(getattr(x, 'playerRating', 0) or 0))[:limit]:
+                    p._gmResigned = True
+            # Keep only players fans voted to re-sign (real votes, or the sim's
+            # stand-in above), capped at the count limit — highest-rated fit first.
+            voted = sorted((p for p in expiring if getattr(p, '_gmResigned', False)),
+                           key=lambda x: -(getattr(x, 'playerRating', 0) or 0))
+            kept = voted[:limit]
+            keptIds = {id(p) for p in kept}
             for p in expiring:
-                # COUNT LIMIT: keep at most N per offseason; the rest walk.
-                if RESIGN_LIMIT_ENABLED and len(kept) >= RESIGN_LIMIT_PER_OFFSEASON:
-                    p._gmResigned = False
-                    continue
-                p._gmResigned = True
-                kept.append(p)
+                p._gmResigned = id(p) in keptIds     # NO auto-keep: unvoted -> walk
             for p in forcedWalk:
-                p._gmResigned = False   # re-sign-once override, even against a fan vote
-            logger.info(f"Retention {team.name}: kept {len(kept)}, forced-walk {len(forcedWalk)}, "
-                        f"count-walk {len(expiring) - len(kept)}")
+                p._gmResigned = False                # re-sign-once override
+            logger.info(f"Retention {team.name}: re-signed {len(kept)}, forced-walk {len(forcedWalk)}, "
+                        f"walked {len(expiring) - len(kept)}")
+            # RETENTION_DEBUG: show the actual decision — which players (by rating)
+            # were re-signed as the best-N-eligible, and who walked and why. Off by
+            # default; a harness sets the env var to make the re-sign logic visible.
+            if os.environ.get('RETENTION_DEBUG'):
+                def _fmt(pl): return f"{pl.name}({getattr(pl,'playerRating',0)})"
+                keptStr = ", ".join(_fmt(p) for p in kept) or "-"
+                walked = [p for p in expiring if id(p) not in keptIds]
+                logger.info(
+                    f"  RESIGN[{team.name}] kept: {keptStr} | "
+                    f"walk(not-resigned): {', '.join(_fmt(p) for p in walked) or '-'} | "
+                    f"walk(re-sign-limit): {', '.join(_fmt(p) for p in forcedWalk) or '-'}")
 
     async def _processRosteredPlayerContracts(self) -> None:
         """Process contract decrements and retirements for players on team rosters"""
