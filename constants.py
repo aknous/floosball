@@ -863,6 +863,34 @@ RESIGN_ONCE_LIMIT = 1             # re-signs allowed with the SAME team before a
 RESIGN_LIMIT_ENABLED = True
 RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
 
+# ---- Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ----
+# A Core-driven, user-voted live rule mutation. Each game day (weeks 1/8/15/22) there's
+# an escalating chance a vote fires: Aris opens a CHANGE vote, Pyre opens a REVERT vote.
+# Most-voted option wins (no quorum); the winner applies immediately and drifts across
+# seasons until reverted. The engine (game_rules.applyRuleChange/revertRule) is safe:
+# only floosball_game.py reads the mutable fields (WP/pick-em/MVP are insulated).
+RULE_VOTE_ENABLED = True
+# Fire chance keyed to consecutive prior game-days THIS season that didn't fire
+# (0 misses -> 25%, ramping to a guaranteed fire once three in a row have missed).
+RULE_VOTE_RAMP = [0.25, 0.50, 0.75, 1.0]
+RULE_VOTE_REVERT_GATE = 3          # changed-rule count that unlocks Pyre reverts (then 50/50 change/revert)
+RULE_VOTE_BALLOT_SIZE = 4          # candidate rules offered per vote (plus a "None" option)
+RULE_VOTE_CLOSE_LEAD_MINUTES = 15  # vote closes this many minutes before the day's first game
+RULE_VOTE_SIM_AUTOPICK = False     # headless sims: random-pick a winner for engine testing (prod stays user-driven)
+
+# The rules Aris/Pyre can toggle. Pool = the curated RULEBOOK_EXPOSED_FIELDS; each has ONE
+# preset alternate value (a field is either at its default or its alternate). 'alternate' is
+# what a CHANGE vote sets it to; the default comes from GameRules. Scoring values may be floats.
+RULE_VOTE_CANDIDATES = {
+    "downsPerSeries":             {"alternate": 3,     "label": "Downs per series"},
+    "firstDownDistance":          {"alternate": 15,    "label": "Yards to a first down"},
+    "touchdownPoints":            {"alternate": 7,     "label": "Touchdown points"},
+    "fieldGoalPoints":            {"alternate": 2,     "label": "Field goal points"},
+    "safetyPoints":               {"alternate": 4,     "label": "Safety points"},
+    "clockStopsOnIncompletePass": {"alternate": False, "label": "Clock stops on an incompletion"},
+    "clockStopsOnOutOfBounds":    {"alternate": False, "label": "Clock stops going out of bounds"},
+}
+
 # ---- Player Fatigue ----
 # Accumulation rate is unchanged — fatigue gauge still climbs visibly
 # across the season for the fan UI. What changed: PHYSICAL_IMPACT is

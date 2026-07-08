@@ -275,3 +275,39 @@ def saveRuleOverrides(overrides: Dict[str, Any]) -> None:
         session.commit()
     finally:
         session.close()
+
+
+def defaultRuleValue(field: str) -> Any:
+    """The pristine default for a rule field (from a fresh GameRules)."""
+    return getattr(GameRules(), field, None)
+
+
+def applyRuleChange(gameRules: "GameRules", field: str, value: Any,
+                    reason: str = "cores vote", source: str = "cores_vote"):
+    """Apply a single rule change to the LIVE gameRules object AND persist it.
+
+    The live patch takes effect on every game that reads this shared instance; the
+    persisted override map (app_settings) survives restarts and is re-applied at each
+    Season.__init__, so the change drifts into future seasons until reverted. Returns
+    the new override map, or None if the field isn't mutable (a no-op guard)."""
+    if field not in MUTABLE_RULE_FIELDS:
+        return None
+    gameRules.applyPatch(field, value, reason=reason, source=source)
+    overrides = loadRuleOverrides()
+    overrides[field] = value
+    saveRuleOverrides(overrides)
+    return overrides
+
+
+def revertRule(gameRules: "GameRules", field: str,
+               reason: str = "cores revert", source: str = "cores_vote"):
+    """Restore a rule field to its default on the LIVE gameRules object and drop it
+    from the persisted override map. Returns the new override map, or None if the
+    field isn't mutable."""
+    if field not in MUTABLE_RULE_FIELDS:
+        return None
+    gameRules.applyPatch(field, defaultRuleValue(field), reason=reason, source=source)
+    overrides = loadRuleOverrides()
+    overrides.pop(field, None)
+    saveRuleOverrides(overrides)
+    return overrides
