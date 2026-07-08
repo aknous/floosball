@@ -608,6 +608,12 @@ class SeasonManager:
                 self.currentSeason.currentWeek = nextWeek
                 self.currentSeason.currentWeekText = nextWeekText
 
+            # Cores rule-change vote: at the START of a game day (weeks 1/8/15/22),
+            # roll the escalating chance a vote opens. Opening here (before the setup
+            # wait) gives fans the whole run-up to kickoff to vote; it resolves 15 min
+            # before the day's first game (below). Idempotent + never blocks the loop.
+            self._maybeOpenRuleVote(nextWeek, weekStartTime)
+
             await self.timingManager.waitForWeekSetup(weekSetupTime)
 
             # ── Official week transition ──
@@ -775,6 +781,11 @@ class SeasonManager:
             await self._firePreGameReminder(weekStartTime, self.currentSeason.currentWeek,
                                             self.currentSeason.currentWeekText,
                                             len(week.get('games', [])))
+
+            # Cores rule-change vote resolves now — 15 min before the day's first game
+            # (the pre-game reminder just fired at that mark) so the winning rule is
+            # live before any of the day's games kick off. No-op unless a vote is open.
+            self._resolveRuleVote()
 
             # Wait for games to start
             await self.timingManager.waitForGamesStart(weekStartTime)
@@ -10104,6 +10115,36 @@ class SeasonManager:
                 session.close()
         except Exception:
             pass
+
+    def _ruleVoteMgr(self):
+        """Lazily-constructed RuleVoteManager (Cores rule-change vote)."""
+        if getattr(self, '_ruleVoteManager', None) is None:
+            from managers.ruleVoteManager import RuleVoteManager
+            self._ruleVoteManager = RuleVoteManager(self.serviceContainer)
+        return self._ruleVoteManager
+
+    def _maybeOpenRuleVote(self, week: int, weekStartTime) -> None:
+        """Open a Cores rule-change vote if the game-day escalation roll fires.
+        Wrapped so nothing here ever blocks or breaks the game loop."""
+        try:
+            if not self.currentSeason:
+                return
+            self._ruleVoteMgr().maybeOpenWindow(
+                self.currentSeason.seasonNumber, week,
+                self.currentSeason.gameRules, weekStartTime)
+        except Exception as e:
+            logger.warning(f"Rule vote open hook failed: {e}")
+
+    def _resolveRuleVote(self) -> None:
+        """Resolve the open Cores rule-change vote (applies the winner to the live
+        rules). No-op if none is open. Never blocks/breaks the game loop."""
+        try:
+            if not self.currentSeason:
+                return
+            self._ruleVoteMgr().resolveOpenWindow(
+                self.currentSeason.seasonNumber, self.currentSeason.gameRules)
+        except Exception as e:
+            logger.warning(f"Rule vote resolve hook failed: {e}")
 
     async def _firePreGameReminder(self, gameStartTime: datetime.datetime, weekNumber: int,
                                    weekText: str, gamesCount: int) -> None:
