@@ -56,25 +56,31 @@ When a vote fires, pick which kind:
   vote with nothing changed → falls back to CHANGE (can't happen past the gate, but safe).
 
 ### The ballot
-- **Candidate pool** = the 7 curated `RULEBOOK_EXPOSED_FIELDS`, each with one preset
-  alternate value (table below). A field is either at default or at its alternate.
-- **CHANGE ballot** = a random **4** of the currently-default candidate fields, each shown
-  as `current → proposed`, **plus a "None" option**.
-- **REVERT ballot** = a random **4** of the currently-changed fields, each shown as
-  `current → default`, **plus "None"**.
+- **Candidate pool** = the 7 curated fields (`RULE_VOTE_CANDIDATES`). Each declares its
+  alternate space: a discrete **`values`** list (structural rules stay integer) or a numeric
+  **`range`** (scoring values, `float: True` → one-decimal values allowed, e.g. a touchdown
+  worth 6.4). A specific proposed value is chosen when the vote opens — always different from
+  the current value AND the default — and stored on the window, so the ballot shows exactly
+  what a win applies.
+- **CHANGE ballot** (Aris) = a random **4** of the fields that have an available new value,
+  each `current → proposed`, **plus "None"**. This **includes already-changed fields** — a
+  rule can be changed to a NEW value before it is ever reverted (e.g. Touchdown 6 → 7, later
+  7 → 5.5).
+- **REVERT ballot** (Pyre) = a random **4** of the currently-changed fields, each
+  `current → default`, **plus "None"**. Revert is the only path back to default.
 - Fewer than 4 available → show what exists (+ None). One rule changes per vote.
 
-Candidate fields + preset alternates (all tunable; scoring values may be floats):
+Candidate fields + alternate spaces (all tunable):
 
-| Field | Default | Proposed alternate | Flavor |
-|---|---|---|---|
-| `downsPerSeries` | 4 | 3 | Three-down football |
-| `firstDownDistance` | 10 | 15 | Longer chains |
-| `touchdownPoints` | 6 | 7 | Touchdowns worth more |
-| `fieldGoalPoints` | 3 | 2 | Kicks devalued |
-| `safetyPoints` | 2 | 4 | Safeties spike |
-| `clockStopsOnIncompletePass` | true | false | Clock runs on incompletions |
-| `clockStopsOnOutOfBounds` | true | false | Clock runs out of bounds |
+| Field | Default | Alternate space |
+|---|---|---|
+| `downsPerSeries` | 4 | values `[3, 5]` |
+| `firstDownDistance` | 10 | values `[5, 8, 12, 15]` |
+| `touchdownPoints` | 6 | range `4–9` (float) |
+| `fieldGoalPoints` | 3 | range `1–5` (float) |
+| `safetyPoints` | 2 | range `1–5` (float) |
+| `clockStopsOnIncompletePass` | true | values `[false]` |
+| `clockStopsOnOutOfBounds` | true | values `[false]` |
 
 ### Window lifecycle (same-day, applies immediately)
 1. **Opens** at the game-day start hook (when the day's slate rolls in). `opensAt = now`,
@@ -137,10 +143,12 @@ that vote.
 ## Data model (`database/models.py` + inline migration)
 
 - **`RuleVoteWindow`** — one row per (season, day) we process. Fields: `season`,
-  `day_index` (0–3), `fired` (bool), `kind` ('change'|'revert'|null), `option_keys` (JSON
-  list of offered field keys), `prompt_line`, `react_pick_line`, `react_none_line` (the
-  Core's stored conversation lines), `opened_at`, `closes_at`, `resolved` (bool),
-  `winner_key` (field key | 'none' | null), `applied` (bool). Unique (`season`, `day_index`).
+  `day_index` (0–3), `fired` (bool), `kind` ('change'|'revert'|null), `core`, `option_keys`
+  (JSON list of `{field, value}` — the specific proposed value per candidate), `prompt_line`,
+  `react_pick_line`, `react_none_line` (the Core's stored conversation lines), `opened_at`,
+  `closes_at`, `resolved` (bool), `winner_key` (field key | 'none' | null), `winner_prev` /
+  `winner_value` (JSON from→to of the applied change), `applied` (bool). Unique
+  (`season`, `day_index`).
 - **`RuleVote`** — one row per (user, window). Fields: `user_id`, `window_id`, `option_key`
   ('none' or a field key), `created_at`. Unique (`user_id`, `window_id`). Changeable (upsert).
 - Repository: `RuleVoteRepository` (create/close windows, cast/withdraw votes, tally).
@@ -204,6 +212,6 @@ that vote.
 table · `RULE_VOTE_SIM_AUTOPICK` (env, testing only).
 
 ## Open / revisit later
-- Multiple alternates per field (a field could change more than once / in either direction).
 - Next-day apply vs same-day (revisit after seeing v1).
 - Widening the candidate pool to more of the 14 mutable fields (clock knobs) once WP is swept.
+- Whether float score values need scoreboard/tiebreaker formatting polish once live.

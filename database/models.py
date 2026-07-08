@@ -2352,6 +2352,10 @@ class RuleVoteWindow(Base):
     closes_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     resolved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     winner_key: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)  # field key | 'none'
+    # The applied change (JSON-encoded so bool/float/int round-trip) — the value the
+    # winning field held just before vs after resolution. Drives the Rulebook pill.
+    winner_prev: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    winner_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

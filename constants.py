@@ -878,17 +878,22 @@ RULE_VOTE_BALLOT_SIZE = 4          # candidate rules offered per vote (plus a "N
 RULE_VOTE_CLOSE_LEAD_MINUTES = 15  # vote closes this many minutes before the day's first game
 RULE_VOTE_SIM_AUTOPICK = False     # headless sims: random-pick a winner for engine testing (prod stays user-driven)
 
-# The rules Aris/Pyre can toggle. Pool = the curated RULEBOOK_EXPOSED_FIELDS; each has ONE
-# preset alternate value (a field is either at its default or its alternate). 'alternate' is
-# what a CHANGE vote sets it to; the default comes from GameRules. Scoring values may be floats.
+# The rules Aris/Pyre can vote on. Each field declares its ALTERNATE space, either:
+#   "values": [...]           a discrete list of allowed alternates, or
+#   "range": [lo, hi]         a numeric range (with "float": True to allow one-decimal
+#                             values, e.g. a touchdown worth 6.4; otherwise whole numbers).
+# A CHANGE vote proposes one specific value from that space (chosen when the vote opens,
+# always different from the current value AND the default), so a rule can be changed again
+# to a NEW value before it is ever reverted. A REVERT vote (Pyre) always returns a rule to
+# its default. Structural rules stay integer (lists); scoring values may be float (ranges).
 RULE_VOTE_CANDIDATES = {
-    "downsPerSeries":             {"alternate": 3,     "label": "Downs per series"},
-    "firstDownDistance":          {"alternate": 15,    "label": "Yards to a first down"},
-    "touchdownPoints":            {"alternate": 7,     "label": "Touchdown points"},
-    "fieldGoalPoints":            {"alternate": 2,     "label": "Field goal points"},
-    "safetyPoints":               {"alternate": 4,     "label": "Safety points"},
-    "clockStopsOnIncompletePass": {"alternate": False, "label": "Clock stops on an incompletion"},
-    "clockStopsOnOutOfBounds":    {"alternate": False, "label": "Clock stops going out of bounds"},
+    "downsPerSeries":             {"label": "Downs per series",              "values": [3, 5]},
+    "firstDownDistance":          {"label": "Yards to a first down",         "values": [5, 8, 12, 15]},
+    "touchdownPoints":            {"label": "Touchdown points",              "range": [4, 9], "float": True},
+    "fieldGoalPoints":            {"label": "Field goal points",             "range": [1, 5], "float": True},
+    "safetyPoints":               {"label": "Safety points",                 "range": [1, 5], "float": True},
+    "clockStopsOnIncompletePass": {"label": "Clock stops on an incompletion", "values": [False]},
+    "clockStopsOnOutOfBounds":    {"label": "Clock stops going out of bounds", "values": [False]},
 }
 
 # ---- Player Fatigue ----

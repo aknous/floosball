@@ -35,19 +35,60 @@ class RuleVoteManager:
         from database.repositories.rule_vote_repository import RuleVoteRepository
         return RuleVoteRepository(session)
 
-    def _changedFields(self, gameRules) -> List[str]:
-        """Candidate fields currently at their alternate (i.e. changed from default)."""
+    def _pickProposedValue(self, field: str, current):
+        """Choose a specific CHANGE value for a field from its alternate space —
+        always different from the current value AND the default (so a change moves a
+        rule to a genuinely new value; returning to default is REVERT's job). Returns
+        None if no such value exists (e.g. a bool already flipped off)."""
         import game_rules as gr
         from constants import RULE_VOTE_CANDIDATES
-        return [f for f in RULE_VOTE_CANDIDATES
-                if getattr(gameRules, f, None) != gr.defaultRuleValue(f)]
+        spec = RULE_VOTE_CANDIDATES.get(field, {})
+        default = gr.defaultRuleValue(field)
+        if 'values' in spec:
+            pool = [v for v in spec['values'] if v != current and v != default]
+            return random.choice(pool) if pool else None
+        rng = spec.get('range')
+        if not rng:
+            return None
+        lo, hi = rng
+        isFloat = bool(spec.get('float'))
+        for _ in range(25):
+            if isFloat and random.random() < 0.5:
+                v = round(random.uniform(lo, hi), 1)      # e.g. 6.4
+            else:
+                v = random.randint(int(lo), int(hi))       # e.g. 5
+            if v != current and v != default:
+                return v
+        return None
 
-    def _defaultFields(self, gameRules) -> List[str]:
-        """Candidate fields currently at their default (available for a CHANGE vote)."""
+    def _changeOptions(self, gameRules) -> List[dict]:
+        """Candidate {field, value} pairs available for a CHANGE vote — includes
+        already-changed fields that can move to a NEW value, not just default ones."""
+        from constants import RULE_VOTE_CANDIDATES
+        out = []
+        for f in RULE_VOTE_CANDIDATES:
+            v = self._pickProposedValue(f, getattr(gameRules, f, None))
+            if v is not None:
+                out.append({"field": f, "value": v})
+        return out
+
+    def _revertOptions(self, gameRules) -> List[dict]:
+        """Candidate {field, value=default} pairs for a REVERT vote — fields currently
+        away from their default."""
         import game_rules as gr
         from constants import RULE_VOTE_CANDIDATES
-        return [f for f in RULE_VOTE_CANDIDATES
-                if getattr(gameRules, f, None) == gr.defaultRuleValue(f)]
+        out = []
+        for f in RULE_VOTE_CANDIDATES:
+            default = gr.defaultRuleValue(f)
+            if getattr(gameRules, f, None) != default:
+                out.append({"field": f, "value": default})
+        return out
+
+    def _changedCount(self, gameRules) -> int:
+        import game_rules as gr
+        from constants import RULE_VOTE_CANDIDATES
+        return sum(1 for f in RULE_VOTE_CANDIDATES
+                   if getattr(gameRules, f, None) != gr.defaultRuleValue(f))
 
     # ── open ─────────────────────────────────────────────────────────────────
     def maybeOpenWindow(self, season: int, week: int, gameRules,
@@ -78,15 +119,15 @@ class RuleVoteManager:
 
             # Pick kind. Below the revert gate it's always a CHANGE; at/above it's a
             # 50/50 coin flip, with guards for empty pools on either side.
-            changed = self._changedFields(gameRules)
-            defaults = self._defaultFields(gameRules)
-            canChange = len(defaults) > 0
-            canRevert = len(changed) >= RULE_VOTE_REVERT_GATE
+            changeOpts = self._changeOptions(gameRules)
+            revertOpts = self._revertOptions(gameRules)
+            canChange = len(changeOpts) > 0
+            canRevert = len(revertOpts) >= RULE_VOTE_REVERT_GATE
             if canRevert and canChange:
                 kind = 'revert' if random.random() < 0.5 else 'change'
             elif canChange:
                 kind = 'change'
-            elif changed:
+            elif revertOpts:
                 kind = 'revert'  # nothing left to change; offer a revert instead
             else:
                 repo.recordDay(season, dayIndex, fired=False)
@@ -94,7 +135,7 @@ class RuleVoteManager:
                 logger.info(f"Rule vote: S{season} day {dayIndex} fired but no candidates")
                 return
 
-            pool = list(changed if kind == 'revert' else defaults)
+            pool = list(revertOpts if kind == 'revert' else changeOpts)
             random.shuffle(pool)
             options = pool[:RULE_VOTE_BALLOT_SIZE]
 
@@ -107,7 +148,7 @@ class RuleVoteManager:
 
             window = repo.recordDay(
                 season, dayIndex, fired=True, kind=kind, core=convo['core'],
-                optionKeys=options, promptLine=convo['prompt'],
+                options=options, promptLine=convo['prompt'],
                 reactPickLine=convo['reactPick'], reactNoneLine=convo['reactNone'],
                 openedAt=openedAt, closesAt=closesAt,
             )
@@ -136,24 +177,28 @@ class RuleVoteManager:
             window = repo.getOpenWindow(season)
             if window is None:
                 return None
-            options = repo.optionsOf(window)
+            specs = repo.optionSpecsOf(window)
+            options = [s["field"] for s in specs]
             tally = repo.tally(window.id)
             winner = self._pickWinner(options, tally)
 
             applied = False
+            prevValue = newValue = None
             if winner != 'none' and winner in options:
                 import game_rules as gr
-                from constants import RULE_VOTE_CANDIDATES
+                prevValue = getattr(gameRules, winner, None)
                 if window.kind == 'revert':
                     gr.revertRule(gameRules, winner, reason="pyre revert vote",
                                   source="cores_vote")
                 else:
-                    alt = RULE_VOTE_CANDIDATES.get(winner, {}).get('alternate')
-                    gr.applyRuleChange(gameRules, winner, alt, reason="aris change vote",
+                    value = next((s["value"] for s in specs if s["field"] == winner), None)
+                    gr.applyRuleChange(gameRules, winner, value, reason="aris change vote",
                                        source="cores_vote")
+                newValue = getattr(gameRules, winner, None)
                 applied = True
 
-            repo.resolveWindow(window.id, winnerKey=winner, applied=applied)
+            repo.resolveWindow(window.id, winnerKey=winner, applied=applied,
+                               prevValue=prevValue, newValue=newValue)
             session.commit()
             logger.info(f"Rule vote RESOLVE: S{season} day {window.day_index} "
                         f"kind={window.kind} winner={winner} applied={applied} tally={tally}")

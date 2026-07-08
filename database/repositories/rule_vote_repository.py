@@ -34,17 +34,18 @@ class RuleVoteRepository:
 
     def recordDay(self, season: int, dayIndex: int, fired: bool,
                   kind: Optional[str] = None, core: Optional[str] = None,
-                  optionKeys: Optional[List[str]] = None,
+                  options: Optional[List[dict]] = None,
                   promptLine: Optional[str] = None,
                   reactPickLine: Optional[str] = None,
                   reactNoneLine: Optional[str] = None,
                   openedAt=None, closesAt=None) -> RuleVoteWindow:
         """Record the per-day escalation outcome. A non-fired day is a bare marker;
-        a fired day carries the live vote (kind/core/options/conversation/timing)."""
+        a fired day carries the live vote. `options` is a list of {field, value}
+        dicts — the specific proposed value for each candidate this vote."""
         window = RuleVoteWindow(
             season=season, day_index=dayIndex, fired=fired,
             kind=kind, core=core,
-            option_keys=json.dumps(optionKeys) if optionKeys is not None else None,
+            option_keys=json.dumps(options) if options is not None else None,
             prompt_line=promptLine, react_pick_line=reactPickLine,
             react_none_line=reactNoneLine,
             opened_at=openedAt, closes_at=closesAt,
@@ -87,12 +88,15 @@ class RuleVoteRepository:
     def getWindowById(self, windowId: int) -> Optional[RuleVoteWindow]:
         return self.session.get(RuleVoteWindow, windowId)
 
-    def resolveWindow(self, windowId: int, winnerKey: str, applied: bool) -> None:
+    def resolveWindow(self, windowId: int, winnerKey: str, applied: bool,
+                      prevValue=None, newValue=None) -> None:
         window = self.session.get(RuleVoteWindow, windowId)
         if window is not None:
             window.resolved = True
             window.winner_key = winnerKey
             window.applied = applied
+            window.winner_prev = json.dumps(prevValue) if applied else None
+            window.winner_value = json.dumps(newValue) if applied else None
             self.session.flush()
 
     def lastResolvedApplied(self, season: int) -> Optional[RuleVoteWindow]:
@@ -107,14 +111,27 @@ class RuleVoteRepository:
         )
 
     @staticmethod
-    def optionsOf(window: RuleVoteWindow) -> List[str]:
-        """Decode a window's offered candidate field keys."""
+    def optionSpecsOf(window: RuleVoteWindow) -> List[dict]:
+        """Decode a window's offered options as [{field, value}] dicts. Tolerates a
+        legacy bare-string list (field only) by mapping to {field, value: None}."""
         if not window or not window.option_keys:
             return []
         try:
-            return list(json.loads(window.option_keys))
+            raw = json.loads(window.option_keys)
         except Exception:
             return []
+        out = []
+        for item in raw:
+            if isinstance(item, dict):
+                out.append({"field": item.get("field"), "value": item.get("value")})
+            else:
+                out.append({"field": item, "value": None})
+        return out
+
+    @staticmethod
+    def optionsOf(window: RuleVoteWindow) -> List[str]:
+        """The offered candidate field keys (used for vote validation + tally keys)."""
+        return [s["field"] for s in RuleVoteRepository.optionSpecsOf(window)]
 
     # ── Votes ────────────────────────────────────────────────────────────────
     def castVote(self, userId: int, windowId: int, optionKey: str) -> RuleVote:

@@ -1289,22 +1289,26 @@ def _lastRuleChange():
     from database.connection import get_session
     from database.repositories.rule_vote_repository import RuleVoteRepository
     from constants import RULE_VOTE_CANDIDATES
-    import game_rules as _gr
+    import json as _json
     session = get_session()
     try:
         w = RuleVoteRepository(session).lastResolvedApplied(season)
         if not w or not w.winner_key or w.winner_key == 'none':
             return None
         field = w.winner_key
-        dflt = _gr.defaultRuleValue(field)
-        alt = RULE_VOTE_CANDIDATES.get(field, {}).get('alternate')
+
+        def _dec(v):
+            try:
+                return _json.loads(v) if v is not None else None
+            except Exception:
+                return None
         return {
             "field": field,
             "label": RULE_VOTE_CANDIDATES.get(field, {}).get('label', field),
             "kind": w.kind,                       # 'change' | 'revert'
             "core": w.core,                       # 'aris' | 'pyre'
-            "from": (alt if w.kind == 'revert' else dflt),
-            "to": (dflt if w.kind == 'revert' else alt),
+            "from": _dec(w.winner_prev),
+            "to": _dec(w.winner_value),
         }
     except Exception:
         return None
@@ -1332,20 +1336,18 @@ def _isVotingOpen(window) -> bool:
 
 
 def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:
-    """Build the ballot's option views (current -> proposed) for a window."""
+    """Build the ballot's option views (current -> proposed) for a window. The
+    proposed value is the specific one chosen for this vote (stored on the window)."""
     from database.repositories.rule_vote_repository import RuleVoteRepository
     from constants import RULE_VOTE_CANDIDATES
-    import game_rules as _gr
     out = []
-    for field in RuleVoteRepository.optionsOf(window):
-        current = getattr(gameRules, field, None)
-        proposed = (_gr.defaultRuleValue(field) if window.kind == 'revert'
-                    else RULE_VOTE_CANDIDATES.get(field, {}).get('alternate'))
+    for spec in RuleVoteRepository.optionSpecsOf(window):
+        field = spec["field"]
         out.append({
             "field": field,
             "label": RULE_VOTE_CANDIDATES.get(field, {}).get('label', field),
-            "current": current,
-            "proposed": proposed,
+            "current": getattr(gameRules, field, None),
+            "proposed": spec["value"],
         })
     return out
 
