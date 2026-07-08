@@ -187,8 +187,15 @@ that vote.
   `useSeasonUpdates` flips the hook to open state so the popup can appear without a poll wait.
 
 ## Blast radius / safety
-- Confirmed readers of mutable fields are all in `floosball_game.py`; WP/pick-em/MVP are
-  insulated. Applying a change before the day's kickoff means no in-progress game is touched.
+- Confirmed readers of mutable fields are all in `floosball_game.py`. Applying a change
+  before the day's kickoff means no in-progress game is touched.
+- **Win probability** now reads the rules: `calculateExpectedPoints` keys its down factor
+  off `downsPerSeries` (the LAST down is the turnover down, not a hardcoded 4th) and scales
+  EP by the current `touchdownPoints`/`fieldGoalPoints`; `calculateWinProbability`'s
+  blowout dampener measures the gap in "scores" via the current TD+XP value. All reduce to
+  today's behavior at the default rules. The score-margin term already used real scores.
+- **Pick-em** underdog multiplier uses pre-game ELO (rule-agnostic); **MVP/WPA** attribution
+  is symmetric across both teams. So the fairness-sensitive consumers stay sound.
 - `applyOverrides`/`applyPatch` already filter to `MUTABLE_RULE_FIELDS` and audit-log every
   patch (`patchHistory`), so an out-of-set key is a no-op, and every change is traceable.
 - Same-day/immediate is the owner's chosen v1 ("let's see how that works first"); the window

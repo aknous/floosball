@@ -8944,8 +8944,12 @@ class Game:
         estimatedPossessions = max(1.0, total_seconds / 150.0)
         epWeight = 1.0 / estimatedPossessions
         # Dampen EP further when the score gap is large — a 3-point EP swing
-        # shouldn't move WP much in a 21-point blowout.
-        epDampener = 1.0 / (1.0 + (abs(scoreDiff) / 7.0) ** 1.5)
+        # shouldn't move WP much in a 21-point blowout. "One score" tracks the
+        # mutable TD (+XP) value so the gap is measured in scores, not raw points
+        # (= 7.0 at the default 6-pt TD + 1-pt XP, so default behavior is unchanged).
+        oneScore = (float(getattr(self.gameRules, 'touchdownPoints', 6))
+                    + float(getattr(self.gameRules, 'extraPointPoints', 1)))
+        epDampener = 1.0 / (1.0 + (abs(scoreDiff) / oneScore) ** 1.5)
         adjustedScoreDiff = scoreDiff + (homeExpected - awayExpected) * epWeight * epDampener
 
         # Smooth time-sensitivity: k increases from 0.06 at kickoff to ~0.40 late in Q4
@@ -9104,24 +9108,38 @@ class Game:
         # kick regardless of conversion odds, so down matters much less.
         inFgRange = field_position >= 60
         ytfd = self.yardsToFirstDown
-        if self.down == 1:
+        # Down factor keyed off the ACTUAL series length (downsPerSeries is a mutable
+        # rule): the LAST down is the turnover down, the penultimate down is the
+        # aggressive must-convert-soon down, and earlier downs decay only mildly.
+        # At the default 4 downs this reproduces the old 1st/2nd/3rd/4th logic exactly.
+        lastDown = int(getattr(self.gameRules, 'downsPerSeries', 4) or 4)
+        if self.down <= 1:
             down_factor = 1.0
-        elif self.down == 2:
-            down_factor = float(np.interp(ytfd, [1, 3, 7, 10, 15], [0.95, 0.92, 0.82, 0.70, 0.60]))
-            if inFgRange:
-                down_factor = max(down_factor, 0.85)
-        elif self.down == 3:
-            down_factor = float(np.interp(ytfd, [1, 3, 7, 10, 15], [0.85, 0.70, 0.40, 0.25, 0.15]))
-            if inFgRange:
-                down_factor = max(down_factor, 0.75)
-        else:  # 4th down
+        elif self.down >= lastDown:            # last down — turnover if not converted
             if inFgRange:
                 down_factor = 0.65
             else:
                 down_factor = float(np.interp(ytfd, [1, 3, 7, 10], [0.15, 0.10, 0.05, 0.03]))
-        
+        elif self.down == lastDown - 1:        # penultimate down (the old "3rd down")
+            down_factor = float(np.interp(ytfd, [1, 3, 7, 10, 15], [0.85, 0.70, 0.40, 0.25, 0.15]))
+            if inFgRange:
+                down_factor = max(down_factor, 0.75)
+        else:                                  # middle downs (the old "2nd down")
+            down_factor = float(np.interp(ytfd, [1, 3, 7, 10, 15], [0.95, 0.92, 0.82, 0.70, 0.60]))
+            if inFgRange:
+                down_factor = max(down_factor, 0.85)
+
         expected_points = base_ep * down_factor
-        
+
+        # Scale EP by how valuable scoring is under the CURRENT rules (touchdown /
+        # field-goal points are mutable). The blend leans on the TD value — EP near
+        # the scoring zone is TD-dominated — with a smaller FG influence. Both ratios
+        # are 1.0 at the default 6-pt TD (+1 XP) / 3-pt FG, so defaults are unchanged.
+        tdScale = (float(getattr(self.gameRules, 'touchdownPoints', 6))
+                   + float(getattr(self.gameRules, 'extraPointPoints', 1))) / 7.0
+        fgScale = float(getattr(self.gameRules, 'fieldGoalPoints', 3)) / 3.0
+        expected_points *= (0.7 * tdScale + 0.3 * fgScale)
+
         return expected_points
     
     def checkOvertimeEnd(self, defensiveScore: bool = False) -> bool:
