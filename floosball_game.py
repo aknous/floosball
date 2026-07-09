@@ -6267,34 +6267,39 @@ class Game:
                 # Broadcast final play state (before the game-end event below)
                 self.broadcastGameState(includeLastPlay=True)
 
-        # Determine winner
+        # Determine winner. Scores can be fractional (float scoring rules) — format
+        # them for the display feeds below so no float artifact (29.0999...) leaks in.
+        def _fs(v):
+            r = round(float(v), 1)
+            return f"{int(r)}" if r == int(r) else f"{r}"
+        _hs, _as = _fs(self.homeScore), _fs(self.awayScore)
         if self.awayScore > self.homeScore:
             self.winningTeam = self.awayTeam
             self.losingTeam = self.homeTeam
-            self.gameDict['score'] = '{0} - {1}'.format(self.awayScore, self.homeScore)
+            self.gameDict['score'] = '{0} - {1}'.format(_as, _hs)
             finalEventMessage = {
-                'text': 'Final: {} - {} | {} - {}'.format(self.awayTeam.abbr, self.awayScore, self.homeTeam.abbr, self.homeScore),
+                'text': 'Final: {} - {} | {} - {}'.format(self.awayTeam.abbr, _as, self.homeTeam.abbr, _hs),
                 'quarter': 'Final',
                 'timeRemaining': '0:00'
             }
             self.gameFeed.insert(0, {'event': finalEventMessage})
             self.leagueHighlights.insert(0, {'event':  {
-                                                'text': 'Game Final: {} - {} | {} - {}'.format(self.awayTeam.name, self.awayScore, self.homeTeam.name, self.homeScore)
+                                                'text': 'Game Final: {} - {} | {} - {}'.format(self.awayTeam.name, _as, self.homeTeam.name, _hs)
                                             }
                                         })
 
         elif self.homeScore > self.awayScore:
             self.winningTeam = self.homeTeam
             self.losingTeam = self.awayTeam
-            self.gameDict['score'] = '{0} - {1}'.format(self.homeScore, self.awayScore)
+            self.gameDict['score'] = '{0} - {1}'.format(_hs, _as)
             finalEventMessage = {
-                'text': 'Final: {} - {} | {} - {}'.format(self.homeTeam.abbr, self.homeScore, self.awayTeam.abbr, self.awayScore),
+                'text': 'Final: {} - {} | {} - {}'.format(self.homeTeam.abbr, _hs, self.awayTeam.abbr, _as),
                 'quarter': 'Final',
                 'timeRemaining': '0:00'
             }
             self.gameFeed.insert(0, {'event': finalEventMessage})
             self.leagueHighlights.insert(0, {'event':  {
-                                                'text': 'Game Final: {} - {} | {} - {}'.format(self.homeTeam.name, self.homeScore, self.awayTeam.name, self.awayScore)
+                                                'text': 'Game Final: {} - {} | {} - {}'.format(self.homeTeam.name, _hs, self.awayTeam.name, _as)
                                             }
                                         })
         else:
@@ -6313,15 +6318,15 @@ class Game:
             )
             self.winningTeam = self.homeTeam  # Arbitrary - treat as home team win
             self.losingTeam = self.awayTeam
-            self.gameDict['score'] = '{0} - {1} (TIE)'.format(self.homeScore, self.awayScore)
+            self.gameDict['score'] = '{0} - {1} (TIE)'.format(_hs, _as)
             finalEventMessage = {
-                'text': 'Final (TIE): {} - {} | {} - {}'.format(self.homeTeam.abbr, self.homeScore, self.awayTeam.abbr, self.awayScore),
+                'text': 'Final (TIE): {} - {} | {} - {}'.format(self.homeTeam.abbr, _hs, self.awayTeam.abbr, _as),
                 'quarter': 'Final',
                 'timeRemaining': '0:00'
             }
             self.gameFeed.insert(0, {'event': finalEventMessage})
             self.leagueHighlights.insert(0, {'event':  {
-                                                'text': 'Game Final (TIE): {} - {} | {} - {}'.format(self.homeTeam.name, self.homeScore, self.awayTeam.name, self.awayScore)
+                                                'text': 'Game Final (TIE): {} - {} | {} - {}'.format(self.homeTeam.name, _hs, self.awayTeam.name, _as)
                                             }
                                         })
 
