@@ -1738,6 +1738,95 @@ async def debug_anomaly_tick():
     return build_success_response({'fired': True, 'season': seasonNumber, 'week': currentWeek})
 
 
+# ── Rule-change + Criticality testing aids (ungated, like the anomaly debug set) ──
+@app.post("/api/debug/rule-vote/open")
+def debug_rule_vote_open(kind: str = "change"):
+    """Testing aid — force-open a Cores rule-change vote for the current season NOW,
+    so the popup appears immediately (bypasses the escalation roll; stays open ~1h).
+    kind = 'change' (Aris) or 'revert' (Pyre). NOT admin-gated."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    if not (sm and sm.currentSeason):
+        raise HTTPException(400, "No active season")
+    wid = sm._ruleVoteMgr().forceOpenWindow(
+        sm.currentSeason.seasonNumber, sm.currentSeason.currentWeek or 1,
+        sm.currentSeason.gameRules, kind=kind)
+    if wid is None:
+        raise HTTPException(400, "No candidate rules available for that kind right now")
+    return build_success_response({"windowId": wid, "kind": kind})
+
+
+@app.post("/api/debug/rule-vote/resolve")
+def debug_rule_vote_resolve():
+    """Testing aid — resolve the open rule vote NOW (applies the winner + fires the
+    outcome beat / Rulebook-pill notification). NOT admin-gated."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    if not (sm and sm.currentSeason):
+        raise HTTPException(400, "No active season")
+    winner = sm._ruleVoteMgr().resolveOpenWindow(
+        sm.currentSeason.seasonNumber, sm.currentSeason.gameRules)
+    return build_success_response({"winner": winner})
+
+
+@app.post("/api/debug/criticality/trigger")
+def debug_criticality_trigger(duration: int = 4):
+    """Testing aid — force a Criticality window for the current season (enables the
+    per-game chaos rulesets + the site-wide / Rulebook glitch). `duration` weeks.
+    NOT admin-gated. Use /api/debug/criticality/clear to end it."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    if not (sm and sm.currentSeason):
+        raise HTTPException(400, "No active season")
+    season = sm.currentSeason.seasonNumber
+    week = sm.currentSeason.currentWeek or 1
+    from database.connection import get_session
+    from database.models import AppSetting, LeagueAnomalyState
+    session = get_session()
+    try:
+        row = session.query(AppSetting).filter_by(key='criticality_enabled').first()
+        if row is None:
+            session.add(AppSetting(key='criticality_enabled', value='true'))
+        else:
+            row.value = 'true'
+        state = session.query(LeagueAnomalyState).filter_by(season=season).first()
+        if state is None:
+            state = LeagueAnomalyState(season=season)
+            session.add(state)
+        state.last_thinning_week = week
+        patches = list(state.cores_patches_applied or [])
+        patches.append({'event': 'thinning_trigger', 'start_week': week, 'duration': int(duration)})
+        state.cores_patches_applied = patches
+        session.commit()
+        return build_success_response({"season": season, "week": week, "duration": int(duration)})
+    finally:
+        session.close()
+
+
+@app.post("/api/debug/criticality/clear")
+def debug_criticality_clear():
+    """Testing aid — end the forced Criticality window (games return to the shared
+    ruleset, glitch clears). NOT admin-gated."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    from database.connection import get_session
+    from database.models import LeagueAnomalyState
+    session = get_session()
+    try:
+        state = session.query(LeagueAnomalyState).filter_by(season=season).first()
+        if state is not None:
+            state.last_thinning_week = None
+            session.commit()
+        return build_success_response({"cleared": True, "season": season})
+    finally:
+        session.close()
+
+
 @app.get("/api/players/{player_id}/anomaly", response_model=Dict[str, Any])
 async def get_player_anomaly(player_id: int):
     """Anomaly state for a player in the current season.

@@ -156,6 +156,8 @@ class RuleVoteManager:
             misses = dayIndex - ((maxFired + 1) if maxFired is not None else 0)
             misses = max(0, min(misses, len(RULE_VOTE_RAMP) - 1))
             prob = RULE_VOTE_RAMP[misses]
+            if os.environ.get('RULE_VOTE_FORCE'):
+                prob = 1.0   # testing: a vote fires every game day
             if random.random() >= prob:
                 repo.recordDay(season, dayIndex, fired=False)
                 session.commit()
@@ -205,6 +207,53 @@ class RuleVoteManager:
             self._broadcast(f'rule_vote_open_{kind}', session, season, week)
         except Exception as e:
             logger.warning(f"Rule vote open failed: {e}")
+        finally:
+            session.close()
+
+    def forceOpenWindow(self, season: int, week: int, gameRules,
+                        kind: Optional[str] = None, minutesOpen: int = 60) -> Optional[int]:
+        """DEBUG/testing: open a rule vote on demand — bypasses the escalation roll
+        AND the once-per-day idempotency, replacing any window for the current game
+        day. Stays open `minutesOpen`. Returns the new window id (or None if there's
+        no candidate for the requested kind)."""
+        dayIndex = self.dayIndexForWeek(week)
+        from database.connection import get_session
+        from database.models import RuleVoteWindow
+        from constants import RULE_VOTE_BALLOT_SIZE
+        session = get_session()
+        try:
+            repo = self._repo(session)
+            session.query(RuleVoteWindow).filter_by(season=season, day_index=dayIndex).delete()
+            session.commit()
+            changeOpts = self._changeOptions(gameRules)
+            revertOpts = self._revertOptions(gameRules)
+            if kind not in ('change', 'revert'):
+                kind = 'change' if changeOpts else 'revert'
+            pool = revertOpts if kind == 'revert' else changeOpts
+            if not pool:  # requested kind has nothing to offer — fall back to the other
+                kind = 'revert' if kind == 'change' else 'change'
+                pool = revertOpts if kind == 'revert' else changeOpts
+            if not pool:
+                return None
+            random.shuffle(pool)
+            options = pool[:RULE_VOTE_BALLOT_SIZE]
+            from managers.coresManager import ruleVoteConversation
+            convo = ruleVoteConversation(kind)
+            openedAt = datetime.datetime.utcnow()
+            closesAt = openedAt + datetime.timedelta(minutes=minutesOpen)
+            window = repo.recordDay(
+                season, dayIndex, fired=True, kind=kind, core=convo['core'],
+                options=options, promptLine=convo['prompt'],
+                reactPickLine=convo['reactPick'], reactNoneLine=convo['reactNone'],
+                openedAt=openedAt, closesAt=closesAt,
+            )
+            session.commit()
+            self._broadcast(f'rule_vote_open_{kind}', session, season, week)
+            logger.info(f"Rule vote FORCE-OPEN (debug): S{season} day {dayIndex} kind={kind}")
+            return window.id
+        except Exception as e:
+            logger.warning(f"Force-open rule vote failed: {e}")
+            return None
         finally:
             session.close()
 
