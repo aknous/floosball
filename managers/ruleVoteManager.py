@@ -104,6 +104,37 @@ class RuleVoteManager:
         return sum(1 for f in RULE_VOTE_CANDIDATES
                    if getattr(gameRules, f, None) != gr.defaultRuleValue(f))
 
+    # ── Criticality chaos rules ────────────────────────────────────────────────
+    def _randomChaosValue(self, field: str):
+        """A fully random value for a candidate field — no exclusions, NO TD>FG
+        guard (chaos: a field goal may outscore a touchdown). Floats get a whole/
+        one-decimal mix; lists pick any member; bools pick either."""
+        from constants import RULE_VOTE_CANDIDATES
+        spec = RULE_VOTE_CANDIDATES.get(field, {})
+        if 'values' in spec:
+            return random.choice(spec['values'])
+        rng = spec.get('range')
+        if not rng:
+            return None
+        lo, hi = rng
+        if spec.get('float') and random.random() < 0.5:
+            return round(random.uniform(lo, hi), 1)
+        return random.randint(int(lo), int(hi))
+
+    def randomChaosRules(self, baseRules):
+        """A per-game randomized ruleset for a Criticality game: a copy of the base
+        (current) ruleset with every SUPPORTED candidate field set to a random value.
+        Both teams in the game share it; it's hidden from users; results count. The
+        base is left untouched (deep-copied)."""
+        import copy
+        from constants import RULE_VOTE_CANDIDATES
+        g = copy.deepcopy(baseRules)
+        for f in RULE_VOTE_CANDIDATES:
+            v = self._randomChaosValue(f)
+            if v is not None:
+                setattr(g, f, v)
+        return g
+
     # ── open ─────────────────────────────────────────────────────────────────
     def maybeOpenWindow(self, season: int, week: int, gameRules,
                         weekStartTime: Optional[datetime.datetime] = None) -> None:

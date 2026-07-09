@@ -1067,6 +1067,7 @@ class SeasonManager:
                             )
 
             # Simulate the game
+            self._applyChaosRulesIfCritical(gameInstance)
             await gameInstance.playGame()
 
             # Clear fantasy tracker callbacks after game
@@ -4544,6 +4545,7 @@ class SeasonManager:
             # No fantasy tracker callbacks for playoff games — FP is regular season only
 
             # Simulate the game
+            self._applyChaosRulesIfCritical(gameInstance)
             await gameInstance.playGame()
 
             # Determine winner
@@ -10145,6 +10147,23 @@ class SeasonManager:
                 self.currentSeason.seasonNumber, self.currentSeason.gameRules)
         except Exception as e:
             logger.warning(f"Rule vote resolve hook failed: {e}")
+
+    def _applyChaosRulesIfCritical(self, game) -> None:
+        """During a Criticality, give this game its OWN randomized ruleset just
+        before kickoff — chaos rules are hidden from users, both teams play by the
+        same set, results count. Reverts naturally when Criticality ends (normal
+        weeks keep the shared season ruleset). Never blocks the game loop."""
+        try:
+            if not self.currentSeason:
+                return
+            from managers.anomalyManager import isCriticalityWeek
+            week = getattr(game, 'week', None)
+            if week is None:
+                week = self.currentSeason.currentWeek
+            if isCriticalityWeek(self.currentSeason.seasonNumber, week):
+                game.gameRules = self._ruleVoteMgr().randomChaosRules(self.currentSeason.gameRules)
+        except Exception as e:
+            logger.warning(f"Criticality chaos ruleset failed: {e}")
 
     async def _firePreGameReminder(self, gameStartTime: datetime.datetime, weekNumber: int,
                                    weekText: str, gamesCount: int) -> None:
