@@ -1332,7 +1332,7 @@ def _isVotingOpen(window) -> bool:
         return False
     if window.closes_at is None:
         return True
-    return datetime.datetime.utcnow() < window.closes_at
+    return datetime.utcnow() < window.closes_at
 
 
 def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:
