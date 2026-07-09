@@ -141,12 +141,20 @@ def testSuppressionMechanicsAndCap(session):
 
 def testStatusBands(session):
     import managers.anomalyManager as a
-    from database.models import LeagueAnomalyState
+    from database.models import LeagueAnomalyState, PlayerAttention
 
     season = 77
+    week = 10
     state = LeagueAnomalyState(season=season, aggregate_score=0.0, threshold=1000,
                                thinnings_this_season=0, cores_patches_applied=[])
     session.add(state)
+    # getCriticalityStatus derives its band from a LIVE carry sum (_sumOverCapCarry
+    # + week), self-healing state.aggregate_score to match — so we must drive the
+    # ratio through a real PlayerAttention.over_cap_carry row, not by poking
+    # aggregate_score directly (which the self-heal would overwrite to ~0).
+    carrier = PlayerAttention(player_id=1, season=season, score=0.0,
+                              over_cap_carry=0.0, peak_score=0.0)
+    session.add(carrier)
     session.commit()
 
     cases = [
@@ -156,12 +164,13 @@ def testStatusBands(session):
         (1.05, 'critical'),
     ]
     for ratio, expected in cases:
-        state.aggregate_score = ratio * state.threshold
+        # liveAggregate = over_cap_carry + week ; solve carry for the target ratio.
+        carrier.over_cap_carry = max(0.0, ratio * state.threshold - week)
         session.commit()
-        got = a.getCriticalityStatus(season, week=10)['status']
+        got = a.getCriticalityStatus(season, week=week)['status']
         assert got == expected, f"ratio {ratio:.2f} → {got}, expected {expected}"
         # No band description leaks a number.
-        desc = a.getCriticalityStatus(season, week=10)['description']
+        desc = a.getCriticalityStatus(season, week=week)['description']
         assert all(ch not in desc for ch in '0123456789'), f"numbers leaked in '{desc}'"
     print("  ok: qualitative status bands (dormant/stirring/unstable/critical, number-free)")
 
@@ -238,6 +247,105 @@ def testTriggerPathFiresOneSuppression(session):
     print("  ok: _updateLeagueAggregate fires one suppression, narrated as an exchange")
 
 
+def testCarryDecay(session):
+    """The leaky-integrator fix: _applyDecay decays over_cap_carry (not just score)
+    so the league aggregate can't run away unbounded."""
+    import managers.anomalyManager as a
+    from database.models import PlayerAttention
+
+    assert a.OVER_CAP_CARRY_DECAY < 1.0, "carry decay must be enabled in prod (non-FAST)"
+    season = 61
+    row = PlayerAttention(player_id=1, season=season, score=200.0,
+                          over_cap_carry=500.0, peak_score=200.0)
+    session.add(row)
+    session.commit()
+
+    a._applyDecay(session, season)
+    session.commit()
+    assert abs(row.score - 200.0 * a.ATTENTION_DECAY) < 1e-6, "score decayed"
+    assert abs(row.over_cap_carry - 500.0 * a.OVER_CAP_CARRY_DECAY) < 1e-6, "carry decayed"
+
+    # A steady over-cap inflow reaches a bounded plateau, not an unbounded ramp:
+    # carry_{t+1} = carry_t * decay + inflow  ->  plateau = inflow / (1 - decay).
+    row.over_cap_carry = 0.0
+    session.commit()
+    inflow = 60.0
+    for _ in range(60):
+        a._applyDecay(session, season)
+        row.over_cap_carry = float(row.over_cap_carry) + inflow  # inject fresh overflow
+        session.commit()
+    plateau = inflow / (1.0 - a.OVER_CAP_CARRY_DECAY)
+    assert abs(row.over_cap_carry - plateau) < plateau * 0.02, \
+        f"carry should plateau at ~{plateau:.0f}, got {row.over_cap_carry:.0f}"
+    print(f"  ok: over_cap_carry decays + plateaus (leaky integrator, ~{plateau:.0f})")
+
+
+def testAdaptiveThreshold(session):
+    """The bar is seeded from the league's own observed attention plateau at
+    THRESHOLD_SEED_WEEK, not a user-count guess — and stays provisional (no
+    crossings) during the calibration window."""
+    import managers.anomalyManager as a
+    from database.models import LeagueAnomalyState, PlayerAttention
+
+    season = 62
+    # One heavy carrier; aggregate = over_cap_carry + week.
+    session.add(PlayerAttention(player_id=1, season=season, score=100.0,
+                                over_cap_carry=1000.0, peak_score=100.0))
+    session.commit()
+
+    # Before the seed week: threshold stays provisional/unreachable, no crossing.
+    a._updateLeagueAggregate(session, season, week=a.THRESHOLD_SEED_WEEK - 1)
+    session.commit()
+    st = session.query(LeagueAnomalyState).filter_by(season=season).first()
+    assert st.threshold >= a.THRESHOLD_PROVISIONAL, "bar must stay provisional during calibration"
+    assert not [e for e in (st.cores_patches_applied or []) if e.get('event') in
+                ('suppression', 'thinning_trigger')], "no crossings during the quiet window"
+
+    # At the seed week: the bar locks from the observed plateau estimate.
+    wk = a.THRESHOLD_SEED_WEEK
+    a._updateLeagueAggregate(session, season, wk)
+    session.commit()
+    st = session.query(LeagueAnomalyState).filter_by(season=season).first()
+    overCap = 1000.0
+    fill = 1.0 - a.OVER_CAP_CARRY_DECAY ** wk
+    expected = round((overCap / fill) * a.THRESHOLD_PLATEAU_MULT)
+    assert abs(st.threshold - expected) <= 2, f"bar locked to {st.threshold}, expected ~{expected}"
+    assert st.threshold < a.THRESHOLD_PROVISIONAL, "bar no longer provisional after lock"
+    print(f"  ok: adaptive threshold locks at week {wk} from observed plateau (-> {st.threshold})")
+
+
+def testPityRamp():
+    """Enabled crossings that suppress escalate the next crossing's fire odds; a
+    real fire resets the ramp; gated near-misses never accrue pity."""
+    import managers.anomalyManager as a
+
+    def st(patches):
+        return SimpleNamespace(cores_patches_applied=patches, season=1)
+
+    # No history -> base rate (0 prior eligible suppressions).
+    assert a._eligibleSuppressionsSinceLastFire(st([])) == 0
+    # Gated near-misses (fire_eligible falsy) do NOT count.
+    gated = [{'event': 'suppression', 'week': w, 'fire_eligible': False} for w in (2, 4)]
+    assert a._eligibleSuppressionsSinceLastFire(st(gated)) == 0
+    # Enabled suppressions DO count.
+    elig = [{'event': 'suppression', 'week': w, 'fire_eligible': True} for w in (3, 5, 7)]
+    assert a._eligibleSuppressionsSinceLastFire(st(elig)) == 3
+    # A real fire resets the ramp: only eligible suppressions AFTER the last fire count.
+    mixed = [
+        {'event': 'suppression', 'week': 3, 'fire_eligible': True},
+        {'event': 'thinning_trigger', 'start_week': 6},
+        {'event': 'suppression', 'week': 8, 'fire_eligible': True},
+    ]
+    assert a._eligibleSuppressionsSinceLastFire(st(mixed)) == 1, "ramp resets after a fire"
+
+    # The escalated chance climbs and caps.
+    base, ramp, cap = a.CRITICALITY_FIRE_CHANCE, a.CRITICALITY_FIRE_CHANCE_RAMP, a.CRITICALITY_FIRE_CHANCE_MAX
+    assert min(cap, base + 0 * ramp) == base
+    assert min(cap, base + 3 * ramp) <= cap
+    assert base + int((cap - base) / ramp + 1) * ramp >= cap, "ramp reaches the cap in finite steps"
+    print("  ok: pity ramp counts eligible-only suppressions, resets on fire, caps")
+
+
 def main():
     if os.path.exists('/data'):
         print("SKIP: /data exists on this host — would target the prod volume, not a temp DB")
@@ -255,12 +363,15 @@ def main():
     testHelpers()
     testInstabilityDial()
     testCoresExchanges()
+    testPityRamp()
 
     session = get_session()
     try:
         testSuppressionMechanicsAndCap(session)
         testStatusBands(session)
         testTriggerPathFiresOneSuppression(session)
+        testCarryDecay(session)
+        testAdaptiveThreshold(session)
     finally:
         session.close()
 

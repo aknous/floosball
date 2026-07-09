@@ -126,6 +126,20 @@ ATTENTION_DECAY = 0.95 if _ANOMALY_FAST else 0.9  # slower decay in fast mode
 # instead of further boosting that one player's per-play roll.
 ATTENTION_SOFT_CAP = 100.0
 
+# Weekly decay applied to each player's accumulated over_cap_carry (the fuel the
+# league aggregate is summed from). Without this the carry is a MONOTONIC
+# accumulator — every saturated player dumps their weekly overflow into it and it
+# never comes back down, so the aggregate ramps unbounded and, once it clears a
+# league's threshold, re-crosses every suppression window for the rest of the
+# season (the "pinned critical" failure). Decaying the carry turns the aggregate
+# into a LEAKY INTEGRATOR that plateaus at a level proportional to CURRENT
+# sustained attention (equilibrium ≈ weeklyOverflow / (1 - decay)) instead of
+# season-cumulative history — so a crossing represents a real engagement surge,
+# not inevitable clockwork. 1.0 = old monotonic behavior (no decay). Tuned with
+# the threshold scaling below against the realistic-attention harness so a typical
+# league steady-states in the 'unstable' band and only a surge crosses.
+OVER_CAP_CARRY_DECAY = 1.0 if _ANOMALY_FAST else 0.82
+
 # State ladder thresholds. Once a player crosses the higher tier
 # they advance; once they cross AWAKEN_THRESHOLD they are awakened
 # and the transition is sticky (only Reset purge can undo it).
@@ -154,29 +168,30 @@ else:
 THRESHOLD_MIN = 80 if _ANOMALY_FAST else 600
 THRESHOLD_MAX = 200 if _ANOMALY_FAST else 1200
 
-# ── Active-user threshold scaling (prod, non-fast) ──
-# Attention is entirely user-generated (cards/rosters/follows/fav-team fans), so
-# the buildup scales with the active population. A flat threshold is therefore
-# population-blind: unreachable for a small base, trivial at scale. Instead we
-# seed the per-season threshold from the active-user count, so Criticality fires
-# on the CONCENTRATION of engagement, not raw volume — and the crossing week
-# stays roughly constant as the game grows.
-#   threshold = clamp(BASE + PER_USER * activeUsers, FLOOR, CEIL) * jitter
-# "Active users" = users who logged in within the project's activity window
-# (the SAME window supporterManager uses, SUPPORTER_ACTIVITY_WINDOW_DAYS) AND
-# engage with players (favorite team OR
-# following >=1). Recency matters: a user who set a favorite team a year ago and
-# never returned generates no attention, so counting all-time registrations
-# badly overstates the live population. Calibrated against the owner's chosen
-# value: the current prod base (~42 active+engaged) seeds ~180 — the threshold
-# hand-picked for a reliable mid-season near-miss. FLOOR sits above max
-# background pressure (~32/season) so a dead league never trips on time alone
-# (leagues under ~26 active all floor at 120, effectively unreachable). +-10%
-# jitter keeps the exact value hidden.
+# ── Adaptive threshold seeding (prod, non-fast) ──
+# The bar is seeded from the league's OWN emergent attention, not a guess from
+# population. The old active-user formula (threshold = BASE + PER_USER×activeUsers)
+# indexed the bar to raw user COUNT, but the aggregate is driven by attention
+# CONCENTRATION on a fixed 24×6 player pool, which scales SUPER-linearly — so the
+# population formula mis-set the bar badly (prod floored at 120 while its aggregate
+# ran to ~460, leaving it permanently pinned and crossing every suppression window).
+# Now, after a short quiet calibration window, we estimate the season's plateau from
+# the observed aggregate (a leaky integrator: aggregate ≈ plateau×(1 − carryDecay^week))
+# and lock the bar at a fraction of it. The league then steady-states in the
+# 'unstable' band and only a genuine engagement surge crosses — self-normalizing to
+# whatever attention the league generates, at any size. See `_maybeSeedAdaptiveThreshold`.
+# Tuned with OVER_CAP_CARRY_DECAY against the realistic-attention harness: MULT 0.92
+# lands ~1.5 fires/season (P(≥1)≈90%) with ~3-4 near-miss crossings and no pinning,
+# stable across 29 / 60 / 140-user leagues.
+THRESHOLD_SEED_WEEK = 6            # weeks 1..this−1 are a quiet calibration window (no crossings)
+THRESHOLD_PLATEAU_MULT = 0.92      # locked bar = this × estimated plateau (over-cap only)
+THRESHOLD_PROVISIONAL = 1_000_000_000  # hidden unreachable sentinel before the bar locks
+THRESHOLD_FLOOR = 120              # minimum bar: a barely-engaged league never trips (plateau below this)
+THRESHOLD_CEIL = 6000             # (legacy) retained for the FAST-band clamp only
+# Legacy active-user-scaling knobs — no longer used to seed the bar (kept referenced
+# by nothing; _countActiveUsers still powers award/anomaly quorums elsewhere).
 THRESHOLD_BASE = 20.0
 THRESHOLD_PER_ACTIVE_USER = 3.8
-THRESHOLD_FLOOR = 120
-THRESHOLD_CEIL = 6000
 THRESHOLD_JITTER = 0.10
 
 # Suppression window length (weeks) post-Reset where anomaly rate
@@ -197,6 +212,19 @@ THRESHOLD_DECAY_AFTER_CRITICALITY = 1.25
 # attention harness: 0.30 lands real prod at ~1.3 Criticalities/season (inside the target 1-2 band) with
 # ~85% odds of at least one, and still leaves ~6 near-miss suppressions a season for the Cores tension.
 CRITICALITY_FIRE_CHANCE = 0.30
+
+# Pity ramp on the fire roll. A crossing that SUPPRESSES (the Cores caught it) while
+# the feature is ENABLED raises the odds of the NEXT crossing breaking through, so
+# the event is bounded to actually LAND within a few crossings once enabled rather
+# than being a coin-flip a whole season can lose. The first crossing of a cycle
+# stays at the base rate (keeps it rare/surprising); each subsequent fire-eligible
+# suppression adds RAMP; capped at _MAX. Reset to the base rate after a real fire
+# (the ramp counts only suppressions since the last thinning_trigger). Only
+# ENABLED crossings count — gated near-misses never rolled the dice, so they don't
+# accrue pity (a season spent disabled doesn't hand you a guaranteed instant fire
+# the moment you flip it on). base .30 + .25/step → guaranteed by the 4th crossing.
+CRITICALITY_FIRE_CHANCE_RAMP = 0.25
+CRITICALITY_FIRE_CHANCE_MAX = 1.0
 
 # Criticality duration — number of rounds (weeks) the Criticality is active.
 # 1 round for first Criticality, 2 rounds if the aggregate was 50%+ over
@@ -672,11 +700,19 @@ def _pickControllingCore(state: LeagueAnomalyState) -> str:
 
 
 def _applyDecay(session: Session, seasonNumber: int) -> None:
-    """Multiply every existing attention score by ATTENTION_DECAY."""
+    """Decay each player's attention score by ATTENTION_DECAY, and their
+    accumulated over_cap_carry by OVER_CAP_CARRY_DECAY (see that constant — this
+    is what makes the league aggregate a leaky integrator instead of a monotonic
+    accumulator). Both run BEFORE this week's contributions are added."""
     rows = session.query(PlayerAttention).filter_by(season=seasonNumber).all()
     for row in rows:
         row.score = float(row.score) * ATTENTION_DECAY
-    logger.debug(f"Decayed {len(rows)} attention rows by {ATTENTION_DECAY}")
+        if OVER_CAP_CARRY_DECAY < 1.0 and row.over_cap_carry:
+            row.over_cap_carry = float(row.over_cap_carry) * OVER_CAP_CARRY_DECAY
+    logger.debug(
+        f"Decayed {len(rows)} attention rows (score ×{ATTENTION_DECAY}, "
+        f"carry ×{OVER_CAP_CARRY_DECAY})"
+    )
 
 
 # ─── Weekly contributions ───────────────────────────────────────────────────
@@ -1014,19 +1050,45 @@ def _countActiveUsers(session: Session) -> int:
 
 
 def _seedThreshold(session: Session) -> int:
-    """Seed a season's Criticality threshold. FAST mode keeps the old low random
-    band (sims trigger reliably); prod scales it with the active-user count."""
+    """Seed a season's INITIAL Criticality threshold. FAST mode keeps the old low
+    random band (sims trigger reliably). Prod starts PROVISIONAL/unreachable — the
+    real bar is locked in a few weeks later from the league's own observed attention
+    plateau (see `_maybeSeedAdaptiveThreshold`), so no crossing can happen during
+    the quiet calibration window."""
     if _ANOMALY_FAST:
         return random.randint(THRESHOLD_MIN, THRESHOLD_MAX)
-    activeUsers = _countActiveUsers(session)
-    raw = THRESHOLD_BASE + THRESHOLD_PER_ACTIVE_USER * activeUsers
-    jittered = raw * random.uniform(1.0 - THRESHOLD_JITTER, 1.0 + THRESHOLD_JITTER)
-    threshold = int(max(THRESHOLD_FLOOR, min(THRESHOLD_CEIL, round(jittered))))
+    return THRESHOLD_PROVISIONAL
+
+
+def _maybeSeedAdaptiveThreshold(state: LeagueAnomalyState, week: int) -> None:
+    """Lock the hidden Criticality bar from the league's OWN emergent attention,
+    once the leaky integrator has partially filled. No-op in FAST mode, before the
+    calibration window, or once already locked (threshold below the sentinel).
+
+    The aggregate approaches its plateau as a leaky integrator:
+        aggregate_overcap ≈ plateau × (1 − carryDecay^week)
+    so we back out the plateau from the observed over-cap aggregate and set the bar
+    to THRESHOLD_PLATEAU_MULT × plateau (floored). A barely-engaged league whose
+    plateau sits under THRESHOLD_FLOOR simply never trips."""
+    if _ANOMALY_FAST:
+        return
+    if state.threshold is None or state.threshold < THRESHOLD_PROVISIONAL:
+        return  # already locked
+    if week < THRESHOLD_SEED_WEEK:
+        return  # still in the quiet calibration window
+    if OVER_CAP_CARRY_DECAY < 1.0:
+        fillFraction = 1.0 - (OVER_CAP_CARRY_DECAY ** week)
+    else:
+        fillFraction = 1.0
+    overCap = max(0.0, float(state.aggregate_score) - float(week))
+    plateauEst = overCap / max(0.05, fillFraction)
+    bar = int(max(THRESHOLD_FLOOR, round(plateauEst * THRESHOLD_PLATEAU_MULT)))
+    state.threshold = bar
     logger.info(
-        f"Seeded threshold from {activeUsers} active users: "
-        f"base+perUser={raw:.0f}, jittered -> {threshold} (hidden)"
+        f"Adaptive threshold locked (season={state.season}, week={week}): "
+        f"observed over-cap={overCap:.0f}, plateauEst={plateauEst:.0f} "
+        f"-> threshold={bar} (hidden)"
     )
-    return threshold
 
 
 def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> None:
@@ -1039,8 +1101,9 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
     """
     state = session.query(LeagueAnomalyState).filter_by(season=seasonNumber).first()
     if state is None:
-        # First tick of the season — seed the row with a hidden threshold scaled
-        # to the active-user population (see _seedThreshold).
+        # First tick of the season — seed the row with a PROVISIONAL/unreachable
+        # threshold (non-FAST); the real bar locks in a few weeks later from the
+        # league's own observed attention plateau (see _maybeSeedAdaptiveThreshold).
         threshold = _seedThreshold(session)
         state = LeagueAnomalyState(
             season=seasonNumber,
@@ -1058,6 +1121,11 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
 
     state.aggregate_score = overCapSum + backgroundPressure
     state.updated_at = datetime.utcnow()
+
+    # Lock the hidden bar from the league's own emergent attention once the leaky
+    # integrator has partially filled (no-op in FAST / before the window / if
+    # already locked). Must run before the crossing check below.
+    _maybeSeedAdaptiveThreshold(state, week)
 
     logger.debug(
         f"League aggregate: {state.aggregate_score:.1f} / threshold {state.threshold} "
@@ -1354,6 +1422,25 @@ def _getPlayerPersonality(session: Session, playerId: int) -> Optional[str]:
         return None
 
 
+def _eligibleSuppressionsSinceLastFire(state: LeagueAnomalyState) -> int:
+    """Count fire-eligible suppressions (enabled crossings that rolled and lost)
+    since the most recent real Criticality fire — the pity-ramp accumulator. A
+    fired Criticality resets the ramp; gated near-misses (fire_eligible falsy)
+    never count."""
+    patches = state.cores_patches_applied or []
+    lastFireWeek = None
+    for e in patches:
+        if e.get('event') == 'thinning_trigger':
+            sw = e.get('start_week')
+            if sw is not None and (lastFireWeek is None or sw > lastFireWeek):
+                lastFireWeek = sw
+    return sum(
+        1 for e in patches
+        if e.get('event') == 'suppression' and e.get('fire_eligible')
+        and (lastFireWeek is None or (e.get('week') or 0) > lastFireWeek)
+    )
+
+
 def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
                      session: Optional[Session] = None) -> None:
     """Fire a Criticality event for the upcoming round(s).
@@ -1371,14 +1458,23 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
     """
     from constants import ANOMALY_CRITICALITY_ENABLED
     if not getAnomalySetting(session, 'criticality_enabled', ANOMALY_CRITICALITY_ENABLED):
-        _suppressCriticality(state, currentWeek, session=session)
+        # Gated: force a near-miss, and mark it NOT fire-eligible so it never
+        # accrues pity toward a future enabled crossing (see the pity ramp below).
+        _suppressCriticality(state, currentWeek, session=session, fireEligible=False)
         return
     # Even with the feature ON, a crossing MOSTLY suppresses (the Cores catch it — the common near-miss
     # beat, and the Cores dialogue it surfaces). Only occasionally does it break through and a
-    # Criticality actually FIRES, keeping it the rare ~1-2/season event it's meant to be (the aggregate
-    # re-crosses every ~2-3 weeks, so firing every time would mean ~7-12/season).
-    if random.random() >= CRITICALITY_FIRE_CHANCE:
-        _suppressCriticality(state, currentWeek, session=session)
+    # Criticality actually FIRES, keeping it the rare ~1-2/season event it's meant to be. To stop an
+    # unlucky streak from whiffing a whole season, the odds ESCALATE: each fire-eligible suppression
+    # since the last real fire raises this crossing's chance (pity ramp), so it's bounded to land within
+    # a few crossings once enabled while the first crossing stays at the base rate.
+    priorEligibleSuppressions = _eligibleSuppressionsSinceLastFire(state)
+    effectiveChance = min(
+        CRITICALITY_FIRE_CHANCE_MAX,
+        CRITICALITY_FIRE_CHANCE + priorEligibleSuppressions * CRITICALITY_FIRE_CHANCE_RAMP,
+    )
+    if random.random() >= effectiveChance:
+        _suppressCriticality(state, currentWeek, session=session, fireEligible=True)
         return
     overRatio = state.aggregate_score / max(1, state.threshold)
     duration = (
@@ -1437,14 +1533,17 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
 
 
 def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
-                         session: Optional[Session] = None) -> None:
-    """Gated near-miss: the aggregate crossed threshold but Criticality is off.
+                         session: Optional[Session] = None,
+                         fireEligible: bool = False) -> None:
+    """Near-miss: the aggregate crossed threshold but the crossing did not fire a
+    Criticality — either because the feature is gated OFF, or because the enabled
+    fire roll came up suppress. Rather than firing, the Cores scramble and force
+    the buildup back — a dramatized "we caught it this time" patch beat.
+    Uncapped: every crossing that doesn't fire lands one of these.
 
-    Rather than firing, the Cores scramble and force the buildup back — a
-    dramatized "we caught it this time" patch beat. Capped per season; once the
-    cap is reached the Cores can no longer push it back and the league sits
-    pinned at critical instability (the dial stays high) for the rest of the
-    year, though the event still cannot fire while gated.
+    `fireEligible` records whether this suppression was an ENABLED fire roll that
+    lost (True) vs. a gated near-miss that never rolled (False). Only the former
+    accrues toward the pity ramp (see `_eligibleSuppressionsSinceLastFire`).
 
     Each patch:
       * records a `suppression` audit entry (controlling Core + week),
@@ -1459,10 +1558,10 @@ def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
         1 for e in (state.cores_patches_applied or [])
         if e.get('event') == 'suppression'
     )
-    # No cap while Criticality is gated — the Cores keep catching it all season,
-    # so the league never gets stuck pinned at 100%. The cap only bites once the
-    # real event is enabled.
-    from constants import ANOMALY_CRITICALITY_ENABLED
+    # Uncapped — the Cores keep catching every non-firing crossing, so a gated
+    # league never gets permanently stuck pinned at 100%. When enabled, real
+    # Criticalities are paced by the escalating fire roll (CRITICALITY_FIRE_CHANCE
+    # + pity ramp), not by a suppression cap.
     patchNumber = priorPatches + 1
     # The Core that mechanically led the patch (recorded for getCriticalityStatus
     # / the control room). The narration below is a multi-Core scramble exchange
@@ -1486,6 +1585,7 @@ def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
         'week': currentWeek,
         'aggregate_at_patch': float(state.aggregate_score),
         'over_ratio': overRatio,
+        'fire_eligible': bool(fireEligible),
         'core': controllingCore,
         'fired_at': datetime.utcnow().isoformat() + 'Z',
         'news': news,
