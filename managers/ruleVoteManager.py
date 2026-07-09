@@ -137,9 +137,9 @@ class RuleVoteManager:
 
     # ── open ─────────────────────────────────────────────────────────────────
     def maybeOpenWindow(self, season: int, week: int, gameRules,
-                        weekStartTime: Optional[datetime.datetime] = None) -> None:
+                        closesAt: Optional[datetime.datetime] = None) -> None:
         from constants import (RULE_VOTE_ENABLED, RULE_VOTE_RAMP, RULE_VOTE_REVERT_GATE,
-                               RULE_VOTE_BALLOT_SIZE, RULE_VOTE_CLOSE_LEAD_MINUTES)
+                               RULE_VOTE_BALLOT_SIZE)
         if not RULE_VOTE_ENABLED or week not in GAME_DAY_START_WEEKS:
             return
         dayIndex = self.dayIndexForWeek(week)
@@ -190,15 +190,9 @@ class RuleVoteManager:
             convo = ruleVoteConversation(kind)
 
             openedAt = datetime.datetime.utcnow()
-            closesAt = (weekStartTime - datetime.timedelta(minutes=RULE_VOTE_CLOSE_LEAD_MINUTES)
-                        if weekStartTime is not None else None)
-            # Testing: in non-scheduled modes the scheduled kickoff is backdated, so
-            # closesAt would be in the past (votingOpen=False, popup never shows). Give
-            # the forced vote a real future window instead. requireClosed keeps the sim
-            # from auto-resolving it until this time is up.
-            if os.environ.get('RULE_VOTE_FORCE'):
-                closesAt = openedAt + datetime.timedelta(
-                    minutes=int(os.environ.get('RULE_VOTE_FORCE_MINUTES', '15')))
+            # closes_at (passed in) = the real games-start time = the countdown target.
+            # Voting stays open until the sim resolves it AT games start; this is only
+            # the cosmetic countdown, not the gate (see api _isVotingOpen).
 
             window = repo.recordDay(
                 season, dayIndex, fired=True, kind=kind, core=convo['core'],

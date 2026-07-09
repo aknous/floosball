@@ -1327,12 +1327,11 @@ def _coreDisplayName(coreKey: Optional[str]) -> Optional[str]:
 
 
 def _isVotingOpen(window) -> bool:
-    """A window accepts votes while it's unresolved and before its close time."""
-    if window is None or window.resolved:
-        return False
-    if window.closes_at is None:
-        return True
-    return datetime.utcnow() < window.closes_at
+    """A window accepts votes until it's resolved (the sim resolves it when the
+    day's games start). closes_at is only the frontend countdown target, not the
+    gate — in non-scheduled modes it's backdated, so gating on it wrongly closed
+    voting immediately."""
+    return bool(window is not None and not window.resolved)
 
 
 def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:

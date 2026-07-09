@@ -782,13 +782,13 @@ class SeasonManager:
                                             self.currentSeason.currentWeekText,
                                             len(week.get('games', [])))
 
-            # Cores rule-change vote resolves now — 15 min before the day's first game
-            # (the pre-game reminder just fired at that mark) so the winning rule is
-            # live before any of the day's games kick off. No-op unless a vote is open.
-            self._resolveRuleVote()
-
             # Wait for games to start
             await self.timingManager.waitForGamesStart(weekStartTime)
+
+            # Cores rule-change vote resolves right AS the day's games start — voting
+            # stays open through the whole pre-game run-up, the winning rule applies to
+            # the shared gameRules before any game plays. No-op unless a vote is open.
+            self._resolveRuleVote()
 
             # Clear cached countdown — games are starting now
             self._cachedNextGameStart = None
@@ -10131,9 +10131,18 @@ class SeasonManager:
         try:
             if not self.currentSeason:
                 return
+            # closes_at = the real wall-clock time the day's games start (the vote's
+            # countdown target). Scheduled: the true kickoff. Non-scheduled: kickoff is
+            # backdated, so estimate from the setup + games-start delays the loop is
+            # about to sleep, so the countdown reflects reality (~a minute), not hours.
+            closesAt = weekStartTime
+            if not getattr(self.timingManager, '_isScheduledMode', False):
+                d = getattr(self.timingManager, 'delays', {}) or {}
+                secs = (d.get('week_start_wait', 30) or 0) + (d.get('game_announcement', 30) or 0)
+                closesAt = datetime.datetime.utcnow() + datetime.timedelta(seconds=secs)
             self._ruleVoteMgr().maybeOpenWindow(
                 self.currentSeason.seasonNumber, week,
-                self.currentSeason.gameRules, weekStartTime)
+                self.currentSeason.gameRules, closesAt)
         except Exception as e:
             logger.warning(f"Rule vote open hook failed: {e}")
 
