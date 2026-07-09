@@ -10144,7 +10144,8 @@ class SeasonManager:
             if not self.currentSeason:
                 return
             self._ruleVoteMgr().resolveOpenWindow(
-                self.currentSeason.seasonNumber, self.currentSeason.gameRules)
+                self.currentSeason.seasonNumber, self.currentSeason.gameRules,
+                requireClosed=True)
         except Exception as e:
             logger.warning(f"Rule vote resolve hook failed: {e}")
 

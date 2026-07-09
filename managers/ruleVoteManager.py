@@ -192,6 +192,13 @@ class RuleVoteManager:
             openedAt = datetime.datetime.utcnow()
             closesAt = (weekStartTime - datetime.timedelta(minutes=RULE_VOTE_CLOSE_LEAD_MINUTES)
                         if weekStartTime is not None else None)
+            # Testing: in non-scheduled modes the scheduled kickoff is backdated, so
+            # closesAt would be in the past (votingOpen=False, popup never shows). Give
+            # the forced vote a real future window instead. requireClosed keeps the sim
+            # from auto-resolving it until this time is up.
+            if os.environ.get('RULE_VOTE_FORCE'):
+                closesAt = openedAt + datetime.timedelta(
+                    minutes=int(os.environ.get('RULE_VOTE_FORCE_MINUTES', '15')))
 
             window = repo.recordDay(
                 season, dayIndex, fired=True, kind=kind, core=convo['core'],
@@ -258,10 +265,14 @@ class RuleVoteManager:
             session.close()
 
     # ── resolve ──────────────────────────────────────────────────────────────
-    def resolveOpenWindow(self, season: int, gameRules) -> Optional[str]:
+    def resolveOpenWindow(self, season: int, gameRules, requireClosed: bool = False) -> Optional[str]:
         """Resolve the season's open vote (most-voted wins). Applies the winner to
         the live rules + persists it, and announces the outcome. Returns the winner
-        key ('none' or a field), or None if there was nothing to resolve."""
+        key ('none' or a field), or None if there was nothing to resolve.
+
+        `requireClosed` (the sim's auto-resolve) only resolves a window whose close
+        time has actually arrived, so a still-open window (esp. a debug-opened one
+        with a future close time) is left alone until it's genuinely due."""
         if not self._enabled():
             return None
         from database.connection import get_session
@@ -271,6 +282,9 @@ class RuleVoteManager:
             window = repo.getOpenWindow(season)
             if window is None:
                 return None
+            if requireClosed and window.closes_at is not None \
+                    and datetime.datetime.utcnow() < window.closes_at:
+                return None  # not due yet — leave it open (manual/debug window)
             specs = repo.optionSpecsOf(window)
             options = [s["field"] for s in specs]
             tally = repo.tally(window.id)
