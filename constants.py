@@ -894,6 +894,13 @@ RULE_VOTE_CANDIDATES = {
     "safetyPoints":               {"label": "Safety points",                 "range": [1, 5], "float": True},
     "clockStopsOnIncompletePass": {"label": "Clock stops on an incompletion", "values": [False]},
     "clockStopsOnOutOfBounds":    {"label": "Clock stops going out of bounds", "values": [False]},
+    # Display-only ENUM: how the score is shown (no engine effect). `valueLabels`
+    # gives each option a clean display name for the ballot/Rulebook.
+    "scoringModel":               {"label": "How the score is shown",
+                                   "values": ["additive", "spread", "share"],
+                                   "valueLabels": {"additive": "Additive",
+                                                   "spread": "Spread",
+                                                   "share": "Share"}},
 }
 
 # ---- Player Fatigue ----

@@ -71,6 +71,15 @@ class GameRules:
     twoPointConversionPoints: int = 2
     safetyPoints: int = 2
 
+    # ── Score display model (presentation only) ────────────────────
+    # How the running tally is SHOWN, not the points earned. The engine
+    # still tracks cumulative points and decides the winner by them — this
+    # is a lens over the two scores at the render sites only. No engine,
+    # decision, or fairness effect. 'additive' = each team's cumulative
+    # points (today's behavior); 'spread' = leader-centric margin (+N/-N,
+    # EVEN on tie); 'share' = each team's % of total points scored.
+    scoringModel: str = 'additive'
+
     # ── Field goal mechanics ───────────────────────────────────────
     fgSnapDistance: int = 17            # Yards added to LOS for snap + hold
     fgMinAttemptProb: float = 0.20      # Coaches attempt FG if make-prob >= this
@@ -144,6 +153,7 @@ class GameRules:
             "extraPointPoints": self.extraPointPoints,
             "twoPointConversionPoints": self.twoPointConversionPoints,
             "safetyPoints": self.safetyPoints,
+            "scoringModel": self.scoringModel,
             "fgSnapDistance": self.fgSnapDistance,
             "fgMinAttemptProb": self.fgMinAttemptProb,
             "fieldGoalUprights": list(self.fieldGoalUprights),
@@ -189,6 +199,10 @@ DEFAULT_RULES = GameRules()
 MUTABLE_RULE_FIELDS = {
     "touchdownPoints", "fieldGoalPoints", "extraPointPoints",
     "twoPointConversionPoints", "safetyPoints", "fgMinAttemptProb",
+    # Score DISPLAY model — presentation only (additive / spread / share).
+    # Zero engine blast radius: every score consumer reads the real cumulative
+    # values; only the frontend render sites apply the lens. Safe to mutate.
+    "scoringModel",
     # Structural rule #1 — yards needed to convert a first down. Core mechanic
     # (reset/decrement/goal-to-go) reads gameRules; play-calling heuristics use
     # the live yardsToFirstDown so they degrade gracefully at non-default values.
@@ -226,6 +240,9 @@ RULEBOOK_EXPOSED_FIELDS = {
     "downsPerSeries", "firstDownDistance",
     "touchdownPoints", "fieldGoalPoints", "safetyPoints",
     "clockStopsOnIncompletePass", "clockStopsOnOutOfBounds",
+    # The score DISPLAY model — surfaced as the Rulebook's own "Scoring Model"
+    # row (its own presentation), and votable like the rest.
+    "scoringModel",
 } & MUTABLE_RULE_FIELDS
 
 RULE_OVERRIDES_SETTING_KEY = "rule_overrides"

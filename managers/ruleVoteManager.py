@@ -22,6 +22,11 @@ logger = get_logger('floosball.rulevote')
 # Weeks that begin a game day (day index = (week-1)//7).
 GAME_DAY_START_WEEKS = (1, 8, 15, 22)
 
+# Candidate fields left OUT of the per-game Criticality chaos. `scoringModel` is a
+# display-only lens read league-wide from /api/rules — threading a per-game display
+# model through the game payload isn't built, so chaos leaves it at the league value.
+_CHAOS_EXCLUDE = frozenset({'scoringModel'})
+
 
 class RuleVoteManager:
     def __init__(self, serviceContainer=None):
@@ -130,6 +135,8 @@ class RuleVoteManager:
         from constants import RULE_VOTE_CANDIDATES
         g = copy.deepcopy(baseRules)
         for f in RULE_VOTE_CANDIDATES:
+            if f in _CHAOS_EXCLUDE:
+                continue
             v = self._randomChaosValue(f)
             if v is not None:
                 setattr(g, f, v)
