@@ -13,9 +13,11 @@ The score MODEL is how the running tally is shown. The real engine still tracks 
 winner by them — the model is a lens over those two numbers.
 
 - **`additive`** (default) — today's behavior. Each team shows its cumulative points (`21`, `14`).
-- **`differential`** — each team shows its **margin**: the leader is `+N`, the trailer is `-N`, a tie is `0-0`.
-  When a team scores a TD, the board reads `+7` / `-7`. Purely a presentation of the same two numbers
-  (`home = homeScore - awayScore`, `away = awayScore - homeScore`).
+- **`spread`** — a leader-centric betting-line readout of the margin: the leading team's cell shows `+N`, the
+  trailing team's `-N`, a tie shows `EVEN`. (Where the layout is a single line, `LEADER +N`.) Same two numbers,
+  framed as the spread. *(Replaces the earlier `differential` idea.)*
+- **`share`** — each team shows its **percentage of total points scored**: `60% / 40%`, a tie (or 0-0) shows
+  `50% / 50%`. Still reflects who's ahead, so the board stays consistent with the real winner.
 
 ## What does NOT change (the whole point of scoping it here)
 Everything reads the **real cumulative scores** exactly as today, so there is **no engine/decision/fairness ripple**:
@@ -29,8 +31,10 @@ the real blast radius.
 ## The display transform
 A single helper: `displayScore(teamScore, oppScore, model)`:
 - `additive` → `teamScore` (formatted via `formatScore`).
-- `differential` → the signed margin: `teamScore - oppScore`, shown as `+N` / `-N`, `0` when tied. (Still
-  `formatScore`-cleaned so float margins read `+6.4` etc.)
+- `spread` → the signed margin `teamScore - oppScore` as `+N` / `-N` (leader positive), `EVEN` when tied. Still
+  `formatScore`-cleaned so a float margin reads `+6.4`. (The exact one-line vs per-cell treatment is a small
+  frontend layout call.)
+- `share` → `round(teamScore / (teamScore + oppScore) × 100)%`, `50% / 50%` when tied or scoreless.
 
 Applied everywhere a team score renders: the game-modal scoreboard, the game card, the GameBar, the league-news
 feed's final score, and the play-feed running score. (The **quarter-by-quarter table** is a per-quarter breakdown
@@ -38,28 +42,54 @@ where cumulative points make sense — recommend it stays `additive` regardless 
 decision.)
 
 ## The rule (toggle + config) — `constants.py` / `game_rules.py`
-- `scoringModel` on `GameRules` (`'additive'` default | `'differential'`). Surfaced as the Rulebook popover's
+- `scoringModel` on `GameRules` (`'additive'` default | `'spread'` | `'share'`). Surfaced as the Rulebook popover's
   **"Scoring Model"** row (already teased as "Additive"), which flips to the active model.
 - It's an **enum choice among models**, so the vote offers the models as options (a light case of the non-scalar
-  vote generalization). During **Criticality**, the model can be randomized (a game shown in differential).
+  vote generalization). During **Criticality**, the model can be randomized (a game shown in spread or share).
 - Exposed on `/api/rules` (league-level); per-game override during chaos is a build detail (the model is
-  presentation, so showing a chaos game in differential doesn't leak point values).
+  presentation, so showing a chaos game in spread/share doesn't leak point values).
 
-## Deferred (designed-for, not built)
-Future models that DO change the game — kept out of scope now but the abstraction should accommodate them:
-- **race-to-zero / countdown-from-N** — both teams start at N, scoring *subtracts*, first to 0 (or lowest) wins.
-  This **inverts "higher is better"** → it would invert the scoring-aware decision tree + WP. Big blast radius.
-- **first-to-X / capped** — game ends when a team reaches X points.
-- Structure the `ScoreModel` so it can optionally define (a) a display transform [built now] AND (b) a
-  win-condition / game-over hook [deferred]. For now every model is display-only and the win condition stays
-  cumulative-highest-wins.
+## Deferred — two deeper tiers (designed-for, not built)
+The display models above are safe now. Everything below changes what the game *is*, in escalating blast radius.
+Structure the `ScoreModel`/`GameFormat` layer so a mode can optionally define a display transform [built now], a
+**win-condition / game-over hook** [tier 1 below], and/or a **game-loop override** [tier 2 below].
+
+### Tier 1 — Win-condition models (who wins / when it ends; score stays cumulative)
+Touch game-over, the scoring-aware decision tree, and WP.
+- **`frames`** *(owner: keep)* — divide the 60 minutes into **more, smaller periods** than the 4 quarters
+  (e.g. 6 / 8 / 12 frames, tunable); win the **most frames** (a frame goes to whoever scored more in it; total
+  points break ties). A team can out-score and still lose the game. Needs period tracking + a win-by-frames
+  resolution + WP that thinks in frames.
+- **`countdown`** *(race-to-zero)* — both teams start at N; scoring **subtracts**; first to 0 (or lowest at time)
+  wins. **Inverts "higher is better"** → inverts the whole decision tree + WP. Biggest blast radius here.
+- **`target`** *(first-to-X)* — game ends when a team reaches X points; adds a "closer" urgency.
+- **`mercy`** *(lead cap)* — game ends the instant a team leads by N. Only shortens the game (winner unchanged), so
+  it's *almost* display-only — just an early game-over.
+
+### Tier 2 — Game-format models (rewrite the game loop — possession / clock / plays)
+The deepest tier: these change how the game is *played*, not just how score is kept. Likely their own spec doc(s).
+- **`chessClock`** — each team gets a total **offense-time budget** (e.g. 30 min). Their clock runs only while they
+  possess; when it hits 0 they can **no longer be on offense** — the other team keeps the ball to the end.
+  Turnovers just restart the offense at their own 20. Rewrites possession assignment + adds per-team offense clocks.
+- **`splitHalf`** *(innings)* — each team is on offense for a **full half**: one team has the ball the entire first
+  two quarters (score as much as possible), the other the whole second half. No alternating possession within a
+  half. Rewrites the possession model.
+- **`oldSchool`** *(play-count, no game clock)* — how floosball ORIGINALLY worked: **no game clock**, a fixed number
+  of **plays per quarter**; offenses manage the play count (hurry-up near the end of halves, know when the last play
+  is). This **revives the deprecated play-count model** (`GAME_MAX_PLAYS` / `PLAYS_TO_*_QUARTER` still exist as
+  vestigial constants — see CLAUDE.md "Open Questions"). A neat callback to origins; swaps the clock-driven loop for
+  a play-driven one.
+
+> These tier-2 formats are the largest changes in the whole rule-mutation direction — each is effectively an
+> alternate game engine mode. Spec + build them individually, well after the display models and the Tier-2
+> mechanics (Contested Scoring / Drive Clock / Conversion Ladder / Sideline Goals) land.
 
 ## Blast radius (scoped version)
 - **Essentially none on the engine** — display-only. All score consumers read the real cumulative values.
 - **Frontend:** thread the active model into the score-render sites via `displayScore` (a small, mechanical change
   to the same sites as `formatScore`). Needs the frontend to know the model (from `/api/rules`, like the
   last-down color).
-- **Edge cases to settle:** the quarter table (rec: keep additive), and whether the differential board colors the
+- **Edge cases to settle:** the quarter table (rec: keep additive), and whether the spread board colors the
   `+`/`-` (rec: sign is enough; optional leader-green / trailer-muted).
 
 ## Build phases
@@ -71,15 +101,17 @@ Future models that DO change the game — kept out of scope now but the abstract
 4. **Model source** — fetch the active model (`/api/rules`, mirroring the last-down color fetch); per-game chaos
    override if the game data carries it.
 5. **Criticality** — randomize the model during a Criticality.
-6. **Validation** — with `differential` on: a TD reads `+7 / -7`, a tie reads `0 / 0`, floats read `+6.4`, and the
+6. **Validation** — with `spread` on: a TD reads `+7 / -7`, a tie reads `EVEN`; with `share`, `60% / 40%`; floats read `+6.4`; and the
    winner/standings/WP are all unchanged (real scores).
 
-### Later (separate effort, when appetite exists)
-7. **Win-condition models** — extend `ScoreModel` with a game-over/win-condition hook, implement race-to-zero /
-   first-to-X, and do the decision-tree + WP inversion work those require. This is the original Tier-3 flagship
-   blast radius; keep it its own project.
+### Later (separate efforts, when appetite exists)
+7. **Tier 1 — Win-condition models** — extend the model with a game-over/win-condition hook: `frames` (period
+   tracking + win-by-frames), `countdown`/`target`/`mercy`. `countdown` needs the decision-tree + WP inversion.
+8. **Tier 2 — Game-format models** — the deepest: `chessClock`, `splitHalf`, `oldSchool` (revive the play-count
+   loop). Each is effectively an alternate engine mode; likely its own spec + build.
 
 ## Open / revisit
-- Quarter table under `differential` — additive (rec) or per-quarter differential?
-- `+`/`-` coloring on the differential board (rec: minimal — sign only).
-- Naming the models for the Rulebook / vote (Additive, Differential, and later the deferred ones).
+- Quarter table under `spread`/`share` — additive (rec) or per-period?
+- `+`/`-` coloring on the spread board (rec: minimal — sign only).
+- Naming the models for the Rulebook / vote (Additive, Spread, Share now; the deferred tiers later).
+- `frames`: how many periods, and how a frame is won on a tie within the period (rec: carry to total-points tiebreak).
