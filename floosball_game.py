@@ -223,6 +223,10 @@ class PlayResult(enum.Enum):
     SixthDown = '6th Down'
     Punt = 'Punt'
     TurnoverOnDowns = 'Turnover On Downs'
+    # A turnover on downs caused specifically by the Drive Clock running out — its
+    # own result so the feed badge reads distinctly (still a turnover on downs for
+    # momentum / choke / stats purposes).
+    DriveClockExpired = 'Drive Clock Expired'
     FieldGoalGood = 'Field Goal is Good'
     FieldGoalNoGood = 'Field Goal is No Good'
     ExtraPointGood = 'XP Good'
@@ -4284,7 +4288,8 @@ class Game:
         kneelEndedGame = (self.play.playType is PlayType.Kneel
                           and self.gameClockSeconds <= 0)
         if not kneelEndedGame:
-            self.play.playResult = PlayResult.TurnoverOnDowns
+            self.play.playResult = (PlayResult.DriveClockExpired if driveClockExpired
+                                    else PlayResult.TurnoverOnDowns)
             self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
         self.play.driveClockExpired = driveClockExpired
         self.clockRunning = False  # Clock stops after a turnover on downs
@@ -5041,7 +5046,7 @@ class Game:
         isChokeOutcome = (
             # Turnover in close game
             ((play.isInterception or play.isFumbleLost
-              or play.playResult == PlayResult.TurnoverOnDowns)
+              or play.playResult in (PlayResult.TurnoverOnDowns, PlayResult.DriveClockExpired))
              and abs(scoreDiff) <= 7)
             # Missed FG to tie / take lead
             or (play.playType == PlayType.FieldGoal and not play.isFgGood
@@ -5088,7 +5093,7 @@ class Game:
         tackler = getattr(play, 'tackledBy', None)
         if tackler and tackler not in defenders:
             isStop = (play.yardage < 0
-                      or play.playResult == PlayResult.TurnoverOnDowns)
+                      or play.playResult in (PlayResult.TurnoverOnDowns, PlayResult.DriveClockExpired))
             if isStop:
                 defenders.append(tackler)
 
