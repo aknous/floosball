@@ -112,8 +112,11 @@ class RuleVoteRepository:
 
     @staticmethod
     def optionSpecsOf(window: RuleVoteWindow) -> List[dict]:
-        """Decode a window's offered options as [{field, value}] dicts. Tolerates a
-        legacy bare-string list (field only) by mapping to {field, value: None}."""
+        """Decode a window's offered options as generic dicts:
+        {key, label, patch, field, value}. A scalar option has a single-field patch
+        (+ field/value for display); a preset option has a multi-field patch and no
+        field/value. Tolerates the legacy {field, value} shape (key defaults to the
+        field, patch synthesised) and a bare-string list."""
         if not window or not window.option_keys:
             return []
         try:
@@ -123,15 +126,22 @@ class RuleVoteRepository:
         out = []
         for item in raw:
             if isinstance(item, dict):
-                out.append({"field": item.get("field"), "value": item.get("value")})
+                field = item.get("field")
+                value = item.get("value")
+                key = item.get("key") or field
+                patch = item.get("patch")
+                if patch is None and field is not None:
+                    patch = {field: value}   # legacy scalar row
+                out.append({"key": key, "label": item.get("label"),
+                            "patch": patch or {}, "field": field, "value": value})
             else:
-                out.append({"field": item, "value": None})
+                out.append({"key": item, "label": None, "patch": {}, "field": item, "value": None})
         return out
 
     @staticmethod
     def optionsOf(window: RuleVoteWindow) -> List[str]:
-        """The offered candidate field keys (used for vote validation + tally keys)."""
-        return [s["field"] for s in RuleVoteRepository.optionSpecsOf(window)]
+        """The offered option keys (used for vote validation + tally keys)."""
+        return [s["key"] for s in RuleVoteRepository.optionSpecsOf(window)]
 
     # ── Votes ────────────────────────────────────────────────────────────────
     def castVote(self, userId: int, windowId: int, optionKey: str) -> RuleVote:

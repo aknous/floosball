@@ -80,34 +80,65 @@ class RuleVoteManager:
                 return v
         return None
 
+    def _presetFields(self, spec) -> List[str]:
+        """The fields a PRESET candidate controls (union of its presets' patch keys —
+        same keys across presets, so the first is enough)."""
+        presets = spec.get('presets') or []
+        return list(presets[0]['patch'].keys()) if presets else []
+
+    def _isChangedCandidate(self, f, spec, gameRules) -> bool:
+        """Whether a candidate is currently OFF its default. For a preset candidate
+        that's whether its `gate` field is off-default; for a scalar, the field."""
+        import game_rules as gr
+        if 'presets' in spec:
+            gate = spec.get('gate')
+            return bool(gate and getattr(gameRules, gate, None) != gr.defaultRuleValue(gate))
+        return getattr(gameRules, f, None) != gr.defaultRuleValue(f)
+
     def _changeOptions(self, gameRules) -> List[dict]:
-        """Candidate {field, value} pairs available for a CHANGE vote — includes
-        already-changed fields that can move to a NEW value, not just default ones."""
+        """Options available for a CHANGE vote, as generic {key, label, patch, field,
+        value} dicts. A scalar candidate proposes one specific new value; a PRESET
+        candidate (e.g. Drive Clock) proposes one random preset — offered only while
+        the mechanic is currently off."""
         from constants import RULE_VOTE_CANDIDATES
         out = []
-        for f in RULE_VOTE_CANDIDATES:
-            v = self._pickProposedValue(f, getattr(gameRules, f, None), gameRules)
-            if v is not None:
-                out.append({"field": f, "value": v})
+        for f, spec in RULE_VOTE_CANDIDATES.items():
+            if 'presets' in spec:
+                if not self._isChangedCandidate(f, spec, gameRules):   # only when off
+                    p = random.choice(spec['presets'])
+                    out.append({"key": p['key'], "label": p['label'],
+                                "patch": dict(p['patch']), "field": None, "value": None})
+            else:
+                v = self._pickProposedValue(f, getattr(gameRules, f, None), gameRules)
+                if v is not None:
+                    out.append({"key": f, "label": spec.get('label', f),
+                                "patch": {f: v}, "field": f, "value": v})
         return out
 
     def _revertOptions(self, gameRules) -> List[dict]:
-        """Candidate {field, value=default} pairs for a REVERT vote — fields currently
-        away from their default."""
+        """Options for a REVERT vote — candidates currently away from their default.
+        A scalar reverts its one field; a preset reverts all its fields to default."""
         import game_rules as gr
         from constants import RULE_VOTE_CANDIDATES
         out = []
-        for f in RULE_VOTE_CANDIDATES:
-            default = gr.defaultRuleValue(f)
-            if getattr(gameRules, f, None) != default:
-                out.append({"field": f, "value": default})
+        for f, spec in RULE_VOTE_CANDIDATES.items():
+            if not self._isChangedCandidate(f, spec, gameRules):
+                continue
+            if 'presets' in spec:
+                fields = self._presetFields(spec)
+                patch = {fld: gr.defaultRuleValue(fld) for fld in fields}
+                out.append({"key": "revert:" + f, "label": spec.get('label', f),
+                            "patch": patch, "field": None, "value": None})
+            else:
+                default = gr.defaultRuleValue(f)
+                out.append({"key": f, "label": spec.get('label', f),
+                            "patch": {f: default}, "field": f, "value": default})
         return out
 
     def _changedCount(self, gameRules) -> int:
-        import game_rules as gr
         from constants import RULE_VOTE_CANDIDATES
-        return sum(1 for f in RULE_VOTE_CANDIDATES
-                   if getattr(gameRules, f, None) != gr.defaultRuleValue(f))
+        return sum(1 for f, spec in RULE_VOTE_CANDIDATES.items()
+                   if self._isChangedCandidate(f, spec, gameRules))
 
     # ── Criticality chaos rules ────────────────────────────────────────────────
     def _randomChaosValue(self, field: str):
@@ -134,8 +165,15 @@ class RuleVoteManager:
         import copy
         from constants import RULE_VOTE_CANDIDATES
         g = copy.deepcopy(baseRules)
-        for f in RULE_VOTE_CANDIDATES:
+        for f, spec in RULE_VOTE_CANDIDATES.items():
             if f in _CHAOS_EXCLUDE:
+                continue
+            if 'presets' in spec:
+                # A preset mechanic (Drive Clock): coin-flip it on with a random
+                # preset (it's impactful, so not every chaos game gets it).
+                if random.random() < 0.5:
+                    for fld, v in random.choice(spec['presets'])['patch'].items():
+                        setattr(g, fld, v)
                 continue
             v = self._randomChaosValue(f)
             if v is not None:
@@ -287,7 +325,7 @@ class RuleVoteManager:
                     and datetime.datetime.utcnow() < window.closes_at:
                 return None  # not due yet — leave it open (manual/debug window)
             specs = repo.optionSpecsOf(window)
-            options = [s["field"] for s in specs]
+            options = [s["key"] for s in specs]
             tally = repo.tally(window.id)
             winner = self._pickWinner(options, tally)
 
@@ -295,15 +333,27 @@ class RuleVoteManager:
             prevValue = newValue = None
             if winner != 'none' and winner in options:
                 import game_rules as gr
-                prevValue = getattr(gameRules, winner, None)
+                winOpt = next(s for s in specs if s["key"] == winner)
+                patch = winOpt.get("patch") or {}
+                isScalar = winOpt.get("field") is not None
+                # 'what changed' display: scalar shows the field's before/after; a
+                # preset shows Off/On + its label.
+                if isScalar:
+                    prevValue = getattr(gameRules, winOpt["field"], None)
                 if window.kind == 'revert':
-                    gr.revertRule(gameRules, winner, reason="pyre revert vote",
-                                  source="cores_vote")
+                    for fld in patch:
+                        gr.revertRule(gameRules, fld, reason="pyre revert vote",
+                                      source="cores_vote")
+                    if not isScalar:
+                        prevValue, newValue = winOpt.get("label"), "Off"
                 else:
-                    value = next((s["value"] for s in specs if s["field"] == winner), None)
-                    gr.applyRuleChange(gameRules, winner, value, reason="aris change vote",
-                                       source="cores_vote")
-                newValue = getattr(gameRules, winner, None)
+                    for fld, v in patch.items():
+                        gr.applyRuleChange(gameRules, fld, v, reason="aris change vote",
+                                           source="cores_vote")
+                    if not isScalar:
+                        prevValue, newValue = "Off", winOpt.get("label")
+                if isScalar:
+                    newValue = getattr(gameRules, winOpt["field"], None)
                 applied = True
 
             repo.resolveWindow(window.id, winnerKey=winner, applied=applied,

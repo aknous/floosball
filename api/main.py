@@ -1302,9 +1302,12 @@ def _lastRuleChange():
                 return _json.loads(v) if v is not None else None
             except Exception:
                 return None
+        # Label: a scalar winner key IS a candidate field; a preset winner key
+        # (a preset key or 'revert:<candidate>') resolves to its mechanic label.
+        label = RULE_VOTE_CANDIDATES.get(field, {}).get('label') or _presetMechanicLabel(field)
         return {
             "field": field,
-            "label": RULE_VOTE_CANDIDATES.get(field, {}).get('label', field),
+            "label": label,
             "kind": w.kind,                       # 'change' | 'revert'
             "core": w.core,                       # 'aris' | 'pyre'
             "from": _dec(w.winner_prev),
@@ -1334,20 +1337,44 @@ def _isVotingOpen(window) -> bool:
     return bool(window is not None and not window.resolved)
 
 
+def _presetMechanicLabel(key: str) -> str:
+    """The mechanic label owning a preset option key (a preset key or
+    'revert:<candidate>'), e.g. 'Drive Clock'. Falls back to the key."""
+    from constants import RULE_VOTE_CANDIDATES
+    for f, spec in RULE_VOTE_CANDIDATES.items():
+        if 'presets' not in spec:
+            continue
+        if key == 'revert:' + f or any(p['key'] == key for p in (spec.get('presets') or [])):
+            return spec.get('label', f)
+    return key
+
+
 def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:
-    """Build the ballot's option views (current -> proposed) for a window. The
-    proposed value is the specific one chosen for this vote (stored on the window)."""
+    """Build the ballot's option views for a window. A SCALAR option shows the
+    field's current -> proposed value; a PRESET option (e.g. Drive Clock) shows the
+    mechanic label with Off -> <preset label> (or On -> Off for a revert)."""
     from database.repositories.rule_vote_repository import RuleVoteRepository
     from constants import RULE_VOTE_CANDIDATES
+    isRevert = getattr(window, 'kind', None) == 'revert'
     out = []
     for spec in RuleVoteRepository.optionSpecsOf(window):
         field = spec["field"]
-        out.append({
-            "field": field,
-            "label": RULE_VOTE_CANDIDATES.get(field, {}).get('label', field),
-            "current": getattr(gameRules, field, None),
-            "proposed": spec["value"],
-        })
+        if field is not None:
+            out.append({
+                "key": spec["key"],
+                "field": field,
+                "label": RULE_VOTE_CANDIDATES.get(field, {}).get('label', field),
+                "current": getattr(gameRules, field, None),
+                "proposed": spec["value"],
+            })
+        else:
+            out.append({
+                "key": spec["key"],
+                "field": None,
+                "label": _presetMechanicLabel(spec["key"]),
+                "current": "On" if isRevert else "Off",
+                "proposed": "Off" if isRevert else spec.get("label"),
+            })
     return out
 
 

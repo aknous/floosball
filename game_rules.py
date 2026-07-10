@@ -101,6 +101,20 @@ class GameRules:
     conversionLadderEnabled: bool = False
     conversionLadder: List[Dict[str, Any]] = field(default_factory=lambda: _defaultConversionLadder())
 
+    # ── Drive Clock (dormant mechanic) ─────────────────────────────
+    # A shot-clock for possessions. `driveClockUnit` = what it counts
+    # ('seconds' of game clock, pausing when the game clock stops, or
+    # 'plays' — one per snap). `driveClockReset` = when it refills
+    # ('possession' = a hard cap on the whole drive, 'series' = refills
+    # on each first down). Expire before scoring (or a first down, in
+    # series mode) → turnover on downs at the spot. Off by default;
+    # a Cores vote picks a preset. Scalars, so all four fields are
+    # mutable (the preset applies them as a patch).
+    driveClockEnabled: bool = False
+    driveClockUnit: str = 'seconds'        # 'seconds' | 'plays'
+    driveClockReset: str = 'possession'    # 'possession' | 'series'
+    driveClockLimit: int = 60              # seconds or plays, per the unit
+
     # ── Field goal mechanics ───────────────────────────────────────
     fgSnapDistance: int = 17            # Yards added to LOS for snap + hold
     fgMinAttemptProb: float = 0.20      # Coaches attempt FG if make-prob >= this
@@ -177,6 +191,10 @@ class GameRules:
             "scoringModel": self.scoringModel,
             "conversionLadderEnabled": self.conversionLadderEnabled,
             "conversionLadder": [dict(r) for r in self.conversionLadder],
+            "driveClockEnabled": self.driveClockEnabled,
+            "driveClockUnit": self.driveClockUnit,
+            "driveClockReset": self.driveClockReset,
+            "driveClockLimit": self.driveClockLimit,
             "fgSnapDistance": self.fgSnapDistance,
             "fgMinAttemptProb": self.fgMinAttemptProb,
             "fieldGoalUprights": list(self.fieldGoalUprights),
@@ -230,6 +248,10 @@ MUTABLE_RULE_FIELDS = {
     # a complex collection mutated wholesale — not a votable scalar). Contained in
     # the post-TD conversion path.
     "conversionLadderEnabled",
+    # Drive Clock — all four scalar fields are mutable; a vote preset applies them
+    # together as a patch (enabled + unit + reset + limit). Contained in the
+    # possession/down loop + the situational play-weights.
+    "driveClockEnabled", "driveClockUnit", "driveClockReset", "driveClockLimit",
     # Structural rule #1 — yards needed to convert a first down. Core mechanic
     # (reset/decrement/goal-to-go) reads gameRules; play-calling heuristics use
     # the live yardsToFirstDown so they degrade gracefully at non-default values.
@@ -273,6 +295,9 @@ RULEBOOK_EXPOSED_FIELDS = {
     # Conversion Ladder — a dormant on/off mechanic (surfaced in the Rulebook's
     # "Dormant Rules" list, votable on).
     "conversionLadderEnabled",
+    # Drive Clock gate — the dormant mechanic's on/off marker (the mode config
+    # rides alongside in `rules`, shown as the active preset).
+    "driveClockEnabled",
 } & MUTABLE_RULE_FIELDS
 
 RULE_OVERRIDES_SETTING_KEY = "rule_overrides"

@@ -905,6 +905,13 @@ RULE_VOTE_CANDIDATES = {
     # only proposable CHANGE is enabling it; disabling is a REVERT to default.
     "conversionLadderEnabled":    {"label": "Conversion Ladder",
                                    "values": [True], "valueLabels": {True: "On", False: "Off"}},
+    # PRESET candidate (the Drive Clock). Not a scalar field=value — each option is
+    # a full {unit, reset, limit} bundle applied as a patch. `gate` is the on/off
+    # field used to tell whether the mechanic is currently changed (for revert +
+    # changed-count). A CHANGE proposes one random preset (offered only when off);
+    # a REVERT resets all the preset's fields to their defaults.
+    "driveClock":                 {"label": "Drive Clock", "gate": "driveClockEnabled",
+                                   "presets": None},  # filled below (needs DRIVE_CLOCK_PRESETS)
 }
 
 # ── Conversion Ladder (dormant mechanic — docs/CONVERSION_LADDER_PLAN.md) ──
@@ -918,6 +925,31 @@ CONVERSION_LADDER_RUNGS = [
     {"points": 4, "distance": 10},
     {"points": 5, "distance": 15},
 ]
+
+# ── Drive Clock (dormant mechanic — docs/DRIVE_CLOCK_PLAN.md) ──
+# A shot-clock for possessions. Two mode knobs: unit ('seconds' of game clock vs
+# 'plays' per snap) × reset ('possession' = a hard cap on the whole drive,
+# 'series' = refills on each first down). Expire before scoring (or a first down,
+# in series mode) = turnover on downs. Off by default; a Cores vote picks a PRESET
+# (each a full {enabled, unit, reset, limit} bundle — the compound-rule vote).
+DRIVE_CLOCK_DEFAULT_LIMIT = {"seconds": 60, "plays": 6}
+DRIVE_CLOCK_PRESETS = [
+    {"key": "dc_60s_possession", "label": "60 seconds, whole drive",
+     "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
+               "driveClockReset": "possession", "driveClockLimit": 60}},
+    {"key": "dc_90s_series", "label": "90 seconds, resets each first down",
+     "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
+               "driveClockReset": "series", "driveClockLimit": 90}},
+    {"key": "dc_6plays_possession", "label": "6 plays, whole drive",
+     "patch": {"driveClockEnabled": True, "driveClockUnit": "plays",
+               "driveClockReset": "possession", "driveClockLimit": 6}},
+    {"key": "dc_8plays_series", "label": "8 plays, resets each first down",
+     "patch": {"driveClockEnabled": True, "driveClockUnit": "plays",
+               "driveClockReset": "series", "driveClockLimit": 8}},
+]
+# Wire the presets into the vote candidate (declared above with presets=None to
+# avoid a forward-reference).
+RULE_VOTE_CANDIDATES["driveClock"]["presets"] = DRIVE_CLOCK_PRESETS
 
 # ---- Player Fatigue ----
 # Accumulation rate is unchanged — fatigue gauge still climbs visibly

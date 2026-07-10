@@ -982,6 +982,11 @@ class Game:
         self.isHalftime = False
         self.isOvertime = False
         self.isRegularSeasonGame = None
+        # Drive Clock (mutable-rule mechanic): remaining budget for the current
+        # possession (seconds or plays per the rule). Reset on every possession
+        # change; a no-op unless driveClockEnabled. See _resetDriveClock/_tickDriveClock.
+        self.driveClockRemaining = 0
+        self.driveClockExpiredThisPlay = False
         self.down = 0
         self.yardLine = None
         self.yardsToFirstDown = 0
@@ -2257,6 +2262,47 @@ class Game:
         return max((r['points'] for r in self._conversionRungs() if r['kind'] == 'go'),
                    default=getattr(self.gameRules, 'twoPointConversionPoints', 2))
 
+    # ── Drive Clock (mutable-rule mechanic) ──────────────────────────────────
+    def _driveClockActive(self) -> bool:
+        return bool(getattr(self.gameRules, 'driveClockEnabled', False))
+
+    def _resetDriveClock(self) -> None:
+        """Refill the drive clock to the rule's limit — called on every possession
+        change (and, in 'series' reset mode, on each first down). No-op when off."""
+        self.driveClockRemaining = (float(getattr(self.gameRules, 'driveClockLimit', 60))
+                                    if self._driveClockActive() else 0)
+        self.driveClockExpiredThisPlay = False
+
+    def _driveClockRefillOnFirstDown(self) -> None:
+        """A first down refills the drive clock ONLY in 'series' reset mode; in
+        'possession' mode it keeps draining across the whole drive."""
+        if self._driveClockActive() and getattr(self.gameRules, 'driveClockReset', 'possession') == 'series':
+            self._resetDriveClock()
+
+    def _tickDriveClockPlays(self) -> None:
+        """Decrement the drive clock by one snap — only in the 'plays' unit
+        (the 'seconds' unit drains in consumeGameTime instead)."""
+        if self._driveClockActive() and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'plays':
+            self.driveClockRemaining -= 1
+            if self.driveClockRemaining <= 0:
+                self.driveClockRemaining = 0
+                self.driveClockExpiredThisPlay = True
+
+    def _driveClockExpired(self) -> bool:
+        """True when an ENABLED drive clock has run out for the current possession."""
+        return self._driveClockActive() and self.driveClockRemaining <= 0
+
+    def _driveClockLow(self) -> bool:
+        """True when the drive clock is low enough that the offense should hurry —
+        the last ~15s (seconds unit) or the last snap (plays unit). Drives the
+        situational hurry-up in the play-caller. False when the mechanic is off."""
+        if not self._driveClockActive():
+            return False
+        unit = getattr(self.gameRules, 'driveClockUnit', 'seconds')
+        if unit == 'plays':
+            return self.driveClockRemaining <= 1
+        return self.driveClockRemaining <= 15
+
     def _estimateConversionProb(self, scoringTeam, distance) -> float:
         """Rough likelihood a run/pass converts from `distance` yards out — used
         ONLY by the ladder decision to weigh rungs (the actual try is a real play,
@@ -3293,6 +3339,10 @@ class Game:
         """The offense is racing the clock — a 2-minute drill trailing in Q4, or an
         end-of-half push in Q2. In hurry-up you want quick, decisive plays; fakes
         and reads that eat seconds (play-action, RPO, the delayed draw) are off."""
+        # Drive Clock draining low → race the possession's own shot clock, no matter
+        # the game clock or score (chunk plays, no fakes/reads that eat the count).
+        if self._driveClockLow():
+            return True
         if getattr(self, 'isOvertime', False):
             return False
         q = self.currentQuarter
@@ -4119,7 +4169,36 @@ class Game:
         self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
         self.down = 1
         self.yardsToFirstDown = self.gameRules.firstDownDistance
+        # New possession → fresh drive clock (no-op unless the mechanic is on).
+        self._resetDriveClock()
 
+    def _handleTurnoverOnDowns(self, lastPlayFormatted: bool, driveClockExpired: bool = False) -> None:
+        """Resolve a turnover on downs — a failed final down OR a Drive Clock expiry.
+        Stamps the result + momentum, stops the clock, formats/inserts/broadcasts the
+        play (unless already done), and hands the ball to the defense at the spot.
+        The caller sets its own `lastPlayFormatted = True` and breaks the loop."""
+        kneelEndedGame = (self.play.playType is PlayType.Kneel
+                          and self.gameClockSeconds <= 0)
+        if not kneelEndedGame:
+            self.play.playResult = PlayResult.TurnoverOnDowns
+            self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
+        self.play.driveClockExpired = driveClockExpired
+        self.clockRunning = False  # Clock stops after a turnover on downs
+        self.formatPlayText()
+        if driveClockExpired:
+            self.play.playText = "Drive clock expired — " + (self.play.playText or '')
+        # Skip the re-insert if a kneel/spike branch already added + broadcast this
+        # Play (same object reference would otherwise land in the feed twice).
+        if not lastPlayFormatted:
+            if (self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange
+                    or self.play.yardage >= 30 or self.play.isClutchPlay
+                    or self.play.isChokePlay or self.play.isMomentumShift):
+                self.highlights.insert(0, {'play': self.play})
+                self.leagueHighlights.insert(0, {'play': self.play})
+            self.gameFeed.insert(0, {'play': self.play})
+            self.broadcastGameState(includeLastPlay=True)
+        self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
+        self._pendingPossessionChange = True
 
     def _resolveDefensiveReturn(self):
         """After an interception or fumble recovery, the defender runs it back.
@@ -5870,6 +5949,9 @@ class Game:
                         break
                 self.totalPlays += 1
                 self.play.playNumber = self.totalPlays
+                # Drive Clock (plays unit): one snap spent (seconds unit drains via
+                # consumeGameTime). No-op unless the mechanic is on.
+                self._tickDriveClockPlays()
                 if self.offensiveTeam is self.homeTeam:
                     self.homePlaysTotal += 1
                     if self.down == 3:
@@ -6162,6 +6244,14 @@ class Game:
                             self.yardsToFirstDown = self.gameRules.firstDownDistance
                         self.yardsToSafety += self.play.yardage
                         self.yardsToEndzone -= self.play.yardage
+                        # Drive Clock: a first down refills it in 'series' mode; in
+                        # 'possession' mode it keeps draining, so a spent hard cap
+                        # ends the drive even on a first down.
+                        self._driveClockRefillOnFirstDown()
+                        if self._driveClockExpired():
+                            self._handleTurnoverOnDowns(lastPlayFormatted, driveClockExpired=True)
+                            lastPlayFormatted = True
+                            break
                         self.play.playResult = PlayResult.FirstDown
                         continue
 
@@ -6251,37 +6341,15 @@ class Game:
                         self.yardsToEndzone -= self.play.yardage
                         self.yardsToSafety += self.play.yardage
                         self.yardsToFirstDown -= self.play.yardage
-                        if self.down < self.gameRules.downsPerSeries:
+                        # A spent Drive Clock ends the drive here even on an early
+                        # down (a stalled series that ran out of its shot clock).
+                        if self.down < self.gameRules.downsPerSeries and not self._driveClockExpired():
                             self.down += 1
                             self.play.playResult = downPlayResult(self.down)
                             continue
                         else:
-                            # A victory-formation kneel that ran the clock to 0:00
-                            # ends the game — it's not a live turnover on downs, so
-                            # don't stamp the turnover label / momentum swing on it.
-                            kneelEndedGame = (self.play.playType is PlayType.Kneel
-                                              and self.gameClockSeconds <= 0)
-                            if not kneelEndedGame:
-                                self.play.playResult = PlayResult.TurnoverOnDowns
-                                self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
-                            self.clockRunning = False  # Clock stops after turnover on downs
-                            self.formatPlayText()
-                            # Kneel and spike branches above (line ~4451) already
-                            # inserted and broadcast this play before falling
-                            # through to the down-advancement section. Skip the
-                            # re-insert here when that happened, otherwise the
-                            # same Play object lands in gameFeed twice — once
-                            # tagged "FourthDown" originally, once after this
-                            # branch mutated playResult to "TurnoverOnDowns".
-                            # Both render identically (same object reference).
-                            if not lastPlayFormatted:
-                                if self.play.isFumbleLost or self.play.isInterception or self.play.scoreChange or self.play.yardage >= 30 or self.play.isClutchPlay or self.play.isChokePlay or self.play.isMomentumShift:
-                                    self.highlights.insert(0, {'play': self.play})
-                                    self.leagueHighlights.insert(0, {'play': self.play})
-                                self.gameFeed.insert(0, {'play': self.play})
-                                self.broadcastGameState(includeLastPlay=True)
-                            self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
-                            self._pendingPossessionChange = True
+                            self._handleTurnoverOnDowns(lastPlayFormatted,
+                                                        driveClockExpired=self._driveClockExpired())
                             lastPlayFormatted = True
                             break
         
@@ -8307,6 +8375,15 @@ class Game:
             'isUpsetAlert': isUpsetAlert,
             'homeTimeouts': self.homeTimeoutsRemaining,
             'awayTimeouts': self.awayTimeoutsRemaining,
+            # Drive Clock — the current possession's shot clock (null unless the
+            # mechanic is on). `remaining` is seconds or plays per `unit`.
+            'driveClock': ({
+                'remaining': int(self.driveClockRemaining),
+                'unit': getattr(self.gameRules, 'driveClockUnit', 'seconds'),
+                'reset': getattr(self.gameRules, 'driveClockReset', 'possession'),
+                'limit': getattr(self.gameRules, 'driveClockLimit', 60),
+                'low': self._driveClockLow(),
+            } if self._driveClockActive() else None),
             'momentum': round(getattr(self, 'momentum', 0.0), 1),
             'momentumTeam': (self.homeTeam.abbr if self.momentum > MOMENTUM_DISPLAY_THRESHOLD
                              else self.awayTeam.abbr if self.momentum < -MOMENTUM_DISPLAY_THRESHOLD
@@ -8804,6 +8881,14 @@ class Game:
             self.gameClockSeconds -= seconds
             if self.gameClockSeconds < 0:
                 self.gameClockSeconds = 0
+            # Drive Clock (seconds unit): the possession budget drains with the
+            # game clock, so it naturally pauses whenever the game clock is stopped
+            # (this is only called while time is running off).
+            if self._driveClockActive() and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'seconds':
+                self.driveClockRemaining -= seconds
+                if self.driveClockRemaining <= 0:
+                    self.driveClockRemaining = 0
+                    self.driveClockExpiredThisPlay = True
 
     def checkTwoMinuteWarning(self):
         """Check and trigger two-minute warning"""
