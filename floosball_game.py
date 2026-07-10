@@ -4294,9 +4294,8 @@ class Game:
         self.play.driveClockExpired = driveClockExpired
         self.clockRunning = False  # Clock stops after a turnover on downs
         self.formatPlayText()
-        if driveClockExpired:
-            base = (self.play.playText or '').rstrip('. ')
-            self.play.playText = f"{base}. Drive clock expired!" if base else "Drive clock expired!"
+        # No text suffix — the DriveClockExpired result badge conveys the reason;
+        # the description stays the play itself (like any turnover on downs).
         # Skip the re-insert if a kneel/spike branch already added + broadcast this
         # Play (same object reference would otherwise land in the feed twice).
         if not lastPlayFormatted:
