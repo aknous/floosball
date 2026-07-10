@@ -68,7 +68,10 @@ Touch game-over, the scoring-aware decision tree, and WP.
   conversion-ladder rungs) to land exactly, *avoiding* a touchdown that overshoots. **Depends on fine-grained
   scoring** (Sideline Goals' 1-pt hoops + the Conversion Ladder) to even be playable — otherwise a team can't
   control its total precisely. It **inverts the decision tree near X** (score *carefully*, avoid overshooting), so
-  it's the most decision-heavy win-condition model. Only offer it when those mechanics are on.
+  it's the most decision-heavy win-condition model. Only offer it when those mechanics are on. The target X must be
+  kept **LOW** (tunable, ~15-25) so careful 1-pt scoring doesn't drag the game out, with a **fallback end** (the
+  game clock still bounds it; at the buzzer, closest-to-X-without-busting wins) so a game can't run forever if
+  neither team lands exactly.
 - **`mercy`** *(lead cap)* — game ends the instant a team leads by N. Only shortens the game (winner unchanged), so
   it's *almost* display-only — just an early game-over.
 
@@ -77,11 +80,12 @@ The deepest tier: these change how the game is *played*, not just how score is k
 - **`chessClock`** — each team gets a total **offense-time budget** (e.g. 30 min). Their clock runs only while they
   possess; when it hits 0 they can **no longer be on offense** — the other team keeps the ball to the end.
   Turnovers just restart the offense at their own 20. Rewrites possession assignment + adds per-team offense clocks.
-- **`innings`** *(baseball / cricket-style)* — the game divides into **N innings** (`2` default, which matches the
-  4 quarters = each team owns a full half; more innings = more back-and-forth). Within an inning **one team is on
-  offense** and scores as much as it can; a turnover just gives that team the ball back at its own 20 (it owns the
-  inning). Innings alternate, time split evenly across them. Rewrites the possession model (no alternating
-  possession *within* an inning). The inning count is the tunable knob.
+- **`innings`** *(baseball-style)* — **out-driven, not time-driven.** Each team **bats until 3 outs**, then the
+  teams switch. An **out = any possession that ends — a score, a punt, or a turnover.** Scores MUST count as outs,
+  or a dominant team would just score forever. So each half-inning is up to **3 possessions**; the team bats those
+  three drives, banking whatever it scores, then hands over. Play **N innings** (tunable — inning count + outs are
+  the knobs); most total points after N innings wins. Like `oldSchool`, this **replaces the game clock** with an
+  inning/out structure — a non-clock format. Rewrites the possession + game-end loop.
 - **`oldSchool`** *(play-count, no game clock)* — how floosball ORIGINALLY worked: **no game clock**, a fixed number
   of **plays per quarter**; offenses manage the play count (hurry-up near the end of halves, know when the last play
   is). This **revives the deprecated play-count model** (`GAME_MAX_PLAYS` / `PLAYS_TO_*_QUARTER` still exist as
