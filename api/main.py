@@ -2102,6 +2102,23 @@ async def get_current_games(response: Response):
             game_dict['homeTimeouts'] = getattr(game, 'homeTimeoutsRemaining', 3)
             game_dict['awayTimeouts'] = getattr(game, 'awayTimeoutsRemaining', 3)
 
+            # Drive Clock — mirror the WS game-state payload so the chip shows on the
+            # initial REST load too (null unless the mechanic is on).
+            try:
+                if hasattr(game, '_driveClockActive') and game._driveClockActive():
+                    gr = game.gameRules
+                    game_dict['driveClock'] = {
+                        'remaining': int(getattr(game, 'driveClockRemaining', 0)),
+                        'unit': getattr(gr, 'driveClockUnit', 'seconds'),
+                        'reset': getattr(gr, 'driveClockReset', 'possession'),
+                        'limit': getattr(gr, 'driveClockLimit', 60),
+                        'low': game._driveClockLow(),
+                    }
+                else:
+                    game_dict['driveClock'] = None
+            except Exception:
+                game_dict['driveClock'] = None
+
             game_list.append(game_dict)
         
         # Sort: status first (Active → Scheduled → Final),

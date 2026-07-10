@@ -428,6 +428,11 @@ RPO_QB_FIT = {'instinct': 0.35, 'vision': 0.3, 'agility': 0.35}  # which QBs run
 # red zone / backed up, and NOT as a desperation heave (called shots only).
 TRICK_PLAY_ENABLED = True
 TRICK_PLAY_BASE = 0.02            # base rate for a max-aggressive coach in an ideal spot (per-eligible-play; rolls compound over a game, so kept low — gadgets are a rare called shot, a few per team per SEASON)
+# Chance a BOLD coach dials up a gadget (a flea-flicker deep shot) instead of a
+# straight heave on the final snap of a possession when the Drive Clock is about
+# to expire out of FG range. Scaled by the same aggressiveness lean as the normal
+# trigger (0 below aggr 78, up to this at aggr 100), so only bold coaches gamble it.
+HAIL_MARY_TRICK_CHANCE = 0.15
 TRICK_FIELD_MIN_YTE = 21         # not in the red zone (yardsToEndzone must exceed this)
 TRICK_FIELD_MAX_YTE = 85         # not backed up in own territory (must be at/under this)
 # resolves: 'run'|'pass'; trigger: which D commitment it beats; exec: the key
@@ -934,9 +939,12 @@ CONVERSION_LADDER_RUNGS = [
 # (each a full {enabled, unit, reset, limit} bundle — the compound-rule vote).
 DRIVE_CLOCK_DEFAULT_LIMIT = {"seconds": 60, "plays": 6}
 DRIVE_CLOCK_PRESETS = [
-    {"key": "dc_60s_possession", "label": "60 seconds, whole drive",
+    # In seconds mode the clock drains with the GAME clock (~35-45s/play incl. the
+    # huddle), so a whole-drive cap needs headroom for a real drive (~3-4 plays);
+    # the series preset refills on each first down, so it can run tighter.
+    {"key": "dc_150s_possession", "label": "150 seconds, whole drive",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
-               "driveClockReset": "possession", "driveClockLimit": 60}},
+               "driveClockReset": "possession", "driveClockLimit": 150}},
     {"key": "dc_90s_series", "label": "90 seconds, resets each first down",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
                "driveClockReset": "series", "driveClockLimit": 90}},

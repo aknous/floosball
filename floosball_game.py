@@ -1976,7 +1976,24 @@ class Game:
 
         Only fires when trailing/tied in Q2 or Q4. Probability scales with
         time urgency, timeout availability, and coach clock management quality.
+        Also fires — any quarter/score — to PRESERVE a draining Drive Clock
+        (seconds unit), since stopping the game clock pauses the drive clock.
         """
+        # Drive Clock (seconds): a low drive clock is its own reason to get out of
+        # bounds — a stopped game clock pauses the drive clock, so the next huddle
+        # doesn't burn it and the offense buys more plays to score. Applies any
+        # quarter/score, but not when draining for an end-of-game FG (we want the
+        # game clock to run out there). Scaled by the coach's clock IQ.
+        if (self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'seconds'
+                and self.driveClockRemaining <= 90
+                and not self._isFgDrainMode()):
+            import random
+            drain = 1.0 - max(0.0, self.driveClockRemaining) / 90.0   # 0 at 90s → 1 at 0
+            prob = (0.55 + 0.4 * drain) * (0.6 + 0.4 * self._coachClockIQ(coach))
+            if random.random() < min(0.97, prob):
+                return True
+            # otherwise fall through to the normal game-clock logic
         if self.currentQuarter not in (2, 4):
             return False
         # A leading team late in Q4 wants the clock RUNNING — never stop it.
@@ -3339,10 +3356,15 @@ class Game:
         """The offense is racing the clock — a 2-minute drill trailing in Q4, or an
         end-of-half push in Q2. In hurry-up you want quick, decisive plays; fakes
         and reads that eat seconds (play-action, RPO, the delayed draw) are off."""
-        # Drive Clock draining low → race the possession's own shot clock, no matter
-        # the game clock or score (chunk plays, no fakes/reads that eat the count).
-        if self._driveClockLow():
-            return True
+        # Drive Clock pressured (~2 plays of possession time left) → 2-minute-drill
+        # tempo NO MATTER the game clock or score: quick decisive plays, fast snaps,
+        # sideline routes. Wider than _driveClockLow (the amber-chip / spike trigger)
+        # so the whole END of a drive is visibly urgent, not just the final snap.
+        if self._driveClockActive():
+            _dcUnit = getattr(self.gameRules, 'driveClockUnit', 'seconds')
+            if (_dcUnit == 'plays' and self.driveClockRemaining <= 2) or \
+               (_dcUnit == 'seconds' and self.driveClockRemaining <= 75):
+                return True
         if getattr(self, 'isOvertime', False):
             return False
         q = self.currentQuarter
@@ -3862,6 +3884,54 @@ class Game:
                             self.play.runPlay()
                             return
                         # else: aggressive push — fall through to normal play caller
+            # Drive Clock about to expire (roughly one play left) and in makeable FG
+            # range: take the points NOW on ANY down, rather than run a play and turn
+            # it over with zero. Skips goal-to-go (a near-certain TD is worth more)
+            # and 4th down (the fourth-down caller already weighs the FG). Any quarter.
+            _dcUnit = getattr(self.gameRules, 'driveClockUnit', 'seconds')
+            _dcExpiring = self._driveClockActive() and (
+                (_dcUnit == 'seconds' and self.driveClockRemaining <= 20)
+                or (_dcUnit == 'plays' and self.driveClockRemaining <= 1))
+            if (_dcExpiring
+                    and self.down < self.gameRules.downsPerSeries
+                    and self.yardsToEndzone > 5
+                    and not self._isGarbageTime(scoreDiff)):
+                _fgK = self.offensiveTeam.rosterDict.get('k')
+                _fgCharged = self._awakenedReadyFor(_fgK, 'kick')
+                _fgKMax = (self._chargedKickerMaxFg(_fgK) if _fgCharged
+                           else ((_fgK.maxFgDistance - self.gameRules.fgSnapDistance) if _fgK else 0))
+                if self.yardsToEndzone <= _fgKMax and (
+                        _fgCharged or self._estimateFgProbability() >= self._coachFgThreshold(coach)):
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'fieldGoal',
+                        'reason': 'Drive clock expiring — take the points',
+                        'clockRemaining': self.gameClockSeconds,
+                    }
+                    self.play.playType = PlayType.FieldGoal
+                    return
+
+            # Drive Clock (seconds) preservation: critically low with a down to
+            # spare — spike to stop the game clock (which pauses the drive clock),
+            # so the next huddle doesn't burn it and the offense gets another snap.
+            # Early downs only (spiking forfeits a down); not in easy scoring range
+            # (just score there); coach-IQ gated. A no-op when the mechanic is off.
+            if (self._driveClockActive()
+                    and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'seconds'
+                    and self.driveClockRemaining <= 12
+                    and self.clockRunning
+                    and self.down <= self.gameRules.downsPerSeries - 2
+                    and self.yardsToEndzone > 5
+                    and not self._isFgDrainMode()
+                    and not self._isGarbageTime(scoreDiff)):
+                if _random.random() < (0.35 + 0.55 * gameIQ):
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'spike',
+                        'reason': 'Preserve the drive clock',
+                        'clockRemaining': self.gameClockSeconds,
+                    }
+                    self.play.spike()
+                    return
+
             # Spike: Q2/Q4/OT, clock running, no timeouts, trailing/tied
             # Urgency scales with remaining time — almost always spike under 30s,
             # less likely at 90s+ (sometimes better to just run a play)
@@ -4052,32 +4122,66 @@ class Game:
                 self.play.playType = PlayType.FieldGoal
                 return
 
-        # ── Hail Mary: desperation deep throw when trailing in Q4 ──
-        # Time for only one play and too far for a FG — heave it toward the endzone
-        if (self.currentQuarter == 4 and scoreDiff < 0
+        # ── Hail Mary: desperation deep throw ──
+        # Fires when it's the LAST play and too far for a FG, so heaving toward the
+        # end zone is the only shot at points. Two triggers:
+        #   • game clock — trailing in Q4 with time for one play (~12s), OR
+        #   • Drive Clock — its final snap (any quarter), when trailing or tied.
+        # The game-clock path is byte-identical to before (drive-clock path is a
+        # no-op when the mechanic is off).
+        _dcUnitHM = getattr(self.gameRules, 'driveClockUnit', 'seconds')
+        _dcLastPlay = self._driveClockActive() and (
+            (_dcUnitHM == 'plays' and self.driveClockRemaining <= 1)
+            or (_dcUnitHM == 'seconds' and self.driveClockRemaining <= 20))
+        _gameHailMary = (self.currentQuarter == 4 and scoreDiff < 0
+                         and self.gameClockSeconds <= 12)
+        _driveHailMary = _dcLastPlay and scoreDiff <= 0   # trailing or tied
+        if ((_gameHailMary or _driveHailMary)
                 and self.yardsToEndzone >= 30
                 and not self._isGarbageTime(scoreDiff)):
             fgCanHelp = (scoreDiff >= -self._fgValue() and self.yardsToEndzone <= kickerMaxFg)
             if not fgCanHelp:
-                # Only when it's guaranteed to be the last play. The hail mary
-                # itself burns ~8-12s (calculatePlayDuration), so if the clock is
-                # within that window the heave runs it out and nothing follows.
-                # With more time than that there are still real options (notably
-                # going for a first down and continuing to drive), so it's not a
-                # hail mary situation — normal offense / the 4th-down caller
-                # handles it.
-                if self.gameClockSeconds <= 12:
+                # A bold coach may gamble the final snap on a gadget (a flea-flicker
+                # deep shot) instead of a straight heave — occasional, gated by the
+                # SAME aggressiveness lean as the normal trick trigger. Drive-clock
+                # desperation only, so the game-clock heave stays unchanged.
+                from constants import TRICK_PLAY_ENABLED, HAIL_MARY_TRICK_CHANCE
+                _tAggr = getattr(coach, 'aggressiveness', 80) if coach else 80
+                _tLean = max(0.0, (_tAggr - 78) / 22.0)   # 0 at aggr 78 → 1 at 100
+                if (_driveHailMary and TRICK_PLAY_ENABLED and _tLean > 0
+                        and _random.random() < HAIL_MARY_TRICK_CHANCE * _tLean):
                     self.play.insights['clockMgmt'] = {
-                        'decision': 'hailMary',
-                        'reason': 'Desperation — need a miracle score',
+                        'decision': 'trickPlay',
+                        'reason': 'Drive clock expiring — bold coach dials up a gadget',
                         'clockRemaining': self.gameClockSeconds,
                         'yardsToEndzone': self.yardsToEndzone,
-                        'scoreDiff': scoreDiff,
                         'down': self.down,
                     }
-                    self.play.passPlay('Play9')
+                    # Mirror _executeWeightedPlay's per-play RPO/trick reset before the trick.
+                    self.play.isRpo = False
+                    self.play._rpoOpennessBonus = 0.0
+                    self.play._rpoRunRelief = 0.0
+                    self.play.trickPlay = None
+                    self.play._trickOpennessBonus = 0.0
+                    self.play._trickRunRelief = 0.0
+                    self.play._trickSackMult = 1.0
+                    self.play._forcedRunner = None
+                    self.play._forcedGap = None
+                    self._executeTrickPlay('flea_flicker')
                     self.play.targetSideline = False
                     return
+                self.play.insights['clockMgmt'] = {
+                    'decision': 'hailMary',
+                    'reason': ('Drive clock expiring — heave for the score' if _driveHailMary
+                               else 'Desperation — need a miracle score'),
+                    'clockRemaining': self.gameClockSeconds,
+                    'yardsToEndzone': self.yardsToEndzone,
+                    'scoreDiff': scoreDiff,
+                    'down': self.down,
+                }
+                self.play.passPlay('Play9')
+                self.play.targetSideline = False
+                return
 
         # Final down — punt / FG / go-for-it decision
         if self.down == self.gameRules.downsPerSeries:
@@ -4186,7 +4290,8 @@ class Game:
         self.clockRunning = False  # Clock stops after a turnover on downs
         self.formatPlayText()
         if driveClockExpired:
-            self.play.playText = "Drive clock expired — " + (self.play.playText or '')
+            base = (self.play.playText or '').rstrip('. ')
+            self.play.playText = f"{base}. Drive clock expired!" if base else "Drive clock expired!"
         # Skip the re-insert if a kneel/spike branch already added + broadcast this
         # Play (same object reference would otherwise land in the feed twice).
         if not lastPlayFormatted:
@@ -5773,6 +5878,10 @@ class Game:
                 self.yardsToFirstDown = self.gameRules.firstDownDistance
                 self.yardsToEndzone = 80
                 self.yardsToSafety = 20
+                # Fresh possession established here (the opening drive after the
+                # coin toss sets offense directly, bypassing turnover()) — give it
+                # a full drive clock so the first play isn't already expired.
+                self._resetDriveClock()
 
             # Possession loop - while offense has downs
             while self.down <= self.gameRules.downsPerSeries and self.gameClockSeconds > 0:
@@ -8465,6 +8574,16 @@ class Game:
                 and getattr(self.play, 'playType', None) == PlayType.FieldGoal):
             target = 7
             return ('setupFG', max(8, secs - target))
+
+        # Drive Clock pressured (~2 plays of possession time left) → 2-minute-drill
+        # tempo REGARDLESS of the game clock or score: a fast huddle (visible hurry-up
+        # in the feed) that also drains the drive clock far slower, so the offense
+        # visibly races its own shot clock instead of turning it over.
+        if self._driveClockActive():
+            _u = getattr(self.gameRules, 'driveClockUnit', 'seconds')
+            if (_u == 'plays' and self.driveClockRemaining <= 2) or \
+               (_u == 'seconds' and self.driveClockRemaining <= 75):
+                return ('hurryUp', 12)
 
         if (q >= 4) and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0 and not garbageTime:
             return ('hurryUp', 12)  # Q4/OT trailing or tied under 2:00
