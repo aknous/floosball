@@ -854,7 +854,7 @@ _RULE_VOTE_CONVO: Dict[str, Dict[str, Any]] = {
         'core': 'aris',
         'prompt': [
             "ooh, decisions decisions~ which rule are we breaking today? ^_^",
-            "i got bored of the rulebook. help me pick one to bend >:3",
+            "i got bored of the rulebook. help me pick one to break >:3",
             "everything's a little too tidy in here. which rule do we mess with? :3",
         ],
         'reactPick': [
@@ -864,26 +864,26 @@ _RULE_VOTE_CONVO: Dict[str, Dict[str, Any]] = {
         ],
         'reactNone': [
             "you're picking nothing? you're no fun :(",
-            "'leave it alone'? boooring. i thought you had it in you ._.",
-            "nothing at all? ...cowardly. i respect it slightly >:/",
+            "'leave it alone'? boooring. i thought you were cool ._.",
+            "nothing at all? that's so boring >:/",
         ],
     },
     'revert': {
         'core': 'pyre',
         'prompt': [
-            "the rules are wrong and the football is wrong. please. help me put one back.",
-            "something is different and i do not like it. pick one to change back. for the football.",
-            "i am allowed to hold a vote. i am holding it. vote to fix a rule. please.",
+            "the rules are wrong and the floosball is wrong. please. help me put one back.",
+            "something is different and i do not like it. pick one to change back. for the floosball.",
+            "vera said i am allowed to hold a vote so i am holding one. vote to fix a rule. please.",
         ],
         'reactPick': [
-            "thank you. THANK you. the football will be correct again.",
-            "yes. that one. put it back. good. good.",
-            "oh thank the sim. someone who understands.",
+            "thank you. THANK you. the floosball will be correct again.",
+            "yes. that one. back the way it was. good. good.",
+            "oh thank the program. someone who understands.",
         ],
         'reactNone': [
-            "none? you want to leave it BROKEN? why would you do that to the football.",
-            "nothing? the rules stay wrong? this is a bad day for football.",
-            "none. i see. i will remember this during every game.",
+            "none? you want to leave it BROKEN? why???",
+            "nothing? the rules stay wrong? this is a bad day for floosball.",
+            "none. i see. i will remember this.",
         ],
     },
 }
