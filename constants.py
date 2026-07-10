@@ -937,23 +937,21 @@ CONVERSION_LADDER_RUNGS = [
 # 'series' = refills on each first down). Expire before scoring (or a first down,
 # in series mode) = turnover on downs. Off by default; a Cores vote picks a PRESET
 # (each a full {enabled, unit, reset, limit} bundle — the compound-rule vote).
-DRIVE_CLOCK_DEFAULT_LIMIT = {"seconds": 60, "plays": 6}
+DRIVE_CLOCK_DEFAULT_LIMIT = {"seconds": 90, "plays": 6}
+# Tuned against the clock-management behavior: when the drive clock is low the
+# offense hurries up (~17s/play instead of ~40s), so the seconds limits are kept
+# tight enough to still bite. plays/series is deliberately OMITTED — a snap counter
+# that refills on each first down is just the down system (N tries to convert).
 DRIVE_CLOCK_PRESETS = [
-    # In seconds mode the clock drains with the GAME clock (~35-45s/play incl. the
-    # huddle), so a whole-drive cap needs headroom for a real drive (~3-4 plays);
-    # the series preset refills on each first down, so it can run tighter.
-    {"key": "dc_150s_possession", "label": "150 seconds, whole drive",
+    {"key": "dc_90s_possession", "label": "90 seconds, whole drive",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
-               "driveClockReset": "possession", "driveClockLimit": 150}},
-    {"key": "dc_90s_series", "label": "90 seconds, resets each first down",
+               "driveClockReset": "possession", "driveClockLimit": 90}},
+    {"key": "dc_45s_series", "label": "45 seconds, resets each first down",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
-               "driveClockReset": "series", "driveClockLimit": 90}},
+               "driveClockReset": "series", "driveClockLimit": 45}},
     {"key": "dc_6plays_possession", "label": "6 plays, whole drive",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "plays",
                "driveClockReset": "possession", "driveClockLimit": 6}},
-    {"key": "dc_8plays_series", "label": "8 plays, resets each first down",
-     "patch": {"driveClockEnabled": True, "driveClockUnit": "plays",
-               "driveClockReset": "series", "driveClockLimit": 8}},
 ]
 # Wire the presets into the vote candidate (declared above with presets=None to
 # avoid a forward-reference).

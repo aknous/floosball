@@ -113,7 +113,7 @@ class GameRules:
     driveClockEnabled: bool = False
     driveClockUnit: str = 'seconds'        # 'seconds' | 'plays'
     driveClockReset: str = 'possession'    # 'possession' | 'series'
-    driveClockLimit: int = 60              # seconds or plays, per the unit
+    driveClockLimit: int = 90              # seconds or plays, per the unit
 
     # ── Field goal mechanics ───────────────────────────────────────
     fgSnapDistance: int = 17            # Yards added to LOS for snap + hold
