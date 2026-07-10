@@ -63,6 +63,12 @@ Touch game-over, the scoring-aware decision tree, and WP.
 - **`countdown`** *(race-to-zero)* — both teams start at N; scoring **subtracts**; first to 0 (or lowest at time)
   wins. **Inverts "higher is better"** → inverts the whole decision tree + WP. Biggest blast radius here.
 - **`target`** *(first-to-X)* — game ends when a team reaches X points; adds a "closer" urgency.
+- **`bust`** *(blackjack / darts)* — a team must reach **EXACTLY** the target X; **going over = bust** (you lose,
+  unless the opponent also busts). Forces careful scoring near the target — small scores (1-pt sideline hoops, low
+  conversion-ladder rungs) to land exactly, *avoiding* a touchdown that overshoots. **Depends on fine-grained
+  scoring** (Sideline Goals' 1-pt hoops + the Conversion Ladder) to even be playable — otherwise a team can't
+  control its total precisely. It **inverts the decision tree near X** (score *carefully*, avoid overshooting), so
+  it's the most decision-heavy win-condition model. Only offer it when those mechanics are on.
 - **`mercy`** *(lead cap)* — game ends the instant a team leads by N. Only shortens the game (winner unchanged), so
   it's *almost* display-only — just an early game-over.
 
@@ -71,9 +77,11 @@ The deepest tier: these change how the game is *played*, not just how score is k
 - **`chessClock`** — each team gets a total **offense-time budget** (e.g. 30 min). Their clock runs only while they
   possess; when it hits 0 they can **no longer be on offense** — the other team keeps the ball to the end.
   Turnovers just restart the offense at their own 20. Rewrites possession assignment + adds per-team offense clocks.
-- **`splitHalf`** *(innings)* — each team is on offense for a **full half**: one team has the ball the entire first
-  two quarters (score as much as possible), the other the whole second half. No alternating possession within a
-  half. Rewrites the possession model.
+- **`innings`** *(baseball / cricket-style)* — the game divides into **N innings** (`2` default, which matches the
+  4 quarters = each team owns a full half; more innings = more back-and-forth). Within an inning **one team is on
+  offense** and scores as much as it can; a turnover just gives that team the ball back at its own 20 (it owns the
+  inning). Innings alternate, time split evenly across them. Rewrites the possession model (no alternating
+  possession *within* an inning). The inning count is the tunable knob.
 - **`oldSchool`** *(play-count, no game clock)* — how floosball ORIGINALLY worked: **no game clock**, a fixed number
   of **plays per quarter**; offenses manage the play count (hurry-up near the end of halves, know when the last play
   is). This **revives the deprecated play-count model** (`GAME_MAX_PLAYS` / `PLAYS_TO_*_QUARTER` still exist as
@@ -107,8 +115,9 @@ The deepest tier: these change how the game is *played*, not just how score is k
 ### Later (separate efforts, when appetite exists)
 7. **Tier 1 — Win-condition models** — extend the model with a game-over/win-condition hook: `frames` (period
    tracking + win-by-frames), `countdown`/`target`/`mercy`. `countdown` needs the decision-tree + WP inversion.
-8. **Tier 2 — Game-format models** — the deepest: `chessClock`, `splitHalf`, `oldSchool` (revive the play-count
-   loop). Each is effectively an alternate engine mode; likely its own spec + build.
+8. **Tier 2 — Game-format models** — the deepest: `chessClock`, `innings` (N-inning possession), `oldSchool`
+   (revive the play-count loop). Each is effectively an alternate engine mode; likely its own spec + build.
+   Note: `bust` (Tier 1) is gated on Sideline Goals + Conversion Ladder shipping first (needs 1-pt precision).
 
 ## Open / revisit
 - Quarter table under `spread`/`share` — additive (rec) or per-period?
