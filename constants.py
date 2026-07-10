@@ -901,7 +901,23 @@ RULE_VOTE_CANDIDATES = {
                                    "valueLabels": {"additive": "Additive",
                                                    "spread": "Spread",
                                                    "share": "Share"}},
+    # On/off MECHANIC toggle (the Conversion Ladder). A bool default False, so the
+    # only proposable CHANGE is enabling it; disabling is a REVERT to default.
+    "conversionLadderEnabled":    {"label": "Conversion Ladder",
+                                   "values": [True], "valueLabels": {True: "On", False: "Off"}},
 }
+
+# ── Conversion Ladder (dormant mechanic — docs/CONVERSION_LADDER_PLAN.md) ──
+# After a touchdown the offense picks ONE rung. The safe 1-pt kick and the 2-pt
+# try always exist (from extraPointPoints / twoPointConversionPoints); the ladder
+# adds higher-value tries snapped from further out (harder to convert). Each rung
+# is one run/pass from its distance — "harder from further" emerges from the play
+# resolution, not a dial. Off by default; switched on by a Cores vote.
+CONVERSION_LADDER_RUNGS = [
+    {"points": 3, "distance": 5},
+    {"points": 4, "distance": 10},
+    {"points": 5, "distance": 15},
+]
 
 # ---- Player Fatigue ----
 # Accumulation rate is unchanged — fatigue gauge still climbs visibly

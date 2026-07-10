@@ -29,6 +29,17 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any
 
 
+def _defaultConversionLadder() -> List[Dict[str, Any]]:
+    """The default Conversion-Ladder rungs (the ADDED 3/4/5-point tries). Sourced
+    from constants so there's one tunable place; falls back to a hardcoded copy if
+    constants can't be imported (keeps a bare GameRules() construction safe)."""
+    try:
+        from constants import CONVERSION_LADDER_RUNGS
+        return [dict(r) for r in CONVERSION_LADDER_RUNGS]
+    except Exception:
+        return [{"points": 3, "distance": 5}, {"points": 4, "distance": 10}, {"points": 5, "distance": 15}]
+
+
 @dataclass
 class GameRules:
     """All configurable football rules in one place.
@@ -80,6 +91,16 @@ class GameRules:
     # EVEN on tie); 'share' = each team's % of total points scored.
     scoringModel: str = 'additive'
 
+    # ── Conversion Ladder (dormant mechanic) ──────────────────────
+    # When enabled, the post-TD try becomes a ladder: the safe 1-pt kick and the
+    # 2-pt try always exist; these rungs add higher-value tries from further out.
+    # `conversionLadder` = ordered [{points, distance}] for the ADDED rungs (1 and
+    # 2 come from extraPointPoints / twoPointConversionPoints + their distances).
+    # A complex collection, so it's excluded from applyPatch (mutated wholesale,
+    # like fieldGoalUprights); the on/off gate is the votable scalar.
+    conversionLadderEnabled: bool = False
+    conversionLadder: List[Dict[str, Any]] = field(default_factory=lambda: _defaultConversionLadder())
+
     # ── Field goal mechanics ───────────────────────────────────────
     fgSnapDistance: int = 17            # Yards added to LOS for snap + hold
     fgMinAttemptProb: float = 0.20      # Coaches attempt FG if make-prob >= this
@@ -111,7 +132,7 @@ class GameRules:
         """
         from datetime import datetime
         if not hasattr(self, fieldName) or fieldName in {
-            "patchHistory", "fieldGoalUprights",
+            "patchHistory", "fieldGoalUprights", "conversionLadder",
         }:
             # patchHistory and complex collections need their own
             # purpose-built mutators rather than generic apply.
@@ -154,6 +175,8 @@ class GameRules:
             "twoPointConversionPoints": self.twoPointConversionPoints,
             "safetyPoints": self.safetyPoints,
             "scoringModel": self.scoringModel,
+            "conversionLadderEnabled": self.conversionLadderEnabled,
+            "conversionLadder": [dict(r) for r in self.conversionLadder],
             "fgSnapDistance": self.fgSnapDistance,
             "fgMinAttemptProb": self.fgMinAttemptProb,
             "fieldGoalUprights": list(self.fieldGoalUprights),
@@ -203,6 +226,10 @@ MUTABLE_RULE_FIELDS = {
     # Zero engine blast radius: every score consumer reads the real cumulative
     # values; only the frontend render sites apply the lens. Safe to mutate.
     "scoringModel",
+    # Conversion Ladder on/off gate (the rung LIST rides on gameRules.conversionLadder,
+    # a complex collection mutated wholesale — not a votable scalar). Contained in
+    # the post-TD conversion path.
+    "conversionLadderEnabled",
     # Structural rule #1 — yards needed to convert a first down. Core mechanic
     # (reset/decrement/goal-to-go) reads gameRules; play-calling heuristics use
     # the live yardsToFirstDown so they degrade gracefully at non-default values.
@@ -243,6 +270,9 @@ RULEBOOK_EXPOSED_FIELDS = {
     # The score DISPLAY model — surfaced as the Rulebook's own "Scoring Model"
     # row (its own presentation), and votable like the rest.
     "scoringModel",
+    # Conversion Ladder — a dormant on/off mechanic (surfaced in the Rulebook's
+    # "Dormant Rules" list, votable on).
+    "conversionLadderEnabled",
 } & MUTABLE_RULE_FIELDS
 
 RULE_OVERRIDES_SETTING_KEY = "rule_overrides"

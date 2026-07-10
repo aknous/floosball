@@ -232,6 +232,10 @@ class PlayResult(enum.Enum):
     TouchdownNoXP = 'Touchdown, XP No Good'
     Touchdown2PtGood = 'Touchdown, 2-Pt Good'
     Touchdown2PtNoGood = 'Touchdown, 2-Pt No Good'
+    # Conversion Ladder — a go-for-it try worth more than 2 (from further out).
+    # The 2-pt rung keeps the Touchdown2Pt* labels; higher rungs use these.
+    ConversionGood = 'Conversion Good'
+    ConversionNoGood = 'Conversion No Good'
     Safety = 'Safety'
     Fumble = 'Fumble'
     Interception = 'Interception'
@@ -2219,10 +2223,63 @@ class Game:
                      + getattr(self.gameRules, 'extraPointPoints', 1))
 
     def _maxPossession(self) -> float:
-        """Most points one possession can yield (TD + two-point conversion) — the
-        'still a one-score game' bound. 8 at the default rules."""
+        """Most points one possession can yield (TD + the best conversion rung) —
+        the 'still a one-score game' bound. 8 at the default rules; larger when the
+        Conversion Ladder is on (TD + the max rung), so the catch-up / 'how many
+        scores behind' logic stays correct."""
         return float(getattr(self.gameRules, 'touchdownPoints', 6)
-                     + getattr(self.gameRules, 'twoPointConversionPoints', 2))
+                     + self._maxLadderPoints())
+
+    def _conversionRungs(self) -> list:
+        """Every post-TD conversion rung available right now, as
+        {kind: 'kick'|'go', points, distance}. The safe KICK (extra point) and the
+        2-pt try always exist; the Conversion Ladder adds higher 'go' rungs when
+        enabled. Each 'go' rung is one run/pass from its distance."""
+        xp = getattr(self.gameRules, 'extraPointPoints', 1)
+        two = getattr(self.gameRules, 'twoPointConversionPoints', 2)
+        patDist = getattr(self.gameRules, 'patSnapDistance', 15)
+        twoDist = getattr(self.gameRules, 'twoPointConversionDistance', 2)
+        rungs = [
+            {'kind': 'kick', 'points': xp, 'distance': patDist},
+            {'kind': 'go', 'points': two, 'distance': twoDist},
+        ]
+        if getattr(self.gameRules, 'conversionLadderEnabled', False):
+            for r in (getattr(self.gameRules, 'conversionLadder', None) or []):
+                try:
+                    rungs.append({'kind': 'go', 'points': r['points'], 'distance': r['distance']})
+                except (KeyError, TypeError):
+                    continue
+        return rungs
+
+    def _maxLadderPoints(self) -> float:
+        """Most points a single conversion try can bank now (max over 'go' rungs).
+        2 at the default rules; higher when the ladder is on."""
+        return max((r['points'] for r in self._conversionRungs() if r['kind'] == 'go'),
+                   default=getattr(self.gameRules, 'twoPointConversionPoints', 2))
+
+    def _estimateConversionProb(self, scoringTeam, distance) -> float:
+        """Rough likelihood a run/pass converts from `distance` yards out — used
+        ONLY by the ladder decision to weigh rungs (the actual try is a real play,
+        so 'harder from further' truly emerges there). Falls with distance."""
+        p = 0.62 - max(0, distance - 2) * 0.035   # ~0.62 at 2 yd, ~0.16 at 15 yd
+        return max(0.05, min(0.92, p))
+
+    def _conversionDesire(self, deficit: float, points: float, xp: float, one: float) -> float:
+        """How much the trailing team wants a go-try worth `points` over the safe
+        kick, as a base probability. Compares the gap left after this try vs after
+        the kick, in normal scoring possessions. Reduces EXACTLY to the old
+        _shouldGoForTwo chart at points = the two-point value."""
+        import math
+        after = deficit - points
+        afterXp = deficit - xp
+        need = lambda gap: math.ceil(gap / one) if gap > 0 else 0
+        if after <= 0 < afterXp:
+            return 0.85   # this try ties/wins now; the kick leaves you behind
+        if need(after) < need(afterXp):
+            return 0.60   # the try saves a whole possession
+        if deficit <= self._maxPossession():
+            return 0.25   # still a one-score game — occasional aggression
+        return 0.0
 
     def _otPlayCaller(self, scoreDiff: int):
         """Handle play calling in overtime (Q5). Called only when currentQuarter == 5."""
@@ -4161,10 +4218,7 @@ class Game:
                 self.broadcastGameState(includeLastPlay=True)
                 return
             self.broadcastGameState(includeLastPlay=True)
-            if self._shouldGoForTwo(self.defensiveTeam):
-                self._simulate2PointConversionPlay(self.defensiveTeam, self.offensiveTeam)
-            else:
-                self._simulateExtraPointPlay(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
+            self._attemptConversion(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
             self.turnover(self.defensiveTeam, self.offensiveTeam, 80)
         else:
             self.broadcastGameState(includeLastPlay=True)
@@ -6034,10 +6088,7 @@ class Game:
                             break
 
                         self.broadcastGameState(includeLastPlay=True)
-                        if self._shouldGoForTwo(self.defensiveTeam):
-                            self._simulate2PointConversionPlay(self.defensiveTeam, self.offensiveTeam)
-                        else:
-                            self._simulateExtraPointPlay(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
+                        self._attemptConversion(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
                         self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                     else:
                         self.broadcastGameState(includeLastPlay=True)
@@ -6085,10 +6136,7 @@ class Game:
                         if self.checkOvertimeEnd():
                             break
 
-                        if self._shouldGoForTwo(self.offensiveTeam):
-                            self._simulate2PointConversionPlay(self.offensiveTeam, self.defensiveTeam)
-                        else:
-                            self._simulateExtraPointPlay(self.offensiveTeam, self.defensiveTeam)
+                        self._attemptConversion(self.offensiveTeam, self.defensiveTeam)
 
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                         self._pendingPossessionChange = True
@@ -6146,10 +6194,7 @@ class Game:
                                 self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                                 break
 
-                            if self._shouldGoForTwo(self.defensiveTeam):
-                                self._simulate2PointConversionPlay(self.defensiveTeam, self.offensiveTeam)
-                            else:
-                                self._simulateExtraPointPlay(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
+                            self._attemptConversion(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
 
                             self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                             break
@@ -8489,51 +8534,74 @@ class Game:
         pct = max(0.40, min(0.95, 0.75 + aggressNorm * 0.15))
         return random.random() < pct
 
-    def _shouldGoForTwo(self, scoringTeam: FloosTeam.Team) -> bool:
-        """
-        Decide whether to go for 2 instead of kicking the extra point.
-        Only in Q4. The 6 TD points are already added before this is called.
+    def _chooseConversion(self, scoringTeam: FloosTeam.Team) -> dict:
+        """Pick the post-TD conversion rung (Conversion-Ladder-aware). Returns a
+        rung dict {kind, points, distance}. Generalizes the old _shouldGoForTwo:
+        when the ladder is OFF there is only the 2-pt go-rung, so this reduces
+        EXACTLY to the kick-vs-2-pt decision. The TD points are already banked
+        before this is called; only Q4 trailing teams gamble.
         """
         import random
-        if self.currentQuarter != 4:  # Q1-Q3: always kick; OT (>=5): always kick
-            return False
+        rungs = self._conversionRungs()
+        kick = next(r for r in rungs if r['kind'] == 'kick')
+        goRungs = [r for r in rungs if r['kind'] == 'go']
+        if self.currentQuarter != 4 or not goRungs:   # Q1-Q3 / OT: always the safe kick
+            return kick
         scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
         opponentScore = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
-        deficit = opponentScore - scoringScore  # positive = still trailing after TD
+        deficit = opponentScore - scoringScore  # positive = still trailing after the TD
         if deficit <= 0:
-            return False
+            return kick
 
-        # Base probability, computed from the LIVE scoring values (mutable-rule
-        # aware) instead of a fixed 6/1/2 chart. Compare the gap left after a kick
-        # (extra point) vs a two-point try, by how many normal scoring possessions
-        # each leaves to erase. Reduces to sensible behavior at the default values.
         import math
         xp = float(getattr(self.gameRules, 'extraPointPoints', 1))
-        two = float(getattr(self.gameRules, 'twoPointConversionPoints', 2))
         one = self._oneScore()
-        afterXp = deficit - xp
-        afterTwo = deficit - two
         need = lambda gap: math.ceil(gap / one) if gap > 0 else 0
-        if afterTwo <= 0 < afterXp:
-            basePct = 0.85   # a two-pointer ties or wins now, the kick leaves you behind
-        elif need(afterTwo) < need(afterXp):
-            basePct = 0.60   # the two-pointer saves a whole possession
-        elif deficit <= self._maxPossession():
-            basePct = 0.25   # still a one-score game — occasional aggression
-        else:
-            return False
 
-        # Coach aggressiveness shifts probability ±0.15
+        # SELECT the target rung. Off → the sole 2-pt rung. On → the rung with the
+        # best expected game-state value: convert-likelihood weighted by how much
+        # closer it gets you (reaching a tie/lead is worth most), tie-broken to the
+        # SAFER (closer) rung so a team doesn't needlessly over-reach.
+        def rungValue(r):
+            after = deficit - r['points']
+            convP = self._estimateConversionProb(scoringTeam, r['distance'])
+            reach = 2.0 if after <= 0 else 0.0
+            savings = max(0, 3 - need(after))
+            return convP * (reach + savings)
+        target = max(goRungs, key=lambda r: (rungValue(r), -r['distance']))
+
+        # GATE: actually go for `target` vs the safe kick, via the desire chart
+        # (identical to the old 2-pt logic for the 2-pt rung) + coach aggressiveness.
+        desire = self._conversionDesire(deficit, target['points'], xp, one)
+        if desire <= 0:
+            return kick
         coach = getattr(scoringTeam, 'coach', None)
-        aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE  # -1.0 to +1.0
-        pct = max(0.05, min(0.95, basePct + aggressNorm * 0.15))
-        return random.random() < pct
+        aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+        pct = max(0.05, min(0.95, desire + aggressNorm * 0.15))
+        return target if random.random() < pct else kick
 
-    def _simulate2PointConversionPlay(self, scoringTeam: FloosTeam.Team, opposingTeam: FloosTeam.Team):
+    def _attemptConversion(self, scoringTeam: 'FloosTeam.Team', opposingTeam: 'FloosTeam.Team',
+                           trackPtsAllowed: bool = True):
+        """Single post-TD conversion entry point: choose a rung, then run it. The
+        safe kick goes through the PAT path; any go-for-it rung (2-pt or a higher
+        Conversion-Ladder rung) runs as a real run/pass from its distance."""
+        rung = self._chooseConversion(scoringTeam)
+        if rung['kind'] == 'kick':
+            self._simulateExtraPointPlay(scoringTeam, opposingTeam, trackPtsAllowed=trackPtsAllowed)
+        else:
+            self._simulateConversionPlay(scoringTeam, opposingTeam, rung['points'], rung['distance'])
+
+    def _simulateConversionPlay(self, scoringTeam: FloosTeam.Team, opposingTeam: FloosTeam.Team,
+                                points, distance):
+        """Simulate a go-for-it conversion — the 2-pt try or a higher Conversion-
+        Ladder rung — as a real run or pass from `distance` yards out. Success =
+        reach the end zone → bank `points`. Does NOT consume game clock; its own
+        feed entry. Generalizes the old 2-pt conversion to any rung.
         """
-        Simulate a 2-point conversion as a real run or pass play from the 2-yard line.
-        Does NOT consume game clock. Broadcasts result as a separate play entry.
-        """
+        two = getattr(self.gameRules, 'twoPointConversionPoints', 2)
+        twoDist = getattr(self.gameRules, 'twoPointConversionDistance', 2)
+        is2pt = (points == two and distance == twoDist)
+
         # Save game state
         savedOffensive = self.offensiveTeam
         savedDefensive = self.defensiveTeam
@@ -8542,48 +8610,57 @@ class Game:
         savedDown = self.down
         savedYardsToFirstDown = self.yardsToFirstDown
 
-        # Set up 2-yard-line state before snapshotting into Play()
+        # Set up the rung's line-of-scrimmage before snapshotting into Play()
         self.offensiveTeam = scoringTeam
         self.defensiveTeam = opposingTeam
-        self.yardsToEndzone = 2
-        self.yardsToSafety = self.gameRules.fieldLength - 2
+        self.yardsToEndzone = distance
+        self.yardsToSafety = self.gameRules.fieldLength - distance
         self.down = 1
-        self.yardsToFirstDown = 2
+        self.yardsToFirstDown = distance
 
         self.play = Play(self)
         # Give the conversion its own play number so it has a stable identity
-        # separate from the touchdown that preceded it. Without this the Play
-        # object has no playNumber attribute, which serializes as 0 and can
-        # collide with other 2-pt conversions (or missing-playNumber plays)
-        # in the REST response and frontend React keys.
+        # separate from the touchdown that preceded it (React keys + REST
+        # serialization need a unique playNumber per feed entry).
         self.totalPlays += 1
         self.play.playNumber = self.totalPlays
 
-        # 60% pass, 40% run (2-pt conversions favor passing)
-        if batched_randint(1, 10) <= 6:
-            self.play.passPlay(self._selectPassPlay('short'))
+        # Conversions favor passing; deeper rungs even more so. Short pool inside
+        # ~5 yards, medium beyond (more field to cover).
+        passBias = 7 if distance > 5 else 6
+        if batched_randint(1, 10) <= passBias:
+            self.play.passPlay(self._selectPassPlay('short' if distance <= 5 else 'medium'))
         else:
             self.play.runPlay()
 
-        twoPointGood = self.play.yardage >= 2
-        if twoPointGood:
-            self._addScore(scoringTeam, self.gameRules.twoPointConversionPoints)
-            self.play.playResult = PlayResult.Touchdown2PtGood
+        good = self.play.yardage >= distance
+        if good:
+            self._addScore(scoringTeam, points)
+            self.play.playResult = PlayResult.Touchdown2PtGood if is2pt else PlayResult.ConversionGood
             self.play.scoreChange = True
         else:
-            self.play.playResult = PlayResult.Touchdown2PtNoGood
+            self.play.playResult = PlayResult.Touchdown2PtNoGood if is2pt else PlayResult.ConversionNoGood
             self.play.scoreChange = False
+        # Carry the rung so the feed / narration can show it.
+        self.play.conversionPoints = points
+        self.play.conversionDistance = distance
 
         self.play.homeTeamScore = self.homeScore
         self.play.awayTeamScore = self.awayScore
 
         self.formatPlayText()
+        # A ladder rung (not the plain 2-pt) prepends the "going for N" context so
+        # the feed reads "Going for 4 from the 10 — <the play>". The 2-pt keeps its
+        # existing narration unchanged.
+        if not is2pt:
+            self.play.playText = f"Going for {points:g} from the {distance} — " + (self.play.playText or '')
+
         # Defensive: only insert if this Play object isn't already at the top
         # of the feed. Guards against any unexpected double-invocation path.
         alreadyInFeed = bool(self.gameFeed) and self.gameFeed[0].get('play') is self.play
         if not alreadyInFeed:
             self.gameFeed.insert(0, {'play': self.play})
-        if twoPointGood:
+        if good:
             self.highlights.insert(0, {'play': self.play})
             self.leagueHighlights.insert(0, {'play': self.play})
         self.broadcastGameState(includeLastPlay=True)
@@ -8595,6 +8672,13 @@ class Game:
         self.yardsToSafety = savedYardsToSafety
         self.down = savedDown
         self.yardsToFirstDown = savedYardsToFirstDown
+
+    def _simulate2PointConversionPlay(self, scoringTeam: FloosTeam.Team, opposingTeam: FloosTeam.Team):
+        """Back-compat thin wrapper — a 2-pt conversion is the 2-pt rung of the
+        generalized conversion play."""
+        two = getattr(self.gameRules, 'twoPointConversionPoints', 2)
+        twoDist = getattr(self.gameRules, 'twoPointConversionDistance', 2)
+        self._simulateConversionPlay(scoringTeam, opposingTeam, two, twoDist)
 
     def _simulateExtraPointPlay(self, scoringTeam: 'FloosTeam.Team',
                                 opposingTeam: 'FloosTeam.Team',
