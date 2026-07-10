@@ -63,15 +63,16 @@ Touch game-over, the scoring-aware decision tree, and WP.
 - **`countdown`** *(race-to-zero)* — both teams start at N; scoring **subtracts**; first to 0 (or lowest at time)
   wins. **Inverts "higher is better"** → inverts the whole decision tree + WP. Biggest blast radius here.
 - **`target`** *(first-to-X)* — game ends when a team reaches X points; adds a "closer" urgency.
-- **`bust`** *(blackjack / darts)* — a team must reach **EXACTLY** the target X; **going over = bust** (you lose,
-  unless the opponent also busts). Forces careful scoring near the target — small scores (1-pt sideline hoops, low
-  conversion-ladder rungs) to land exactly, *avoiding* a touchdown that overshoots. **Depends on fine-grained
-  scoring** (Sideline Goals' 1-pt hoops + the Conversion Ladder) to even be playable — otherwise a team can't
-  control its total precisely. It **inverts the decision tree near X** (score *carefully*, avoid overshooting), so
-  it's the most decision-heavy win-condition model. Only offer it when those mechanics are on. The target X must be
-  kept **LOW** (tunable, ~15-25) so careful 1-pt scoring doesn't drag the game out, with a **fallback end** (the
-  game clock still bounds it; at the buzzer, closest-to-X-without-busting wins) so a game can't run forever if
-  neither team lands exactly.
+- **`bust`** *(darts-style)* — first team to land on **EXACTLY** the target X wins. A score that would put a team
+  **OVER X does not count — it's a TURNOVER** (the points are voided, the ball goes to the defense), so a team can
+  **never exceed X**; a greedy touchdown that overshoots just wastes the drive. This forces careful scoring near
+  the target — small scores (1-pt sideline hoops, low conversion-ladder rungs) to inch onto X exactly. **Depends on
+  fine-grained scoring** (Sideline Goals' 1-pt hoops + the Conversion Ladder) to even be playable — otherwise a
+  team can't control its total precisely. It **inverts the decision tree near X** (score *carefully*, avoid
+  overshooting), so it's the most decision-heavy win-condition model. Only offer it when those mechanics are on.
+  Keep X **LOW** (tunable, ~15-25) so precise scoring doesn't drag the game out; **fallback end** — the game clock
+  still bounds it, and since no one can exceed X, the highest score at the buzzer (i.e. closest to X) wins. (The
+  "score that busts you = turnover" voiding reuses the Contested-Scoring stuff path.)
 - **`mercy`** *(lead cap)* — game ends the instant a team leads by N. Only shortens the game (winner unchanged), so
   it's *almost* display-only — just an early game-over.
 
