@@ -2256,6 +2256,19 @@ class Game:
         return float(getattr(self.gameRules, 'touchdownPoints', 6)
                      + self._maxLadderPoints())
 
+    def _targetMatchPoint(self) -> bool:
+        """Target format: the team ON OFFENSE can reach X on THIS possession — a
+        score ends the game in their favor. So they push to finish it (hurry-up,
+        aggressive), regardless of the game clock or the lead. No-op in other formats."""
+        if getattr(self.gameRules, 'gameFormat', 'standard') != 'target':
+            return False
+        off = self.offensiveTeam
+        if off is None:
+            return False
+        offScore = self.homeScore if off is self.homeTeam else self.awayScore
+        need = getattr(self.gameRules, 'targetScore', 30) - offScore
+        return 0 < need <= self._maxPossession()
+
     def _conversionRungs(self) -> list:
         """Every post-TD conversion rung available right now, as
         {kind: 'kick'|'go', points, distance}. The safe KICK (extra point) and the
@@ -3369,6 +3382,10 @@ class Game:
             if (_dcUnit == 'plays' and self.driveClockRemaining <= 2) or \
                (_dcUnit == 'seconds' and self.driveClockRemaining <= 75):
                 return True
+        # Target format: a score this possession ends the game in our favor — push
+        # to finish, no matter the clock or the lead.
+        if self._targetMatchPoint():
+            return True
         if getattr(self, 'isOvertime', False):
             return False
         q = self.currentQuarter
@@ -8578,6 +8595,13 @@ class Game:
                 and getattr(self.play, 'playType', None) == PlayType.FieldGoal):
             target = 7
             return ('setupFG', max(8, secs - target))
+
+        # Target format: a score this possession WINS — push to finish (fast huddle),
+        # never drain the clock. Overrides the burn-clock branches below for a leader
+        # who could otherwise sit on a lead; in target you end it by scoring, not by
+        # running out the clock.
+        if self._targetMatchPoint():
+            return ('hurryUp', 12)
 
         # Drive Clock pressured (~2 plays of possession time left) → 2-minute-drill
         # tempo REGARDLESS of the game clock or score: a fast huddle (visible hurry-up
