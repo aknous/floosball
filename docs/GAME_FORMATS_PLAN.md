@@ -49,7 +49,7 @@ schedule** — a vote fires **every** game day (weeks 1 / 8 / 15 / 22 = day indi
 | 0 | 1 | Aris | change | **game format only** |
 | 1 | 8 | Aris | change | scalars + score display + mechanics (everything EXCEPT game format) |
 | 2 | 15 | Aris | change | same as day 1 |
-| 3 | 22 | Pyre | revert | any active (non-default) rule — the fan safety valve before the last day + playoffs |
+| 3 | 22 | Pyre | revert (**multi-select**) | any active (non-default) rule — the fan safety valve before the last day + playoffs |
 
 Design notes:
 - **No probability, no misses** — `maybeOpenWindow` always opens a window on a game
@@ -64,8 +64,18 @@ Design notes:
 - **Days 1–2 = everything else.** All CHANGE candidates except `gameFormat`: the
   scalars (downs / distances / TD-FG-safety points / clock stops), the score-display
   enum, and the on/off mechanics (Conversion Ladder, Drive Clock).
-- **Day 3 = Pyre revert.** Offers reverting any rule currently off its default (format,
-  scalar, mechanic, or display) — the existing revert-options logic, unchanged.
+- **Day 3 = Pyre revert — MULTI-SELECT (approval vote).** Unlike the single-pick change
+  votes, the revert is a **spring-cleaning**: each fan selects **any subset** of the
+  currently-active (non-default) rules they want undone, and **every rule that lands on
+  ≥50% of ballots gets reverted** — so one vote can roll back several rules at once
+  before the last day + playoffs. Reuses the **Hall-of-Fame approval-vote pattern**
+  (multi-row vote per user, tally per option, act on all clearing
+  `AWARD_HOF_APPROVAL_FRACTION = 0.5` of the distinct voters). Below quorum → the
+  existing revert fallback (no forced reverts). Implementation: `RuleVote` becomes
+  multi-row per (user, window) for a revert window (like `AwardVote` HoF approvals);
+  `resolveWindow` applies **all** winners, not just one; the revert modal is checkboxes,
+  not radios. The Aris CHANGE votes (days 0–2) stay **single-pick** (a change adds ONE
+  rule change).
 - Aris on days 0–2, Pyre on day 3 — already how the change/revert Cores split works.
 - Idempotency (`hasWindow` once per game day) stays. The same-day resolution timing
   (15 min before the day's first game) stays.
