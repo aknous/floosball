@@ -992,6 +992,15 @@ async def get_players(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _isUndraftedProspect(p) -> bool:
+    """An upcoming-rookie / prospect that no team has drafted yet. Their projected
+    Expected/Ceiling are hidden from the profile so the only signal is the scouting-
+    blurred range on the rookie ballot (no fog-of-war loophole). Reveals the moment a
+    team drafts them (drafting_team_id set)."""
+    return (getattr(p, 'drafting_team_id', None) is None
+            and (getattr(p, 'is_upcoming_rookie', False) or getattr(p, 'is_prospect', False)))
+
+
 @app.get("/api/players/{player_id}", response_model=Dict[str, Any])
 async def get_player(player_id: int, response: Response):
     """
@@ -1025,12 +1034,26 @@ async def get_player(player_id: int, response: Response):
         player_dict['rank'] = player.serviceTime.value if hasattr(player.serviceTime, 'value') else player.serviceTime
         player_dict['number'] = player.currentNumber
         player_dict['ratingValue'] = player.playerRating
-        # Projected ceiling (rating at full skill potential) — drawn as a marker
-        # on the overall rating gauge. Always >= current rating.
-        try:
-            player_dict['ceiling'] = player.computeCeilingRating()
-        except Exception:
+        # Projected Expected (overall at trueSkill — natural development) and Ceiling
+        # (overall at potential — perfect development) — drawn as markers on the
+        # overall rating gauge. Both >= current when there's headroom. Hidden for
+        # undrafted prospects (scouting-blurred range on the ballot is the only signal).
+        if _isUndraftedProspect(player):
+            player_dict['expected'] = None
             player_dict['ceiling'] = None
+            # Also blank the per-attribute potential star markers — a coarser reveal
+            # of the same potential the scouting range blurs. (Currently unrendered,
+            # but stripped here so a future consumer can't reopen the fog-of-war leak.)
+            for _k in ('att1PotStars', 'att2PotStars', 'att3PotStars'):
+                if _k in player_dict:
+                    player_dict[_k] = None
+        else:
+            try:
+                player_dict['expected'] = player.computeExpectedRating()
+                player_dict['ceiling'] = player.computeCeilingRating()
+            except Exception:
+                player_dict['expected'] = None
+                player_dict['ceiling'] = None
         player_dict['championships'] = player.leagueChampionships
         player_dict['mvpAwards'] = getattr(player, 'mvpAwards', [])
         player_dict['allProSeasons'] = getattr(player, 'allProSeasons', [])
@@ -6575,20 +6598,26 @@ def get_player_rating_history(player_id: int):
                 "defensiveRating": getattr(player, 'defensiveRating', None),
             })
 
-    # Projected ceiling — the top rating this player could reach if every skill
-    # attribute developed to its potential. Drawn as a dotted reference line on
-    # the progression chart. Only available for active players (live attrs).
+    # Projected markers — dotted reference lines on the progression chart:
+    #   expected = top rating at trueSkill (natural development)
+    #   ceiling  = top rating at potential (perfect development)
+    # Only for active players (live attrs); hidden for undrafted prospects so the
+    # profile can't leak what the rookie-ballot scouting range deliberately blurs.
+    expected = None
     ceiling = None
-    if player is not None and hasattr(player, 'computeCeilingRating'):
+    if (player is not None and hasattr(player, 'computeCeilingRating')
+            and not _isUndraftedProspect(player)):
         try:
+            expected = player.computeExpectedRating()
             ceiling = player.computeCeilingRating()
         except Exception:
+            expected = None
             ceiling = None
-    # The projection is from CURRENT attribute potentials, so a past-peak vet can
-    # have earlier seasons above it (their attributes — and the playmaking/xFactor
+    # The ceiling projection is from CURRENT attribute potentials, so a past-peak vet
+    # can have earlier seasons above it (their attributes — and the playmaking/xFactor
     # terms — were higher then). The ceiling must be at least what they've already
-    # achieved, so floor it at their max plotted rating; the line never sits below
-    # a point.
+    # achieved, so floor it at their max plotted rating; the line never sits below a
+    # point. Expected is NOT floored — a declining vet legitimately sits below past peak.
     if ceiling is not None and history:
         maxHist = max((h.get("rating") or 0) for h in history)
         if maxHist > ceiling:
@@ -6597,6 +6626,7 @@ def get_player_rating_history(player_id: int):
     return build_success_response({
         "playerId": player_id,
         "history": history,
+        "expected": expected,
         "ceiling": ceiling,
     })
 

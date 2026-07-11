@@ -323,7 +323,7 @@ class SeasonManager:
         # mint off the (now corrected) ratings. Guarded to run exactly once; auto-
         # skips a fresh / already-on-curve pool. See docs/PARITY_PROSPECT_PLAN.md.
         if resumeFromWeek == 0:
-            self._maybeRunParityRemap()
+            self._maybeRunParityRemap(seasonNumber)
 
         # Generate card templates for the new season
         self._generateCardTemplates(seasonNumber)
@@ -356,6 +356,15 @@ class SeasonManager:
             self.playerManager.snapshotRatingsForSeason(seasonNumber)
         except Exception as e:
             logger.warning(f"Rating snapshot at season {seasonNumber} start failed: {e}")
+
+        # One-time: after the parity re-map deflated current ratings, smooth the
+        # pre-remap progression history so the chart doesn't cliff at the boundary.
+        # Runs after the snapshot above so the remap-season row exists. Marker-guarded.
+        self._maybeRebaseRatingHistoryForParity()
+
+        # One-time: freeze existing (non-prospect) players at their current level so
+        # they don't show a spurious development arc from the re-map's runway.
+        self._maybeFreezeLegacyDevArc()
 
         # Generate the season's rookie class UP FRONT so fans can scout and vote
         # on picks all season long. Rookies sit as is_upcoming_rookie=True until
@@ -5511,13 +5520,14 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"Could not re-provision starter packs: {e}")
 
-    def _maybeRunParityRemap(self) -> None:
+    def _maybeRunParityRemap(self, seasonNumber: int = 0) -> None:
         """One-time parity migration: deflate an inflated legacy pool onto the
         new true-skill curve and freeze it. Runs exactly once (persisted marker),
         auto-skips a pool already on the curve (fresh start or already re-mapped),
         and persists the re-rated players before marking done so a crash can't
-        leave the marker set with the old ratings still on disk. See
-        docs/PARITY_PROSPECT_PLAN.md Phase 3."""
+        leave the marker set with the old ratings still on disk. Records the season
+        the deflation landed on (`parity_remap_season`) so the rating-history rebase
+        knows the cliff boundary. See docs/PARITY_PROSPECT_PLAN.md Phase 3."""
         from database.models import AppSetting
         KEY = 'parity_remap_done'
         try:
@@ -5530,6 +5540,14 @@ class SeasonManager:
                 n = self.playerManager.remapPoolToTrueSkill()
                 self.playerManager.savePlayerData()   # persist BEFORE marking done
                 logger.info(f"Parity re-map applied to {n} players (pool was {frac:.0%} 4-5-star)")
+                # Record the boundary season for the history rebase (only when the
+                # deflation actually applied — a skipped/already-on-curve pool has no cliff).
+                if seasonNumber:
+                    seasonRow = self.db_session.query(AppSetting).filter_by(key='parity_remap_season').first()
+                    if seasonRow is None:
+                        self.db_session.add(AppSetting(key='parity_remap_season', value=str(seasonNumber)))
+                    else:
+                        seasonRow.value = str(seasonNumber)
             else:
                 logger.info(f"Parity re-map skipped — pool already on curve ({frac:.0%} 4-5-star)")
             if row is None:
@@ -5540,6 +5558,53 @@ class SeasonManager:
         except Exception as e:
             # Don't set the marker on failure — retry at the next cutover.
             logger.error(f"Parity re-map failed (will retry next cutover): {e}")
+
+    def _maybeRebaseRatingHistoryForParity(self) -> None:
+        """After the parity re-map deflated current ratings, rescale each player's
+        PRE-remap progression history so the chart doesn't cliff at the boundary.
+        Runs once (persisted marker), only after the remap applied AND the remap-
+        season snapshot exists (so the boundary ratio is computable). Idempotent and
+        approximate. See docs/PARITY_PROSPECT_PLAN.md Phase 3."""
+        from database.models import AppSetting
+        DONE = 'parity_history_rebased'
+        try:
+            if self.db_session.query(AppSetting).filter_by(key='parity_remap_done', value='1').first() is None:
+                return  # remap hasn't applied — nothing to rebase
+            if self.db_session.query(AppSetting).filter_by(key=DONE, value='1').first() is not None:
+                return
+            seasonRow = self.db_session.query(AppSetting).filter_by(key='parity_remap_season').first()
+            if seasonRow is None or not (seasonRow.value or '').isdigit():
+                return  # unknown boundary — dev DBs set this explicitly; retry later
+            remapSeason = int(seasonRow.value)
+            result = self.playerManager.rebaseRatingHistoryForRemap(remapSeason)
+            # Only mark done once the boundary snapshot existed (eligible players found);
+            # otherwise retry on a later boot when the remap-season row is present.
+            if result.get('eligible', 0) > 0:
+                self.db_session.add(AppSetting(key=DONE, value='1'))
+                self.db_session.commit()
+                logger.info(f"Parity history rebase complete: {result}")
+        except Exception as e:
+            logger.error(f"Parity history rebase failed (will retry): {e}")
+
+    def _maybeFreezeLegacyDevArc(self) -> None:
+        """After the parity re-map, freeze existing (non-prospect) players at their
+        current level so they don't surface a spurious 'Expected'/'Ceiling' growth
+        arc (the re-map had handed rising legacy vets a development runway). Runs
+        once (persisted marker), only after the remap applied. Idempotent + a no-op
+        on a pool re-mapped with the corrected freeze. See docs/PARITY_PROSPECT_PLAN.md."""
+        from database.models import AppSetting
+        DONE = 'legacy_devarc_frozen'
+        try:
+            if self.db_session.query(AppSetting).filter_by(key='parity_remap_done', value='1').first() is None:
+                return  # remap hasn't applied — nothing to freeze
+            if self.db_session.query(AppSetting).filter_by(key=DONE, value='1').first() is not None:
+                return
+            result = self.playerManager.freezeLegacyDevelopmentArc()
+            self.db_session.add(AppSetting(key=DONE, value='1'))
+            self.db_session.commit()
+            logger.info(f"Legacy dev-arc freeze complete: {result}")
+        except Exception as e:
+            logger.error(f"Legacy dev-arc freeze failed (will retry): {e}")
 
     def _generateCardTemplates(self, seasonNumber: int) -> None:
         """Generate card templates for all active players for a season.
