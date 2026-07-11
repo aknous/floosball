@@ -115,6 +115,16 @@ class GameRules:
     driveClockReset: str = 'possession'    # 'possession' | 'series'
     driveClockLimit: int = 90              # seconds or plays, per the unit
 
+    # ── Game format / win condition (dormant) ──────────────────────
+    # How the game is won / when it ends. 'standard' = today (cumulative
+    # score, higher wins at the end of regulation/OT). Alternates change
+    # the win condition or the game loop — one format at a time, set by a
+    # Cores vote preset (docs/GAME_FORMATS_PLAN.md). `targetScore` is the
+    # finish line for the 'target' format (first to X). Other formats add
+    # their own config as they're built.
+    gameFormat: str = 'standard'           # 'standard' | 'target' | (bust/play_limit/chess_clock/innings later)
+    targetScore: int = 30                  # 'target' format: first to this many points wins
+
     # ── Field goal mechanics ───────────────────────────────────────
     fgSnapDistance: int = 17            # Yards added to LOS for snap + hold
     fgMinAttemptProb: float = 0.20      # Coaches attempt FG if make-prob >= this
@@ -191,6 +201,8 @@ class GameRules:
             "scoringModel": self.scoringModel,
             "conversionLadderEnabled": self.conversionLadderEnabled,
             "conversionLadder": [dict(r) for r in self.conversionLadder],
+            "gameFormat": self.gameFormat,
+            "targetScore": self.targetScore,
             "driveClockEnabled": self.driveClockEnabled,
             "driveClockUnit": self.driveClockUnit,
             "driveClockReset": self.driveClockReset,
@@ -252,6 +264,9 @@ MUTABLE_RULE_FIELDS = {
     # together as a patch (enabled + unit + reset + limit). Contained in the
     # possession/down loop + the situational play-weights.
     "driveClockEnabled", "driveClockUnit", "driveClockReset", "driveClockLimit",
+    # Game format / win condition — one format at a time; a vote preset sets the
+    # format + its config together. targetScore is the 'target' finish line.
+    "gameFormat", "targetScore",
     # Structural rule #1 — yards needed to convert a first down. Core mechanic
     # (reset/decrement/goal-to-go) reads gameRules; play-calling heuristics use
     # the live yardsToFirstDown so they degrade gracefully at non-default values.
@@ -298,6 +313,9 @@ RULEBOOK_EXPOSED_FIELDS = {
     # Drive Clock gate — the dormant mechanic's on/off marker (the mode config
     # rides alongside in `rules`, shown as the active preset).
     "driveClockEnabled",
+    # Game format gate — surfaced as the Rulebook's "Game Format" row (the active
+    # format + its config); the config (targetScore, ...) rides alongside in `rules`.
+    "gameFormat",
 } & MUTABLE_RULE_FIELDS
 
 RULE_OVERRIDES_SETTING_KEY = "rule_overrides"

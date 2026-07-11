@@ -25,7 +25,10 @@ GAME_DAY_START_WEEKS = (1, 8, 15, 22)
 # Candidate fields left OUT of the per-game Criticality chaos. `scoringModel` is a
 # display-only lens read league-wide from /api/rules — threading a per-game display
 # model through the game payload isn't built, so chaos leaves it at the league value.
-_CHAOS_EXCLUDE = frozenset({'scoringModel'})
+# `gameFormat` is a win-condition/loop change that must be fully modelled (WP +
+# decision tree) per format before it's safe to fire — excluded until each format's
+# build is complete (docs/GAME_FORMATS_PLAN.md).
+_CHAOS_EXCLUDE = frozenset({'scoringModel', 'gameFormat'})
 
 
 class RuleVoteManager:

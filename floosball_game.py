@@ -9155,7 +9155,16 @@ class Game:
         # Check status first - if already marked Final, game is definitely over
         if hasattr(self, 'status') and self.status == GameStatus.Final:
             return True
-        
+
+        # Game format 'target': first to X points ends the game immediately (a
+        # walk-off, any quarter). If nobody reaches X, the clock still bounds the
+        # game via the regulation/OT checks below (the winner is unchanged —
+        # whoever crossed X has the higher score).
+        if getattr(self.gameRules, 'gameFormat', 'standard') == 'target':
+            tgt = getattr(self.gameRules, 'targetScore', 30)
+            if self.homeScore >= tgt or self.awayScore >= tgt:
+                return True
+
         # Game over if clock expired in regulation and not tied
         if self.currentQuarter == 4 and self.gameClockSeconds <= 0:
             return self.homeScore != self.awayScore

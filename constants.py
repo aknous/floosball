@@ -917,6 +917,12 @@ RULE_VOTE_CANDIDATES = {
     # a REVERT resets all the preset's fields to their defaults.
     "driveClock":                 {"label": "Drive Clock", "gate": "driveClockEnabled",
                                    "presets": None},  # filled below (needs DRIVE_CLOCK_PRESETS)
+    # PRESET candidate (the Game Format / win condition). One format at a time; each
+    # preset is a full {gameFormat, ...config} bundle. `gate` = gameFormat (changed
+    # when != 'standard'). Swap-directly: a CHANGE can propose a different format even
+    # when one is already active (see ruleVoteManager). Only built formats appear.
+    "gameFormat":                 {"label": "Game Format", "gate": "gameFormat",
+                                   "presets": None},  # filled below (needs GAME_FORMAT_PRESETS)
 }
 
 # ── Conversion Ladder (dormant mechanic — docs/CONVERSION_LADDER_PLAN.md) ──
@@ -956,6 +962,16 @@ DRIVE_CLOCK_PRESETS = [
 # Wire the presets into the vote candidate (declared above with presets=None to
 # avoid a forward-reference).
 RULE_VOTE_CANDIDATES["driveClock"]["presets"] = DRIVE_CLOCK_PRESETS
+
+# ── Game Formats / win conditions (docs/GAME_FORMATS_PLAN.md) ──
+# Each preset is a full {gameFormat, ...config} bundle. One format at a time. Only
+# BUILT formats are listed — add target/bust/play_limit/chess_clock/innings here as
+# each ships. `target` (first-to-X) is the first build; X kept "reachable" (~28-32).
+GAME_FORMAT_PRESETS = [
+    {"key": "gf_target_30", "label": "First to 30",
+     "patch": {"gameFormat": "target", "targetScore": 30}},
+]
+RULE_VOTE_CANDIDATES["gameFormat"]["presets"] = GAME_FORMAT_PRESETS
 
 # ---- Player Fatigue ----
 # Accumulation rate is unchanged — fatigue gauge still climbs visibly
