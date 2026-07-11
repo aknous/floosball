@@ -9222,6 +9222,15 @@ class Game:
         totalGameTime = 3600
         timeElapsed = totalGameTime - total_seconds
         gameProgress = min(1.0, timeElapsed / totalGameTime)
+        # Target format: the game is ALSO "further along" as the leader nears X, so a
+        # near-target lead is treated like late game (steeper score logistic, ELO prior
+        # floors) even with clock left. gameProgress = max(time, score-toward-X). At
+        # 0-0 this is inert; a 24-0 lead in a first-to-30 game reads ~0.80 done.
+        if getattr(self.gameRules, 'gameFormat', 'standard') == 'target':
+            _tgt = float(getattr(self.gameRules, 'targetScore', 30))
+            if _tgt > 0:
+                gameProgress = max(gameProgress,
+                                   min(1.0, max(self.homeScore, self.awayScore) / _tgt))
         # Overtime is past regulation: force full progress so the ELO prior floors
         # (eloWeight → 0.05) and the score logistic maxes (k → ~0.40). Without this
         # the regulation 3600s math leaves gameProgress ~0.83 in OT, leaking a ~21%
@@ -9326,6 +9335,23 @@ class Game:
                 pull = 0.4 * confidence
             if pull > 0:
                 targetWp = 99 if homeLeading else 1
+                homeWinProb = homeWinProb + (targetWp - homeWinProb) * pull
+                awayWinProb = 100 - homeWinProb
+
+        # Target format: a team on offense that can reach X THIS possession has match
+        # point — pull WP toward them like a late-game go-ahead drive, ramped by how
+        # reachable X is (expected points from the current field position vs the points
+        # still needed). Regulation only; OT below handles the tied-at-time case.
+        if (getattr(self.gameRules, 'gameFormat', 'standard') == 'target'
+                and self.currentQuarter < 5 and self.offensiveTeam is not None):
+            _tgt = getattr(self.gameRules, 'targetScore', 30)
+            _off = self.offensiveTeam
+            _offScore = self.homeScore if _off is self.homeTeam else self.awayScore
+            _need = _tgt - _offScore
+            if 0 < _need <= self._maxPossession():
+                reach = min(1.0, max(0.0, expectedPoints / max(1.0, float(_need))))
+                pull = 0.6 * reach
+                targetWp = 99 if (_off is self.homeTeam) else 1
                 homeWinProb = homeWinProb + (targetWp - homeWinProb) * pull
                 awayWinProb = 100 - homeWinProb
 
