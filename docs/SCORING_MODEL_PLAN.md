@@ -12,12 +12,21 @@
 The score MODEL is how the running tally is shown. The real engine still tracks cumulative points and decides the
 winner by them — the model is a lens over those two numbers.
 
+**Built (2026-07-10): `additive`, `spread`, `subtractive`.** (`share` was built then dropped — a percentage
+doesn't convey the comeback distance the way a fan wants, per owner.)
 - **`additive`** (default) — today's behavior. Each team shows its cumulative points (`21`, `14`).
-- **`spread`** — a leader-centric betting-line readout of the margin: the leading team's cell shows `+N`, the
-  trailing team's `-N`, a tie shows `EVEN`. (Where the layout is a single line, `LEADER +N`.) Same two numbers,
-  framed as the spread. *(Replaces the earlier `differential` idea.)*
-- **`share`** — each team shows its **percentage of total points scored**: `60% / 40%`, a tie (or 0-0) shows
-  `50% / 50%`. Still reflects who's ahead, so the board stays consistent with the real winner.
+- **`spread`** — the leader-centric one, and the owner favorite: a SINGLE line where the leader shows `+N`, the
+  trailing side is blank, a tie shows `EVEN` (e.g. `PHI +7`). The trailing `+N`/`-N`-on-both-sides version was
+  simplified to leader-only during live testing. Its value: the trailing team's deficit IS the comeback distance.
+- **`subtractive`** — golf-flavored novelty: each team's points shown NEGATIVE (`-21` / `-14`), so the LOWEST
+  number is the winner. Display-only — the real winner (most points) is unchanged, it just reads inverted.
+- **`share`** *(built then REMOVED)* — percentage of total points (`60%/40%`). Cut because it shows who's ahead
+  but not the comeback distance.
+
+> **Owner direction (2026-07-10):** genuinely different *score-KEEPING systems* (tennis sets, count-down-from-N,
+> match-play "3 up with 5 to play", cricket "runs for wickets") are a category to explore — but they change the
+> WIN CONDITION (game-over / WP / decision tree), so they belong to the deferred win-condition tier below, NOT the
+> display lenses. Display models stay presentation-only.
 
 ## What does NOT change (the whole point of scoping it here)
 Everything reads the **real cumulative scores** exactly as today, so there is **no engine/decision/fairness ripple**:

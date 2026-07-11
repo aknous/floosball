@@ -902,10 +902,10 @@ RULE_VOTE_CANDIDATES = {
     # Display-only ENUM: how the score is shown (no engine effect). `valueLabels`
     # gives each option a clean display name for the ballot/Rulebook.
     "scoringModel":               {"label": "How the score is shown",
-                                   "values": ["additive", "spread", "share"],
+                                   "values": ["additive", "spread", "subtractive"],
                                    "valueLabels": {"additive": "Additive",
                                                    "spread": "Spread",
-                                                   "share": "Share"}},
+                                                   "subtractive": "Subtractive"}},
     # On/off MECHANIC toggle (the Conversion Ladder). A bool default False, so the
     # only proposable CHANGE is enabling it; disabling is a REVERT to default.
     "conversionLadderEnabled":    {"label": "Conversion Ladder",
