@@ -409,6 +409,38 @@ class Player:
             if saved:
                 self.updateRating()  # restore live ratings
 
+    def computeExpectedRating(self):
+        """Projected 'expected' rating: what this player's overall rating would be
+        with every physical skill attribute developed to its TRUE SKILL — the level
+        a prospect naturally develops into over their early seasons (vs the ceiling,
+        which is the potential reached only with good development). Same mechanics as
+        computeCeilingRating but targeting the trueSkill snapshot instead of potential;
+        only the physical attrs are lifted (mental attrs don't train). Returns the
+        current rating when already developed in (current >= trueSkill everywhere) or
+        no trueSkill data exists. By construction this is <= computeCeilingRating()."""
+        attrs = getattr(self, 'attributes', None)
+        if attrs is None:
+            return int(round(getattr(self, 'playerRating', 0) or 0))
+        # (live attr, trueSkill attr) pairs — the same physical set that develops.
+        pairs = [(a, t) for (a, t, _p) in _TRUESKILL_ATTR_TRIPLES]
+        saved = {}
+        try:
+            for base, tru in pairs:
+                cur = getattr(attrs, base, None)
+                truVal = getattr(attrs, tru, None)
+                if cur is not None and truVal and truVal > cur:
+                    saved[base] = cur
+                    setattr(attrs, base, truVal)
+            if not saved:
+                return int(round(getattr(self, 'playerRating', 0) or 0))
+            self.updateRating()
+            return int(round(getattr(self, 'playerRating', 0) or 0))
+        finally:
+            for base, val in saved.items():
+                setattr(attrs, base, val)
+            if saved:
+                self.updateRating()  # restore live ratings
+
     def addPassTd(self, yards, isRegularSeason):
         self.stat_tracker.add_pass_td(yards, isRegularSeason)
 
