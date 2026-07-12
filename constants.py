@@ -963,10 +963,11 @@ SIDELINE_GOAL_MIDFIELD_RANGE = 12        # midfield pair in range for yardsToEnd
 SIDELINE_GOAL_ENDZONE_MIN = 3            # end-zone pair reachable from the ... 3 ...
 SIDELINE_GOAL_ENDZONE_RANGE = 18         # ... out to the 18 (the red zone; not from the goal line itself)
 # Play-caller: attempt chance when a fresh pair is in range (a low-risk point-grab now).
-SIDELINE_GOAL_ATTEMPT_INRANGE = 0.14     # base chance when in range of an unused pair
-SIDELINE_GOAL_ATTEMPT_STALL_MULT = 1.6   # x when the drive is stalling (salvage a point)
-SIDELINE_GOAL_ATTEMPT_AGGR_SPAN = 0.15   # + up to this for a max-aggressiveness coach
-SIDELINE_GOAL_ATTEMPT_MAX = 0.60         # cap on the attempt chance
+SIDELINE_GOAL_ATTEMPT_INRANGE = 0.55     # base chance when in range of an unused pair (a
+                                         # low-risk point — teams grab it readily when they can)
+SIDELINE_GOAL_ATTEMPT_STALL_MULT = 1.4   # x when the drive is stalling (salvage a point)
+SIDELINE_GOAL_ATTEMPT_AGGR_SPAN = 0.25   # + up to this for a max-aggressiveness coach
+SIDELINE_GOAL_ATTEMPT_MAX = 0.90         # cap on the attempt chance
 
 # ── Drive Clock (dormant mechanic — docs/DRIVE_CLOCK_PLAN.md) ──
 # A shot-clock for possessions. Two mode knobs: unit ('seconds' of game clock vs
