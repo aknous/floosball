@@ -70,6 +70,16 @@ through one. Phase it:
 - During Criticality the hoop (like the other chaos rules) is hidden/glitched in the Rulebook, but a live shot
   still narrates its point value.
 
+## Build status (2026-07-12)
+**BUILT (phases 1–6) on `feature/rule-changes`** — backend `f6e5dce`, frontend `6756272`.
+Rule gate + config, the hoop-shot play type (make/miss/tip resolution), the play-caller
+option, turnover reuse, narration, and frontend v1 (feed badge + dormant pill) are all in.
+Validated live: make rate emerges from the QB (42/53/67% by skill, 51% overall), ~2.7
+shots/game (rare), tips→returnable INTs, turnovers-on-miss correct, no crashes; OFF by
+default is byte-identical. **Deferred:** phase 7 (Criticality randomization) and phase 9
+(v2 field art). Tunables live in `constants.py` `SIDELINE_GOAL_*`. This unblocks the
+`bust` game format (which bundles Sideline Goals on).
+
 ## Build phases
 1. **Rule + config** — `SIDELINE_GOALS_ENABLED` + `sidelineGoalPoints`/hoop params on `GameRules`, the non-scalar
    toggle in the vote layer, wire the dormant "Sideline Goals" pill to the live state.
