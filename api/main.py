@@ -2151,6 +2151,15 @@ async def get_current_games(response: Response):
             except Exception:
                 game_dict['driveClock'] = None
 
+            # Format-specific display fields (play_limit's plays-remaining, target's
+            # points-to-go) on the initial REST load too — mirrors game_state.
+            try:
+                fmt = getattr(game, 'format', None)
+                if fmt is not None:
+                    game_dict.update(fmt.stateExtra(game))
+            except Exception:
+                pass
+
             game_list.append(game_dict)
         
         # Sort: status first (Active → Scheduled → Final),
