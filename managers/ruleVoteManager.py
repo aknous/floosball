@@ -318,13 +318,50 @@ class RuleVoteManager:
                 return None  # not due yet — leave it open (manual/debug window)
             specs = repo.optionSpecsOf(window)
             options = [s["key"] for s in specs]
+            import game_rules as gr
+
+            if window.kind == 'revert':
+                # MULTI-SELECT approval: revert every active rule that lands on >= 50%
+                # of the ballots (Pyre's fan safety valve). Below any voters => no-op.
+                import math
+                from constants import AWARD_HOF_APPROVAL_FRACTION
+                counts, voters = repo.revertCounts(window.id)
+                threshold = math.ceil(voters * AWARD_HOF_APPROVAL_FRACTION) if voters else 0
+                winners = [k for k in options
+                           if threshold and counts.get(k, 0) >= threshold]
+                revertedLabels = []
+                for k in winners:
+                    winOpt = next((s for s in specs if s["key"] == k), None)
+                    if not winOpt:
+                        continue
+                    for fld in (winOpt.get("patch") or {}):
+                        gr.revertRule(gameRules, fld, reason="pyre revert vote",
+                                      source="cores_vote")
+                    revertedLabels.append(winOpt.get("label") or k)
+                applied = len(winners) > 0
+                if not applied:
+                    winnerKey, prevValue, newValue = 'none', None, None
+                elif len(winners) == 1:
+                    winnerKey, prevValue, newValue = winners[0], revertedLabels[0], "reverted"
+                else:
+                    winnerKey = 'revert:multi'
+                    prevValue, newValue = ", ".join(revertedLabels), "reverted"
+                repo.resolveWindow(window.id, winnerKey=winnerKey, applied=applied,
+                                   prevValue=prevValue, newValue=newValue)
+                session.commit()
+                logger.info(f"Rule vote RESOLVE (revert): S{season} day {window.day_index} "
+                            f"voters={voters} threshold={threshold} reverted={winners} "
+                            f"counts={counts}")
+                event = 'rule_reverted' if applied else 'rule_revert_none'
+                self._broadcast(event, session, season, self._weekForDay(window.day_index))
+                return winnerKey
+
+            # ── change (single-pick plurality) ────────────────────────────────
             tally = repo.tally(window.id)
             winner = self._pickWinner(options, tally)
-
             applied = False
             prevValue = newValue = None
             if winner != 'none' and winner in options:
-                import game_rules as gr
                 winOpt = next(s for s in specs if s["key"] == winner)
                 patch = winOpt.get("patch") or {}
                 isScalar = winOpt.get("field") is not None
@@ -332,33 +369,21 @@ class RuleVoteManager:
                 # preset shows Off/On + its label.
                 if isScalar:
                     prevValue = getattr(gameRules, winOpt["field"], None)
-                if window.kind == 'revert':
-                    for fld in patch:
-                        gr.revertRule(gameRules, fld, reason="pyre revert vote",
-                                      source="cores_vote")
-                    if not isScalar:
-                        prevValue, newValue = winOpt.get("label"), "Off"
-                else:
-                    for fld, v in patch.items():
-                        gr.applyRuleChange(gameRules, fld, v, reason="aris change vote",
-                                           source="cores_vote")
-                    if not isScalar:
-                        prevValue, newValue = "Off", winOpt.get("label")
+                for fld, v in patch.items():
+                    gr.applyRuleChange(gameRules, fld, v, reason="aris change vote",
+                                       source="cores_vote")
                 if isScalar:
                     newValue = getattr(gameRules, winOpt["field"], None)
+                else:
+                    prevValue, newValue = "Off", winOpt.get("label")
                 applied = True
 
             repo.resolveWindow(window.id, winnerKey=winner, applied=applied,
                                prevValue=prevValue, newValue=newValue)
             session.commit()
-            logger.info(f"Rule vote RESOLVE: S{season} day {window.day_index} "
-                        f"kind={window.kind} winner={winner} applied={applied} tally={tally}")
-
-            # Announce the outcome (kind + whether anything happened).
-            if window.kind == 'revert':
-                event = 'rule_reverted' if applied else 'rule_revert_none'
-            else:
-                event = 'rule_change_applied' if applied else 'rule_change_none'
+            logger.info(f"Rule vote RESOLVE (change): S{season} day {window.day_index} "
+                        f"winner={winner} applied={applied} tally={tally}")
+            event = 'rule_change_applied' if applied else 'rule_change_none'
             self._broadcast(event, session, season, self._weekForDay(window.day_index))
             return winner
         except Exception as e:

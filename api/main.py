@@ -1259,7 +1259,8 @@ async def get_rules():
 
 # ── Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ───────────────────────
 class _RuleVoteRequest(BaseModel):
-    optionKey: str   # a candidate field key, or 'none'
+    optionKey: Optional[str] = None       # change window: a candidate field key, or 'none'
+    optionKeys: Optional[List[str]] = None  # revert window: the full multi-select set
 
 
 def _currentSeasonNumber() -> Optional[int]:
@@ -1421,19 +1422,31 @@ def get_rule_vote_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
         if not w:
             return build_success_response({"open": False, "season": season})
         options = _ruleVoteOptions(w, _liveGameRules())
+        isRevert = w.kind == 'revert'
+        # Revert is MULTI-SELECT approval: totals = per-option approval counts, and
+        # the user carries a set of picks. Change is single-pick plurality.
+        if isRevert:
+            counts, _voters = repo.revertCounts(w.id)
+            totals = counts
+            myPicks = repo.getUserRevertSelection(user.id, w.id) if user else []
+        else:
+            totals = repo.tally(w.id)
+            myPicks = None
         return build_success_response({
             "open": True,
             "season": season,
             "windowId": w.id,
             "kind": w.kind,
+            "multiSelect": isRevert,
             "core": w.core,
             "coreDisplayName": _coreDisplayName(w.core),
             "prompt": w.prompt_line,
             "reactPick": w.react_pick_line,
             "reactNone": w.react_none_line,
             "options": options,
-            "totals": repo.tally(w.id),
-            "myPick": repo.getUserVote(user.id, w.id) if user else None,
+            "totals": totals,
+            "myPick": repo.getUserVote(user.id, w.id) if (user and not isRevert) else None,
+            "myPicks": myPicks,
             "closesAt": (w.closes_at.isoformat() + 'Z') if w.closes_at else None,
             "votingOpen": _isVotingOpen(w),
         })
@@ -1458,8 +1471,23 @@ def cast_rule_vote(req: _RuleVoteRequest, user: _User = Depends(_getCurrentUser)
             raise HTTPException(400, "No rule-change vote is open right now")
         if not _isVotingOpen(w):
             raise HTTPException(400, "Voting has closed for this rule change")
-        valid = set(RuleVoteRepository.optionsOf(w)) | {"none"}
-        if req.optionKey not in valid:
+        valid = set(RuleVoteRepository.optionsOf(w))
+        if w.kind == 'revert':
+            # MULTI-SELECT: the full set replaces the user's prior selection. Any
+            # unknown key is rejected; an empty set clears their ballot.
+            picks = [k for k in (req.optionKeys or []) if k and k != 'none']
+            bad = [k for k in picks if k not in valid]
+            if bad:
+                raise HTTPException(400, "That option is not on the ballot")
+            repo.setRevertSelection(user.id, w.id, picks)
+            session.commit()
+            counts, _voters = repo.revertCounts(w.id)
+            return build_success_response({
+                "season": season, "windowId": w.id,
+                "myPicks": sorted(set(picks)), "totals": counts,
+            })
+        # single-pick change
+        if req.optionKey not in (valid | {"none"}):
             raise HTTPException(400, "That option is not on the ballot")
         repo.castVote(user.id, w.id, req.optionKey)
         session.commit()

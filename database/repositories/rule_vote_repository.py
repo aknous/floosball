@@ -183,3 +183,51 @@ class RuleVoteRepository:
             .all()
         )
         return {key: int(count) for key, count in rows}
+
+    # ── Multi-select (approval) revert votes ───────────────────────────────────
+    # A day-3 revert window is MULTI-SELECT: a user picks any subset of the active
+    # rules to revert. Stored as ONE row per user whose option_key is a JSON list of
+    # the selected keys (SQLite ignores the column length, so no migration + the
+    # existing one-row-per-(user,window) constraint still holds).
+    def setRevertSelection(self, userId: int, windowId: int, keys: List[str]) -> None:
+        """Replace this user's full revert selection. An empty set clears their row."""
+        self.session.query(RuleVote).filter(
+            RuleVote.user_id == userId, RuleVote.window_id == windowId).delete()
+        clean = sorted({k for k in (keys or []) if k and k != 'none'})
+        if clean:
+            self.session.add(RuleVote(user_id=userId, window_id=windowId,
+                                      option_key=json.dumps(clean)))
+        self.session.flush()
+
+    def getUserRevertSelection(self, userId: int, windowId: int) -> List[str]:
+        raw = self.getUserVote(userId, windowId)
+        if not raw:
+            return []
+        try:
+            v = json.loads(raw)
+            return v if isinstance(v, list) else [raw]
+        except Exception:
+            return [raw]
+
+    def revertCounts(self, windowId: int):
+        """Approval tally for a revert window: (per-option approval counts, distinct
+        voter count). Each row's option_key is a JSON list of the user's selections."""
+        rows = self.session.query(RuleVote.option_key).filter(
+            RuleVote.window_id == windowId).all()
+        counts: Dict[str, int] = {}
+        voters = 0
+        for (raw,) in rows:
+            if not raw:
+                continue
+            try:
+                keys = json.loads(raw)
+                if not isinstance(keys, list):
+                    keys = [raw]
+            except Exception:
+                keys = [raw]
+            keys = [k for k in keys if k and k != 'none']
+            if keys:
+                voters += 1
+            for k in keys:
+                counts[k] = counts.get(k, 0) + 1
+        return counts, voters
