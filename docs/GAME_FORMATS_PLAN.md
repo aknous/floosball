@@ -313,9 +313,16 @@ nothing). Teams go for it far more; the risk/reward of every 4th down shifts har
    Budgets floor at 0 and only in-budget time advances the synthetic clock (no overshoot
    / stranded budget). chess_clock doesn't latch Final mid-play (a defensive score can
    flip a decided game within a play). Ties → OT.
-4. **`innings`** — full out/inning loop; the deepest.
+4. **`innings`** — DONE. Baseball-style, out-driven, no clock. Each team bats until
+   `outsPerInning` (3) outs then teams switch; `inningsPerGame` (3) innings, most points
+   wins; OT = extra innings on a tie. An OUT = any possession that ENDS, so the batting
+   team keeps the ball at its own 20 (banking points) until 3 outs. NOT a loop rewrite:
+   the clock/quarter loop is left INERT (consumeTime no-op) and the out/inning counters
+   drive the game via `possessionReceiver` (out-count + half-inning flip) + `checkEarlyEnd`
+   (end after N innings, decided; else extra innings). suppressPunt=True (never punt),
+   every at-bat starts at own 20 (`newDriveYardsToEndzone`), WP progress = innings played.
 5. **`bust`** — after Sideline Goals ships (needs fine-grained scoring); inverts WP +
-   decisions near X.
+   decisions near X. LAST remaining format. See §2 (BUNDLE decision).
 
 ### Architecture (BUILT 2026-07-11): `game_formats.py` strategy layer
 One `Game` engine; format-specific logic lives in per-format policy objects
