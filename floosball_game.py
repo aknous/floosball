@@ -4311,17 +4311,22 @@ class Game:
                 self.otSecondPossComplete = True
                 self.firstOtPossessionComplete = True
         
-        # Possession gate (chess_clock): a locked-out receiver can't take the ball, so
-        # the format may keep it with the giver (fresh drive at its own 20). Default
-        # returns the defense, so standard/other formats flip normally.
+        # Possession gate: the format decides who gets the ball on a possession change
+        # (chess_clock keeps it with the giver when the receiver is locked out; innings
+        # keeps it with the batting team until 3 outs). Default returns the defense, so
+        # standard/other formats flip normally. `newDriveYardsToEndzone` lets a format
+        # spot EVERY new possession at a fixed place (innings: the batting team's own 20).
         receiver = self.format.possessionReceiver(self, offense, defense)
+        fixedStart = self.format.newDriveYardsToEndzone(self)
         if receiver is offense:
             self.offensiveTeam = offense
             self.defensiveTeam = defense
-            yards = self.gameRules.fieldLength - 20  # giver keeps it at its own 20
+            yards = fixedStart if fixedStart is not None else (self.gameRules.fieldLength - 20)
         else:
             self.offensiveTeam = defense
             self.defensiveTeam = offense
+            if fixedStart is not None:
+                yards = fixedStart
         self.yardsToEndzone = yards
         self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
         self.down = 1

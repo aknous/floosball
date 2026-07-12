@@ -80,8 +80,14 @@ class GameFormat:
     def suppressPunt(self, game) -> bool:
         """True → the offense should go for it on 4th down instead of punting. chess_clock
         returns this when the DEFENSE is locked out: a failed 4th down just hands the ball
-        back at the offense's own 20 (the possession gate), so a punt only wastes a down."""
+        back at the offense's own 20 (the possession gate), so a punt only wastes a down.
+        innings returns it always (a punt is an out for nothing)."""
         return False
+
+    def newDriveYardsToEndzone(self, game):
+        """A fixed yards-to-endzone for EVERY new possession, or None to use the natural
+        spot. innings starts every drive at the batting team's own 20 (a fresh at-bat)."""
+        return None
 
     def onPeriodStart(self, game) -> None:
         """Called when a new quarter/OT period begins (and at kickoff). No-op unless a
@@ -372,8 +378,97 @@ class ChessClockFormat(GameFormat):
         }}
 
 
-_FORMATS = {f.key: f for f in
-            (GameFormat(), TargetFormat(), PlayLimitFormat(), ChessClockFormat())}
+class InningsFormat(GameFormat):
+    """Baseball-style, out-driven — no game clock. Each team BATS until `outsPerInning`
+    (3) outs, then teams switch; play `inningsPerGame` (3) innings, most points wins.
+    An OUT = any possession that ENDS (a score, a punt, or a turnover), so a half-inning
+    is up to 3 drives — the batting team keeps getting the ball at its own 20 until it
+    makes 3 outs, banking whatever it scores, then hands over. OT = extra innings on a
+    tie. The engine's clock/quarter loop is left INERT (the clock never drains) and the
+    game is driven entirely by the out/inning counters via the possession gate."""
+    key = 'innings'
+    label = 'Innings'
+    EXTRA_INNINGS_CAP = 5   # accept a tie after this many extra innings (anti-stalemate)
+
+    def _innings(self, game) -> int:
+        return max(1, int(getattr(game.gameRules, 'inningsPerGame', 3)))
+
+    def _outs(self, game) -> int:
+        return max(1, int(getattr(game.gameRules, 'outsPerInning', 3)))
+
+    def consumesRealTime(self) -> bool:
+        return False
+
+    def consumeTime(self, game, seconds: int) -> None:
+        return None   # no game clock — the loop is out-driven
+
+    def latchFinalMidPlay(self) -> bool:
+        return False   # ends on score+inning conditions a defensive score can flip
+
+    def suppressPunt(self, game) -> bool:
+        return True    # a punt is an out for nothing; going for it is strictly better
+
+    def newDriveYardsToEndzone(self, game):
+        return game.gameRules.fieldLength - 20   # every at-bat starts at own 20
+
+    def onPeriodStart(self, game) -> None:
+        if game.currentQuarter == 1:
+            game._inningsNumber = 1
+            game._inningsHalf = 'top'
+            game._inningsOuts = 0
+
+    def possessionReceiver(self, game, giver, receiver):
+        # Every possession-end is an out for the batting team (the giver). Under 3 outs
+        # they keep batting; at 3 outs the half-inning flips to the other team.
+        outs = getattr(game, '_inningsOuts', 0) + 1
+        if outs < self._outs(game):
+            game._inningsOuts = outs
+            return giver
+        game._inningsOuts = 0
+        if getattr(game, '_inningsHalf', 'top') == 'top':
+            game._inningsHalf = 'bottom'
+        else:
+            game._inningsHalf = 'top'
+            game._inningsNumber = getattr(game, '_inningsNumber', 1) + 1
+        return receiver
+
+    def checkEarlyEnd(self, game):
+        # A full inning just completed when we're back at the TOP with 0 outs and the
+        # inning counter has passed `inningsPerGame`. End if decided; else extra innings
+        # (until the anti-stalemate cap accepts a tie).
+        inning = getattr(game, '_inningsNumber', 1)
+        if (getattr(game, '_inningsHalf', 'top') == 'top'
+                and getattr(game, '_inningsOuts', 0) == 0
+                and inning > self._innings(game)):
+            if game.homeScore != game.awayScore:
+                return True
+            if inning > self._innings(game) + self.EXTRA_INNINGS_CAP:
+                return True   # accept a tie after too many extra innings
+        return None
+
+    def adjustGameProgress(self, game, gameProgress: float) -> float:
+        # Progress = fraction of the scheduled innings played (completed innings +
+        # current half + outs within it), so WP reads late innings as "late game".
+        total = self._innings(game)
+        inning = getattr(game, '_inningsNumber', 1)
+        halfFrac = 0.5 if getattr(game, '_inningsHalf', 'top') == 'bottom' else 0.0
+        outFrac = (getattr(game, '_inningsOuts', 0) / self._outs(game)) * 0.5
+        done = (inning - 1) + halfFrac + outFrac
+        return max(gameProgress, min(1.0, done / total))
+
+    def stateExtra(self, game) -> dict:
+        return {'innings': {
+            'active': True,
+            'inning': getattr(game, '_inningsNumber', 1),
+            'half': getattr(game, '_inningsHalf', 'top'),
+            'outs': getattr(game, '_inningsOuts', 0),
+            'inningsPerGame': self._innings(game),
+            'outsPerInning': self._outs(game),
+        }}
+
+
+_FORMATS = {f.key: f for f in (GameFormat(), TargetFormat(), PlayLimitFormat(),
+                               ChessClockFormat(), InningsFormat())}
 
 
 def getFormat(key: Optional[str]) -> GameFormat:

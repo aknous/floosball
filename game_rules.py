@@ -122,10 +122,12 @@ class GameRules:
     # Cores vote preset (docs/GAME_FORMATS_PLAN.md). `targetScore` is the
     # finish line for the 'target' format (first to X). Other formats add
     # their own config as they're built.
-    gameFormat: str = 'standard'           # 'standard' | 'target' | 'play_limit' | 'chess_clock' | (bust/innings later)
+    gameFormat: str = 'standard'           # 'standard' | 'target' | 'play_limit' | 'chess_clock' | 'innings' | (bust later)
     targetScore: int = 30                  # 'target' format: first to this many points wins
     playsPerQuarter: int = 30              # 'play_limit' format: fixed plays per quarter (no clock)
     offenseClockBudgetSeconds: int = 1080  # 'chess_clock' format: each team's offense-time budget (18:00)
+    inningsPerGame: int = 3                # 'innings' format: innings each team bats (no clock)
+    outsPerInning: int = 3                 # 'innings' format: possession-ends per half-inning
 
     # ── Field goal mechanics ───────────────────────────────────────
     fgSnapDistance: int = 17            # Yards added to LOS for snap + hold
@@ -207,6 +209,8 @@ class GameRules:
             "targetScore": self.targetScore,
             "playsPerQuarter": self.playsPerQuarter,
             "offenseClockBudgetSeconds": self.offenseClockBudgetSeconds,
+            "inningsPerGame": self.inningsPerGame,
+            "outsPerInning": self.outsPerInning,
             "driveClockEnabled": self.driveClockEnabled,
             "driveClockUnit": self.driveClockUnit,
             "driveClockReset": self.driveClockReset,
@@ -271,8 +275,10 @@ MUTABLE_RULE_FIELDS = {
     # Game format / win condition — one format at a time; a vote preset sets the
     # format + its config together. targetScore is the 'target' finish line;
     # playsPerQuarter is the 'play_limit' per-quarter play budget;
-    # offenseClockBudgetSeconds is each team's 'chess_clock' offense-time budget.
+    # offenseClockBudgetSeconds is each team's 'chess_clock' offense-time budget;
+    # inningsPerGame/outsPerInning configure the 'innings' format.
     "gameFormat", "targetScore", "playsPerQuarter", "offenseClockBudgetSeconds",
+    "inningsPerGame", "outsPerInning",
     # Structural rule #1 — yards needed to convert a first down. Core mechanic
     # (reset/decrement/goal-to-go) reads gameRules; play-calling heuristics use
     # the live yardsToFirstDown so they degrade gracefully at non-default values.
