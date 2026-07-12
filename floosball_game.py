@@ -2257,9 +2257,9 @@ class Game:
                      + self._maxLadderPoints())
 
     def _targetMatchPoint(self) -> bool:
-        """Target format: the team ON OFFENSE can reach X on THIS possession — a
-        score ends the game in their favor. So they push to finish it (hurry-up,
-        aggressive), regardless of the game clock or the lead. No-op in other formats."""
+        """Target format: the team ON OFFENSE can reach X on THIS possession — a score
+        ends the game in their favor (the raw capability). Whether they actually PUSH
+        for it vs sit on a lead is _targetShouldPush. No-op in other formats."""
         if getattr(self.gameRules, 'gameFormat', 'standard') != 'target':
             return False
         off = self.offensiveTeam
@@ -2268,6 +2268,23 @@ class Game:
         offScore = self.homeScore if off is self.homeTeam else self.awayScore
         need = getattr(self.gameRules, 'targetScore', 30) - offScore
         return 0 < need <= self._maxPossession()
+
+    def _targetShouldPush(self) -> bool:
+        """Target format: PUSH to reach X now (hurry-up, aggressive) vs sit on a lead.
+        Trailing, tied, or only a one-score lead → always push (need the points / the
+        opponent is close). With a COMFORTABLE lead, only an aggressive coach goes for
+        the outright win; a conservative coach burns the clock to protect the lead
+        instead (falls through to the normal burn-clock logic)."""
+        if not self._targetMatchPoint():
+            return False
+        off = self.offensiveTeam
+        offScore = self.homeScore if off is self.homeTeam else self.awayScore
+        oppScore = self.awayScore if off is self.homeTeam else self.homeScore
+        if (offScore - oppScore) <= self._oneScore():
+            return True   # trailing / tied / one-score lead — push to reach X
+        coach = getattr(off, 'coach', None)
+        aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
+        return aggr >= 80   # comfortable lead: aggressive & neutral push, conservative burns
 
     def _conversionRungs(self) -> list:
         """Every post-TD conversion rung available right now, as
@@ -3383,8 +3400,8 @@ class Game:
                (_dcUnit == 'seconds' and self.driveClockRemaining <= 75):
                 return True
         # Target format: a score this possession ends the game in our favor — push
-        # to finish, no matter the clock or the lead.
-        if self._targetMatchPoint():
+        # to finish (unless a conservative coach is sitting on a comfortable lead).
+        if self._targetShouldPush():
             return True
         if getattr(self, 'isOvertime', False):
             return False
@@ -8596,11 +8613,11 @@ class Game:
             target = 7
             return ('setupFG', max(8, secs - target))
 
-        # Target format: a score this possession WINS — push to finish (fast huddle),
-        # never drain the clock. Overrides the burn-clock branches below for a leader
-        # who could otherwise sit on a lead; in target you end it by scoring, not by
-        # running out the clock.
-        if self._targetMatchPoint():
+        # Target format: a score this possession WINS — push to finish (fast huddle)
+        # instead of draining, UNLESS a conservative coach is protecting a comfortable
+        # lead (then fall through to the burn-clock branches below). Aggressive coaches
+        # go for the outright win; a big-lead conservative coach burns the clock.
+        if self._targetShouldPush():
             return ('hurryUp', 12)
 
         # Drive Clock pressured (~2 plays of possession time left) → 2-minute-drill
