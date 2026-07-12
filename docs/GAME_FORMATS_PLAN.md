@@ -297,18 +297,31 @@ nothing). Teams go for it far more; the risk/reward of every 4th down shifts har
 ## Build order
 0. **Shared `GameFormat` abstraction** — GameRules fields, the format-keyed hook layer,
    the vote preset candidate (swap-directly), the Rulebook "Game Format" row.
-1. **`target`** — the proving slice: game-over hook + re-derived WP + decision tree +
-   frontend. Confirms the abstraction end-to-end with the least new machinery.
-2. **`play_limit`** — the first loop rewrite (clock → play counter); reuses the Drive
-   Clock's plays-mode plumbing.
+1. **`target`** — DONE. The proving slice: game-over hook + re-derived WP + decision
+   tree + frontend.
+2. **`play_limit`** — DONE. No game clock: each quarter is a fixed `playsPerQuarter`
+   plays via a SYNTHETIC clock (the format drives `gameClockSeconds` from a per-period
+   scrimmage-play counter in `onPlayTick`; `consumeGameTime` is neutralized). The
+   entire time-based decision tree + WP are reused UNCHANGED because plays-remaining is
+   proportional to seconds-remaining — no decision-tree rewrite was needed after all.
 3. **`chess_clock`** — possession model + per-team offense clocks.
 4. **`innings`** — full out/inning loop; the deepest.
 5. **`bust`** — after Sideline Goals ships (needs fine-grained scoring); inverts WP +
    decisions near X.
 
-Each format is its own spec + build once we reach it; this doc is the shared frame +
-the `target` design. Every format ships with its WP + decision-tree re-derivation
-(owner: fully accurate up front), so each is a real modelling task, not a flag flip.
+### Architecture (BUILT 2026-07-11): `game_formats.py` strategy layer
+One `Game` engine; format-specific logic lives in per-format policy objects
+(`GameFormat` base = standard/pass-through, `TargetFormat`, `PlayLimitFormat`) that
+the engine delegates to via `Game.format` (resolved from `gameRules.gameFormat`,
+cached). Seams: `checkEarlyEnd` / `adjustGameProgress` / `adjustWinProbability` /
+`consumesRealTime` / `onPeriodStart` / `onPlayTick` / `matchPoint` / `shouldPush` /
+`stateExtra`. Every base method is the standard behavior, so standard stays
+byte-identical (validated live). New formats subclass `GameFormat` + register in
+`_FORMATS` — no new `if gameFormat ==` branches in the 9,400-line engine. Chess_clock
+/ innings / bust each add their seam overrides here.
+
+Each remaining format is its own spec + build once we reach it; every format ships
+with its WP + decision-tree re-derivation (owner: fully accurate up front).
 
 ## Open / revisit
 - `targetScore` exact default + votable range (30 / ~24–42 to start; tune in sim).
