@@ -323,8 +323,16 @@ nothing). Teams go for it far more; the risk/reward of every 4th down shifts har
    WALK IT OFF (checkEarlyEnd ends the moment HOME leads in the bottom of the final/extra
    inning — winning team needn't bat). suppressPunt=True (never punt), every at-bat starts
    at own 20 (`newDriveYardsToEndzone`), WP progress = innings played.
-5. **`bust`** — after Sideline Goals ships (needs fine-grained scoring); inverts WP +
-   decisions near X. LAST remaining format. See §2 (BUNDLE decision).
+5. **`bust`** — DONE. Darts: land EXACTLY on X (default 18). A score that would push
+   you OVER X is VOIDED (no points) + turns the ball over; reaching exactly X wins;
+   time-expiry → higher score (both ≤ X) wins. Two new base scoring hooks — `scorePoints`
+   (bust ROUNDS to whole numbers so a fractional value can't make X unreachable) and
+   `voidsScore` (overshoot → void) — called in `_addScore` (the single scoring choke
+   point). The offensive-TD + FG-make branches handle a voided score (no points, turn it
+   over, PlayResult.Bust); `allowFieldGoal` gates the FG decision so the play-caller
+   won't kick a busting FG. Bundles Sideline Goals on (the 1-pt hoops land the exact
+   remainder) + snaps score values to integers. Validated: 53% of games land exactly on
+   X, 47% at time-expiry, 0 scores over X. **ALL SIX FORMATS DONE.**
 6. **`frames`** — DONE (owner-requested 2026-07-12; originally out of scope). Golf/snooker
    MATCH PLAY: the game splits into `framesPerGame` (6) equal TIME frames; whoever outscores
    the other within a frame wins it (+1), a tied frame is HALVED (½). Most frames won wins
