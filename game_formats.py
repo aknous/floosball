@@ -135,6 +135,13 @@ class GameFormat:
         point totals; frames uses frames-won so the margin reflects the match result."""
         return game.homeScore, game.awayScore
 
+    def usesQuarterCoachAdjustments(self) -> bool:
+        """Whether the adaptive mid-game coach re-plan fires at QUARTER boundaries.
+        True for clock/quarter formats. frames returns False — its adjustment beat is
+        at FRAME boundaries (which don't line up with quarters), so quarter re-plans
+        would just double it up."""
+        return True
+
     # ── Display ───────────────────────────────────────────────────────────────
     def stateExtra(self, game) -> dict:
         """Extra fields merged into the game_state broadcast (format-specific UI)."""
@@ -518,6 +525,9 @@ class FramesFormat(GameFormat):
     def _regSeconds(self, game) -> int:
         return int(game.gameRules.quartersPerGame * game.gameRules.quarterLengthSeconds)
 
+    def usesQuarterCoachAdjustments(self) -> bool:
+        return False   # frames adjust between FRAMES, not quarters
+
     def _elapsed(self, game) -> int:
         # Regulation seconds elapsed (capped at the full game; OT is past all frames).
         total = self._regSeconds(game)
@@ -536,6 +546,7 @@ class FramesFormat(GameFormat):
         N = self._frames(game)
         frameLen = self._regSeconds(game) / N
         target = min(N, int(self._elapsed(game) / frameLen)) if frameLen else N
+        awarded = False
         while getattr(game, '_frameIndex', 0) < target:
             h = game.homeScore - getattr(game, '_frameStartHome', 0)
             a = game.awayScore - getattr(game, '_frameStartAway', 0)
@@ -549,6 +560,16 @@ class FramesFormat(GameFormat):
             game._frameStartHome = game.homeScore
             game._frameStartAway = game.awayScore
             game._frameIndex = getattr(game, '_frameIndex', 0) + 1
+            awarded = True
+        # A frame just ended (and it's not the game-ending final frame) — give the
+        # coaches a moment to regroup between frames, like a break in match play. Reuses
+        # the adaptive, adaptability-gated mid-game re-plan (frame boundaries don't line
+        # up with quarters, so this is the frames format's own adjustment beat).
+        if awarded and getattr(game, '_frameIndex', 0) < N:
+            try:
+                game._maybeReadjustGameplans('frame')
+            except Exception:
+                pass
 
     def onPeriodStart(self, game) -> None:
         if game.currentQuarter == 1:

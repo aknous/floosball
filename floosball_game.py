@@ -9207,7 +9207,8 @@ class Game:
             self.currentQuarter = 2
             self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
-            self._maybeReadjustGameplans('q1q2')  # adaptive coaches re-plan on the fly
+            if self.format.usesQuarterCoachAdjustments():
+                self._maybeReadjustGameplans('q1q2')  # adaptive coaches re-plan on the fly
         elif self.currentQuarter == 2:
             # Halftime
             self.currentQuarter = 3
@@ -9221,7 +9222,8 @@ class Game:
             self.currentQuarter = 4
             self.gameClockSeconds = self.gameRules.quarterLengthSeconds
             self.twoMinuteWarningShown = False
-            self._maybeReadjustGameplans('q3q4')  # adaptive coaches re-plan on the fly
+            if self.format.usesQuarterCoachAdjustments():
+                self._maybeReadjustGameplans('q3q4')  # adaptive coaches re-plan on the fly
         elif self.currentQuarter == 4:
             # Check for overtime
             if self.homeScore == self.awayScore:
