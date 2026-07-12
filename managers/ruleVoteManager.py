@@ -112,7 +112,17 @@ class RuleVoteManager:
             if f == 'scoringModel' and fmt not in SCORING_MODEL_FORMATS:
                 continue
             if 'presets' in spec:
-                if not self._isChangedCandidate(f, spec, gameRules):   # only when off
+                if f == 'gameFormat':
+                    # Offer EVERY format as its own option (a menu, not one random pick),
+                    # excluding whichever format is currently active (swap-directly; a
+                    # revert-to-standard is day 3's job).
+                    curFmt = getattr(gameRules, 'gameFormat', 'standard') or 'standard'
+                    for p in spec['presets']:
+                        if p['patch'].get('gameFormat') == curFmt:
+                            continue
+                        out.append({"key": p['key'], "label": p['label'],
+                                    "patch": dict(p['patch']), "field": None, "value": None})
+                elif not self._isChangedCandidate(f, spec, gameRules):   # only when off
                     p = random.choice(spec['presets'])
                     out.append({"key": p['key'], "label": p['label'],
                                 "patch": dict(p['patch']), "field": None, "value": None})
@@ -244,6 +254,10 @@ class RuleVoteManager:
                 # to the general pool so the day still fires.
                 options = (gfOpts or otherOpts) if dayIndex == 0 else otherOpts
 
+            # The Game Format day shows the FULL menu of formats (no truncation); every
+            # other change/revert ballot is a random subset up to the ballot size.
+            isFormatMenu = (dayIndex == 0 and bool(gfOpts))
+
             if not options:
                 repo.recordDay(season, dayIndex, fired=False)
                 session.commit()
@@ -251,7 +265,8 @@ class RuleVoteManager:
                 return
 
             random.shuffle(options)
-            options = options[:RULE_VOTE_BALLOT_SIZE]
+            if not isFormatMenu:
+                options = options[:RULE_VOTE_BALLOT_SIZE]
 
             from managers.coresManager import ruleVoteConversation
             convo = ruleVoteConversation(kind)

@@ -69,11 +69,12 @@ class GameRules:
     timeoutClockThreshold: int = 120    # Below this in Q2/Q4, timeout considered
     kneelDrainSeconds: int = 40         # Clock burned per kneel
 
-    # ── Clock stoppage (the Cores can flip these to a "running clock") ──
-    # When False, that event no longer stops the clock — the inter-play clock
-    # keeps draining, so games have far fewer plays. Defaults = standard football.
-    clockStopsOnIncompletePass: bool = True
-    clockStopsOnOutOfBounds: bool = True
+    # ── Clock stoppage (the Cores can flip this to a "running clock") ──
+    # One general dead-ball rule: when True (standard football) the clock stops on an
+    # incompletion, going out of bounds, AND a turnover. When False it's a RUNNING CLOCK
+    # — none of those stop it, so the inter-play clock keeps draining and games have far
+    # fewer plays. (A score, FG, punt, or spike always stops the clock regardless.)
+    clockStopsOnDeadBall: bool = True
 
     # ── Scoring values ─────────────────────────────────────────────
     touchdownPoints: int = 6
@@ -216,8 +217,7 @@ class GameRules:
             "spikeClockThreshold": self.spikeClockThreshold,
             "timeoutClockThreshold": self.timeoutClockThreshold,
             "kneelDrainSeconds": self.kneelDrainSeconds,
-            "clockStopsOnIncompletePass": self.clockStopsOnIncompletePass,
-            "clockStopsOnOutOfBounds": self.clockStopsOnOutOfBounds,
+            "clockStopsOnDeadBall": self.clockStopsOnDeadBall,
             "touchdownPoints": self.touchdownPoints,
             "fieldGoalPoints": self.fieldGoalPoints,
             "extraPointPoints": self.extraPointPoints,
@@ -325,11 +325,11 @@ MUTABLE_RULE_FIELDS = {
     # of truth for the per-kneel drain (snap 4s + play-clock kneelDrainSeconds-4).
     "overtimeLengthSeconds", "timeoutClockThreshold", "spikeClockThreshold",
     "kneelDrainSeconds", "fgSnapDistance",
-    # Running-clock rule — suppress the incompletion / out-of-bounds clock stops
-    # (gated in shouldClockRun). Far fewer plays per game. Clock-management
-    # play-calling heuristics still assume incompletions stop the clock, so they
-    # degrade gracefully (a later pass can make them rule-aware).
-    "clockStopsOnIncompletePass", "clockStopsOnOutOfBounds",
+    # Running-clock rule — one general dead-ball toggle: suppress the incompletion /
+    # out-of-bounds / turnover clock stops (gated in shouldClockRun). Far fewer plays
+    # per game. Clock-management play-calling heuristics still assume dead balls stop
+    # the clock, so they degrade gracefully (a later pass can make them rule-aware).
+    "clockStopsOnDeadBall",
 }
 
 # ── What the Rulebook currently EXPOSES as changeable ───────────────────────
@@ -346,7 +346,7 @@ MUTABLE_RULE_FIELDS = {
 RULEBOOK_EXPOSED_FIELDS = {
     "downsPerSeries", "firstDownDistance",
     "touchdownPoints", "fieldGoalPoints", "safetyPoints",
-    "clockStopsOnIncompletePass", "clockStopsOnOutOfBounds",
+    "clockStopsOnDeadBall",
     # The score DISPLAY model — surfaced as the Rulebook's own "Scoring Model"
     # row (its own presentation), and votable like the rest.
     "scoringModel",

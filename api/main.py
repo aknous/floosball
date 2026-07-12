@@ -1354,9 +1354,19 @@ def _presetMechanicLabel(key: str) -> str:
     return key
 
 
+def _formatPresetInfo(key: str):
+    """(formatName, description) for a game-format preset option key, else None."""
+    from constants import GAME_FORMAT_PRESETS, GAME_FORMAT_DESCRIPTIONS
+    for p in GAME_FORMAT_PRESETS:
+        if p['key'] == key:
+            return p['label'], GAME_FORMAT_DESCRIPTIONS.get(p['patch'].get('gameFormat'), '')
+    return None
+
+
 def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:
     """Build the ballot's option views for a window. A SCALAR option shows the
-    field's current -> proposed value; a PRESET option (e.g. Drive Clock) shows the
+    field's current -> proposed value; a GAME FORMAT option reads "Game Format: <name>"
+    with a brief description (no arrow); any other PRESET (e.g. Drive Clock) shows the
     mechanic label with Off -> <preset label> (or On -> Off for a revert)."""
     from database.repositories.rule_vote_repository import RuleVoteRepository
     from constants import RULE_VOTE_CANDIDATES
@@ -1364,6 +1374,7 @@ def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:
     out = []
     for spec in RuleVoteRepository.optionSpecsOf(window):
         field = spec["field"]
+        fmtInfo = None if (field is not None or isRevert) else _formatPresetInfo(spec["key"])
         if field is not None:
             out.append({
                 "key": spec["key"],
@@ -1371,6 +1382,17 @@ def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:
                 "label": RULE_VOTE_CANDIDATES.get(field, {}).get('label', field),
                 "current": getattr(gameRules, field, None),
                 "proposed": spec["value"],
+            })
+        elif fmtInfo is not None:
+            # A game format is described, not shown as a value change.
+            name, desc = fmtInfo
+            out.append({
+                "key": spec["key"],
+                "field": None,
+                "label": f"Game Format: {name}",
+                "description": desc,
+                "current": None,
+                "proposed": None,
             })
         else:
             out.append({

@@ -9447,29 +9447,30 @@ class Game:
             return False
         if self.play.playType == PlayType.Spike:
             return False
-        if self.play.isFumbleLost or self.play.isInterception:
-            return False  # Turnover stops clock
         if self.play.scoreChange:
             return False  # Score stops clock
-        
+        # Turnover — a dead ball; stops the clock unless the running-clock rule is on.
+        if self.play.isFumbleLost or self.play.isInterception:
+            return not self.gameRules.clockStopsOnDeadBall
+
         # Pass plays
         if self.play.playType == PlayType.Pass:
             if self.play.isPassCompletion:
-                # Completed pass - in bounds keeps the clock; out of bounds stops
-                # it unless the running-clock rule suppresses OOB stoppage.
+                # Completed pass - in bounds keeps the clock; out of bounds is a dead
+                # ball (stops it) unless the running-clock rule suppresses that.
                 if self.play.isInBounds:
                     return True
-                return not self.gameRules.clockStopsOnOutOfBounds
+                return not self.gameRules.clockStopsOnDeadBall
             else:
-                # Incomplete stops the clock unless the running-clock rule is on.
-                return not self.gameRules.clockStopsOnIncompletePass
+                # Incomplete is a dead ball — stops the clock unless running-clock is on.
+                return not self.gameRules.clockStopsOnDeadBall
 
-        # Run plays - clock runs unless out of bounds (and the OOB rule stops it)
+        # Run plays - clock runs unless out of bounds (a dead ball, stops it)
         if self.play.playType == PlayType.Run:
             if self.play.isInBounds:
                 return True  # Run in bounds, clock runs
             else:
-                return not self.gameRules.clockStopsOnOutOfBounds
+                return not self.gameRules.clockStopsOnDeadBall
         
         # Kneel - clock always runs
         if self.play.playType == PlayType.Kneel:

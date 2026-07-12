@@ -898,8 +898,9 @@ RULE_VOTE_CANDIDATES = {
     "fieldGoalPoints":            {"label": "Field goal points",             "range": [1, 5], "float": True},
     # safetyPoints intentionally NOT votable — safeties are too infrequent for the
     # option to feel worth it (owner 2026-07-12).
-    "clockStopsOnIncompletePass": {"label": "Clock stops on an incompletion", "values": [False]},
-    "clockStopsOnOutOfBounds":    {"label": "Clock stops going out of bounds", "values": [False]},
+    # One general dead-ball clock rule (incompletion / out of bounds / turnover). Default
+    # True; the only proposable CHANGE is turning it OFF (a running clock).
+    "clockStopsOnDeadBall":       {"label": "Clock stops on dead balls", "values": [False]},
     # Display-only ENUM: how the score is shown (no engine effect). `valueLabels`
     # gives each option a clean display name for the ballot/Rulebook.
     "scoringModel":               {"label": "How the score is shown",
@@ -1105,6 +1106,18 @@ GAME_FORMAT_PRESETS = [
                "extraPointPoints": 1, "twoPointConversionPoints": 2}},
 ]
 RULE_VOTE_CANDIDATES["gameFormat"]["presets"] = GAME_FORMAT_PRESETS
+
+# Brief, number-free descriptions of each game format for the vote ballot (keyed by the
+# format's `gameFormat` value). Shown as the sub-line under "Game Format: <name>".
+GAME_FORMAT_DESCRIPTIONS = {
+    "standard":    "The usual game. Most points at the final whistle wins.",
+    "target":      "A race to the target score. First team to reach it wins.",
+    "play_limit":  "No clock. Each quarter is a fixed number of plays.",
+    "chess_clock": "Each team gets an offense-time budget. Run yours out and you can't get the ball back.",
+    "innings":     "Baseball-style. Teams trade at-bats over a set number of innings; most points wins.",
+    "frames":      "Match play. The game splits into frames; win the most frames, not the most points.",
+    "bust":        "Land exactly on the target score. Overshoot it and the points are voided.",
+}
 
 # ---- Player Fatigue ----
 # Accumulation rate is unchanged — fatigue gauge still climbs visibly
