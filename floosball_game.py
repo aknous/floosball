@@ -3424,7 +3424,11 @@ class Game:
                                SIDELINE_GOAL_ENDZONE_MIN, SIDELINE_GOAL_ENDZONE_RANGE)
         used = getattr(self, '_hoopPairResult', None) or {}
         yte = self.yardsToEndzone
-        if 'endzone' not in used and SIDELINE_GOAL_ENDZONE_MIN <= yte <= SIDELINE_GOAL_ENDZONE_RANGE:
+        # Darts (bust): the endzone pair is usable right at the goal (yte 1-2) so a carrier
+        # held up short can dink the remainder; standard play gates it back (a hoop there
+        # is pointless when you'd just walk in for a TD).
+        ezMin = 1 if getattr(self.format, 'key', '') == 'bust' else SIDELINE_GOAL_ENDZONE_MIN
+        if 'endzone' not in used and ezMin <= yte <= SIDELINE_GOAL_ENDZONE_RANGE:
             return ('endzone', float(yte))
         if 'midfield' not in used:
             # Only valid while APPROACHING the 50 (d = yards before it). Once the LOS is
@@ -5159,10 +5163,14 @@ class Game:
                     line = line.rstrip('.') + f", good from {fgDist} yards"
             text = f"{fire['powerName']}: {line}"
 
-        # Darts (bust): a scoring play that overshot X banked nothing — flag the bust.
-        if getattr(self.play, 'scoreVoided', False):
+        # Darts (bust): a carrier who pulled up short of a would-bust TD.
+        if getattr(self.play, 'heldUpShort', False):
             _X = int(getattr(self.gameRules, 'targetScore', 0))
-            text = f"{text or 'reaches the end zone'} — BUST! that would clear {_X}, no points"
+            text = f"{text or 'breaks free'}, but pulls up short of the goal (a TD would clear {_X})"
+        # Darts (bust): a scoring play that overshot X banked nothing — flag the bust.
+        elif getattr(self.play, 'scoreVoided', False):
+            _X = int(getattr(self.gameRules, 'targetScore', 0))
+            text = f"{text or 'reaches the end zone'}. BUST: that would clear {_X}, no points"
 
         self.play.playText = text
 
@@ -6527,21 +6535,10 @@ class Game:
                 # Handle normal play outcomes
                 else:
                     if self.play.yardage >= self.yardsToEndzone:
-                        # Darts (bust): a TD that would push the offense OVER X is a bust —
-                        # no points, no stats, no conversion; turn the ball over. (A TD that
-                        # lands on/under X scores normally; == X wins via checkEarlyEnd.)
-                        if self.format.voidsScore(self, self.offensiveTeam, self.gameRules.touchdownPoints):
-                            self.play.playResult = PlayResult.Bust
-                            self.play.scoreVoided = True
-                            self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
-                            self.formatPlayText()
-                            self.gameFeed.insert(0, {'play': self.play})
-                            self.broadcastGameState(includeLastPlay=True)
-                            self.turnover(self.offensiveTeam, self.defensiveTeam,
-                                          self.gameRules.fieldLength - 20)
-                            self._pendingPossessionChange = True
-                            lastPlayFormatted = True
-                            break
+                        # Darts (bust): a TD that would overshoot X never reaches here — the
+                        # carrier is held up short of the goal at the yardage source
+                        # (_holdUpShortCap), so any TD that DOES land here is on/under X and
+                        # scores normally (== X wins via checkEarlyEnd).
                         self.play.isTd = True
                         if self.play.playType is PlayType.Run:
                             self.play.runner.addRushTd(self.play.yardage, self.isRegularSeasonGame)
@@ -10343,6 +10340,7 @@ class Play():
         self.hoopMade = False
         self.hoopPair = None           # 'midfield' | 'endzone' — which pair was targeted
         self.scoreVoided = False       # bust: a score was voided (overshot X) → turnover
+        self.heldUpShort = False       # bust: carrier pulled up short of the goal (would-bust TD)
         self.isTd = False
         self.isXpTry = False
         self.isFgGood = False
@@ -10812,6 +10810,20 @@ class Play():
         tail = int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
         return int(min(self.yardsToEndzone, floor + tail))
 
+    def _holdUpShortCap(self, yardage):
+        """Darts (bust): a ball-carrier who would score a touchdown that overshoots the
+        target X is aware of it and pulls up short of the goal line (held up at the 1)
+        instead of busting — no score, keep the ball, dink the exact remainder with a
+        hoop / short FG later. Returns the capped yardage and flags self.heldUpShort when
+        it fires. A no-op in every non-bust format (voidsScore is always False), so it's
+        safe to call on every run/pass resolution."""
+        g = self.game
+        if (yardage >= self.yardsToEndzone
+                and g.format.voidsScore(g, g.offensiveTeam, g.gameRules.touchdownPoints)):
+            self.heldUpShort = True
+            return max(0, self.yardsToEndzone - 1)
+        return yardage
+
     def runPlay(self):
         """
         Improved running play using multi-stage system similar to passing:
@@ -11183,6 +11195,9 @@ class Play():
         if _sbonus:
             self.yardage = min(self.yardage + _sbonus, self.yardsToEndzone - 1)
         
+        # Darts (bust): hold up short of a would-bust TD (no-op otherwise).
+        self.yardage = self._holdUpShortCap(self.yardage)
+
         # Update stats
         self.runner.addRushYards(self.yardage, self.game.isRegularSeasonGame)
         self.runner.addCarry(self.game.isRegularSeasonGame)
@@ -11295,6 +11310,7 @@ class Play():
             yds = max(yds, self._awakenedForcedGain())
         if yds > self.yardsToEndzone:
             yds = self.yardsToEndzone
+        yds = self._holdUpShortCap(yds)   # darts (bust): hold up short of a would-bust TD
         self.yardage = yds
         self.isInBounds = batched_randint(1, 100) > QB_SCRAMBLE_OOB_CHANCE
         self.tackledBy = tackler
@@ -11362,6 +11378,7 @@ class Play():
         yac = max(0, int(round(np.random.exponential(yacMean))) + int((agi - 80) / 25))
         yards = max(-3, airYards + yac)
         yards = min(yards, self.yardsToEndzone)
+        yards = self._holdUpShortCap(yards)   # darts (bust): hold up short of a would-bust TD
         self.yardage = yards
 
         # Reception credit (a TD, if it reaches the end zone, is credited by the
@@ -12700,6 +12717,9 @@ class Play():
                         _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.receiver)
                         if _stBonus:
                             self.yardage = min(self.yardage + _stBonus, self.yardsToEndzone - 1)
+
+                    # Darts (bust): hold up short of a would-bust TD (no-op otherwise).
+                    self.yardage = self._holdUpShortCap(self.yardage)
 
                     # Update stats
                     self.passer.addPassYards(self.yardage, self.game.isRegularSeasonGame)
