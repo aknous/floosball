@@ -186,9 +186,22 @@ reads as a "reached the target" walk-off.
 
 ## 2. `bust` — darts (land exactly on X)
 
-> **Gated on Sideline Goals shipping first** — you need fine-grained scoring (1-pt
-> hoops + the Conversion Ladder) to control your total precisely enough to land on X.
+> **Needs Sideline Goals (fine-grained scoring) to be playable** — you need 1-pt hoops
+> + the Conversion Ladder to control your total precisely enough to land on X.
 > Build it LAST of the five.
+>
+> **Dependency resolution (decided 2026-07-11): BUNDLE.** The darts format is a
+> compound-preset vote whose patch enables its own prerequisite atomically —
+> `{gameFormat:'bust', targetScore:X, sidelineGoalsEnabled:True}`. The vote-option
+> model is already a multi-field patch, so this is a one-line `GAME_FORMAT_PRESETS`
+> entry; darts is offerable from **day 0** and always playable the moment it wins,
+> with no cross-week vote-chain ordering fragility. The day-3 **multi-select** revert
+> can still peel `gameFormat` and `sidelineGoalsEnabled` back independently (Sideline
+> Goals left on under standard scoring is harmless — just an extra scoring option).
+> (Rejected alternatives: gate darts behind Sideline Goals already being live — too
+> much friction, may never fire in a short season; engine-implied fine-grained scoring
+> — kills Sideline Goals as a standalone mechanic.) Prereq: build Sideline Goals as a
+> standalone mechanic candidate (`sidelineGoalsEnabled` in game_rules) BEFORE darts.
 
 **Rule:** first to land **exactly** on X wins. A score that would put you **over** X is
 **voided — a turnover** (points not awarded, ball to the defense), reusing the
