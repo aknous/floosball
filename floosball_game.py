@@ -8578,6 +8578,7 @@ class Game:
                     'yardsGained': getattr(playObj, 'yardage', 0),
                     'description': getattr(playObj, 'playText', ''),
                     'playResult': playObj.playResult.value if hasattr(playObj, 'playResult') and playObj.playResult else None,
+                    'hoopPair': getattr(playObj, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                     'isTouchdown': getattr(playObj, 'isTd', False),
                     'isTurnover': (getattr(playObj, 'isFumbleLost', False) or getattr(playObj, 'isInterception', False)),
                     'isSack': getattr(playObj, 'isSack', False),
@@ -8615,6 +8616,7 @@ class Game:
                 'yardsGained': getattr(self.play, 'yardage', 0),
                 'description': getattr(self.play, 'playText', ''),
                 'playResult': self.play.playResult.value if hasattr(self.play, 'playResult') and self.play.playResult else None,
+                'hoopPair': getattr(self.play, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                 'isTouchdown': getattr(self.play, 'isTd', False),
                 'isTurnover': (getattr(self.play, 'isFumbleLost', False) or getattr(self.play, 'isInterception', False)),
                 'isSack': getattr(self.play, 'isSack', False),
