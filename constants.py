@@ -970,6 +970,8 @@ RULE_VOTE_CANDIDATES["driveClock"]["presets"] = DRIVE_CLOCK_PRESETS
 GAME_FORMAT_PRESETS = [
     {"key": "gf_target_30", "label": "First to 30",
      "patch": {"gameFormat": "target", "targetScore": 30}},
+    {"key": "gf_play_limit_30", "label": "30 Plays a Quarter",
+     "patch": {"gameFormat": "play_limit", "playsPerQuarter": 30}},
 ]
 RULE_VOTE_CANDIDATES["gameFormat"]["presets"] = GAME_FORMAT_PRESETS
 

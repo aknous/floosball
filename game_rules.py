@@ -122,8 +122,9 @@ class GameRules:
     # Cores vote preset (docs/GAME_FORMATS_PLAN.md). `targetScore` is the
     # finish line for the 'target' format (first to X). Other formats add
     # their own config as they're built.
-    gameFormat: str = 'standard'           # 'standard' | 'target' | (bust/play_limit/chess_clock/innings later)
+    gameFormat: str = 'standard'           # 'standard' | 'target' | 'play_limit' | (bust/chess_clock/innings later)
     targetScore: int = 30                  # 'target' format: first to this many points wins
+    playsPerQuarter: int = 30              # 'play_limit' format: fixed plays per quarter (no clock)
 
     # ── Field goal mechanics ───────────────────────────────────────
     fgSnapDistance: int = 17            # Yards added to LOS for snap + hold
@@ -203,6 +204,7 @@ class GameRules:
             "conversionLadder": [dict(r) for r in self.conversionLadder],
             "gameFormat": self.gameFormat,
             "targetScore": self.targetScore,
+            "playsPerQuarter": self.playsPerQuarter,
             "driveClockEnabled": self.driveClockEnabled,
             "driveClockUnit": self.driveClockUnit,
             "driveClockReset": self.driveClockReset,
@@ -230,20 +232,6 @@ class GameRules:
             if self.applyPatch(fieldName, value, reason=reason, source=source):
                 applied.append(fieldName)
         return applied
-
-    def resetToDefaults(self, reason: str = "season start",
-                        source: str = "season_reset") -> List[str]:
-        """Return every mutable rule to its pristine default IN PLACE (so any Game
-        already holding a reference to this object sees the reset). Used at season
-        start so each season begins on a clean rulebook. Returns the fields reset."""
-        pristine = GameRules()
-        reset: List[str] = []
-        for fieldName in MUTABLE_RULE_FIELDS:
-            default = getattr(pristine, fieldName, None)
-            if getattr(self, fieldName, None) != default:
-                if self.applyPatch(fieldName, default, reason=reason, source=source):
-                    reset.append(fieldName)
-        return reset
 
 
 # Module-level default — used by code paths that need to fall back to
@@ -279,8 +267,9 @@ MUTABLE_RULE_FIELDS = {
     # possession/down loop + the situational play-weights.
     "driveClockEnabled", "driveClockUnit", "driveClockReset", "driveClockLimit",
     # Game format / win condition — one format at a time; a vote preset sets the
-    # format + its config together. targetScore is the 'target' finish line.
-    "gameFormat", "targetScore",
+    # format + its config together. targetScore is the 'target' finish line;
+    # playsPerQuarter is the 'play_limit' per-quarter play budget.
+    "gameFormat", "targetScore", "playsPerQuarter",
     # Structural rule #1 — yards needed to convert a first down. Core mechanic
     # (reset/decrement/goal-to-go) reads gameRules; play-calling heuristics use
     # the live yardsToFirstDown so they degrade gracefully at non-default values.

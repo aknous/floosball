@@ -2256,35 +2256,27 @@ class Game:
         return float(getattr(self.gameRules, 'touchdownPoints', 6)
                      + self._maxLadderPoints())
 
+    @property
+    def format(self):
+        """The active game-format strategy (game_formats.py), resolved from
+        gameRules.gameFormat and cached. Standard is a pure pass-through, so OFF
+        stays byte-identical."""
+        key = getattr(getattr(self, 'gameRules', None), 'gameFormat', 'standard') or 'standard'
+        if getattr(self, '_formatObj', None) is None or getattr(self, '_formatKey', None) != key:
+            from game_formats import getFormat
+            self._formatObj = getFormat(key)
+            self._formatKey = key
+        return self._formatObj
+
     def _targetMatchPoint(self) -> bool:
-        """Target format: the team ON OFFENSE can reach X on THIS possession — a score
-        ends the game in their favor (the raw capability). Whether they actually PUSH
-        for it vs sit on a lead is _targetShouldPush. No-op in other formats."""
-        if getattr(self.gameRules, 'gameFormat', 'standard') != 'target':
-            return False
-        off = self.offensiveTeam
-        if off is None:
-            return False
-        offScore = self.homeScore if off is self.homeTeam else self.awayScore
-        need = getattr(self.gameRules, 'targetScore', 30) - offScore
-        return 0 < need <= self._maxPossession()
+        """The team on offense can END the game in its favor on THIS possession
+        (delegates to the active format; only 'target' says yes)."""
+        return self.format.matchPoint(self)
 
     def _targetShouldPush(self) -> bool:
-        """Target format: PUSH to reach X now (hurry-up, aggressive) vs sit on a lead.
-        Trailing, tied, or only a one-score lead → always push (need the points / the
-        opponent is close). With a COMFORTABLE lead, only an aggressive coach goes for
-        the outright win; a conservative coach burns the clock to protect the lead
-        instead (falls through to the normal burn-clock logic)."""
-        if not self._targetMatchPoint():
-            return False
-        off = self.offensiveTeam
-        offScore = self.homeScore if off is self.homeTeam else self.awayScore
-        oppScore = self.awayScore if off is self.homeTeam else self.homeScore
-        if (offScore - oppScore) <= self._oneScore():
-            return True   # trailing / tied / one-score lead — push to reach X
-        coach = getattr(off, 'coach', None)
-        aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
-        return aggr >= 80   # comfortable lead: aggressive & neutral push, conservative burns
+        """The offense should PUSH to end the game now (hurry-up/aggressive) vs sit on
+        a lead (delegates to the active format; only 'target' says yes)."""
+        return self.format.shouldPush(self)
 
     def _conversionRungs(self) -> list:
         """Every post-TD conversion rung available right now, as
@@ -5476,6 +5468,9 @@ class Game:
         self.currentQuarter = 1
         self.gameClockSeconds = self.gameRules.quarterLengthSeconds
         self.clockRunning = False
+        # Let the game format initialize any per-period state (play_limit's play
+        # budget). No-op for clock-driven formats.
+        self.format.onPeriodStart(self)
         
         # Store ELO ratings for use in win probability calculations
         self.homeTeamElo = self.homeTeam.elo
@@ -6096,6 +6091,9 @@ class Game:
                         break
                 self.totalPlays += 1
                 self.play.playNumber = self.totalPlays
+                # Game format tick (play_limit drives its synthetic clock from here).
+                # No-op for clock-driven formats.
+                self.format.onPlayTick(self)
                 # Drive Clock (plays unit): one snap spent (seconds unit drains via
                 # consumeGameTime). No-op unless the mechanic is on.
                 self._tickDriveClockPlays()
@@ -8538,6 +8536,12 @@ class Game:
             'gameStats': self._buildGameStatsSnapshot()
         }
 
+        # Format-specific display fields (play_limit's plays-remaining, target's
+        # points-to-go). Empty for standard / clock-driven formats.
+        _formatExtra = self.format.stateExtra(self)
+        if _formatExtra:
+            gameStateData.update(_formatExtra)
+
         # Sideline cutaway — fire on downtime moments (possession changes,
         # halftime, quarter starts, two-minute warning). Probabilistic so
         # not every transition produces one.
@@ -9041,6 +9045,12 @@ class Game:
     
     def consumeGameTime(self, seconds: int):
         """Consume time from game clock"""
+        # Formats that don't run on real time (play_limit) drive a synthetic clock
+        # from the play counter in the format's onPlayTick — the engine's variable
+        # per-play decrement is neutralized so a play = one fixed slice regardless of
+        # its real duration.
+        if not self.format.consumesRealTime():
+            return
         if seconds > 0:
             self.gameClockSeconds -= seconds
             if self.gameClockSeconds < 0:
@@ -9149,6 +9159,8 @@ class Game:
 
     def advanceQuarter(self):
         """Transition to next quarter"""
+        _oldQuarter = self.currentQuarter
+        _oldOtPeriod = getattr(self, 'otPeriod', 0)
         if self.currentQuarter == 1:
             self.currentQuarter = 2
             self.gameClockSeconds = self.gameRules.quarterLengthSeconds
@@ -9190,21 +9202,23 @@ class Game:
                 # 2nd+ OT is sudden death — no possession reset needed
                 # Keep currentQuarter at 5 for tracking (all OT periods shown as "OT")
             # else game is over with a winner
-    
+        # A new period actually began (regulation quarter changed OR a fresh OT
+        # period) — let the format reset any per-period play budget (play_limit).
+        if self.currentQuarter != _oldQuarter or getattr(self, 'otPeriod', 0) != _oldOtPeriod:
+            self.format.onPeriodStart(self)
+
     def isGameOver(self) -> bool:
         """Check if game should end"""
         # Check status first - if already marked Final, game is definitely over
         if hasattr(self, 'status') and self.status == GameStatus.Final:
             return True
 
-        # Game format 'target': first to X points ends the game immediately (a
-        # walk-off, any quarter). If nobody reaches X, the clock still bounds the
-        # game via the regulation/OT checks below (the winner is unchanged —
-        # whoever crossed X has the higher score).
-        if getattr(self.gameRules, 'gameFormat', 'standard') == 'target':
-            tgt = getattr(self.gameRules, 'targetScore', 30)
-            if self.homeScore >= tgt or self.awayScore >= tgt:
-                return True
+        # Format-specific early end (e.g. target's first-to-X walk-off), BEFORE the
+        # standard clock/OT logic. None = defer to the standard checks below (the
+        # winner is unchanged — whoever crossed the win condition has the higher score).
+        _formatEnd = self.format.checkEarlyEnd(self)
+        if _formatEnd is not None:
+            return _formatEnd
 
         # Game over if clock expired in regulation and not tied
         if self.currentQuarter == 4 and self.gameClockSeconds <= 0:
@@ -9263,15 +9277,11 @@ class Game:
         totalGameTime = 3600
         timeElapsed = totalGameTime - total_seconds
         gameProgress = min(1.0, timeElapsed / totalGameTime)
-        # Target format: the game is ALSO "further along" as the leader nears X, so a
-        # near-target lead is treated like late game (steeper score logistic, ELO prior
-        # floors) even with clock left. gameProgress = max(time, score-toward-X). At
-        # 0-0 this is inert; a 24-0 lead in a first-to-30 game reads ~0.80 done.
-        if getattr(self.gameRules, 'gameFormat', 'standard') == 'target':
-            _tgt = float(getattr(self.gameRules, 'targetScore', 30))
-            if _tgt > 0:
-                gameProgress = max(gameProgress,
-                                   min(1.0, max(self.homeScore, self.awayScore) / _tgt))
+        # Format-specific "how far along": e.g. target treats a near-X lead as late
+        # game (steeper score logistic, ELO prior floors) even with clock left.
+        # Standard/play_limit are pass-through (play_limit's synthetic clock already
+        # makes the time math read as plays-run / total-plays).
+        gameProgress = self.format.adjustGameProgress(self, gameProgress)
         # Overtime is past regulation: force full progress so the ELO prior floors
         # (eloWeight → 0.05) and the score logistic maxes (k → ~0.40). Without this
         # the regulation 3600s math leaves gameProgress ~0.83 in OT, leaking a ~21%
@@ -9379,22 +9389,11 @@ class Game:
                 homeWinProb = homeWinProb + (targetWp - homeWinProb) * pull
                 awayWinProb = 100 - homeWinProb
 
-        # Target format: a team on offense that can reach X THIS possession has match
-        # point — pull WP toward them like a late-game go-ahead drive, ramped by how
-        # reachable X is (expected points from the current field position vs the points
-        # still needed). Regulation only; OT below handles the tied-at-time case.
-        if (getattr(self.gameRules, 'gameFormat', 'standard') == 'target'
-                and self.currentQuarter < 5 and self.offensiveTeam is not None):
-            _tgt = getattr(self.gameRules, 'targetScore', 30)
-            _off = self.offensiveTeam
-            _offScore = self.homeScore if _off is self.homeTeam else self.awayScore
-            _need = _tgt - _offScore
-            if 0 < _need <= self._maxPossession():
-                reach = min(1.0, max(0.0, expectedPoints / max(1.0, float(_need))))
-                pull = 0.6 * reach
-                targetWp = 99 if (_off is self.homeTeam) else 1
-                homeWinProb = homeWinProb + (targetWp - homeWinProb) * pull
-                awayWinProb = 100 - homeWinProb
+        # Format-specific win-condition possession pull (e.g. target's match point: a
+        # team on offense that can reach X this possession is pulled toward winning,
+        # ramped by how reachable X is). Regulation only; OT below handles the tie.
+        homeWinProb, awayWinProb = self.format.adjustWinProbability(
+            self, homeWinProb, awayWinProb, expectedPoints)
 
         # Overtime win probability — replaces generic formula above
         if self.currentQuarter >= 5:
@@ -10410,9 +10409,12 @@ class Play():
         # timeout there. This holds whether the clock was running or stopped before
         # the snap: a stopped clock simply RESTARTS at the snap, then runs off.
         self.game.clockRunning = True
-        # Only drain the actual play time (snap to knee-down)
-        kneelDuration = min(4, self.game.gameClockSeconds)
-        self.game.gameClockSeconds -= kneelDuration
+        # Only drain the actual play time (snap to knee-down). In a format that runs
+        # on a synthetic (play-count) clock, the game clock is driven by onPlayTick
+        # instead, so skip this direct drain.
+        if self.game.format.consumesRealTime():
+            kneelDuration = min(4, self.game.gameClockSeconds)
+            self.game.gameClockSeconds -= kneelDuration
         # Label the NEXT down (1st->2nd...) on a non-final-down kneel. A kneel on
         # the FINAL down surrenders the down, so it's a turnover on downs — the
         # same label the down-advancement section stamps on a non-game-ending
