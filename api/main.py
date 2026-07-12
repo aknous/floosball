@@ -1305,7 +1305,11 @@ def _lastRuleChange():
                 return None
         # Label: a scalar winner key IS a candidate field; a preset winner key
         # (a preset key or 'revert:<candidate>') resolves to its mechanic label.
-        label = RULE_VOTE_CANDIDATES.get(field, {}).get('label') or _presetMechanicLabel(field)
+        # 'revert:multi' is the multi-select day-3 outcome (several rules put back).
+        if field == 'revert:multi':
+            label = 'Rules reverted'
+        else:
+            label = RULE_VOTE_CANDIDATES.get(field, {}).get('label') or _presetMechanicLabel(field)
         return {
             "field": field,
             "label": label,
