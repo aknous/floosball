@@ -1,5 +1,12 @@
 # Contested Scoring — Design Plan
 
+> **BUILT 2026-07-12** (backend `680cc56`, frontend `999d2e0` on `feature/rule-changes`, both
+> repos). ONE mode (`contestedScoringEnabled`) — each TD randomly rolls one of the five contest
+> types. Two-beat play feed (provisional "reaches the end zone" → contest entry that books/stuffs),
+> score final the instant the contest resolves. Validated forced-on (~1500 fast-sim contests):
+> 14.4% stuff rate (in the 10-15% target band), all five types firing, 0 crashes; standard
+> byte-identical (the gate short-circuits the TD block). NOT yet merged to `next-season`.
+
 > A mutable rule (dormant → switched on by a Cores vote, or during Criticality). Owner-specced 2026-07-09.
 > Rugby-flavored: crossing the goal line is only a *provisional* touchdown — the scorer must **complete an
 > action** to bank the points, and the defense gets one **last-resort contest** to cancel it. Emerges from
