@@ -959,7 +959,8 @@ SIDELINE_GOAL_MIN_MAKE = 0.30            # floor
 SIDELINE_GOAL_MAX_MAKE = 0.92            # ceiling — never automatic
 # Hoop geometry (in yardsToEndzone terms — distance to the attacking goal line).
 SIDELINE_GOAL_MIDFIELD_YARD = 50         # the midfield pair sits at the 50
-SIDELINE_GOAL_MIDFIELD_RANGE = 12        # midfield pair in range for yardsToEndzone within +/- this of 50
+SIDELINE_GOAL_MIDFIELD_RANGE = 14        # midfield pair in range this many yards BEFORE the 50 only
+                                         # (once the LOS is PAST midfield the hoops are behind you)
 SIDELINE_GOAL_ENDZONE_MIN = 3            # end-zone pair reachable from the ... 3 ...
 SIDELINE_GOAL_ENDZONE_RANGE = 18         # ... out to the 18 (the red zone; not from the goal line itself)
 # Play-caller: attempt chance when a fresh pair is in range (a low-risk point-grab now).

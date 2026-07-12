@@ -3420,8 +3420,10 @@ class Game:
         if 'endzone' not in used and SIDELINE_GOAL_ENDZONE_MIN <= yte <= SIDELINE_GOAL_ENDZONE_RANGE:
             return ('endzone', float(yte))
         if 'midfield' not in used:
-            d = abs(yte - SIDELINE_GOAL_MIDFIELD_YARD)
-            if d <= SIDELINE_GOAL_MIDFIELD_RANGE:
+            # Only valid while APPROACHING the 50 (d = yards before it). Once the LOS is
+            # PAST midfield (d < 0), the hoops are behind the offense — no longer a target.
+            d = yte - SIDELINE_GOAL_MIDFIELD_YARD
+            if 0 <= d <= SIDELINE_GOAL_MIDFIELD_RANGE:
                 return ('midfield', float(d))
         return None
 
