@@ -910,6 +910,10 @@ RULE_VOTE_CANDIDATES = {
     # only proposable CHANGE is enabling it; disabling is a REVERT to default.
     "conversionLadderEnabled":    {"label": "Conversion Ladder",
                                    "values": [True], "valueLabels": {True: "On", False: "Off"}},
+    # On/off MECHANIC toggle (Sideline Goals). Bool default False — the only proposable
+    # CHANGE is enabling it; disabling is a REVERT to default.
+    "sidelineGoalsEnabled":       {"label": "Sideline Goals",
+                                   "values": [True], "valueLabels": {True: "On", False: "Off"}},
     # PRESET candidate (the Drive Clock). Not a scalar field=value — each option is
     # a full {unit, reset, limit} bundle applied as a patch. `gate` is the on/off
     # field used to tell whether the mechanic is currently changed (for revert +
@@ -936,6 +940,24 @@ CONVERSION_LADDER_RUNGS = [
     {"points": 4, "distance": 10},
     {"points": 5, "distance": 15},
 ]
+
+# ── Sideline Goals (dormant mechanic — docs/SIDELINE_GOALS_PLAN.md) ────────────
+# A hoop-shot play: the QB throws at a sideline hoop for `sidelineGoalPoints`. Make
+# = bank points + consume the down + drive continues; miss = turnover at the LOS; a
+# rare tip = a returnable INT. Make probability EMERGES from the QB's accuracy/arm
+# (attr, ~60-100, neutral 80) minus defensive pressure — no dial for the make rate.
+SIDELINE_GOAL_POINTS = 1                 # default points per make (mirrors GameRules default)
+SIDELINE_GOAL_BASE_MAKE = 0.55           # make prob for a neutral (80) accuracy QB, neutral coverage
+SIDELINE_GOAL_ACCURACY_SPAN = 0.010      # +/- make prob per skill point off 80 (skill drives it)
+SIDELINE_GOAL_PRESSURE_PENALTY = 0.22    # max make-prob reduction under elite coverage
+SIDELINE_GOAL_MIN_MAKE = 0.15            # floor so even a bad shot has a puncher's chance
+SIDELINE_GOAL_MAX_MAKE = 0.85            # ceiling so it's never automatic
+SIDELINE_GOAL_TIP_INT_CHANCE = 0.06      # chance a MISS is a tipped, returnable INT (not a clean turnover)
+# Play-caller: how often the hoop shot is even attempted (rare, situational).
+SIDELINE_GOAL_ATTEMPT_BASE = 0.02        # base per-eligible-play attempt chance
+SIDELINE_GOAL_ATTEMPT_STALL_MULT = 2.5   # x when the drive is stalling (salvage points)
+SIDELINE_GOAL_ATTEMPT_AGGR_SPAN = 0.04   # + up to this for a max-aggressiveness coach
+SIDELINE_GOAL_ATTEMPT_MAX = 0.18         # cap on the per-play attempt chance
 
 # ── Drive Clock (dormant mechanic — docs/DRIVE_CLOCK_PLAN.md) ──
 # A shot-clock for possessions. Two mode knobs: unit ('seconds' of game clock vs

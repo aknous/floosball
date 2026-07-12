@@ -115,6 +115,18 @@ class GameRules:
     driveClockReset: str = 'possession'    # 'possession' | 'series'
     driveClockLimit: int = 90              # seconds or plays, per the unit
 
+    # ── Sideline Goals (dormant mechanic) ──────────────────────────
+    # Quidditch-style: on any down the offense may throw at a sideline hoop for
+    # bonus points. A MAKE banks `sidelineGoalPoints` and CONSUMES the down but the
+    # drive continues (no yards gained → repeated shots march toward a turnover on
+    # downs). A MISS is a turnover at the current line of scrimmage (a rare tipped
+    # throw is a returnable INT). Make prob emerges from the QB's accuracy/arm vs the
+    # hoop, minus defensive pressure (tunables in constants.py `SIDELINE_GOAL_*`).
+    # Off by default; a Cores vote flips the gate. Fine-grained 1-pt scoring is the
+    # prerequisite for the 'bust'/darts game format (which bundles this on).
+    sidelineGoalsEnabled: bool = False
+    sidelineGoalPoints: int = 1            # points banked per made hoop shot
+
     # ── Game format / win condition (dormant) ──────────────────────
     # How the game is won / when it ends. 'standard' = today (cumulative
     # score, higher wins at the end of regulation/OT). Alternates change
@@ -217,6 +229,8 @@ class GameRules:
             "driveClockUnit": self.driveClockUnit,
             "driveClockReset": self.driveClockReset,
             "driveClockLimit": self.driveClockLimit,
+            "sidelineGoalsEnabled": self.sidelineGoalsEnabled,
+            "sidelineGoalPoints": self.sidelineGoalPoints,
             "fgSnapDistance": self.fgSnapDistance,
             "fgMinAttemptProb": self.fgMinAttemptProb,
             "fieldGoalUprights": list(self.fieldGoalUprights),
@@ -274,6 +288,9 @@ MUTABLE_RULE_FIELDS = {
     # together as a patch (enabled + unit + reset + limit). Contained in the
     # possession/down loop + the situational play-weights.
     "driveClockEnabled", "driveClockUnit", "driveClockReset", "driveClockLimit",
+    # Sideline Goals — on/off gate + the point value per made hoop shot. Contained
+    # in the play-calling + resolution path (a new hoop-shot play type).
+    "sidelineGoalsEnabled", "sidelineGoalPoints",
     # Game format / win condition — one format at a time; a vote preset sets the
     # format + its config together. targetScore is the 'target' finish line;
     # playsPerQuarter is the 'play_limit' per-quarter play budget;
@@ -328,6 +345,8 @@ RULEBOOK_EXPOSED_FIELDS = {
     # Drive Clock gate — the dormant mechanic's on/off marker (the mode config
     # rides alongside in `rules`, shown as the active preset).
     "driveClockEnabled",
+    # Sideline Goals gate — dormant on/off mechanic (Rulebook "Dormant Rules" list).
+    "sidelineGoalsEnabled",
     # Game format gate — surfaced as the Rulebook's "Game Format" row (the active
     # format + its config); the config (targetScore, ...) rides alongside in `rules`.
     "gameFormat",

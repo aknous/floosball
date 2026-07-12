@@ -240,6 +240,10 @@ class PlayResult(enum.Enum):
     # The 2-pt rung keeps the Touchdown2Pt* labels; higher rungs use these.
     ConversionGood = 'Conversion Good'
     ConversionNoGood = 'Conversion No Good'
+    # Sideline Goals — a hoop shot. A make banks the point + consumes the down (drive
+    # continues); a miss is a turnover at the spot (a rare tip is a returnable INT).
+    SidelineHoopGood = 'Sideline Hoop Good'
+    SidelineHoopMiss = 'Sideline Hoop Miss'
     Safety = 'Safety'
     Fumble = 'Fumble'
     Interception = 'Interception'
@@ -3373,6 +3377,13 @@ class Game:
         self.play._forcedRunner = None
         self.play._forcedGap = None
 
+        # Sideline Goals — a rare hoop shot instead of a normal play (only on a
+        # non-final down, so a make just consumes the down and the drive continues).
+        # No-op unless the mechanic is on.
+        if self._shouldAttemptHoopShot():
+            self._executeHoopShot()
+            return
+
         _trick = self._selectTrickPlay()
         if _trick:
             self._executeTrickPlay(_trick)
@@ -3391,6 +3402,81 @@ class Game:
             self.play.passConcept = self._selectPassConcept(playCall)
             self.play.insights['passConcept'] = self.play.passConcept
             self.play.passPlay(self._selectPassPlay(playCall))
+
+    # ── Sideline Goals (hoop shot) ─────────────────────────────────────────────
+    def _sidelineGoalsActive(self) -> bool:
+        return bool(getattr(self.gameRules, 'sidelineGoalsEnabled', False))
+
+    def _shouldAttemptHoopShot(self) -> bool:
+        """Rare, situational choice to throw at a sideline hoop instead of a normal
+        play. Only on a NON-final down (a make just consumes the down; on the last down
+        it'd be a turnover on downs) and never in hurry-up (you need yards, not a
+        down-wasting point) or backed up near your own goal. Chance rises on a stalling
+        drive and with coach aggressiveness, capped low — it stays a novelty gamble."""
+        if not self._sidelineGoalsActive():
+            return False
+        if self.down >= self.gameRules.downsPerSeries or self._isHurryUp():
+            return False
+        if self.yardsToSafety <= 12:   # don't chuck it from your own end (safety risk)
+            return False
+        from constants import (SIDELINE_GOAL_ATTEMPT_BASE, SIDELINE_GOAL_ATTEMPT_STALL_MULT,
+                               SIDELINE_GOAL_ATTEMPT_AGGR_SPAN, SIDELINE_GOAL_ATTEMPT_MAX)
+        chance = SIDELINE_GOAL_ATTEMPT_BASE
+        # Stalling series (past 1st down and still needing ~all of it) → salvage a point.
+        if self.down >= 2 and self.yardsToFirstDown >= self.gameRules.firstDownDistance - 2:
+            chance *= SIDELINE_GOAL_ATTEMPT_STALL_MULT
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
+        chance += max(0.0, (aggr - 80) / 20.0) * SIDELINE_GOAL_ATTEMPT_AGGR_SPAN
+        return _random.random() < min(SIDELINE_GOAL_ATTEMPT_MAX, chance)
+
+    def _executeHoopShot(self) -> None:
+        """Resolve a sideline hoop shot. Make probability EMERGES from the QB's
+        accuracy/arm vs the defense's pass coverage. MAKE → bank sidelineGoalPoints,
+        0 yards, the drive continues (the loop consumes the down + keeps the hoop
+        badge). MISS → turnover at the spot; a rare tip becomes a returnable INT
+        (routed through the normal turnover path). Sets play flags the possession loop
+        reads; does NOT format/broadcast (the loop does)."""
+        from constants import (SIDELINE_GOAL_BASE_MAKE, SIDELINE_GOAL_ACCURACY_SPAN,
+                               SIDELINE_GOAL_PRESSURE_PENALTY, SIDELINE_GOAL_MIN_MAKE,
+                               SIDELINE_GOAL_MAX_MAKE, SIDELINE_GOAL_TIP_INT_CHANCE)
+        self.play.playType = PlayType.Pass   # it's a throw — keeps existing playType logic sane
+        self.play.isHoopShot = True
+        self.play.yardage = 0
+        qb = self.offensiveTeam.rosterDict.get('qb')
+        ga = getattr(qb, 'gameAttributes', None)
+        acc = getattr(ga, 'accuracy', 80) if ga else 80
+        arm = getattr(ga, 'armStrength', 80) if ga else 80
+        skill = 0.7 * acc + 0.3 * arm
+        passCov = getattr(self.defensiveTeam, 'defensePassCoverageRating', 75) or 75
+        # Coverage ratings sit high (~75-100), so pressure keys off 75 as neutral: only
+        # good coverage contests the shot, and the QB's skill stays the primary driver.
+        pressure = max(0.0, min(1.0, (passCov - 75) / 25.0))
+        makeProb = (SIDELINE_GOAL_BASE_MAKE
+                    + (skill - 80) * SIDELINE_GOAL_ACCURACY_SPAN
+                    - pressure * SIDELINE_GOAL_PRESSURE_PENALTY)
+        makeProb = max(SIDELINE_GOAL_MIN_MAKE, min(SIDELINE_GOAL_MAX_MAKE, makeProb))
+        self.play.passer = qb
+        self.play.insights['hoopMakeProb'] = round(makeProb, 3)
+        if _random.random() < makeProb:
+            pts = int(getattr(self.gameRules, 'sidelineGoalPoints', 1))
+            self.play.hoopMade = True
+            self.play.playResult = PlayResult.SidelineHoopGood
+            self._addScore(self.offensiveTeam, pts)
+            self.play.scoreChange = True
+            self.play.homeTeamScore = self.homeScore
+            self.play.awayTeamScore = self.awayScore
+            if self.offensiveTeam is self.homeTeam:
+                self.homeSidelineGoals = getattr(self, 'homeSidelineGoals', 0) + 1
+            else:
+                self.awaySidelineGoals = getattr(self, 'awaySidelineGoals', 0) + 1
+        else:
+            self.play.hoopMade = False
+            self.play.playResult = PlayResult.SidelineHoopMiss
+            # A rare tipped throw is knocked back into the field of play → returnable INT.
+            if _random.random() < SIDELINE_GOAL_TIP_INT_CHANCE:
+                self.play.isInterception = True
+        self.clockRunning = False   # a hoop shot stops the clock (ball dead toward the sideline)
 
     def _isHurryUp(self) -> bool:
         """The offense is racing the clock — a 2-minute drill trailing in Q4, or an
@@ -4334,15 +4420,18 @@ class Game:
         # New possession → fresh drive clock (no-op unless the mechanic is on).
         self._resetDriveClock()
 
-    def _handleTurnoverOnDowns(self, lastPlayFormatted: bool, driveClockExpired: bool = False) -> None:
-        """Resolve a turnover on downs — a failed final down OR a Drive Clock expiry.
-        Stamps the result + momentum, stops the clock, formats/inserts/broadcasts the
-        play (unless already done), and hands the ball to the defense at the spot.
-        The caller sets its own `lastPlayFormatted = True` and breaks the loop."""
+    def _handleTurnoverOnDowns(self, lastPlayFormatted: bool, driveClockExpired: bool = False,
+                               resultOverride: 'PlayResult' = None) -> None:
+        """Resolve a turnover on downs — a failed final down, a Drive Clock expiry, OR a
+        missed Sideline Goal (via `resultOverride`). Stamps the result + momentum, stops
+        the clock, formats/inserts/broadcasts the play (unless already done), and hands
+        the ball to the defense at the spot. The caller sets its own
+        `lastPlayFormatted = True` and breaks the loop."""
         kneelEndedGame = (self.play.playType is PlayType.Kneel
                           and self.gameClockSeconds <= 0)
         if not kneelEndedGame:
-            self.play.playResult = (PlayResult.DriveClockExpired if driveClockExpired
+            self.play.playResult = (resultOverride if resultOverride is not None
+                                    else PlayResult.DriveClockExpired if driveClockExpired
                                     else PlayResult.TurnoverOnDowns)
             self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
         self.play.driveClockExpired = driveClockExpired
@@ -4601,7 +4690,26 @@ class Game:
                 play.insights['players'].append(playerEntry)
 
         text = None
-        if getattr(self.play, 'isScramble', False):
+        if getattr(self.play, 'isHoopShot', False):
+            # Sideline Goal — a throw at a sideline hoop for a bonus point.
+            qbName = self.play.passer.name if getattr(self.play, 'passer', None) else self.offensiveTeam.abbr
+            side = choice(['near-side', 'far-side'])
+            if self.play.hoopMade:
+                pts = int(getattr(self.gameRules, 'sidelineGoalPoints', 1))
+                text = choice([
+                    'HOOP SHOT — {} threads it through the {} hoop! +{}, drive continues'.format(qbName, side, pts),
+                    'HOOP SHOT — {} drills the {} hoop for +{}'.format(qbName, side, pts),
+                    'HOOP SHOT — {} finds the {} hoop, good for +{}'.format(qbName, side, pts),
+                ])
+            elif self.play.isInterception:
+                text = "HOOP SHOT — {}'s throw is tipped back into play and picked off".format(qbName)
+            else:
+                text = choice([
+                    'HOOP SHOT — {} clangs it off the {} rim, turned over at the spot'.format(qbName, side),
+                    'HOOP SHOT — {} sails the {} hoop shot wide, dead ball and a turnover'.format(qbName, side),
+                    'HOOP SHOT — {} misses the {} hoop, the defense takes over'.format(qbName, side),
+                ])
+        elif getattr(self.play, 'isScramble', False):
             # QB ran instead of passing (resolves as a run, narrated as a scramble).
             # Phrasing matches the trigger: 'pressure' = escaped a would-be sack,
             # 'coverage' = no one open, pulled it down and ran.
@@ -6310,6 +6418,21 @@ class Game:
                 if self.play.isSack and not self.play.isFumbleLost:
                     self._applyMomentumEvent(MOMENTUM_SACK, self.defensiveTeam)
 
+                # Sideline Goal — a MISSED hoop shot (clean, no tip) is a turnover at the
+                # current line of scrimmage. A MAKE flows through the normal down-advance
+                # below (0 yards → consume the down, drive continues, badge preserved); a
+                # rare TIP set isInterception and falls into the turnover branch below.
+                if self.play.isHoopShot and not self.play.hoopMade and not self.play.isInterception:
+                    self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
+                    if self.offensiveTeam is self.homeTeam:
+                        self.homeTurnoversTotal += 1
+                    elif self.offensiveTeam is self.awayTeam:
+                        self.awayTurnoversTotal += 1
+                    self._handleTurnoverOnDowns(lastPlayFormatted,
+                                                resultOverride=PlayResult.SidelineHoopMiss)
+                    lastPlayFormatted = True
+                    break
+
                 # Handle turnovers
                 if self.play.isFumbleLost or self.play.isInterception:
                     # Defender runs it back — adjusts play.yardage so the outcome
@@ -6528,7 +6651,10 @@ class Game:
                         # down (a stalled series that ran out of its shot clock).
                         if self.down < self.gameRules.downsPerSeries and not self._driveClockExpired():
                             self.down += 1
-                            self.play.playResult = downPlayResult(self.down)
+                            # A made hoop shot keeps its own badge (it banked a point and
+                            # consumed the down); a normal play shows the new down.
+                            if not (self.play.isHoopShot and self.play.hoopMade):
+                                self.play.playResult = downPlayResult(self.down)
                             continue
                         else:
                             self._handleTurnoverOnDowns(lastPlayFormatted,
@@ -10136,6 +10262,11 @@ class Play():
         self.awakenedStatus = None     # L4 charge-status beat ('powering up' / 'fully charged'), or None
         self._awakenedDefender = None  # the awakened defender on a defensive fire, or None
         self.isInterception = False
+        # Sideline Goals (hoop shot). isHoopShot marks the play; hoopMade = a make;
+        # a clean miss has isHoopShot True + hoopMade False; a rare tip sets
+        # isInterception (returnable) and routes through the normal turnover path.
+        self.isHoopShot = False
+        self.hoopMade = False
         self.isTd = False
         self.isXpTry = False
         self.isFgGood = False
