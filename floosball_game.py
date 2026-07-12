@@ -3415,7 +3415,7 @@ class Game:
         from that hoop, which drives the shot's difficulty."""
         from constants import (SIDELINE_GOAL_MIDFIELD_YARD, SIDELINE_GOAL_MIDFIELD_RANGE,
                                SIDELINE_GOAL_ENDZONE_MIN, SIDELINE_GOAL_ENDZONE_RANGE)
-        used = getattr(self, '_hoopPairsUsed', None) or set()
+        used = getattr(self, '_hoopPairResult', None) or {}
         yte = self.yardsToEndzone
         if 'endzone' not in used and SIDELINE_GOAL_ENDZONE_MIN <= yte <= SIDELINE_GOAL_ENDZONE_RANGE:
             return ('endzone', float(yte))
@@ -3477,10 +3477,11 @@ class Game:
         makeProb = max(SIDELINE_GOAL_MIN_MAKE, min(SIDELINE_GOAL_MAX_MAKE, makeProb))
         self.play.insights['hoopMakeProb'] = round(makeProb, 3)
         self.play.insights['hoopPair'] = pairName
-        # One shot per pair per drive (make OR miss locks it).
-        if getattr(self, '_hoopPairsUsed', None) is None:
-            self._hoopPairsUsed = set()
-        self._hoopPairsUsed.add(pairName)
+        # One shot per pair per drive — _hoopPairResult maps the used pair to its result
+        # ('made'/'missed'), which locks it for the drive AND drives the field-graphic
+        # hoop colors (open→yellow, made→green, missed→red).
+        if getattr(self, '_hoopPairResult', None) is None:
+            self._hoopPairResult = {}
         # A hoop shot is a throw → a pass attempt (make = completion, miss = incompletion).
         if qb is not None:
             qb.addPassAttempt(self.isRegularSeasonGame)
@@ -3488,6 +3489,7 @@ class Game:
             pts = int(getattr(self.gameRules, 'sidelineGoalPoints', 1))
             self.play.hoopMade = True
             self.play.playResult = PlayResult.SidelineHoopGood
+            self._hoopPairResult[pairName] = 'made'
             self._addScore(self.offensiveTeam, pts)
             self.play.scoreChange = True
             self.play.homeTeamScore = self.homeScore
@@ -3501,6 +3503,7 @@ class Game:
         else:
             self.play.hoopMade = False
             self.play.playResult = PlayResult.SidelineHoopMiss   # an incompletion; no turnover
+            self._hoopPairResult[pairName] = 'missed'
         self.clockRunning = False   # a hoop shot stops the clock (an incomplete throw)
 
     def _isHurryUp(self) -> bool:
@@ -4445,7 +4448,7 @@ class Game:
         # New possession → fresh drive clock (no-op unless the mechanic is on).
         self._resetDriveClock()
         # New drive → both sideline-hoop pairs are available again (Sideline Goals).
-        self._hoopPairsUsed = set()
+        self._hoopPairResult = {}
 
     def _handleTurnoverOnDowns(self, lastPlayFormatted: bool, driveClockExpired: bool = False,
                                resultOverride: 'PlayResult' = None) -> None:
@@ -8718,6 +8721,15 @@ class Game:
                 'limit': getattr(self.gameRules, 'driveClockLimit', 60),
                 'low': self._driveClockLow(),
             } if self._driveClockActive() else None),
+            # Sideline Goals — the two hoop pairs' state for THIS drive (open / made /
+            # missed), so the field graphic can color them (yellow / green / red).
+            # `attackingHome` = which end zone the offense is driving toward.
+            'sidelineGoals': ({
+                'active': True,
+                'midfield': (getattr(self, '_hoopPairResult', None) or {}).get('midfield', 'open'),
+                'endzone': (getattr(self, '_hoopPairResult', None) or {}).get('endzone', 'open'),
+                'attackingHome': self.offensiveTeam is self.homeTeam,
+            } if getattr(self.gameRules, 'sidelineGoalsEnabled', False) else None),
             'momentum': round(getattr(self, 'momentum', 0.0), 1),
             'momentumTeam': (self.homeTeam.abbr if self.momentum > MOMENTUM_DISPLAY_THRESHOLD
                              else self.awayTeam.abbr if self.momentum < -MOMENTUM_DISPLAY_THRESHOLD

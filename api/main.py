@@ -2151,6 +2151,22 @@ async def get_current_games(response: Response):
             except Exception:
                 game_dict['driveClock'] = None
 
+            # Sideline Goals hoop state (open/made/missed per pair, this drive) on the
+            # initial REST load — mirrors game_state so the field graphic colors right.
+            try:
+                if getattr(game.gameRules, 'sidelineGoalsEnabled', False):
+                    _hpr = getattr(game, '_hoopPairResult', None) or {}
+                    game_dict['sidelineGoals'] = {
+                        'active': True,
+                        'midfield': _hpr.get('midfield', 'open'),
+                        'endzone': _hpr.get('endzone', 'open'),
+                        'attackingHome': getattr(game, 'offensiveTeam', None) is getattr(game, 'homeTeam', None),
+                    }
+                else:
+                    game_dict['sidelineGoals'] = None
+            except Exception:
+                game_dict['sidelineGoals'] = None
+
             # Format-specific display fields (play_limit's plays-remaining, target's
             # points-to-go) on the initial REST load too — mirrors game_state.
             try:
