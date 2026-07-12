@@ -15,8 +15,8 @@ Six formats total; the owner's build set (this doc) is **five**:
 - **chess clock** — per-team offense-time budget (game-format rewrite).
 - **innings** — baseball-style, out-driven not clock-driven (game-format rewrite).
 
-(`frames` — most-periods-wins, tennis/boxing style — is specced in SCORING_MODEL_PLAN
-but out of scope here.)
+(`frames` — most-frames-wins, golf match play — was originally out of scope here but
+was **built 2026-07-12** at the owner's request; see §6 below.)
 
 ## Foundational decisions (owner, 2026-07-11)
 1. **Trigger = the normal Cores vote.** A `gameFormat` is a **preset candidate** in
@@ -325,6 +325,20 @@ nothing). Teams go for it far more; the risk/reward of every 4th down shifts har
    at own 20 (`newDriveYardsToEndzone`), WP progress = innings played.
 5. **`bust`** — after Sideline Goals ships (needs fine-grained scoring); inverts WP +
    decisions near X. LAST remaining format. See §2 (BUNDLE decision).
+6. **`frames`** — DONE (owner-requested 2026-07-12; originally out of scope). Golf/snooker
+   MATCH PLAY: the game splits into `framesPerGame` (6) equal TIME frames; whoever outscores
+   the other within a frame wins it (+1), a tied frame is HALVED (½). Most frames won wins
+   the match — TOTAL POINTS ARE IRRELEVANT to the result (a team can win the match with
+   fewer points). Frames tied at the end → total-points tiebreak → still tied → OT. It's the
+   ONLY format that decouples the winner from total points, so it added the winner seam:
+   base hooks `winnerSide` / `resultDisplay` / `eloScores` (default = most points, so the
+   other formats are byte-identical). The clock/quarter/OT loop runs NORMALLY — frames are a
+   time-based OVERLAY (`consumeTime` drains the clock then awards frames at time boundaries;
+   the engine winner block + both `updateEloAfterGame` calls route through the hooks; ELO
+   margin uses frames-won). WP is frames-lead based (points-WP is meaningless here). New
+   `framesPerGame` field + "Frames (6, match play)" preset; frontend shows "Frames 3-2 ·
+   Frame 4/6". Validated live: winner is frames-won incl. teams winning with fewer points,
+   points-tiebreak + OT resolve frame ties, standard regression unchanged.
 
 ### Architecture (BUILT 2026-07-11): `game_formats.py` strategy layer
 One `Game` engine; format-specific logic lives in per-format policy objects
