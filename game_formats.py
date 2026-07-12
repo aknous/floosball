@@ -36,6 +36,14 @@ class GameFormat:
         clock/OT logic, or None to defer to it (the default)."""
         return None
 
+    def latchFinalMidPlay(self) -> bool:
+        """Whether the engine may mark the game Final MID-PLAY (during a broadcast).
+        True for clock-based formats (they only end when the clock hits 0, a stable
+        moment). chess_clock ends on volatile score+budget conditions that a defensive
+        score can flip within the same play, so it defers to the main loop's
+        stable-state check instead of latching on a transient score."""
+        return True
+
     # ── Win probability ───────────────────────────────────────────────────────
     def adjustGameProgress(self, game, gameProgress: float) -> float:
         """Map elapsed-fraction (0 kickoff → 1 end of regulation). Formats where the
@@ -50,14 +58,34 @@ class GameFormat:
 
     # ── Clock / tempo semantics ───────────────────────────────────────────────
     def consumesRealTime(self) -> bool:
-        """True: plays drain the game clock in seconds (standard). False: the engine
-        neutralizes its per-play clock decrements and the format drives the clock in
-        `onPlayTick` (play_limit's synthetic clock)."""
+        """True: the game clock (and the seconds-unit Drive Clock) drain in real
+        seconds (standard). False: the format drives the game clock itself (play_limit
+        from a play counter, chess_clock from a budget), so the seconds-unit Drive
+        Clock is moot under it (it would use the plays unit)."""
         return True
+
+    def consumeTime(self, game, seconds: int) -> None:
+        """Consume `seconds` of game time. Standard drains the game clock; play_limit
+        no-ops (its clock is play-count driven); chess_clock drains the possessing
+        team's budget and recomputes its synthetic clock."""
+        if seconds > 0:
+            game.gameClockSeconds = max(0, game.gameClockSeconds - seconds)
+
+    def possessionReceiver(self, game, giver, receiver):
+        """Which team gets the ball on a possession change. Default: the defense
+        (`receiver`). chess_clock keeps it with the `giver` when the `receiver` is
+        locked out (offense budget spent)."""
+        return receiver
+
+    def suppressPunt(self, game) -> bool:
+        """True → the offense should go for it on 4th down instead of punting. chess_clock
+        returns this when the DEFENSE is locked out: a failed 4th down just hands the ball
+        back at the offense's own 20 (the possession gate), so a punt only wastes a down."""
+        return False
 
     def onPeriodStart(self, game) -> None:
         """Called when a new quarter/OT period begins (and at kickoff). No-op unless a
-        format tracks per-period play budgets."""
+        format tracks per-period state (play budgets, chess-clock synthetic clock)."""
         return None
 
     def onPlayTick(self, game) -> None:
@@ -174,6 +202,10 @@ class PlayLimitFormat(GameFormat):
     def consumesRealTime(self) -> bool:
         return False
 
+    def consumeTime(self, game, seconds: int) -> None:
+        # No-op: the game clock is driven by the play counter in onPlayTick.
+        return None
+
     def onPeriodStart(self, game) -> None:
         game._playLimitQuarterPlays = 0
 
@@ -195,7 +227,153 @@ class PlayLimitFormat(GameFormat):
         }}
 
 
-_FORMATS = {f.key: f for f in (GameFormat(), TargetFormat(), PlayLimitFormat())}
+class ChessClockFormat(GameFormat):
+    """Per-team offense-time budget. Each team drains its own budget only while it
+    possesses the ball; when its budget hits 0 it's LOCKED OUT — it can't take the
+    ball again, and the other team keeps it to the end. The game ends when both
+    budgets are spent. Cumulative score, highest wins.
+
+    Implemented with a SYNTHETIC clock (like play_limit): the game clock is scaled so
+    4 quarters span the TOTAL budget (both teams), which keeps gameClockSeconds in the
+    0..quarterLength range WP + halftime expect. The individual budgets are a parallel
+    overlay that drives the possession gate. A leader that hogs the ball drains its own
+    budget faster and hands the trailer uncontested late possessions — the strategic
+    axis. Budgets are ignored in OT (a fresh sudden-death period on the synthetic clock)."""
+    key = 'chess_clock'
+    label = 'Chess Clock'
+
+    def _budget(self, game) -> int:
+        return max(1, int(getattr(game.gameRules, 'offenseClockBudgetSeconds', 1080)))
+
+    def _totalBudget(self, game) -> int:
+        return 2 * self._budget(game)
+
+    # Budget accessors default to the full budget, so any call BEFORE the game loop
+    # inits them (e.g. the season manager's pre-game WP) reads "not locked out".
+    def _homeBudget(self, game):
+        return getattr(game, '_chessHomeBudget', self._budget(game))
+
+    def _awayBudget(self, game):
+        return getattr(game, '_chessAwayBudget', self._budget(game))
+
+    def consumesRealTime(self) -> bool:
+        return False
+
+    def latchFinalMidPlay(self) -> bool:
+        return False
+
+    def consumeTime(self, game, seconds: int) -> None:
+        if seconds <= 0:
+            return
+        if game.currentQuarter >= 5:
+            # OT: budgets are spent; advance the synthetic OT clock by full seconds.
+            counted = seconds
+        else:
+            # Drain the possessing team's budget, FLOORED at 0. Only the portion within
+            # their remaining budget advances the shared synthetic clock — a locked-out
+            # team's overshoot plays are "free" so they can't end the game early and the
+            # opponent still gets its full budget.
+            if game.offensiveTeam is game.homeTeam:
+                before = self._homeBudget(game)
+                counted = min(seconds, max(0, before))
+                game._chessHomeBudget = max(0, before - seconds)
+            elif game.offensiveTeam is game.awayTeam:
+                before = self._awayBudget(game)
+                counted = min(seconds, max(0, before))
+                game._chessAwayBudget = max(0, before - seconds)
+            else:
+                counted = seconds
+        # Advance the synthetic game clock from TOTAL (capped) budget spent this period,
+        # so a period ends when its share (totalBudget/4) of offense time is used.
+        game._chessQuarterSpent = getattr(game, '_chessQuarterSpent', 0) + counted
+        quarterBudget = self._totalBudget(game) / 4.0
+        frac = min(1.0, game._chessQuarterSpent / quarterBudget) if quarterBudget else 1.0
+        period = (game.gameRules.overtimeLengthSeconds if game.currentQuarter >= 5
+                  else game.gameRules.quarterLengthSeconds)
+        game.gameClockSeconds = max(0, round(period * (1.0 - frac)))
+        # Both budgets spent in regulation → force the period to end so Q4 resolves
+        # (the all-free plays would otherwise freeze the synthetic clock).
+        if (game.currentQuarter < 5 and self._homeBudget(game) <= 0
+                and self._awayBudget(game) <= 0):
+            game.gameClockSeconds = 0
+
+    def _lockedOut(self, game, team) -> bool:
+        if team is game.homeTeam:
+            return self._homeBudget(game) <= 0
+        if team is game.awayTeam:
+            return self._awayBudget(game) <= 0
+        return False
+
+    def suppressPunt(self, game) -> bool:
+        # If the DEFENSE is locked out, a failed 4th down just returns the ball to the
+        # offense at its own 20 (the gate), so punting only wastes a down — go for it.
+        return game.currentQuarter < 5 and self._lockedOut(game, game.defensiveTeam)
+
+    def possessionReceiver(self, game, giver, receiver):
+        # A locked-out team can't take the ball back — the giver keeps it (fresh drive
+        # at its own 20). Gate is off in OT. If both are spent the game is ending.
+        if game.currentQuarter >= 5:
+            return receiver
+        if self._lockedOut(game, receiver) and not self._lockedOut(game, giver):
+            return giver
+        return receiver
+
+    def checkEarlyEnd(self, game):
+        # A locked-out team that is TRAILING can never catch up (no offense left) → the
+        # game is decided the instant that's true, whether it locked out first (losing)
+        # or fell behind after (the opponent scored past it). If both are spent and
+        # someone leads, likewise over. A tie returns None so the standard Q4->OT path
+        # runs. OT (>=5) defers to standard sudden-death.
+        if game.currentQuarter >= 5:
+            return None
+        hLock = self._homeBudget(game) <= 0
+        aLock = self._awayBudget(game) <= 0
+        diff = game.homeScore - game.awayScore
+        if hLock and diff < 0:            # home depleted and trailing
+            return True
+        if aLock and diff > 0:            # away depleted and trailing
+            return True
+        if hLock and aLock and diff != 0:  # both depleted, decided
+            return True
+        return None
+
+    def onPeriodStart(self, game) -> None:
+        game._chessQuarterSpent = 0
+        if game.currentQuarter == 1:
+            b = self._budget(game)
+            game._chessHomeBudget = b
+            game._chessAwayBudget = b
+
+    def adjustWinProbability(self, game, homeWp, awayWp, expectedPoints):
+        # A locked-out team can't score again. If it isn't leading, it's nearly done;
+        # if it leads, the other team still has budget to try to catch up (leave WP).
+        if game.currentQuarter >= 5:
+            return homeWp, awayWp
+        hLock = self._homeBudget(game) <= 0
+        aLock = self._awayBudget(game) <= 0
+        if hLock == aLock:
+            return homeWp, awayWp
+        diff = game.homeScore - game.awayScore
+        if hLock and diff <= 0:        # home can't score & isn't ahead → away all but won
+            homeWp = min(homeWp, 4.0)
+            awayWp = 100 - homeWp
+        elif aLock and diff >= 0:       # away can't score & isn't ahead → home all but won
+            awayWp = min(awayWp, 4.0)
+            homeWp = 100 - awayWp
+        return homeWp, awayWp
+
+    def stateExtra(self, game) -> dict:
+        return {'chessClock': {
+            'active': True,
+            'homeBudget': max(0, round(getattr(game, '_chessHomeBudget', 0))),
+            'awayBudget': max(0, round(getattr(game, '_chessAwayBudget', 0))),
+            'homeLockedOut': getattr(game, '_chessHomeBudget', 1) <= 0,
+            'awayLockedOut': getattr(game, '_chessAwayBudget', 1) <= 0,
+        }}
+
+
+_FORMATS = {f.key: f for f in
+            (GameFormat(), TargetFormat(), PlayLimitFormat(), ChessClockFormat())}
 
 
 def getFormat(key: Optional[str]) -> GameFormat:

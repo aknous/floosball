@@ -972,6 +972,8 @@ GAME_FORMAT_PRESETS = [
      "patch": {"gameFormat": "target", "targetScore": 30}},
     {"key": "gf_play_limit_30", "label": "30 Plays a Quarter",
      "patch": {"gameFormat": "play_limit", "playsPerQuarter": 30}},
+    {"key": "gf_chess_clock_18", "label": "Chess Clock (18:00 each)",
+     "patch": {"gameFormat": "chess_clock", "offenseClockBudgetSeconds": 1080}},
 ]
 RULE_VOTE_CANDIDATES["gameFormat"]["presets"] = GAME_FORMAT_PRESETS
 

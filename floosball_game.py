@@ -2525,6 +2525,20 @@ class Game:
         leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
                        and self.gameClockSeconds <= 120)
 
+        # chess_clock: when the DEFENSE is locked out, never punt — a failed 4th down
+        # just returns the ball to us at our own 20 (the possession gate), so a punt
+        # only wastes a down. Kick a makeable FG that helps (points still count);
+        # otherwise go for it.
+        if self.format.suppressPunt(self):
+            if inFieldGoalRange and fgHelps:
+                self.play.playType = PlayType.FieldGoal
+            elif self.yardsToFirstDown <= 3:
+                self.play.runPlay()
+            else:
+                self.play.passPlay(self._selectPassPlay(
+                    'medium' if self.yardsToFirstDown <= 12 else 'long'))
+            return
+
         # Deep own territory: default punt, but override if trailing late in Q4
         # (or Q2 end-of-half past midfield)
         if self.yardsToSafety <= 35:
@@ -4297,8 +4311,17 @@ class Game:
                 self.otSecondPossComplete = True
                 self.firstOtPossessionComplete = True
         
-        self.offensiveTeam = defense
-        self.defensiveTeam = offense
+        # Possession gate (chess_clock): a locked-out receiver can't take the ball, so
+        # the format may keep it with the giver (fresh drive at its own 20). Default
+        # returns the defense, so standard/other formats flip normally.
+        receiver = self.format.possessionReceiver(self, offense, defense)
+        if receiver is offense:
+            self.offensiveTeam = offense
+            self.defensiveTeam = defense
+            yards = self.gameRules.fieldLength - 20  # giver keeps it at its own 20
+        else:
+            self.offensiveTeam = defense
+            self.defensiveTeam = offense
         self.yardsToEndzone = yards
         self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
         self.down = 1
@@ -8335,8 +8358,12 @@ class Game:
             return
 
         # If game is effectively over (e.g. last scoring play in Q4), ensure
-        # status reflects Final before this broadcast goes out to the frontend
-        if self.status != GameStatus.Final and self.isGameOver():
+        # status reflects Final before this broadcast goes out to the frontend.
+        # Skip for formats that don't allow a MID-PLAY latch (chess_clock ends on
+        # score+budget conditions a defensive score can flip within the same play —
+        # the main loop marks it Final at a stable point instead).
+        if (self.status != GameStatus.Final and self.format.latchFinalMidPlay()
+                and self.isGameOver()):
             self.status = GameStatus.Final
 
         # (WP/WPA computed above in _resolvePlayWpa for real plays; newHomeWp/newAwayWp/
@@ -9044,25 +9071,20 @@ class Game:
             return True
     
     def consumeGameTime(self, seconds: int):
-        """Consume time from game clock"""
-        # Formats that don't run on real time (play_limit) drive a synthetic clock
-        # from the play counter in the format's onPlayTick — the engine's variable
-        # per-play decrement is neutralized so a play = one fixed slice regardless of
-        # its real duration.
-        if not self.format.consumesRealTime():
-            return
-        if seconds > 0:
-            self.gameClockSeconds -= seconds
-            if self.gameClockSeconds < 0:
-                self.gameClockSeconds = 0
-            # Drive Clock (seconds unit): the possession budget drains with the
-            # game clock, so it naturally pauses whenever the game clock is stopped
-            # (this is only called while time is running off).
-            if self._driveClockActive() and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'seconds':
-                self.driveClockRemaining -= seconds
-                if self.driveClockRemaining <= 0:
-                    self.driveClockRemaining = 0
-                    self.driveClockExpiredThisPlay = True
+        """Consume game time. The game-clock effect is format-owned: standard drains
+        the clock; play_limit no-ops (its clock is play-count driven); chess_clock
+        drains the possessing team's budget and recomputes its synthetic clock."""
+        self.format.consumeTime(self, seconds)
+        # Drive Clock (seconds unit): the possession budget drains with the game clock,
+        # so it naturally pauses whenever the game clock is stopped. Only for formats
+        # that run on the real clock (play_limit/chess_clock use the plays unit).
+        if (seconds > 0 and self.format.consumesRealTime()
+                and self._driveClockActive()
+                and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'seconds'):
+            self.driveClockRemaining -= seconds
+            if self.driveClockRemaining <= 0:
+                self.driveClockRemaining = 0
+                self.driveClockExpiredThisPlay = True
 
     def checkTwoMinuteWarning(self):
         """Check and trigger two-minute warning"""
@@ -10409,12 +10431,11 @@ class Play():
         # timeout there. This holds whether the clock was running or stopped before
         # the snap: a stopped clock simply RESTARTS at the snap, then runs off.
         self.game.clockRunning = True
-        # Only drain the actual play time (snap to knee-down). In a format that runs
-        # on a synthetic (play-count) clock, the game clock is driven by onPlayTick
-        # instead, so skip this direct drain.
-        if self.game.format.consumesRealTime():
-            kneelDuration = min(4, self.game.gameClockSeconds)
-            self.game.gameClockSeconds -= kneelDuration
+        # Only drain the actual play time (snap to knee-down), through the format so a
+        # synthetic-clock format handles it correctly (play_limit no-ops here; chess_clock
+        # drains the possessing team's budget).
+        kneelDuration = min(4, self.game.gameClockSeconds)
+        self.game.format.consumeTime(self.game, kneelDuration)
         # Label the NEXT down (1st->2nd...) on a non-final-down kneel. A kneel on
         # the FINAL down surrenders the down, so it's a turnover on downs — the
         # same label the down-advancement section stamps on a non-game-ending
