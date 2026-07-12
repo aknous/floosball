@@ -896,7 +896,8 @@ RULE_VOTE_CANDIDATES = {
     "firstDownDistance":          {"label": "Yards to a first down",         "values": [5, 8, 12, 15]},
     "touchdownPoints":            {"label": "Touchdown points",              "range": [4, 9], "float": True},
     "fieldGoalPoints":            {"label": "Field goal points",             "range": [1, 5], "float": True},
-    "safetyPoints":               {"label": "Safety points",                 "range": [1, 5], "float": True},
+    # safetyPoints intentionally NOT votable — safeties are too infrequent for the
+    # option to feel worth it (owner 2026-07-12).
     "clockStopsOnIncompletePass": {"label": "Clock stops on an incompletion", "values": [False]},
     "clockStopsOnOutOfBounds":    {"label": "Clock stops going out of bounds", "values": [False]},
     # Display-only ENUM: how the score is shown (no engine effect). `valueLabels`
@@ -932,6 +933,19 @@ RULE_VOTE_CANDIDATES = {
     "gameFormat":                 {"label": "Game Format", "gate": "gameFormat",
                                    "presets": None},  # filled below (needs GAME_FORMAT_PRESETS)
 }
+
+# The score-display model (additive/spread/subtractive) is a lens over the two
+# CUMULATIVE point totals — it only reads sensibly when the raw point total IS the
+# meaningful score. So it's offerable on the ballot ONLY under these formats; under
+# 'target'/'bust' (the number's race to X is the story) and 'frames' (the score shown
+# is frames-won, not points) only additive makes sense, so the candidate is withheld
+# (owner 2026-07-12). A REVERT to additive is always allowed (see ruleVoteManager).
+SCORING_MODEL_FORMATS = frozenset({'standard', 'play_limit', 'chess_clock', 'innings'})
+
+# Criticality chaos: chance a chaos game picks a non-standard game FORMAT (the format is
+# chosen FIRST, then the other rules are randomized within ranges that fit it). Not 1.0
+# so some chaos games stay standard-format-with-scrambled-rules.
+CHAOS_FORMAT_CHANCE = 0.65
 
 # ── Conversion Ladder (dormant mechanic — docs/CONVERSION_LADDER_PLAN.md) ──
 # After a touchdown the offense picks ONE rung. The safe 1-pt kick and the 2-pt

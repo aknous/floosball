@@ -22,12 +22,12 @@ logger = get_logger('floosball.rulevote')
 # Weeks that begin a game day (day index = (week-1)//7).
 GAME_DAY_START_WEEKS = (1, 8, 15, 22)
 
-# Candidate fields left OUT of the per-game Criticality chaos. `scoringModel` is a
+# Candidate fields left OUT of the per-game Criticality chaos LOOP. `scoringModel` is a
 # display-only lens read league-wide from /api/rules — threading a per-game display
 # model through the game payload isn't built, so chaos leaves it at the league value.
-# `gameFormat` is a win-condition/loop change that must be fully modelled (WP +
-# decision tree) per format before it's safe to fire — excluded until each format's
-# build is complete (docs/GAME_FORMATS_PLAN.md).
+# `gameFormat` is NOT excluded from chaos anymore (all formats are built) — but it's
+# handled FIRST (see randomChaosRules) rather than in the general loop, so it's listed
+# here to skip it in the loop.
 _CHAOS_EXCLUDE = frozenset({'scoringModel', 'gameFormat'})
 
 
@@ -103,9 +103,14 @@ class RuleVoteManager:
         value} dicts. A scalar candidate proposes one specific new value; a PRESET
         candidate (e.g. Drive Clock) proposes one random preset — offered only while
         the mechanic is currently off."""
-        from constants import RULE_VOTE_CANDIDATES
+        from constants import RULE_VOTE_CANDIDATES, SCORING_MODEL_FORMATS
+        fmt = getattr(gameRules, 'gameFormat', 'standard') or 'standard'
         out = []
         for f, spec in RULE_VOTE_CANDIDATES.items():
+            # Score-display alternates only make sense under cumulative-point formats;
+            # withhold the candidate under target/bust/frames (only additive reads there).
+            if f == 'scoringModel' and fmt not in SCORING_MODEL_FORMATS:
+                continue
             if 'presets' in spec:
                 if not self._isChangedCandidate(f, spec, gameRules):   # only when off
                     p = random.choice(spec['presets'])
@@ -161,26 +166,51 @@ class RuleVoteManager:
         return random.randint(int(lo), int(hi))
 
     def randomChaosRules(self, baseRules):
-        """A per-game randomized ruleset for a Criticality game: a copy of the base
-        (current) ruleset with every SUPPORTED candidate field set to a random value.
-        Both teams in the game share it; it's hidden from users; results count. The
-        base is left untouched (deep-copied)."""
+        """A per-game randomized ruleset for a Criticality game. FORMAT FIRST: pick the
+        game format (standard or a preset) and apply its patch, THEN randomize every other
+        candidate with values that WORK for that format — the format's own fields stay
+        locked, the Drive Clock is skipped where it can't combine (synthetic / no game
+        clock), and bust keeps whole-number scores so a game is still winnable. Both teams
+        share it; hidden from users; results count. Base left untouched (deep-copied)."""
         import copy
-        from constants import RULE_VOTE_CANDIDATES
+        from constants import RULE_VOTE_CANDIDATES, GAME_FORMAT_PRESETS, CHAOS_FORMAT_CHANCE
         g = copy.deepcopy(baseRules)
+
+        # 1) FORMAT FIRST — the format sets the game's whole contract, so choose + apply it
+        #    before anything else and LOCK the fields it owns (a later random value must not
+        #    break the format, e.g. bust needs integer scores + Sideline Goals on).
+        formatFields = set()
+        if random.random() < CHAOS_FORMAT_CHANCE:
+            preset = random.choice(GAME_FORMAT_PRESETS)
+            for fld, v in preset['patch'].items():
+                setattr(g, fld, v)
+                formatFields.add(fld)
+        fmt = getattr(g, 'gameFormat', 'standard') or 'standard'
+        # The Drive Clock is a GAME-clock shot clock — it only combines with formats that
+        # actually run the game clock (skip the synthetic / no-clock formats).
+        realClock = fmt in ('standard', 'target', 'bust', 'frames')
+
+        # 2) EVERY OTHER RULE — random, but within ranges that fit the chosen format.
         for f, spec in RULE_VOTE_CANDIDATES.items():
-            if f in _CHAOS_EXCLUDE:
+            if f == 'gameFormat' or f in _CHAOS_EXCLUDE or f in formatFields:
                 continue
             if 'presets' in spec:
-                # A preset mechanic (Drive Clock): coin-flip it on with a random
-                # preset (it's impactful, so not every chaos game gets it).
+                # A preset mechanic (Drive Clock): coin-flip it on with a random preset
+                # (impactful, so not every chaos game gets it) — but only where it fits.
+                if f == 'driveClock' and not realClock:
+                    continue
                 if random.random() < 0.5:
                     for fld, v in random.choice(spec['presets'])['patch'].items():
                         setattr(g, fld, v)
                 continue
             v = self._randomChaosValue(f)
-            if v is not None:
-                setattr(g, f, v)
+            if v is None:
+                continue
+            # Bust is only winnable with WHOLE-number scores (land exactly on X). The bust
+            # preset already locks the scoring values; this guards any stray float field.
+            if fmt == 'bust' and spec.get('float'):
+                v = round(v)
+            setattr(g, f, v)
         return g
 
     # ── open ─────────────────────────────────────────────────────────────────
