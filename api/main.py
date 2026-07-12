@@ -1354,6 +1354,16 @@ def _presetMechanicLabel(key: str) -> str:
     return key
 
 
+def _presetCandidateField(key: str) -> str:
+    """The candidate field owning a preset option key (e.g. a Drive Clock preset key
+    -> 'driveClock'), for ballot-metadata lookup. Falls back to the key."""
+    from constants import RULE_VOTE_CANDIDATES
+    for f, spec in RULE_VOTE_CANDIDATES.items():
+        if 'presets' in spec and any(p['key'] == key for p in (spec.get('presets') or [])):
+            return f
+    return key
+
+
 def _formatPresetInfo(key: str):
     """(formatName, description) for a game-format preset option key, else None."""
     from constants import GAME_FORMAT_PRESETS, GAME_FORMAT_DESCRIPTIONS
@@ -1363,45 +1373,80 @@ def _formatPresetInfo(key: str):
     return None
 
 
-def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:
-    """Build the ballot's option views for a window. A SCALAR option shows the
-    field's current -> proposed value; a GAME FORMAT option reads "Game Format: <name>"
-    with a brief description (no arrow); any other PRESET (e.g. Drive Clock) shows the
-    mechanic label with Off -> <preset label> (or On -> Off for a revert)."""
-    from database.repositories.rule_vote_repository import RuleVoteRepository
+def _fmtRuleVal(field: str, v) -> str:
+    """Human-readable value for a rule field (mirrors the frontend fmtRuleValue, plus
+    per-field valueLabels e.g. the scoring-model enum)."""
     from constants import RULE_VOTE_CANDIDATES
+    if isinstance(v, bool):
+        return "On" if v else "Off"
+    if v is None:
+        return "—"
+    vl = RULE_VOTE_CANDIDATES.get(field, {}).get("valueLabels") or {}
+    if v in vl:
+        return vl[v]
+    if isinstance(v, str):
+        return v[:1].upper() + v[1:]
+    n = float(v)
+    return str(int(n)) if n == int(n) else str(round(n * 10) / 10)
+
+
+def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:
+    """Build the ballot's option views for a window. Each option carries a main `label`
+    and a `description` sub-line:
+      - SCALAR change   -> "Downs: 5"                 / "Current: 4"
+      - ON/OFF change   -> "Enable Conversion Ladder" / "<brief explanation>"
+      - GAME FORMAT     -> "Game Format: First to 30" / "<format description>"
+      - Drive Clock     -> "Enable Drive Clock"       / "<chosen preset, e.g. 90 seconds…>"
+      - REVERT (any)    -> "<rule name>"              / "Back to <default/standard>"
+    """
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    from constants import RULE_VOTE_CANDIDATES, RULE_BALLOT_META
     isRevert = getattr(window, 'kind', None) == 'revert'
     out = []
     for spec in RuleVoteRepository.optionSpecsOf(window):
         field = spec["field"]
-        fmtInfo = None if (field is not None or isRevert) else _formatPresetInfo(spec["key"])
+        key = spec["key"]
+        cand = RULE_VOTE_CANDIDATES.get(field, {}) if field else {}
+        meta = RULE_BALLOT_META.get(field, {}) if field else {}
         if field is not None:
-            out.append({
-                "key": spec["key"],
-                "field": field,
-                "label": RULE_VOTE_CANDIDATES.get(field, {}).get('label', field),
-                "current": getattr(gameRules, field, None),
-                "proposed": spec["value"],
-            })
-        elif fmtInfo is not None:
-            # A game format is described, not shown as a value change.
+            cur = getattr(gameRules, field, None)
+            if isRevert:
+                # A restore to default (multi-select day) — name it, note the target.
+                label = meta.get("short") or cand.get("label", field)
+                desc = f"Back to {_fmtRuleVal(field, spec['value'])}"
+            elif isinstance(cur, bool):
+                # On/off toggle — an action line + a brief explanation.
+                label = meta.get("enable", cand.get("label", field))
+                desc = meta.get("desc", "")
+            else:
+                # Scalar / enum — "<short>: <proposed>" over "Current: <current>".
+                short = meta.get("short", cand.get("label", field))
+                label = f"{short}: {_fmtRuleVal(field, spec['value'])}"
+                desc = f"Current: {_fmtRuleVal(field, cur)}"
+            out.append({"key": key, "field": field, "label": label,
+                        "description": desc, "current": cur, "proposed": spec["value"]})
+            continue
+
+        # PRESET options (field is None): game format, Drive Clock, or a preset revert.
+        fmtInfo = None if isRevert else _formatPresetInfo(key)
+        if fmtInfo is not None:
             name, desc = fmtInfo
-            out.append({
-                "key": spec["key"],
-                "field": None,
-                "label": f"Game Format: {name}",
-                "description": desc,
-                "current": None,
-                "proposed": None,
-            })
+            out.append({"key": key, "field": None, "label": f"Game Format: {name}",
+                        "description": desc, "current": None, "proposed": None})
+        elif isRevert:
+            mech = _presetMechanicLabel(key)
+            out.append({"key": key, "field": None, "label": mech,
+                        "description": "Back to Standard" if mech == "Game Format" else "Back to Off",
+                        "current": None, "proposed": None})
         else:
-            out.append({
-                "key": spec["key"],
-                "field": None,
-                "label": _presetMechanicLabel(spec["key"]),
-                "current": "On" if isRevert else "Off",
-                "proposed": "Off" if isRevert else spec.get("label"),
-            })
+            # A non-format preset mechanic (Drive Clock) — enable it; the sub-line is the
+            # chosen preset variant (e.g. "90 seconds, whole drive").
+            from constants import RULE_BALLOT_META as _M
+            mechField = _presetCandidateField(key)
+            out.append({"key": key, "field": None,
+                        "label": _M.get(mechField, {}).get("enable", f"Enable {_presetMechanicLabel(key)}"),
+                        "description": spec.get("label", ""),
+                        "current": None, "proposed": None})
     return out
 
 

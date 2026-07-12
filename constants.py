@@ -948,6 +948,29 @@ SCORING_MODEL_FORMATS = frozenset({'standard', 'play_limit', 'chess_clock', 'inn
 # so some chaos games stay standard-format-with-scrambled-rules.
 CHAOS_FORMAT_CHANCE = 0.65
 
+# How the non-format candidates READ on the ballot. A SCALAR shows "<short>: <proposed>"
+# with a "Current: <current>" sub-line. An ON/OFF toggle shows an "<enable>" action line
+# with a brief "<desc>" under it. (Formats have their own GAME_FORMAT_DESCRIPTIONS; the
+# Drive Clock uses "Enable Drive Clock" + the chosen preset's label as the sub-line.)
+RULE_BALLOT_META = {
+    # scalars — short main-line label
+    "downsPerSeries":          {"short": "Downs"},
+    "firstDownDistance":       {"short": "Yards to 1st"},
+    "touchdownPoints":         {"short": "Touchdown"},
+    "fieldGoalPoints":         {"short": "Field goal"},
+    "scoringModel":            {"short": "Score display"},
+    # on/off toggles — action label + brief explanation
+    "conversionLadderEnabled": {"enable": "Enable Conversion Ladder",
+                                "desc": "After a touchdown, go for 3, 4, or 5 points from further out instead of the safe kick."},
+    "sidelineGoalsEnabled":    {"enable": "Enable Sideline Goals",
+                                "desc": "Throw at the sideline hoops for a bonus point while driving down the field."},
+    "contestedScoringEnabled": {"enable": "Enable Contested Scoring",
+                                "desc": "A touchdown only counts if the scorer beats a defender in a one-on-one contest at the goal line."},
+    "clockStopsOnDeadBall":    {"enable": "Enable Running Clock",
+                                "desc": "The clock keeps running through incompletions, out of bounds, and turnovers."},
+    "driveClock":              {"enable": "Enable Drive Clock"},
+}
+
 # ── Conversion Ladder (dormant mechanic — docs/CONVERSION_LADDER_PLAN.md) ──
 # After a touchdown the offense picks ONE rung. The safe 1-pt kick and the 2-pt
 # try always exist (from extraPointPoints / twoPointConversionPoints); the ladder
