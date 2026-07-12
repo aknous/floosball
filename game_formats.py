@@ -468,6 +468,17 @@ class InningsFormat(GameFormat):
         else:
             game._inningsHalf = 'top'
             game._inningsNumber = getattr(game, '_inningsNumber', 1) + 1
+        # The at-bat is over and the teams switch — give the coaches a moment to
+        # regroup, like a manager between innings. innings leaves the clock inert (no
+        # advanceQuarter), so this is its ONLY mid-game coach-adjustment beat. Skip the
+        # flip that just completed the final inning (the game is about to end).
+        gameEnding = (game._inningsHalf == 'top'
+                      and game._inningsNumber > self._innings(game))
+        if not gameEnding:
+            try:
+                game._maybeReadjustGameplans('inning')
+            except Exception:
+                pass
         return receiver
 
     def checkEarlyEnd(self, game):
