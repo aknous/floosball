@@ -258,19 +258,16 @@ class SeasonManager:
         if self.playerManager:
             self.playerManager.releaseDueNames(seasonNumber)
 
-        self.currentSeason = Season(seasonNumber)
-
         # Rulebook resets to defaults every NEW season, so each season is a fresh
         # canvas and the fan-voted rule mutations only live for the season that
-        # voted them in. A mid-season restart (resumeFromWeek > 0) keeps the
-        # season's rules — those are reloaded from the persisted overrides at boot.
+        # voted them in. Clear the persisted overrides BEFORE the Season is built so
+        # its GameRules loads clean defaults. A mid-season restart (resumeFromWeek > 0)
+        # keeps the season's rules — the Season reloads them from the persisted store.
         if resumeFromWeek == 0:
             from game_rules import clearRuleOverrides
             clearRuleOverrides()
-            resetFields = self.gameRules.resetToDefaults()
-            if resetFields:
-                logger.info(f"  GameRules: reset to defaults for the new season "
-                            f"({len(resetFields)} field(s) cleared)")
+
+        self.currentSeason = Season(seasonNumber)
 
         # Anchor season start to the correct Monday
         from managers.timingManager import TimingMode, TimingManager
