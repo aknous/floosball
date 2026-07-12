@@ -942,22 +942,31 @@ CONVERSION_LADDER_RUNGS = [
 ]
 
 # ── Sideline Goals (dormant mechanic — docs/SIDELINE_GOALS_PLAN.md) ────────────
-# A hoop-shot play: the QB throws at a sideline hoop for `sidelineGoalPoints`. Make
-# = bank points + consume the down + drive continues; miss = turnover at the LOS; a
-# rare tip = a returnable INT. Make probability EMERGES from the QB's accuracy/arm
-# (attr, ~60-100, neutral 80) minus defensive pressure — no dial for the make rate.
+# Hoop shots at sideline hoops for `sidelineGoalPoints`. TWO pairs per attacking
+# direction: a MIDFIELD pair (~the 50) and an END-ZONE pair (flanking the goal being
+# attacked). Each pair is usable ONCE per drive (make or miss locks it). A MAKE banks
+# the point + counts as a completion; a MISS is just an INCOMPLETION — both consume the
+# down and the drive continues (no turnover). Difficulty EMERGES from the throw: the
+# downfield distance from the ball to the near hoop, plus the QB's accuracy/arm vs
+# coverage. So a point-blank shot is easy and a long one is hard.
 SIDELINE_GOAL_POINTS = 1                 # default points per make (mirrors GameRules default)
-SIDELINE_GOAL_BASE_MAKE = 0.55           # make prob for a neutral (80) accuracy QB, neutral coverage
-SIDELINE_GOAL_ACCURACY_SPAN = 0.010      # +/- make prob per skill point off 80 (skill drives it)
-SIDELINE_GOAL_PRESSURE_PENALTY = 0.22    # max make-prob reduction under elite coverage
-SIDELINE_GOAL_MIN_MAKE = 0.15            # floor so even a bad shot has a puncher's chance
-SIDELINE_GOAL_MAX_MAKE = 0.85            # ceiling so it's never automatic
-SIDELINE_GOAL_TIP_INT_CHANCE = 0.06      # chance a MISS is a tipped, returnable INT (not a clean turnover)
-# Play-caller: how often the hoop shot is even attempted (rare, situational).
-SIDELINE_GOAL_ATTEMPT_BASE = 0.02        # base per-eligible-play attempt chance
-SIDELINE_GOAL_ATTEMPT_STALL_MULT = 2.5   # x when the drive is stalling (salvage points)
-SIDELINE_GOAL_ATTEMPT_AGGR_SPAN = 0.04   # + up to this for a max-aggressiveness coach
-SIDELINE_GOAL_ATTEMPT_MAX = 0.18         # cap on the per-play attempt chance
+# Make-probability model: base (point-blank) − distance − coverage + QB skill.
+SIDELINE_GOAL_BASE_MAKE = 0.85           # point-blank make prob (neutral QB, neutral coverage)
+SIDELINE_GOAL_DISTANCE_PENALTY = 0.02    # − make prob per yard of downfield distance to the hoop
+SIDELINE_GOAL_ACCURACY_SPAN = 0.008      # +/- make prob per skill point off 80 (±~0.16 over the range)
+SIDELINE_GOAL_PRESSURE_PENALTY = 0.15    # max make-prob reduction under elite coverage
+SIDELINE_GOAL_MIN_MAKE = 0.30            # floor
+SIDELINE_GOAL_MAX_MAKE = 0.92            # ceiling — never automatic
+# Hoop geometry (in yardsToEndzone terms — distance to the attacking goal line).
+SIDELINE_GOAL_MIDFIELD_YARD = 50         # the midfield pair sits at the 50
+SIDELINE_GOAL_MIDFIELD_RANGE = 12        # midfield pair in range for yardsToEndzone within +/- this of 50
+SIDELINE_GOAL_ENDZONE_MIN = 3            # end-zone pair reachable from the ... 3 ...
+SIDELINE_GOAL_ENDZONE_RANGE = 18         # ... out to the 18 (the red zone; not from the goal line itself)
+# Play-caller: attempt chance when a fresh pair is in range (a low-risk point-grab now).
+SIDELINE_GOAL_ATTEMPT_INRANGE = 0.14     # base chance when in range of an unused pair
+SIDELINE_GOAL_ATTEMPT_STALL_MULT = 1.6   # x when the drive is stalling (salvage a point)
+SIDELINE_GOAL_ATTEMPT_AGGR_SPAN = 0.15   # + up to this for a max-aggressiveness coach
+SIDELINE_GOAL_ATTEMPT_MAX = 0.60         # cap on the attempt chance
 
 # ── Drive Clock (dormant mechanic — docs/DRIVE_CLOCK_PLAN.md) ──
 # A shot-clock for possessions. Two mode knobs: unit ('seconds' of game clock vs
