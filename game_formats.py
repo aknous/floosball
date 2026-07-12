@@ -89,6 +89,12 @@ class GameFormat:
         spot. innings starts every drive at the batting team's own 20 (a fresh at-bat)."""
         return None
 
+    def openingOffense(self, game):
+        """The team that gets the opening possession, or None to keep the coin toss.
+        innings forces the AWAY team to bat first (top) so HOME bats last and can
+        walk it off."""
+        return None
+
     def onPeriodStart(self, game) -> None:
         """Called when a new quarter/OT period begins (and at kickoff). No-op unless a
         format tracks per-period state (play budgets, chess-clock synthetic clock)."""
@@ -379,13 +385,15 @@ class ChessClockFormat(GameFormat):
 
 
 class InningsFormat(GameFormat):
-    """Baseball-style, out-driven — no game clock. Each team BATS until `outsPerInning`
-    (3) outs, then teams switch; play `inningsPerGame` (3) innings, most points wins.
-    An OUT = any possession that ENDS (a score, a punt, or a turnover), so a half-inning
-    is up to 3 drives — the batting team keeps getting the ball at its own 20 until it
-    makes 3 outs, banking whatever it scores, then hands over. OT = extra innings on a
-    tie. The engine's clock/quarter loop is left INERT (the clock never drains) and the
-    game is driven entirely by the out/inning counters via the possession gate."""
+    """Baseball-style, try-driven — no game clock. Each team BATS until `triesPerInning`
+    (3) TRIES, then teams switch; play `inningsPerGame` (3) innings, most points wins.
+    A TRY = any possession that ENDS (a score, a punt, or a turnover), so an at-bat is
+    up to 3 drives — the batting team keeps getting the ball at its own 20 until it uses
+    3 tries, banking whatever it scores, then hands over. The AWAY team bats first (top);
+    the HOME team bats last (bottom) and can WALK IT OFF: once it's the bottom of the
+    final (or an extra) inning and HOME is ahead, HOME has won and doesn't need to bat.
+    Extra innings on a tie. The engine's clock/quarter loop is left INERT (the clock
+    never drains); the game is driven by the try/inning counters via the possession gate."""
     key = 'innings'
     label = 'Innings'
     EXTRA_INNINGS_CAP = 5   # accept a tie after this many extra innings (anti-stalemate)
@@ -393,38 +401,41 @@ class InningsFormat(GameFormat):
     def _innings(self, game) -> int:
         return max(1, int(getattr(game.gameRules, 'inningsPerGame', 3)))
 
-    def _outs(self, game) -> int:
-        return max(1, int(getattr(game.gameRules, 'outsPerInning', 3)))
+    def _tries(self, game) -> int:
+        return max(1, int(getattr(game.gameRules, 'triesPerInning', 3)))
 
     def consumesRealTime(self) -> bool:
         return False
 
     def consumeTime(self, game, seconds: int) -> None:
-        return None   # no game clock — the loop is out-driven
+        return None   # no game clock — the loop is try-driven
 
     def latchFinalMidPlay(self) -> bool:
         return False   # ends on score+inning conditions a defensive score can flip
 
     def suppressPunt(self, game) -> bool:
-        return True    # a punt is an out for nothing; going for it is strictly better
+        return True    # a punt is a try for nothing; going for it is strictly better
 
     def newDriveYardsToEndzone(self, game):
         return game.gameRules.fieldLength - 20   # every at-bat starts at own 20
+
+    def openingOffense(self, game):
+        return game.awayTeam   # away bats first (top) → home bats last (bottom)
 
     def onPeriodStart(self, game) -> None:
         if game.currentQuarter == 1:
             game._inningsNumber = 1
             game._inningsHalf = 'top'
-            game._inningsOuts = 0
+            game._inningsTries = 0
 
     def possessionReceiver(self, game, giver, receiver):
-        # Every possession-end is an out for the batting team (the giver). Under 3 outs
-        # they keep batting; at 3 outs the half-inning flips to the other team.
-        outs = getattr(game, '_inningsOuts', 0) + 1
-        if outs < self._outs(game):
-            game._inningsOuts = outs
+        # Every possession-end is a TRY used by the batting team (the giver). Under 3
+        # tries they keep batting; at 3 the at-bat flips to the other team.
+        tries = getattr(game, '_inningsTries', 0) + 1
+        if tries < self._tries(game):
+            game._inningsTries = tries
             return giver
-        game._inningsOuts = 0
+        game._inningsTries = 0
         if getattr(game, '_inningsHalf', 'top') == 'top':
             game._inningsHalf = 'bottom'
         else:
@@ -433,27 +444,30 @@ class InningsFormat(GameFormat):
         return receiver
 
     def checkEarlyEnd(self, game):
-        # A full inning just completed when we're back at the TOP with 0 outs and the
-        # inning counter has passed `inningsPerGame`. End if decided; else extra innings
-        # (until the anti-stalemate cap accepts a tie).
+        N = self._innings(game)
         inning = getattr(game, '_inningsNumber', 1)
-        if (getattr(game, '_inningsHalf', 'top') == 'top'
-                and getattr(game, '_inningsOuts', 0) == 0
-                and inning > self._innings(game)):
+        half = getattr(game, '_inningsHalf', 'top')
+        # WALK-OFF: HOME bats last (bottom). Once it's the bottom of the final (or an
+        # extra) inning and HOME is ahead, HOME has won — it needn't bat / keep batting.
+        if half == 'bottom' and inning >= N and game.homeScore > game.awayScore:
+            return True
+        # A full inning just completed (back at the TOP with 0 tries, past N innings):
+        # decided ends it; a tie goes to extra innings (until the anti-stalemate cap).
+        if half == 'top' and getattr(game, '_inningsTries', 0) == 0 and inning > N:
             if game.homeScore != game.awayScore:
                 return True
-            if inning > self._innings(game) + self.EXTRA_INNINGS_CAP:
+            if inning > N + self.EXTRA_INNINGS_CAP:
                 return True   # accept a tie after too many extra innings
         return None
 
     def adjustGameProgress(self, game, gameProgress: float) -> float:
         # Progress = fraction of the scheduled innings played (completed innings +
-        # current half + outs within it), so WP reads late innings as "late game".
+        # current half + tries within it), so WP reads late innings as "late game".
         total = self._innings(game)
         inning = getattr(game, '_inningsNumber', 1)
         halfFrac = 0.5 if getattr(game, '_inningsHalf', 'top') == 'bottom' else 0.0
-        outFrac = (getattr(game, '_inningsOuts', 0) / self._outs(game)) * 0.5
-        done = (inning - 1) + halfFrac + outFrac
+        tryFrac = (getattr(game, '_inningsTries', 0) / self._tries(game)) * 0.5
+        done = (inning - 1) + halfFrac + tryFrac
         return max(gameProgress, min(1.0, done / total))
 
     def stateExtra(self, game) -> dict:
@@ -461,9 +475,9 @@ class InningsFormat(GameFormat):
             'active': True,
             'inning': getattr(game, '_inningsNumber', 1),
             'half': getattr(game, '_inningsHalf', 'top'),
-            'outs': getattr(game, '_inningsOuts', 0),
+            'tries': getattr(game, '_inningsTries', 0),
             'inningsPerGame': self._innings(game),
-            'outsPerInning': self._outs(game),
+            'triesPerInning': self._tries(game),
         }}
 
 

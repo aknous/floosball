@@ -974,8 +974,8 @@ GAME_FORMAT_PRESETS = [
      "patch": {"gameFormat": "play_limit", "playsPerQuarter": 30}},
     {"key": "gf_chess_clock_18", "label": "Chess Clock (18:00 each)",
      "patch": {"gameFormat": "chess_clock", "offenseClockBudgetSeconds": 1080}},
-    {"key": "gf_innings_3", "label": "Innings (3, out-driven)",
-     "patch": {"gameFormat": "innings", "inningsPerGame": 3, "outsPerInning": 3}},
+    {"key": "gf_innings_3", "label": "Innings (3, try-driven)",
+     "patch": {"gameFormat": "innings", "inningsPerGame": 3, "triesPerInning": 3}},
 ]
 RULE_VOTE_CANDIDATES["gameFormat"]["presets"] = GAME_FORMAT_PRESETS
 

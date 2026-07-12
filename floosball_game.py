@@ -5639,7 +5639,17 @@ class Game:
             self.defensiveTeam = self.homeTeam
             coinFlipWinner = self.awayTeam
             coinFlipLoser = self.homeTeam
-            
+
+        # A format may force the opening possession (innings: away bats first, top),
+        # overriding the coin toss. No-op for standard/other formats.
+        _forcedOpen = self.format.openingOffense(self)
+        if _forcedOpen is not None:
+            self.offensiveTeam = _forcedOpen
+            self.defensiveTeam = (self.awayTeam if _forcedOpen is self.homeTeam
+                                  else self.homeTeam)
+            coinFlipWinner = _forcedOpen
+            coinFlipLoser = self.defensiveTeam
+
         self.status = GameStatus.Active
         self.gameFeed.insert(0, {'event':  {
                                                 'text': '{} wins the coin toss'.format(coinFlipWinner.name),

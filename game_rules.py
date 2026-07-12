@@ -127,7 +127,7 @@ class GameRules:
     playsPerQuarter: int = 30              # 'play_limit' format: fixed plays per quarter (no clock)
     offenseClockBudgetSeconds: int = 1080  # 'chess_clock' format: each team's offense-time budget (18:00)
     inningsPerGame: int = 3                # 'innings' format: innings each team bats (no clock)
-    outsPerInning: int = 3                 # 'innings' format: possession-ends per half-inning
+    triesPerInning: int = 3                # 'innings' format: possession-ends (tries) per at-bat
 
     # ── Field goal mechanics ───────────────────────────────────────
     fgSnapDistance: int = 17            # Yards added to LOS for snap + hold
@@ -210,7 +210,7 @@ class GameRules:
             "playsPerQuarter": self.playsPerQuarter,
             "offenseClockBudgetSeconds": self.offenseClockBudgetSeconds,
             "inningsPerGame": self.inningsPerGame,
-            "outsPerInning": self.outsPerInning,
+            "triesPerInning": self.triesPerInning,
             "driveClockEnabled": self.driveClockEnabled,
             "driveClockUnit": self.driveClockUnit,
             "driveClockReset": self.driveClockReset,
@@ -276,9 +276,9 @@ MUTABLE_RULE_FIELDS = {
     # format + its config together. targetScore is the 'target' finish line;
     # playsPerQuarter is the 'play_limit' per-quarter play budget;
     # offenseClockBudgetSeconds is each team's 'chess_clock' offense-time budget;
-    # inningsPerGame/outsPerInning configure the 'innings' format.
+    # inningsPerGame/triesPerInning configure the 'innings' format.
     "gameFormat", "targetScore", "playsPerQuarter", "offenseClockBudgetSeconds",
-    "inningsPerGame", "outsPerInning",
+    "inningsPerGame", "triesPerInning",
     # Structural rule #1 — yards needed to convert a first down. Core mechanic
     # (reset/decrement/goal-to-go) reads gameRules; play-calling heuristics use
     # the live yardsToFirstDown so they degrade gracefully at non-default values.
