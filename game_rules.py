@@ -134,7 +134,7 @@ class GameRules:
     # Cores vote preset (docs/GAME_FORMATS_PLAN.md). `targetScore` is the
     # finish line for the 'target' format (first to X). Other formats add
     # their own config as they're built.
-    gameFormat: str = 'standard'           # 'standard' | 'target' | 'play_limit' | 'chess_clock' | 'innings' | 'frames' | (bust later)
+    gameFormat: str = 'standard'           # 'standard' | 'target' | 'play_limit' | 'chess_clock' | 'innings' | 'frames' | 'bust'
     targetScore: int = 30                  # 'target' format: first to this many points wins
     playsPerQuarter: int = 30              # 'play_limit' format: fixed plays per quarter (no clock)
     offenseClockBudgetSeconds: int = 1080  # 'chess_clock' format: each team's offense-time budget (18:00)

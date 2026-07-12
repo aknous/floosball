@@ -135,6 +135,25 @@ class GameFormat:
         point totals; frames uses frames-won so the margin reflects the match result."""
         return game.homeScore, game.awayScore
 
+    # ── Scoring interception (bust) ────────────────────────────────────────────
+    def scorePoints(self, game, points):
+        """Transform the points a scoring play awards before they're applied. Default =
+        unchanged. bust ROUNDS to a whole number so a fractional score value can't make
+        landing exactly on X impossible."""
+        return points
+
+    def voidsScore(self, game, team, points) -> bool:
+        """True → VOID this score (don't apply the points; the scoring play becomes a
+        no-score / turnover). Default never voids. bust voids a score that would push the
+        team OVER the target X (you can't exceed X)."""
+        return False
+
+    def allowFieldGoal(self, game, fgPoints) -> bool:
+        """Whether the offense may attempt a field goal right now. Default yes. bust
+        forbids a FG that would OVERSHOOT X (a busted kick just wastes the down); a FG
+        that lands on or under X is fine (exactly on X wins)."""
+        return True
+
     def usesQuarterCoachAdjustments(self) -> bool:
         """Whether the adaptive mid-game coach re-plan fires at QUARTER boundaries.
         True for clock/quarter formats. frames returns False — its adjustment beat is
@@ -658,8 +677,56 @@ class FramesFormat(GameFormat):
         }}
 
 
+class BustFormat(GameFormat):
+    """Darts — land EXACTLY on the target X to win. A score that would push you OVER X is
+    VOIDED (no points) and turns the ball over, so a greedy TD that overshoots wastes the
+    drive; you can never exceed X. Reaching exactly X wins; if the clock expires first the
+    higher score (both <= X) wins. Score values are forced to WHOLE NUMBERS so landing on
+    X is always possible, and Sideline Goals is bundled on so the 1-pt hoops let you land
+    precisely. The clock/quarter loop runs normally — only scoring + the win condition
+    change. The decision tree inverts: near X, don't kick a busting FG or chase a busting
+    TD — dink the exact remainder with a FG / hoop."""
+    key = 'bust'
+    label = 'Darts'
+
+    def _target(self, game) -> int:
+        return int(getattr(game.gameRules, 'targetScore', 18))
+
+    def scorePoints(self, game, points):
+        return int(round(points))   # whole numbers only — a fractional score can't land on X
+
+    def voidsScore(self, game, team, points) -> bool:
+        cur = game.homeScore if team is game.homeTeam else game.awayScore
+        return (cur + points) > self._target(game)
+
+    def bustNeed(self, game, team) -> int:
+        cur = game.homeScore if team is game.homeTeam else game.awayScore
+        return self._target(game) - cur
+
+    def allowFieldGoal(self, game, fgPoints) -> bool:
+        off = getattr(game, 'offensiveTeam', None)
+        if off is None:
+            return True
+        return self.bustNeed(game, off) >= int(round(fgPoints))
+
+    def checkEarlyEnd(self, game):
+        # Reached exactly X → win (the standard higher-score winner picks that team).
+        X = self._target(game)
+        if game.homeScore == X or game.awayScore == X:
+            return True
+        return None
+
+    def adjustGameProgress(self, game, gameProgress: float) -> float:
+        # Nearing X is "late game" (a lead near X reads decisive). Scores never exceed X.
+        X = self._target(game)
+        if X > 0:
+            return max(gameProgress, min(1.0, max(game.homeScore, game.awayScore) / X))
+        return gameProgress
+
+
 _FORMATS = {f.key: f for f in (GameFormat(), TargetFormat(), PlayLimitFormat(),
-                               ChessClockFormat(), InningsFormat(), FramesFormat())}
+                               ChessClockFormat(), InningsFormat(), FramesFormat(),
+                               BustFormat())}
 
 
 def getFormat(key: Optional[str]) -> GameFormat:

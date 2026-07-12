@@ -1011,6 +1011,15 @@ GAME_FORMAT_PRESETS = [
      "patch": {"gameFormat": "innings", "inningsPerGame": 3, "triesPerInning": 3}},
     {"key": "gf_frames_6", "label": "Frames (6, match play)",
      "patch": {"gameFormat": "frames", "framesPerGame": 6}},
+    # Darts: land EXACTLY on X (overshoot busts → turnover). BUNDLES Sideline Goals on
+    # (the 1-pt hoops are how you land precisely). Also snaps the score values back to
+    # WHOLE NUMBERS — fractional increments (a voted 6.4-pt TD) could never sum to exactly
+    # X, making it unwinnable (the format also rounds at scoring time as a safety net).
+    # X kept low (~18).
+    {"key": "gf_bust_18", "label": "Darts (land on 18)",
+     "patch": {"gameFormat": "bust", "targetScore": 18, "sidelineGoalsEnabled": True,
+               "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
+               "extraPointPoints": 1, "twoPointConversionPoints": 2}},
 ]
 RULE_VOTE_CANDIDATES["gameFormat"]["presets"] = GAME_FORMAT_PRESETS
 

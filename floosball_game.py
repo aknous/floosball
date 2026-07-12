@@ -244,6 +244,9 @@ class PlayResult(enum.Enum):
     # continues); a miss is a turnover at the spot (a rare tip is a returnable INT).
     SidelineHoopGood = 'Sideline Hoop Good'
     SidelineHoopMiss = 'Sideline Hoop Miss'
+    # Darts (bust) — a score that would overshoot the target X is voided (no points),
+    # and the drive is turned over.
+    Bust = 'Bust'
     Safety = 'Safety'
     Fumble = 'Fumble'
     Interception = 'Interception'
@@ -2526,6 +2529,10 @@ class Game:
         fgHelps = scoreDiff >= -self._fgValue() or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
         inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
+        # Darts (bust): never treat a FG as "in range" if it would overshoot X — the
+        # offense should go for it / dink a hoop instead of busting the kick.
+        if not self.format.allowFieldGoal(self, self.gameRules.fieldGoalPoints):
+            inFieldGoalRange = False
         leadingLate = (scoreDiff > 0 and self.currentQuarter >= 4
                        and self.gameClockSeconds <= 120)
 
@@ -5152,6 +5159,11 @@ class Game:
                     line = line.rstrip('.') + f", good from {fgDist} yards"
             text = f"{fire['powerName']}: {line}"
 
+        # Darts (bust): a scoring play that overshot X banked nothing — flag the bust.
+        if getattr(self.play, 'scoreVoided', False):
+            _X = int(getattr(self.gameRules, 'targetScore', 0))
+            text = f"{text or 'reaches the end zone'} — BUST! that would clear {_X}, no points"
+
         self.play.playText = text
 
     def _evaluateClutchChoke(self):
@@ -6307,10 +6319,16 @@ class Game:
 
                     if self.play.isFgGood:
                         self._addScore(self.offensiveTeam, self.gameRules.fieldGoalPoints)
-                        self._applyMomentumEvent(MOMENTUM_FG_MADE, self.offensiveTeam)
-                        self.defensiveTeam.gameDefenseStats['ptsAlwd'] += self.gameRules.fieldGoalPoints
-                        self.play.playResult = PlayResult.FieldGoalGood
-                        self.play.scoreChange = True
+                        if getattr(self.play, 'scoreVoided', False):
+                            # Darts bust — the FG would overshoot X (should be rare, the
+                            # play-caller avoids busting kicks); no points, just a turnover.
+                            self.play.playResult = PlayResult.Bust
+                            self.play.scoreChange = False
+                        else:
+                            self._applyMomentumEvent(MOMENTUM_FG_MADE, self.offensiveTeam)
+                            self.defensiveTeam.gameDefenseStats['ptsAlwd'] += self.gameRules.fieldGoalPoints
+                            self.play.playResult = PlayResult.FieldGoalGood
+                            self.play.scoreChange = True
                         self.play.homeTeamScore = self.homeScore
                         self.play.awayTeamScore = self.awayScore
                         self.clockRunning = False  # Clock stops after score
@@ -6509,6 +6527,21 @@ class Game:
                 # Handle normal play outcomes
                 else:
                     if self.play.yardage >= self.yardsToEndzone:
+                        # Darts (bust): a TD that would push the offense OVER X is a bust —
+                        # no points, no stats, no conversion; turn the ball over. (A TD that
+                        # lands on/under X scores normally; == X wins via checkEarlyEnd.)
+                        if self.format.voidsScore(self, self.offensiveTeam, self.gameRules.touchdownPoints):
+                            self.play.playResult = PlayResult.Bust
+                            self.play.scoreVoided = True
+                            self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
+                            self.formatPlayText()
+                            self.gameFeed.insert(0, {'play': self.play})
+                            self.broadcastGameState(includeLastPlay=True)
+                            self.turnover(self.offensiveTeam, self.defensiveTeam,
+                                          self.gameRules.fieldLength - 20)
+                            self._pendingPossessionChange = True
+                            lastPlayFormatted = True
+                            break
                         self.play.isTd = True
                         if self.play.playType is PlayType.Run:
                             self.play.runner.addRushTd(self.play.yardage, self.isRegularSeasonGame)
@@ -9783,6 +9816,15 @@ class Game:
             team: The team to award points to (homeTeam or awayTeam)
             points: Number of points to add
         """
+        # Format-owned scoring: bust rounds points to whole numbers and VOIDS a score
+        # that would push the team over the target X (a bust — the play banks nothing;
+        # the calling scoring branch turns the ball over). Identity/no-op for others, so
+        # standard is unchanged.
+        points = self.format.scorePoints(self, points)
+        if self.format.voidsScore(self, team, points):
+            if hasattr(self, 'play') and self.play is not None:
+                self.play.scoreVoided = True
+            return
         # Record who scored on this play so calculateWinProbability can
         # bake in expected PAT on TDs (anticipating the upcoming kick
         # makes a missed XP show as a real negative WPA event).
@@ -10300,6 +10342,7 @@ class Play():
         self.isHoopShot = False
         self.hoopMade = False
         self.hoopPair = None           # 'midfield' | 'endzone' — which pair was targeted
+        self.scoreVoided = False       # bust: a score was voided (overshot X) → turnover
         self.isTd = False
         self.isXpTry = False
         self.isFgGood = False
