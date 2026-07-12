@@ -186,8 +186,7 @@ class RuleVoteManager:
     # ── open ─────────────────────────────────────────────────────────────────
     def maybeOpenWindow(self, season: int, week: int, gameRules,
                         closesAt: Optional[datetime.datetime] = None) -> None:
-        from constants import (RULE_VOTE_ENABLED, RULE_VOTE_RAMP, RULE_VOTE_REVERT_GATE,
-                               RULE_VOTE_BALLOT_SIZE)
+        from constants import RULE_VOTE_ENABLED, RULE_VOTE_BALLOT_SIZE
         if not RULE_VOTE_ENABLED or week not in GAME_DAY_START_WEEKS:
             return
         dayIndex = self.dayIndexForWeek(week)
@@ -198,41 +197,31 @@ class RuleVoteManager:
             if repo.hasWindow(season, dayIndex):
                 return  # this game day already processed (idempotent on restart)
 
-            # Escalation: chance ramps with consecutive prior game-days this season
-            # that didn't fire; guaranteed once three in a row have missed.
-            maxFired = repo.maxFiredDayIndex(season)
-            misses = dayIndex - ((maxFired + 1) if maxFired is not None else 0)
-            misses = max(0, min(misses, len(RULE_VOTE_RAMP) - 1))
-            prob = RULE_VOTE_RAMP[misses]
-            if os.environ.get('RULE_VOTE_FORCE'):
-                prob = 1.0   # testing: a vote fires every game day
-            if random.random() >= prob:
-                repo.recordDay(season, dayIndex, fired=False)
-                session.commit()
-                logger.info(f"Rule vote: S{season} day {dayIndex} did not fire (p={prob:.2f})")
-                return
-
-            # Pick kind. Below the revert gate it's always a CHANGE; at/above it's a
-            # 50/50 coin flip, with guards for empty pools on either side.
-            changeOpts = self._changeOptions(gameRules)
-            revertOpts = self._revertOptions(gameRules)
-            canChange = len(changeOpts) > 0
-            canRevert = len(revertOpts) >= RULE_VOTE_REVERT_GATE
-            if canRevert and canChange:
-                kind = 'revert' if random.random() < 0.5 else 'change'
-            elif canChange:
-                kind = 'change'
-            elif revertOpts:
-                kind = 'revert'  # nothing left to change; offer a revert instead
+            # Deterministic weekly cadence — a vote fires EVERY game day, no roll:
+            #   day 0 -> Aris CHANGE, the Game Format only
+            #   day 1,2 -> Aris CHANGE, everything else (scalars / display / mechanics)
+            #   day 3 -> Pyre REVERT (the fan safety valve before the last day + playoffs)
+            if dayIndex >= 3:
+                kind = 'revert'
+                options = self._revertOptions(gameRules)
             else:
+                kind = 'change'
+                allChange = self._changeOptions(gameRules)
+                gfOpts = [o for o in allChange if 'gameFormat' in (o.get('patch') or {})]
+                otherOpts = [o for o in allChange if 'gameFormat' not in (o.get('patch') or {})]
+                # Day 0 is the Game Format day. If no format change is available (e.g.
+                # the only built format is already active, no swap target), fall back
+                # to the general pool so the day still fires.
+                options = (gfOpts or otherOpts) if dayIndex == 0 else otherOpts
+
+            if not options:
                 repo.recordDay(season, dayIndex, fired=False)
                 session.commit()
-                logger.info(f"Rule vote: S{season} day {dayIndex} fired but no candidates")
+                logger.info(f"Rule vote: S{season} day {dayIndex} ({kind}) — no candidates")
                 return
 
-            pool = list(revertOpts if kind == 'revert' else changeOpts)
-            random.shuffle(pool)
-            options = pool[:RULE_VOTE_BALLOT_SIZE]
+            random.shuffle(options)
+            options = options[:RULE_VOTE_BALLOT_SIZE]
 
             from managers.coresManager import ruleVoteConversation
             convo = ruleVoteConversation(kind)
