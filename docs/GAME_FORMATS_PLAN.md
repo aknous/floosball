@@ -304,7 +304,15 @@ nothing). Teams go for it far more; the risk/reward of every 4th down shifts har
    scrimmage-play counter in `onPlayTick`; `consumeGameTime` is neutralized). The
    entire time-based decision tree + WP are reused UNCHANGED because plays-remaining is
    proportional to seconds-remaining — no decision-tree rewrite was needed after all.
-3. **`chess_clock`** — possession model + per-team offense clocks.
+3. **`chess_clock`** — DONE. Per-team offense-time budget (18:00 each) on a synthetic
+   clock scaled to the total (like play_limit, so WP/quarters stay accurate). Owner
+   rules: a depleted team plays perpetual defense (possession gate keeps the ball with
+   the giver at its own 20 when the receiver is locked out); the team that depletes
+   first while LOSING ends the game immediately (can't catch up); when a team is locked
+   out the opponent never punts (a failed 4th just returns the ball at its own 20).
+   Budgets floor at 0 and only in-budget time advances the synthetic clock (no overshoot
+   / stranded budget). chess_clock doesn't latch Final mid-play (a defensive score can
+   flip a decided game within a play). Ties → OT.
 4. **`innings`** — full out/inning loop; the deepest.
 5. **`bust`** — after Sideline Goals ships (needs fine-grained scoring); inverts WP +
    decisions near X.
