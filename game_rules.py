@@ -127,6 +127,14 @@ class GameRules:
     sidelineGoalsEnabled: bool = False
     sidelineGoalPoints: int = 1            # points banked per made hoop shot
 
+    # Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md). When on, a
+    # rushing / receiving / QB-scramble TD is only PROVISIONAL: the scorer completes an
+    # action (dunk/race/arm-wrestle/beauty/backflip, each keyed to a real attribute) to
+    # bank it, and the best-suited defender gets one last-resort contest to cancel it (a
+    # stuff = no points, back to the play's LOS, down advances). Tunables in constants
+    # `CONTEST_*`. Off by default; a Cores vote flips the gate.
+    contestedScoringEnabled: bool = False
+
     # ── Game format / win condition (dormant) ──────────────────────
     # How the game is won / when it ends. 'standard' = today (cumulative
     # score, higher wins at the end of regulation/OT). Alternates change
@@ -230,6 +238,7 @@ class GameRules:
             "driveClockReset": self.driveClockReset,
             "driveClockLimit": self.driveClockLimit,
             "sidelineGoalsEnabled": self.sidelineGoalsEnabled,
+            "contestedScoringEnabled": self.contestedScoringEnabled,
             "sidelineGoalPoints": self.sidelineGoalPoints,
             "fgSnapDistance": self.fgSnapDistance,
             "fgMinAttemptProb": self.fgMinAttemptProb,
@@ -291,6 +300,8 @@ MUTABLE_RULE_FIELDS = {
     # Sideline Goals — on/off gate + the point value per made hoop shot. Contained
     # in the play-calling + resolution path (a new hoop-shot play type).
     "sidelineGoalsEnabled", "sidelineGoalPoints",
+    # Contested Scoring — on/off gate; contained in the TD scoring-resolution step.
+    "contestedScoringEnabled",
     # Game format / win condition — one format at a time; a vote preset sets the
     # format + its config together. targetScore is the 'target' finish line;
     # playsPerQuarter is the 'play_limit' per-quarter play budget;
@@ -347,6 +358,8 @@ RULEBOOK_EXPOSED_FIELDS = {
     "driveClockEnabled",
     # Sideline Goals gate — dormant on/off mechanic (Rulebook "Dormant Rules" list).
     "sidelineGoalsEnabled",
+    # Contested Scoring gate — dormant on/off mechanic (Rulebook "Dormant Rules" list).
+    "contestedScoringEnabled",
     # Game format gate — surfaced as the Rulebook's "Game Format" row (the active
     # format + its config); the config (targetScore, ...) rides alongside in `rules`.
     "gameFormat",

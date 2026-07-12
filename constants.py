@@ -914,6 +914,10 @@ RULE_VOTE_CANDIDATES = {
     # CHANGE is enabling it; disabling is a REVERT to default.
     "sidelineGoalsEnabled":       {"label": "Sideline Goals",
                                    "values": [True], "valueLabels": {True: "On", False: "Off"}},
+    # On/off MECHANIC toggle (Contested Scoring). Same shape — the only proposable
+    # CHANGE is enabling it; disabling is a REVERT to default.
+    "contestedScoringEnabled":    {"label": "Contested Scoring",
+                                   "values": [True], "valueLabels": {True: "On", False: "Off"}},
     # PRESET candidate (the Drive Clock). Not a scalar field=value — each option is
     # a full {unit, reset, limit} bundle applied as a patch. `gate` is the on/off
     # field used to tell whether the mechanic is currently changed (for revert +
@@ -969,6 +973,71 @@ SIDELINE_GOAL_ATTEMPT_INRANGE = 0.55     # base chance when in range of an unuse
 SIDELINE_GOAL_ATTEMPT_STALL_MULT = 1.4   # x when the drive is stalling (salvage a point)
 SIDELINE_GOAL_ATTEMPT_AGGR_SPAN = 0.25   # + up to this for a max-aggressiveness coach
 SIDELINE_GOAL_ATTEMPT_MAX = 0.90         # cap on the attempt chance
+
+# ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
+# Rugby-flavored: a rushing / receiving / QB-scramble TD is only PROVISIONAL — the
+# scorer must complete an ACTION to bank it, and the best-suited defender gets one
+# last-resort contest to cancel it. The defense winning is RARE and dramatic (a stuff
+# = no points, back to the play's LOS, down advances) — not a scoring nerf. Everything
+# emerges from player attributes (natural-emergence principle); off by default.
+# Each contest TYPE keys off a different attribute so different players shine; the
+# scorer/defender attribute is a weighted blend of real `floosball_player` stats.
+CONTEST_TYPES = [
+    # key            label            scorer attrs (weighted)          defender attrs (weighted)     solo   weight
+    {'key': 'dunk',        'label': 'Dunk',          'scorer': [('power', 0.7), ('xFactor', 0.3)],     'defender': [('power', 0.6), ('agility', 0.4)], 'solo': False, 'weight': 1.0},
+    {'key': 'race',        'label': 'Race',          'scorer': [('speed', 1.0)],                       'defender': [('speed', 1.0)],                   'solo': False, 'weight': 1.0},
+    {'key': 'arm_wrestle', 'label': 'Arm Wrestle',   'scorer': [('power', 1.0)],                       'defender': [('power', 1.0)],                   'solo': False, 'weight': 1.0},
+    {'key': 'beauty',      'label': 'Beauty Contest', 'scorer': [('xFactor', 0.6), ('creativity', 0.4)], 'defender': [('xFactor', 0.6), ('creativity', 0.4)], 'solo': False, 'weight': 0.8},
+    {'key': 'backflip',    'label': 'Backflip',      'scorer': [('agility', 1.0)],                     'defender': None,                               'solo': True,  'weight': 1.0},
+]
+# Balance — P(defense wins) scales with the attribute ratio (see the plan). Even-matchup
+# ~13%; a star scorer vs a weak defender almost always banks (~5%); a weak scorer vs a
+# stud defender is the danger zone (~25-30%).
+CONTEST_DEFENSE_BASE = 0.13              # even-matchup (ratio 1.0) defense-win probability
+CONTEST_RATIO_POWER = 2.0               # how sharply the def/scorer attr ratio swings it
+CONTEST_DEFENSE_FLOOR = 0.03            # a star scorer is never a sure loss for the defense-win roll
+CONTEST_DEFENSE_CEIL = 0.32            # even a mismatch tops out here — offense still wins most
+CONTEST_BOTCH_BASE = 0.11              # solo (backflip) botch prob at a neutral (80) scorer
+# Mental modifier (phase 2, light): a clutch scorer finishes, a choker fumbles the dunk.
+CONTEST_MENTAL_SPAN = 0.05             # max +/- to P(def wins) from pressureHandling + selfBelief
+# During a Criticality the contest goes haywire — the defense-win rate is boosted.
+CONTEST_CRITICALITY_DEFENSE_MULT = 2.2  # x P(def wins) while a Criticality is live
+# Per-type phrasing for the contest play-feed entry (its own beat). "TOUCHDOWN" appears
+# ONLY on a win (the entry that books the score), so a stuffed score never shows a TD
+# that then vanishes. Gender-neutral; {scorer}/{defender} filled at narration time.
+CONTEST_NARRATION = {
+    'dunk': {
+        'win':   ["{scorer} rises and HAMMERS it over the crossbar. TOUCHDOWN, six points!",
+                  "{scorer} throws it down on {defender}. That counts — six points!"],
+        'stuff': ["{scorer} goes up for the slam but {defender} swats it away. No good.",
+                  "{defender} rises with {scorer} and stuffs the dunk. No points."],
+    },
+    'race': {
+        'win':   ["{scorer} beats {defender} across the end zone. TOUCHDOWN!",
+                  "{scorer} outruns {defender} to the far pylon. Six points!"],
+        'stuff': ["{defender} runs {scorer} down before the pylon. No good.",
+                  "{scorer} races for the corner but {defender} tags him short. No points."],
+    },
+    'arm_wrestle': {
+        'win':   ["{scorer} pins {defender} at the goal line. TOUCHDOWN!",
+                  "{scorer} overpowers {defender} and drives across. Six points!"],
+        'stuff': ["{defender} out-muscles {scorer} at the line. No good.",
+                  "{scorer} can't budge {defender} an inch. Stuffed, no points."],
+    },
+    'beauty': {
+        'win':   ["The judges love {scorer}'s pose over {defender}'s. TOUCHDOWN!",
+                  "{scorer} strikes it; {defender} can't match the flair. Six points!"],
+        'stuff': ["{defender} out-poses {scorer} — the judges aren't buying it. No good.",
+                  "{scorer}'s form falls flat next to {defender}. No points."],
+    },
+    'backflip': {
+        'win':   ["{scorer} flips over the line and STICKS the landing. TOUCHDOWN!",
+                  "{scorer} nails the backflip clean. Six points!"],
+        'stuff': ["{scorer} flips but stumbles the landing. No good, no points.",
+                  "{scorer} can't stick it, hands down. Waved off."],
+    },
+}
+CONTEST_TYPE_LABELS = {t['key']: t['label'] for t in CONTEST_TYPES}
 
 # ── Drive Clock (dormant mechanic — docs/DRIVE_CLOCK_PLAN.md) ──
 # A shot-clock for possessions. Two mode knobs: unit ('seconds' of game clock vs

@@ -247,6 +247,12 @@ class PlayResult(enum.Enum):
     # Darts (bust) — a score that would overshoot the target X is voided (no points),
     # and the drive is turned over.
     Bust = 'Bust'
+    # Contested Scoring — a TD is provisional until a contest resolves. The scoring play
+    # reads "reaches the end zone" (no TOUCHDOWN); the contest is its OWN feed entry that
+    # banks the TD (win) or stuffs it (no points, back to the LOS, down advances).
+    ProvisionalScore = 'Provisional Score'
+    ContestWon = 'Contest Won'
+    ContestStuff = 'Contest Stuff'
     Safety = 'Safety'
     Fumble = 'Fumble'
     Interception = 'Interception'
@@ -5172,6 +5178,23 @@ class Game:
             _X = int(getattr(self.gameRules, 'targetScore', 0))
             text = f"{text or 'reaches the end zone'}. BUST: that would clear {_X}, no points"
 
+        # Contested Scoring: the provisional scoring play (reached the end zone, not yet
+        # banked — deliberately NOT the word "TOUCHDOWN") and the contest beat (its own
+        # entry, which is the one that books the score or waves it off).
+        if getattr(self.play, 'isProvisionalScore', False):
+            text = f"{text or 'breaks free'} — reaches the end zone! (contest to come)"
+        elif getattr(self.play, 'isContest', False):
+            from constants import CONTEST_NARRATION, CONTEST_TYPE_LABELS
+            sc = getattr(self.play, 'contestScorer', None)
+            df = getattr(self.play, 'contestDefender', None)
+            pools = CONTEST_NARRATION.get(self.play.contestType, {})
+            lines = pools.get('win' if self.play.contestWon else 'stuff') or ['']
+            body = _random.choice(lines).format(
+                scorer=(sc.name if sc else 'The scorer'),
+                defender=(df.name if df else 'the defender'))
+            label = CONTEST_TYPE_LABELS.get(self.play.contestType, 'Contest')
+            text = f"CONTEST · {label}: {body}"
+
         self.play.playText = text
 
     def _evaluateClutchChoke(self):
@@ -6535,6 +6558,51 @@ class Game:
                 # Handle normal play outcomes
                 else:
                     if self.play.yardage >= self.yardsToEndzone:
+                        # Contested Scoring: a rushing / receiving / QB-scramble TD is only
+                        # PROVISIONAL — the scorer must complete an action (dunk/race/...) to
+                        # bank it, and the best-suited defender gets one last-resort contest.
+                        # Two beats: (1) this play reaches the end zone WITHOUT booking (no
+                        # "TOUCHDOWN"); (2) the contest is its OWN feed entry that banks the TD
+                        # (win → normal PAT + turnover) or stuffs it (no points, back to the
+                        # play's LOS, down advances / turnover on downs). Score is final the
+                        # instant the contest resolves → WP / pick-em / standings read truth.
+                        if (self._contestedScoringActive()
+                                and self.play.playType in (PlayType.Run, PlayType.Pass)):
+                            scoringPlay = self.play
+                            scorer = (scoringPlay.runner if scoringPlay.playType is PlayType.Run
+                                      else scoringPlay.receiver)
+                            # BEAT 1 — provisional: reaches the end zone, not yet on the board.
+                            self.play.isProvisionalScore = True
+                            self.play.playResult = PlayResult.ProvisionalScore
+                            self.formatPlayText()
+                            self.gameFeed.insert(0, {'play': self.play})
+                            self.broadcastGameState(includeLastPlay=True)
+                            # BEAT 2 — the contest (its own entry) books the TD or stuffs it.
+                            won = self._runContest(scorer, scoringPlay)
+                            if won:
+                                if self.checkOvertimeEnd():
+                                    break
+                                self._attemptConversion(self.offensiveTeam, self.defensiveTeam)
+                                self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
+                                self._pendingPossessionChange = True
+                                self._pendingKickoff = True
+                                lastPlayFormatted = True
+                                break
+                            # STUFF — no points; ball back at the play's LOS (never advanced),
+                            # down += 1, or a turnover on downs on the last down. Keep the
+                            # ContestStuff badge on the turnover entry (don't relabel it).
+                            if (self.down < self.gameRules.downsPerSeries
+                                    and not self._driveClockExpired()):
+                                self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
+                                self.down += 1
+                                lastPlayFormatted = True
+                                continue
+                            self._handleTurnoverOnDowns(True,
+                                                        driveClockExpired=self._driveClockExpired(),
+                                                        resultOverride=PlayResult.ContestStuff)
+                            lastPlayFormatted = True
+                            break
+
                         # Darts (bust): a TD that would overshoot X never reaches here — the
                         # carrier is held up short of the goal at the yardage source
                         # (_holdUpShortCap), so any TD that DOES land here is on/under X and
@@ -9060,6 +9128,135 @@ class Game:
         pct = max(0.05, min(0.95, desire + aggressNorm * 0.15))
         return target if random.random() < pct else kick
 
+    # ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
+    def _contestedScoringActive(self) -> bool:
+        """Gate: a rushing/receiving/scramble TD is only provisional and must survive a
+        contest. Off by default → byte-identical (the TD block never enters the contest)."""
+        return bool(getattr(self.gameRules, 'contestedScoringEnabled', False))
+
+    def _contestAttr(self, player, attrSpec) -> float:
+        """Weighted blend of a player's real attributes for a contest (spec weights sum to
+        1.0). Neutral 80 for a missing player/attr."""
+        if player is None:
+            return 80.0
+        return float(sum(getattr(player, a, 80) * w for a, w in attrSpec))
+
+    def _selectContestDefender(self, defenseTeam, typeSpec):
+        """The single best-suited on-field defender for this contest type (fastest for a
+        race, strongest for an arm wrestle, ...). None for a solo type (backflip)."""
+        if typeSpec.get('solo') or typeSpec.get('defender') is None or defenseTeam is None:
+            return None
+        onField = [p for p in defenseTeam.rosterDict.values() if p is not None]
+        defenders = [p for p in onField if getattr(p, 'defensivePosition', None) is not None] or onField
+        if not defenders:
+            return None
+        return max(defenders, key=lambda p: self._contestAttr(p, typeSpec['defender']))
+
+    def _resolveContestOutcome(self, scorer, defender, typeSpec) -> bool:
+        """Roll the contest. Returns True if the SCORER wins (banks the TD), False on a
+        defensive stuff. Offense wins most; the defense is a rare last resort. An awakened
+        scorer auto-wins; a Criticality boosts the defense-win rate (haywire)."""
+        from constants import (CONTEST_DEFENSE_BASE, CONTEST_RATIO_POWER, CONTEST_DEFENSE_FLOOR,
+                               CONTEST_DEFENSE_CEIL, CONTEST_BOTCH_BASE, CONTEST_MENTAL_SPAN,
+                               CONTEST_CRITICALITY_DEFENSE_MULT)
+        # Awakened scorer: L4 power trumps the contest — never in doubt.
+        if scorer is not None and getattr(scorer, 'id', None) in self._awakenedCharge:
+            return True
+        scorerAttr = max(1.0, self._contestAttr(scorer, typeSpec['scorer']))
+        if typeSpec.get('solo'):
+            # Backflip: the scorer attempts alone; the defense "wins" only on a botch,
+            # keyed off the scorer's attribute (neutral 80 → CONTEST_BOTCH_BASE).
+            pDef = CONTEST_BOTCH_BASE * (80.0 / scorerAttr) ** CONTEST_RATIO_POWER
+        else:
+            defAttr = max(1.0, self._contestAttr(defender, typeSpec['defender']))
+            pDef = CONTEST_DEFENSE_BASE * (defAttr / scorerAttr) ** CONTEST_RATIO_POWER
+        # Mental nudge — a clutch scorer finishes; a choker fumbles it.
+        mental = (getattr(scorer, 'pressureHandling', 0) / 10.0
+                  + (getattr(scorer, 'selfBelief', 80) - 80) / 20.0) if scorer is not None else 0.0
+        pDef -= max(-1.0, min(1.0, mental)) * CONTEST_MENTAL_SPAN
+        pDef = max(CONTEST_DEFENSE_FLOOR, min(CONTEST_DEFENSE_CEIL, pDef))
+        # Criticality: contests go haywire — the defense is far more dangerous.
+        if self._criticalityActive:
+            pDef = min(0.85, pDef * CONTEST_CRITICALITY_DEFENSE_MULT)
+        return _random.random() >= pDef
+
+    def _runContest(self, scorer, scoringPlay) -> bool:
+        """Beat 2 of Contested Scoring: run the contest as its OWN play-feed entry (mirrors
+        `_simulate2PointConversionPlay`'s separate-entry pattern). Rolls a contest type,
+        resolves it, and either BANKS the TD (win → score + stats + momentum; the caller then
+        runs the PAT/2-pt + turnover) or STUFFS it (no points; the caller returns the ball to
+        the LOS + advances the down). The contest beat carries the scoring play's actors so
+        WPA attributes the swing to the scorer / the contesting defender. Returns True on a
+        banked TD."""
+        from constants import CONTEST_TYPES
+        typeSpec = _random.choices(CONTEST_TYPES, weights=[t['weight'] for t in CONTEST_TYPES])[0]
+        offense = self.offensiveTeam
+        defense = self.defensiveTeam
+        defender = self._selectContestDefender(defense, typeSpec)
+        won = self._resolveContestOutcome(scorer, defender, typeSpec)
+        scoringType = scoringPlay.playType
+
+        # Fresh Play for the contest beat (stable playNumber for React keys / REST).
+        self.play = Play(self)
+        self.totalPlays += 1
+        self.play.playNumber = self.totalPlays
+        self.play.playType = scoringType   # so _attributeWpa credits the scorer on a win
+        self.play.isContest = True
+        self.play.contestType = typeSpec['key']
+        self.play.contestWon = won
+        self.play.contestScorer = scorer
+        self.play.contestDefender = defender
+        if scoringType is PlayType.Run:
+            self.play.runner = scorer
+        elif scoringType is PlayType.Pass:
+            self.play.passer = scoringPlay.passer
+            self.play.receiver = scoringPlay.receiver
+            self.play.isPassCompletion = True
+
+        if won:
+            # Bank the TD — mirror the normal offensive-TD stat + score booking, keyed to
+            # the scoring play's actors (the yards were already credited during the play).
+            if scoringType is PlayType.Run:
+                scorer.addRushTd(scoringPlay.yardage, self.isRegularSeasonGame)
+                scorer.updateInGameConfidence(.03)
+                defense.gameDefenseStats['runTdsAlwd'] += 1
+                defense.gameDefenseStats['tdsAlwd'] += 1
+            else:
+                scoringPlay.passer.addPassTd(scoringPlay.yardage, self.isRegularSeasonGame)
+                scoringPlay.receiver.addReceiveTd(scoringPlay.yardage, self.isRegularSeasonGame)
+                defense.gameDefenseStats['passTdsAlwd'] += 1
+                defense.gameDefenseStats['tdsAlwd'] += 1
+                scoringPlay.passer.updateInGameConfidence(.03)
+                scoringPlay.receiver.updateInGameConfidence(.03)
+            defense.gameDefenseStats['ptsAlwd'] += self.gameRules.touchdownPoints
+            self._addScore(offense, self.gameRules.touchdownPoints)
+            self._applyMomentumEvent(MOMENTUM_TD, offense)
+            self.play.isTd = True
+            self.play.playResult = PlayResult.ContestWon
+            self.play.scoreChange = True
+        else:
+            # Stuff — a "contested stop" (a tackle) for the defender; no points.
+            if defender is not None and hasattr(defender, 'stat_tracker'):
+                defender.stat_tracker.add_tackle(self.isRegularSeasonGame)
+            self.play.playResult = PlayResult.ContestStuff
+            self.play.scoreChange = False
+
+        self.play.homeTeamScore = self.homeScore
+        self.play.awayTeamScore = self.awayScore
+
+        # A no-time play — force the clock-stopped snapshot like the PAT/2-pt entries.
+        savedClockRunning = self.clockRunning
+        self.clockRunning = False
+        self.formatPlayText()
+        self.clockRunning = savedClockRunning
+
+        if self.play.scoreChange:
+            self.highlights.insert(0, {'play': self.play})
+            self.leagueHighlights.insert(0, {'play': self.play})
+        self.gameFeed.insert(0, {'play': self.play})
+        self.broadcastGameState(includeLastPlay=True)
+        return won
+
     def _attemptConversion(self, scoringTeam: 'FloosTeam.Team', opposingTeam: 'FloosTeam.Team',
                            trackPtsAllowed: bool = True):
         """Single post-TD conversion entry point: choose a rung, then run it. The
@@ -10341,6 +10538,12 @@ class Play():
         self.hoopPair = None           # 'midfield' | 'endzone' — which pair was targeted
         self.scoreVoided = False       # bust: a score was voided (overshot X) → turnover
         self.heldUpShort = False       # bust: carrier pulled up short of the goal (would-bust TD)
+        self.isProvisionalScore = False  # contested scoring: reached the end zone, not yet banked
+        self.isContest = False         # contested scoring: this play IS the contest beat
+        self.contestType = None        # contested scoring: 'dunk' | 'race' | 'arm_wrestle' | 'beauty' | 'backflip'
+        self.contestWon = None         # contested scoring: True (banked) / False (stuffed)
+        self.contestScorer = None      # contested scoring: the scorer attempting the action
+        self.contestDefender = None    # contested scoring: the contesting defender (None for solo)
         self.isTd = False
         self.isXpTry = False
         self.isFgGood = False
