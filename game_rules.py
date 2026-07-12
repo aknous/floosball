@@ -231,6 +231,20 @@ class GameRules:
                 applied.append(fieldName)
         return applied
 
+    def resetToDefaults(self, reason: str = "season start",
+                        source: str = "season_reset") -> List[str]:
+        """Return every mutable rule to its pristine default IN PLACE (so any Game
+        already holding a reference to this object sees the reset). Used at season
+        start so each season begins on a clean rulebook. Returns the fields reset."""
+        pristine = GameRules()
+        reset: List[str] = []
+        for fieldName in MUTABLE_RULE_FIELDS:
+            default = getattr(pristine, fieldName, None)
+            if getattr(self, fieldName, None) != default:
+                if self.applyPatch(fieldName, default, reason=reason, source=source):
+                    reset.append(fieldName)
+        return reset
+
 
 # Module-level default — used by code paths that need to fall back to
 # standard rules when no Season-scoped instance is available (tests,
@@ -365,6 +379,13 @@ def saveRuleOverrides(overrides: Dict[str, Any]) -> None:
         session.commit()
     finally:
         session.close()
+
+
+def clearRuleOverrides() -> None:
+    """Wipe all persisted rule overrides — the league returns to the pristine
+    defaults. Called at season start so each season begins on a clean rulebook and
+    the fan-voted mutations only live for the season that voted them in."""
+    saveRuleOverrides({})
 
 
 def defaultRuleValue(field: str) -> Any:
