@@ -976,6 +976,8 @@ GAME_FORMAT_PRESETS = [
      "patch": {"gameFormat": "chess_clock", "offenseClockBudgetSeconds": 1080}},
     {"key": "gf_innings_3", "label": "Innings (3, try-driven)",
      "patch": {"gameFormat": "innings", "inningsPerGame": 3, "triesPerInning": 3}},
+    {"key": "gf_frames_6", "label": "Frames (6, match play)",
+     "patch": {"gameFormat": "frames", "framesPerGame": 6}},
 ]
 RULE_VOTE_CANDIDATES["gameFormat"]["presets"] = GAME_FORMAT_PRESETS
 

@@ -115,6 +115,26 @@ class GameFormat:
         than sit on a lead. Standard football has no such win-by-scoring race."""
         return False
 
+    # ── Result / winner (the ONLY seam where a format decouples the winner from
+    #    total points — frames uses this; every other format keeps most-points-wins) ──
+    def winnerSide(self, game) -> str:
+        """Who won: 'home', 'away', or 'tie'. Default = most cumulative points."""
+        if game.homeScore > game.awayScore:
+            return 'home'
+        if game.awayScore > game.homeScore:
+            return 'away'
+        return 'tie'
+
+    def resultDisplay(self, game):
+        """The (home, away) values shown AS the final result / score string. Default =
+        the point totals; frames shows frames-won."""
+        return game.homeScore, game.awayScore
+
+    def eloScores(self, game):
+        """The (home, away) values ELO uses for its margin-of-victory. Default = the
+        point totals; frames uses frames-won so the margin reflects the match result."""
+        return game.homeScore, game.awayScore
+
     # ── Display ───────────────────────────────────────────────────────────────
     def stateExtra(self, game) -> dict:
         """Extra fields merged into the game_state broadcast (format-specific UI)."""
@@ -481,8 +501,133 @@ class InningsFormat(GameFormat):
         }}
 
 
+class FramesFormat(GameFormat):
+    """Match play (golf/snooker frames). The game is split into `framesPerGame` equal
+    time frames; whoever OUTSCORES the other WITHIN a frame wins it (+1), a tied frame
+    is HALVED (1/2 each). Most frames won wins the match — total points are irrelevant
+    to the result (a lopsided frame is worth the same +1 as a squeaker). Frames tied at
+    the end → total-points tiebreak; still tied → OT. The clock/quarter/OT loop runs
+    NORMALLY; frames are a time-based OVERLAY, and only the WINNER is decided differently.
+    """
+    key = 'frames'
+    label = 'Frames'
+
+    def _frames(self, game) -> int:
+        return max(1, int(getattr(game.gameRules, 'framesPerGame', 6)))
+
+    def _regSeconds(self, game) -> int:
+        return int(game.gameRules.quartersPerGame * game.gameRules.quarterLengthSeconds)
+
+    def _elapsed(self, game) -> int:
+        # Regulation seconds elapsed (capped at the full game; OT is past all frames).
+        total = self._regSeconds(game)
+        if game.currentQuarter >= 5:
+            return total
+        q = game.gameRules.quarterLengthSeconds
+        return min(total, (game.currentQuarter - 1) * q + (q - game.gameClockSeconds))
+
+    def latchFinalMidPlay(self) -> bool:
+        return False   # the final frame's winner can shift on the last play's score
+
+    def consumeTime(self, game, seconds: int) -> None:
+        super().consumeTime(game, seconds)   # normal game-clock drain
+        # Award every frame whose time boundary the clock just crossed (the final
+        # frame commits when the clock reaches 0 at the end of regulation).
+        N = self._frames(game)
+        frameLen = self._regSeconds(game) / N
+        target = min(N, int(self._elapsed(game) / frameLen)) if frameLen else N
+        while getattr(game, '_frameIndex', 0) < target:
+            h = game.homeScore - getattr(game, '_frameStartHome', 0)
+            a = game.awayScore - getattr(game, '_frameStartAway', 0)
+            if h > a:
+                game._framesWonHome = getattr(game, '_framesWonHome', 0.0) + 1
+            elif a > h:
+                game._framesWonAway = getattr(game, '_framesWonAway', 0.0) + 1
+            else:
+                game._framesWonHome = getattr(game, '_framesWonHome', 0.0) + 0.5
+                game._framesWonAway = getattr(game, '_framesWonAway', 0.0) + 0.5
+            game._frameStartHome = game.homeScore
+            game._frameStartAway = game.awayScore
+            game._frameIndex = getattr(game, '_frameIndex', 0) + 1
+
+    def onPeriodStart(self, game) -> None:
+        if game.currentQuarter == 1:
+            game._frameIndex = 0
+            game._frameStartHome = 0
+            game._frameStartAway = 0
+            game._framesWonHome = 0.0
+            game._framesWonAway = 0.0
+
+    def checkEarlyEnd(self, game):
+        # End of regulation: the match is decided by frames won; a frames tie falls to
+        # the total-points tiebreak; if BOTH are tied, defer (None) so it goes to OT.
+        if game.currentQuarter == 4 and game.gameClockSeconds <= 0:
+            fh = getattr(game, '_framesWonHome', 0.0)
+            fa = getattr(game, '_framesWonAway', 0.0)
+            if fh != fa:
+                return True
+            if game.homeScore != game.awayScore:
+                return True
+            return None   # frames AND points tied -> OT
+        return None
+
+    def winnerSide(self, game) -> str:
+        fh = getattr(game, '_framesWonHome', 0.0)
+        fa = getattr(game, '_framesWonAway', 0.0)
+        if fh > fa:
+            return 'home'
+        if fa > fh:
+            return 'away'
+        # frames tied -> total-points tiebreak
+        if game.homeScore > game.awayScore:
+            return 'home'
+        if game.awayScore > game.homeScore:
+            return 'away'
+        return 'tie'
+
+    def resultDisplay(self, game):
+        return (getattr(game, '_framesWonHome', 0.0), getattr(game, '_framesWonAway', 0.0))
+
+    def eloScores(self, game):
+        return (getattr(game, '_framesWonHome', 0.0), getattr(game, '_framesWonAway', 0.0))
+
+    def adjustWinProbability(self, game, homeWp, awayWp, expectedPoints):
+        # Frames-based WP: the point-logistic WP is meaningless here (points don't win
+        # the match). Home's edge = frames-won lead + the current frame's lean, damped
+        # by how many frames remain. Keep a light touch of the ELO/point prior early.
+        import math
+        N = self._frames(game)
+        fh = getattr(game, '_framesWonHome', 0.0)
+        fa = getattr(game, '_framesWonAway', 0.0)
+        curH = game.homeScore - getattr(game, '_frameStartHome', 0)
+        curA = game.awayScore - getattr(game, '_frameStartAway', 0)
+        curLean = 0.5 if curH > curA else -0.5 if curA > curH else 0.0
+        remaining = max(1, N - getattr(game, '_frameIndex', 0))
+        lead = (fh - fa) + curLean
+        z = lead / (0.7 * math.sqrt(remaining))
+        framesWp = 100.0 / (1.0 + math.exp(-z))
+        # Blend: mostly frames, a little of the incoming (ELO+form) prior, fading as the
+        # match progresses so late frames are almost purely frames-driven.
+        priorWeight = 0.30 * (remaining / N)
+        home = priorWeight * homeWp + (1 - priorWeight) * framesWp
+        return home, 100.0 - home
+
+    def stateExtra(self, game) -> dict:
+        idx = getattr(game, '_frameIndex', 0)
+        N = self._frames(game)
+        return {'frames': {
+            'active': True,
+            'framesPerGame': N,
+            'currentFrame': min(N, idx + 1),
+            'framesWonHome': getattr(game, '_framesWonHome', 0.0),
+            'framesWonAway': getattr(game, '_framesWonAway', 0.0),
+            'frameHome': game.homeScore - getattr(game, '_frameStartHome', 0),
+            'frameAway': game.awayScore - getattr(game, '_frameStartAway', 0),
+        }}
+
+
 _FORMATS = {f.key: f for f in (GameFormat(), TargetFormat(), PlayLimitFormat(),
-                               ChessClockFormat(), InningsFormat())}
+                               ChessClockFormat(), InningsFormat(), FramesFormat())}
 
 
 def getFormat(key: Optional[str]) -> GameFormat:

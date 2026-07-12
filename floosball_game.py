@@ -6568,8 +6568,13 @@ class Game:
         def _fs(v):
             r = round(float(v), 1)
             return f"{int(r)}" if r == int(r) else f"{r}"
-        _hs, _as = _fs(self.homeScore), _fs(self.awayScore)
-        if self.awayScore > self.homeScore:
+        # The winner is FORMAT-decided (frames uses frames-won, tiebroken by points;
+        # every other format = most points). The shown result is resultDisplay (frames
+        # for the frames format, the point totals otherwise — so standard is unchanged).
+        _side = self.format.winnerSide(self)
+        _dispHome, _dispAway = self.format.resultDisplay(self)
+        _hs, _as = _fs(_dispHome), _fs(_dispAway)
+        if _side == 'away':
             self.winningTeam = self.awayTeam
             self.losingTeam = self.homeTeam
             self.gameDict['score'] = '{0} - {1}'.format(_as, _hs)
@@ -6584,7 +6589,7 @@ class Game:
                                             }
                                         })
 
-        elif self.homeScore > self.awayScore:
+        elif _side == 'home':
             self.winningTeam = self.homeTeam
             self.losingTeam = self.awayTeam
             self.gameDict['score'] = '{0} - {1}'.format(_hs, _as)
@@ -6627,7 +6632,7 @@ class Game:
                                         })
 
         if self.isRegularSeasonGame:
-            if self.homeScore != self.awayScore:  # No ties in season standings
+            if _side != 'tie':  # No ties in season standings (frames: by frames won)
                 self.winningTeam.seasonTeamStats['wins'] += 1
                 self.losingTeam.seasonTeamStats['losses'] += 1
             else:  # Tie game - both teams get a tie

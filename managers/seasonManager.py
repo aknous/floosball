@@ -1104,11 +1104,12 @@ class SeasonManager:
             # Update ELO ratings based on game result using pre-game win probability
             teamManager = self.serviceContainer.getService('team_manager')
             if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
+                _eloHome, _eloAway = gameInstance.format.eloScores(gameInstance)
                 teamManager.updateEloAfterGame(
                     gameInstance.homeTeam,
                     gameInstance.awayTeam,
-                    gameInstance.homeScore,
-                    gameInstance.awayScore,
+                    _eloHome,
+                    _eloAway,
                     gameInstance.winningTeam,
                     getattr(gameInstance, 'preGameHomeWinProbability', None),
                     getattr(gameInstance, 'preGameAwayWinProbability', None)
@@ -4573,11 +4574,12 @@ class SeasonManager:
             # Update ELO ratings based on playoff game result using pre-game win probability
             teamManager = self.serviceContainer.getService('team_manager')
             if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
+                _eloHome, _eloAway = gameInstance.format.eloScores(gameInstance)
                 teamManager.updateEloAfterGame(
                     gameInstance.homeTeam,
                     gameInstance.awayTeam,
-                    gameInstance.homeScore,
-                    gameInstance.awayScore,
+                    _eloHome,
+                    _eloAway,
                     gameInstance.winningTeam,
                     getattr(gameInstance, 'preGameHomeWinProbability', None),
                     getattr(gameInstance, 'preGameAwayWinProbability', None)

@@ -122,12 +122,13 @@ class GameRules:
     # Cores vote preset (docs/GAME_FORMATS_PLAN.md). `targetScore` is the
     # finish line for the 'target' format (first to X). Other formats add
     # their own config as they're built.
-    gameFormat: str = 'standard'           # 'standard' | 'target' | 'play_limit' | 'chess_clock' | 'innings' | (bust later)
+    gameFormat: str = 'standard'           # 'standard' | 'target' | 'play_limit' | 'chess_clock' | 'innings' | 'frames' | (bust later)
     targetScore: int = 30                  # 'target' format: first to this many points wins
     playsPerQuarter: int = 30              # 'play_limit' format: fixed plays per quarter (no clock)
     offenseClockBudgetSeconds: int = 1080  # 'chess_clock' format: each team's offense-time budget (18:00)
     inningsPerGame: int = 3                # 'innings' format: innings each team bats (no clock)
     triesPerInning: int = 3                # 'innings' format: possession-ends (tries) per at-bat
+    framesPerGame: int = 6                 # 'frames' format: match-play frames (win a frame = +1; most frames wins)
 
     # ── Field goal mechanics ───────────────────────────────────────
     fgSnapDistance: int = 17            # Yards added to LOS for snap + hold
@@ -211,6 +212,7 @@ class GameRules:
             "offenseClockBudgetSeconds": self.offenseClockBudgetSeconds,
             "inningsPerGame": self.inningsPerGame,
             "triesPerInning": self.triesPerInning,
+            "framesPerGame": self.framesPerGame,
             "driveClockEnabled": self.driveClockEnabled,
             "driveClockUnit": self.driveClockUnit,
             "driveClockReset": self.driveClockReset,
@@ -276,9 +278,10 @@ MUTABLE_RULE_FIELDS = {
     # format + its config together. targetScore is the 'target' finish line;
     # playsPerQuarter is the 'play_limit' per-quarter play budget;
     # offenseClockBudgetSeconds is each team's 'chess_clock' offense-time budget;
-    # inningsPerGame/triesPerInning configure the 'innings' format.
+    # inningsPerGame/triesPerInning configure the 'innings' format;
+    # framesPerGame configures the 'frames' (match-play) format.
     "gameFormat", "targetScore", "playsPerQuarter", "offenseClockBudgetSeconds",
-    "inningsPerGame", "triesPerInning",
+    "inningsPerGame", "triesPerInning", "framesPerGame",
     # Structural rule #1 — yards needed to convert a first down. Core mechanic
     # (reset/decrement/goal-to-go) reads gameRules; play-calling heuristics use
     # the live yardsToFirstDown so they degrade gracefully at non-default values.
