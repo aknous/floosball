@@ -13425,7 +13425,12 @@ class Play():
                     if not getattr(self, '_diveCatch', False):
                         _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.receiver)
                         if _stBonus:
-                            self.yardage = min(self.yardage + _stBonus, self.yardsToEndzone - 1)
+                            # Cap at the goal line, NOT one short — a 'stretch_goal' reach
+                            # (target == yardsToEndzone) must be allowed to cross for the TD
+                            # (matches the run side); the main loop scores it via yardage >=
+                            # yardsToEndzone. Capping at -1 left the ball on the 1 while the
+                            # narration said "across the goal line!" — text/outcome mismatch.
+                            self.yardage = min(self.yardage + _stBonus, self.yardsToEndzone)
 
                     # Darts (bust): hold up short of a would-bust TD (no-op otherwise).
                     self.yardage = self._holdUpShortCap(self.yardage)
