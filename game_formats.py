@@ -495,7 +495,7 @@ class InningsFormat(GameFormat):
                 _bat = game.homeTeam if game._inningsHalf == 'bottom' else game.awayTeam
                 _lbl = ('Bottom' if game._inningsHalf == 'bottom' else 'Top') + f" {game._inningsNumber}"
                 game.gameFeed.insert(0, {'event': {
-                    'text': f"{_lbl} · {_bat.abbr} batting",
+                    'text': f"{_lbl} · {_bat.abbr} up",
                     '_type': 'inning',
                     'quarter': game.currentQuarter,
                     'timeRemaining': '',

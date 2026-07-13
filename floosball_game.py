@@ -6346,6 +6346,23 @@ class Game:
                                     isPossessionChange=True,
                                     eventMessage=onsideFailEvent
                                 )
+                        elif getattr(self.format, 'key', '') == 'innings':
+                            # Innings: no kickoff — the next at-bat just starts at the own
+                            # 20. Mark "next try" UNLESS a batting change already inserted an
+                            # inning event (that covers the transition), to avoid two markers.
+                            _top = self.gameFeed[0] if self.gameFeed else None
+                            _flipped = isinstance(_top, dict) and (_top.get('event') or {}).get('_type') == 'inning'
+                            if not _flipped:
+                                nextTryEvent = {
+                                    'text': f'{self.offensiveTeam.abbr} · next try',
+                                    '_type': 'inning',
+                                    'quarter': self.currentQuarter,
+                                    'timeRemaining': '',
+                                }
+                                self.gameFeed.insert(0, {'event': nextTryEvent})
+                                self.broadcastGameState(includeLastPlay=False,
+                                                        isPossessionChange=True,
+                                                        eventMessage=nextTryEvent)
                         else:
                             # Normal kickoff
                             kickoffEvent = {
