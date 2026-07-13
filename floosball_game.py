@@ -2407,6 +2407,21 @@ class Game:
         secs = self._chessClockOffenseSecs()
         return secs is not None and secs <= threshold
 
+    def _defenseLockedOut(self) -> bool:
+        """True when the DEFENSE can't get the ball back (chess clock: its budget is
+        spent). Then this offensive possession is effectively the game's last word, so
+        a field goal that still leaves the offense trailing is futile — it should push
+        for the touchdown. False outside chess clock / in OT (budgets don't apply)."""
+        if getattr(self, 'currentQuarter', 0) >= 5:
+            return False
+        lock = getattr(self.format, '_lockedOut', None)
+        if lock is None:
+            return False
+        try:
+            return bool(lock(self, self.defensiveTeam))
+        except Exception:
+            return False
+
     def _frameSecsRemaining(self):
         """Seconds left in the current 10-min frame (frames format only; None otherwise) —
         each frame is a mini-game the offense manages the clock toward (win the frame = +1;
@@ -2628,7 +2643,14 @@ class Game:
         # A charged kicker's range is extended but CAPPED (see _chargedKickerMaxFg)
         # — "from anywhere" up to that cap, not a literal 87-yarder.
         chargedInRange = kickerCharged and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)
-        fgHelps = scoreDiff >= -self._fgValue() or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+        # A FG "helps" if it ties/wins, OR the game isn't late-and-hopeless. In chess
+        # clock a locked-out opponent means THIS possession is the last word — so a FG
+        # that still leaves us trailing (down by more than a FG) is futile; push for the
+        # TD instead. gameClockSeconds is the SYNTHETIC clock in chess clock and can read
+        # plenty while the opponent is already out of budget, so the lockout check is
+        # what actually catches this case.
+        lateHopeless = (self.currentQuarter >= 4 and self.gameClockSeconds <= 300) or self._defenseLockedOut()
+        fgHelps = scoreDiff >= -self._fgValue() or not lateHopeless
         inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
         # Darts (bust): never treat a FG as "in range" if it would overshoot X — the
@@ -4020,7 +4042,7 @@ class Game:
                 if self.down == self.gameRules.downsPerSeries or eohPlaysAvailable <= 1:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'endOfHalfFG',
-                        'reason': 'End of half — take the FG on the last play (any score)',
+                        'reason': 'End of half, take the FG on the last play (any score)',
                         'clockRemaining': self.gameClockSeconds,
                         'playsAvailable': eohPlaysAvailable,
                         'down': self.down,
@@ -4055,7 +4077,7 @@ class Game:
                     if self.down == self.gameRules.downsPerSeries or playsAvailable <= 1:
                         self.play.insights['clockMgmt'] = {
                             'decision': 'desperationFG',
-                            'reason': 'Last play — kick the FG to ' + ('win' if _fgDiff > -self._fgValue() else 'tie'),
+                            'reason': 'Last play, kick the FG to ' + ('win' if _fgDiff > -self._fgValue() else 'tie'),
                             'clockRemaining': self.gameClockSeconds,
                             'playsAvailable': playsAvailable,
                             'down': self.down,
@@ -4089,7 +4111,7 @@ class Game:
                         else:
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'setupFG',
-                                'reason': 'Winning FG in range — draining the clock to kick on the last play',
+                                'reason': 'Winning FG in range, draining the clock to kick on the last play',
                                 'clockRemaining': self.gameClockSeconds,
                                 'playsAvailable': playsAvailable,
                                 'down': self.down,
@@ -4106,7 +4128,7 @@ class Game:
                         if _random.random() < deferChance:
                             self.play.insights['clockMgmt'] = {
                                 'decision': 'deferFG',
-                                'reason': 'Down 3 with 2+ plays — try for the TD to win outright',
+                                'reason': 'Down 3 with 2+ plays, try for the TD to win outright',
                                 'clockRemaining': self.gameClockSeconds,
                                 'playsAvailable': playsAvailable,
                                 'down': self.down,
@@ -4188,7 +4210,7 @@ class Game:
                 if self.yardsToEndzone <= _ccKMax:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'chessClockFG',
-                        'reason': 'Possession clock nearly out — bank the FG',
+                        'reason': 'Possession clock nearly out, bank the FG',
                         'clockRemaining': self.gameClockSeconds,
                     }
                     self.play.playType = PlayType.FieldGoal
@@ -4215,7 +4237,7 @@ class Game:
                         or self._estimateFgProbability() >= self._coachFgThreshold(coach)):
                     self.play.insights['clockMgmt'] = {
                         'decision': 'fieldGoal',
-                        'reason': 'Drive clock expiring — take the points',
+                        'reason': 'Drive clock expiring, take the points',
                         'clockRemaining': self.gameClockSeconds,
                     }
                     self.play.playType = PlayType.FieldGoal
@@ -4481,7 +4503,7 @@ class Game:
                         and _random.random() < HAIL_MARY_TRICK_CHANCE * _tLean):
                     self.play.insights['clockMgmt'] = {
                         'decision': 'trickPlay',
-                        'reason': 'Drive clock expiring — bold coach dials up a gadget',
+                        'reason': 'Drive clock expiring, bold coach dials up a gadget',
                         'clockRemaining': self.gameClockSeconds,
                         'yardsToEndzone': self.yardsToEndzone,
                         'down': self.down,
@@ -4501,7 +4523,7 @@ class Game:
                     return
                 self.play.insights['clockMgmt'] = {
                     'decision': 'hailMary',
-                    'reason': ('Drive clock expiring — heave for the score' if _driveHailMary
+                    'reason': ('Drive clock expiring, heave for the score' if _driveHailMary
                                else 'Desperation — need a miracle score'),
                     'clockRemaining': self.gameClockSeconds,
                     'yardsToEndzone': self.yardsToEndzone,
@@ -4522,7 +4544,8 @@ class Game:
             # range cap so it doesn't attempt an absurd distance.
             if (self.play.playType == PlayType.Punt and kickerCharged
                     and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)):
-                fgHelps = scoreDiff >= -self._fgValue() or not (self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+                fgHelps = scoreDiff >= -self._fgValue() or not (
+                    (self.currentQuarter >= 4 and self.gameClockSeconds <= 300) or self._defenseLockedOut())
                 if fgHelps:
                     self.play.playType = PlayType.FieldGoal
             # Record decision after the fact
