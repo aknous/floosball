@@ -4501,6 +4501,30 @@ class Game:
         self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
         self._pendingPossessionChange = True
 
+    def _chessClockDepletionTurnover(self) -> bool:
+        """Chess clock: an offense that spends its entire time budget to 0 mid-drive loses
+        the ball IMMEDIATELY (it can't keep possessing on empty) — force a turnover to the
+        other team at the spot. Returns True if it forced one. A no-op in every other
+        format / in OT / when a possession change is already pending (that play's own
+        turnover handles it) / when the other team is ALSO locked out (that path resolves
+        via checkEarlyEnd or the both-spent clock, not a handoff)."""
+        if getattr(self, '_pendingPossessionChange', False):
+            return False
+        fmt = self.format
+        if getattr(fmt, 'key', '') != 'chess_clock' or self.currentQuarter >= 5:
+            return False
+        if not fmt._lockedOut(self, self.offensiveTeam) or fmt._lockedOut(self, self.defensiveTeam):
+            return False
+        loser = self.offensiveTeam
+        self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
+        self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
+        event = {'text': f'{loser.abbr} is out of time! Turnover on the clock.',
+                 'quarter': self.currentQuarter,
+                 'timeRemaining': self.formatTime(self.gameClockSeconds)}
+        self.gameFeed.insert(0, {'event': event})
+        self.broadcastGameState(includeLastPlay=False, isPossessionChange=True)
+        return True
+
     def _resolveDefensiveReturn(self):
         """After an interception or fumble recovery, the defender runs it back.
 
@@ -6262,6 +6286,14 @@ class Game:
                     # midfield, leaving the earlier yardLine stale.
                     if self.yardsToEndzone > 50:
                         self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, (100-self.yardsToEndzone))
+                    else:
+                        self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
+
+                # Chess clock: an offense that has run its time budget to 0 mid-drive
+                # can't keep the ball — it's an immediate turnover to the other team.
+                if self._chessClockDepletionTurnover():
+                    if self.yardsToEndzone > 50:
+                        self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, (100 - self.yardsToEndzone))
                     else:
                         self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
 
