@@ -9055,6 +9055,7 @@ def getCardCollection(
     vaulted: Optional[bool] = Query(default=None),
     equipped: Optional[bool] = Query(default=None),
     sort: str = Query(default="recent"),
+    showcaseScore: bool = Query(default=False),
     user: _User = Depends(_getCurrentUser),
 ):
     """Get user's card collection with optional filters and sorting.
@@ -9064,11 +9065,17 @@ def getCardCollection(
     only (equipped status is for the current season/week).
     `classification`: substring match on the card's classification (e.g. 'mvp' also
     matches 'mvp_champion'); None = all classifications.
-    `sort`: recent | rarity | rating | tier | name | team | position | manual.
+    `sort`: recent | rarity | rating | tier | name | team | position | mint |
+    showcase | manual. `mint` = by the season the card was minted (newest first);
+    `showcase` = by Showcase point value (needs showcaseScore=True).
+    `showcaseScore`: when True, attach each card's Showcase scoring breakdown as
+    `showcase` (edition/classification points, recency, tier multiplier, points) so
+    the Showcase picker can display and sort by a card's point value.
     """
     from database.connection import get_session
     from database.repositories.card_repositories import UserCardRepository
     from managers.cardManager import CardManager
+    from managers.showcaseManager import _cardBreakdown as _scoreShowcaseCard
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
@@ -9114,6 +9121,11 @@ def getCardCollection(
                 )
                 if stats:
                     data["playerStats"] = stats
+            if showcaseScore:
+                # Attach the card's Showcase point value (same scorer the Showcase
+                # uses) so the picker can show/sort by what a card is worth. The
+                # dividend share is set-dependent and left out here.
+                data["showcase"] = _scoreShowcaseCard(data, currentSeason)
             result.append(data)
 
         # Sort. Default "recent" = newest first (highest id). All sorts keep a
@@ -9144,6 +9156,12 @@ def getCardCollection(
             result.sort(key=lambda d: (_num(d, "teamId"), (d.get("playerName") or "").lower(), _num(d, "id")))
         elif sort == "position":
             result.sort(key=lambda d: (_num(d, "position"), -_num(d, "id")))
+        elif sort == "mint":
+            # By the season the card was minted, newest first.
+            result.sort(key=lambda d: (_num(d, "seasonCreated"), _num(d, "id")), reverse=True)
+        elif sort == "showcase":
+            # By Showcase point value, highest first (0 when showcaseScore is off).
+            result.sort(key=lambda d: ((d.get("showcase") or {}).get("points", 0), _num(d, "id")), reverse=True)
         elif sort == "manual":
             # Vault manual order: vault_position asc, unset (None) last, then newest.
             result.sort(key=lambda d: (

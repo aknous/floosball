@@ -418,6 +418,7 @@ class RuleVoteManager:
             winner = self._pickWinner(options, tally)
             applied = False
             prevValue = newValue = None
+            newsText = None
             if winner != 'none' and winner in options:
                 winOpt = next(s for s in specs if s["key"] == winner)
                 patch = winOpt.get("patch") or {}
@@ -439,13 +440,33 @@ class RuleVoteManager:
                 else:
                     prevValue, newValue = "Off", winOpt.get("label")
                 applied = True
+                # Factual headline for the league-news feed (neutral, not in a
+                # Core's voice — Aris's in-character line lives in the Cores popover).
+                label = winOpt.get("label") or "A rule"
+                if 'gameFormat' in patch:
+                    newsText = f"Rule change: the game format is now {newValue}."
+                elif isScalar:
+                    newsText = f"Rule change: {label} is now {newValue} (was {prevValue})."
+                else:
+                    newsText = f"Rule change: {label} is now on."
 
             repo.resolveWindow(window.id, winnerKey=winner, applied=applied,
                                prevValue=prevValue, newValue=newValue)
             session.commit()
+            tiebroken = applied and getattr(self, '_lastTiebreak', False)
+            if newsText:
+                if tiebroken:
+                    newsText += " Aris broke a tie to decide it."
+                self._broadcastRuleChangeNews(
+                    newsText, session, season, self._weekForDay(window.day_index))
             logger.info(f"Rule vote RESOLVE (change): S{season} day {window.day_index} "
-                        f"winner={winner} applied={applied} tally={tally}")
-            event = 'rule_change_applied' if applied else 'rule_change_none'
+                        f"winner={winner} applied={applied} tiebroken={tiebroken} tally={tally}")
+            if tiebroken:
+                event = 'rule_change_tiebreak'   # Aris broke a rule-vs-rule tie at random
+            elif applied:
+                event = 'rule_change_applied'
+            else:
+                event = 'rule_change_none'
             self._broadcast(event, session, season, self._weekForDay(window.day_index))
             return winner
         except Exception as e:
@@ -455,9 +476,14 @@ class RuleVoteManager:
             session.close()
 
     def _pickWinner(self, options: List[str], tally: dict) -> str:
-        """Most-voted option. A tie for the lead, no votes, or 'none' leading all
-        resolve to no change. RULE_VOTE_SIM_AUTOPICK breaks a zero-vote tie by
-        random-picking a field (headless engine testing only)."""
+        """Most-voted option. A tie for the lead between two or more RULE options is
+        broken at random — Aris's call (announced via the rule_change_tiebreak beat).
+        A tie that includes 'none', a 'none' lead, or no votes resolves to no change:
+        when 'keep it' is tied for the top, caution wins. `_lastTiebreak` records
+        whether the winner came from a random tiebreak (for the announcement).
+        RULE_VOTE_SIM_AUTOPICK breaks a zero-vote tie by random-picking a field
+        (headless engine testing only)."""
+        self._lastTiebreak = False
         total = sum(tally.values()) if tally else 0
         if total == 0:
             if os.environ.get('RULE_VOTE_SIM_AUTOPICK') and options:
@@ -467,9 +493,15 @@ class RuleVoteManager:
         keys = list(options) + ['none']
         best = max(tally.get(k, 0) for k in keys)
         leaders = [k for k in keys if tally.get(k, 0) == best]
-        if len(leaders) != 1:
-            return 'none'      # tie -> no change
-        return leaders[0]
+        if len(leaders) == 1:
+            return leaders[0]
+        # Tie for the lead. Aris breaks a tie BETWEEN rules at random; but if 'none'
+        # (keep it as-is) is tied for the top, no change — caution takes the deadlock.
+        ruleLeaders = [k for k in leaders if k != 'none']
+        if len(ruleLeaders) >= 2:
+            self._lastTiebreak = True
+            return random.choice(ruleLeaders)
+        return 'none'
 
     # ── plumbing ─────────────────────────────────────────────────────────────
     def _enabled(self) -> bool:
@@ -487,3 +519,28 @@ class RuleVoteManager:
             _broadcastCoreEntries(entries, session=session, seasonNumber=season, week=week)
         except Exception as e:
             logger.warning(f"Rule vote broadcast ({eventType}) failed: {e}")
+
+    def _broadcastRuleChangeNews(self, text: str, session, season: int, week: int) -> None:
+        """Persist + broadcast a factual rule-change headline to the league-news
+        feed (category 'rules'). Distinct from the Cores banter: this is the plain
+        'what changed' item that shows in the main HighlightFeed (which filters out
+        'cores' lines), so a rule change is actually visible there."""
+        try:
+            from database.models import LeagueNewsItem
+            session.add(LeagueNewsItem(season=season, week=week, category='rules',
+                                       event_type='rule_change', text=text))
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.debug(f"Rule news persist skipped: {e}")
+        try:
+            from api.game_broadcaster import broadcaster
+            from api.event_models import LeagueNewsEvent
+            if broadcaster is None or not broadcaster.is_enabled():
+                return
+            event = LeagueNewsEvent.leagueNews(text=text)
+            event['category'] = 'rules'
+            event['eventType'] = 'rule_change'
+            broadcaster.broadcast_sync('season', event)
+        except Exception as e:
+            logger.debug(f"Rule news broadcast skipped: {e}")

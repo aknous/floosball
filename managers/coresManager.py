@@ -300,6 +300,12 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "'leave it alone' won. i am not mad, i am disappointed, which is so much worse >:/",
             "nothing changes. hmph. fine. i will simply ask again next time ^_^",
         ],
+        # Two rules tied for the lead — Aris gets to break it herself. Her favorite.
+        'rule_change_tiebreak': [
+            "two rules, tied to the very last vote. you couldn't choose, so *I* will >:3",
+            "a PERFECT tie! split right down the middle. lucky for you i adore making this call ^_^",
+            "you left it to me? oh you sweet things. *flips a coin with chaos on both sides* ...this one :3",
+        ],
     },
     'halverson': {
         # The NONSENSE core (Portal "Fact Core"). States falsehoods with serene
@@ -731,7 +737,7 @@ def pickCoreForEvent(eventType: str) -> str:
             weights=[35, 25, 20, 20],
         )[0]
     # Rule-change vote beats: Aris breaks, Pyre fixes.
-    if eventType in ('rule_vote_open_change', 'rule_change_applied', 'rule_change_none'):
+    if eventType in ('rule_vote_open_change', 'rule_change_applied', 'rule_change_none', 'rule_change_tiebreak'):
         return 'aris'
     if eventType in ('rule_vote_open_revert', 'rule_reverted', 'rule_revert_none'):
         return 'pyre'
