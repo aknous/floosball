@@ -1543,9 +1543,11 @@ class Game:
           - Run weight is bumped (in-bounds runs let clock tick toward FG-snap time)
           - Pre-snap drain extends to leave just enough for the FG kick (~7s)
         """
-        if self.currentQuarter not in (2, 4):
+        # Chess clock: the offense's budget running low is its own end-game trigger, any
+        # quarter (its possession is ending, not just the half/game). Otherwise Q2/Q4 only.
+        if self.currentQuarter not in (2, 4) and not self._chessClockLow(60):
             return False
-        if self.gameClockSeconds > 60:
+        if self._offenseEffectiveSecs() > 60:
             return False
         isHome = (self.offensiveTeam is self.homeTeam)
         scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
@@ -1940,7 +1942,7 @@ class Game:
         Each productive play burns ~7s of execution. Spikes count as zero-yard
         clock-stoppers between productive plays, not as productive plays.
         """
-        secs = self.gameClockSeconds - 7  # reserve for closing FG kick
+        secs = self._offenseEffectiveSecs() - 7  # reserve for closing FG kick (budget-aware in chess clock)
         if secs <= 5:
             return 0
         timeoutsLeft = (
@@ -2011,6 +2013,17 @@ class Game:
             if random.random() < min(0.97, prob):
                 return True
             # otherwise fall through to the normal game-clock logic
+        # Chess clock: a low budget is its own reason to get out of bounds — a stopped
+        # clock doesn't drain the budget on the next huddle, so the offense buys more
+        # plays to score before it locks out. Any quarter/score; not while draining for
+        # an end-of-game FG (there the clock should run). Scaled by the coach's clock IQ.
+        if self._chessClockLow(90) and not self._isFgDrainMode():
+            import random
+            b = self._chessClockOffenseSecs() or 90
+            drain = 1.0 - max(0.0, min(90.0, b)) / 90.0
+            prob = (0.55 + 0.4 * drain) * (0.6 + 0.4 * self._coachClockIQ(coach))
+            if random.random() < min(0.97, prob):
+                return True
         if self.currentQuarter not in (2, 4):
             return False
         # A leading team late in Q4 wants the clock RUNNING — never stop it.
@@ -2086,8 +2099,8 @@ class Game:
             return
         if self.play.playType in (PlayType.Punt, PlayType.Kneel, PlayType.Spike):
             return  # not trying to preserve time for a score
-        if self.gameClockSeconds > 15:
-            return  # plenty of clock — the normal huddle won't expire it
+        if self._offenseEffectiveSecs() > 15:
+            return  # plenty of clock/budget — the normal huddle won't expire it
         isHome = (self.offensiveTeam == self.homeTeam)
         timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
         if timeoutsLeft <= 0:
@@ -2097,7 +2110,9 @@ class Game:
             return
         endOfHalf = self.currentQuarter == 2
         endOfGameNeed = (self.currentQuarter == 4 or self.currentQuarter >= 5) and scoreDiff <= 0
-        if not (endOfHalf or endOfGameNeed):
+        # Chess clock: a nearly-spent budget is a save-the-snap situation any quarter.
+        chessBudgetNeed = self._chessClockLow(15) and scoreDiff <= 0
+        if not (endOfHalf or endOfGameNeed or chessBudgetNeed):
             return
         self.play.insights['clockMgmt'] = {
             'decision': 'saveSnapTimeout',
@@ -2375,10 +2390,20 @@ class Game:
 
     def _chessClockLow(self, threshold: int = 75) -> bool:
         """True when the offense's chess-clock budget is nearly spent (roughly a couple of
-        plays left) — it should take makeable points and hurry up NOW rather than run the
-        budget out with the ball. False outside chess clock."""
+        plays left) — it should hurry up / stop the clock NOW rather than run the budget
+        out with the ball. False outside chess clock."""
         secs = self._chessClockOffenseSecs()
         return secs is not None and secs <= threshold
+
+    def _offenseEffectiveSecs(self) -> int:
+        """Seconds of urgency the offense faces — how soon it MUST score. Standard: the
+        game clock. Chess clock: the SOONER of the shared (synthetic) game clock and the
+        offense's own budget, so the end-game clock-management machinery (last-play FG,
+        clock drain, sideline throws, timeouts, spikes) keys off whichever runs out first.
+        Byte-identical to gameClockSeconds off chess clock."""
+        secs = self.gameClockSeconds
+        b = self._chessClockOffenseSecs()
+        return min(secs, int(b)) if b is not None else secs
 
     def _estimateConversionProb(self, scoringTeam, distance) -> float:
         """Rough likelihood a run/pass converts from `distance` yards out — used
@@ -3931,10 +3956,10 @@ class Game:
             _eohKicker = self.offensiveTeam.rosterDict.get('k')
             _eohKickerMax = (_eohKicker.maxFgDistance - self.gameRules.fgSnapDistance) if _eohKicker else 0
             endOfHalfPush = (self.currentQuarter == 2
-                             and self.gameClockSeconds <= 120
+                             and self._offenseEffectiveSecs() <= 120
                              and not self._isGarbageTime(scoreDiff)
                              and self.yardsToEndzone <= _eohKickerMax + 25)
-            if (endOfHalfPush and self.gameClockSeconds <= 45
+            if (endOfHalfPush and self._offenseEffectiveSecs() <= 45
                     and self.yardsToEndzone <= _eohKickerMax):
                 eohPlaysAvailable = self._estimateAvailablePlays()
                 if self.down == self.gameRules.downsPerSeries or eohPlaysAvailable <= 1:
@@ -3954,8 +3979,8 @@ class Game:
             # ≤45s here is just a coarse entry filter; the real gate is
             # _estimateAvailablePlays (which reserves ~7s for the FG and accounts
             # for the timeouts/spikes needed to stop the clock between snaps).
-            if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
-                    and -3 <= scoreDiff < 0 and self.gameClockSeconds <= 45):
+            if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5 or self._chessClockLow(60))
+                    and -3 <= scoreDiff < 0 and self._offenseEffectiveSecs() <= 45):
                 kicker = self.offensiveTeam.rosterDict.get('k')
                 kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
                 despFgProb = self._estimateFgProbability()
@@ -3981,7 +4006,7 @@ class Game:
                         self.play.playType = PlayType.FieldGoal
                         return
                     # 2+ plays remain. A long shot → keep advancing to get closer.
-                    if despFgProb < despThreshold and self.gameClockSeconds > 8:
+                    if despFgProb < despThreshold and self._offenseEffectiveSecs() > 8:
                         pass  # fall through to the play caller (try to gain yards)
                     elif self.down < self.gameRules.downsPerSeries and scoreDiff > -self._fgValue():
                         # WINNING FG (trailing 1-2) with 2+ plays — the FG already
@@ -4086,6 +4111,30 @@ class Game:
                             self.play.runPlay()
                             return
                         # else: aggressive push — fall through to normal play caller
+            # Chess clock: on the LAST play the budget allows (in hurry-up a snap burns
+            # ~20-30s of budget, so ~one play + the FG left ≈ 50s), bank a makeable FG on
+            # ANY down and REGARDLESS of score — the possession is about to lock out, so 3
+            # points now beats running the budget out with nothing. The standard trailing-
+            # 1-3 end-game logic above handles the win/tie cases with more nuance; this
+            # catches the rest (tied, trailing 4+, or protecting a lead). Skips goal-to-go
+            # (a near-certain TD is worth more) and garbage time; attempts any in-range kick
+            # (it's the last shot). Earlier than this the offense hurries + stops the clock
+            # (sideline / spike / timeout) to preserve budget and keep driving.
+            if (self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
+                    and self.yardsToEndzone > 5 and not self._isGarbageTime(scoreDiff)):
+                _ccK = self.offensiveTeam.rosterDict.get('k')
+                _ccCharged = self._awakenedReadyFor(_ccK, 'kick')
+                _ccKMax = (self._chargedKickerMaxFg(_ccK) if _ccCharged
+                           else ((_ccK.maxFgDistance - self.gameRules.fgSnapDistance) if _ccK else 0))
+                if self.yardsToEndzone <= _ccKMax:
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'chessClockFG',
+                        'reason': 'Possession clock nearly out — bank the FG',
+                        'clockRemaining': self.gameClockSeconds,
+                    }
+                    self.play.playType = PlayType.FieldGoal
+                    return
+
             # Drive Clock about to expire (roughly one play left) and in makeable FG
             # range: take the points NOW on ANY down, rather than run a play and turn
             # it over with zero. Skips goal-to-go (a near-certain TD is worth more)
@@ -4094,11 +4143,7 @@ class Game:
             _dcExpiring = self._driveClockActive() and (
                 (_dcUnit == 'seconds' and self.driveClockRemaining <= 20)
                 or (_dcUnit == 'plays' and self.driveClockRemaining <= 1))
-            # Chess clock: the offense's budget is nearly spent — its drive is about to end
-            # whether it wants it to or not, so bank a makeable FG on ANY down instead of
-            # running the clock out with nothing (the reported "40s left, didn't kick" bug).
-            _ccExpiring = self._chessClockLow()
-            if ((_dcExpiring or _ccExpiring)
+            if (_dcExpiring
                     and self.down < self.gameRules.downsPerSeries
                     and self.yardsToEndzone > 5
                     and not self._isGarbageTime(scoreDiff)):
@@ -4106,12 +4151,8 @@ class Game:
                 _fgCharged = self._awakenedReadyFor(_fgK, 'kick')
                 _fgKMax = (self._chargedKickerMaxFg(_fgK) if _fgCharged
                            else ((_fgK.maxFgDistance - self.gameRules.fgSnapDistance) if _fgK else 0))
-                # When the CHESS-CLOCK budget is expiring, attempt any in-range FG even
-                # below the coach's normal make-probability bar — it's the last realistic
-                # shot and the alternative is a guaranteed zero (down 3, a long FG to tie
-                # is still worth trying). Drive-clock keeps the coach's threshold.
                 if self.yardsToEndzone <= _fgKMax and (
-                        _fgCharged or _ccExpiring
+                        _fgCharged
                         or self._estimateFgProbability() >= self._coachFgThreshold(coach)):
                     self.play.insights['clockMgmt'] = {
                         'decision': 'fieldGoal',
@@ -4138,6 +4179,24 @@ class Game:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'spike',
                         'reason': 'Preserve the drive clock',
+                        'clockRemaining': self.gameClockSeconds,
+                    }
+                    self.play.spike()
+                    return
+
+            # Chess clock: budget critically low with a down to spare — spike to STOP the
+            # clock so the next huddle doesn't drain the budget and the offense gets another
+            # snap to score. Early downs only; not in easy scoring range; not FG-draining.
+            if (self._chessClockLow(45)
+                    and self.clockRunning
+                    and self.down <= self.gameRules.downsPerSeries - 2
+                    and self.yardsToEndzone > 5
+                    and not self._isFgDrainMode()
+                    and not self._isGarbageTime(scoreDiff)):
+                if _random.random() < (0.35 + 0.55 * gameIQ):
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'spike',
+                        'reason': 'Preserve the possession clock',
                         'clockRemaining': self.gameClockSeconds,
                     }
                     self.play.spike()
