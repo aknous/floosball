@@ -4038,6 +4038,14 @@ class Game:
             # through to the normal play caller — it'll pick a run.
             if ((self.currentQuarter == 4 or self.currentQuarter >= 5)
                     and scoreDiff > 0 and self.yardsToSafety > 2):
+                # Chess clock: a kneel drains the offense's OWN possession budget 1:1 with
+                # the game clock. If that budget can't outlast the clock remaining, the
+                # kneels run it to 0 and the team is LOCKED OUT — a turnover that hands the
+                # trailing opponent the ball (exactly the bug: kneel → "out of time" → TO).
+                # Only drain-kneel when the budget genuinely outlasts the clock; otherwise
+                # fall through to play normally (keep the ball live / extend the lead).
+                _chessSecs = self._chessClockOffenseSecs()
+                chessCanDrain = (_chessSecs is None) or (_chessSecs >= self.gameClockSeconds)
                 oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
                 availableKneels = self.gameRules.downsPerSeries - self.down  # remaining downs
                 # Each kneel drains ~40s: the snap (~4s) + the play-clock runoff (~36s)
@@ -4051,7 +4059,7 @@ class Game:
                 toadKneels = min(effectiveOppTos, availableKneels)
                 freeKneels = availableKneels - toadKneels
                 drainableSeconds = toadKneels * 4 + freeKneels * self.gameRules.kneelDrainSeconds
-                if drainableSeconds >= self.gameClockSeconds:
+                if chessCanDrain and drainableSeconds >= self.gameClockSeconds:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'kneel',
                         'reason': 'Can drain remaining clock with kneels',
@@ -4779,11 +4787,38 @@ class Game:
                  'quarter': self.currentQuarter,
                  'timeRemaining': self.formatTime(self.gameClockSeconds)}
         self.gameFeed.insert(0, {'event': event})
+        # This path is the mid-drive stall; pre-mark the team so the unified lockout
+        # announcer (_maybeAnnounceChessLockout) doesn't drop a second line for it.
+        if not hasattr(self, '_chessLockoutAnnounced'):
+            self._chessLockoutAnnounced = set()
+        self._chessLockoutAnnounced.add(loser)
         # Pass the event as eventMessage so it goes out LIVE over the WebSocket — without
         # it the broadcast carries no lastPlayData and the line only shows up on a REST
         # re-fetch (it's in gameFeed but was never pushed to connected clients).
         self.broadcastGameState(includeLastPlay=False, eventMessage=event, isPossessionChange=True)
         return True
+
+    def _maybeAnnounceChessLockout(self) -> None:
+        """Chess clock: drop a feed entry the first time each team empties its time budget,
+        no matter how the play that emptied it ended. The mid-drive-stall path
+        (_chessClockDepletionTurnover) announces its own forced-turnover line and pre-marks
+        the team, so this covers the cases it can't — a team that scored or turned the ball
+        over on the very play that ran its budget to 0 (possession already flipped, so the
+        stall path never fires). One line per team per game. A no-op off chess / in OT."""
+        fmt = self.format
+        if getattr(fmt, 'key', '') != 'chess_clock' or self.currentQuarter >= 5:
+            return
+        if not hasattr(self, '_chessLockoutAnnounced'):
+            self._chessLockoutAnnounced = set()
+        for team in (self.homeTeam, self.awayTeam):
+            if fmt._lockedOut(self, team) and team not in self._chessLockoutAnnounced:
+                self._chessLockoutAnnounced.add(team)
+                event = {'text': f'{team.abbr} is out of time.',
+                         '_type': 'chess_timeout',
+                         'quarter': self.currentQuarter,
+                         'timeRemaining': self.formatTime(self.gameClockSeconds)}
+                self.gameFeed.insert(0, {'event': event})
+                self.broadcastGameState(includeLastPlay=False, eventMessage=event)
 
     def _frameBoundaryReset(self) -> bool:
         """Frames: a frame just ended (a mini-game) — end the current drive and start the
@@ -6468,8 +6503,14 @@ class Game:
                 # a full drive clock so the first play isn't already expired.
                 self._resetDriveClock()
 
-            # Possession loop - while offense has downs
-            while self.down <= self.gameRules.downsPerSeries and self.gameClockSeconds > 0:
+            # Possession loop - while offense has downs. Also bail the instant the format
+            # declares the game decided (checkEarlyEnd → True) so a drive doesn't play on
+            # after the outcome is settled — e.g. chess clock: once the losing team is
+            # locked out and trailing, the winner shouldn't keep burning its budget out.
+            # Checked at the loop boundary (a stable, between-plays point, so it honors
+            # chess's latchFinalMidPlay=False). None/False (undecided) keeps the drive live.
+            while (self.down <= self.gameRules.downsPerSeries and self.gameClockSeconds > 0
+                   and not self.format.checkEarlyEnd(self)):
                 # Show previous play if exists (unless already formatted at quarter transition)
                 # Update yardline display to current ball position (do this before broadcast and play creation)
                 if self.yardsToEndzone > 50:
@@ -6623,6 +6664,10 @@ class Game:
                         self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, (100 - self.yardsToEndzone))
                     else:
                         self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
+
+                # Chess clock: announce a team's lockout the moment its budget hits 0,
+                # covering the score/turnover-on-the-last-play cases the stall path misses.
+                self._maybeAnnounceChessLockout()
 
                 # Frames: a frame just ended — reset possession to the alternating team and
                 # start the next frame fresh (overrides whatever the last play settled).
