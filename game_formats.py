@@ -545,7 +545,9 @@ class InningsFormat(GameFormat):
     def stateExtra(self, game) -> dict:
         ls = getattr(game, '_inningsLineScore', None) or {'home': {}, 'away': {}}
         inning = getattr(game, '_inningsNumber', 1)
-        maxInn = max([inning] + list(ls['home'].keys()) + list(ls['away'].keys()))
+        # Always show the full scheduled slate of innings (1..inningsPerGame), plus any
+        # extra innings reached — future innings render blank on the frontend.
+        maxInn = max([inning, self._innings(game)] + list(ls['home'].keys()) + list(ls['away'].keys()))
         innNums = list(range(1, int(maxInn) + 1))
         return {'innings': {
             'active': True,
