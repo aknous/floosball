@@ -4670,6 +4670,40 @@ class Game:
         self.broadcastGameState(includeLastPlay=False, isPossessionChange=True)
         return True
 
+    def _frameBoundaryReset(self) -> bool:
+        """Frames: a frame just ended (a mini-game) — end the current drive and start the
+        next frame with a fresh kickoff to the ALTERNATING team (frame 1 to the toss
+        winner, then back and forth, like halves). Drops an 'End of Frame N' marker in the
+        feed. Returns True if it reset. A no-op off frames / when no boundary is pending."""
+        if not getattr(self, '_frameBoundaryPending', False):
+            return False
+        self._frameBoundaryPending = False
+        if getattr(self.format, 'key', '') != 'frames' or self.currentQuarter >= 5:
+            return False
+        endedFrame = int(getattr(self, '_frameIndex', 0))   # the frame that just committed
+        # Marker (blue 'inning'-style accent reused for a period change).
+        self.gameFeed.insert(0, {'event': {
+            'text': f'End of Frame {endedFrame}', '_type': 'frame',
+            'quarter': self.currentQuarter, 'timeRemaining': ''}})
+        # Alternate the frame-start possession from the opening receiver.
+        winner = getattr(self, '_coinFlipWinner', self.homeTeam)
+        loser = getattr(self, '_coinFlipLoser', self.awayTeam)
+        starter = winner if ((endedFrame + 1) % 2 == 1) else loser
+        other = loser if starter is winner else winner
+        self.offensiveTeam = starter
+        self.defensiveTeam = other
+        self.down = 1
+        self.yardsToFirstDown = self.gameRules.firstDownDistance
+        self.yardsToEndzone = 80   # own 20, like a touchback to start the frame
+        self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
+        self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, 100 - self.yardsToEndzone)
+        self._resetDriveClock()
+        self._hoopPairResult = {}
+        self.clockRunning = False
+        self._pendingPossessionChange = False
+        self.broadcastGameState(includeLastPlay=False, isPossessionChange=True)
+        return True
+
     def _resolveDefensiveReturn(self):
         """After an interception or fumble recovery, the defender runs it back.
 
@@ -6002,6 +6036,11 @@ class Game:
             coinFlipWinner = _forcedOpen
             coinFlipLoser = self.defensiveTeam
 
+        # Stash the toss result so the frames format can alternate the frame-start
+        # possession (frame N receiver = winner if N odd else loser), like halves.
+        self._coinFlipWinner = coinFlipWinner
+        self._coinFlipLoser = coinFlipLoser
+
         self.status = GameStatus.Active
         self.gameFeed.insert(0, {'event':  {
                                                 'text': '{} wins the coin toss'.format(coinFlipWinner.name),
@@ -6344,7 +6383,10 @@ class Game:
                 # Runs BEFORE new Play() construction because an onside recovery here
                 # flips possession again — constructing the Play first would freeze
                 # stale offense/defense/yardLine onto the play that actually executes.
-                if getattr(self, '_pendingPossessionChange', False):
+                # Skipped when a FRAME just ended — _frameBoundaryReset (below) overrides
+                # possession to the alternating frame-start team, so a normal kickoff here
+                # would be wrong.
+                if getattr(self, '_pendingPossessionChange', False) and not getattr(self, '_frameBoundaryPending', False):
                     if getattr(self, '_pendingKickoff', False):
                         kickingTeam = self.defensiveTeam
                         receivingTeam = self.offensiveTeam
@@ -6458,6 +6500,10 @@ class Game:
                         self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, (100 - self.yardsToEndzone))
                     else:
                         self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
+
+                # Frames: a frame just ended — reset possession to the alternating team and
+                # start the next frame fresh (overrides whatever the last play settled).
+                self._frameBoundaryReset()
 
                 # Create new play (after any possession flip from onside recovery)
                 self.play = Play(self)

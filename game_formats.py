@@ -625,10 +625,12 @@ class FramesFormat(GameFormat):
             game._frameIndex = getattr(game, '_frameIndex', 0) + 1
             awarded = True
         # A frame just ended (and it's not the game-ending final frame) — give the
-        # coaches a moment to regroup between frames, like a break in match play. Reuses
-        # the adaptive, adaptability-gated mid-game re-plan (frame boundaries don't line
-        # up with quarters, so this is the frames format's own adjustment beat).
+        # coaches a moment to regroup between frames, like a break in match play, and flag
+        # the boundary so the game loop resets possession (the frame is over, the next
+        # frame kicks off to the alternating team). Reuses the adaptive, adaptability-gated
+        # mid-game re-plan (frame boundaries don't line up with quarters).
         if awarded and getattr(game, '_frameIndex', 0) < N:
+            game._frameBoundaryPending = True
             try:
                 game._maybeReadjustGameplans('frame')
             except Exception:
