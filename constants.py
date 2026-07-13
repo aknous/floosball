@@ -1219,6 +1219,10 @@ CHESS_CLOCK_HUDDLE_IQ_SPREAD = 20
 # (~0) rarely bothers and burns budget away. The rate ramps well above this once the
 # budget is actually running low.
 CHESS_CLOCK_BASE_SIDELINE_PROB = 0.30
+# Huddle when a chess-clock team is UP BIG (more than two scores ahead). The game is
+# in hand, so it stops actively saving budget and plays a relaxed, normal pace (still
+# never burns — that only wastes budget). Roughly the standard neutral huddle.
+CHESS_CLOCK_RELAXED_HUDDLE = 35
 
 # ── QB scrambles ──────────────────────────────────────────────────────────
 # A pressured QB can escape a would-be sack and run instead. AGILITY gates the

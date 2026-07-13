@@ -2024,8 +2024,12 @@ class Game:
         # the budget runs low. A lackadaisical coach rarely bothers and burns its budget
         # away — running out early and handing the other team the game. Not while draining
         # for an end-of-game FG (there the clock should run). Any quarter/score.
+        # Up BIG (more than two scores ahead): the game is in hand, so stop actively
+        # banking clock — a comfortably ahead team doesn't need the extra plays. (A
+        # trailing, tied, or modest-lead team still conserves.)
         b = self._chessClockOffenseSecs()
-        if b is not None and not self._isFgDrainMode():
+        if (b is not None and not self._isFgDrainMode()
+                and scoreDiff <= 2 * self._oneScore()):
             import random
             from constants import CHESS_CLOCK_BASE_SIDELINE_PROB
             clockIQ = self._coachClockIQ(coach)
@@ -9236,18 +9240,18 @@ class Game:
                (_u == 'seconds' and self.driveClockRemaining <= 75):
                 return ('hurryUp', 12)
 
-        # Chess clock: the offense's budget is nearly spent → 2-minute-drill tempo (fast
-        # huddle) so it races its own budget and banks points before locking out.
-        if self._chessClockLow(100):
-            return ('hurryUp', 12)
-
-        # Chess clock (budget not yet low): NEVER burn clock — there's no shared clock to
-        # run out, so burning only wastes the budget and hands over possession sooner.
-        # Play an efficient neutral; calculatePreSnapTime gates the actual huddle length by
+        # Chess clock tempo. Up BIG (more than two scores ahead): the game's in hand, so
+        # STOP actively saving budget — play a relaxed, normal pace (still never burn, that
+        # only wastes budget). Otherwise: race the budget with a fast huddle once it's low,
+        # else an efficient neutral. calculatePreSnapTime gates the actual huddle length by
         # the coach's clock management (a sharp manager saves budget, a poor one lets time
         # roll off), so budget efficiency is a coaching skill.
         if getattr(self.format, 'key', '') == 'chess_clock':
-            from constants import CHESS_CLOCK_NEUTRAL_HUDDLE
+            from constants import CHESS_CLOCK_NEUTRAL_HUDDLE, CHESS_CLOCK_RELAXED_HUDDLE
+            if scoreDiff > 2 * self._oneScore():
+                return ('neutral', CHESS_CLOCK_RELAXED_HUDDLE)  # up big — no need to conserve
+            if self._chessClockLow(100):
+                return ('hurryUp', 12)
             return ('neutral', CHESS_CLOCK_NEUTRAL_HUDDLE)
 
         # Frames: the current frame (a mini-game) is winding down — hurry when NOT ahead in
