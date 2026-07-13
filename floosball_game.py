@@ -2513,8 +2513,8 @@ class Game:
         """Rough likelihood a run/pass converts from `distance` yards out — used
         ONLY by the ladder decision to weigh rungs (the actual try is a real play,
         so 'harder from further' truly emerges there). Falls with distance."""
-        p = 0.62 - max(0, distance - 2) * 0.035   # ~0.62 at 2 yd, ~0.16 at 15 yd
-        return max(0.05, min(0.92, p))
+        p = 0.70 - max(0, distance - 2) * 0.028   # ~0.70 at 2 yd, ~0.34 at 15 yd
+        return max(0.05, min(0.92, p))            # tuned to the end-zone-targeting play calls
 
     def _conversionDesire(self, deficit: float, points: float, xp: float, one: float) -> float:
         """How much the trailing team wants a go-try worth `points` over the safe
@@ -9792,13 +9792,24 @@ class Game:
         self.totalPlays += 1
         self.play.playNumber = self.totalPlays
 
-        # Conversions favor passing; deeper rungs even more so. Short pool inside
-        # ~5 yards, medium beyond (more field to cover).
-        passBias = 7 if distance > 5 else 6
-        if batched_randint(1, 10) <= passBias:
-            self.play.passPlay(self._selectPassPlay('short' if distance <= 5 else 'medium'))
+        # The conversion is a real snap from `distance` out and the play MUST be able to
+        # reach the end zone. Scale the pass depth to the distance so the route actually
+        # targets the end zone — a `medium` route from the 15 tops out well short and
+        # can't score. Only call a run where a run is a genuine scoring threat (goal-line
+        # short yardage); from deeper, always throw a route that reaches the end zone.
+        if distance <= 3:
+            tier = 'short'
+        elif distance <= 8:
+            tier = 'medium'
+        elif distance <= 13:
+            tier = 'long'
         else:
+            tier = 'deep'
+        runOk = distance <= 3   # a run can only realistically score from goal-line range
+        if runOk and batched_randint(1, 10) > 6:
             self.play.runPlay()
+        else:
+            self.play.passPlay(self._selectPassPlay(tier))
 
         good = self.play.yardage >= distance
         if good:
