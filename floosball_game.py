@@ -6608,6 +6608,21 @@ class Game:
                     # Check if clock expired during pre-snap
                     if self.gameClockSeconds <= 0:
                         break
+                elif (getattr(self.format, 'key', '') == 'chess_clock'
+                        and not getattr(self, '_timeoutCalled', False)
+                        and self.play.playType not in (PlayType.Kneel, PlayType.Spike)):
+                    # Chess clock: even with the game clock already STOPPED (incompletion /
+                    # out of bounds), running a play still uses possession time — drain a
+                    # reduced huddle from the budget so clock-stopping plays aren't nearly
+                    # free (which explodes the play count in pass-heavy games). A deliberate
+                    # TIMEOUT still fully preserves the budget (the intentional tool); this
+                    # floor is only for the cheap, unchosen stops.
+                    from constants import CHESS_CLOCK_STOPPED_HUDDLE_DRAIN
+                    self._inPreSnap = True
+                    self.consumeGameTime(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
+                    self._inPreSnap = False
+                    if self.gameClockSeconds <= 0:
+                        break
                 self.totalPlays += 1
                 self.play.playNumber = self.totalPlays
                 # Game format tick (play_limit drives its synthetic clock from here).

@@ -1223,6 +1223,14 @@ CHESS_CLOCK_BASE_SIDELINE_PROB = 0.30
 # in hand, so it stops actively saving budget and plays a relaxed, normal pace (still
 # never burns — that only wastes budget). Roughly the standard neutral huddle.
 CHESS_CLOCK_RELAXED_HUDDLE = 35
+# Budget drained from a chess-clock possession on a snap where the game clock was
+# already STOPPED (incompletion / out of bounds) and no timeout was called. Running
+# a play still uses possession time, so these snaps aren't free — without this floor
+# a pass-heavy defensive game stops the clock constantly and the play count explodes
+# (200+ plays, very long games). A deliberate TIMEOUT still fully preserves the budget
+# (drains nothing) — that's the intentional conservation tool; this is for the cheap,
+# unchosen stops.
+CHESS_CLOCK_STOPPED_HUDDLE_DRAIN = 10
 
 # ── QB scrambles ──────────────────────────────────────────────────────────
 # A pressured QB can escape a would-be sack and run instead. AGILITY gates the
