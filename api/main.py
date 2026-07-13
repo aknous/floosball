@@ -1365,11 +1365,15 @@ def _presetCandidateField(key: str) -> str:
 
 
 def _formatPresetInfo(key: str):
-    """(formatName, description) for a game-format preset option key, else None."""
+    """(formatName, description) for a game-format preset option key, else None. The
+    ballot name drops the parenthetical config detail (e.g. "Darts (land on 18)" ->
+    "Darts") since the description already conveys it."""
+    import re
     from constants import GAME_FORMAT_PRESETS, GAME_FORMAT_DESCRIPTIONS
     for p in GAME_FORMAT_PRESETS:
         if p['key'] == key:
-            return p['label'], GAME_FORMAT_DESCRIPTIONS.get(p['patch'].get('gameFormat'), '')
+            name = re.sub(r'\s*\(.*\)\s*', '', p['label']).strip()
+            return name, GAME_FORMAT_DESCRIPTIONS.get(p['patch'].get('gameFormat'), '')
     return None
 
 
