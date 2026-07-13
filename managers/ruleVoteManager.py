@@ -54,6 +54,18 @@ class RuleVoteManager:
             return value > float(getattr(gameRules, 'fieldGoalPoints', 3))
         return True
 
+    def _formatDisplayName(self, fmtKey) -> str:
+        """Clean display name for a game format (parenthetical config stripped). A format
+        is never "Off" — the default is Standard."""
+        import re
+        from constants import GAME_FORMAT_PRESETS
+        if not fmtKey or fmtKey == 'standard':
+            return 'Standard'
+        for p in GAME_FORMAT_PRESETS:
+            if p['patch'].get('gameFormat') == fmtKey:
+                return re.sub(r'\s*\(.*\)\s*', '', p['label']).strip()
+        return str(fmtKey)
+
     def _pickProposedValue(self, field: str, current, gameRules):
         """Choose a specific CHANGE value for a field from its alternate space —
         always different from the current value AND the default (so a change moves a
@@ -410,8 +422,10 @@ class RuleVoteManager:
                 winOpt = next(s for s in specs if s["key"] == winner)
                 patch = winOpt.get("patch") or {}
                 isScalar = winOpt.get("field") is not None
-                # 'what changed' display: scalar shows the field's before/after; a
-                # preset shows Off/On + its label.
+                # 'what changed' display: scalar shows the field's before/after; a game
+                # FORMAT shows the previous/new format name (never "Off" — default is
+                # Standard); any other preset shows Off + its label.
+                prevFmt = getattr(gameRules, 'gameFormat', 'standard')
                 if isScalar:
                     prevValue = getattr(gameRules, winOpt["field"], None)
                 for fld, v in patch.items():
@@ -419,6 +433,9 @@ class RuleVoteManager:
                                        source="cores_vote")
                 if isScalar:
                     newValue = getattr(gameRules, winOpt["field"], None)
+                elif 'gameFormat' in patch:
+                    prevValue = self._formatDisplayName(prevFmt)
+                    newValue = self._formatDisplayName(patch['gameFormat'])
                 else:
                     prevValue, newValue = "Off", winOpt.get("label")
                 applied = True
