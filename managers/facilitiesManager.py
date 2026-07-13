@@ -38,8 +38,9 @@ def projectCostFloobits(cost_shares: float, shareUnit: float) -> int:
 
 
 def computeAppeal(facilities: dict) -> float:
-    """Appeal = weighted sum of facility levels (drives FA order, Phase 4).
-    `facilities` = {facility_key: level}."""
+    """Appeal = weighted sum of facility levels — a facility-quality readout.
+    (Historically set FA draft order; that's now worst-first by record, so Appeal
+    no longer affects the draft.) `facilities` = {facility_key: level}."""
     return sum((facilities or {}).get(k, 0) * APPEAL_LEVEL_WEIGHTS.get(k, 1.0)
                for k in FACILITY_CATALOG)
 
