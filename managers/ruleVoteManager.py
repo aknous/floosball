@@ -443,9 +443,15 @@ class RuleVoteManager:
             repo.resolveWindow(window.id, winnerKey=winner, applied=applied,
                                prevValue=prevValue, newValue=newValue)
             session.commit()
+            tiebroken = applied and getattr(self, '_lastTiebreak', False)
             logger.info(f"Rule vote RESOLVE (change): S{season} day {window.day_index} "
-                        f"winner={winner} applied={applied} tally={tally}")
-            event = 'rule_change_applied' if applied else 'rule_change_none'
+                        f"winner={winner} applied={applied} tiebroken={tiebroken} tally={tally}")
+            if tiebroken:
+                event = 'rule_change_tiebreak'   # Aris broke a rule-vs-rule tie at random
+            elif applied:
+                event = 'rule_change_applied'
+            else:
+                event = 'rule_change_none'
             self._broadcast(event, session, season, self._weekForDay(window.day_index))
             return winner
         except Exception as e:
@@ -455,9 +461,14 @@ class RuleVoteManager:
             session.close()
 
     def _pickWinner(self, options: List[str], tally: dict) -> str:
-        """Most-voted option. A tie for the lead, no votes, or 'none' leading all
-        resolve to no change. RULE_VOTE_SIM_AUTOPICK breaks a zero-vote tie by
-        random-picking a field (headless engine testing only)."""
+        """Most-voted option. A tie for the lead between two or more RULE options is
+        broken at random — Aris's call (announced via the rule_change_tiebreak beat).
+        A tie that includes 'none', a 'none' lead, or no votes resolves to no change:
+        when 'keep it' is tied for the top, caution wins. `_lastTiebreak` records
+        whether the winner came from a random tiebreak (for the announcement).
+        RULE_VOTE_SIM_AUTOPICK breaks a zero-vote tie by random-picking a field
+        (headless engine testing only)."""
+        self._lastTiebreak = False
         total = sum(tally.values()) if tally else 0
         if total == 0:
             if os.environ.get('RULE_VOTE_SIM_AUTOPICK') and options:
@@ -467,9 +478,15 @@ class RuleVoteManager:
         keys = list(options) + ['none']
         best = max(tally.get(k, 0) for k in keys)
         leaders = [k for k in keys if tally.get(k, 0) == best]
-        if len(leaders) != 1:
-            return 'none'      # tie -> no change
-        return leaders[0]
+        if len(leaders) == 1:
+            return leaders[0]
+        # Tie for the lead. Aris breaks a tie BETWEEN rules at random; but if 'none'
+        # (keep it as-is) is tied for the top, no change — caution takes the deadlock.
+        ruleLeaders = [k for k in leaders if k != 'none']
+        if len(ruleLeaders) >= 2:
+            self._lastTiebreak = True
+            return random.choice(ruleLeaders)
+        return 'none'
 
     # ── plumbing ─────────────────────────────────────────────────────────────
     def _enabled(self) -> bool:
