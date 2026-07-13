@@ -2024,8 +2024,14 @@ class Game:
         # the budget runs low. A lackadaisical coach rarely bothers and burns its budget
         # away — running out early and handing the other team the game. Not while draining
         # for an end-of-game FG (there the clock should run). Any quarter/score.
+        # Conserve only while it still matters. Up BIG (more than two scores ahead) → the
+        # game's in hand, no need to bank plays. Trailing but OUT OF REACH (not enough
+        # budget left to fit the scores needed) → hopeless, so ease up. In between —
+        # tied, a modest lead, or a still-catchable deficit — keep banking clock.
         b = self._chessClockOffenseSecs()
-        if b is not None and not self._isFgDrainMode():
+        if (b is not None and not self._isFgDrainMode()
+                and scoreDiff <= 2 * self._oneScore()
+                and self._chessClockCatchUpPossible(scoreDiff)):
             import random
             from constants import CHESS_CLOCK_BASE_SIDELINE_PROB
             clockIQ = self._coachClockIQ(coach)
@@ -2417,6 +2423,28 @@ class Game:
         out with the ball. False outside chess clock."""
         secs = self._chessClockOffenseSecs()
         return secs is not None and secs <= threshold
+
+    def _chessClockCatchUpPossible(self, scoreDiff: int) -> bool:
+        """Chess clock: can the TRAILING offense still realistically catch up with the
+        possession budget it has left? Estimates the budget it needs: a single short
+        FG-drive when a field goal ties/wins, otherwise scoresNeeded touchdown drives.
+        Optimistic (a quick hurry-up drive, a score every possession) so this only returns
+        False when catching up is genuinely out of reach. True when leading/tied, or off
+        chess clock — the caller keeps preserving the clock unless this says it's hopeless."""
+        if scoreDiff >= 0:
+            return True
+        b = self._chessClockOffenseSecs()
+        if b is None:
+            return True
+        import math
+        from constants import CHESS_CLOCK_CATCHUP_DRIVE_SECS, CHESS_CLOCK_CATCHUP_FG_SECS
+        deficit = -scoreDiff
+        if deficit <= self.gameRules.fieldGoalPoints:
+            budgetNeeded = CHESS_CLOCK_CATCHUP_FG_SECS          # a field goal ties/wins
+        else:
+            scoresNeeded = math.ceil(deficit / self._oneScore())
+            budgetNeeded = scoresNeeded * CHESS_CLOCK_CATCHUP_DRIVE_SECS
+        return b >= budgetNeeded
 
     def _defenseLockedOut(self) -> bool:
         """True when the DEFENSE can't get the ball back (chess clock: its budget is
@@ -6604,6 +6632,21 @@ class Game:
                     # Check if clock expired during pre-snap
                     if self.gameClockSeconds <= 0:
                         break
+                elif (getattr(self.format, 'key', '') == 'chess_clock'
+                        and not getattr(self, '_timeoutCalled', False)
+                        and self.play.playType not in (PlayType.Kneel, PlayType.Spike)):
+                    # Chess clock: even with the game clock already STOPPED (incompletion /
+                    # out of bounds), running a play still uses possession time — drain a
+                    # reduced huddle from the budget so clock-stopping plays aren't nearly
+                    # free (which explodes the play count in pass-heavy games). A deliberate
+                    # TIMEOUT still fully preserves the budget (the intentional tool); this
+                    # floor is only for the cheap, unchosen stops.
+                    from constants import CHESS_CLOCK_STOPPED_HUDDLE_DRAIN
+                    self._inPreSnap = True
+                    self.consumeGameTime(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
+                    self._inPreSnap = False
+                    if self.gameClockSeconds <= 0:
+                        break
                 self.totalPlays += 1
                 self.play.playNumber = self.totalPlays
                 # Game format tick (play_limit drives its synthetic clock from here).
@@ -9236,18 +9279,20 @@ class Game:
                (_u == 'seconds' and self.driveClockRemaining <= 75):
                 return ('hurryUp', 12)
 
-        # Chess clock: the offense's budget is nearly spent → 2-minute-drill tempo (fast
-        # huddle) so it races its own budget and banks points before locking out.
-        if self._chessClockLow(100):
-            return ('hurryUp', 12)
-
-        # Chess clock (budget not yet low): NEVER burn clock — there's no shared clock to
-        # run out, so burning only wastes the budget and hands over possession sooner.
-        # Play an efficient neutral; calculatePreSnapTime gates the actual huddle length by
+        # Chess clock tempo. Up BIG (more than two scores ahead): the game's in hand, so
+        # STOP actively saving budget — play a relaxed, normal pace (still never burn, that
+        # only wastes budget). Otherwise: race the budget with a fast huddle once it's low,
+        # else an efficient neutral. calculatePreSnapTime gates the actual huddle length by
         # the coach's clock management (a sharp manager saves budget, a poor one lets time
         # roll off), so budget efficiency is a coaching skill.
         if getattr(self.format, 'key', '') == 'chess_clock':
-            from constants import CHESS_CLOCK_NEUTRAL_HUDDLE
+            from constants import CHESS_CLOCK_NEUTRAL_HUDDLE, CHESS_CLOCK_RELAXED_HUDDLE
+            # Relax (normal pace) when the clock no longer matters: up big (game in hand)
+            # OR trailing with no realistic budget left to catch up (out of reach).
+            if scoreDiff > 2 * self._oneScore() or not self._chessClockCatchUpPossible(scoreDiff):
+                return ('neutral', CHESS_CLOCK_RELAXED_HUDDLE)
+            if self._chessClockLow(100):
+                return ('hurryUp', 12)
             return ('neutral', CHESS_CLOCK_NEUTRAL_HUDDLE)
 
         # Frames: the current frame (a mini-game) is winding down — hurry when NOT ahead in

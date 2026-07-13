@@ -146,7 +146,7 @@ class GameRules:
     gameFormat: str = 'standard'           # 'standard' | 'target' | 'play_limit' | 'chess_clock' | 'innings' | 'frames' | 'bust'
     targetScore: int = 30                  # 'target' format: first to this many points wins
     playsPerQuarter: int = 30              # 'play_limit' format: fixed plays per quarter (no clock)
-    offenseClockBudgetSeconds: int = 1080  # 'chess_clock' format: each team's offense-time budget (18:00)
+    offenseClockBudgetSeconds: int = 1800  # 'chess_clock' format: each team's offense-time budget (30:00 → 60:00 game, 15:00 quarters)
     inningsPerGame: int = 3                # 'innings' format: innings each team bats (no clock)
     triesPerInning: int = 3                # 'innings' format: possession-ends (tries) per at-bat
     framesPerGame: int = 6                 # 'frames' format: match-play frames (win a frame = +1; most frames wins)

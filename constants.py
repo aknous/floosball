@@ -1120,8 +1120,8 @@ RULE_VOTE_CANDIDATES["driveClock"]["presets"] = DRIVE_CLOCK_PRESETS
 # game_formats.py (dormant) — re-add their presets below to re-enable them (owner
 # 2026-07-13: hold target/play_limit/bust until they're tested).
 GAME_FORMAT_PRESETS = [
-    {"key": "gf_chess_clock_18", "label": "Chess Clock (18:00 each)",
-     "patch": {"gameFormat": "chess_clock", "offenseClockBudgetSeconds": 1080}},
+    {"key": "gf_chess_clock_30", "label": "Chess Clock (30:00 each)",
+     "patch": {"gameFormat": "chess_clock", "offenseClockBudgetSeconds": 1800}},
     {"key": "gf_innings_3", "label": "Innings (3, try-driven)",
      "patch": {"gameFormat": "innings", "inningsPerGame": 3, "triesPerInning": 3}},
     {"key": "gf_frames_6", "label": "Frames (6, match play)",
@@ -1219,6 +1219,27 @@ CHESS_CLOCK_HUDDLE_IQ_SPREAD = 20
 # (~0) rarely bothers and burns budget away. The rate ramps well above this once the
 # budget is actually running low.
 CHESS_CLOCK_BASE_SIDELINE_PROB = 0.30
+# Huddle when a chess-clock team is UP BIG (more than two scores ahead). The game is
+# in hand, so it stops actively saving budget and plays a relaxed, normal pace (still
+# never burns — that only wastes budget). Roughly the standard neutral huddle.
+CHESS_CLOCK_RELAXED_HUDDLE = 35
+# Budget drained from a chess-clock possession on a snap where the game clock was
+# already STOPPED (incompletion / out of bounds) and no timeout was called. Running
+# a play still uses possession time, so these snaps aren't free — without this floor
+# a pass-heavy defensive game stops the clock constantly and the play count explodes
+# (200+ plays, very long games). A deliberate TIMEOUT still fully preserves the budget
+# (drains nothing) — that's the intentional conservation tool; this is for the cheap,
+# unchosen stops.
+CHESS_CLOCK_STOPPED_HUDDLE_DRAIN = 10
+# Budget a scoring drive costs, used to decide whether a TRAILING chess-clock team can
+# still realistically catch up: it needs (scoresNeeded x TD-drive) of budget, OR just a
+# short FG-drive when a field goal ties/wins. These are OPTIMISTIC — a well-executed
+# hurry-up drive with a couple of chunk plays — because a team only "eases up" when even
+# a great drive can't get there; otherwise it keeps preserving the clock to fight. So a
+# ONE-score deficit stays catchable with ~a minute of budget; it's a MULTI-score deficit
+# against little budget (e.g. two scores with under a minute left) that's out of reach.
+CHESS_CLOCK_CATCHUP_DRIVE_SECS = 50   # one hurry-up touchdown drive
+CHESS_CLOCK_CATCHUP_FG_SECS = 30      # a field-goal-to-tie drive (shorter)
 
 # ── QB scrambles ──────────────────────────────────────────────────────────
 # A pressured QB can escape a would-be sack and run instead. AGILITY gates the
