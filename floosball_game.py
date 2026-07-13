@@ -2688,7 +2688,13 @@ class Game:
         # TD instead. gameClockSeconds is the SYNTHETIC clock in chess clock and can read
         # plenty while the opponent is already out of budget, so the lockout check is
         # what actually catches this case.
-        lateHopeless = (self.currentQuarter >= 4 and self.gameClockSeconds <= 300) or self._defenseLockedOut()
+        # A FG on 4th down only "helps" if it wins/ties, OR there's realistically time for a
+        # SUBSEQUENT possession to score the rest. No subsequent possession when: late in
+        # regulation (game clock), the opponent is locked out (chess clock — they can't give
+        # the ball back), OR OUR OWN budget is about to run out (chess clock — we won't get
+        # the ball again). Down more than a FG in any of those → a futile 3, so go for the TD.
+        lateHopeless = ((self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+                        or self._defenseLockedOut() or self._chessClockLow(120))
         fgHelps = scoreDiff >= -self._fgValue() or not lateHopeless
         inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
@@ -4032,6 +4038,14 @@ class Game:
             # through to the normal play caller — it'll pick a run.
             if ((self.currentQuarter == 4 or self.currentQuarter >= 5)
                     and scoreDiff > 0 and self.yardsToSafety > 2):
+                # Chess clock: a kneel drains the offense's OWN possession budget 1:1 with
+                # the game clock. If that budget can't outlast the clock remaining, the
+                # kneels run it to 0 and the team is LOCKED OUT — a turnover that hands the
+                # trailing opponent the ball (exactly the bug: kneel → "out of time" → TO).
+                # Only drain-kneel when the budget genuinely outlasts the clock; otherwise
+                # fall through to play normally (keep the ball live / extend the lead).
+                _chessSecs = self._chessClockOffenseSecs()
+                chessCanDrain = (_chessSecs is None) or (_chessSecs >= self.gameClockSeconds)
                 oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
                 availableKneels = self.gameRules.downsPerSeries - self.down  # remaining downs
                 # Each kneel drains ~40s: the snap (~4s) + the play-clock runoff (~36s)
@@ -4045,7 +4059,7 @@ class Game:
                 toadKneels = min(effectiveOppTos, availableKneels)
                 freeKneels = availableKneels - toadKneels
                 drainableSeconds = toadKneels * 4 + freeKneels * self.gameRules.kneelDrainSeconds
-                if drainableSeconds >= self.gameClockSeconds:
+                if chessCanDrain and drainableSeconds >= self.gameClockSeconds:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'kneel',
                         'reason': 'Can drain remaining clock with kneels',
@@ -4059,6 +4073,28 @@ class Game:
             # Good coaches (IQ~1.0) almost always make the right call.
             # Bad coaches (IQ~0.0) frequently miss the correct situational play.
             gameIQ = self._coachClockIQ(coach)
+
+            # ── Chess clock: WINNING game-winner. A FG that WINS (down 1-2 or tied) which
+            # the opponent can no longer answer (they're LOCKED OUT) ends the game — so take
+            # it the moment it's a short, HIGH-CONFIDENCE kick, on ANY down. No need to drain
+            # the budget to the last play the way standard football does (draining doesn't
+            # deny a locked-out opponent anything). A longer / lower-confidence look → keep
+            # driving for a chip shot instead of gambling the win on a long try.
+            if (self._defenseLockedOut() and -self._fgValue() < scoreDiff <= 0
+                    and not self._isGarbageTime(scoreDiff)):
+                from constants import CHESS_CLOCK_WIN_FG_MAX_YARDS, CHESS_CLOCK_FG_CONFIDENCE
+                _gwFgDist = self.yardsToEndzone + self.gameRules.fgSnapDistance
+                if (_gwFgDist <= CHESS_CLOCK_WIN_FG_MAX_YARDS
+                        and self._estimateFgProbability() >= CHESS_CLOCK_FG_CONFIDENCE):
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'gameWinningFG',
+                        'reason': 'Short game-winning FG, opponent out of time',
+                        'fgDistance': _gwFgDist,
+                        'fgProbability': round(self._estimateFgProbability() * 100, 1),
+                        'coachClockIQ': round(gameIQ, 2),
+                    }
+                    self.play.playType = PlayType.FieldGoal
+                    return
 
             # ── End of the FIRST HALF: always try to score, REGARDLESS of the
             # score. A half ends the same whether you're up or down, so a live
@@ -4075,8 +4111,10 @@ class Game:
                              and self._offenseEffectiveSecs() <= 120
                              and not self._isGarbageTime(scoreDiff)
                              and self.yardsToEndzone <= _eohKickerMax + 25)
+            # Goal-to-go (inside the 5): go for the TD, not a FG — a near-certain 7 beats a
+            # 3, even on the last play of the half.
             if (endOfHalfPush and self._offenseEffectiveSecs() <= 45
-                    and self.yardsToEndzone <= _eohKickerMax):
+                    and 5 < self.yardsToEndzone <= _eohKickerMax):
                 eohPlaysAvailable = self._estimateAvailablePlays()
                 if self.down == self.gameRules.downsPerSeries or eohPlaysAvailable <= 1:
                     self.play.insights['clockMgmt'] = {
@@ -4232,16 +4270,28 @@ class Game:
                             return
                         # else: aggressive push — fall through to normal play caller
             # Chess clock: on the LAST play the budget allows (in hurry-up a snap burns
-            # ~20-30s of budget, so ~one play + the FG left ≈ 50s), bank a makeable FG on
-            # ANY down and REGARDLESS of score — the possession is about to lock out, so 3
-            # points now beats running the budget out with nothing. The standard trailing-
-            # 1-3 end-game logic above handles the win/tie cases with more nuance; this
-            # catches the rest (tied, trailing 4+, or protecting a lead). Skips goal-to-go
-            # (a near-certain TD is worth more) and garbage time; attempts any in-range kick
-            # (it's the last shot). Earlier than this the offense hurries + stops the clock
-            # (sideline / spike / timeout) to preserve budget and keep driving.
+            # ~20-30s of budget, so ~one play + the FG left ≈ 50s), bank a makeable FG when
+            # it actually HELPS — the possession is about to lock out, so 3 points now beats
+            # running the budget out with nothing. "Helps" = it wins/ties or protects a
+            # lead, i.e. NOT trailing by more than a field goal: down 4+, a FG still leaves
+            # you losing and this is your last possession, so a futile 3 is worthless and
+            # the offense must go for the TD (the only thing that ties/wins). The standard
+            # trailing-1-3 end-game logic above handles the win/tie cases with more nuance;
+            # this catches tied and protecting-a-lead. Skips goal-to-go (a near-certain TD
+            # is worth more) and garbage time; attempts any in-range kick (it's the last
+            # shot). Earlier than this the offense hurries + stops the clock (sideline /
+            # spike / timeout) to preserve budget and keep driving.
+            # LAST snap the budget allows (only ~one play fits): take a makeable FG that
+            # wins/ties/protects even if it's a longer or lower-confidence look — it's the
+            # last chance, so a shot beats running the budget out with nothing. On EARLIER
+            # snaps a winning FG is only taken when short + high-confidence (the game-winner
+            # block above); a tying FG waits for the last play; and either way the offense
+            # keeps driving for a better look while it can. Excludes trailing by more than a
+            # FG (futile) and goal-to-go (a TD is worth more).
             if (self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
-                    and self.yardsToEndzone > 5 and not self._isGarbageTime(scoreDiff)):
+                    and self.yardsToEndzone > 5 and not self._isGarbageTime(scoreDiff)
+                    and scoreDiff >= -self._fgValue()
+                    and self._estimateAvailablePlays() <= 1):
                 _ccK = self.offensiveTeam.rosterDict.get('k')
                 _ccCharged = self._awakenedReadyFor(_ccK, 'kick')
                 _ccKMax = (self._chargedKickerMaxFg(_ccK) if _ccCharged
@@ -4737,8 +4787,38 @@ class Game:
                  'quarter': self.currentQuarter,
                  'timeRemaining': self.formatTime(self.gameClockSeconds)}
         self.gameFeed.insert(0, {'event': event})
-        self.broadcastGameState(includeLastPlay=False, isPossessionChange=True)
+        # This path is the mid-drive stall; pre-mark the team so the unified lockout
+        # announcer (_maybeAnnounceChessLockout) doesn't drop a second line for it.
+        if not hasattr(self, '_chessLockoutAnnounced'):
+            self._chessLockoutAnnounced = set()
+        self._chessLockoutAnnounced.add(loser)
+        # Pass the event as eventMessage so it goes out LIVE over the WebSocket — without
+        # it the broadcast carries no lastPlayData and the line only shows up on a REST
+        # re-fetch (it's in gameFeed but was never pushed to connected clients).
+        self.broadcastGameState(includeLastPlay=False, eventMessage=event, isPossessionChange=True)
         return True
+
+    def _maybeAnnounceChessLockout(self) -> None:
+        """Chess clock: drop a feed entry the first time each team empties its time budget,
+        no matter how the play that emptied it ended. The mid-drive-stall path
+        (_chessClockDepletionTurnover) announces its own forced-turnover line and pre-marks
+        the team, so this covers the cases it can't — a team that scored or turned the ball
+        over on the very play that ran its budget to 0 (possession already flipped, so the
+        stall path never fires). One line per team per game. A no-op off chess / in OT."""
+        fmt = self.format
+        if getattr(fmt, 'key', '') != 'chess_clock' or self.currentQuarter >= 5:
+            return
+        if not hasattr(self, '_chessLockoutAnnounced'):
+            self._chessLockoutAnnounced = set()
+        for team in (self.homeTeam, self.awayTeam):
+            if fmt._lockedOut(self, team) and team not in self._chessLockoutAnnounced:
+                self._chessLockoutAnnounced.add(team)
+                event = {'text': f'{team.abbr} is out of time.',
+                         '_type': 'chess_timeout',
+                         'quarter': self.currentQuarter,
+                         'timeRemaining': self.formatTime(self.gameClockSeconds)}
+                self.gameFeed.insert(0, {'event': event})
+                self.broadcastGameState(includeLastPlay=False, eventMessage=event)
 
     def _frameBoundaryReset(self) -> bool:
         """Frames: a frame just ended (a mini-game) — end the current drive and start the
@@ -4752,9 +4832,9 @@ class Game:
             return False
         endedFrame = int(getattr(self, '_frameIndex', 0))   # the frame that just committed
         # Marker (blue 'inning'-style accent reused for a period change).
-        self.gameFeed.insert(0, {'event': {
-            'text': f'End of Frame {endedFrame}', '_type': 'frame',
-            'quarter': self.currentQuarter, 'timeRemaining': ''}})
+        frameEvent = {'text': f'End of Frame {endedFrame}', '_type': 'frame',
+                      'quarter': self.currentQuarter, 'timeRemaining': ''}
+        self.gameFeed.insert(0, {'event': frameEvent})
         # Alternate the frame-start possession from the opening receiver.
         winner = getattr(self, '_coinFlipWinner', self.homeTeam)
         loser = getattr(self, '_coinFlipLoser', self.awayTeam)
@@ -4771,7 +4851,9 @@ class Game:
         self._hoopPairResult = {}
         self.clockRunning = False
         self._pendingPossessionChange = False
-        self.broadcastGameState(includeLastPlay=False, isPossessionChange=True)
+        # eventMessage so the frame marker goes out live over the WebSocket (else it only
+        # shows on a REST re-fetch — same bug as the chess out-of-time turnover).
+        self.broadcastGameState(includeLastPlay=False, eventMessage=frameEvent, isPossessionChange=True)
         return True
 
     def _resolveDefensiveReturn(self):
@@ -6421,8 +6503,14 @@ class Game:
                 # a full drive clock so the first play isn't already expired.
                 self._resetDriveClock()
 
-            # Possession loop - while offense has downs
-            while self.down <= self.gameRules.downsPerSeries and self.gameClockSeconds > 0:
+            # Possession loop - while offense has downs. Also bail the instant the format
+            # declares the game decided (checkEarlyEnd → True) so a drive doesn't play on
+            # after the outcome is settled — e.g. chess clock: once the losing team is
+            # locked out and trailing, the winner shouldn't keep burning its budget out.
+            # Checked at the loop boundary (a stable, between-plays point, so it honors
+            # chess's latchFinalMidPlay=False). None/False (undecided) keeps the drive live.
+            while (self.down <= self.gameRules.downsPerSeries and self.gameClockSeconds > 0
+                   and not self.format.checkEarlyEnd(self)):
                 # Show previous play if exists (unless already formatted at quarter transition)
                 # Update yardline display to current ball position (do this before broadcast and play creation)
                 if self.yardsToEndzone > 50:
@@ -6576,6 +6664,10 @@ class Game:
                         self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, (100 - self.yardsToEndzone))
                     else:
                         self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
+
+                # Chess clock: announce a team's lockout the moment its budget hits 0,
+                # covering the score/turnover-on-the-last-play cases the stall path misses.
+                self._maybeAnnounceChessLockout()
 
                 # Frames: a frame just ended — reset possession to the alternating team and
                 # start the next frame fresh (overrides whatever the last play settled).
