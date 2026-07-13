@@ -597,6 +597,10 @@ class FramesFormat(GameFormat):
 
     def consumeTime(self, game, seconds: int) -> None:
         super().consumeTime(game, seconds)   # normal game-clock drain
+        # Don't award a frame mid-huddle (before the snap) — the game loop flags the
+        # pre-snap drain so a play's score stays in its own frame, not the next one.
+        if getattr(game, '_inPreSnap', False):
+            return
         # Award every frame whose time boundary the clock just crossed (the final
         # frame commits when the clock reaches 0 at the end of regulation).
         N = self._frames(game)

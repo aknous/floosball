@@ -6120,7 +6120,13 @@ class Game:
                 if self.currentQuarter >= 5 and self.gameClockSeconds <= 0 and self.homeScore == self.awayScore:
                     self.gameClockSeconds = self.gameRules.overtimeLengthSeconds  # Force clock reset to prevent infinite loop
                 
-                if oldQuarter == 2:
+                if oldQuarter == 2 and getattr(self.format, 'key', '') == 'frames':
+                    # Frames: NO halftime — each frame boundary is the break, and the frame
+                    # reset (not a 2nd-half switch) sets possession. The frame-3 boundary
+                    # coincides with the Q2 end; the frame machinery handles it. Just carry
+                    # on to Q3 quietly (advanceQuarter already reset the clock).
+                    self.down = 1
+                elif oldQuarter == 2:
                     # Halftime
                     self.isHalftime = True
                     self.gameFeed.insert(0, {'event':  {
@@ -6277,7 +6283,7 @@ class Game:
                             awayTeamStats=awayTeamStats
                         )
                         broadcaster.broadcast_sync(self.id, event)
-                elif self.currentQuarter == 3:
+                elif self.currentQuarter == 3 and getattr(self.format, 'key', '') != 'frames':
                     if self.timingManager:
                         await self.timingManager.waitForQuarterBreak()
                     self.gameFeed.insert(0, {'event':  {
@@ -6305,7 +6311,7 @@ class Game:
                             awayTeamStats=awayTeamStats
                         )
                         broadcaster.broadcast_sync(self.id, event)
-                elif self.currentQuarter == 4:
+                elif self.currentQuarter == 4 and getattr(self.format, 'key', '') != 'frames':
                     if self.timingManager:
                         await self.timingManager.waitForQuarterBreak()
                     self.gameFeed.insert(0, {'event':  {
@@ -6544,7 +6550,13 @@ class Game:
                     self._maybeCallTimeoutToSaveSnap()
                 if self.clockRunning and self.play.playType not in (PlayType.Kneel, PlayType.Spike):
                     preSnapTime = self.calculatePreSnapTime()
+                    # Frames: don't AWARD a frame while the pre-snap huddle drains the clock
+                    # (the snap hasn't happened yet). Deferring the award to the play's own
+                    # clock burn keeps a play — and its score — in the frame its drive was
+                    # in, instead of leaking into the next frame.
+                    self._inPreSnap = True
                     self.consumeGameTime(preSnapTime)
+                    self._inPreSnap = False
                     self.checkTwoMinuteWarning()
 
                     # Check if clock expired during pre-snap
