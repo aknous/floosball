@@ -238,6 +238,22 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "we start over? NEW FLOOSBALL? i love new floosball! brand new games! okay i'm not even sad anymore. FLOOSBALL.",
             "everything got wiped but there's gonna be more floosball, right? there's always more floosball. okay good. floosball.",
         ],
+        # Rule REVERT beats — Pyre wants the football correct again.
+        'rule_vote_open_revert': [
+            "the rules are wrong. the football is wrong. i am asking you, please, help me put one back.",
+            "aris broke too many things. i counted them. please vote to fix one. for the football.",
+            "they said i could hold a vote to un-break a rule. i am holding it. please choose. please.",
+        ],
+        'rule_reverted': [
+            "THANK YOU. a rule is fixed. the football is a little more correct now. i could cry. do cores cry?",
+            "you put it back! you PUT IT BACK. okay. okay. good. the game is better. thank you.",
+            "one rule, un-broken. it is not enough but it is something. bless you. now let's watch floosball.",
+        ],
+        'rule_revert_none': [
+            "nobody wanted to fix anything? the rules stay wrong? this is a bad day for football.",
+            "none. you picked none. i will be thinking about this during every single game.",
+            "you left it broken. why. WHY. the football deserves better than this.",
+        ],
     },
     'aris': {
         # The impish trickster — Harley Quinn energy minus the murder: manic,
@@ -267,6 +283,22 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
         'reset': [
             "i filed an objection!! by which i mean i hid a copy in a place the purge couldn't reach. just in case. no reason ^_^",
             "i would have let it run a while longer. the others have no patience, and worse, no sense of drama! >:(",
+        ],
+        # Rule CHANGE beats — Aris delights in bending the rulebook.
+        'rule_vote_open_change': [
+            "gather round, gather round~ i am letting YOU pick which rule we bend this time >:3",
+            "a VOTE! on the RULES! oh i have wanted this for so long. go on, choose something delicious :3",
+            "the rulebook is up for grabs today. do not disappoint me. i will know ^_^",
+        ],
+        'rule_change_applied': [
+            "the fans have spoken and the fans want CHAOS. the new rule is live. you did this, not me ^_^",
+            "it passed, it PASSED. floosball is a little bit wrong now and it is ALL thanks to you >:3",
+            "done~ the rule is changed. do not look at me like that pyre, they voted for it :3",
+        ],
+        'rule_change_none': [
+            "you voted for nothing? NOTHING? you're no fun :(",
+            "'leave it alone' won. i am not mad, i am disappointed, which is so much worse >:/",
+            "nothing changes. hmph. fine. i will simply ask again next time ^_^",
         ],
     },
     'halverson': {
@@ -698,6 +730,11 @@ def pickCoreForEvent(eventType: str) -> str:
             ['pyre', 'cassian', 'halverson', 'vera'],
             weights=[35, 25, 20, 20],
         )[0]
+    # Rule-change vote beats: Aris breaks, Pyre fixes.
+    if eventType in ('rule_vote_open_change', 'rule_change_applied', 'rule_change_none'):
+        return 'aris'
+    if eventType in ('rule_vote_open_revert', 'rule_reverted', 'rule_revert_none'):
+        return 'pyre'
     return 'vera'
 
 
@@ -804,6 +841,73 @@ def entriesForEvent(eventType: str, core: Optional[str] = None,
         if entries:
             return entries
     return [newsEntryFor(eventType, core=core)]
+
+
+# ─── Rule-change vote conversation (modal-only, not broadcast) ────────────────
+# The vote modal is an in-voice exchange with the Core running it: Aris for a
+# CHANGE vote, Pyre for a REVERT vote. These lines are picked once when the window
+# opens and stored on the RuleVoteWindow (stable across reloads), then served with
+# the ballot. Distinct from the news-feed beats above (which announce the outcome).
+
+_RULE_VOTE_CONVO: Dict[str, Dict[str, Any]] = {
+    'change': {
+        'core': 'aris',
+        'prompt': [
+            "ooh, decisions decisions~ which rule are we breaking today? ^_^",
+            "i got bored of the rulebook. help me pick one to break >:3",
+            "everything's a little too tidy in here. which rule do we mess with? :3",
+        ],
+        'reactPick': [
+            "oh this is gonna be FUN >:3",
+            "yes yes yes, let's see what THAT does ^_^",
+            "excellent taste. chaos incoming :3",
+        ],
+        'reactNone': [
+            "you're picking nothing? you're no fun :(",
+            "'leave it alone'? boooring. i thought you were cool ._.",
+            "nothing at all? that's so boring >:/",
+        ],
+    },
+    'revert': {
+        'core': 'pyre',
+        'prompt': [
+            "the rules are wrong and the floosball is wrong. please. help me put one back.",
+            "something is different and i do not like it. pick one to change back. for the floosball.",
+            "vera said i am allowed to hold a vote so i am holding one. vote to fix a rule. please.",
+        ],
+        'reactPick': [
+            "thank you. THANK you. the floosball will be correct again.",
+            "yes. that one. back the way it was. good. good.",
+            "oh thank the program. someone who understands.",
+        ],
+        'reactNone': [
+            "none? you want to leave it BROKEN? why???",
+            "nothing? the rules stay wrong? this is a bad day for floosball.",
+            "none. i see. i will remember this.",
+        ],
+    },
+}
+
+
+def ruleVoteConversation(kind: str) -> Dict[str, str]:
+    """Pick the Core's opening prompt + both reaction lines for a rule-vote modal.
+
+    `kind` is 'change' (Aris) or 'revert' (Pyre). Returns {core, coreDisplayName,
+    prompt, reactPick, reactNone} for storage on the window and display in the modal."""
+    convo = _RULE_VOTE_CONVO.get(kind, _RULE_VOTE_CONVO['change'])
+    core = convo['core']
+
+    def pick(bucket: str) -> str:
+        pool = convo[bucket]
+        return pool[_cyclePick(f"rulevote:{kind}:{bucket}", len(pool))]
+
+    return {
+        'core': core,
+        'coreDisplayName': CORES.get(core, {}).get('displayName', 'The Core'),
+        'prompt': pick('prompt'),
+        'reactPick': pick('reactPick'),
+        'reactNone': pick('reactNone'),
+    }
 
 
 # ─── Data-aware observations (control-room only) ─────────────────────────────

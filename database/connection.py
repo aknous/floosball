@@ -195,6 +195,26 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Retention limit / re-sign-once (parity): times the current team has
+        # re-signed this player (resets to 0 on a walk to FA).
+        try:
+            conn.execute(text("ALTER TABLE players ADD COLUMN team_resign_count INTEGER DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added players.team_resign_count")
+        except Exception:
+            conn.rollback()
+
+        # Cores rule-change vote: the applied change (from -> to) on the winning
+        # window, JSON-encoded so bool/float/int round-trip. (The table itself is
+        # created by create_all; these columns were added after it shipped.)
+        for _col in ("winner_prev", "winner_value"):
+            try:
+                conn.execute(text(f"ALTER TABLE rule_vote_windows ADD COLUMN {_col} TEXT"))
+                conn.commit()
+                logger.info(f"  Migration: added rule_vote_windows.{_col}")
+            except Exception:
+                conn.rollback()
+
         # Team funding breakdown columns (v0.8) — clear old records and re-add columns
         try:
             # Check if new columns already exist
@@ -534,6 +554,21 @@ def _runPendingMigrations():
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE player_attributes ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added player_attributes.{col}")
+            except Exception:
+                conn.rollback()
+
+        # True-skill columns on player_attributes (parity + prospect model,
+        # docs/PARITY_PROSPECT_PLAN.md). Default 0 → loader backfills to the
+        # current attr until the one-time percentile re-map sets them.
+        for col in [
+            'true_skill_speed', 'true_skill_hands', 'true_skill_reach',
+            'true_skill_agility', 'true_skill_power', 'true_skill_arm_strength',
+            'true_skill_accuracy', 'true_skill_leg_strength',
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE player_attributes ADD COLUMN {col} INTEGER DEFAULT 0"))
                 conn.commit()
                 logger.info(f"  Migration: added player_attributes.{col}")
             except Exception:

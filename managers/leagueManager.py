@@ -109,13 +109,18 @@ class LeagueManager:
                 league = League(leagueConfig)
                 self.leagues.append(league)
         
-        # Distribute teams across leagues
+        # Distribute teams across leagues (config order / even split)
         self._distributeTeamsToLeagues(config)
-        
+
+        # If a prior one-time realignment saved a custom alignment, honor it — this
+        # overrides the config-order split so realigned leagues survive restarts/deploys
+        # (the split is otherwise recomputed from config order on every boot).
+        self._applyPersistedAlignment()
+
         # Save to database if enabled
         if DATABASE_AVAILABLE and USE_DATABASE:
             self._saveLeaguesToDatabase()
-        
+
         logger.info(f"Created {len(self.leagues)} leagues with {len(self.teams)} teams")
     
     def _saveLeaguesToDatabase(self) -> None:
@@ -187,7 +192,116 @@ class LeagueManager:
                 if teamIndex < len(self.teams):
                     league.addTeam(self.teams[teamIndex])
                     teamIndex += 1
-    
+
+    def _applyPersistedAlignment(self) -> None:
+        """Override the config-order distribution with a saved `league_alignment`
+        (from a prior one-time realignment), so realigned leagues survive restarts
+        and deploys. No-op when no alignment is stored or it doesn't cleanly cover
+        the current team set (falls back to the config-order split)."""
+        try:
+            from game_rules import _readAppSetting
+            raw = _readAppSetting('league_alignment')
+        except Exception:
+            raw = None
+        if not raw:
+            return
+        import json
+        try:
+            alignment = json.loads(raw)  # {leagueName: [teamId, ...]}
+        except Exception:
+            return
+        byId = {t.id: t for t in self.teams}
+        allIds = [tid for ids in alignment.values() for tid in ids]
+        # Every current team must be assigned exactly once, and every league name
+        # in the alignment must exist — otherwise ignore and keep the config split.
+        if sorted(allIds) != sorted(byId.keys()):
+            logger.warning("Saved league_alignment doesn't cover current teams; keeping config-order split")
+            return
+        leagueByName = {lg.name: lg for lg in self.leagues}
+        if any(name not in leagueByName for name in alignment):
+            logger.warning("Saved league_alignment references unknown league; keeping config-order split")
+            return
+        for name, ids in alignment.items():
+            league = leagueByName[name]
+            league.teamList[:] = [byId[i] for i in ids if i in byId]
+            for t in league.teamList:
+                t.league = name
+        logger.info("Applied persisted league alignment from app_settings")
+
+    def realignByRecentPerformance(self, seasonNumber: int, windowSeasons: int = 2) -> Optional[Dict[str, Any]]:
+        """One-time competitive realignment: rank all teams by combined win% over the
+        last `windowSeasons` completed seasons and serpentine-split them evenly across
+        the two leagues (rank 1->A, 2->B, 3->B, 4->A, ...), so neither league stays
+        perpetually stronger. Reassigns in-memory membership, persists team.league_id,
+        and stores the result as the `league_alignment` app_setting (honored on future
+        boots). Returns a summary dict, or None if it can't run yet (no DB / not two
+        leagues / no completed-season history in the window)."""
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return None
+        if len(self.leagues) != 2 or len(self.teams) < 2:
+            return None
+        firstSeason = max(1, seasonNumber - windowSeasons)
+        lastSeason = seasonNumber - 1  # window = last completed seasons
+        if lastSeason < firstSeason:
+            return None
+        try:
+            from sqlalchemy import text
+            rows = self.db_session.execute(text(
+                "SELECT team_id, COALESCE(SUM(wins), 0), COALESCE(SUM(losses), 0), "
+                "COALESCE(SUM(score_differential), 0) FROM team_season_stats "
+                "WHERE season BETWEEN :a AND :b GROUP BY team_id"),
+                {"a": firstSeason, "b": lastSeason}).fetchall()
+        except Exception as e:
+            logger.error(f"League realignment: failed to read team_season_stats: {e}")
+            return None
+        agg = {r[0]: (r[1], r[2], r[3]) for r in rows}
+        if not agg:
+            return None  # no history yet — let the caller retry next season
+
+        def sortKey(team):
+            w, l, sd = agg.get(team.id, (0, 0, 0))
+            winPct = (w / (w + l)) if (w + l) else 0.5
+            # Best first: highest win%, then point differential; team.id as a stable
+            # deterministic final tiebreak.
+            return (-winPct, -sd, team.id)
+
+        ranked = sorted(self.teams, key=sortKey)
+
+        # Serpentine split into the two leagues: rank%4 in {0,3} -> league A, else B.
+        # For an even team count this yields equal-size leagues with balanced strength.
+        groups = ([], [])
+        for rank, team in enumerate(ranked):
+            groups[0 if (rank % 4 in (0, 3)) else 1].append(team)
+
+        priorLeagueByTeam = {t.id: lg.name for lg in self.leagues for t in lg.teamList}
+        moved = []
+        for i, league in enumerate(self.leagues):
+            league.teamList[:] = groups[i]
+            for t in groups[i]:
+                if priorLeagueByTeam.get(t.id) != league.name:
+                    moved.append({'team': t.name, 'from': priorLeagueByTeam.get(t.id), 'to': league.name})
+                t.league = league.name
+
+        # Persist: team.league_id (via the existing saver) + the durable alignment map.
+        try:
+            self._saveLeaguesToDatabase()
+        except Exception as e:
+            logger.error(f"League realignment: failed to persist league_id: {e}")
+        try:
+            import json
+            from game_rules import _writeAppSetting
+            alignment = {lg.name: [t.id for t in lg.teamList] for lg in self.leagues}
+            _writeAppSetting('league_alignment', json.dumps(alignment))
+        except Exception as e:
+            logger.error(f"League realignment: failed to persist league_alignment: {e}")
+
+        return {
+            'seasonNumber': seasonNumber,
+            'window': [firstSeason, lastSeason],
+            'moved': moved,
+            'alignment': {lg.name: [t.name for t in lg.teamList] for lg in self.leagues},
+        }
+
     def _findTeamByName(self, teamName: str) -> Optional[FloosTeam.Team]:
         """Find team by name"""
         for team in self.teams:
