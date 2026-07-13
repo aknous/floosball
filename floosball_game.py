@@ -1543,14 +1543,18 @@ class Game:
           - Run weight is bumped (in-bounds runs let clock tick toward FG-snap time)
           - Pre-snap drain extends to leave just enough for the FG kick (~7s)
         """
-        # Chess clock: the offense's budget running low is its own end-game trigger, any
-        # quarter (its possession is ending, not just the half/game). Otherwise Q2/Q4 only.
-        if self.currentQuarter not in (2, 4) and not self._chessClockLow(60):
+        # Chess clock's low budget and a frame winding down are each their own end-game
+        # trigger any quarter (the possession/frame is ending, not just the half/game).
+        if self.currentQuarter not in (2, 4) and not self._chessClockLow(60) and not self._frameEndSoon(60):
             return False
         if self._offenseEffectiveSecs() > 60:
             return False
         isHome = (self.offensiveTeam is self.homeTeam)
         scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        # Frames: it's the FRAME you're trying to win, so drain/kick off the frame margin.
+        _fd = self._frameScoreDiff()
+        if _fd is not None:
+            scoreDiff = _fd
         if not (-self._fgValue() <= scoreDiff <= 0):
             return False
         if self._isGarbageTime(scoreDiff):
@@ -2395,15 +2399,53 @@ class Game:
         secs = self._chessClockOffenseSecs()
         return secs is not None and secs <= threshold
 
+    def _frameSecsRemaining(self):
+        """Seconds left in the current 10-min frame (frames format only; None otherwise) —
+        each frame is a mini-game the offense manages the clock toward (win the frame = +1;
+        the running total doesn't decide the match)."""
+        fmt = self.format
+        if getattr(fmt, 'key', '') != 'frames' or self.currentQuarter >= 5:
+            return None
+        try:
+            n = fmt._frames(self)
+            frameLen = fmt._regSeconds(self) / n if n else 0
+            if not frameLen:
+                return None
+            elapsed = fmt._elapsed(self)
+            return max(0, int(round(frameLen - (elapsed % frameLen))))
+        except Exception:
+            return None
+
+    def _frameScoreDiff(self):
+        """The CURRENT frame's margin from the OFFENSE's perspective (frames only, else
+        None). Winning the frame is the goal, so the end-game clock management keys off
+        this, not the running total."""
+        if getattr(self.format, 'key', '') != 'frames':
+            return None
+        fh = self.homeScore - getattr(self, '_frameStartHome', 0)
+        fa = self.awayScore - getattr(self, '_frameStartAway', 0)
+        return (fh - fa) if self.offensiveTeam is self.homeTeam else (fa - fh)
+
+    def _frameEndSoon(self, threshold: int = 120) -> bool:
+        """True when the current frame is winding down (frames only) — teams should manage
+        the clock like the end of a game (hurry if behind in the frame, drain if ahead)."""
+        fs = self._frameSecsRemaining()
+        return fs is not None and fs <= threshold
+
     def _offenseEffectiveSecs(self) -> int:
         """Seconds of urgency the offense faces — how soon it MUST score. Standard: the
-        game clock. Chess clock: the SOONER of the shared (synthetic) game clock and the
-        offense's own budget, so the end-game clock-management machinery (last-play FG,
-        clock drain, sideline throws, timeouts, spikes) keys off whichever runs out first.
-        Byte-identical to gameClockSeconds off chess clock."""
+        game clock. Chess clock: the SOONER of the game clock and the offense's own budget.
+        Frames: the time left in the CURRENT frame (the mini-game deadline). So the end-game
+        clock-management machinery (last-play FG, clock drain, sideline, timeouts, spikes)
+        keys off whichever deadline is really in play. Byte-identical off those formats."""
         secs = self.gameClockSeconds
         b = self._chessClockOffenseSecs()
-        return min(secs, int(b)) if b is not None else secs
+        if b is not None:
+            return min(secs, int(b))
+        f = self._frameSecsRemaining()
+        if f is not None:
+            return f
+        return secs
 
     def _estimateConversionProb(self, scoringTeam, distance) -> float:
         """Rough likelihood a run/pass converts from `distance` yards out — used
@@ -3588,6 +3630,11 @@ class Game:
         # points before its drive ends on the clock, no matter the shared game clock.
         if self._chessClockLow(100):
             return True
+        # Frames: the current frame (mini-game) is ending and we're NOT ahead in it — push
+        # to win/tie the frame before the break, like a 2-minute drill.
+        _fd = self._frameScoreDiff()
+        if _fd is not None and _fd <= 0 and self._frameEndSoon(120) and not self._isGarbageTime(_fd):
+            return True
         # Target format: a score this possession ends the game in our favor — push
         # to finish (unless a conservative coach is sitting on a comfortable lead).
         if self._targetShouldPush():
@@ -3979,8 +4026,12 @@ class Game:
             # ≤45s here is just a coarse entry filter; the real gate is
             # _estimateAvailablePlays (which reserves ~7s for the FG and accounts
             # for the timeouts/spikes needed to stop the clock between snaps).
-            if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5 or self._chessClockLow(60))
-                    and -self._fgValue() <= scoreDiff < 0 and self._offenseEffectiveSecs() <= 45):
+            # Frames: it's the FRAME you're trying to win, so this block reasons off the
+            # frame margin + the frame's clock, and a frame ending is its own entry trigger.
+            _fgDiff = self._frameScoreDiff()
+            _fgDiff = _fgDiff if _fgDiff is not None else scoreDiff
+            if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5 or self._chessClockLow(60) or self._frameEndSoon(60))
+                    and -self._fgValue() <= _fgDiff < 0 and self._offenseEffectiveSecs() <= 45):
                 kicker = self.offensiveTeam.rosterDict.get('k')
                 kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
                 despFgProb = self._estimateFgProbability()
@@ -3996,7 +4047,7 @@ class Game:
                     if self.down == self.gameRules.downsPerSeries or playsAvailable <= 1:
                         self.play.insights['clockMgmt'] = {
                             'decision': 'desperationFG',
-                            'reason': 'Last play — kick the FG to ' + ('win' if scoreDiff > -self._fgValue() else 'tie'),
+                            'reason': 'Last play — kick the FG to ' + ('win' if _fgDiff > -self._fgValue() else 'tie'),
                             'clockRemaining': self.gameClockSeconds,
                             'playsAvailable': playsAvailable,
                             'down': self.down,
@@ -4008,7 +4059,7 @@ class Game:
                     # 2+ plays remain. A long shot → keep advancing to get closer.
                     if despFgProb < despThreshold and self._offenseEffectiveSecs() > 8:
                         pass  # fall through to the play caller (try to gain yards)
-                    elif self.down < self.gameRules.downsPerSeries and scoreDiff > -self._fgValue():
+                    elif self.down < self.gameRules.downsPerSeries and _fgDiff > -self._fgValue():
                         # WINNING FG (trailing 1-2) with 2+ plays — the FG already
                         # wins, so the smart play is to DRAIN the clock and kick on
                         # the last snap, NOT gamble the ball on a TD. Clock-mgmt
@@ -9089,6 +9140,16 @@ class Game:
         # huddle) so it races its own budget and banks points before locking out.
         if self._chessClockLow(100):
             return ('hurryUp', 12)
+
+        # Frames: the current frame (a mini-game) is winding down — hurry when NOT ahead in
+        # it (win/tie the frame before the break), drain when ahead (secure the +1). Keys
+        # off the FRAME margin, not the running total. Garbage-time (frame) falls through.
+        _fdiff = self._frameScoreDiff()
+        if _fdiff is not None and self._frameEndSoon(120):
+            if _fdiff > 0:
+                return ('burnClock', 40)              # ahead in the frame → run the frame out
+            if not self._isGarbageTime(_fdiff):
+                return ('hurryUp', 12)                # behind/tied → race to win the frame
 
         if (q >= 4) and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0 and not garbageTime:
             return ('hurryUp', 12)  # Q4/OT trailing or tied under 2:00
