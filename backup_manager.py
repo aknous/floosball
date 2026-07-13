@@ -16,6 +16,7 @@ Env:
   BACKUP_KEEP             default "7"   — most recent N copies kept
 """
 import os
+import re
 import glob
 import asyncio
 import sqlite3
@@ -56,8 +57,16 @@ def runBackupOnce():
     os.replace(tmpPath, outPath)
 
     keep = max(1, int(os.environ.get('BACKUP_KEEP', '3')))
-    existing = sorted(glob.glob(os.path.join(backupDir, 'floosball_*.db')))
-    for old in existing[:-keep]:
+    # Prune only the AUTO backups (floosball_<YYYYMMDD>_<HHMMSS>.db), oldest first by
+    # mtime, and NEVER the one we just wrote. Manual/named backups (e.g.
+    # floosball_pre_freeze_*.db) are left alone — sorting the raw glob by NAME put those
+    # after the timestamped ones, so a low BACKUP_KEEP could delete the fresh auto backup.
+    autoRe = re.compile(r'^floosball_\d{8}_\d{6}\.db$')
+    autos = [p for p in glob.glob(os.path.join(backupDir, 'floosball_*.db'))
+             if autoRe.match(os.path.basename(p)) and os.path.abspath(p) != os.path.abspath(outPath)]
+    autos.sort(key=os.path.getmtime)  # oldest first
+    excess = len(autos) - (keep - 1)  # keep newest (keep-1) others + the just-written one
+    for old in autos[:max(0, excess)]:
         try:
             os.remove(old)
         except OSError:
@@ -90,7 +99,7 @@ async def runBackupLoop():
     while True:
         try:
             outPath = await asyncio.to_thread(runBackupOnce)
-            if outPath:
+            if outPath and os.path.exists(outPath):
                 sizeMb = os.path.getsize(outPath) / 1e6
                 logger.info(f"DB backup written: {outPath} ({sizeMb:.1f}MB)")
         except Exception as e:
