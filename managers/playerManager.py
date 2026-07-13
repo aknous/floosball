@@ -381,6 +381,7 @@ class PlayerManager:
             player.term = db_player.term
             player.termRemaining = db_player.term_remaining
             player.capHit = db_player.cap_hit
+            player.teamResignCount = int(getattr(db_player, 'team_resign_count', 0) or 0)
             player.playerRating = db_player.player_rating
             player.freeAgentYears = db_player.free_agent_years
             # Prospect pipeline state
@@ -437,6 +438,17 @@ class PlayerManager:
                 player.attributes.potentialAccuracy = attrs.potential_accuracy
                 player.attributes.potentialLegStrength = attrs.potential_leg_strength
                 player.attributes.potentialSkillRating = attrs.potential_skill_rating
+                # True skill: fall back to the current attr when unset (0/null) —
+                # pre-migration players and any not yet percentile-remapped start
+                # with trueSkill == current so the dev arc has a valid target.
+                player.attributes.trueSkillSpeed = getattr(attrs, 'true_skill_speed', 0) or player.attributes.speed
+                player.attributes.trueSkillHands = getattr(attrs, 'true_skill_hands', 0) or player.attributes.hands
+                player.attributes.trueSkillReach = getattr(attrs, 'true_skill_reach', 0) or player.attributes.reach
+                player.attributes.trueSkillAgility = getattr(attrs, 'true_skill_agility', 0) or player.attributes.agility
+                player.attributes.trueSkillPower = getattr(attrs, 'true_skill_power', 0) or player.attributes.power
+                player.attributes.trueSkillArmStrength = getattr(attrs, 'true_skill_arm_strength', 0) or player.attributes.armStrength
+                player.attributes.trueSkillAccuracy = getattr(attrs, 'true_skill_accuracy', 0) or player.attributes.accuracy
+                player.attributes.trueSkillLegStrength = getattr(attrs, 'true_skill_leg_strength', 0) or player.attributes.legStrength
                 player.attributes.routeRunning = attrs.route_running
                 player.attributes.vision = attrs.vision
                 player.attributes.blocking = attrs.blocking
@@ -711,9 +723,12 @@ class PlayerManager:
         import numpy as np
         from random import randint
 
-        # Generate dual seeds (physical + mental) from normal distribution
-        meanPlayerSkill = 80
-        stdDevPlayerSkill = 7
+        # Generate dual seeds (physical + mental) from normal distribution.
+        # Parity distribution (docs/PARITY_PROSPECT_PLAN.md); founding players
+        # are established, so they enter at their true skill (no entry discount).
+        from constants import GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD
+        meanPlayerSkill = GEN_TRUESKILL_MEAN
+        stdDevPlayerSkill = GEN_TRUESKILL_STD
         physicalSeeds = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, totalPlayers)
         physicalSeeds = np.clip(physicalSeeds, 60, 100).tolist()
         mentalSeeds = np.random.normal(meanPlayerSkill, stdDevPlayerSkill, totalPlayers)
@@ -820,6 +835,7 @@ class PlayerManager:
         """Create a single player of specified position"""
         from random import randint
         import numpy as np
+        from constants import GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD
 
         name = self.popUniqueName()
         if name is None:
@@ -830,9 +846,9 @@ class PlayerManager:
         # distribution as the league-balanced rookie class so one-off
         # player creations match the compressed talent curve.
         if physicalSeed is None:
-            physicalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
+            physicalSeed = int(np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD), 60, 100))
         if mentalSeed is None:
-            mentalSeed = int(np.clip(np.random.normal(78, 7), 60, 100))
+            mentalSeed = int(np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD), 60, 100))
         
         # Create player based on position with dual seeds
         player = None
@@ -908,6 +924,16 @@ class PlayerManager:
         if player in playerList:
             playerList.remove(player)
     
+    def hasReachedResignLimit(self, player) -> bool:
+        """True if this team can no longer re-sign the player (re-sign-once limit
+        reached). Single source of truth for re-sign eligibility, shared by the
+        offseason retention pass, the eligible-targets API, and vote validation.
+        An expiring player who hits the limit is forced to walk to free agency."""
+        from constants import RESIGN_ONCE_ENABLED, RESIGN_ONCE_LIMIT
+        if not RESIGN_ONCE_ENABLED:
+            return False
+        return (getattr(player, 'teamResignCount', 0) or 0) >= RESIGN_ONCE_LIMIT
+
     def _getPlayerTerm(self, player) -> int:
         """Decide contract term for a signing / promotion / re-sign.
 
@@ -930,10 +956,13 @@ class PlayerManager:
             return 2  # B / C
 
         # Veteran: roll by tier, then clamp to expected career runway.
+        # Star (S/A) deals are SHORT (2-3, was 4-6 / 3-4) so a player cycles through
+        # their ~2 contracts (re-sign-once retention limit) in ~4-5 years rather than
+        # a decade — keeps talent circulating for parity. See PARITY_PROSPECT_PLAN.md P5.
         if tier == FloosPlayer.PlayerTier.TierS:
-            base = randint(4, 6)
+            base = randint(2, 3)
         elif tier == FloosPlayer.PlayerTier.TierA:
-            base = randint(3, 4)
+            base = randint(2, 3)
         elif tier == FloosPlayer.PlayerTier.TierD:
             base = 1
         else:
@@ -952,7 +981,7 @@ class PlayerManager:
         # the dead-cap risk for hall-of-fame trajectory players); TierA
         # holds at 2 years; lower tiers fall to the runway floor of 1.
         if tier == FloosPlayer.PlayerTier.TierS:
-            floor = 3
+            floor = 2
         elif tier == FloosPlayer.PlayerTier.TierA:
             floor = 2
         else:
@@ -1286,8 +1315,23 @@ class PlayerManager:
         if seasons - longevity >= RETIREMENT_YEARS_PAST_HIGH:
             return 'near_retirement'
 
+        # 'developing' means upside ahead — but a player who has already reached
+        # their skill ceiling (current == potential on every attribute, e.g. a
+        # frozen legacy player) has no room to grow, so age alone shouldn't call
+        # them developing. Require actual potential headroom; otherwise they've
+        # arrived and read as 'prime' (at their level).
+        hasUpside = False
+        if attrs is not None:
+            from floosball_player import _TRUESKILL_ATTR_TRIPLES
+            for base, _trueName, potName in _TRUESKILL_ATTR_TRIPLES:
+                cur = getattr(attrs, base, 0) or 0
+                pot = getattr(attrs, potName, 0) or 0
+                if cur and pot > cur:
+                    hasUpside = True
+                    break
+
         peak = PlayerDevelopment.peakSeason(player)
-        if seasons < peak - DEV_PRIME_WINDOW:
+        if seasons < peak - DEV_PRIME_WINDOW and hasUpside:
             return 'developing'
         if seasons <= peak + DEV_PRIME_WINDOW:
             return 'prime'
@@ -1552,6 +1596,7 @@ class PlayerManager:
                         term=player.term,
                         term_remaining=player.termRemaining,
                         cap_hit=player.capHit,
+                        team_resign_count=int(getattr(player, 'teamResignCount', 0) or 0),
                         player_rating=player.playerRating,
                         offensive_rating=getattr(player, 'offensiveRating', None),
                         defensive_rating=getattr(player, 'defensiveRating', None),
@@ -1583,6 +1628,7 @@ class PlayerManager:
                     db_player.term = player.term
                     db_player.term_remaining = player.termRemaining
                     db_player.cap_hit = player.capHit
+                    db_player.team_resign_count = int(getattr(player, 'teamResignCount', 0) or 0)
                     db_player.player_rating = player.playerRating
                     db_player.offensive_rating = getattr(player, 'offensiveRating', None)
                     db_player.defensive_rating = getattr(player, 'defensiveRating', None)
@@ -1628,6 +1674,14 @@ class PlayerManager:
                             potential_accuracy=attrs.potentialAccuracy,
                             potential_leg_strength=attrs.potentialLegStrength,
                             potential_skill_rating=attrs.potentialSkillRating,
+                            true_skill_speed=getattr(attrs, 'trueSkillSpeed', 0),
+                            true_skill_hands=getattr(attrs, 'trueSkillHands', 0),
+                            true_skill_reach=getattr(attrs, 'trueSkillReach', 0),
+                            true_skill_agility=getattr(attrs, 'trueSkillAgility', 0),
+                            true_skill_power=getattr(attrs, 'trueSkillPower', 0),
+                            true_skill_arm_strength=getattr(attrs, 'trueSkillArmStrength', 0),
+                            true_skill_accuracy=getattr(attrs, 'trueSkillAccuracy', 0),
+                            true_skill_leg_strength=getattr(attrs, 'trueSkillLegStrength', 0),
                             route_running=attrs.routeRunning,
                             vision=attrs.vision,
                             blocking=attrs.blocking,
@@ -1679,6 +1733,14 @@ class PlayerManager:
                         db_attrs.potential_accuracy = attrs.potentialAccuracy
                         db_attrs.potential_leg_strength = attrs.potentialLegStrength
                         db_attrs.potential_skill_rating = attrs.potentialSkillRating
+                        db_attrs.true_skill_speed = getattr(attrs, 'trueSkillSpeed', 0)
+                        db_attrs.true_skill_hands = getattr(attrs, 'trueSkillHands', 0)
+                        db_attrs.true_skill_reach = getattr(attrs, 'trueSkillReach', 0)
+                        db_attrs.true_skill_agility = getattr(attrs, 'trueSkillAgility', 0)
+                        db_attrs.true_skill_power = getattr(attrs, 'trueSkillPower', 0)
+                        db_attrs.true_skill_arm_strength = getattr(attrs, 'trueSkillArmStrength', 0)
+                        db_attrs.true_skill_accuracy = getattr(attrs, 'trueSkillAccuracy', 0)
+                        db_attrs.true_skill_leg_strength = getattr(attrs, 'trueSkillLegStrength', 0)
                         db_attrs.route_running = attrs.routeRunning
                         db_attrs.vision = attrs.vision
                         db_attrs.blocking = attrs.blocking
@@ -3844,11 +3906,13 @@ class PlayerManager:
         """
         import numpy as np
         from random import randint
-        from constants import ROOKIE_DRAFT_CLASS_SIZE
+        from constants import ROOKIE_DRAFT_CLASS_SIZE, GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD
 
         numRookies = ROOKIE_DRAFT_CLASS_SIZE
-        meanSkill = 78
-        stdDev = 10
+        # The generated seed is the rookie's TRUE SKILL (mature target); they
+        # debut below it via the entry discount below. Parity distribution.
+        meanSkill = GEN_TRUESKILL_MEAN
+        stdDev = GEN_TRUESKILL_STD
         physicalSeeds = np.clip(np.random.normal(meanSkill, stdDev, numRookies), 60, 100).tolist()
         mentalSeeds = np.clip(np.random.normal(meanSkill, stdDev, numRookies), 60, 100).tolist()
 
@@ -3878,9 +3942,123 @@ class PlayerManager:
             # Rookie flags — not in FA pool yet; drafted into prospects or placed into FA below
             player.seasonsPlayed = 0
             player.team = 'Unsigned'
+            # Debut below true skill; the dev arc grows them into it.
+            from constants import PROSPECT_ENTRY_DISCOUNT
+            player.applyEntryDiscount(PROSPECT_ENTRY_DISCOUNT)
             rookies.append(player)
         logger.info(f"Generated rookie class of {len(rookies)} for season {currentSeason}")
         return rookies
+
+    def parityStarFraction(self) -> float:
+        """Fraction of the non-retired pool at 4-5-star (rating >= 84). Used to
+        detect an OLD inflated pool (needs the one-time parity re-map) vs a
+        fresh/already-re-mapped one already on the true-skill curve."""
+        pool = [p for p in self.activePlayers
+                if getattr(p, 'serviceTime', None) != FloosPlayer.PlayerServiceTime.Retired
+                and getattr(p, 'playerRating', 0)]
+        if not pool:
+            return 0.0
+        return sum(1 for p in pool if p.playerRating >= 84) / len(pool)
+
+    def remapPoolToTrueSkill(self) -> int:
+        """One-time between-season re-map of the existing (inflated) pool onto
+        the new true-skill distribution, rank-preserving PER POSITION (QB/RB/WR/
+        TE/K sit on different rating scales, so a pooled map would distort them).
+
+        Deflates every non-retired player (rostered / FA / prospect / upcoming
+        rookie) onto the parity curve and FREEZES them: trueSkill = potential =
+        current. Freezing is essential — leaving any overshoot headroom (or an
+        old inflated potential on the excluded prospect cohort) lets the pool
+        climb straight back up over a few seasons (measured: 19% -> 25%). With
+        the freeze, only NEW post-cutover rookies develop under the full
+        three-tier model; the existing pool holds its deflated ratings and ages
+        out. Migration for the parity package — the caller guards it to run once.
+        Validated on a prod-copy boot (held ~20%, no creep). See
+        docs/PARITY_PROSPECT_PLAN.md Phase 3.
+        """
+        import numpy as np
+        from random import randint
+        from constants import (GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD,
+                               PROSPECT_ENTRY_DISCOUNT, POTENTIAL_HEADROOM)
+        from floosball_player import _TRUESKILL_ATTR_TRIPLES
+        from player_development import PlayerDevelopment
+
+        PHYS = ['speed', 'power', 'agility', 'reach', 'hands', 'armStrength', 'accuracy', 'legStrength']
+        posClass = {
+            FloosPlayer.Position.QB: FloosPlayer.PlayerQB,
+            FloosPlayer.Position.RB: FloosPlayer.PlayerRB,
+            FloosPlayer.Position.WR: FloosPlayer.PlayerWR,
+            FloosPlayer.Position.TE: FloosPlayer.PlayerTE,
+            FloosPlayer.Position.K:  FloosPlayer.PlayerK,
+        }
+        pool = [p for p in self.activePlayers
+                if getattr(p, 'serviceTime', None) != FloosPlayer.PlayerServiceTime.Retired
+                and getattr(p, 'playerRating', 0) and getattr(p, 'position', None) in posClass]
+        if not pool:
+            return 0
+
+        def refCurve(posEnum, M=3000):
+            ctor = posClass[posEnum]
+            vals = []
+            for _ in range(M):
+                s = int(np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD), 60, 100))
+                m = int(np.clip(np.random.normal(GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD), 60, 100))
+                vals.append(ctor(s, m).playerRating)
+            vals.sort()
+            return vals
+
+        def setToRating(p, target):
+            # Shift physical athletic attrs to move playerRating toward target
+            # (rating moves ~0.8x per unit shift; iterate on the residual).
+            # Preserves each player's relative attribute shape.
+            for _ in range(12):
+                d = target - p.playerRating
+                if d == 0:
+                    break
+                for attr in PHYS:
+                    v = getattr(p.attributes, attr, 0)
+                    if v > 0:
+                        setattr(p.attributes, attr, int(np.clip(v + d, 45, 100)))
+                p.updateRating()
+
+        byPos = {}
+        for p in pool:
+            byPos.setdefault(p.position, []).append(p)
+
+        total = 0
+        for posEnum, players in byPos.items():
+            ref = refCurve(posEnum)
+            M = len(ref); N = len(players)
+            order = sorted(range(N), key=lambda i: players[i].playerRating)  # low -> high
+            for rank, i in enumerate(order):
+                p = players[i]
+                pct = (rank + 0.5) / N
+                setToRating(p, ref[min(M - 1, int(pct * M))])  # rank places them on the mature curve
+                # FREEZE every player the re-map processes at their mature rank
+                # (trueSkill = potential = current, no runway). The re-map runs once,
+                # at the first post-deploy cutover, so its entire pool is the EXISTING
+                # (pre-deploy) league — rostered vets, FAs, AND pipeline prospects
+                # drafted under the old scheme. None of them are new-scheme developers,
+                # so none get a develop-up arc: they hold their deflated ratings and
+                # age out (the freeze is also what stops the pool climbing back up).
+                # The three-tier debut-below-and-develop arc belongs EXCLUSIVELY to the
+                # rookie classes generated AFTER the re-map, via the normal generation
+                # path (applyEntryDiscount) — those are the only players that should
+                # ever surface an "Expected" growth line.
+                for attr, trueName, potName in _TRUESKILL_ATTR_TRIPLES:
+                    cur = getattr(p.attributes, attr, 0)
+                    if cur <= 0:
+                        setattr(p.attributes, trueName, 0)
+                        setattr(p.attributes, potName, 0)
+                        continue
+                    setattr(p.attributes, trueName, cur)   # frozen: trueSkill = current
+                    setattr(p.attributes, potName, cur)    # frozen: potential = current
+                p.updateRating()
+                p.attributes.potentialSkillRating = p.attributes.skillRating
+                total += 1
+
+        logger.info(f"Parity re-map: deflated {total} players onto the true-skill curve (rising debut below & grow in, peak/declining frozen)")
+        return total
 
     def countTeamProspectsAtPosition(self, team, position) -> int:
         """How many prospects this team already holds at a given Position enum."""
@@ -4042,15 +4220,16 @@ class PlayerManager:
             return {"low": low, "high": high, "exact": None}
 
         attrs = getattr(rookie, 'attributes', None)
-        potentials = {}
-        if attrs:
-            for name in ('potentialSpeed', 'potentialHands', 'potentialReach',
-                        'potentialAgility', 'potentialPower', 'potentialArmStrength',
-                        'potentialAccuracy', 'potentialLegStrength',
-                        'potentialSkillRating'):
-                val = getattr(attrs, name, None)
-                if val:
-                    potentials[name] = blur(val, name)
+        # Headline projections are OVERALL ratings (not per-attribute): 'expected' =
+        # overall at trueSkill (natural development), 'ceiling' = overall at potential
+        # (perfect development). Each blurred by scouting confidence. These are the
+        # single source of truth shared with the profile's Expected/Ceiling markers.
+        expExact = ceilExact = None
+        try:
+            expExact = rookie.computeExpectedRating()
+            ceilExact = rookie.computeCeilingRating()
+        except Exception:
+            expExact = ceilExact = None
 
         return {
             "playerId": rookie.id,
@@ -4059,7 +4238,8 @@ class PlayerManager:
             "rating": round(rookie.playerRating, 1),
             "tier": rookie.playerTier.name if hasattr(rookie, 'playerTier') else None,
             "longevity": getattr(attrs, 'longevity', None) if attrs else None,
-            "potentials": potentials,
+            "projectedExpected": blur(expExact, 'overallExpected') if expExact else None,
+            "projectedCeiling": blur(ceilExact, 'overallCeiling') if ceilExact else None,
             "scoutingAccuracy": effectiveScouting,
             "scoutingRange": rangeSize,
         }
@@ -4175,6 +4355,127 @@ class PlayerManager:
             return 0
         logger.info(f"Rating history: snapshotted {snapshots} new entries for season {season}")
         return snapshots
+
+    def rebaseRatingHistoryForRemap(self, remapSeason: int, dryRun: bool = False) -> dict:
+        """The one-time parity re-map (remapPoolToTrueSkill) deflated every player's
+        CURRENT rating at `remapSeason`, but the stored progression history for the
+        seasons BEFORE it is still on the old inflated scale — so the profile chart
+        shows a cliff at the (remapSeason-1 -> remapSeason) boundary.
+
+        Rebase each player's pre-remap rows by the SAME factor their own rating
+        dropped at the boundary (r_remap / r_latestPreRemap), applied to `rating`
+        (and offensive/defensive_rating for consistency). This preserves the SHAPE
+        of the old trajectory while landing it smoothly on the new scale. Approximate
+        by design (the ask is 'drop each point by the same % the current rating drops
+        by', not exact re-derivation).
+
+        Idempotent: a player whose latest pre-remap row no longer sits meaningfully
+        above their remap-season row (already rebased, or never deflated) is skipped.
+        Only DEFLATIONS are smoothed (a boundary that rose is left alone). Returns a
+        summary dict; pass dryRun=True to preview without writing."""
+        from database.models import PlayerRatingHistory as DBHistory
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return {"eligible": 0, "rebased": 0, "rowsChanged": 0, "sample": []}
+        EPS = 0.02        # ignore boundaries within ~2% (no real cliff / already done)
+        FLOOR = 40        # never scale a rating below this
+        rows = self.db_session.query(DBHistory).order_by(
+            DBHistory.player_id, DBHistory.season
+        ).all()
+        byPlayer: dict = {}
+        for r in rows:
+            byPlayer.setdefault(r.player_id, []).append(r)
+
+        eligible = rebased = rowsChanged = 0
+        sample = []
+        for pid, prows in byPlayer.items():
+            remapRow = next((r for r in prows if r.season == remapSeason), None)
+            preRows = [r for r in prows if r.season < remapSeason]
+            if remapRow is None or not preRows or not remapRow.rating:
+                continue
+            latestPre = max(preRows, key=lambda r: r.season)
+            if not latestPre.rating:
+                continue
+            eligible += 1
+            # Only smooth a genuine downward cliff (idempotent on a re-run).
+            if latestPre.rating <= remapRow.rating * (1 + EPS):
+                continue
+            ratio = remapRow.rating / latestPre.rating
+            changedHere = False
+            for r in preRows:
+                for attr in ('rating', 'offensive_rating', 'defensive_rating'):
+                    v = getattr(r, attr, None)
+                    if v:
+                        nv = int(max(FLOOR, min(100, round(v * ratio))))
+                        if nv != v:
+                            if not dryRun:
+                                setattr(r, attr, nv)
+                            changedHere = True
+                            rowsChanged += 1
+            if changedHere:
+                rebased += 1
+                if len(sample) < 8:
+                    sample.append({
+                        "playerId": pid, "ratio": round(ratio, 3),
+                        "boundary": f"s{latestPre.season}:{latestPre.rating}->s{remapSeason}:{remapRow.rating}",
+                    })
+        if not dryRun and rowsChanged:
+            try:
+                self.db_session.commit()
+            except Exception as e:
+                self.db_session.rollback()
+                logger.warning(f"Rating-history rebase failed for remapSeason {remapSeason}: {e}")
+                return {"eligible": eligible, "rebased": 0, "rowsChanged": 0, "sample": [], "error": str(e)}
+        logger.info(f"Rating-history rebase (remapSeason={remapSeason}, dryRun={dryRun}): "
+                    f"{rebased}/{eligible} players, {rowsChanged} rows")
+        return {"eligible": eligible, "rebased": rebased, "rowsChanged": rowsChanged, "sample": sample}
+
+    def freezeLegacyDevelopmentArc(self, dryRun: bool = False) -> dict:
+        """One-time fix for a pool re-mapped by the OLD remap, which handed existing
+        players (rostered vets, FAs, AND pipeline prospects) a development runway —
+        debut below trueSkill, potential above — so they wrongly surface 'Expected'/
+        'Ceiling' growth lines despite being old-scheme players that don't develop.
+
+        Freeze every RE-MAPPED player AT their current level (trueSkill = potential =
+        current). A re-mapped player is fingerprinted by `potentialSkillRating <=
+        skillRating` — the re-map stamps the composite potential down to current
+        (playerManager.remapPoolToTrueSkill). Freshly-generated rookies keep
+        `potentialSkillRating > skillRating` (real composite headroom) and their
+        genuine arc, so they're preserved regardless of is_prospect/is_upcoming_rookie
+        flags or how far into the season this runs. Freezes DOWN, so playerRating
+        (derived from current attrs only) is unchanged — no rating/history/snapshot
+        impact. Idempotent; a no-op on a pool re-mapped with the corrected remap
+        (everyone already frozen). See docs/PARITY_PROSPECT_PLAN.md Phase 3."""
+        from floosball_player import _TRUESKILL_ATTR_TRIPLES
+        frozen = 0
+        attrsChanged = 0
+        for p in self.activePlayers:
+            if getattr(p, 'serviceTime', None) == FloosPlayer.PlayerServiceTime.Retired:
+                continue
+            attrs = getattr(p, 'attributes', None)
+            if attrs is None:
+                continue
+            # New-scheme rookies keep their arc — fingerprint: composite potential
+            # above current. The re-map stamps this DOWN to current on everyone it
+            # processed, so `<=` marks an old-scheme (re-mapped) player.
+            if (getattr(attrs, 'potentialSkillRating', 0) or 0) > (getattr(attrs, 'skillRating', 0) or 0):
+                continue
+            changedHere = False
+            for base, trueName, potName in _TRUESKILL_ATTR_TRIPLES:
+                cur = getattr(attrs, base, 0) or 0
+                if cur <= 0:
+                    continue
+                for name in (trueName, potName):
+                    if (getattr(attrs, name, 0) or 0) > cur:
+                        if not dryRun:
+                            setattr(attrs, name, cur)
+                        changedHere = True
+                        attrsChanged += 1
+            if changedHere:
+                frozen += 1
+        if not dryRun and frozen:
+            self.savePlayerData()
+        logger.info(f"Freeze legacy dev-arc (dryRun={dryRun}): {frozen} players, {attrsChanged} attrs")
+        return {"frozen": frozen, "attrsChanged": attrsChanged}
 
     def _advanceProspectWindow(self) -> dict:
         """Increment prospect_seasons on every prospect; release washouts to the FA pool.
@@ -4633,7 +4934,7 @@ class PlayerManager:
         }
         
         return tier_cap_hits.get(player.playerTier, 2)
-    
+
     def validateSalaryCaps(self) -> Dict[str, Any]:
         """
         Validate salary caps for all teams and identify any issues

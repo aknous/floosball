@@ -258,6 +258,15 @@ class SeasonManager:
         if self.playerManager:
             self.playerManager.releaseDueNames(seasonNumber)
 
+        # Rulebook resets to defaults every NEW season, so each season is a fresh canvas
+        # and the fan-voted rule mutations only live for the season that voted them in.
+        # Reset BEFORE the Season is built so its GameRules loads clean defaults. This is
+        # season-STAMPED (not keyed off resumeFromWeek): a restart mid-season re-enters the
+        # SAME season and keeps its rules even at week 1 in progress (resumeFromWeek == 0),
+        # where the old `if resumeFromWeek == 0` check wrongly wiped a just-voted format.
+        from game_rules import maybeResetRuleOverridesForSeason
+        maybeResetRuleOverridesForSeason(seasonNumber)
+
         self.currentSeason = Season(seasonNumber)
 
         # Anchor season start to the correct Monday
@@ -278,6 +287,12 @@ class SeasonManager:
 
         # Clear previous season data
         self._clearSeasonData()
+
+        # One-time league realignment: rebalance the two leagues by recent win% so
+        # one league isn't perpetually stronger. Must run BEFORE the schedule is
+        # generated (the new alignment drives the matchups). Fires once, at a genuine
+        # new-season boundary; self-gated so it never re-runs.
+        self._maybeRealignLeagues(seasonNumber, resumeFromWeek)
 
         # Create new season schedule — load from DB if resuming, otherwise generate fresh
         scheduleLoaded = False
@@ -318,6 +333,13 @@ class SeasonManager:
         teamMgr = self.serviceContainer.getService('team_manager')
         teamMgr.setPressureModifiersForNewSeason(seasonNumber)
 
+        # One-time parity re-map: at a genuine new-season cutover, deflate an
+        # inflated legacy pool onto the new true-skill curve BEFORE card templates
+        # mint off the (now corrected) ratings. Guarded to run exactly once; auto-
+        # skips a fresh / already-on-curve pool. See docs/PARITY_PROSPECT_PLAN.md.
+        if resumeFromWeek == 0:
+            self._maybeRunParityRemap(seasonNumber)
+
         # Generate card templates for the new season
         self._generateCardTemplates(seasonNumber)
 
@@ -349,6 +371,15 @@ class SeasonManager:
             self.playerManager.snapshotRatingsForSeason(seasonNumber)
         except Exception as e:
             logger.warning(f"Rating snapshot at season {seasonNumber} start failed: {e}")
+
+        # One-time: after the parity re-map deflated current ratings, smooth the
+        # pre-remap progression history so the chart doesn't cliff at the boundary.
+        # Runs after the snapshot above so the remap-season row exists. Marker-guarded.
+        self._maybeRebaseRatingHistoryForParity()
+
+        # One-time: freeze existing (non-prospect) players at their current level so
+        # they don't show a spurious development arc from the re-map's runway.
+        self._maybeFreezeLegacyDevArc()
 
         # Generate the season's rookie class UP FRONT so fans can scout and vote
         # on picks all season long. Rookies sit as is_upcoming_rookie=True until
@@ -601,6 +632,12 @@ class SeasonManager:
                 self.currentSeason.currentWeek = nextWeek
                 self.currentSeason.currentWeekText = nextWeekText
 
+            # Cores rule-change vote: at the START of a game day (weeks 1/8/15/22),
+            # roll the escalating chance a vote opens. Opening here (before the setup
+            # wait) gives fans the whole run-up to kickoff to vote; it resolves 15 min
+            # before the day's first game (below). Idempotent + never blocks the loop.
+            self._maybeOpenRuleVote(nextWeek, weekStartTime)
+
             await self.timingManager.waitForWeekSetup(weekSetupTime)
 
             # ── Official week transition ──
@@ -771,6 +808,11 @@ class SeasonManager:
 
             # Wait for games to start
             await self.timingManager.waitForGamesStart(weekStartTime)
+
+            # Cores rule-change vote resolves right AS the day's games start — voting
+            # stays open through the whole pre-game run-up, the winning rule applies to
+            # the shared gameRules before any game plays. No-op unless a vote is open.
+            self._resolveRuleVote()
 
             # Clear cached countdown — games are starting now
             self._cachedNextGameStart = None
@@ -1049,6 +1091,7 @@ class SeasonManager:
                             )
 
             # Simulate the game
+            self._applyChaosRulesIfCritical(gameInstance)
             await gameInstance.playGame()
 
             # Clear fantasy tracker callbacks after game
@@ -1076,11 +1119,12 @@ class SeasonManager:
             # Update ELO ratings based on game result using pre-game win probability
             teamManager = self.serviceContainer.getService('team_manager')
             if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
+                _eloHome, _eloAway = gameInstance.format.eloScores(gameInstance)
                 teamManager.updateEloAfterGame(
                     gameInstance.homeTeam,
                     gameInstance.awayTeam,
-                    gameInstance.homeScore,
-                    gameInstance.awayScore,
+                    _eloHome,
+                    _eloAway,
                     gameInstance.winningTeam,
                     getattr(gameInstance, 'preGameHomeWinProbability', None),
                     getattr(gameInstance, 'preGameAwayWinProbability', None)
@@ -3194,6 +3238,45 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"_syncGameIdCounter failed: {e}")
 
+    def _maybeRealignLeagues(self, seasonNumber: int, resumeFromWeek: int) -> None:
+        """Fire the one-time league realignment exactly once, at a genuine new-season
+        boundary before the schedule generates. Gated by the `league_realigned`
+        app_setting so it never re-runs — this is a one-shot rebalance, not a recurring
+        re-seed. Skipped on a mid-season restart, and when this season's schedule
+        already exists (season already underway). If there's no completed-season
+        history yet the realign is a no-op and stays unstamped, so it retries at the
+        next boundary once data exists."""
+        if resumeFromWeek > 0:
+            return
+        try:
+            from game_rules import _readAppSetting, _writeAppSetting
+        except Exception:
+            return
+        if _readAppSetting('league_realigned'):
+            return
+        try:
+            if self.game_repo and self.game_repo.has_schedule(seasonNumber):
+                return  # season already has a schedule — too late to realign it
+        except Exception:
+            pass
+        if not self.leagueManager:
+            return
+        try:
+            from constants import LEAGUE_REALIGN_WINDOW_SEASONS
+        except Exception:
+            LEAGUE_REALIGN_WINDOW_SEASONS = 2
+        summary = self.leagueManager.realignByRecentPerformance(
+            seasonNumber, LEAGUE_REALIGN_WINDOW_SEASONS)
+        if not summary:
+            return  # no history yet — leave unstamped to retry next season
+        _writeAppSetting('league_realigned', str(seasonNumber))
+        moved = summary.get('moved', [])
+        logger.info(
+            f"League realignment (season {seasonNumber}, window {summary.get('window')}): "
+            f"{len(moved)} teams changed leagues")
+        for m in moved:
+            logger.info(f"  {m['team']}: {m['from']} -> {m['to']}")
+
     def createSchedule(self) -> None:
         """Generate season schedule (matches original floosball.py algorithm)"""
         import floosball_team as FloosTeam
@@ -4526,6 +4609,7 @@ class SeasonManager:
             # No fantasy tracker callbacks for playoff games — FP is regular season only
 
             # Simulate the game
+            self._applyChaosRulesIfCritical(gameInstance)
             await gameInstance.playGame()
 
             # Determine winner
@@ -4544,11 +4628,12 @@ class SeasonManager:
             # Update ELO ratings based on playoff game result using pre-game win probability
             teamManager = self.serviceContainer.getService('team_manager')
             if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
+                _eloHome, _eloAway = gameInstance.format.eloScores(gameInstance)
                 teamManager.updateEloAfterGame(
                     gameInstance.homeTeam,
                     gameInstance.awayTeam,
-                    gameInstance.homeScore,
-                    gameInstance.awayScore,
+                    _eloHome,
+                    _eloAway,
                     gameInstance.winningTeam,
                     getattr(gameInstance, 'preGameHomeWinProbability', None),
                     getattr(gameInstance, 'preGameAwayWinProbability', None)
@@ -4964,6 +5049,14 @@ class SeasonManager:
                 for team in teamManager.teams:
                     if team.coach:
                         teamManager._saveCoachToDatabase(team)
+
+            # STEP 2.7: Retention limits — per team, decide which EXPIRING players
+            # to keep, applying whichever levers are enabled (re-sign-once, per-
+            # offseason count limit, salary cap). The rest WALK to FA. Sets
+            # _gmResigned flags that STEP 3 consumes. Fan resign votes honored first.
+            # See docs/PARITY_PROSPECT_PLAN.md Phase 5.
+            logger.info("Step 2.7: Retention (re-sign) decisions")
+            self._applyRetentionLimits()
 
             # STEP 3: Process contract decrements and retirements for rostered players
             logger.info("Step 3: Contract decrements and team retirements")
@@ -5495,6 +5588,92 @@ class SeasonManager:
             logger.info(f"Re-provisioned starter packs for {len(usersWithoutCurrency)} existing user(s)")
         except Exception as e:
             logger.warning(f"Could not re-provision starter packs: {e}")
+
+    def _maybeRunParityRemap(self, seasonNumber: int = 0) -> None:
+        """One-time parity migration: deflate an inflated legacy pool onto the
+        new true-skill curve and freeze it. Runs exactly once (persisted marker),
+        auto-skips a pool already on the curve (fresh start or already re-mapped),
+        and persists the re-rated players before marking done so a crash can't
+        leave the marker set with the old ratings still on disk. Records the season
+        the deflation landed on (`parity_remap_season`) so the rating-history rebase
+        knows the cliff boundary. See docs/PARITY_PROSPECT_PLAN.md Phase 3."""
+        from database.models import AppSetting
+        KEY = 'parity_remap_done'
+        try:
+            row = self.db_session.query(AppSetting).filter_by(key=KEY).first()
+            if row is not None and row.value == '1':
+                return
+            frac = self.playerManager.parityStarFraction()
+            # Old inflated pools sit ~40% 4-5-star; fresh/re-mapped pools ~19-21%.
+            if frac > 0.28:
+                n = self.playerManager.remapPoolToTrueSkill()
+                self.playerManager.savePlayerData()   # persist BEFORE marking done
+                logger.info(f"Parity re-map applied to {n} players (pool was {frac:.0%} 4-5-star)")
+                # Record the boundary season for the history rebase (only when the
+                # deflation actually applied — a skipped/already-on-curve pool has no cliff).
+                if seasonNumber:
+                    seasonRow = self.db_session.query(AppSetting).filter_by(key='parity_remap_season').first()
+                    if seasonRow is None:
+                        self.db_session.add(AppSetting(key='parity_remap_season', value=str(seasonNumber)))
+                    else:
+                        seasonRow.value = str(seasonNumber)
+            else:
+                logger.info(f"Parity re-map skipped — pool already on curve ({frac:.0%} 4-5-star)")
+            if row is None:
+                self.db_session.add(AppSetting(key=KEY, value='1'))
+            else:
+                row.value = '1'
+            self.db_session.commit()
+        except Exception as e:
+            # Don't set the marker on failure — retry at the next cutover.
+            logger.error(f"Parity re-map failed (will retry next cutover): {e}")
+
+    def _maybeRebaseRatingHistoryForParity(self) -> None:
+        """After the parity re-map deflated current ratings, rescale each player's
+        PRE-remap progression history so the chart doesn't cliff at the boundary.
+        Runs once (persisted marker), only after the remap applied AND the remap-
+        season snapshot exists (so the boundary ratio is computable). Idempotent and
+        approximate. See docs/PARITY_PROSPECT_PLAN.md Phase 3."""
+        from database.models import AppSetting
+        DONE = 'parity_history_rebased'
+        try:
+            if self.db_session.query(AppSetting).filter_by(key='parity_remap_done', value='1').first() is None:
+                return  # remap hasn't applied — nothing to rebase
+            if self.db_session.query(AppSetting).filter_by(key=DONE, value='1').first() is not None:
+                return
+            seasonRow = self.db_session.query(AppSetting).filter_by(key='parity_remap_season').first()
+            if seasonRow is None or not (seasonRow.value or '').isdigit():
+                return  # unknown boundary — dev DBs set this explicitly; retry later
+            remapSeason = int(seasonRow.value)
+            result = self.playerManager.rebaseRatingHistoryForRemap(remapSeason)
+            # Only mark done once the boundary snapshot existed (eligible players found);
+            # otherwise retry on a later boot when the remap-season row is present.
+            if result.get('eligible', 0) > 0:
+                self.db_session.add(AppSetting(key=DONE, value='1'))
+                self.db_session.commit()
+                logger.info(f"Parity history rebase complete: {result}")
+        except Exception as e:
+            logger.error(f"Parity history rebase failed (will retry): {e}")
+
+    def _maybeFreezeLegacyDevArc(self) -> None:
+        """After the parity re-map, freeze existing (non-prospect) players at their
+        current level so they don't surface a spurious 'Expected'/'Ceiling' growth
+        arc (the re-map had handed rising legacy vets a development runway). Runs
+        once (persisted marker), only after the remap applied. Idempotent + a no-op
+        on a pool re-mapped with the corrected freeze. See docs/PARITY_PROSPECT_PLAN.md."""
+        from database.models import AppSetting
+        DONE = 'legacy_devarc_frozen'
+        try:
+            if self.db_session.query(AppSetting).filter_by(key='parity_remap_done', value='1').first() is None:
+                return  # remap hasn't applied — nothing to freeze
+            if self.db_session.query(AppSetting).filter_by(key=DONE, value='1').first() is not None:
+                return
+            result = self.playerManager.freezeLegacyDevelopmentArc()
+            self.db_session.add(AppSetting(key=DONE, value='1'))
+            self.db_session.commit()
+            logger.info(f"Legacy dev-arc freeze complete: {result}")
+        except Exception as e:
+            logger.error(f"Legacy dev-arc freeze failed (will retry): {e}")
 
     def _generateCardTemplates(self, seasonNumber: int) -> None:
         """Generate card templates for all active players for a season.
@@ -6095,6 +6274,75 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"clear recap events failed: {e}")
 
+    def _applyRetentionLimits(self) -> None:
+        """Per team, decide which EXPIRING players (contract up this offseason) get
+        RE-SIGNED vs walk to FA. FAN-DRIVEN — a player is only kept if fans voted to
+        re-sign them (`_gmResigned`, set by the resign vote in STEP 2). There is NO
+        auto-keep: with no vote, a player walks (fans may deliberately let players
+        go, or simply not vote; unmanaged teams circulate their talent faster). Two
+        limits apply on top:
+          - RE-SIGN-ONCE: a player already re-signed the limit number of times by
+            this team is FORCED to walk even if fans voted to keep them.
+          - COUNT LIMIT: at most RESIGN_LIMIT_PER_OFFSEASON re-signs per offseason;
+            if fans voted for more, only the most-voted keep (rest walk).
+        Kept players stay flagged `_gmResigned` (STEP 3 renews them + increments the
+        re-sign count); the rest are cleared and walk. See PARITY_PROSPECT_PLAN.md P5."""
+        from constants import (RESIGN_ONCE_ENABLED, RESIGN_ONCE_LIMIT,
+                               RESIGN_LIMIT_ENABLED, RESIGN_LIMIT_PER_OFFSEASON)
+        if not (RESIGN_ONCE_ENABLED or RESIGN_LIMIT_ENABLED):
+            return
+        teamManager = self.serviceContainer.getService('team_manager')
+        if not teamManager:
+            return
+        # SIM-ONLY: model fan behaviour (re-sign your best eligible players) so a
+        # userless sim isn't an all-walk extreme. Prod is unaffected — it's driven
+        # by real fan votes. Gated by env; set by retention_harness.py.
+        simulateFans = bool(os.environ.get('SIMULATE_FAN_RESIGNS'))
+        limit = RESIGN_LIMIT_PER_OFFSEASON if RESIGN_LIMIT_ENABLED else 99
+        for team in teamManager.teams:
+            expiring, forcedWalk = [], []
+            for p in team.rosterDict.values():
+                if p is None or getattr(p, 'willRetire', False):
+                    continue  # empty slot, or retires in STEP 3 (vacates)
+                if (getattr(p, 'termRemaining', 0) or 0) > 1:
+                    continue  # stays on current deal
+                if self.playerManager.hasReachedResignLimit(p):
+                    forcedWalk.append(p)    # re-sign limit reached — must walk
+                else:
+                    expiring.append(p)      # contract up → keep only if voted
+            if simulateFans:
+                # Stand in for fan resign votes: keep the best `limit` eligible.
+                for p in sorted(expiring, key=lambda x: -(getattr(x, 'playerRating', 0) or 0))[:limit]:
+                    p._gmResigned = True
+            # Keep only players fans voted to re-sign (real votes, or the sim's
+            # stand-in above), capped at the count limit. Tiebreak on net votes so
+            # the most-supported stay; fall back to rating for the sim stand-in
+            # (no real vote tallies) and any legacy flag without a stored count.
+            def _resignRank(p):
+                nv = getattr(p, '_gmResignNetVotes', None)
+                return nv if nv is not None else (getattr(p, 'playerRating', 0) or 0)
+            voted = sorted((p for p in expiring if getattr(p, '_gmResigned', False)),
+                           key=lambda x: -_resignRank(x))
+            kept = voted[:limit]
+            keptIds = {id(p) for p in kept}
+            for p in expiring:
+                p._gmResigned = id(p) in keptIds     # NO auto-keep: unvoted -> walk
+            for p in forcedWalk:
+                p._gmResigned = False                # re-sign-once override
+            logger.info(f"Retention {team.name}: re-signed {len(kept)}, forced-walk {len(forcedWalk)}, "
+                        f"walked {len(expiring) - len(kept)}")
+            # RETENTION_DEBUG: show the actual decision — which players were
+            # re-signed (most-voted, capped at the limit) and who walked and why.
+            # Off by default; a harness sets the env var to surface the logic.
+            if os.environ.get('RETENTION_DEBUG'):
+                def _fmt(pl): return f"{pl.name}({getattr(pl,'playerRating',0)})"
+                keptStr = ", ".join(_fmt(p) for p in kept) or "-"
+                walked = [p for p in expiring if id(p) not in keptIds]
+                logger.info(
+                    f"  RESIGN[{team.name}] kept: {keptStr} | "
+                    f"walk(not-resigned): {', '.join(_fmt(p) for p in walked) or '-'} | "
+                    f"walk(re-sign-limit): {', '.join(_fmt(p) for p in forcedWalk) or '-'}")
+
     async def _processRosteredPlayerContracts(self) -> None:
         """Process contract decrements and retirements for players on team rosters"""
         from random import randint
@@ -6128,9 +6376,12 @@ class SeasonManager:
                     # Player retires (overrides re-sign)
                     self._executePlayerRetirement(player, team, position, leagueHighlights)
                 elif getattr(player, '_gmResigned', False):
-                    # GM Mode: re-signed via vote — renew contract
+                    # Re-signed (fan vote or retention-limit keep) — renew contract
+                    # and bump the re-sign count (re-sign-once forces a walk once the
+                    # count hits RESIGN_ONCE_LIMIT).
                     player.term = self.playerManager._getPlayerTerm(player)
                     player.termRemaining = player.term
+                    player.teamResignCount = int(getattr(player, 'teamResignCount', 0) or 0) + 1
                     player._gmResigned = False
                     leagueHighlights.insert(0, {
                         'event': {'text': f'{player.name} re-signed with {team.name} for {player.term} season(s) (GM vote)'}
@@ -6141,8 +6392,7 @@ class SeasonManager:
                 elif player.termRemaining <= 0:
                     # Contract expired - move to free agency
                     player.previousTeam = team.name
-                    # TODO: capHit feature not fully developed - disabled for now
-                    # team.playerCap -= getattr(player, 'capHit', 0)
+                    player.teamResignCount = 0   # tenure ended; next team starts fresh
                     if player.currentNumber in team.playerNumbersList:
                         team.playerNumbersList.remove(player.currentNumber)
                     player.team = 'Free Agent'
@@ -6744,24 +6994,16 @@ class SeasonManager:
         if not self.currentSeason:
             return
 
-        # FA draft order = team APPEAL (facilities-derived, Markets→Facilities):
-        # higher Appeal drafts free agents first ("players prefer better-equipped
-        # clubs"). At activation Appeal reproduces the old tier order, since the
-        # grandfather migration seeds facility levels from tier — so nobody loses
-        # FA position. Ties in Appeal break by REVERSE STANDINGS (the rookie-draft
-        # order — worse teams pick first) for parity. (effective_funding was the
-        # old within-Appeal tiebreaker; dropped post-cutover now that funding is
-        # no longer a competitive lever.)
-        from managers import facilitiesManager
-        rookieDraftOrder = self.currentSeason.freeAgencyOrder
-        rookieOrderIdx = {
-            getattr(t, 'id', None): idx for idx, t in enumerate(rookieDraftOrder)
-        }
-        def _appealKey(t):
-            appeal = facilitiesManager.computeAppeal(getattr(t, 'facilities', {}) or {})
-            # higher Appeal drafts FIRST; ties → reverse standings (rookie order)
-            return (-appeal, rookieOrderIdx.get(getattr(t, 'id', None), 999))
-        freeAgencyOrder = sorted(rookieDraftOrder, key=_appealKey)
+        # FA draft order = WORST-FIRST (reverse standings), matching the rookie
+        # draft — the weakest teams pick free agents first. This REPLACES the old
+        # appeal-first order, which was a rich-get-richer loop (fund → appeal →
+        # first pick → consolidate skill). `freeAgencyOrder` is already seeded
+        # worst-first (non-playoff teams by ascending win%, then playoff teams,
+        # champion last), so it IS the order. Combined with re-sign-once shedding
+        # stacked cores into this pool, this is the parity engine. Appeal now only
+        # affects fan-facing rewards, not FA position. See PARITY_PROSPECT_PLAN.md P5.
+        from managers import facilitiesManager  # (still used for the display payload)
+        freeAgencyOrder = list(self.currentSeason.freeAgencyOrder)
         self._pendingFaDraftOrder = freeAgencyOrder
 
         if not (BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled()):
@@ -6775,8 +7017,8 @@ class SeasonManager:
                     'abbr': getattr(t, 'abbr', t.name[:3].upper()),
                     'id': getattr(t, 'id', None),
                     'color': getattr(t, 'color', None),
-                    # FA order is by Appeal (facilities-derived), not market tier —
-                    # the board renders a single Appeal-ranked list, no tier groups.
+                    # FA order is worst-first (reverse standings). appeal kept for
+                    # reference/legacy display only.
                     'appeal': round(facilitiesManager.computeAppeal(getattr(t, 'facilities', {}) or {}), 1),
                 }
                 for t in freeAgencyOrder
@@ -9996,6 +10238,63 @@ class SeasonManager:
                 session.close()
         except Exception:
             pass
+
+    def _ruleVoteMgr(self):
+        """Lazily-constructed RuleVoteManager (Cores rule-change vote)."""
+        if getattr(self, '_ruleVoteManager', None) is None:
+            from managers.ruleVoteManager import RuleVoteManager
+            self._ruleVoteManager = RuleVoteManager(self.serviceContainer)
+        return self._ruleVoteManager
+
+    def _maybeOpenRuleVote(self, week: int, weekStartTime) -> None:
+        """Open a Cores rule-change vote if the game-day escalation roll fires.
+        Wrapped so nothing here ever blocks or breaks the game loop."""
+        try:
+            if not self.currentSeason:
+                return
+            # closes_at = the real wall-clock time the day's games start (the vote's
+            # countdown target). Scheduled: the true kickoff. Non-scheduled: kickoff is
+            # backdated, so estimate from the setup + games-start delays the loop is
+            # about to sleep, so the countdown reflects reality (~a minute), not hours.
+            closesAt = weekStartTime
+            if not getattr(self.timingManager, '_isScheduledMode', False):
+                d = getattr(self.timingManager, 'delays', {}) or {}
+                secs = (d.get('week_start_wait', 30) or 0) + (d.get('game_announcement', 30) or 0)
+                closesAt = datetime.datetime.utcnow() + datetime.timedelta(seconds=secs)
+            self._ruleVoteMgr().maybeOpenWindow(
+                self.currentSeason.seasonNumber, week,
+                self.currentSeason.gameRules, closesAt)
+        except Exception as e:
+            logger.warning(f"Rule vote open hook failed: {e}")
+
+    def _resolveRuleVote(self) -> None:
+        """Resolve the open Cores rule-change vote (applies the winner to the live
+        rules). No-op if none is open. Never blocks/breaks the game loop."""
+        try:
+            if not self.currentSeason:
+                return
+            self._ruleVoteMgr().resolveOpenWindow(
+                self.currentSeason.seasonNumber, self.currentSeason.gameRules,
+                requireClosed=True)
+        except Exception as e:
+            logger.warning(f"Rule vote resolve hook failed: {e}")
+
+    def _applyChaosRulesIfCritical(self, game) -> None:
+        """During a Criticality, give this game its OWN randomized ruleset just
+        before kickoff — chaos rules are hidden from users, both teams play by the
+        same set, results count. Reverts naturally when Criticality ends (normal
+        weeks keep the shared season ruleset). Never blocks the game loop."""
+        try:
+            if not self.currentSeason:
+                return
+            from managers.anomalyManager import isCriticalityWeek
+            week = getattr(game, 'week', None)
+            if week is None:
+                week = self.currentSeason.currentWeek
+            if isCriticalityWeek(self.currentSeason.seasonNumber, week):
+                game.gameRules = self._ruleVoteMgr().randomChaosRules(self.currentSeason.gameRules)
+        except Exception as e:
+            logger.warning(f"Criticality chaos ruleset failed: {e}")
 
     async def _firePreGameReminder(self, gameStartTime: datetime.datetime, weekNumber: int,
                                    weekText: str, gamesCount: int) -> None:

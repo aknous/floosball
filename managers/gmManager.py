@@ -363,6 +363,9 @@ class GmManager:
                 else:
                     outcome = "success"
                     player._gmResigned = True
+                    # Net support drives the count-limit tiebreak: when more players
+                    # clear threshold than a team may keep, the most-voted stay.
+                    player._gmResignNetVotes = net
                     logger.info(
                         f"GM: {team.name} re-signing {player.name} "
                         f"({yea} for / {nay} against, net {net} of {threshold} required)"

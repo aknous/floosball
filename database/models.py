@@ -158,6 +158,9 @@ class Player(Base):
     term: Mapped[Optional[int]] = mapped_column(Integer)
     term_remaining: Mapped[Optional[int]] = mapped_column(Integer)
     cap_hit: Mapped[Optional[int]] = mapped_column(Integer)
+    # Times the CURRENT team has re-signed this player (retention limit / re-sign-once;
+    # resets to 0 when the player walks to FA). See docs/PARITY_PROSPECT_PLAN.md.
+    team_resign_count: Mapped[int] = mapped_column(Integer, default=0)
     player_rating: Mapped[Optional[int]] = mapped_column(Integer)
     offensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     defensive_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -248,7 +251,19 @@ class PlayerAttributes(Base):
     potential_accuracy: Mapped[int] = mapped_column(Integer)
     potential_leg_strength: Mapped[int] = mapped_column(Integer)
     potential_skill_rating: Mapped[int] = mapped_column(Integer)
-    
+
+    # True-skill attributes — the mature level a player develops INTO (the
+    # generated attr value). current <= trueSkill <= potential. Rookies debut
+    # below trueSkill and grow into it. See docs/PARITY_PROSPECT_PLAN.md.
+    true_skill_speed: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_hands: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_reach: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_agility: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_power: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_arm_strength: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_accuracy: Mapped[int] = mapped_column(Integer, default=0)
+    true_skill_leg_strength: Mapped[int] = mapped_column(Integer, default=0)
+
     # Mental/skill attributes
     route_running: Mapped[int] = mapped_column(Integer)
     vision: Mapped[int] = mapped_column(Integer)
@@ -2310,3 +2325,70 @@ class AnomalyEvent(Base):
 
     def __repr__(self):
         return f"<AnomalyEvent(player={self.player_id}, layer={self.layer}, ability={self.ability})>"
+
+
+class RuleVoteWindow(Base):
+    """One Cores rule-change vote window per (season, game day).
+
+    A row is recorded for EVERY game day we process (fired or not) so the daily
+    escalation roll is idempotent on restart. When fired=True the window holds a
+    live vote: kind ('change'=Aris / 'revert'=Pyre), the offered candidate field
+    keys, the Core's stored conversation lines, and (once resolved) the winner.
+    See docs/RULE_CHANGES_PLAN.md.
+    """
+    __tablename__ = "rule_vote_windows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    day_index: Mapped[int] = mapped_column(Integer, nullable=False)  # 0-3 (weeks 1/8/15/22)
+    fired: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    kind: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)  # 'change' | 'revert'
+    core: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)  # 'aris' | 'pyre'
+    option_keys: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON list of field keys
+    prompt_line: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    react_pick_line: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    react_none_line: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    opened_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    closes_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    winner_key: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)  # field key | 'none'
+    # The applied change (JSON-encoded so bool/float/int round-trip) — the value the
+    # winning field held just before vs after resolution. Drives the Rulebook pill.
+    winner_prev: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    winner_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    applied: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("season", "day_index", name="uq_rule_vote_window"),
+        Index("idx_rule_vote_windows_season", "season"),
+    )
+
+    def __repr__(self):
+        return (f"<RuleVoteWindow(season={self.season}, day={self.day_index}, "
+                f"fired={self.fired}, kind={self.kind}, resolved={self.resolved})>")
+
+
+class RuleVote(Base):
+    """A user's single pick in a rule-change vote window (free, changeable).
+
+    One row per (user, window); the pick is 'none' or a candidate field key.
+    See docs/RULE_CHANGES_PLAN.md.
+    """
+    __tablename__ = "rule_votes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    window_id: Mapped[int] = mapped_column(Integer, ForeignKey("rule_vote_windows.id"), nullable=False)
+    option_key: Mapped[str] = mapped_column(String(40), nullable=False)  # 'none' | field key
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "window_id", name="uq_rule_vote"),
+        Index("idx_rule_votes_window", "window_id"),
+    )
+
+    def __repr__(self):
+        return f"<RuleVote(user={self.user_id}, window={self.window_id}, pick='{self.option_key}')>"

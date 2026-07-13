@@ -2,11 +2,7 @@
 
 > Living list of features targeted for the next season cutover. **Keep this updated as features land** — move items to "Shipped" with the commit/version, and link each in-flight item to its design doc. Owner-curated.
 
-_Last updated: 2026-07-05_
-
-## In progress
-
-_(nothing in flight)_
+_Last updated: 2026-07-08_
 
 ## Planned
 
@@ -21,13 +17,14 @@ Tie the anomaly/awakening theme into the card system: when a player awakens (or 
 ## Backlog (owner notes, unspecced — 2026-07-02)
 Rough capture; each needs a design pass before building.
 
-- **First iteration of rule changes** — take the rule-mutation layer from tooling to an actual live, Cores-driven rule change in a season. The mutable-rule plumbing already exists (data-driven scoring rules + persisted override layer; mutable `firstDownDistance`/`downsPerSeries`; clock/FG knobs; running-clock rule) — see `docs/SIM_EVOLUTION.md` and the `Rule mutation:` commits. Pick the FIRST rule to actually change, how it's triggered (Cores?), and how it's surfaced to players (the "current rules" UI foreshadowing).
+- **First iteration of rule changes** (Workstream B — owner mechanic specced 2026-07-07) — take the rule-mutation layer from tooling to an actual live, Cores-driven rule change. **Mechanic:** the Core **Aris** opens a mid-season CHANGE vote (a list of candidate rules, each showing current value → proposed new value; most-voted change goes live); later the Core **Halverson** opens a REVERT vote (pick changed rules to restore). Plumbing already exists (data-driven scoring rules + persisted override layer; mutable `firstDownDistance`/`downsPerSeries`; clock/FG knobs; running-clock rule; `GET /api/rules` + "current rules" UI shipped as foreshadowing) — see `docs/SIM_EVOLUTION.md`, the `Rule mutation:` commits, and memory `rule-mutation-future-ideas`. OPEN: vote timing in the season, how many rules per cycle, who picks the proposed new values, vote cost, Criticality interaction. Blast radius (WP model / pick-em / scoreboard all read rule+score state) is bigger than the parity package — scope after Workstream A's distribution work is underway.
 - **New attention sources** — expand what feeds player "attention" beyond the current four (equipped cards, fantasy roster slots, follows, favorite-team fans; all in `anomalyManager._applyWeeklyContributions`). Brainstorm additional user-driven signals so attention concentration has more inputs (keeps it user-generated, not sim-driven).
 
 ## Bugs / smaller fixes
 - **Showcase dividend rate balance pass** — `SHOWCASE_DIVIDEND_RATE` (0.13) was a calibrated starting point (sustained S ≈ the old ~3000 lump/season, top end uncapped); still wants an owner balance pass.
 
 ## Shipped (this cycle)
+- **League parity + prospect true-skill package** ✅ — the top-heavy-league fix (Cranes ~26-2, 80% titles in S13 sims). **Distribution levers:** lower/wider generation seed + flattened dev rise (target ~15-20% 4-5★) and a one-time **rank-preserving percentile re-map** of the live pool at the cutover (Phase 3). **Prospect true-skill model:** three-tier ratings (`current` < `trueSkill` < `potential`) — rookies debut below their mature target and grow into it over 2-3 seasons (Phases 1-2). **Salary cap SCRATCHED** — Phase 5 built model B (`3a30b60`), then **pivoted to retention limits** as the parity model instead (re-signs are fan-vote-driven; cap code removed). Commits `674ed92`/`7e687e3`/`3a30b60`→`c8e1ec7`/`af9d51c`. Plan: `docs/PARITY_PROSPECT_PLAN.md`.
 - **Playbook diversification** ✅ — a real offensive playbook layered on the sim: run concepts (power/draw/counter/sweep) with deception + execution rolls, gap coherence, and defensive counter-adaptation; play-action; route concepts (mesh/flood/screen vs coverage); RPO (QB reads the box pre-snap); trick plays (flea flicker / statue / reverse) as rare called shots. Coach-gated (aggressiveness = experimental adoption / offensiveMind = standard sophistication), situationally aware, balance-measured (concept ON/OFF for inflation), self-describing PBP with the scheme detail in the Play Insights "Play Design" row. Commits `a3e92ef`…`5c7d077`. Plan: `docs/PLAYBOOK_PLAN.md`. (Tuning `5c7d077`: flood out of PBP → insights only; trick plays cut to ~3.4/team/season from ~42.)
 - **Coaching / play-calling depth** ✅ — gameplan wiring made real: `runPassRatio` + a master gameplan switch, situational pass-depth quick-game lever, adaptable coaches re-plan mid-game (not just at halftime), and a Q4 lead-protection floor so every team runs the clock better with a lead. Commits `67e60f3`/`dd03fef`/`6d93c2f`/`20b75ea`.
 - **Clock / kneel / FG fixes** ✅ — score before the half + never let a scoring snap die with timeouts; kneel rules (no 4th-down kneel, no draining a stopped clock); cap awakened-kicker range; PBP: a diving catch no longer also stretches for the marker. Commits `deb11ee`/`26328c9`/`6c69afb`/`0c5cb25`/`1cab194`.
