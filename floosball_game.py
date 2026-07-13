@@ -2688,7 +2688,13 @@ class Game:
         # TD instead. gameClockSeconds is the SYNTHETIC clock in chess clock and can read
         # plenty while the opponent is already out of budget, so the lockout check is
         # what actually catches this case.
-        lateHopeless = (self.currentQuarter >= 4 and self.gameClockSeconds <= 300) or self._defenseLockedOut()
+        # A FG on 4th down only "helps" if it wins/ties, OR there's realistically time for a
+        # SUBSEQUENT possession to score the rest. No subsequent possession when: late in
+        # regulation (game clock), the opponent is locked out (chess clock — they can't give
+        # the ball back), OR OUR OWN budget is about to run out (chess clock — we won't get
+        # the ball again). Down more than a FG in any of those → a futile 3, so go for the TD.
+        lateHopeless = ((self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
+                        or self._defenseLockedOut() or self._chessClockLow(120))
         fgHelps = scoreDiff >= -self._fgValue() or not lateHopeless
         inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
@@ -4075,8 +4081,10 @@ class Game:
                              and self._offenseEffectiveSecs() <= 120
                              and not self._isGarbageTime(scoreDiff)
                              and self.yardsToEndzone <= _eohKickerMax + 25)
+            # Goal-to-go (inside the 5): go for the TD, not a FG — a near-certain 7 beats a
+            # 3, even on the last play of the half.
             if (endOfHalfPush and self._offenseEffectiveSecs() <= 45
-                    and self.yardsToEndzone <= _eohKickerMax):
+                    and 5 < self.yardsToEndzone <= _eohKickerMax):
                 eohPlaysAvailable = self._estimateAvailablePlays()
                 if self.down == self.gameRules.downsPerSeries or eohPlaysAvailable <= 1:
                     self.play.insights['clockMgmt'] = {
