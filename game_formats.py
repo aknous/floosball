@@ -487,6 +487,21 @@ class InningsFormat(GameFormat):
         else:
             game._inningsHalf = 'top'
             game._inningsNumber = getattr(game, '_inningsNumber', 1) + 1
+        # Mark the batting change in the play feed (like a new quarter) — unless this flip
+        # just ended the final inning (the game is about to end, no new at-bat).
+        _endFlip = (game._inningsHalf == 'top' and game._inningsNumber > self._innings(game))
+        if not _endFlip:
+            try:
+                _bat = game.homeTeam if game._inningsHalf == 'bottom' else game.awayTeam
+                _lbl = ('Bottom' if game._inningsHalf == 'bottom' else 'Top') + f" {game._inningsNumber}"
+                game.gameFeed.insert(0, {'event': {
+                    'text': f"{_lbl} · {_bat.abbr} batting",
+                    '_type': 'inning',
+                    'quarter': game.currentQuarter,
+                    'timeRemaining': '',
+                }})
+            except Exception:
+                pass
         # The at-bat is over and the teams switch — give the coaches a moment to
         # regroup, like a manager between innings. innings leaves the clock inert (no
         # advanceQuarter), so this is its ONLY mid-game coach-adjustment beat. Skip the
@@ -528,13 +543,22 @@ class InningsFormat(GameFormat):
         return max(gameProgress, min(1.0, done / total))
 
     def stateExtra(self, game) -> dict:
+        ls = getattr(game, '_inningsLineScore', None) or {'home': {}, 'away': {}}
+        inning = getattr(game, '_inningsNumber', 1)
+        maxInn = max([inning] + list(ls['home'].keys()) + list(ls['away'].keys()))
+        innNums = list(range(1, int(maxInn) + 1))
         return {'innings': {
             'active': True,
-            'inning': getattr(game, '_inningsNumber', 1),
+            'inning': inning,
             'half': getattr(game, '_inningsHalf', 'top'),
             'tries': getattr(game, '_inningsTries', 0),
             'inningsPerGame': self._innings(game),
             'triesPerInning': self._tries(game),
+            'lineScore': {
+                'innings': innNums,
+                'home': [ls['home'].get(i, 0) for i in innNums],
+                'away': [ls['away'].get(i, 0) for i in innNums],
+            },
         }}
 
 

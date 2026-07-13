@@ -2454,6 +2454,9 @@ async def get_game_by_id(game_id: int, response: Response):
                             play_data = {
                                 'playNumber': getattr(play_data, 'playNumber', 0),
                                 'quarter': getattr(play_data, 'quarter', 0),
+                                'inning': getattr(play_data, 'inning', None),
+                                'inningHalf': getattr(play_data, 'inningHalf', None),
+                                'inningTry': getattr(play_data, 'inningTry', None),
                                 'timeRemaining': getattr(play_data, 'timeRemaining', '0:00'),
                                 'down': getattr(play_data, 'down', 0),
                                 'distance': getattr(play_data, 'yardsTo1st', 0),

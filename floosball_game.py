@@ -8834,6 +8834,9 @@ class Game:
             lastPlayData = {
                 'playNumber': self.totalPlays,
                 'quarter': self.play.quarter if hasattr(self.play, 'quarter') else self.currentQuarter,
+                'inning': getattr(self.play, 'inning', None),
+                'inningHalf': getattr(self.play, 'inningHalf', None),
+                'inningTry': getattr(self.play, 'inningTry', None),
                 'timeRemaining': self.formatTime(self.gameClockSeconds),
                 'down': self.play.down if hasattr(self.play, 'down') else self.down,
                 'distance': self.play.yardsTo1st if hasattr(self.play, 'yardsTo1st') else self.yardsToFirstDown,
@@ -10180,7 +10183,18 @@ class Game:
                 self.awayScoreQ4 += points
             elif self.currentQuarter == 5:
                 self.awayScoreOT += points
-        
+
+        # Innings: accumulate a per-inning line score for the box-score display. Keyed by
+        # the current inning number (away bats the top, home the bottom of the same
+        # number). Live-only (not persisted) — a no-op in every other format.
+        if getattr(self.format, 'key', '') == 'innings':
+            ls = getattr(self, '_inningsLineScore', None)
+            if ls is None:
+                ls = self._inningsLineScore = {'home': {}, 'away': {}}
+            _inn = int(getattr(self, '_inningsNumber', 1))
+            _side = 'home' if team is self.homeTeam else 'away'
+            ls[_side][_inn] = ls[_side].get(_inn, 0) + points
+
         # Broadcast score update
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
             event = GameEvent.scoreUpdate(
@@ -10633,6 +10647,17 @@ class Play():
         self.homeAbbr = game.homeTeam.abbr
         self.awayAbbr = game.awayTeam.abbr
         self.quarter = game.currentQuarter
+        # Innings: stamp the at-bat context so the play row can show "Top 2 · Try 1"
+        # instead of the meaningless quarter/clock (the clock loop is inert). None off
+        # innings, so no effect on other formats.
+        if getattr(game.format, 'key', '') == 'innings':
+            self.inning = int(getattr(game, '_inningsNumber', 1))
+            self.inningHalf = getattr(game, '_inningsHalf', 'top')
+            self.inningTry = int(getattr(game, '_inningsTries', 0)) + 1
+        else:
+            self.inning = None
+            self.inningHalf = None
+            self.inningTry = None
         self.down = game.down
         self.timeRemaining = game.formatTime(game.gameClockSeconds)
         self.yardLine = game.yardLine
