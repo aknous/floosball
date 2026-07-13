@@ -8854,6 +8854,8 @@ class Game:
                 'inning': getattr(self.play, 'inning', None),
                 'inningHalf': getattr(self.play, 'inningHalf', None),
                 'inningTry': getattr(self.play, 'inningTry', None),
+                'frame': getattr(self.play, 'frame', None),
+                'frameClock': getattr(self.play, 'frameClock', None),
                 'timeRemaining': self.formatTime(self.gameClockSeconds),
                 'down': self.play.down if hasattr(self.play, 'down') else self.down,
                 'distance': self.play.yardsTo1st if hasattr(self.play, 'yardsTo1st') else self.yardsToFirstDown,
@@ -10675,6 +10677,23 @@ class Play():
             self.inning = None
             self.inningHalf = None
             self.inningTry = None
+        # Frames: stamp the frame number + time remaining IN the frame (10-min frames don't
+        # line up with 15-min quarters), so the play row shows "Frame 2 · 7:30" not a
+        # quarter. None off frames.
+        if getattr(game.format, 'key', '') == 'frames':
+            try:
+                fmt = game.format
+                n = fmt._frames(game)
+                frameLen = fmt._regSeconds(game) / n if n else 0
+                elapsed = fmt._elapsed(game)
+                self.frame = min(n, int(elapsed / frameLen) + 1) if frameLen else 1
+                self.frameClock = game.formatTime(int(max(0, frameLen - (elapsed % frameLen)))) if frameLen else '0:00'
+            except Exception:
+                self.frame = None
+                self.frameClock = None
+        else:
+            self.frame = None
+            self.frameClock = None
         self.down = game.down
         self.timeRemaining = game.formatTime(game.gameClockSeconds)
         self.yardLine = game.yardLine

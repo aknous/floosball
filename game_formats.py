@@ -608,11 +608,18 @@ class FramesFormat(GameFormat):
             a = game.awayScore - getattr(game, '_frameStartAway', 0)
             if h > a:
                 game._framesWonHome = getattr(game, '_framesWonHome', 0.0) + 1
+                winner = 'home'
             elif a > h:
                 game._framesWonAway = getattr(game, '_framesWonAway', 0.0) + 1
+                winner = 'away'
             else:
                 game._framesWonHome = getattr(game, '_framesWonHome', 0.0) + 0.5
                 game._framesWonAway = getattr(game, '_framesWonAway', 0.0) + 0.5
+                winner = 'tie'
+            # Record the completed frame's points + winner for the box-score line.
+            if not hasattr(game, '_frameResults'):
+                game._frameResults = []
+            game._frameResults.append({'home': h, 'away': a, 'winner': winner})
             game._frameStartHome = game.homeScore
             game._frameStartAway = game.awayScore
             game._frameIndex = getattr(game, '_frameIndex', 0) + 1
@@ -700,6 +707,9 @@ class FramesFormat(GameFormat):
             'framesWonAway': getattr(game, '_framesWonAway', 0.0),
             'frameHome': game.homeScore - getattr(game, '_frameStartHome', 0),
             'frameAway': game.awayScore - getattr(game, '_frameStartAway', 0),
+            # Per-frame line: completed frames (points + winner); the current frame's
+            # in-progress points are frameHome/frameAway, future frames render blank.
+            'frameResults': list(getattr(game, '_frameResults', [])),
         }}
 
 
