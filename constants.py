@@ -1104,29 +1104,27 @@ DRIVE_CLOCK_PRESETS = [
 RULE_VOTE_CANDIDATES["driveClock"]["presets"] = DRIVE_CLOCK_PRESETS
 
 # ── Game Formats / win conditions (docs/GAME_FORMATS_PLAN.md) ──
-# Each preset is a full {gameFormat, ...config} bundle. One format at a time. Only
-# BUILT formats are listed — add target/bust/play_limit/chess_clock/innings here as
-# each ships. `target` (first-to-X) is the first build; X kept "reachable" (~28-32).
+# Each preset is a full {gameFormat, ...config} bundle. One format at a time. ONLY the
+# formats we've tested enough to ship are offerable here (a vote / Criticality can only
+# pick from this list). The target / play_limit / bust FORMATS still exist in
+# game_formats.py (dormant) — re-add their presets below to re-enable them (owner
+# 2026-07-13: hold target/play_limit/bust until they're tested).
 GAME_FORMAT_PRESETS = [
-    {"key": "gf_target_30", "label": "First to 30",
-     "patch": {"gameFormat": "target", "targetScore": 30}},
-    {"key": "gf_play_limit_30", "label": "30 Plays a Quarter",
-     "patch": {"gameFormat": "play_limit", "playsPerQuarter": 30}},
     {"key": "gf_chess_clock_18", "label": "Chess Clock (18:00 each)",
      "patch": {"gameFormat": "chess_clock", "offenseClockBudgetSeconds": 1080}},
     {"key": "gf_innings_3", "label": "Innings (3, try-driven)",
      "patch": {"gameFormat": "innings", "inningsPerGame": 3, "triesPerInning": 3}},
     {"key": "gf_frames_6", "label": "Frames (6, match play)",
      "patch": {"gameFormat": "frames", "framesPerGame": 6}},
-    # Darts: land EXACTLY on X (overshoot busts → turnover). BUNDLES Sideline Goals on
-    # (the 1-pt hoops are how you land precisely). Also snaps the score values back to
-    # WHOLE NUMBERS — fractional increments (a voted 6.4-pt TD) could never sum to exactly
-    # X, making it unwinnable (the format also rounds at scoring time as a safety net).
-    # X kept low (~18).
-    {"key": "gf_bust_18", "label": "Darts (land on 18)",
-     "patch": {"gameFormat": "bust", "targetScore": 18, "sidelineGoalsEnabled": True,
-               "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
-               "extraPointPoints": 1, "twoPointConversionPoints": 2}},
+    # HELD until tested (re-add to re-enable) — the formats themselves are still built:
+    #   {"key": "gf_target_30",      "label": "First to 30",
+    #    "patch": {"gameFormat": "target", "targetScore": 30}},
+    #   {"key": "gf_play_limit_30",  "label": "30 Plays a Quarter",
+    #    "patch": {"gameFormat": "play_limit", "playsPerQuarter": 30}},
+    #   {"key": "gf_bust_18",        "label": "Darts (land on 18)",
+    #    "patch": {"gameFormat": "bust", "targetScore": 18, "sidelineGoalsEnabled": True,
+    #              "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
+    #              "extraPointPoints": 1, "twoPointConversionPoints": 2}},
 ]
 RULE_VOTE_CANDIDATES["gameFormat"]["presets"] = GAME_FORMAT_PRESETS
 
