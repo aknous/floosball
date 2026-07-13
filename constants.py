@@ -992,6 +992,13 @@ CONVERSION_LADDER_RUNGS = [
     {"points": 4, "distance": 10},
     {"points": 5, "distance": 15},
 ]
+# "No kick" mode (gameRules.conversionKickEnabled=False): every post-TD try is a forced
+# go-for-it. When NOT in a Q4 comeback, a coach reaches for the highest-value rung whose
+# make estimate clears a personal floor — aggressive coaches accept lower odds (reach
+# higher up the ladder), conservative coaches stick to the safe 2-pt.
+CONVERSION_FORCEGO_MAKE_FLOOR = 0.72     # a neutral coach's minimum make% to reach past the 2-pt
+CONVERSION_FORCEGO_AGGR_SWING = 0.30     # +/- the floor across the coach-aggressiveness range
+CONVERSION_FORCEGO_JITTER = 0.08         # per-attempt randomness on the floor (variety)
 
 # ── Sideline Goals (dormant mechanic — docs/SIDELINE_GOALS_PLAN.md) ────────────
 # Hoop shots at sideline hoops for `sidelineGoalPoints`. TWO pairs per attacking

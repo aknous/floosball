@@ -9583,13 +9583,19 @@ class Game:
         rungs = self._conversionRungs()
         kick = next(r for r in rungs if r['kind'] == 'kick')
         goRungs = [r for r in rungs if r['kind'] == 'go']
-        if self.currentQuarter != 4 or not goRungs:   # Q1-Q3 / OT: always the safe kick
-            return kick
+        # "No kick" mode (conversionKickEnabled=False): the safe kick is removed, so every
+        # spot where a team would kick instead takes its FORCED go-rung — the coach's
+        # aggressiveness-picked rung. When the kick is enabled (default) fallback IS the
+        # kick, so this is byte-identical to the old kick-vs-go decision.
+        kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True))
+        fallback = kick if (kickAllowed or not goRungs) else self._forcedGoRung(scoringTeam, goRungs)
+        if self.currentQuarter != 4 or not goRungs:   # Q1-Q3 / OT: the safe kick (or forced go-rung)
+            return fallback
         scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
         opponentScore = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
         deficit = opponentScore - scoringScore  # positive = still trailing after the TD
         if deficit <= 0:
-            return kick
+            return fallback
 
         import math
         xp = float(getattr(self.gameRules, 'extraPointPoints', 1))
@@ -9608,15 +9614,33 @@ class Game:
             return convP * (reach + savings)
         target = max(goRungs, key=lambda r: (rungValue(r), -r['distance']))
 
-        # GATE: actually go for `target` vs the safe kick, via the desire chart
-        # (identical to the old 2-pt logic for the 2-pt rung) + coach aggressiveness.
+        # GATE: actually go for `target` vs the fallback (safe kick, or the forced go-rung
+        # in no-kick mode), via the desire chart + coach aggressiveness.
         desire = self._conversionDesire(deficit, target['points'], xp, one)
         if desire <= 0:
-            return kick
+            return fallback
         coach = getattr(scoringTeam, 'coach', None)
         aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         pct = max(0.05, min(0.95, desire + aggressNorm * 0.15))
-        return target if random.random() < pct else kick
+        return target if random.random() < pct else fallback
+
+    def _forcedGoRung(self, scoringTeam: FloosTeam.Team, goRungs: list) -> dict:
+        """No-kick mode, NON-comeback pick: with the safe kick gone, a team going for it
+        without a specific comeback need reaches for the highest-value go-rung whose make
+        estimate clears a personal floor set by coach aggressiveness (aggressive → lower
+        floor → reaches higher up the ladder), with per-attempt jitter for variety. Always
+        falls back to the safest (closest) rung — the 2-pt — when nothing clears."""
+        from constants import (CONVERSION_FORCEGO_MAKE_FLOOR, CONVERSION_FORCEGO_AGGR_SWING,
+                               CONVERSION_FORCEGO_JITTER)
+        coach = getattr(scoringTeam, 'coach', None)
+        aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+        jitter = (_random.random() - 0.5) * 2 * CONVERSION_FORCEGO_JITTER
+        floor = CONVERSION_FORCEGO_MAKE_FLOOR - aggressNorm * CONVERSION_FORCEGO_AGGR_SWING + jitter
+        eligible = [r for r in goRungs
+                    if self._estimateConversionProb(scoringTeam, r['distance']) >= floor]
+        if eligible:
+            return max(eligible, key=lambda r: r['points'])   # reach as high as the odds allow
+        return min(goRungs, key=lambda r: r['distance'])       # else the safest (closest) rung
 
     # ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
     def _contestedScoringActive(self) -> bool:

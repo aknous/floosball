@@ -102,6 +102,13 @@ class GameRules:
     conversionLadderEnabled: bool = False
     conversionLadder: List[Dict[str, Any]] = field(default_factory=lambda: _defaultConversionLadder())
 
+    # "No kick" modifier: when False, the safe extra-point KICK is removed and EVERY
+    # post-TD try is a forced go-for-it (the 2-pt rung is the floor). Coaches pick a rung
+    # by aggressiveness when not in a Q4 comeback (aggressive → reach higher). On by
+    # default (the kick exists); set False for "go-for-it" football. Works with or without
+    # the ladder (ladder off → always go for 2).
+    conversionKickEnabled: bool = True
+
     # ── Drive Clock (dormant mechanic) ─────────────────────────────
     # A shot-clock for possessions. `driveClockUnit` = what it counts
     # ('seconds' of game clock, pausing when the game clock stops, or
@@ -225,6 +232,7 @@ class GameRules:
             "safetyPoints": self.safetyPoints,
             "scoringModel": self.scoringModel,
             "conversionLadderEnabled": self.conversionLadderEnabled,
+            "conversionKickEnabled": self.conversionKickEnabled,
             "conversionLadder": [dict(r) for r in self.conversionLadder],
             "gameFormat": self.gameFormat,
             "targetScore": self.targetScore,
@@ -291,8 +299,9 @@ MUTABLE_RULE_FIELDS = {
     "scoringModel",
     # Conversion Ladder on/off gate (the rung LIST rides on gameRules.conversionLadder,
     # a complex collection mutated wholesale — not a votable scalar). Contained in
-    # the post-TD conversion path.
-    "conversionLadderEnabled",
+    # the post-TD conversion path. conversionKickEnabled=False forces every try to be
+    # a go-for-it (removes the safe kick).
+    "conversionLadderEnabled", "conversionKickEnabled",
     # Drive Clock — all four scalar fields are mutable; a vote preset applies them
     # together as a patch (enabled + unit + reset + limit). Contained in the
     # possession/down loop + the situational play-weights.
