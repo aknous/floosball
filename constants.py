@@ -1231,6 +1231,15 @@ CHESS_CLOCK_RELAXED_HUDDLE = 35
 # (drains nothing) — that's the intentional conservation tool; this is for the cheap,
 # unchosen stops.
 CHESS_CLOCK_STOPPED_HUDDLE_DRAIN = 10
+# Budget a scoring drive costs, used to decide whether a TRAILING chess-clock team can
+# still realistically catch up: it needs (scoresNeeded x TD-drive) of budget, OR just a
+# short FG-drive when a field goal ties/wins. These are OPTIMISTIC — a well-executed
+# hurry-up drive with a couple of chunk plays — because a team only "eases up" when even
+# a great drive can't get there; otherwise it keeps preserving the clock to fight. So a
+# ONE-score deficit stays catchable with ~a minute of budget; it's a MULTI-score deficit
+# against little budget (e.g. two scores with under a minute left) that's out of reach.
+CHESS_CLOCK_CATCHUP_DRIVE_SECS = 50   # one hurry-up touchdown drive
+CHESS_CLOCK_CATCHUP_FG_SECS = 30      # a field-goal-to-tie drive (shorter)
 
 # ── QB scrambles ──────────────────────────────────────────────────────────
 # A pressured QB can escape a would-be sack and run instead. AGILITY gates the

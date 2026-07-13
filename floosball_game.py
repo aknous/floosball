@@ -2024,12 +2024,14 @@ class Game:
         # the budget runs low. A lackadaisical coach rarely bothers and burns its budget
         # away — running out early and handing the other team the game. Not while draining
         # for an end-of-game FG (there the clock should run). Any quarter/score.
-        # Up BIG (more than two scores ahead): the game is in hand, so stop actively
-        # banking clock — a comfortably ahead team doesn't need the extra plays. (A
-        # trailing, tied, or modest-lead team still conserves.)
+        # Conserve only while it still matters. Up BIG (more than two scores ahead) → the
+        # game's in hand, no need to bank plays. Trailing but OUT OF REACH (not enough
+        # budget left to fit the scores needed) → hopeless, so ease up. In between —
+        # tied, a modest lead, or a still-catchable deficit — keep banking clock.
         b = self._chessClockOffenseSecs()
         if (b is not None and not self._isFgDrainMode()
-                and scoreDiff <= 2 * self._oneScore()):
+                and scoreDiff <= 2 * self._oneScore()
+                and self._chessClockCatchUpPossible(scoreDiff)):
             import random
             from constants import CHESS_CLOCK_BASE_SIDELINE_PROB
             clockIQ = self._coachClockIQ(coach)
@@ -2421,6 +2423,28 @@ class Game:
         out with the ball. False outside chess clock."""
         secs = self._chessClockOffenseSecs()
         return secs is not None and secs <= threshold
+
+    def _chessClockCatchUpPossible(self, scoreDiff: int) -> bool:
+        """Chess clock: can the TRAILING offense still realistically catch up with the
+        possession budget it has left? Estimates the budget it needs: a single short
+        FG-drive when a field goal ties/wins, otherwise scoresNeeded touchdown drives.
+        Optimistic (a quick hurry-up drive, a score every possession) so this only returns
+        False when catching up is genuinely out of reach. True when leading/tied, or off
+        chess clock — the caller keeps preserving the clock unless this says it's hopeless."""
+        if scoreDiff >= 0:
+            return True
+        b = self._chessClockOffenseSecs()
+        if b is None:
+            return True
+        import math
+        from constants import CHESS_CLOCK_CATCHUP_DRIVE_SECS, CHESS_CLOCK_CATCHUP_FG_SECS
+        deficit = -scoreDiff
+        if deficit <= self.gameRules.fieldGoalPoints:
+            budgetNeeded = CHESS_CLOCK_CATCHUP_FG_SECS          # a field goal ties/wins
+        else:
+            scoresNeeded = math.ceil(deficit / self._oneScore())
+            budgetNeeded = scoresNeeded * CHESS_CLOCK_CATCHUP_DRIVE_SECS
+        return b >= budgetNeeded
 
     def _defenseLockedOut(self) -> bool:
         """True when the DEFENSE can't get the ball back (chess clock: its budget is
@@ -9263,8 +9287,10 @@ class Game:
         # roll off), so budget efficiency is a coaching skill.
         if getattr(self.format, 'key', '') == 'chess_clock':
             from constants import CHESS_CLOCK_NEUTRAL_HUDDLE, CHESS_CLOCK_RELAXED_HUDDLE
-            if scoreDiff > 2 * self._oneScore():
-                return ('neutral', CHESS_CLOCK_RELAXED_HUDDLE)  # up big — no need to conserve
+            # Relax (normal pace) when the clock no longer matters: up big (game in hand)
+            # OR trailing with no realistic budget left to catch up (out of reach).
+            if scoreDiff > 2 * self._oneScore() or not self._chessClockCatchUpPossible(scoreDiff):
+                return ('neutral', CHESS_CLOCK_RELAXED_HUDDLE)
             if self._chessClockLow(100):
                 return ('hurryUp', 12)
             return ('neutral', CHESS_CLOCK_NEUTRAL_HUDDLE)
