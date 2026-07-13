@@ -4066,6 +4066,28 @@ class Game:
             # Bad coaches (IQ~0.0) frequently miss the correct situational play.
             gameIQ = self._coachClockIQ(coach)
 
+            # ── Chess clock: WINNING game-winner. A FG that WINS (down 1-2 or tied) which
+            # the opponent can no longer answer (they're LOCKED OUT) ends the game — so take
+            # it the moment it's a short, HIGH-CONFIDENCE kick, on ANY down. No need to drain
+            # the budget to the last play the way standard football does (draining doesn't
+            # deny a locked-out opponent anything). A longer / lower-confidence look → keep
+            # driving for a chip shot instead of gambling the win on a long try.
+            if (self._defenseLockedOut() and -self._fgValue() < scoreDiff <= 0
+                    and not self._isGarbageTime(scoreDiff)):
+                from constants import CHESS_CLOCK_WIN_FG_MAX_YARDS, CHESS_CLOCK_FG_CONFIDENCE
+                _gwFgDist = self.yardsToEndzone + self.gameRules.fgSnapDistance
+                if (_gwFgDist <= CHESS_CLOCK_WIN_FG_MAX_YARDS
+                        and self._estimateFgProbability() >= CHESS_CLOCK_FG_CONFIDENCE):
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'gameWinningFG',
+                        'reason': 'Short game-winning FG, opponent out of time',
+                        'fgDistance': _gwFgDist,
+                        'fgProbability': round(self._estimateFgProbability() * 100, 1),
+                        'coachClockIQ': round(gameIQ, 2),
+                    }
+                    self.play.playType = PlayType.FieldGoal
+                    return
+
             # ── End of the FIRST HALF: always try to score, REGARDLESS of the
             # score. A half ends the same whether you're up or down, so a live
             # drive should push for points (there's no clock to "protect" — it
@@ -4251,15 +4273,17 @@ class Game:
             # is worth more) and garbage time; attempts any in-range kick (it's the last
             # shot). Earlier than this the offense hurries + stops the clock (sideline /
             # spike / timeout) to preserve budget and keep driving.
-            # A FG that only TIES (down exactly a field goal) is gated to the last play:
-            # a tie just sends it to OT, so keep trying for the win (TD) while a play
-            # remains, and settle for the tying FG only when this is the last snap. A
-            # WINNING FG (down 1-2, tied, or lead-protecting) still banks on the last
-            # budget play.
+            # LAST snap the budget allows (only ~one play fits): take a makeable FG that
+            # wins/ties/protects even if it's a longer or lower-confidence look — it's the
+            # last chance, so a shot beats running the budget out with nothing. On EARLIER
+            # snaps a winning FG is only taken when short + high-confidence (the game-winner
+            # block above); a tying FG waits for the last play; and either way the offense
+            # keeps driving for a better look while it can. Excludes trailing by more than a
+            # FG (futile) and goal-to-go (a TD is worth more).
             if (self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
                     and self.yardsToEndzone > 5 and not self._isGarbageTime(scoreDiff)
-                    and (scoreDiff > -self._fgValue()
-                         or (scoreDiff == -self._fgValue() and self._estimateAvailablePlays() <= 1))):
+                    and scoreDiff >= -self._fgValue()
+                    and self._estimateAvailablePlays() <= 1):
                 _ccK = self.offensiveTeam.rosterDict.get('k')
                 _ccCharged = self._awakenedReadyFor(_ccK, 'kick')
                 _ccKMax = (self._chargedKickerMaxFg(_ccK) if _ccCharged

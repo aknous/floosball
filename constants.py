@@ -1240,6 +1240,13 @@ CHESS_CLOCK_STOPPED_HUDDLE_DRAIN = 10
 # against little budget (e.g. two scores with under a minute left) that's out of reach.
 CHESS_CLOCK_CATCHUP_DRIVE_SECS = 50   # one hurry-up touchdown drive
 CHESS_CLOCK_CATCHUP_FG_SECS = 30      # a field-goal-to-tie drive (shorter)
+# Game-winning FG (chess clock): when a FG would WIN and the opponent is locked out
+# (can't answer), a team takes it the moment it's a short, high-confidence kick — on
+# any down, no need to drain the budget first. These gate that: the kick must be within
+# WIN_FG_MAX_YARDS and clear FG_CONFIDENCE make probability; a longer / lower-confidence
+# look means keep driving for a chip shot.
+CHESS_CLOCK_WIN_FG_MAX_YARDS = 30     # kick distance (yardsToEndzone + snap) ceiling
+CHESS_CLOCK_FG_CONFIDENCE = 0.80      # minimum make probability to take the game-winner
 
 # ── QB scrambles ──────────────────────────────────────────────────────────
 # A pressured QB can escape a would-be sack and run instead. AGILITY gates the
