@@ -645,6 +645,16 @@ class FramesFormat(GameFormat):
             game._framesWonAway = 0.0
 
     def checkEarlyEnd(self, game):
+        # Match clinched (like a golf match "3 & 2"): if the trailing team can't win enough
+        # of the frames still to be decided to even TIE the frames, the match is over. A
+        # tie is still winnable (it defers to the points tiebreak), so only end when the
+        # trailer literally can't reach the leader's frames-won even by sweeping the rest.
+        N = self._frames(game)
+        fh = getattr(game, '_framesWonHome', 0.0)
+        fa = getattr(game, '_framesWonAway', 0.0)
+        remaining = N - int(getattr(game, '_frameIndex', 0))   # frames not yet decided (incl. current)
+        if remaining >= 0 and (fa + remaining < fh or fh + remaining < fa):
+            return True
         # End of regulation: the match is decided by frames won; a frames tie falls to
         # the total-points tiebreak; if BOTH are tied, defer (None) so it goes to OT.
         if game.currentQuarter == 4 and game.gameClockSeconds <= 0:
