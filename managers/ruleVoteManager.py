@@ -418,6 +418,7 @@ class RuleVoteManager:
             winner = self._pickWinner(options, tally)
             applied = False
             prevValue = newValue = None
+            newsText = None
             if winner != 'none' and winner in options:
                 winOpt = next(s for s in specs if s["key"] == winner)
                 patch = winOpt.get("patch") or {}
@@ -439,11 +440,25 @@ class RuleVoteManager:
                 else:
                     prevValue, newValue = "Off", winOpt.get("label")
                 applied = True
+                # Factual headline for the league-news feed (neutral, not in a
+                # Core's voice — Aris's in-character line lives in the Cores popover).
+                label = winOpt.get("label") or "A rule"
+                if 'gameFormat' in patch:
+                    newsText = f"Rule change: the game format is now {newValue}."
+                elif isScalar:
+                    newsText = f"Rule change: {label} is now {newValue} (was {prevValue})."
+                else:
+                    newsText = f"Rule change: {label} is now on."
 
             repo.resolveWindow(window.id, winnerKey=winner, applied=applied,
                                prevValue=prevValue, newValue=newValue)
             session.commit()
             tiebroken = applied and getattr(self, '_lastTiebreak', False)
+            if newsText:
+                if tiebroken:
+                    newsText += " Aris broke a tie to decide it."
+                self._broadcastRuleChangeNews(
+                    newsText, session, season, self._weekForDay(window.day_index))
             logger.info(f"Rule vote RESOLVE (change): S{season} day {window.day_index} "
                         f"winner={winner} applied={applied} tiebroken={tiebroken} tally={tally}")
             if tiebroken:
@@ -504,3 +519,28 @@ class RuleVoteManager:
             _broadcastCoreEntries(entries, session=session, seasonNumber=season, week=week)
         except Exception as e:
             logger.warning(f"Rule vote broadcast ({eventType}) failed: {e}")
+
+    def _broadcastRuleChangeNews(self, text: str, session, season: int, week: int) -> None:
+        """Persist + broadcast a factual rule-change headline to the league-news
+        feed (category 'rules'). Distinct from the Cores banter: this is the plain
+        'what changed' item that shows in the main HighlightFeed (which filters out
+        'cores' lines), so a rule change is actually visible there."""
+        try:
+            from database.models import LeagueNewsItem
+            session.add(LeagueNewsItem(season=season, week=week, category='rules',
+                                       event_type='rule_change', text=text))
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.debug(f"Rule news persist skipped: {e}")
+        try:
+            from api.game_broadcaster import broadcaster
+            from api.event_models import LeagueNewsEvent
+            if broadcaster is None or not broadcaster.is_enabled():
+                return
+            event = LeagueNewsEvent.leagueNews(text=text)
+            event['category'] = 'rules'
+            event['eventType'] = 'rule_change'
+            broadcaster.broadcast_sync('season', event)
+        except Exception as e:
+            logger.debug(f"Rule news broadcast skipped: {e}")
