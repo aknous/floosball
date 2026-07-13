@@ -2359,6 +2359,27 @@ class Game:
             return self.driveClockRemaining <= 1
         return self.driveClockRemaining <= 15
 
+    def _chessClockOffenseSecs(self):
+        """The offense's remaining chess-clock budget (seconds), or None when not in chess
+        clock / in OT (budgets don't apply). In chess clock THIS is the offense's real
+        clock — the shared game clock is scaled to BOTH teams' budgets, so it can read
+        plenty of time while this team is about to be locked out."""
+        fmt = self.format
+        if getattr(fmt, 'key', '') != 'chess_clock' or self.currentQuarter >= 5:
+            return None
+        if self.offensiveTeam is self.homeTeam:
+            return fmt._homeBudget(self)
+        if self.offensiveTeam is self.awayTeam:
+            return fmt._awayBudget(self)
+        return None
+
+    def _chessClockLow(self, threshold: int = 75) -> bool:
+        """True when the offense's chess-clock budget is nearly spent (roughly a couple of
+        plays left) — it should take makeable points and hurry up NOW rather than run the
+        budget out with the ball. False outside chess clock."""
+        secs = self._chessClockOffenseSecs()
+        return secs is not None and secs <= threshold
+
     def _estimateConversionProb(self, scoringTeam, distance) -> float:
         """Rough likelihood a run/pass converts from `distance` yards out — used
         ONLY by the ladder decision to weigh rungs (the actual try is a real play,
@@ -3538,6 +3559,10 @@ class Game:
             if (_dcUnit == 'plays' and self.driveClockRemaining <= 2) or \
                (_dcUnit == 'seconds' and self.driveClockRemaining <= 75):
                 return True
+        # Chess clock: the offense's own budget is nearly spent (~3 plays) — race to bank
+        # points before its drive ends on the clock, no matter the shared game clock.
+        if self._chessClockLow(100):
+            return True
         # Target format: a score this possession ends the game in our favor — push
         # to finish (unless a conservative coach is sitting on a comfortable lead).
         if self._targetShouldPush():
@@ -4069,7 +4094,11 @@ class Game:
             _dcExpiring = self._driveClockActive() and (
                 (_dcUnit == 'seconds' and self.driveClockRemaining <= 20)
                 or (_dcUnit == 'plays' and self.driveClockRemaining <= 1))
-            if (_dcExpiring
+            # Chess clock: the offense's budget is nearly spent — its drive is about to end
+            # whether it wants it to or not, so bank a makeable FG on ANY down instead of
+            # running the clock out with nothing (the reported "40s left, didn't kick" bug).
+            _ccExpiring = self._chessClockLow()
+            if ((_dcExpiring or _ccExpiring)
                     and self.down < self.gameRules.downsPerSeries
                     and self.yardsToEndzone > 5
                     and not self._isGarbageTime(scoreDiff)):
@@ -4077,8 +4106,13 @@ class Game:
                 _fgCharged = self._awakenedReadyFor(_fgK, 'kick')
                 _fgKMax = (self._chargedKickerMaxFg(_fgK) if _fgCharged
                            else ((_fgK.maxFgDistance - self.gameRules.fgSnapDistance) if _fgK else 0))
+                # When the CHESS-CLOCK budget is expiring, attempt any in-range FG even
+                # below the coach's normal make-probability bar — it's the last realistic
+                # shot and the alternative is a guaranteed zero (down 3, a long FG to tie
+                # is still worth trying). Drive-clock keeps the coach's threshold.
                 if self.yardsToEndzone <= _fgKMax and (
-                        _fgCharged or self._estimateFgProbability() >= self._coachFgThreshold(coach)):
+                        _fgCharged or _ccExpiring
+                        or self._estimateFgProbability() >= self._coachFgThreshold(coach)):
                     self.play.insights['clockMgmt'] = {
                         'decision': 'fieldGoal',
                         'reason': 'Drive clock expiring — take the points',
@@ -8969,6 +9003,11 @@ class Game:
             if (_u == 'plays' and self.driveClockRemaining <= 2) or \
                (_u == 'seconds' and self.driveClockRemaining <= 75):
                 return ('hurryUp', 12)
+
+        # Chess clock: the offense's budget is nearly spent → 2-minute-drill tempo (fast
+        # huddle) so it races its own budget and banks points before locking out.
+        if self._chessClockLow(100):
+            return ('hurryUp', 12)
 
         if (q >= 4) and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0 and not garbageTime:
             return ('hurryUp', 12)  # Q4/OT trailing or tied under 2:00
