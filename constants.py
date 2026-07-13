@@ -1120,8 +1120,8 @@ RULE_VOTE_CANDIDATES["driveClock"]["presets"] = DRIVE_CLOCK_PRESETS
 # game_formats.py (dormant) — re-add their presets below to re-enable them (owner
 # 2026-07-13: hold target/play_limit/bust until they're tested).
 GAME_FORMAT_PRESETS = [
-    {"key": "gf_chess_clock_18", "label": "Chess Clock (18:00 each)",
-     "patch": {"gameFormat": "chess_clock", "offenseClockBudgetSeconds": 1080}},
+    {"key": "gf_chess_clock_30", "label": "Chess Clock (30:00 each)",
+     "patch": {"gameFormat": "chess_clock", "offenseClockBudgetSeconds": 1800}},
     {"key": "gf_innings_3", "label": "Innings (3, try-driven)",
      "patch": {"gameFormat": "innings", "inningsPerGame": 3, "triesPerInning": 3}},
     {"key": "gf_frames_6", "label": "Frames (6, match play)",
