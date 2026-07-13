@@ -341,14 +341,20 @@ class ChessClockFormat(GameFormat):
                 game._chessAwayBudget = max(0, before - seconds)
             else:
                 counted = seconds
-        # Advance the synthetic game clock from TOTAL (capped) budget spent this period,
-        # so a period ends when its share (totalBudget/4) of offense time is used.
+        # Advance the game clock from budget spent this period, so a period ends when
+        # its share (totalBudget/4) of offense time is used.
         game._chessQuarterSpent = getattr(game, '_chessQuarterSpent', 0) + counted
         quarterBudget = self._totalBudget(game) / 4.0
-        frac = min(1.0, game._chessQuarterSpent / quarterBudget) if quarterBudget else 1.0
-        period = (game.gameRules.overtimeLengthSeconds if game.currentQuarter >= 5
-                  else game.gameRules.quarterLengthSeconds)
-        game.gameClockSeconds = max(0, round(period * (1.0 - frac)))
+        if game.currentQuarter >= 5:
+            # OT: budgets are already spent — scale the OT clock to its display length.
+            frac = min(1.0, game._chessQuarterSpent / quarterBudget) if quarterBudget else 1.0
+            game.gameClockSeconds = max(0, round(game.gameRules.overtimeLengthSeconds * (1.0 - frac)))
+        else:
+            # Regulation: the game clock counts DOWN 1:1 with possession time spent — a
+            # play that costs 20s of the offense's budget takes the same 20s off the game
+            # clock, so the two clocks deplete together during a drive. Each quarter is
+            # therefore totalBudget/4 of REAL offense time (no 15:00-scaled display).
+            game.gameClockSeconds = max(0, round(quarterBudget - game._chessQuarterSpent))
         # Both budgets spent in regulation → force the period to end so Q4 resolves
         # (the all-free plays would otherwise freeze the synthetic clock).
         if (game.currentQuarter < 5 and self._homeBudget(game) <= 0
