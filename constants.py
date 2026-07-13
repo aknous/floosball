@@ -1201,6 +1201,17 @@ LEAGUE_COMPRESSION_MEAN = 84        # Center of the curve
 # tied, it spends a timeout before the huddle to squeeze more plays out of what's
 # left. ~2-3 plays of budget; bounded by the 3 timeouts a team holds.
 CHESS_CLOCK_TIMEOUT_PRESERVE_SECS = 90
+# Chess-clock huddle when the budget isn't yet low. Chess clock never burns clock
+# (there's no shared clock to run out — burning only wastes the budget and hands
+# over possession sooner), so this replaces the burn/neutral huddles there. This is
+# the AVERAGE-coach huddle; the actual length is gated by the coach's clock
+# management (below), so a team's budget efficiency is a coaching skill.
+CHESS_CLOCK_NEUTRAL_HUDDLE = 24
+# How much clock management swings the chess-clock huddle (total spread, seconds).
+# A sharp clock manager (IQ~1.0) snaps ~half this faster to save budget; a poor one
+# (IQ~0.0) lets that much extra time roll off each huddle. 20 → roughly 14s (great)
+# to 34s (poor) around the 24s average.
+CHESS_CLOCK_HUDDLE_IQ_SPREAD = 20
 
 # ── QB scrambles ──────────────────────────────────────────────────────────
 # A pressured QB can escape a would-be sack and run instead. AGILITY gates the

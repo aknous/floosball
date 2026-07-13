@@ -9207,6 +9207,15 @@ class Game:
         if self._chessClockLow(100):
             return ('hurryUp', 12)
 
+        # Chess clock (budget not yet low): NEVER burn clock — there's no shared clock to
+        # run out, so burning only wastes the budget and hands over possession sooner.
+        # Play an efficient neutral; calculatePreSnapTime gates the actual huddle length by
+        # the coach's clock management (a sharp manager saves budget, a poor one lets time
+        # roll off), so budget efficiency is a coaching skill.
+        if getattr(self.format, 'key', '') == 'chess_clock':
+            from constants import CHESS_CLOCK_NEUTRAL_HUDDLE
+            return ('neutral', CHESS_CLOCK_NEUTRAL_HUDDLE)
+
         # Frames: the current frame (a mini-game) is winding down — hurry when NOT ahead in
         # it (win/tie the frame before the break), drain when ahead (secure the +1). Keys
         # off the FRAME margin, not the running total. Garbage-time (frame) falls through.
@@ -9280,6 +9289,12 @@ class Game:
             # to the FG-snap target). Dumb coaches under-drain — they leave
             # the opponent more time after the kick.
             iqOffset = round(4 * (gameIQ - 0.5))
+        elif intent == 'neutral' and getattr(self.format, 'key', '') == 'chess_clock':
+            # Chess clock: the huddle length IS a clock-management skill. A sharp
+            # manager (IQ~1.0) snaps quickly to save budget; a poor one (IQ~0.0)
+            # lets time roll off each huddle. Negative offset = faster.
+            from constants import CHESS_CLOCK_HUDDLE_IQ_SPREAD
+            iqOffset = round(-CHESS_CLOCK_HUDDLE_IQ_SPREAD * (gameIQ - 0.5))
         else:
             iqOffset = 0
 
