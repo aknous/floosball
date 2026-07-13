@@ -1193,6 +1193,33 @@ LEAGUE_COMPRESSION_FACTOR = 0.7     # 1.0 = no compression, 0.5 = aggressive
 # gameAttributes copy). Measured: +1 mean ~= +0.2 pts/team. See _applyLeagueCompression.
 LEAGUE_COMPRESSION_MEAN = 84        # Center of the curve
 
+# ── Chess-clock timeouts ──────────────────────────────────────────────────
+# In the Chess Clock format the offense's possession budget IS its real clock,
+# and a timeout stops the pre-snap huddle drain — so a team preserves its budget
+# by calling timeouts once it's GETTING low (not just at the final snap). When
+# the offense's remaining budget drops to this many seconds and it's trailing or
+# tied, it spends a timeout before the huddle to squeeze more plays out of what's
+# left. ~2-3 plays of budget; bounded by the 3 timeouts a team holds.
+CHESS_CLOCK_TIMEOUT_PRESERVE_SECS = 90
+# Chess-clock huddle when the budget isn't yet low. Chess clock never burns clock
+# (there's no shared clock to run out — burning only wastes the budget and hands
+# over possession sooner), so this replaces the burn/neutral huddles there. This is
+# the AVERAGE-coach huddle; the actual length is gated by the coach's clock
+# management (below), so a team's budget efficiency is a coaching skill. Leaner than
+# a standard neutral so teams conserve budget from the opening drive, not just late.
+CHESS_CLOCK_NEUTRAL_HUDDLE = 20
+# How much clock management swings the chess-clock huddle (total spread, seconds).
+# A sharp clock manager (IQ~1.0) snaps ~half this faster to save budget; a poor one
+# (IQ~0.0) lets that much extra time roll off each huddle. 20 → roughly 10s (great)
+# to 30s (poor) around the 20s average.
+CHESS_CLOCK_HUDDLE_IQ_SPREAD = 20
+# Baseline chance a clock-conscious coach gets a pass out of bounds to stop the clock
+# in chess clock BEFORE the budget is low — mixed into the normal play mix, not every
+# play. Scaled by clock management: a sharp coach (IQ~1.0) hits this rate, a poor one
+# (~0) rarely bothers and burns budget away. The rate ramps well above this once the
+# budget is actually running low.
+CHESS_CLOCK_BASE_SIDELINE_PROB = 0.30
+
 # ── QB scrambles ──────────────────────────────────────────────────────────
 # A pressured QB can escape a would-be sack and run instead. AGILITY gates the
 # escape (whether they scramble at all); SPEED drives the yardage. A pocket QB
