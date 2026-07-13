@@ -851,6 +851,16 @@ ATTITUDE_DRIFT_MAGNITUDE = 1.5    # win/loss drift multiplier on |winPct-0.5| (d
 # don't re-open a gap. Only matters when a position is genuinely short.
 ROSTER_SUPPLY_BUFFER_PER_POSITION = 3
 
+# ---- League realignment (one-time competitive rebalance) ----
+# One league had drifted persistently stronger than the other. A one-time
+# realignment ranks all teams by combined win% over the last
+# LEAGUE_REALIGN_WINDOW_SEASONS completed seasons and serpentine-splits them
+# evenly across the two leagues (rank 1->A, 2->B, 3->B, 4->A, ...) so neither
+# league stays lopsided. Fires once at a new-season boundary (gated by the
+# `league_realigned` app_setting) and the resulting alignment persists via the
+# `league_alignment` app_setting, honored by LeagueManager.createLeagues.
+LEAGUE_REALIGN_WINDOW_SEASONS = 2
+
 # ---- Retention limits (parity — docs/PARITY_PROSPECT_PLAN.md Phase 5) ----
 # Force stacked teams to break up by limiting RETENTION, not salary. Two levers,
 # each independently switchable, applied in the offseason re-sign pass:

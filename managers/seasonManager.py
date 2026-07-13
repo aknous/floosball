@@ -288,6 +288,12 @@ class SeasonManager:
         # Clear previous season data
         self._clearSeasonData()
 
+        # One-time league realignment: rebalance the two leagues by recent win% so
+        # one league isn't perpetually stronger. Must run BEFORE the schedule is
+        # generated (the new alignment drives the matchups). Fires once, at a genuine
+        # new-season boundary; self-gated so it never re-runs.
+        self._maybeRealignLeagues(seasonNumber, resumeFromWeek)
+
         # Create new season schedule — load from DB if resuming, otherwise generate fresh
         scheduleLoaded = False
         if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
@@ -3231,6 +3237,45 @@ class SeasonManager:
                 self._gameIdCounter = int(dbMax)
         except Exception as e:
             logger.warning(f"_syncGameIdCounter failed: {e}")
+
+    def _maybeRealignLeagues(self, seasonNumber: int, resumeFromWeek: int) -> None:
+        """Fire the one-time league realignment exactly once, at a genuine new-season
+        boundary before the schedule generates. Gated by the `league_realigned`
+        app_setting so it never re-runs — this is a one-shot rebalance, not a recurring
+        re-seed. Skipped on a mid-season restart, and when this season's schedule
+        already exists (season already underway). If there's no completed-season
+        history yet the realign is a no-op and stays unstamped, so it retries at the
+        next boundary once data exists."""
+        if resumeFromWeek > 0:
+            return
+        try:
+            from game_rules import _readAppSetting, _writeAppSetting
+        except Exception:
+            return
+        if _readAppSetting('league_realigned'):
+            return
+        try:
+            if self.game_repo and self.game_repo.has_schedule(seasonNumber):
+                return  # season already has a schedule — too late to realign it
+        except Exception:
+            pass
+        if not self.leagueManager:
+            return
+        try:
+            from constants import LEAGUE_REALIGN_WINDOW_SEASONS
+        except Exception:
+            LEAGUE_REALIGN_WINDOW_SEASONS = 2
+        summary = self.leagueManager.realignByRecentPerformance(
+            seasonNumber, LEAGUE_REALIGN_WINDOW_SEASONS)
+        if not summary:
+            return  # no history yet — leave unstamped to retry next season
+        _writeAppSetting('league_realigned', str(seasonNumber))
+        moved = summary.get('moved', [])
+        logger.info(
+            f"League realignment (season {seasonNumber}, window {summary.get('window')}): "
+            f"{len(moved)} teams changed leagues")
+        for m in moved:
+            logger.info(f"  {m['team']}: {m['from']} -> {m['to']}")
 
     def createSchedule(self) -> None:
         """Generate season schedule (matches original floosball.py algorithm)"""
