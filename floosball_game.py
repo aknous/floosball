@@ -3980,7 +3980,7 @@ class Game:
             # _estimateAvailablePlays (which reserves ~7s for the FG and accounts
             # for the timeouts/spikes needed to stop the clock between snaps).
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5 or self._chessClockLow(60))
-                    and -3 <= scoreDiff < 0 and self._offenseEffectiveSecs() <= 45):
+                    and -self._fgValue() <= scoreDiff < 0 and self._offenseEffectiveSecs() <= 45):
                 kicker = self.offensiveTeam.rosterDict.get('k')
                 kickerMax = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
                 despFgProb = self._estimateFgProbability()
@@ -4215,7 +4215,7 @@ class Game:
             spikeKicker = self.offensiveTeam.rosterDict.get('k')
             spikeKickerMax = (spikeKicker.maxFgDistance - self.gameRules.fgSnapDistance) if spikeKicker else 0
             spikeFgException = (self.down == self.gameRules.downsPerSeries - 1
-                                and (self.currentQuarter == 2 or -3 <= scoreDiff <= 0)
+                                and (self.currentQuarter == 2 or -self._fgValue() <= scoreDiff <= 0)
                                 and self.yardsToEndzone <= spikeKickerMax
                                 and secs <= 20)
             spikeDownOK = self.down <= self.gameRules.downsPerSeries - 2 or spikeFgException
@@ -4379,7 +4379,7 @@ class Game:
         if (kickerCharged and self.currentQuarter in (2, 4)
                 and self.yardsToEndzone <= self._chargedKickerMaxFg(kicker)
                 and self._estimateAvailablePlays() == 0):
-            fgWorthwhile = (self.currentQuarter == 2) or (-3 <= scoreDiff <= 0)
+            fgWorthwhile = (self.currentQuarter == 2) or (-self._fgValue() <= scoreDiff <= 0)
             if fgWorthwhile:
                 self.play.insights['clockMgmt'] = {
                     'decision': 'chargedLastPlayFG',
