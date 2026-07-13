@@ -1193,6 +1193,15 @@ LEAGUE_COMPRESSION_FACTOR = 0.7     # 1.0 = no compression, 0.5 = aggressive
 # gameAttributes copy). Measured: +1 mean ~= +0.2 pts/team. See _applyLeagueCompression.
 LEAGUE_COMPRESSION_MEAN = 84        # Center of the curve
 
+# ── Chess-clock timeouts ──────────────────────────────────────────────────
+# In the Chess Clock format the offense's possession budget IS its real clock,
+# and a timeout stops the pre-snap huddle drain — so a team preserves its budget
+# by calling timeouts once it's GETTING low (not just at the final snap). When
+# the offense's remaining budget drops to this many seconds and it's trailing or
+# tied, it spends a timeout before the huddle to squeeze more plays out of what's
+# left. ~2-3 plays of budget; bounded by the 3 timeouts a team holds.
+CHESS_CLOCK_TIMEOUT_PRESERVE_SECS = 90
+
 # ── QB scrambles ──────────────────────────────────────────────────────────
 # A pressured QB can escape a would-be sack and run instead. AGILITY gates the
 # escape (whether they scramble at all); SPEED drives the yardage. A pocket QB

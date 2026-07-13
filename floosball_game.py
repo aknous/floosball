@@ -2103,8 +2103,15 @@ class Game:
             return
         if self.play.playType in (PlayType.Punt, PlayType.Kneel, PlayType.Spike):
             return  # not trying to preserve time for a score
-        if self._offenseEffectiveSecs() > 15:
-            return  # plenty of clock/budget — the normal huddle won't expire it
+        # Chess clock: the possession budget IS the offense's clock and a timeout
+        # skips the huddle drain, so PRESERVING budget kicks in earlier (a wider
+        # window). Other formats keep the tight save-the-last-snap window — a
+        # timeout there only matters in the final seconds.
+        from constants import CHESS_CLOCK_TIMEOUT_PRESERVE_SECS
+        isChess = getattr(self.format, 'key', '') == 'chess_clock'
+        preserveWindow = CHESS_CLOCK_TIMEOUT_PRESERVE_SECS if isChess else 15
+        if self._offenseEffectiveSecs() > preserveWindow:
+            return  # plenty of clock/budget — the normal huddle won't hurt
         isHome = (self.offensiveTeam == self.homeTeam)
         timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
         if timeoutsLeft <= 0:
@@ -2114,8 +2121,9 @@ class Game:
             return
         endOfHalf = self.currentQuarter == 2
         endOfGameNeed = (self.currentQuarter == 4 or self.currentQuarter >= 5) and scoreDiff <= 0
-        # Chess clock: a nearly-spent budget is a save-the-snap situation any quarter.
-        chessBudgetNeed = self._chessClockLow(15) and scoreDiff <= 0
+        # Chess clock: a budget that's GETTING low is a preserve-time situation in
+        # ANY quarter (trailing/tied) — spend a timeout to save the huddle drain.
+        chessBudgetNeed = isChess and self._chessClockLow(preserveWindow) and scoreDiff <= 0
         if not (endOfHalf or endOfGameNeed or chessBudgetNeed):
             return
         self.play.insights['clockMgmt'] = {
