@@ -699,10 +699,14 @@ class FramesFormat(GameFormat):
     def stateExtra(self, game) -> dict:
         idx = getattr(game, '_frameIndex', 0)
         N = self._frames(game)
+        # Time remaining in the current 10-min frame (the mini-game clock).
+        frameLen = self._regSeconds(game) / N if N else 0
+        frameRem = max(0, int(round(frameLen - (self._elapsed(game) % frameLen)))) if frameLen else 0
         return {'frames': {
             'active': True,
             'framesPerGame': N,
             'currentFrame': min(N, idx + 1),
+            'frameClock': game.formatTime(frameRem),
             'framesWonHome': getattr(game, '_framesWonHome', 0.0),
             'framesWonAway': getattr(game, '_framesWonAway', 0.0),
             'frameHome': game.homeScore - getattr(game, '_frameStartHome', 0),
