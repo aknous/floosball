@@ -4232,16 +4232,20 @@ class Game:
                             return
                         # else: aggressive push — fall through to normal play caller
             # Chess clock: on the LAST play the budget allows (in hurry-up a snap burns
-            # ~20-30s of budget, so ~one play + the FG left ≈ 50s), bank a makeable FG on
-            # ANY down and REGARDLESS of score — the possession is about to lock out, so 3
-            # points now beats running the budget out with nothing. The standard trailing-
-            # 1-3 end-game logic above handles the win/tie cases with more nuance; this
-            # catches the rest (tied, trailing 4+, or protecting a lead). Skips goal-to-go
-            # (a near-certain TD is worth more) and garbage time; attempts any in-range kick
-            # (it's the last shot). Earlier than this the offense hurries + stops the clock
-            # (sideline / spike / timeout) to preserve budget and keep driving.
+            # ~20-30s of budget, so ~one play + the FG left ≈ 50s), bank a makeable FG when
+            # it actually HELPS — the possession is about to lock out, so 3 points now beats
+            # running the budget out with nothing. "Helps" = it wins/ties or protects a
+            # lead, i.e. NOT trailing by more than a field goal: down 4+, a FG still leaves
+            # you losing and this is your last possession, so a futile 3 is worthless and
+            # the offense must go for the TD (the only thing that ties/wins). The standard
+            # trailing-1-3 end-game logic above handles the win/tie cases with more nuance;
+            # this catches tied and protecting-a-lead. Skips goal-to-go (a near-certain TD
+            # is worth more) and garbage time; attempts any in-range kick (it's the last
+            # shot). Earlier than this the offense hurries + stops the clock (sideline /
+            # spike / timeout) to preserve budget and keep driving.
             if (self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
-                    and self.yardsToEndzone > 5 and not self._isGarbageTime(scoreDiff)):
+                    and self.yardsToEndzone > 5 and not self._isGarbageTime(scoreDiff)
+                    and scoreDiff >= -self._fgValue()):
                 _ccK = self.offensiveTeam.rosterDict.get('k')
                 _ccCharged = self._awakenedReadyFor(_ccK, 'kick')
                 _ccKMax = (self._chargedKickerMaxFg(_ccK) if _ccCharged
