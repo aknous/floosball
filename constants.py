@@ -1184,7 +1184,14 @@ MENTAL_FLOOR_RATIO = 0.85           # 15% max aggregate reduction from baseline
 # untouched; only `gameAttributes` is compressed. Set factor=1.0 to
 # disable.
 LEAGUE_COMPRESSION_FACTOR = 0.7     # 1.0 = no compression, 0.5 = aggressive
-LEAGUE_COMPRESSION_MEAN = 80        # Center of the curve
+# Center of the compression curve — this is the effective baseline every player
+# plays at, so it also sets the league's overall scoring level (higher = more
+# offense). Raised 80 -> 84 to recover the scoring the attribute remap cost:
+# the remap (skill-creep fix) lowered profile ratings and pulled total scoring
+# from ~38 to ~33 pts/game; nudging the in-game baseline up restores ~35 without
+# re-inflating any displayed rating (compression only touches the live
+# gameAttributes copy). Measured: +1 mean ~= +0.2 pts/team. See _applyLeagueCompression.
+LEAGUE_COMPRESSION_MEAN = 84        # Center of the curve
 
 # ── QB scrambles ──────────────────────────────────────────────────────────
 # A pressured QB can escape a would-be sack and run instead. AGILITY gates the
