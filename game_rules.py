@@ -29,6 +29,17 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any
 
 
+def _defaultConversionLadder() -> List[Dict[str, Any]]:
+    """The default Conversion-Ladder rungs (the ADDED 3/4/5-point tries). Sourced
+    from constants so there's one tunable place; falls back to a hardcoded copy if
+    constants can't be imported (keeps a bare GameRules() construction safe)."""
+    try:
+        from constants import CONVERSION_LADDER_RUNGS
+        return [dict(r) for r in CONVERSION_LADDER_RUNGS]
+    except Exception:
+        return [{"points": 3, "distance": 5}, {"points": 4, "distance": 10}, {"points": 5, "distance": 15}]
+
+
 @dataclass
 class GameRules:
     """All configurable football rules in one place.
@@ -58,11 +69,12 @@ class GameRules:
     timeoutClockThreshold: int = 120    # Below this in Q2/Q4, timeout considered
     kneelDrainSeconds: int = 40         # Clock burned per kneel
 
-    # ── Clock stoppage (the Cores can flip these to a "running clock") ──
-    # When False, that event no longer stops the clock — the inter-play clock
-    # keeps draining, so games have far fewer plays. Defaults = standard football.
-    clockStopsOnIncompletePass: bool = True
-    clockStopsOnOutOfBounds: bool = True
+    # ── Clock stoppage (the Cores can flip this to a "running clock") ──
+    # One general dead-ball rule: when True (standard football) the clock stops on an
+    # incompletion, going out of bounds, AND a turnover. When False it's a RUNNING CLOCK
+    # — none of those stop it, so the inter-play clock keeps draining and games have far
+    # fewer plays. (A score, FG, punt, or spike always stops the clock regardless.)
+    clockStopsOnDeadBall: bool = True
 
     # ── Scoring values ─────────────────────────────────────────────
     touchdownPoints: int = 6
@@ -70,6 +82,74 @@ class GameRules:
     extraPointPoints: int = 1
     twoPointConversionPoints: int = 2
     safetyPoints: int = 2
+
+    # ── Score display model (presentation only) ────────────────────
+    # How the running tally is SHOWN, not the points earned. The engine
+    # still tracks cumulative points and decides the winner by them — this
+    # is a lens over the two scores at the render sites only. No engine,
+    # decision, or fairness effect. 'additive' = each team's cumulative
+    # points (today's behavior); 'spread' = leader-centric margin (+N/-N,
+    # EVEN on tie); 'share' = each team's % of total points scored.
+    scoringModel: str = 'additive'
+
+    # ── Conversion Ladder (dormant mechanic) ──────────────────────
+    # When enabled, the post-TD try becomes a ladder: the safe 1-pt kick and the
+    # 2-pt try always exist; these rungs add higher-value tries from further out.
+    # `conversionLadder` = ordered [{points, distance}] for the ADDED rungs (1 and
+    # 2 come from extraPointPoints / twoPointConversionPoints + their distances).
+    # A complex collection, so it's excluded from applyPatch (mutated wholesale,
+    # like fieldGoalUprights); the on/off gate is the votable scalar.
+    conversionLadderEnabled: bool = False
+    conversionLadder: List[Dict[str, Any]] = field(default_factory=lambda: _defaultConversionLadder())
+
+    # ── Drive Clock (dormant mechanic) ─────────────────────────────
+    # A shot-clock for possessions. `driveClockUnit` = what it counts
+    # ('seconds' of game clock, pausing when the game clock stops, or
+    # 'plays' — one per snap). `driveClockReset` = when it refills
+    # ('possession' = a hard cap on the whole drive, 'series' = refills
+    # on each first down). Expire before scoring (or a first down, in
+    # series mode) → turnover on downs at the spot. Off by default;
+    # a Cores vote picks a preset. Scalars, so all four fields are
+    # mutable (the preset applies them as a patch).
+    driveClockEnabled: bool = False
+    driveClockUnit: str = 'seconds'        # 'seconds' | 'plays'
+    driveClockReset: str = 'possession'    # 'possession' | 'series'
+    driveClockLimit: int = 90              # seconds or plays, per the unit
+
+    # ── Sideline Goals (dormant mechanic) ──────────────────────────
+    # Quidditch-style: on any down the offense may throw at a sideline hoop for
+    # bonus points. A MAKE banks `sidelineGoalPoints` and CONSUMES the down but the
+    # drive continues (no yards gained → repeated shots march toward a turnover on
+    # downs). A MISS is a turnover at the current line of scrimmage (a rare tipped
+    # throw is a returnable INT). Make prob emerges from the QB's accuracy/arm vs the
+    # hoop, minus defensive pressure (tunables in constants.py `SIDELINE_GOAL_*`).
+    # Off by default; a Cores vote flips the gate. Fine-grained 1-pt scoring is the
+    # prerequisite for the 'bust'/darts game format (which bundles this on).
+    sidelineGoalsEnabled: bool = False
+    sidelineGoalPoints: int = 1            # points banked per made hoop shot
+
+    # Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md). When on, a
+    # rushing / receiving / QB-scramble TD is only PROVISIONAL: the scorer completes an
+    # action (dunk/race/arm-wrestle/beauty/backflip, each keyed to a real attribute) to
+    # bank it, and the best-suited defender gets one last-resort contest to cancel it (a
+    # stuff = no points, back to the play's LOS, down advances). Tunables in constants
+    # `CONTEST_*`. Off by default; a Cores vote flips the gate.
+    contestedScoringEnabled: bool = False
+
+    # ── Game format / win condition (dormant) ──────────────────────
+    # How the game is won / when it ends. 'standard' = today (cumulative
+    # score, higher wins at the end of regulation/OT). Alternates change
+    # the win condition or the game loop — one format at a time, set by a
+    # Cores vote preset (docs/GAME_FORMATS_PLAN.md). `targetScore` is the
+    # finish line for the 'target' format (first to X). Other formats add
+    # their own config as they're built.
+    gameFormat: str = 'standard'           # 'standard' | 'target' | 'play_limit' | 'chess_clock' | 'innings' | 'frames' | 'bust'
+    targetScore: int = 30                  # 'target' format: first to this many points wins
+    playsPerQuarter: int = 30              # 'play_limit' format: fixed plays per quarter (no clock)
+    offenseClockBudgetSeconds: int = 1080  # 'chess_clock' format: each team's offense-time budget (18:00)
+    inningsPerGame: int = 3                # 'innings' format: innings each team bats (no clock)
+    triesPerInning: int = 3                # 'innings' format: possession-ends (tries) per at-bat
+    framesPerGame: int = 6                 # 'frames' format: match-play frames (win a frame = +1; most frames wins)
 
     # ── Field goal mechanics ───────────────────────────────────────
     fgSnapDistance: int = 17            # Yards added to LOS for snap + hold
@@ -102,7 +182,7 @@ class GameRules:
         """
         from datetime import datetime
         if not hasattr(self, fieldName) or fieldName in {
-            "patchHistory", "fieldGoalUprights",
+            "patchHistory", "fieldGoalUprights", "conversionLadder",
         }:
             # patchHistory and complex collections need their own
             # purpose-built mutators rather than generic apply.
@@ -137,13 +217,29 @@ class GameRules:
             "spikeClockThreshold": self.spikeClockThreshold,
             "timeoutClockThreshold": self.timeoutClockThreshold,
             "kneelDrainSeconds": self.kneelDrainSeconds,
-            "clockStopsOnIncompletePass": self.clockStopsOnIncompletePass,
-            "clockStopsOnOutOfBounds": self.clockStopsOnOutOfBounds,
+            "clockStopsOnDeadBall": self.clockStopsOnDeadBall,
             "touchdownPoints": self.touchdownPoints,
             "fieldGoalPoints": self.fieldGoalPoints,
             "extraPointPoints": self.extraPointPoints,
             "twoPointConversionPoints": self.twoPointConversionPoints,
             "safetyPoints": self.safetyPoints,
+            "scoringModel": self.scoringModel,
+            "conversionLadderEnabled": self.conversionLadderEnabled,
+            "conversionLadder": [dict(r) for r in self.conversionLadder],
+            "gameFormat": self.gameFormat,
+            "targetScore": self.targetScore,
+            "playsPerQuarter": self.playsPerQuarter,
+            "offenseClockBudgetSeconds": self.offenseClockBudgetSeconds,
+            "inningsPerGame": self.inningsPerGame,
+            "triesPerInning": self.triesPerInning,
+            "framesPerGame": self.framesPerGame,
+            "driveClockEnabled": self.driveClockEnabled,
+            "driveClockUnit": self.driveClockUnit,
+            "driveClockReset": self.driveClockReset,
+            "driveClockLimit": self.driveClockLimit,
+            "sidelineGoalsEnabled": self.sidelineGoalsEnabled,
+            "contestedScoringEnabled": self.contestedScoringEnabled,
+            "sidelineGoalPoints": self.sidelineGoalPoints,
             "fgSnapDistance": self.fgSnapDistance,
             "fgMinAttemptProb": self.fgMinAttemptProb,
             "fieldGoalUprights": list(self.fieldGoalUprights),
@@ -189,6 +285,31 @@ DEFAULT_RULES = GameRules()
 MUTABLE_RULE_FIELDS = {
     "touchdownPoints", "fieldGoalPoints", "extraPointPoints",
     "twoPointConversionPoints", "safetyPoints", "fgMinAttemptProb",
+    # Score DISPLAY model — presentation only (additive / spread / share).
+    # Zero engine blast radius: every score consumer reads the real cumulative
+    # values; only the frontend render sites apply the lens. Safe to mutate.
+    "scoringModel",
+    # Conversion Ladder on/off gate (the rung LIST rides on gameRules.conversionLadder,
+    # a complex collection mutated wholesale — not a votable scalar). Contained in
+    # the post-TD conversion path.
+    "conversionLadderEnabled",
+    # Drive Clock — all four scalar fields are mutable; a vote preset applies them
+    # together as a patch (enabled + unit + reset + limit). Contained in the
+    # possession/down loop + the situational play-weights.
+    "driveClockEnabled", "driveClockUnit", "driveClockReset", "driveClockLimit",
+    # Sideline Goals — on/off gate + the point value per made hoop shot. Contained
+    # in the play-calling + resolution path (a new hoop-shot play type).
+    "sidelineGoalsEnabled", "sidelineGoalPoints",
+    # Contested Scoring — on/off gate; contained in the TD scoring-resolution step.
+    "contestedScoringEnabled",
+    # Game format / win condition — one format at a time; a vote preset sets the
+    # format + its config together. targetScore is the 'target' finish line;
+    # playsPerQuarter is the 'play_limit' per-quarter play budget;
+    # offenseClockBudgetSeconds is each team's 'chess_clock' offense-time budget;
+    # inningsPerGame/triesPerInning configure the 'innings' format;
+    # framesPerGame configures the 'frames' (match-play) format.
+    "gameFormat", "targetScore", "playsPerQuarter", "offenseClockBudgetSeconds",
+    "inningsPerGame", "triesPerInning", "framesPerGame",
     # Structural rule #1 — yards needed to convert a first down. Core mechanic
     # (reset/decrement/goal-to-go) reads gameRules; play-calling heuristics use
     # the live yardsToFirstDown so they degrade gracefully at non-default values.
@@ -204,11 +325,11 @@ MUTABLE_RULE_FIELDS = {
     # of truth for the per-kneel drain (snap 4s + play-clock kneelDrainSeconds-4).
     "overtimeLengthSeconds", "timeoutClockThreshold", "spikeClockThreshold",
     "kneelDrainSeconds", "fgSnapDistance",
-    # Running-clock rule — suppress the incompletion / out-of-bounds clock stops
-    # (gated in shouldClockRun). Far fewer plays per game. Clock-management
-    # play-calling heuristics still assume incompletions stop the clock, so they
-    # degrade gracefully (a later pass can make them rule-aware).
-    "clockStopsOnIncompletePass", "clockStopsOnOutOfBounds",
+    # Running-clock rule — one general dead-ball toggle: suppress the incompletion /
+    # out-of-bounds / turnover clock stops (gated in shouldClockRun). Far fewer plays
+    # per game. Clock-management play-calling heuristics still assume dead balls stop
+    # the clock, so they degrade gracefully (a later pass can make them rule-aware).
+    "clockStopsOnDeadBall",
 }
 
 # ── What the Rulebook currently EXPOSES as changeable ───────────────────────
@@ -225,7 +346,23 @@ MUTABLE_RULE_FIELDS = {
 RULEBOOK_EXPOSED_FIELDS = {
     "downsPerSeries", "firstDownDistance",
     "touchdownPoints", "fieldGoalPoints", "safetyPoints",
-    "clockStopsOnIncompletePass", "clockStopsOnOutOfBounds",
+    "clockStopsOnDeadBall",
+    # The score DISPLAY model — surfaced as the Rulebook's own "Scoring Model"
+    # row (its own presentation), and votable like the rest.
+    "scoringModel",
+    # Conversion Ladder — a dormant on/off mechanic (surfaced in the Rulebook's
+    # "Dormant Rules" list, votable on).
+    "conversionLadderEnabled",
+    # Drive Clock gate — the dormant mechanic's on/off marker (the mode config
+    # rides alongside in `rules`, shown as the active preset).
+    "driveClockEnabled",
+    # Sideline Goals gate — dormant on/off mechanic (Rulebook "Dormant Rules" list).
+    "sidelineGoalsEnabled",
+    # Contested Scoring gate — dormant on/off mechanic (Rulebook "Dormant Rules" list).
+    "contestedScoringEnabled",
+    # Game format gate — surfaced as the Rulebook's "Game Format" row (the active
+    # format + its config); the config (targetScore, ...) rides alongside in `rules`.
+    "gameFormat",
 } & MUTABLE_RULE_FIELDS
 
 RULE_OVERRIDES_SETTING_KEY = "rule_overrides"
@@ -275,3 +412,106 @@ def saveRuleOverrides(overrides: Dict[str, Any]) -> None:
         session.commit()
     finally:
         session.close()
+
+
+def clearRuleOverrides() -> None:
+    """Wipe all persisted rule overrides — the league returns to the pristine
+    defaults. Called at season start so each season begins on a clean rulebook and
+    the fan-voted mutations only live for the season that voted them in."""
+    saveRuleOverrides({})
+
+
+RULE_OVERRIDES_SEASON_KEY = "rule_overrides_season"
+
+
+def _readAppSetting(key: str):
+    """Raw string value of an app_settings row, or None."""
+    try:
+        from sqlalchemy import text
+        from database.connection import SessionLocal
+        session = SessionLocal()
+        try:
+            row = session.execute(text("SELECT value FROM app_settings WHERE key = :k"),
+                                  {"k": key}).fetchone()
+        finally:
+            session.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _writeAppSetting(key: str, value: str) -> None:
+    from datetime import datetime
+    from sqlalchemy import text
+    from database.connection import SessionLocal
+    session = SessionLocal()
+    try:
+        session.execute(
+            text("INSERT INTO app_settings (key, value, updated_at) VALUES (:k, :v, :t) "
+                 "ON CONFLICT(key) DO UPDATE SET value = :v, updated_at = :t"),
+            {"k": key, "v": value, "t": datetime.utcnow()})
+        session.commit()
+    finally:
+        session.close()
+
+
+def maybeResetRuleOverridesForSeason(season: int) -> bool:
+    """Reset the voted rule overrides ONLY when a genuinely NEW season begins — i.e. the
+    season starting differs from the season the current overrides belong to (stamped in
+    app_settings). A mid-season restart re-enters the SAME season (even at week 1 in
+    progress, where the resume week is 0), so its voted rules are PRESERVED rather than
+    wiped. Idempotent. Returns True if it reset.
+
+    Migration-safe: if there's no stamp yet but overrides already exist, they're assumed
+    to belong to the season being started (stamp them, don't wipe) so a first restart
+    after this ships doesn't clobber a live ruleset."""
+    stored = _readAppSetting(RULE_OVERRIDES_SEASON_KEY)
+    try:
+        storedSeason = int(stored) if stored is not None else None
+    except (TypeError, ValueError):
+        storedSeason = None
+    if storedSeason == season:
+        return False  # resuming the same season — keep its rules
+    if storedSeason is None and loadRuleOverrides():
+        # Overrides already live but never stamped → treat as this season's, don't wipe.
+        _writeAppSetting(RULE_OVERRIDES_SEASON_KEY, str(season))
+        return False
+    saveRuleOverrides({})
+    _writeAppSetting(RULE_OVERRIDES_SEASON_KEY, str(season))
+    return True
+
+
+def defaultRuleValue(field: str) -> Any:
+    """The pristine default for a rule field (from a fresh GameRules)."""
+    return getattr(GameRules(), field, None)
+
+
+def applyRuleChange(gameRules: "GameRules", field: str, value: Any,
+                    reason: str = "cores vote", source: str = "cores_vote"):
+    """Apply a single rule change to the LIVE gameRules object AND persist it.
+
+    The live patch takes effect on every game that reads this shared instance; the
+    persisted override map (app_settings) survives restarts and is re-applied at each
+    Season.__init__, so the change drifts into future seasons until reverted. Returns
+    the new override map, or None if the field isn't mutable (a no-op guard)."""
+    if field not in MUTABLE_RULE_FIELDS:
+        return None
+    gameRules.applyPatch(field, value, reason=reason, source=source)
+    overrides = loadRuleOverrides()
+    overrides[field] = value
+    saveRuleOverrides(overrides)
+    return overrides
+
+
+def revertRule(gameRules: "GameRules", field: str,
+               reason: str = "cores revert", source: str = "cores_vote"):
+    """Restore a rule field to its default on the LIVE gameRules object and drop it
+    from the persisted override map. Returns the new override map, or None if the
+    field isn't mutable."""
+    if field not in MUTABLE_RULE_FIELDS:
+        return None
+    gameRules.applyPatch(field, defaultRuleValue(field), reason=reason, source=source)
+    overrides = loadRuleOverrides()
+    overrides.pop(field, None)
+    saveRuleOverrides(overrides)
+    return overrides

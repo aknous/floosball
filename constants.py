@@ -428,6 +428,11 @@ RPO_QB_FIT = {'instinct': 0.35, 'vision': 0.3, 'agility': 0.35}  # which QBs run
 # red zone / backed up, and NOT as a desperation heave (called shots only).
 TRICK_PLAY_ENABLED = True
 TRICK_PLAY_BASE = 0.02            # base rate for a max-aggressive coach in an ideal spot (per-eligible-play; rolls compound over a game, so kept low — gadgets are a rare called shot, a few per team per SEASON)
+# Chance a BOLD coach dials up a gadget (a flea-flicker deep shot) instead of a
+# straight heave on the final snap of a possession when the Drive Clock is about
+# to expire out of FG range. Scaled by the same aggressiveness lean as the normal
+# trigger (0 below aggr 78, up to this at aggr 100), so only bold coaches gamble it.
+HAIL_MARY_TRICK_CHANCE = 0.15
 TRICK_FIELD_MIN_YTE = 21         # not in the red zone (yardsToEndzone must exceed this)
 TRICK_FIELD_MAX_YTE = 85         # not backed up in own territory (must be at/under this)
 # resolves: 'run'|'pass'; trigger: which D commitment it beats; exec: the key
@@ -862,6 +867,278 @@ RESIGN_ONCE_LIMIT = 1             # re-signs allowed with the SAME team before a
                                   # this is the real dynasty-breaker; 2 let a 6-peat re-emerge)
 RESIGN_LIMIT_ENABLED = True
 RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
+
+# ---- Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ----
+# A Core-driven, user-voted live rule mutation. Each game day (weeks 1/8/15/22) there's
+# an escalating chance a vote fires: Aris opens a CHANGE vote, Pyre opens a REVERT vote.
+# Most-voted option wins (no quorum); the winner applies immediately and drifts across
+# seasons until reverted. The engine (game_rules.applyRuleChange/revertRule) is safe:
+# only floosball_game.py reads the mutable fields (WP/pick-em/MVP are insulated).
+RULE_VOTE_ENABLED = True
+# Fire chance keyed to consecutive prior game-days THIS season that didn't fire
+# (0 misses -> 25%, ramping to a guaranteed fire once three in a row have missed).
+RULE_VOTE_RAMP = [0.25, 0.50, 0.75, 1.0]
+RULE_VOTE_REVERT_GATE = 3          # changed-rule count that unlocks Pyre reverts (then 50/50 change/revert)
+RULE_VOTE_BALLOT_SIZE = 4          # candidate rules offered per vote (plus a "None" option)
+RULE_VOTE_CLOSE_LEAD_MINUTES = 15  # vote closes this many minutes before the day's first game
+RULE_VOTE_SIM_AUTOPICK = False     # headless sims: random-pick a winner for engine testing (prod stays user-driven)
+
+# The rules Aris/Pyre can vote on. Each field declares its ALTERNATE space, either:
+#   "values": [...]           a discrete list of allowed alternates, or
+#   "range": [lo, hi]         a numeric range (with "float": True to allow one-decimal
+#                             values, e.g. a touchdown worth 6.4; otherwise whole numbers).
+# A CHANGE vote proposes one specific value from that space (chosen when the vote opens,
+# always different from the current value AND the default), so a rule can be changed again
+# to a NEW value before it is ever reverted. A REVERT vote (Pyre) always returns a rule to
+# its default. Structural rules stay integer (lists); scoring values may be float (ranges).
+RULE_VOTE_CANDIDATES = {
+    "downsPerSeries":             {"label": "Downs per series",              "values": [3, 5]},
+    "firstDownDistance":          {"label": "Yards to a first down",         "values": [5, 8, 12, 15]},
+    "touchdownPoints":            {"label": "Touchdown points",              "range": [4, 9], "float": True},
+    "fieldGoalPoints":            {"label": "Field goal points",             "range": [1, 5], "float": True},
+    # safetyPoints intentionally NOT votable — safeties are too infrequent for the
+    # option to feel worth it (owner 2026-07-12).
+    # One general dead-ball clock rule (incompletion / out of bounds / turnover). Default
+    # True; the only proposable CHANGE is turning it OFF (a running clock).
+    "clockStopsOnDeadBall":       {"label": "Clock stops on dead balls", "values": [False]},
+    # Display-only ENUM: how the score is shown (no engine effect). `valueLabels`
+    # gives each option a clean display name for the ballot/Rulebook.
+    "scoringModel":               {"label": "How the score is shown",
+                                   "values": ["additive", "spread", "subtractive"],
+                                   "valueLabels": {"additive": "Additive",
+                                                   "spread": "Spread",
+                                                   "subtractive": "Subtractive"}},
+    # On/off MECHANIC toggle (the Conversion Ladder). A bool default False, so the
+    # only proposable CHANGE is enabling it; disabling is a REVERT to default.
+    "conversionLadderEnabled":    {"label": "Conversion Ladder",
+                                   "values": [True], "valueLabels": {True: "On", False: "Off"}},
+    # On/off MECHANIC toggle (Sideline Goals). Bool default False — the only proposable
+    # CHANGE is enabling it; disabling is a REVERT to default.
+    "sidelineGoalsEnabled":       {"label": "Sideline Goals",
+                                   "values": [True], "valueLabels": {True: "On", False: "Off"}},
+    # On/off MECHANIC toggle (Contested Scoring). Same shape — the only proposable
+    # CHANGE is enabling it; disabling is a REVERT to default.
+    "contestedScoringEnabled":    {"label": "Contested Scoring",
+                                   "values": [True], "valueLabels": {True: "On", False: "Off"}},
+    # PRESET candidate (the Drive Clock). Not a scalar field=value — each option is
+    # a full {unit, reset, limit} bundle applied as a patch. `gate` is the on/off
+    # field used to tell whether the mechanic is currently changed (for revert +
+    # changed-count). A CHANGE proposes one random preset (offered only when off);
+    # a REVERT resets all the preset's fields to their defaults.
+    "driveClock":                 {"label": "Drive Clock", "gate": "driveClockEnabled",
+                                   "presets": None},  # filled below (needs DRIVE_CLOCK_PRESETS)
+    # PRESET candidate (the Game Format / win condition). One format at a time; each
+    # preset is a full {gameFormat, ...config} bundle. `gate` = gameFormat (changed
+    # when != 'standard'). Swap-directly: a CHANGE can propose a different format even
+    # when one is already active (see ruleVoteManager). Only built formats appear.
+    "gameFormat":                 {"label": "Game Format", "gate": "gameFormat",
+                                   "presets": None},  # filled below (needs GAME_FORMAT_PRESETS)
+}
+
+# The score-display model (additive/spread/subtractive) is a lens over the two
+# CUMULATIVE point totals — it only reads sensibly when the raw point total IS the
+# meaningful score. So it's offerable on the ballot ONLY under these formats; under
+# 'target'/'bust' (the number's race to X is the story) and 'frames' (the score shown
+# is frames-won, not points) only additive makes sense, so the candidate is withheld
+# (owner 2026-07-12). A REVERT to additive is always allowed (see ruleVoteManager).
+SCORING_MODEL_FORMATS = frozenset({'standard', 'play_limit', 'chess_clock', 'innings'})
+
+# Criticality chaos: chance a chaos game picks a non-standard game FORMAT (the format is
+# chosen FIRST, then the other rules are randomized within ranges that fit it). Not 1.0
+# so some chaos games stay standard-format-with-scrambled-rules.
+CHAOS_FORMAT_CHANCE = 0.65
+
+# How the non-format candidates READ on the ballot. A SCALAR shows "<short>: <proposed>"
+# with a "Current: <current>" sub-line. An ON/OFF toggle shows an "<enable>" action line
+# with a brief "<desc>" under it. (Formats have their own GAME_FORMAT_DESCRIPTIONS; the
+# Drive Clock uses "Enable Drive Clock" + the chosen preset's label as the sub-line.)
+RULE_BALLOT_META = {
+    # scalars — short main-line label
+    "downsPerSeries":          {"short": "Downs"},
+    "firstDownDistance":       {"short": "Yards to 1st"},
+    "touchdownPoints":         {"short": "Touchdown"},
+    "fieldGoalPoints":         {"short": "Field goal"},
+    "scoringModel":            {"short": "Score display"},
+    # on/off toggles — action label + brief explanation
+    "conversionLadderEnabled": {"enable": "Enable Conversion Ladder",
+                                "desc": "After a touchdown, go for 3, 4, or 5 points from further out instead of the safe kick."},
+    "sidelineGoalsEnabled":    {"enable": "Enable Sideline Goals",
+                                "desc": "Throw at the sideline hoops for a bonus point while driving down the field."},
+    "contestedScoringEnabled": {"enable": "Enable Contested Scoring",
+                                "desc": "A touchdown only counts if the scorer beats a defender in a one-on-one contest at the goal line."},
+    "clockStopsOnDeadBall":    {"enable": "Enable Running Clock",
+                                "desc": "The clock keeps running through incompletions, out of bounds, and turnovers."},
+    "driveClock":              {"enable": "Enable Drive Clock"},
+}
+
+# ── Conversion Ladder (dormant mechanic — docs/CONVERSION_LADDER_PLAN.md) ──
+# After a touchdown the offense picks ONE rung. The safe 1-pt kick and the 2-pt
+# try always exist (from extraPointPoints / twoPointConversionPoints); the ladder
+# adds higher-value tries snapped from further out (harder to convert). Each rung
+# is one run/pass from its distance — "harder from further" emerges from the play
+# resolution, not a dial. Off by default; switched on by a Cores vote.
+CONVERSION_LADDER_RUNGS = [
+    {"points": 3, "distance": 5},
+    {"points": 4, "distance": 10},
+    {"points": 5, "distance": 15},
+]
+
+# ── Sideline Goals (dormant mechanic — docs/SIDELINE_GOALS_PLAN.md) ────────────
+# Hoop shots at sideline hoops for `sidelineGoalPoints`. TWO pairs per attacking
+# direction: a MIDFIELD pair (~the 50) and an END-ZONE pair (flanking the goal being
+# attacked). Each pair is usable ONCE per drive (make or miss locks it). A MAKE banks
+# the point + counts as a completion; a MISS is just an INCOMPLETION — both consume the
+# down and the drive continues (no turnover). Difficulty EMERGES from the throw: the
+# downfield distance from the ball to the near hoop, plus the QB's accuracy/arm vs
+# coverage. So a point-blank shot is easy and a long one is hard.
+SIDELINE_GOAL_POINTS = 1                 # default points per make (mirrors GameRules default)
+# Make-probability model: base (point-blank) − distance − coverage + QB skill.
+SIDELINE_GOAL_BASE_MAKE = 0.85           # point-blank make prob (neutral QB, neutral coverage)
+SIDELINE_GOAL_DISTANCE_PENALTY = 0.02    # − make prob per yard of downfield distance to the hoop
+SIDELINE_GOAL_ACCURACY_SPAN = 0.008      # +/- make prob per skill point off 80 (±~0.16 over the range)
+SIDELINE_GOAL_PRESSURE_PENALTY = 0.15    # max make-prob reduction under elite coverage
+SIDELINE_GOAL_MIN_MAKE = 0.30            # floor
+SIDELINE_GOAL_MAX_MAKE = 0.92            # ceiling — never automatic
+# Hoop geometry (in yardsToEndzone terms — distance to the attacking goal line).
+SIDELINE_GOAL_MIDFIELD_YARD = 50         # the midfield pair sits at the 50
+SIDELINE_GOAL_MIDFIELD_RANGE = 14        # midfield pair in range this many yards BEFORE the 50 only
+                                         # (once the LOS is PAST midfield the hoops are behind you)
+SIDELINE_GOAL_ENDZONE_MIN = 3            # end-zone pair reachable from the ... 3 ...
+SIDELINE_GOAL_ENDZONE_RANGE = 18         # ... out to the 18 (the red zone; not from the goal line itself)
+# Play-caller: attempt chance when a fresh pair is in range (a low-risk point-grab now).
+SIDELINE_GOAL_ATTEMPT_INRANGE = 0.55     # base chance when in range of an unused pair (a
+                                         # low-risk point — teams grab it readily when they can)
+SIDELINE_GOAL_ATTEMPT_STALL_MULT = 1.4   # x when the drive is stalling (salvage a point)
+SIDELINE_GOAL_ATTEMPT_AGGR_SPAN = 0.25   # + up to this for a max-aggressiveness coach
+SIDELINE_GOAL_ATTEMPT_MAX = 0.90         # cap on the attempt chance
+
+# ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
+# Rugby-flavored: a rushing / receiving / QB-scramble TD is only PROVISIONAL — the
+# scorer must complete an ACTION to bank it, and the best-suited defender gets one
+# last-resort contest to cancel it. The defense winning is RARE and dramatic (a stuff
+# = no points, back to the play's LOS, down advances) — not a scoring nerf. Everything
+# emerges from player attributes (natural-emergence principle); off by default.
+# Each contest TYPE keys off a different attribute so different players shine; the
+# scorer/defender attribute is a weighted blend of real `floosball_player` stats.
+CONTEST_TYPES = [
+    # key            label            scorer attrs (weighted)          defender attrs (weighted)     solo   weight
+    {'key': 'dunk',        'label': 'Dunk',          'scorer': [('power', 0.7), ('xFactor', 0.3)],     'defender': [('power', 0.6), ('agility', 0.4)], 'solo': False, 'weight': 1.0},
+    {'key': 'race',        'label': 'Race',          'scorer': [('speed', 1.0)],                       'defender': [('speed', 1.0)],                   'solo': False, 'weight': 1.0},
+    {'key': 'arm_wrestle', 'label': 'Arm Wrestle',   'scorer': [('power', 1.0)],                       'defender': [('power', 1.0)],                   'solo': False, 'weight': 1.0},
+    {'key': 'beauty',      'label': 'Beauty Contest', 'scorer': [('xFactor', 0.6), ('creativity', 0.4)], 'defender': [('xFactor', 0.6), ('creativity', 0.4)], 'solo': False, 'weight': 0.8},
+    {'key': 'backflip',    'label': 'Backflip',      'scorer': [('agility', 1.0)],                     'defender': None,                               'solo': True,  'weight': 1.0},
+]
+# Balance — P(defense wins) scales with the attribute ratio (see the plan). Even-matchup
+# ~13%; a star scorer vs a weak defender almost always banks (~5%); a weak scorer vs a
+# stud defender is the danger zone (~25-30%).
+CONTEST_DEFENSE_BASE = 0.13              # even-matchup (ratio 1.0) defense-win probability
+CONTEST_RATIO_POWER = 2.0               # how sharply the def/scorer attr ratio swings it
+CONTEST_DEFENSE_FLOOR = 0.03            # a star scorer is never a sure loss for the defense-win roll
+CONTEST_DEFENSE_CEIL = 0.32            # even a mismatch tops out here — offense still wins most
+CONTEST_BOTCH_BASE = 0.11              # solo (backflip) botch prob at a neutral (80) scorer
+# Mental modifier (phase 2, light): a clutch scorer finishes, a choker fumbles the dunk.
+CONTEST_MENTAL_SPAN = 0.05             # max +/- to P(def wins) from pressureHandling + selfBelief
+# During a Criticality the contest goes haywire — the defense-win rate is boosted.
+CONTEST_CRITICALITY_DEFENSE_MULT = 2.2  # x P(def wins) while a Criticality is live
+# Per-type phrasing for the contest play-feed entry (its own beat). "TOUCHDOWN" appears
+# ONLY on a win (the entry that books the score), so a stuffed score never shows a TD
+# that then vanishes. Gender-neutral; {scorer}/{defender} filled at narration time.
+CONTEST_NARRATION = {
+    'dunk': {
+        'win':   ["{scorer} rises and HAMMERS it over the crossbar. TOUCHDOWN, six points!",
+                  "{scorer} throws it down on {defender}. That counts — six points!"],
+        'stuff': ["{scorer} goes up for the slam but {defender} swats it away. No good.",
+                  "{defender} rises with {scorer} and stuffs the dunk. No points."],
+    },
+    'race': {
+        'win':   ["{scorer} beats {defender} across the end zone. TOUCHDOWN!",
+                  "{scorer} outruns {defender} to the far pylon. Six points!"],
+        'stuff': ["{defender} runs {scorer} down before the pylon. No good.",
+                  "{scorer} races for the corner but {defender} tags him short. No points."],
+    },
+    'arm_wrestle': {
+        'win':   ["{scorer} pins {defender} at the goal line. TOUCHDOWN!",
+                  "{scorer} overpowers {defender} and drives across. Six points!"],
+        'stuff': ["{defender} out-muscles {scorer} at the line. No good.",
+                  "{scorer} can't budge {defender} an inch. Stuffed, no points."],
+    },
+    'beauty': {
+        'win':   ["The judges love {scorer}'s pose over {defender}'s. TOUCHDOWN!",
+                  "{scorer} strikes it; {defender} can't match the flair. Six points!"],
+        'stuff': ["{defender} out-poses {scorer} — the judges aren't buying it. No good.",
+                  "{scorer}'s form falls flat next to {defender}. No points."],
+    },
+    'backflip': {
+        'win':   ["{scorer} flips over the line and STICKS the landing. TOUCHDOWN!",
+                  "{scorer} nails the backflip clean. Six points!"],
+        'stuff': ["{scorer} flips but stumbles the landing. No good, no points.",
+                  "{scorer} can't stick it, hands down. Waved off."],
+    },
+}
+CONTEST_TYPE_LABELS = {t['key']: t['label'] for t in CONTEST_TYPES}
+
+# ── Drive Clock (dormant mechanic — docs/DRIVE_CLOCK_PLAN.md) ──
+# A shot-clock for possessions. Two mode knobs: unit ('seconds' of game clock vs
+# 'plays' per snap) × reset ('possession' = a hard cap on the whole drive,
+# 'series' = refills on each first down). Expire before scoring (or a first down,
+# in series mode) = turnover on downs. Off by default; a Cores vote picks a PRESET
+# (each a full {enabled, unit, reset, limit} bundle — the compound-rule vote).
+DRIVE_CLOCK_DEFAULT_LIMIT = {"seconds": 90, "plays": 6}
+# Tuned against the clock-management behavior: when the drive clock is low the
+# offense hurries up (~17s/play instead of ~40s), so the seconds limits are kept
+# tight enough to still bite. plays/series is deliberately OMITTED — a snap counter
+# that refills on each first down is just the down system (N tries to convert).
+DRIVE_CLOCK_PRESETS = [
+    {"key": "dc_90s_possession", "label": "90 seconds, whole drive",
+     "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
+               "driveClockReset": "possession", "driveClockLimit": 90}},
+    {"key": "dc_45s_series", "label": "45 seconds, resets each first down",
+     "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
+               "driveClockReset": "series", "driveClockLimit": 45}},
+    {"key": "dc_6plays_possession", "label": "6 plays, whole drive",
+     "patch": {"driveClockEnabled": True, "driveClockUnit": "plays",
+               "driveClockReset": "possession", "driveClockLimit": 6}},
+]
+# Wire the presets into the vote candidate (declared above with presets=None to
+# avoid a forward-reference).
+RULE_VOTE_CANDIDATES["driveClock"]["presets"] = DRIVE_CLOCK_PRESETS
+
+# ── Game Formats / win conditions (docs/GAME_FORMATS_PLAN.md) ──
+# Each preset is a full {gameFormat, ...config} bundle. One format at a time. ONLY the
+# formats we've tested enough to ship are offerable here (a vote / Criticality can only
+# pick from this list). The target / play_limit / bust FORMATS still exist in
+# game_formats.py (dormant) — re-add their presets below to re-enable them (owner
+# 2026-07-13: hold target/play_limit/bust until they're tested).
+GAME_FORMAT_PRESETS = [
+    {"key": "gf_chess_clock_18", "label": "Chess Clock (18:00 each)",
+     "patch": {"gameFormat": "chess_clock", "offenseClockBudgetSeconds": 1080}},
+    {"key": "gf_innings_3", "label": "Innings (3, try-driven)",
+     "patch": {"gameFormat": "innings", "inningsPerGame": 3, "triesPerInning": 3}},
+    {"key": "gf_frames_6", "label": "Frames (6, match play)",
+     "patch": {"gameFormat": "frames", "framesPerGame": 6}},
+    # HELD until tested (re-add to re-enable) — the formats themselves are still built:
+    #   {"key": "gf_target_30",      "label": "First to 30",
+    #    "patch": {"gameFormat": "target", "targetScore": 30}},
+    #   {"key": "gf_play_limit_30",  "label": "30 Plays a Quarter",
+    #    "patch": {"gameFormat": "play_limit", "playsPerQuarter": 30}},
+    #   {"key": "gf_bust_18",        "label": "Darts (land on 18)",
+    #    "patch": {"gameFormat": "bust", "targetScore": 18, "sidelineGoalsEnabled": True,
+    #              "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
+    #              "extraPointPoints": 1, "twoPointConversionPoints": 2}},
+]
+RULE_VOTE_CANDIDATES["gameFormat"]["presets"] = GAME_FORMAT_PRESETS
+
+# Brief, number-free descriptions of each game format for the vote ballot (keyed by the
+# format's `gameFormat` value). Shown as the sub-line under "Game Format: <name>".
+GAME_FORMAT_DESCRIPTIONS = {
+    "standard":    "The usual game. Most points at the final whistle wins.",
+    "target":      "A race to the target score. First team to reach it wins.",
+    "play_limit":  "No clock. Each quarter is a fixed number of plays.",
+    "chess_clock": "Each team gets a set amount of time to possess the ball. Once a team runs out, they can't get the ball back.",
+    "innings":     "Teams get 3 \"tries\" per inning. Most points wins.",
+    "frames":      "Match play. The game splits into frames. The team with the most points in a frame wins the frame. Most frames wins.",
+    "bust":        "Land directly on the target score to win. Overshoot it and the points are voided. Auto-enables sideline targets to help you land it exactly.",
+}
 
 # ---- Player Fatigue ----
 # Accumulation rate is unchanged — fatigue gauge still climbs visibly

@@ -204,6 +204,17 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Cores rule-change vote: the applied change (from -> to) on the winning
+        # window, JSON-encoded so bool/float/int round-trip. (The table itself is
+        # created by create_all; these columns were added after it shipped.)
+        for _col in ("winner_prev", "winner_value"):
+            try:
+                conn.execute(text(f"ALTER TABLE rule_vote_windows ADD COLUMN {_col} TEXT"))
+                conn.commit()
+                logger.info(f"  Migration: added rule_vote_windows.{_col}")
+            except Exception:
+                conn.rollback()
+
         # Team funding breakdown columns (v0.8) — clear old records and re-add columns
         try:
             # Check if new columns already exist

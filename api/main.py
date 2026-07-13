@@ -1263,6 +1263,10 @@ async def get_rules():
     skip = {"patchHistory", "fieldGoalUprights"}
     changed = [k for k, v in current.items()
                if k not in skip and defaults.get(k) != v]
+    # The most recent Cores-vote change (drives the Rulebook pill's "what changed"
+    # line + its notification dot). Sourced from the persisted rule-vote windows so
+    # it survives restarts (patchHistory is in-memory only).
+    lastChange = _lastRuleChange()
     # `mutable` = what the Rulebook currently exposes as changeable (a curated
     # subset of the engine's full capability — see RULEBOOK_EXPOSED_FIELDS).
     return build_success_response({
@@ -1271,7 +1275,354 @@ async def get_rules():
         "mutable": sorted(RULEBOOK_EXPOSED_FIELDS),
         "changed": changed,
         "patchHistory": current.get("patchHistory", []),
+        "lastChange": lastChange,
+        "changeCount": len(changed),
     })
+
+
+# ── Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ───────────────────────
+class _RuleVoteRequest(BaseModel):
+    optionKey: Optional[str] = None       # change window: a candidate field key, or 'none'
+    optionKeys: Optional[List[str]] = None  # revert window: the full multi-select set
+
+
+def _currentSeasonNumber() -> Optional[int]:
+    sm = floosball_app.seasonManager if floosball_app else None
+    if sm and sm.currentSeason:
+        return sm.currentSeason.seasonNumber
+    return None
+
+
+def _liveGameRules():
+    sm = floosball_app.seasonManager if floosball_app else None
+    if sm and sm.currentSeason and getattr(sm.currentSeason, 'gameRules', None):
+        return sm.currentSeason.gameRules
+    from game_rules import GameRules, loadRuleOverrides
+    g = GameRules()
+    ov = loadRuleOverrides()
+    if ov:
+        g.applyOverrides(ov, reason="rules view", source="persisted")
+    return g
+
+
+def _lastRuleChange():
+    """The most recent applied Cores-vote change, or None, for the Rulebook pill."""
+    season = _currentSeasonNumber()
+    if season is None:
+        return None
+    from database.connection import get_session
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    from constants import RULE_VOTE_CANDIDATES
+    import json as _json
+    session = get_session()
+    try:
+        w = RuleVoteRepository(session).lastResolvedApplied(season)
+        if not w or not w.winner_key or w.winner_key == 'none':
+            return None
+        field = w.winner_key
+
+        def _dec(v):
+            try:
+                return _json.loads(v) if v is not None else None
+            except Exception:
+                return None
+        # Label: a scalar winner key IS a candidate field; a preset winner key
+        # (a preset key or 'revert:<candidate>') resolves to its mechanic label.
+        # 'revert:multi' is the multi-select day-3 outcome (several rules put back).
+        if field == 'revert:multi':
+            label = 'Rules reverted'
+        else:
+            label = RULE_VOTE_CANDIDATES.get(field, {}).get('label') or _presetMechanicLabel(field)
+        return {
+            "field": field,
+            "label": label,
+            "kind": w.kind,                       # 'change' | 'revert'
+            "core": w.core,                       # 'aris' | 'pyre'
+            "from": _dec(w.winner_prev),
+            "to": _dec(w.winner_value),
+        }
+    except Exception:
+        return None
+    finally:
+        session.close()
+
+
+def _coreDisplayName(coreKey: Optional[str]) -> Optional[str]:
+    if not coreKey:
+        return None
+    try:
+        from managers.coresManager import CORES
+        return CORES.get(coreKey, {}).get('displayName', coreKey.title())
+    except Exception:
+        return coreKey.title()
+
+
+def _isVotingOpen(window) -> bool:
+    """A window accepts votes until it's resolved (the sim resolves it when the
+    day's games start). closes_at is only the frontend countdown target, not the
+    gate — in non-scheduled modes it's backdated, so gating on it wrongly closed
+    voting immediately."""
+    return bool(window is not None and not window.resolved)
+
+
+def _presetMechanicLabel(key: str) -> str:
+    """The mechanic label owning a preset option key (a preset key or
+    'revert:<candidate>'), e.g. 'Drive Clock'. Falls back to the key."""
+    from constants import RULE_VOTE_CANDIDATES
+    for f, spec in RULE_VOTE_CANDIDATES.items():
+        if 'presets' not in spec:
+            continue
+        if key == 'revert:' + f or any(p['key'] == key for p in (spec.get('presets') or [])):
+            return spec.get('label', f)
+    return key
+
+
+def _presetCandidateField(key: str) -> str:
+    """The candidate field owning a preset option key (e.g. a Drive Clock preset key
+    -> 'driveClock'), for ballot-metadata lookup. Falls back to the key."""
+    from constants import RULE_VOTE_CANDIDATES
+    for f, spec in RULE_VOTE_CANDIDATES.items():
+        if 'presets' in spec and any(p['key'] == key for p in (spec.get('presets') or [])):
+            return f
+    return key
+
+
+def _formatPresetInfo(key: str):
+    """(formatName, description) for a game-format preset option key, else None. The
+    ballot name drops the parenthetical config detail (e.g. "Darts (land on 18)" ->
+    "Darts") since the description already conveys it."""
+    import re
+    from constants import GAME_FORMAT_PRESETS, GAME_FORMAT_DESCRIPTIONS
+    for p in GAME_FORMAT_PRESETS:
+        if p['key'] == key:
+            name = re.sub(r'\s*\(.*\)\s*', '', p['label']).strip()
+            return name, GAME_FORMAT_DESCRIPTIONS.get(p['patch'].get('gameFormat'), '')
+    return None
+
+
+def _fmtRuleVal(field: str, v) -> str:
+    """Human-readable value for a rule field (mirrors the frontend fmtRuleValue, plus
+    per-field valueLabels e.g. the scoring-model enum)."""
+    from constants import RULE_VOTE_CANDIDATES
+    if isinstance(v, bool):
+        return "On" if v else "Off"
+    if v is None:
+        return "—"
+    vl = RULE_VOTE_CANDIDATES.get(field, {}).get("valueLabels") or {}
+    if v in vl:
+        return vl[v]
+    if isinstance(v, str):
+        return v[:1].upper() + v[1:]
+    n = float(v)
+    return str(int(n)) if n == int(n) else str(round(n * 10) / 10)
+
+
+def _ruleVoteOptions(window, gameRules) -> List[Dict[str, Any]]:
+    """Build the ballot's option views for a window. Each option carries a main `label`
+    and a `description` sub-line:
+      - SCALAR change   -> "Downs: 5"                 / "Current: 4"
+      - ON/OFF change   -> "Enable Conversion Ladder" / "<brief explanation>"
+      - GAME FORMAT     -> "Game Format: First to 30" / "<format description>"
+      - Drive Clock     -> "Enable Drive Clock"       / "<chosen preset, e.g. 90 seconds…>"
+      - REVERT (any)    -> "<rule name>"              / "Back to <default/standard>"
+    """
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    from constants import RULE_VOTE_CANDIDATES, RULE_BALLOT_META
+    isRevert = getattr(window, 'kind', None) == 'revert'
+    out = []
+    for spec in RuleVoteRepository.optionSpecsOf(window):
+        field = spec["field"]
+        key = spec["key"]
+        cand = RULE_VOTE_CANDIDATES.get(field, {}) if field else {}
+        meta = RULE_BALLOT_META.get(field, {}) if field else {}
+        if field is not None:
+            cur = getattr(gameRules, field, None)
+            if isRevert:
+                # A restore to default (multi-select day) — name it, note the target.
+                label = meta.get("short") or cand.get("label", field)
+                desc = f"Back to {_fmtRuleVal(field, spec['value'])}"
+            elif isinstance(cur, bool):
+                # On/off toggle — an action line + a brief explanation.
+                label = meta.get("enable", cand.get("label", field))
+                desc = meta.get("desc", "")
+            else:
+                # Scalar / enum — "<short>: <proposed>" over "Current: <current>".
+                short = meta.get("short", cand.get("label", field))
+                label = f"{short}: {_fmtRuleVal(field, spec['value'])}"
+                desc = f"Current: {_fmtRuleVal(field, cur)}"
+            out.append({"key": key, "field": field, "label": label,
+                        "description": desc, "current": cur, "proposed": spec["value"]})
+            continue
+
+        # PRESET options (field is None): game format, Drive Clock, or a preset revert.
+        fmtInfo = None if isRevert else _formatPresetInfo(key)
+        if fmtInfo is not None:
+            name, desc = fmtInfo
+            out.append({"key": key, "field": None, "label": f"Game Format: {name}",
+                        "description": desc, "current": None, "proposed": None})
+        elif isRevert:
+            mech = _presetMechanicLabel(key)
+            out.append({"key": key, "field": None, "label": mech,
+                        "description": "Back to Standard" if mech == "Game Format" else "Back to Off",
+                        "current": None, "proposed": None})
+        else:
+            # A non-format preset mechanic (Drive Clock) — enable it; the sub-line is the
+            # chosen preset variant (e.g. "90 seconds, whole drive").
+            from constants import RULE_BALLOT_META as _M
+            mechField = _presetCandidateField(key)
+            out.append({"key": key, "field": None,
+                        "label": _M.get(mechField, {}).get("enable", f"Enable {_presetMechanicLabel(key)}"),
+                        "description": spec.get("label", ""),
+                        "current": None, "proposed": None})
+    return out
+
+
+@app.get("/api/rules/vote/status")
+def get_rule_vote_status():
+    """Is a Cores rule-change vote open? Drives the nav badge + the dashboard popup."""
+    season = _currentSeasonNumber()
+    if season is None:
+        return build_success_response({"open": False})
+    from database.connection import get_session
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    session = get_session()
+    try:
+        w = RuleVoteRepository(session).getOpenWindow(season)
+        if not w:
+            return build_success_response({"open": False, "season": season})
+        return build_success_response({
+            "open": True,
+            "season": season,
+            "windowId": w.id,
+            "kind": w.kind,
+            "core": w.core,
+            "coreDisplayName": _coreDisplayName(w.core),
+            "closesAt": (w.closes_at.isoformat() + 'Z') if w.closes_at else None,
+            "votingOpen": _isVotingOpen(w),
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/rules/vote/ballot")
+def get_rule_vote_ballot(user: Optional[_User] = Depends(_getOptionalUser)):
+    """The open vote's Core conversation, options (current -> proposed), live totals,
+    the user's current pick, and close time. Totals are shown live (unlike awards)."""
+    season = _currentSeasonNumber()
+    if season is None:
+        return build_success_response({"open": False})
+    from database.connection import get_session
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    session = get_session()
+    try:
+        repo = RuleVoteRepository(session)
+        w = repo.getOpenWindow(season)
+        if not w:
+            return build_success_response({"open": False, "season": season})
+        options = _ruleVoteOptions(w, _liveGameRules())
+        isRevert = w.kind == 'revert'
+        # Revert is MULTI-SELECT approval: totals = per-option approval counts, and
+        # the user carries a set of picks. Change is single-pick plurality.
+        if isRevert:
+            counts, _voters = repo.revertCounts(w.id)
+            totals = counts
+            myPicks = repo.getUserRevertSelection(user.id, w.id) if user else []
+        else:
+            totals = repo.tally(w.id)
+            myPicks = None
+        return build_success_response({
+            "open": True,
+            "season": season,
+            "windowId": w.id,
+            "kind": w.kind,
+            "multiSelect": isRevert,
+            "core": w.core,
+            "coreDisplayName": _coreDisplayName(w.core),
+            "prompt": w.prompt_line,
+            "reactPick": w.react_pick_line,
+            "reactNone": w.react_none_line,
+            "options": options,
+            "totals": totals,
+            "myPick": repo.getUserVote(user.id, w.id) if (user and not isRevert) else None,
+            "myPicks": myPicks,
+            "closesAt": (w.closes_at.isoformat() + 'Z') if w.closes_at else None,
+            "votingOpen": _isVotingOpen(w),
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/rules/vote")
+def cast_rule_vote(req: _RuleVoteRequest, user: _User = Depends(_getCurrentUser)):
+    """Cast (or change) the user's single pick in the open rule-change vote. Free.
+    The pick must be 'none' or one of the offered options, and voting must be open."""
+    season = _currentSeasonNumber()
+    if season is None:
+        raise HTTPException(400, "No active season")
+    from database.connection import get_session
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    session = get_session()
+    try:
+        repo = RuleVoteRepository(session)
+        w = repo.getOpenWindow(season)
+        if not w:
+            raise HTTPException(400, "No rule-change vote is open right now")
+        if not _isVotingOpen(w):
+            raise HTTPException(400, "Voting has closed for this rule change")
+        valid = set(RuleVoteRepository.optionsOf(w))
+        if w.kind == 'revert':
+            # MULTI-SELECT: the full set replaces the user's prior selection. Any
+            # unknown key is rejected; an empty set clears their ballot.
+            picks = [k for k in (req.optionKeys or []) if k and k != 'none']
+            bad = [k for k in picks if k not in valid]
+            if bad:
+                raise HTTPException(400, "That option is not on the ballot")
+            repo.setRevertSelection(user.id, w.id, picks)
+            session.commit()
+            counts, _voters = repo.revertCounts(w.id)
+            return build_success_response({
+                "season": season, "windowId": w.id,
+                "myPicks": sorted(set(picks)), "totals": counts,
+            })
+        # single-pick change
+        if req.optionKey not in (valid | {"none"}):
+            raise HTTPException(400, "That option is not on the ballot")
+        repo.castVote(user.id, w.id, req.optionKey)
+        session.commit()
+        return build_success_response({
+            "season": season,
+            "windowId": w.id,
+            "myPick": req.optionKey,
+            "totals": repo.tally(w.id),
+        })
+    finally:
+        session.close()
+
+
+@app.post("/api/rules/vote/withdraw")
+def withdraw_rule_vote(user: _User = Depends(_getCurrentUser)):
+    """Clear the user's pick in the open rule-change vote."""
+    season = _currentSeasonNumber()
+    if season is None:
+        raise HTTPException(400, "No active season")
+    from database.connection import get_session
+    from database.repositories.rule_vote_repository import RuleVoteRepository
+    session = get_session()
+    try:
+        repo = RuleVoteRepository(session)
+        w = repo.getOpenWindow(season)
+        if not w:
+            raise HTTPException(400, "No rule-change vote is open right now")
+        if not _isVotingOpen(w):
+            raise HTTPException(400, "Voting has closed for this rule change")
+        repo.withdrawVote(user.id, w.id)
+        session.commit()
+        return build_success_response({
+            "season": season, "windowId": w.id, "myPick": None,
+            "totals": repo.tally(w.id),
+        })
+    finally:
+        session.close()
 
 
 @app.get("/api/cores/status", response_model=Dict[str, Any])
@@ -1539,6 +1890,95 @@ async def debug_anomaly_tick():
     return build_success_response({'fired': True, 'season': seasonNumber, 'week': currentWeek})
 
 
+# ── Rule-change + Criticality testing aids (ungated, like the anomaly debug set) ──
+@app.post("/api/debug/rule-vote/open")
+def debug_rule_vote_open(kind: str = "change"):
+    """Testing aid — force-open a Cores rule-change vote for the current season NOW,
+    so the popup appears immediately (bypasses the escalation roll; stays open ~1h).
+    kind = 'change' (Aris) or 'revert' (Pyre). NOT admin-gated."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    if not (sm and sm.currentSeason):
+        raise HTTPException(400, "No active season")
+    wid = sm._ruleVoteMgr().forceOpenWindow(
+        sm.currentSeason.seasonNumber, sm.currentSeason.currentWeek or 1,
+        sm.currentSeason.gameRules, kind=kind)
+    if wid is None:
+        raise HTTPException(400, "No candidate rules available for that kind right now")
+    return build_success_response({"windowId": wid, "kind": kind})
+
+
+@app.post("/api/debug/rule-vote/resolve")
+def debug_rule_vote_resolve():
+    """Testing aid — resolve the open rule vote NOW (applies the winner + fires the
+    outcome beat / Rulebook-pill notification). NOT admin-gated."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    if not (sm and sm.currentSeason):
+        raise HTTPException(400, "No active season")
+    winner = sm._ruleVoteMgr().resolveOpenWindow(
+        sm.currentSeason.seasonNumber, sm.currentSeason.gameRules)
+    return build_success_response({"winner": winner})
+
+
+@app.post("/api/debug/criticality/trigger")
+def debug_criticality_trigger(duration: int = 4):
+    """Testing aid — force a Criticality window for the current season (enables the
+    per-game chaos rulesets + the site-wide / Rulebook glitch). `duration` weeks.
+    NOT admin-gated. Use /api/debug/criticality/clear to end it."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    if not (sm and sm.currentSeason):
+        raise HTTPException(400, "No active season")
+    season = sm.currentSeason.seasonNumber
+    week = sm.currentSeason.currentWeek or 1
+    from database.connection import get_session
+    from database.models import AppSetting, LeagueAnomalyState
+    session = get_session()
+    try:
+        row = session.query(AppSetting).filter_by(key='criticality_enabled').first()
+        if row is None:
+            session.add(AppSetting(key='criticality_enabled', value='true'))
+        else:
+            row.value = 'true'
+        state = session.query(LeagueAnomalyState).filter_by(season=season).first()
+        if state is None:
+            state = LeagueAnomalyState(season=season)
+            session.add(state)
+        state.last_thinning_week = week
+        patches = list(state.cores_patches_applied or [])
+        patches.append({'event': 'thinning_trigger', 'start_week': week, 'duration': int(duration)})
+        state.cores_patches_applied = patches
+        session.commit()
+        return build_success_response({"season": season, "week": week, "duration": int(duration)})
+    finally:
+        session.close()
+
+
+@app.post("/api/debug/criticality/clear")
+def debug_criticality_clear():
+    """Testing aid — end the forced Criticality window (games return to the shared
+    ruleset, glitch clears). NOT admin-gated."""
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    from database.connection import get_session
+    from database.models import LeagueAnomalyState
+    session = get_session()
+    try:
+        state = session.query(LeagueAnomalyState).filter_by(season=season).first()
+        if state is not None:
+            state.last_thinning_week = None
+            session.commit()
+        return build_success_response({"cleared": True, "season": season})
+    finally:
+        session.close()
+
+
 @app.get("/api/players/{player_id}/anomaly", response_model=Dict[str, Any])
 async def get_player_anomaly(player_id: int):
     """Anomaly state for a player in the current season.
@@ -1788,6 +2228,48 @@ async def get_current_games(response: Response):
             game_dict['homeTimeouts'] = getattr(game, 'homeTimeoutsRemaining', 3)
             game_dict['awayTimeouts'] = getattr(game, 'awayTimeoutsRemaining', 3)
 
+            # Drive Clock — mirror the WS game-state payload so the chip shows on the
+            # initial REST load too (null unless the mechanic is on).
+            try:
+                if hasattr(game, '_driveClockActive') and game._driveClockActive():
+                    gr = game.gameRules
+                    game_dict['driveClock'] = {
+                        'remaining': int(getattr(game, 'driveClockRemaining', 0)),
+                        'unit': getattr(gr, 'driveClockUnit', 'seconds'),
+                        'reset': getattr(gr, 'driveClockReset', 'possession'),
+                        'limit': getattr(gr, 'driveClockLimit', 60),
+                        'low': game._driveClockLow(),
+                    }
+                else:
+                    game_dict['driveClock'] = None
+            except Exception:
+                game_dict['driveClock'] = None
+
+            # Sideline Goals hoop state (open/made/missed per pair, this drive) on the
+            # initial REST load — mirrors game_state so the field graphic colors right.
+            try:
+                if getattr(game.gameRules, 'sidelineGoalsEnabled', False):
+                    _hpr = getattr(game, '_hoopPairResult', None) or {}
+                    game_dict['sidelineGoals'] = {
+                        'active': True,
+                        'midfield': _hpr.get('midfield', 'open'),
+                        'endzone': _hpr.get('endzone', 'open'),
+                        'attackingHome': getattr(game, 'offensiveTeam', None) is getattr(game, 'homeTeam', None),
+                    }
+                else:
+                    game_dict['sidelineGoals'] = None
+            except Exception:
+                game_dict['sidelineGoals'] = None
+
+            # Format-specific display fields (play_limit's plays-remaining, target's
+            # points-to-go) on the initial REST load too — mirrors game_state.
+            try:
+                fmt = getattr(game, 'format', None)
+                if fmt is not None:
+                    game_dict.update(fmt.stateExtra(game))
+            except Exception:
+                pass
+
             game_list.append(game_dict)
         
         # Sort: status first (Active → Scheduled → Final),
@@ -1995,6 +2477,11 @@ async def get_game_by_id(game_id: int, response: Response):
                             play_data = {
                                 'playNumber': getattr(play_data, 'playNumber', 0),
                                 'quarter': getattr(play_data, 'quarter', 0),
+                                'inning': getattr(play_data, 'inning', None),
+                                'inningHalf': getattr(play_data, 'inningHalf', None),
+                                'inningTry': getattr(play_data, 'inningTry', None),
+                                'frame': getattr(play_data, 'frame', None),
+                                'frameClock': getattr(play_data, 'frameClock', None),
                                 'timeRemaining': getattr(play_data, 'timeRemaining', '0:00'),
                                 'down': getattr(play_data, 'down', 0),
                                 'distance': getattr(play_data, 'yardsTo1st', 0),

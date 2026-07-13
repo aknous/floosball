@@ -258,6 +258,15 @@ class SeasonManager:
         if self.playerManager:
             self.playerManager.releaseDueNames(seasonNumber)
 
+        # Rulebook resets to defaults every NEW season, so each season is a fresh canvas
+        # and the fan-voted rule mutations only live for the season that voted them in.
+        # Reset BEFORE the Season is built so its GameRules loads clean defaults. This is
+        # season-STAMPED (not keyed off resumeFromWeek): a restart mid-season re-enters the
+        # SAME season and keeps its rules even at week 1 in progress (resumeFromWeek == 0),
+        # where the old `if resumeFromWeek == 0` check wrongly wiped a just-voted format.
+        from game_rules import maybeResetRuleOverridesForSeason
+        maybeResetRuleOverridesForSeason(seasonNumber)
+
         self.currentSeason = Season(seasonNumber)
 
         # Anchor season start to the correct Monday
@@ -617,6 +626,12 @@ class SeasonManager:
                 self.currentSeason.currentWeek = nextWeek
                 self.currentSeason.currentWeekText = nextWeekText
 
+            # Cores rule-change vote: at the START of a game day (weeks 1/8/15/22),
+            # roll the escalating chance a vote opens. Opening here (before the setup
+            # wait) gives fans the whole run-up to kickoff to vote; it resolves 15 min
+            # before the day's first game (below). Idempotent + never blocks the loop.
+            self._maybeOpenRuleVote(nextWeek, weekStartTime)
+
             await self.timingManager.waitForWeekSetup(weekSetupTime)
 
             # ── Official week transition ──
@@ -787,6 +802,11 @@ class SeasonManager:
 
             # Wait for games to start
             await self.timingManager.waitForGamesStart(weekStartTime)
+
+            # Cores rule-change vote resolves right AS the day's games start — voting
+            # stays open through the whole pre-game run-up, the winning rule applies to
+            # the shared gameRules before any game plays. No-op unless a vote is open.
+            self._resolveRuleVote()
 
             # Clear cached countdown — games are starting now
             self._cachedNextGameStart = None
@@ -1065,6 +1085,7 @@ class SeasonManager:
                             )
 
             # Simulate the game
+            self._applyChaosRulesIfCritical(gameInstance)
             await gameInstance.playGame()
 
             # Clear fantasy tracker callbacks after game
@@ -1092,11 +1113,12 @@ class SeasonManager:
             # Update ELO ratings based on game result using pre-game win probability
             teamManager = self.serviceContainer.getService('team_manager')
             if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
+                _eloHome, _eloAway = gameInstance.format.eloScores(gameInstance)
                 teamManager.updateEloAfterGame(
                     gameInstance.homeTeam,
                     gameInstance.awayTeam,
-                    gameInstance.homeScore,
-                    gameInstance.awayScore,
+                    _eloHome,
+                    _eloAway,
                     gameInstance.winningTeam,
                     getattr(gameInstance, 'preGameHomeWinProbability', None),
                     getattr(gameInstance, 'preGameAwayWinProbability', None)
@@ -4542,6 +4564,7 @@ class SeasonManager:
             # No fantasy tracker callbacks for playoff games — FP is regular season only
 
             # Simulate the game
+            self._applyChaosRulesIfCritical(gameInstance)
             await gameInstance.playGame()
 
             # Determine winner
@@ -4560,11 +4583,12 @@ class SeasonManager:
             # Update ELO ratings based on playoff game result using pre-game win probability
             teamManager = self.serviceContainer.getService('team_manager')
             if teamManager and hasattr(gameInstance, 'winningTeam') and gameInstance.winningTeam:
+                _eloHome, _eloAway = gameInstance.format.eloScores(gameInstance)
                 teamManager.updateEloAfterGame(
                     gameInstance.homeTeam,
                     gameInstance.awayTeam,
-                    gameInstance.homeScore,
-                    gameInstance.awayScore,
+                    _eloHome,
+                    _eloAway,
                     gameInstance.winningTeam,
                     getattr(gameInstance, 'preGameHomeWinProbability', None),
                     getattr(gameInstance, 'preGameAwayWinProbability', None)
@@ -10169,6 +10193,63 @@ class SeasonManager:
                 session.close()
         except Exception:
             pass
+
+    def _ruleVoteMgr(self):
+        """Lazily-constructed RuleVoteManager (Cores rule-change vote)."""
+        if getattr(self, '_ruleVoteManager', None) is None:
+            from managers.ruleVoteManager import RuleVoteManager
+            self._ruleVoteManager = RuleVoteManager(self.serviceContainer)
+        return self._ruleVoteManager
+
+    def _maybeOpenRuleVote(self, week: int, weekStartTime) -> None:
+        """Open a Cores rule-change vote if the game-day escalation roll fires.
+        Wrapped so nothing here ever blocks or breaks the game loop."""
+        try:
+            if not self.currentSeason:
+                return
+            # closes_at = the real wall-clock time the day's games start (the vote's
+            # countdown target). Scheduled: the true kickoff. Non-scheduled: kickoff is
+            # backdated, so estimate from the setup + games-start delays the loop is
+            # about to sleep, so the countdown reflects reality (~a minute), not hours.
+            closesAt = weekStartTime
+            if not getattr(self.timingManager, '_isScheduledMode', False):
+                d = getattr(self.timingManager, 'delays', {}) or {}
+                secs = (d.get('week_start_wait', 30) or 0) + (d.get('game_announcement', 30) or 0)
+                closesAt = datetime.datetime.utcnow() + datetime.timedelta(seconds=secs)
+            self._ruleVoteMgr().maybeOpenWindow(
+                self.currentSeason.seasonNumber, week,
+                self.currentSeason.gameRules, closesAt)
+        except Exception as e:
+            logger.warning(f"Rule vote open hook failed: {e}")
+
+    def _resolveRuleVote(self) -> None:
+        """Resolve the open Cores rule-change vote (applies the winner to the live
+        rules). No-op if none is open. Never blocks/breaks the game loop."""
+        try:
+            if not self.currentSeason:
+                return
+            self._ruleVoteMgr().resolveOpenWindow(
+                self.currentSeason.seasonNumber, self.currentSeason.gameRules,
+                requireClosed=True)
+        except Exception as e:
+            logger.warning(f"Rule vote resolve hook failed: {e}")
+
+    def _applyChaosRulesIfCritical(self, game) -> None:
+        """During a Criticality, give this game its OWN randomized ruleset just
+        before kickoff — chaos rules are hidden from users, both teams play by the
+        same set, results count. Reverts naturally when Criticality ends (normal
+        weeks keep the shared season ruleset). Never blocks the game loop."""
+        try:
+            if not self.currentSeason:
+                return
+            from managers.anomalyManager import isCriticalityWeek
+            week = getattr(game, 'week', None)
+            if week is None:
+                week = self.currentSeason.currentWeek
+            if isCriticalityWeek(self.currentSeason.seasonNumber, week):
+                game.gameRules = self._ruleVoteMgr().randomChaosRules(self.currentSeason.gameRules)
+        except Exception as e:
+            logger.warning(f"Criticality chaos ruleset failed: {e}")
 
     async def _firePreGameReminder(self, gameStartTime: datetime.datetime, weekNumber: int,
                                    weekText: str, gamesCount: int) -> None:
