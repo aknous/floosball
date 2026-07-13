@@ -4519,6 +4519,7 @@ class Game:
         self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
         self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
         event = {'text': f'{loser.abbr} is out of time! Turnover on the clock.',
+                 '_type': 'chess_timeout',
                  'quarter': self.currentQuarter,
                  'timeRemaining': self.formatTime(self.gameClockSeconds)}
         self.gameFeed.insert(0, {'event': event})
