@@ -2017,15 +2017,26 @@ class Game:
             if random.random() < min(0.97, prob):
                 return True
             # otherwise fall through to the normal game-clock logic
-        # Chess clock: a low budget is its own reason to get out of bounds — a stopped
-        # clock doesn't drain the budget on the next huddle, so the offense buys more
-        # plays to score before it locks out. Any quarter/score; not while draining for
-        # an end-of-game FG (there the clock should run). Scaled by the coach's clock IQ.
-        if self._chessClockLow(90) and not self._isFgDrainMode():
+        # Chess clock: getting a pass out of bounds stops the clock, which doesn't drain
+        # the budget on the next huddle — so it buys more plays before lockout. A clock-
+        # conscious coach MIXES these into the normal play mix from the start (a moderate
+        # rate scaled by clock management, not every play), and the rate ramps up hard as
+        # the budget runs low. A lackadaisical coach rarely bothers and burns its budget
+        # away — running out early and handing the other team the game. Not while draining
+        # for an end-of-game FG (there the clock should run). Any quarter/score.
+        b = self._chessClockOffenseSecs()
+        if b is not None and not self._isFgDrainMode():
             import random
-            b = self._chessClockOffenseSecs() or 90
-            drain = 1.0 - max(0.0, min(90.0, b)) / 90.0
-            prob = (0.55 + 0.4 * drain) * (0.6 + 0.4 * self._coachClockIQ(coach))
+            from constants import CHESS_CLOCK_BASE_SIDELINE_PROB
+            clockIQ = self._coachClockIQ(coach)
+            if b <= 90:
+                # Budget getting low: urgency ramps the clock-stopping rate up.
+                drain = 1.0 - max(0.0, min(90.0, b)) / 90.0
+                prob = (0.55 + 0.4 * drain) * (0.6 + 0.4 * clockIQ)
+            else:
+                # From the start: a sharp clock manager mixes in clock-stoppers to bank
+                # budget; a poor one lets it roll. Scaled straight by clock management.
+                prob = CHESS_CLOCK_BASE_SIDELINE_PROB * clockIQ
             if random.random() < min(0.97, prob):
                 return True
         if self.currentQuarter not in (2, 4):
