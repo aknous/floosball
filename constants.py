@@ -1137,7 +1137,7 @@ GAME_FORMAT_DESCRIPTIONS = {
     "target":      "A race to the target score. First team to reach it wins.",
     "play_limit":  "No clock. Each quarter is a fixed number of plays.",
     "chess_clock": "Each team gets an offense-time budget. Run yours out and you can't get the ball back.",
-    "innings":     "Baseball-style. Teams trade at-bats over a set number of innings; most points wins.",
+    "innings":     "Teams get 3 \"tries\" per inning. Most points wins.",
     "frames":      "Match play. The game splits into frames; win the most frames, not the most points.",
     "bust":        "Land directly on the target score to win. Overshoot it and the points are voided.",
 }
