@@ -1139,7 +1139,7 @@ GAME_FORMAT_DESCRIPTIONS = {
     "chess_clock": "Each team gets an offense-time budget. Run yours out and you can't get the ball back.",
     "innings":     "Baseball-style. Teams trade at-bats over a set number of innings; most points wins.",
     "frames":      "Match play. The game splits into frames; win the most frames, not the most points.",
-    "bust":        "Land exactly on the target score. Overshoot it and the points are voided.",
+    "bust":        "Land directly on the target score to win.",
 }
 
 # ---- Player Fatigue ----
