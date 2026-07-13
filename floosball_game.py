@@ -4251,9 +4251,15 @@ class Game:
             # is worth more) and garbage time; attempts any in-range kick (it's the last
             # shot). Earlier than this the offense hurries + stops the clock (sideline /
             # spike / timeout) to preserve budget and keep driving.
+            # A FG that only TIES (down exactly a field goal) is gated to the last play:
+            # a tie just sends it to OT, so keep trying for the win (TD) while a play
+            # remains, and settle for the tying FG only when this is the last snap. A
+            # WINNING FG (down 1-2, tied, or lead-protecting) still banks on the last
+            # budget play.
             if (self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
                     and self.yardsToEndzone > 5 and not self._isGarbageTime(scoreDiff)
-                    and scoreDiff >= -self._fgValue()):
+                    and (scoreDiff > -self._fgValue()
+                         or (scoreDiff == -self._fgValue() and self._estimateAvailablePlays() <= 1))):
                 _ccK = self.offensiveTeam.rosterDict.get('k')
                 _ccCharged = self._awakenedReadyFor(_ccK, 'kick')
                 _ccKMax = (self._chargedKickerMaxFg(_ccK) if _ccCharged
