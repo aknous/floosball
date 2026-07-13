@@ -4737,7 +4737,10 @@ class Game:
                  'quarter': self.currentQuarter,
                  'timeRemaining': self.formatTime(self.gameClockSeconds)}
         self.gameFeed.insert(0, {'event': event})
-        self.broadcastGameState(includeLastPlay=False, isPossessionChange=True)
+        # Pass the event as eventMessage so it goes out LIVE over the WebSocket — without
+        # it the broadcast carries no lastPlayData and the line only shows up on a REST
+        # re-fetch (it's in gameFeed but was never pushed to connected clients).
+        self.broadcastGameState(includeLastPlay=False, eventMessage=event, isPossessionChange=True)
         return True
 
     def _frameBoundaryReset(self) -> bool:
@@ -4752,9 +4755,9 @@ class Game:
             return False
         endedFrame = int(getattr(self, '_frameIndex', 0))   # the frame that just committed
         # Marker (blue 'inning'-style accent reused for a period change).
-        self.gameFeed.insert(0, {'event': {
-            'text': f'End of Frame {endedFrame}', '_type': 'frame',
-            'quarter': self.currentQuarter, 'timeRemaining': ''}})
+        frameEvent = {'text': f'End of Frame {endedFrame}', '_type': 'frame',
+                      'quarter': self.currentQuarter, 'timeRemaining': ''}
+        self.gameFeed.insert(0, {'event': frameEvent})
         # Alternate the frame-start possession from the opening receiver.
         winner = getattr(self, '_coinFlipWinner', self.homeTeam)
         loser = getattr(self, '_coinFlipLoser', self.awayTeam)
@@ -4771,7 +4774,9 @@ class Game:
         self._hoopPairResult = {}
         self.clockRunning = False
         self._pendingPossessionChange = False
-        self.broadcastGameState(includeLastPlay=False, isPossessionChange=True)
+        # eventMessage so the frame marker goes out live over the WebSocket (else it only
+        # shows on a REST re-fetch — same bug as the chess out-of-time turnover).
+        self.broadcastGameState(includeLastPlay=False, eventMessage=frameEvent, isPossessionChange=True)
         return True
 
     def _resolveDefensiveReturn(self):
