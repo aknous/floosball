@@ -421,6 +421,66 @@ def clearRuleOverrides() -> None:
     saveRuleOverrides({})
 
 
+RULE_OVERRIDES_SEASON_KEY = "rule_overrides_season"
+
+
+def _readAppSetting(key: str):
+    """Raw string value of an app_settings row, or None."""
+    try:
+        from sqlalchemy import text
+        from database.connection import SessionLocal
+        session = SessionLocal()
+        try:
+            row = session.execute(text("SELECT value FROM app_settings WHERE key = :k"),
+                                  {"k": key}).fetchone()
+        finally:
+            session.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _writeAppSetting(key: str, value: str) -> None:
+    from datetime import datetime
+    from sqlalchemy import text
+    from database.connection import SessionLocal
+    session = SessionLocal()
+    try:
+        session.execute(
+            text("INSERT INTO app_settings (key, value, updated_at) VALUES (:k, :v, :t) "
+                 "ON CONFLICT(key) DO UPDATE SET value = :v, updated_at = :t"),
+            {"k": key, "v": value, "t": datetime.utcnow()})
+        session.commit()
+    finally:
+        session.close()
+
+
+def maybeResetRuleOverridesForSeason(season: int) -> bool:
+    """Reset the voted rule overrides ONLY when a genuinely NEW season begins — i.e. the
+    season starting differs from the season the current overrides belong to (stamped in
+    app_settings). A mid-season restart re-enters the SAME season (even at week 1 in
+    progress, where the resume week is 0), so its voted rules are PRESERVED rather than
+    wiped. Idempotent. Returns True if it reset.
+
+    Migration-safe: if there's no stamp yet but overrides already exist, they're assumed
+    to belong to the season being started (stamp them, don't wipe) so a first restart
+    after this ships doesn't clobber a live ruleset."""
+    stored = _readAppSetting(RULE_OVERRIDES_SEASON_KEY)
+    try:
+        storedSeason = int(stored) if stored is not None else None
+    except (TypeError, ValueError):
+        storedSeason = None
+    if storedSeason == season:
+        return False  # resuming the same season — keep its rules
+    if storedSeason is None and loadRuleOverrides():
+        # Overrides already live but never stamped → treat as this season's, don't wipe.
+        _writeAppSetting(RULE_OVERRIDES_SEASON_KEY, str(season))
+        return False
+    saveRuleOverrides({})
+    _writeAppSetting(RULE_OVERRIDES_SEASON_KEY, str(season))
+    return True
+
+
 def defaultRuleValue(field: str) -> Any:
     """The pristine default for a rule field (from a fresh GameRules)."""
     return getattr(GameRules(), field, None)
