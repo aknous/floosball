@@ -4357,7 +4357,12 @@ class Game:
             # Chess clock: budget critically low with a down to spare — spike to STOP the
             # clock so the next huddle doesn't drain the budget and the offense gets another
             # snap to score. Early downs only; not in easy scoring range; not FG-draining.
+            # A spike is ONLY worth it if it actually buys a productive play afterward: it
+            # costs a down AND a few seconds of budget, so require room for >= 2 productive
+            # plays (spike + a real snap). At <= 1 the spike would just forfeit the down and
+            # burn the last of the budget into a lockout — run the real play instead.
             if (self._chessClockLow(45)
+                    and self._estimateAvailablePlays() >= 2
                     and self.clockRunning
                     and self.down <= self.gameRules.downsPerSeries - 2
                     and self.yardsToEndzone > 5
@@ -4782,6 +4787,11 @@ class Game:
         loser = self.offensiveTeam
         self._applyMomentumEvent(MOMENTUM_TURNOVER, self.defensiveTeam)
         self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
+        # Stop the clock on the possession change, exactly like the normal turnover path
+        # (main loop). turnover() itself doesn't touch clockRunning, so without this the
+        # clock stayed "running" from the loser's drive and the team taking over would
+        # burn a timeout to stop a clock that isn't actually running.
+        self.clockRunning = False
         event = {'text': f'{loser.abbr} is out of time! Turnover on the clock.',
                  '_type': 'chess_timeout',
                  'quarter': self.currentQuarter,
@@ -7304,6 +7314,20 @@ class Game:
                                                 'text': 'Game Final (TIE): {} - {} | {} - {}'.format(self.homeTeam.name, _hs, self.awayTeam.name, _as)
                                             }
                                         })
+
+        # Chess clock: when the game ends because the LOSING team ran its possession
+        # budget out (locked out and couldn't catch up), spell that out as the closing
+        # reason. A chess game can end mid-quarter with the clock reading above 0:00, so
+        # without this the feed just stops with no "why". Inserted at index 1 so it sits
+        # directly UNDER the Final line (chronologically the last thing before the whistle).
+        if (getattr(self.format, 'key', '') == 'chess_clock' and _side in ('home', 'away')
+                and self.format._lockedOut(self, self.losingTeam)):
+            self.gameFeed.insert(1, {'event': {
+                'text': f'{self.losingTeam.abbr} ran out of time. {self.winningTeam.abbr} wins.',
+                '_type': 'chess_timeout',
+                'quarter': 'Final',
+                'timeRemaining': '0:00',
+            }})
 
         if self.isRegularSeasonGame:
             if _side != 'tie':  # No ties in season standings (frames: by frames won)
