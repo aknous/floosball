@@ -242,8 +242,8 @@ class PlayResult(enum.Enum):
     ConversionNoGood = 'Conversion No Good'
     # Sideline Goals — a hoop shot. A make banks the point + consumes the down (drive
     # continues); a miss is a turnover at the spot (a rare tip is a returnable INT).
-    SidelineHoopGood = 'Sideline Hoop Good'
-    SidelineHoopMiss = 'Sideline Hoop Miss'
+    SidelineHoopGood = 'Sideline Goal Good'
+    SidelineHoopMiss = 'Sideline Goal Miss'
     # Darts (bust) — a score that would overshoot the target X is voided (no points),
     # and the drive is turned over.
     Bust = 'Bust'
