@@ -1367,13 +1367,22 @@ def _isVotingOpen(window) -> bool:
 
 def _presetMechanicLabel(key: str) -> str:
     """The mechanic label owning a preset option key (a preset key or
-    'revert:<candidate>'), e.g. 'Drive Clock'. Falls back to the key."""
+    'revert:<candidate>'), e.g. 'Drive Clock'. Falls back to the owning mechanic by key
+    PREFIX so a stale/renamed preset key (e.g. an old 'gf_chess_clock_18' from before the
+    30:00 rename, still stored on a past rule-vote) resolves to its mechanic instead of
+    leaking the raw key into the Rulebook."""
     from constants import RULE_VOTE_CANDIDATES
     for f, spec in RULE_VOTE_CANDIDATES.items():
         if 'presets' not in spec:
             continue
         if key == 'revert:' + f or any(p['key'] == key for p in (spec.get('presets') or [])):
             return spec.get('label', f)
+    # Not in the current preset set — recover the mechanic from the key prefix
+    # (gf_* = a Game Format preset, dc_* = a Drive Clock preset).
+    if key.startswith('gf_') or key.startswith('revert:gameFormat'):
+        return RULE_VOTE_CANDIDATES.get('gameFormat', {}).get('label', 'Game Format')
+    if key.startswith('dc_') or key.startswith('revert:driveClock'):
+        return RULE_VOTE_CANDIDATES.get('driveClock', {}).get('label', 'Drive Clock')
     return key
 
 
