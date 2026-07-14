@@ -9514,6 +9514,16 @@ class Game:
 
         finalTime = max(8, baseTime + iqOffset + batched_randint(-3, 3))
 
+        # A play that MUST beat the clock this snap rushes to the line and snaps below the
+        # normal huddle floor — a FG unit especially doesn't huddle. Without this the 8s
+        # floor would burn a tight clock (e.g. 3s left) before the ball is ever snapped, so
+        # a decided last-second kick would never get off. Cap the pre-snap at one tick under
+        # the clock so the snap always happens with time still on it. (Teams that still hold
+        # a timeout are handled earlier by _maybeCallTimeoutToSaveSnap; this covers the rest.)
+        if (self.play is not None and 0 < self.gameClockSeconds <= finalTime
+                and self.play.playType in (PlayType.FieldGoal, PlayType.Pass, PlayType.Run)):
+            finalTime = max(0, self.gameClockSeconds - 1)
+
         # Augment the tempo insight with the time math (recordTempoIntent
         # already set intent / baseTime / coachClockIQ).
         if hasattr(self, 'play') and self.play is not None and 'tempo' in self.play.insights:
