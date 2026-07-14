@@ -973,7 +973,7 @@ RULE_BALLOT_META = {
     "conversionLadderEnabled": {"enable": "Enable Conversion Ladder",
                                 "desc": "After a touchdown, go for 3, 4, or 5 points from further out instead of the safe kick."},
     "sidelineGoalsEnabled":    {"enable": "Enable Sideline Goals",
-                                "desc": "Throw at the sideline hoops for a bonus point while driving down the field."},
+                                "desc": "Throw at the sideline goals for a bonus point while driving down the field."},
     "contestedScoringEnabled": {"enable": "Enable Contested Scoring",
                                 "desc": "A touchdown only counts if the scorer beats a defender in a one-on-one contest at the goal line."},
     "clockStopsOnDeadBall":    {"enable": "Enable Running Clock",

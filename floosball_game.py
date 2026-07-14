@@ -5117,15 +5117,15 @@ class Game:
             side = choice(['near-side', 'far-side'])
             if self.play.hoopMade:
                 text = choice([
-                    '{} threads it through the {} {} hoop!'.format(qbName, side, hoopName),
-                    '{} drills the {} {} hoop!'.format(qbName, side, hoopName),
-                    '{} finds the {} {} hoop, good!'.format(qbName, side, hoopName),
+                    '{} threads it through the {} {} goal!'.format(qbName, side, hoopName),
+                    '{} drills the {} {} goal!'.format(qbName, side, hoopName),
+                    '{} finds the {} {} goal, good!'.format(qbName, side, hoopName),
                 ])
             else:
                 text = choice([
                     '{} clangs it off the {} {} rim, no good'.format(qbName, side, hoopName),
-                    '{} sails the {} {} hoop shot wide, incomplete'.format(qbName, side, hoopName),
-                    '{} just misses the {} {} hoop'.format(qbName, side, hoopName),
+                    '{} sails it wide of the {} {} goal, incomplete'.format(qbName, side, hoopName),
+                    '{} just misses the {} {} goal'.format(qbName, side, hoopName),
                 ])
         elif getattr(self.play, 'isScramble', False):
             # QB ran instead of passing (resolves as a run, narrated as a scramble).
