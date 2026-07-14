@@ -28,7 +28,13 @@ GAME_DAY_START_WEEKS = (1, 8, 15, 22)
 # `gameFormat` is NOT excluded from chaos anymore (all formats are built) — but it's
 # handled FIRST (see randomChaosRules) rather than in the general loop, so it's listed
 # here to skip it in the loop.
-_CHAOS_EXCLUDE = frozenset({'scoringModel', 'gameFormat'})
+# Fields the chaos randomizer never touches: scoringModel (display-only), gameFormat
+# (format-first step owns it), the two mechanic gates handled by the dedicated coin-flip
+# (conversionLadder/sidelineGoals), and Contested Scoring (held out until vetted → stays
+# at its base/off value).
+_CHAOS_EXCLUDE = frozenset({'scoringModel', 'gameFormat',
+                            'conversionLadderEnabled', 'sidelineGoalsEnabled',
+                            'contestedScoringEnabled'})
 
 
 class RuleVoteManager:
@@ -211,6 +217,18 @@ class RuleVoteManager:
         # The Drive Clock is a GAME-clock shot clock — it only combines with formats that
         # actually run the game clock (skip the synthetic / no-clock formats).
         realClock = fmt in ('standard', 'target', 'bust', 'frames')
+
+        # 1b) DORMANT MECHANICS — each independently coin-flipped ON/OFF (they don't all
+        # have to be on). Contested Scoring is held out (in _CHAOS_EXCLUDE) until vetted.
+        # A format preset may already own one (e.g. bust bundles Sideline Goals) — respect
+        # that and don't re-roll it. These are excluded from the generic loop below.
+        for mech in ('conversionLadderEnabled', 'sidelineGoalsEnabled'):
+            if mech not in formatFields:
+                setattr(g, mech, random.random() < 0.5)
+        # The Conversion Ladder is played WITHOUT the safe kick — every post-TD try is a
+        # forced go-for-it — so drop the kick whenever the ladder rolls on.
+        if getattr(g, 'conversionLadderEnabled', False):
+            g.conversionKickEnabled = False
 
         # 2) EVERY OTHER RULE — random, but within ranges that fit the chosen format.
         for f, spec in RULE_VOTE_CANDIDATES.items():
