@@ -973,7 +973,7 @@ RULE_BALLOT_META = {
     "conversionLadderEnabled": {"enable": "Enable Conversion Ladder",
                                 "desc": "After a touchdown, go for 3, 4, or 5 points from further out instead of the safe kick."},
     "sidelineGoalsEnabled":    {"enable": "Enable Sideline Goals",
-                                "desc": "Throw at the sideline hoops for a bonus point while driving down the field."},
+                                "desc": "Throw at the sideline goals for a bonus point while driving down the field."},
     "contestedScoringEnabled": {"enable": "Enable Contested Scoring",
                                 "desc": "A touchdown only counts if the scorer beats a defender in a one-on-one contest at the goal line."},
     "clockStopsOnDeadBall":    {"enable": "Enable Running Clock",
@@ -992,6 +992,26 @@ CONVERSION_LADDER_RUNGS = [
     {"points": 4, "distance": 10},
     {"points": 5, "distance": 15},
 ]
+# "No kick" mode (gameRules.conversionKickEnabled=False): every post-TD try is a forced
+# go-for-it. When NOT in a Q4 comeback, a coach reaches for the highest-value rung whose
+# make estimate clears a personal floor — aggressive coaches accept lower odds (reach
+# higher up the ladder), conservative coaches stick to the safe 2-pt.
+CONVERSION_FORCEGO_MAKE_FLOOR = 0.72     # a neutral coach's minimum make% to reach past the 2-pt
+CONVERSION_FORCEGO_AGGR_SWING = 0.30     # +/- the floor across the coach-aggressiveness range
+CONVERSION_FORCEGO_JITTER = 0.08         # per-attempt randomness on the floor (variety)
+
+# How boldly a TRAILING team reaches for a ladder rung (or the 2-pt) instead of the safe
+# kick — the desire chart in _conversionDesire, now tuned aggressive so comebacks lean on
+# the rungs. Each tier is the base go-for-it probability (before coach aggressiveness and
+# the CONVERSION_GO_AGGRESSION master dial).
+CONVERSION_DESIRE_TIE_OR_WIN = 0.92      # the try ties / takes the lead now; the kick leaves you behind
+CONVERSION_DESIRE_SAVE_POSS  = 0.78      # the try saves a whole scoring possession vs kicking
+CONVERSION_DESIRE_ONE_SCORE  = 0.50      # still a one-score game — real aggression (was a rare 0.25)
+CONVERSION_DESIRE_LONGSHOT   = 0.20      # multi-score & doesn't save a possession — occasional reach (was 0)
+CONVERSION_GO_AGGRESSION     = 1.3       # master multiplier on the whole chart — raise for even bolder teams
+# Go-for-it is now considered in the whole SECOND HALF when trailing (was Q4 only); Q3 is
+# dampened since it's earlier and a miss has more time to hurt.
+CONVERSION_GO_Q3_DAMPEN      = 0.55
 
 # ── Sideline Goals (dormant mechanic — docs/SIDELINE_GOALS_PLAN.md) ────────────
 # Hoop shots at sideline hoops for `sidelineGoalPoints`. TWO pairs per attacking

@@ -234,16 +234,16 @@ class PlayResult(enum.Enum):
     Touchdown = 'Touchdown'
     TouchdownXP = 'Touchdown, XP is Good'
     TouchdownNoXP = 'Touchdown, XP No Good'
-    Touchdown2PtGood = 'Touchdown, 2-Pt Good'
-    Touchdown2PtNoGood = 'Touchdown, 2-Pt No Good'
+    Touchdown2PtGood = '2-Pt Good'
+    Touchdown2PtNoGood = '2-Pt No Good'
     # Conversion Ladder — a go-for-it try worth more than 2 (from further out).
-    # The 2-pt rung keeps the Touchdown2Pt* labels; higher rungs use these.
+    # The 2-pt rung keeps the Touchdown2Pt* enum MEMBERS; higher rungs use these.
     ConversionGood = 'Conversion Good'
     ConversionNoGood = 'Conversion No Good'
     # Sideline Goals — a hoop shot. A make banks the point + consumes the down (drive
     # continues); a miss is a turnover at the spot (a rare tip is a returnable INT).
-    SidelineHoopGood = 'Sideline Hoop Good'
-    SidelineHoopMiss = 'Sideline Hoop Miss'
+    SidelineHoopGood = 'Sideline Goal Good'
+    SidelineHoopMiss = 'Sideline Goal Miss'
     # Darts (bust) — a score that would overshoot the target X is voided (no points),
     # and the drive is turned over.
     Bust = 'Bust'
@@ -2513,25 +2513,30 @@ class Game:
         """Rough likelihood a run/pass converts from `distance` yards out — used
         ONLY by the ladder decision to weigh rungs (the actual try is a real play,
         so 'harder from further' truly emerges there). Falls with distance."""
-        p = 0.62 - max(0, distance - 2) * 0.035   # ~0.62 at 2 yd, ~0.16 at 15 yd
-        return max(0.05, min(0.92, p))
+        p = 0.70 - max(0, distance - 2) * 0.028   # ~0.70 at 2 yd, ~0.34 at 15 yd
+        return max(0.05, min(0.92, p))            # tuned to the end-zone-targeting play calls
 
     def _conversionDesire(self, deficit: float, points: float, xp: float, one: float) -> float:
-        """How much the trailing team wants a go-try worth `points` over the safe
-        kick, as a base probability. Compares the gap left after this try vs after
-        the kick, in normal scoring possessions. Reduces EXACTLY to the old
-        _shouldGoForTwo chart at points = the two-point value."""
+        """How much the trailing team wants a go-try worth `points` over the safe kick, as a
+        base probability. Compares the gap left after this try vs after the kick, in normal
+        scoring possessions. Tuned aggressive (constants CONVERSION_DESIRE_*) so comebacks
+        lean on the rungs; the CONVERSION_GO_AGGRESSION master dial scales the whole chart."""
+        from constants import (CONVERSION_DESIRE_TIE_OR_WIN, CONVERSION_DESIRE_SAVE_POSS,
+                               CONVERSION_DESIRE_ONE_SCORE, CONVERSION_DESIRE_LONGSHOT,
+                               CONVERSION_GO_AGGRESSION)
         import math
         after = deficit - points
         afterXp = deficit - xp
         need = lambda gap: math.ceil(gap / one) if gap > 0 else 0
         if after <= 0 < afterXp:
-            return 0.85   # this try ties/wins now; the kick leaves you behind
-        if need(after) < need(afterXp):
-            return 0.60   # the try saves a whole possession
-        if deficit <= self._maxPossession():
-            return 0.25   # still a one-score game — occasional aggression
-        return 0.0
+            base = CONVERSION_DESIRE_TIE_OR_WIN   # this try ties/wins now; the kick leaves you behind
+        elif need(after) < need(afterXp):
+            base = CONVERSION_DESIRE_SAVE_POSS    # the try saves a whole possession
+        elif deficit <= self._maxPossession():
+            base = CONVERSION_DESIRE_ONE_SCORE    # still a one-score game — real aggression
+        else:
+            base = CONVERSION_DESIRE_LONGSHOT     # multi-score & doesn't save a possession — occasional reach
+        return base * CONVERSION_GO_AGGRESSION
 
     def _otPlayCaller(self, scoreDiff: int):
         """Handle play calling in overtime (Q5). Called only when currentQuarter == 5."""
@@ -5111,17 +5116,16 @@ class Game:
             hoopName = 'end-zone' if getattr(self.play, 'hoopPair', 'midfield') == 'endzone' else 'midfield'
             side = choice(['near-side', 'far-side'])
             if self.play.hoopMade:
-                pts = int(getattr(self.gameRules, 'sidelineGoalPoints', 1))
                 text = choice([
-                    'HOOP SHOT — {} threads it through the {} {} hoop! +{}'.format(qbName, side, hoopName, pts),
-                    'HOOP SHOT — {} drills the {} {} hoop for +{}'.format(qbName, side, hoopName, pts),
-                    'HOOP SHOT — {} finds the {} {} hoop, good for +{}'.format(qbName, side, hoopName, pts),
+                    '{} threads it through the {} {} goal!'.format(qbName, side, hoopName),
+                    '{} drills the {} {} goal!'.format(qbName, side, hoopName),
+                    '{} finds the {} {} goal, good!'.format(qbName, side, hoopName),
                 ])
             else:
                 text = choice([
-                    'HOOP SHOT — {} clangs it off the {} {} rim, no good'.format(qbName, side, hoopName),
-                    'HOOP SHOT — {} sails the {} {} hoop shot wide, incomplete'.format(qbName, side, hoopName),
-                    'HOOP SHOT — {} just misses the {} {} hoop'.format(qbName, side, hoopName),
+                    '{} clangs it off the {} {} rim, no good'.format(qbName, side, hoopName),
+                    '{} sails it wide of the {} {} goal, incomplete'.format(qbName, side, hoopName),
+                    '{} just misses the {} {} goal'.format(qbName, side, hoopName),
                 ])
         elif getattr(self.play, 'isScramble', False):
             # QB ran instead of passing (resolves as a run, narrated as a scramble).
@@ -9132,6 +9136,7 @@ class Game:
                     'description': getattr(playObj, 'playText', ''),
                     'playResult': playObj.playResult.value if hasattr(playObj, 'playResult') and playObj.playResult else None,
                     'hoopPair': getattr(playObj, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
+                    'conversionPoints': getattr(playObj, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                     'isTouchdown': getattr(playObj, 'isTd', False),
                     'isTurnover': (getattr(playObj, 'isFumbleLost', False) or getattr(playObj, 'isInterception', False)),
                     'isSack': getattr(playObj, 'isSack', False),
@@ -9175,6 +9180,7 @@ class Game:
                 'description': getattr(self.play, 'playText', ''),
                 'playResult': self.play.playResult.value if hasattr(self.play, 'playResult') and self.play.playResult else None,
                 'hoopPair': getattr(self.play, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
+                'conversionPoints': getattr(self.play, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                 'isTouchdown': getattr(self.play, 'isTd', False),
                 'isTurnover': (getattr(self.play, 'isFumbleLost', False) or getattr(self.play, 'isInterception', False)),
                 'isSack': getattr(self.play, 'isSack', False),
@@ -9583,13 +9589,19 @@ class Game:
         rungs = self._conversionRungs()
         kick = next(r for r in rungs if r['kind'] == 'kick')
         goRungs = [r for r in rungs if r['kind'] == 'go']
-        if self.currentQuarter != 4 or not goRungs:   # Q1-Q3 / OT: always the safe kick
-            return kick
+        # "No kick" mode (conversionKickEnabled=False): the safe kick is removed, so every
+        # spot where a team would kick instead takes its FORCED go-rung — the coach's
+        # aggressiveness-picked rung. When the kick is enabled (default) fallback IS the
+        # kick, so this is byte-identical to the old kick-vs-go decision.
+        kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True))
+        fallback = kick if (kickAllowed or not goRungs) else self._forcedGoRung(scoringTeam, goRungs)
+        if self.currentQuarter not in (3, 4) or not goRungs:   # Q1-Q2 / OT: the safe kick (or forced go-rung)
+            return fallback
         scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
         opponentScore = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
         deficit = opponentScore - scoringScore  # positive = still trailing after the TD
         if deficit <= 0:
-            return kick
+            return fallback
 
         import math
         xp = float(getattr(self.gameRules, 'extraPointPoints', 1))
@@ -9608,15 +9620,36 @@ class Game:
             return convP * (reach + savings)
         target = max(goRungs, key=lambda r: (rungValue(r), -r['distance']))
 
-        # GATE: actually go for `target` vs the safe kick, via the desire chart
-        # (identical to the old 2-pt logic for the 2-pt rung) + coach aggressiveness.
+        # GATE: actually go for `target` vs the fallback (safe kick, or the forced go-rung
+        # in no-kick mode), via the desire chart + coach aggressiveness.
         desire = self._conversionDesire(deficit, target['points'], xp, one)
+        if self.currentQuarter == 3:   # 2nd-half comeback, but earlier — dampen vs Q4
+            from constants import CONVERSION_GO_Q3_DAMPEN
+            desire *= CONVERSION_GO_Q3_DAMPEN
         if desire <= 0:
-            return kick
+            return fallback
         coach = getattr(scoringTeam, 'coach', None)
         aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         pct = max(0.05, min(0.95, desire + aggressNorm * 0.15))
-        return target if random.random() < pct else kick
+        return target if random.random() < pct else fallback
+
+    def _forcedGoRung(self, scoringTeam: FloosTeam.Team, goRungs: list) -> dict:
+        """No-kick mode, NON-comeback pick: with the safe kick gone, a team going for it
+        without a specific comeback need reaches for the highest-value go-rung whose make
+        estimate clears a personal floor set by coach aggressiveness (aggressive → lower
+        floor → reaches higher up the ladder), with per-attempt jitter for variety. Always
+        falls back to the safest (closest) rung — the 2-pt — when nothing clears."""
+        from constants import (CONVERSION_FORCEGO_MAKE_FLOOR, CONVERSION_FORCEGO_AGGR_SWING,
+                               CONVERSION_FORCEGO_JITTER)
+        coach = getattr(scoringTeam, 'coach', None)
+        aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+        jitter = (_random.random() - 0.5) * 2 * CONVERSION_FORCEGO_JITTER
+        floor = CONVERSION_FORCEGO_MAKE_FLOOR - aggressNorm * CONVERSION_FORCEGO_AGGR_SWING + jitter
+        eligible = [r for r in goRungs
+                    if self._estimateConversionProb(scoringTeam, r['distance']) >= floor]
+        if eligible:
+            return max(eligible, key=lambda r: r['points'])   # reach as high as the odds allow
+        return min(goRungs, key=lambda r: r['distance'])       # else the safest (closest) rung
 
     # ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
     def _contestedScoringActive(self) -> bool:
@@ -9792,15 +9825,34 @@ class Game:
         self.totalPlays += 1
         self.play.playNumber = self.totalPlays
 
-        # Conversions favor passing; deeper rungs even more so. Short pool inside
-        # ~5 yards, medium beyond (more field to cover).
-        passBias = 7 if distance > 5 else 6
-        if batched_randint(1, 10) <= passBias:
-            self.play.passPlay(self._selectPassPlay('short' if distance <= 5 else 'medium'))
+        # The conversion is a real snap from `distance` out and the play MUST be able to
+        # reach the end zone. Scale the pass depth to the distance so the route actually
+        # targets the end zone — a `medium` route from the 15 tops out well short and
+        # can't score. Only call a run where a run is a genuine scoring threat (goal-line
+        # short yardage); from deeper, always throw a route that reaches the end zone.
+        if distance <= 3:
+            tier = 'short'
+        elif distance <= 8:
+            tier = 'medium'
+        elif distance <= 13:
+            tier = 'long'
         else:
+            tier = 'deep'
+        runOk = distance <= 3   # a run can only realistically score from goal-line range
+        if runOk and batched_randint(1, 10) > 6:
             self.play.runPlay()
+        else:
+            self.play.passPlay(self._selectPassPlay(tier))
 
-        good = self.play.yardage >= distance
+        # A pass only converts on a genuine COMPLETION into the end zone. Guard against an
+        # incompletion (or a pick) whose residual air yards were clamped to the short
+        # conversion field's yardsToEndzone, which would otherwise read yardage >= distance
+        # and wrongly score "Good" on a play the feed narrates as broken up / incomplete.
+        _passIncomplete = (self.play.playType == PlayType.Pass
+                           and not getattr(self.play, 'isPassCompletion', False))
+        if _passIncomplete:
+            self.play.yardage = 0
+        good = (self.play.yardage >= distance) and not _passIncomplete
         if good:
             self._addScore(scoringTeam, points)
             self.play.playResult = PlayResult.Touchdown2PtGood if is2pt else PlayResult.ConversionGood
@@ -9816,11 +9868,9 @@ class Game:
         self.play.awayTeamScore = self.awayScore
 
         self.formatPlayText()
-        # A ladder rung (not the plain 2-pt) prepends the "going for N" context so
-        # the feed reads "Going for 4 from the 10 — <the play>". The 2-pt keeps its
-        # existing narration unchanged.
-        if not is2pt:
-            self.play.playText = f"Going for {points:g} from the {distance} — " + (self.play.playText or '')
+        # The rung context (2/3/4/5-pt) is shown by the feed's down/distance slot as an
+        # "Npt Try" label (via the serialized conversionPoints), so the play text stays the
+        # clean run/pass narration — no "Going for N from the M —" prefix.
 
         # Defensive: only insert if this Play object isn't already at the top
         # of the feed. Guards against any unexpected double-invocation path.

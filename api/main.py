@@ -2490,6 +2490,7 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'yardsGained': getattr(play_data, 'yardage', 0),
                                 'description': getattr(play_data, 'playText', ''),
                                 'playResult': play_data.playResult.value if hasattr(play_data, 'playResult') and play_data.playResult else None,
+                                'conversionPoints': getattr(play_data, 'conversionPoints', None),
                                 'isTouchdown': getattr(play_data, 'isTd', False),
                                 'isTurnover': (getattr(play_data, 'isFumbleLost', False) or getattr(play_data, 'isInterception', False)),
                                 'isSack': getattr(play_data, 'isSack', False),
