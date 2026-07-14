@@ -234,10 +234,10 @@ class PlayResult(enum.Enum):
     Touchdown = 'Touchdown'
     TouchdownXP = 'Touchdown, XP is Good'
     TouchdownNoXP = 'Touchdown, XP No Good'
-    Touchdown2PtGood = 'Touchdown, 2-Pt Good'
-    Touchdown2PtNoGood = 'Touchdown, 2-Pt No Good'
+    Touchdown2PtGood = '2-Pt Good'
+    Touchdown2PtNoGood = '2-Pt No Good'
     # Conversion Ladder — a go-for-it try worth more than 2 (from further out).
-    # The 2-pt rung keeps the Touchdown2Pt* labels; higher rungs use these.
+    # The 2-pt rung keeps the Touchdown2Pt* enum MEMBERS; higher rungs use these.
     ConversionGood = 'Conversion Good'
     ConversionNoGood = 'Conversion No Good'
     # Sideline Goals — a hoop shot. A make banks the point + consumes the down (drive
