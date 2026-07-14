@@ -2517,21 +2517,26 @@ class Game:
         return max(0.05, min(0.92, p))            # tuned to the end-zone-targeting play calls
 
     def _conversionDesire(self, deficit: float, points: float, xp: float, one: float) -> float:
-        """How much the trailing team wants a go-try worth `points` over the safe
-        kick, as a base probability. Compares the gap left after this try vs after
-        the kick, in normal scoring possessions. Reduces EXACTLY to the old
-        _shouldGoForTwo chart at points = the two-point value."""
+        """How much the trailing team wants a go-try worth `points` over the safe kick, as a
+        base probability. Compares the gap left after this try vs after the kick, in normal
+        scoring possessions. Tuned aggressive (constants CONVERSION_DESIRE_*) so comebacks
+        lean on the rungs; the CONVERSION_GO_AGGRESSION master dial scales the whole chart."""
+        from constants import (CONVERSION_DESIRE_TIE_OR_WIN, CONVERSION_DESIRE_SAVE_POSS,
+                               CONVERSION_DESIRE_ONE_SCORE, CONVERSION_DESIRE_LONGSHOT,
+                               CONVERSION_GO_AGGRESSION)
         import math
         after = deficit - points
         afterXp = deficit - xp
         need = lambda gap: math.ceil(gap / one) if gap > 0 else 0
         if after <= 0 < afterXp:
-            return 0.85   # this try ties/wins now; the kick leaves you behind
-        if need(after) < need(afterXp):
-            return 0.60   # the try saves a whole possession
-        if deficit <= self._maxPossession():
-            return 0.25   # still a one-score game — occasional aggression
-        return 0.0
+            base = CONVERSION_DESIRE_TIE_OR_WIN   # this try ties/wins now; the kick leaves you behind
+        elif need(after) < need(afterXp):
+            base = CONVERSION_DESIRE_SAVE_POSS    # the try saves a whole possession
+        elif deficit <= self._maxPossession():
+            base = CONVERSION_DESIRE_ONE_SCORE    # still a one-score game — real aggression
+        else:
+            base = CONVERSION_DESIRE_LONGSHOT     # multi-score & doesn't save a possession — occasional reach
+        return base * CONVERSION_GO_AGGRESSION
 
     def _otPlayCaller(self, scoreDiff: int):
         """Handle play calling in overtime (Q5). Called only when currentQuarter == 5."""
@@ -9589,7 +9594,7 @@ class Game:
         # kick, so this is byte-identical to the old kick-vs-go decision.
         kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True))
         fallback = kick if (kickAllowed or not goRungs) else self._forcedGoRung(scoringTeam, goRungs)
-        if self.currentQuarter != 4 or not goRungs:   # Q1-Q3 / OT: the safe kick (or forced go-rung)
+        if self.currentQuarter not in (3, 4) or not goRungs:   # Q1-Q2 / OT: the safe kick (or forced go-rung)
             return fallback
         scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
         opponentScore = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
@@ -9617,6 +9622,9 @@ class Game:
         # GATE: actually go for `target` vs the fallback (safe kick, or the forced go-rung
         # in no-kick mode), via the desire chart + coach aggressiveness.
         desire = self._conversionDesire(deficit, target['points'], xp, one)
+        if self.currentQuarter == 3:   # 2nd-half comeback, but earlier — dampen vs Q4
+            from constants import CONVERSION_GO_Q3_DAMPEN
+            desire *= CONVERSION_GO_Q3_DAMPEN
         if desire <= 0:
             return fallback
         coach = getattr(scoringTeam, 'coach', None)
