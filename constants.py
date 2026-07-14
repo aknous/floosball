@@ -1213,6 +1213,14 @@ LEAGUE_COMPRESSION_FACTOR = 0.7     # 1.0 = no compression, 0.5 = aggressive
 # gameAttributes copy). Measured: +1 mean ~= +0.2 pts/team. See _applyLeagueCompression.
 LEAGUE_COMPRESSION_MEAN = 84        # Center of the curve
 
+# ── End-game snap estimate ────────────────────────────────────────────────
+# A play (or a FG) only needs to be SNAPPED before the clock hits 0:00 — it may finish
+# after. So the closing-snap estimate (_estimateAvailablePlays) reserves only a snap's
+# worth of time for the final kick/play, not a whole play's duration. Roughly the pre-snap
+# time to get lined up and get the ball off. Was implicitly ~7s (a full play), which
+# undercounted the last snap in tight windows.
+FINAL_SNAP_SECS = 2
+
 # ── Chess-clock timeouts ──────────────────────────────────────────────────
 # In the Chess Clock format the offense's possession budget IS its real clock,
 # and a timeout stops the pre-snap huddle drain — so a team preserves its budget
@@ -1243,6 +1251,11 @@ CHESS_CLOCK_BASE_SIDELINE_PROB = 0.30
 # in hand, so it stops actively saving budget and plays a relaxed, normal pace (still
 # never burns — that only wastes budget). Roughly the standard neutral huddle.
 CHESS_CLOCK_RELAXED_HUDDLE = 35
+# Budget (seconds) at which a chess-clock team STARTS actively conserving — the lean
+# huddle and the sideline clock-stopping only kick in once the offense is down to about
+# this much of its budget ("a few minutes left"). Above it teams play a normal, relaxed
+# pace and let the budget drain, so games don't drag on with 130+ plays of clock-milking.
+CHESS_CLOCK_CONSERVE_SECS = 180
 # Budget drained from a chess-clock possession on a snap where the game clock was
 # already STOPPED (incompletion / out of bounds) and no timeout was called. Running
 # a play still uses possession time, so these snaps aren't free — without this floor
@@ -1250,7 +1263,7 @@ CHESS_CLOCK_RELAXED_HUDDLE = 35
 # (200+ plays, very long games). A deliberate TIMEOUT still fully preserves the budget
 # (drains nothing) — that's the intentional conservation tool; this is for the cheap,
 # unchosen stops.
-CHESS_CLOCK_STOPPED_HUDDLE_DRAIN = 10
+CHESS_CLOCK_STOPPED_HUDDLE_DRAIN = 25
 # Budget a scoring drive costs, used to decide whether a TRAILING chess-clock team can
 # still realistically catch up: it needs (scoresNeeded x TD-drive) of budget, OR just a
 # short FG-drive when a field goal ties/wins. These are OPTIMISTIC — a well-executed

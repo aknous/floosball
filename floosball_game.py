@@ -1946,8 +1946,13 @@ class Game:
         Each productive play burns ~7s of execution. Spikes count as zero-yard
         clock-stoppers between productive plays, not as productive plays.
         """
-        secs = self._offenseEffectiveSecs() - 7  # reserve for closing FG kick (budget-aware in chess clock)
-        if secs <= 5:
+        from constants import FINAL_SNAP_SECS
+        # The closing FG only needs to be SNAPPED before 0:00 (the kick can finish after),
+        # so reserve just a snap for it — not a whole play's ~7s. Same for the last
+        # productive snap: it's counted below on the basis of being snappable (clock >
+        # a snap), not on its full duration fitting.
+        secs = self._offenseEffectiveSecs() - FINAL_SNAP_SECS  # reserve a SNAP for the closing FG (budget-aware in chess clock)
+        if secs <= FINAL_SNAP_SECS:
             return 0
         timeoutsLeft = (
             self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
@@ -1957,10 +1962,10 @@ class Game:
         # Down 1 or 2 → 1 spike between productive plays; 3rd down → 0.
         spikesAvailable = 1 if self.down < self.gameRules.downsPerSeries - 1 else 0
         plays = 0
-        while secs > 5:
+        while secs > FINAL_SNAP_SECS:
             plays += 1
-            secs -= 7  # productive play execution
-            if secs <= 5:
+            secs -= 7  # productive play execution (drains the clock before the NEXT snap)
+            if secs <= FINAL_SNAP_SECS:
                 break
             if timeoutsLeft > 0:
                 timeoutsLeft -= 1
@@ -2029,9 +2034,11 @@ class Game:
         # budget left to fit the scores needed) → hopeless, so ease up. In between —
         # tied, a modest lead, or a still-catchable deficit — keep banking clock.
         b = self._chessClockOffenseSecs()
+        from constants import CHESS_CLOCK_CONSERVE_SECS
         if (b is not None and not self._isFgDrainMode()
                 and scoreDiff <= 2 * self._oneScore()
-                and self._chessClockCatchUpPossible(scoreDiff)):
+                and self._chessClockCatchUpPossible(scoreDiff)
+                and b <= CHESS_CLOCK_CONSERVE_SECS):   # only bank clock once down to a few minutes
             import random
             from constants import CHESS_CLOCK_BASE_SIDELINE_PROB
             clockIQ = self._coachClockIQ(coach)
@@ -2040,7 +2047,7 @@ class Game:
                 drain = 1.0 - max(0.0, min(90.0, b)) / 90.0
                 prob = (0.55 + 0.4 * drain) * (0.6 + 0.4 * clockIQ)
             else:
-                # From the start: a sharp clock manager mixes in clock-stoppers to bank
+                # A few minutes left: a sharp clock manager mixes in clock-stoppers to bank
                 # budget; a poor one lets it roll. Scaled straight by clock management.
                 prob = CHESS_CLOCK_BASE_SIDELINE_PROB * clockIQ
             if random.random() < min(0.97, prob):
@@ -9408,14 +9415,20 @@ class Game:
         # the coach's clock management (a sharp manager saves budget, a poor one lets time
         # roll off), so budget efficiency is a coaching skill.
         if getattr(self.format, 'key', '') == 'chess_clock':
-            from constants import CHESS_CLOCK_NEUTRAL_HUDDLE, CHESS_CLOCK_RELAXED_HUDDLE
+            from constants import (CHESS_CLOCK_NEUTRAL_HUDDLE, CHESS_CLOCK_RELAXED_HUDDLE,
+                                   CHESS_CLOCK_CONSERVE_SECS)
             # Relax (normal pace) when the clock no longer matters: up big (game in hand)
             # OR trailing with no realistic budget left to catch up (out of reach).
             if scoreDiff > 2 * self._oneScore() or not self._chessClockCatchUpPossible(scoreDiff):
                 return ('neutral', CHESS_CLOCK_RELAXED_HUDDLE)
             if self._chessClockLow(100):
                 return ('hurryUp', 12)
-            return ('neutral', CHESS_CLOCK_NEUTRAL_HUDDLE)
+            # Only start CONSERVING (the lean, budget-saving huddle) once the budget is down
+            # to a few minutes — otherwise play a normal, relaxed pace so games don't drag on
+            # with clock-milking from the opening drive.
+            if self._chessClockLow(CHESS_CLOCK_CONSERVE_SECS):
+                return ('neutral', CHESS_CLOCK_NEUTRAL_HUDDLE)
+            return ('neutral', CHESS_CLOCK_RELAXED_HUDDLE)
 
         # Frames: the current frame (a mini-game) is winding down — hurry when NOT ahead in
         # it (win/tie the frame before the break), drain when ahead (secure the +1). Keys
