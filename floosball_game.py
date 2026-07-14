@@ -9136,6 +9136,7 @@ class Game:
                     'description': getattr(playObj, 'playText', ''),
                     'playResult': playObj.playResult.value if hasattr(playObj, 'playResult') and playObj.playResult else None,
                     'hoopPair': getattr(playObj, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
+                    'conversionPoints': getattr(playObj, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                     'isTouchdown': getattr(playObj, 'isTd', False),
                     'isTurnover': (getattr(playObj, 'isFumbleLost', False) or getattr(playObj, 'isInterception', False)),
                     'isSack': getattr(playObj, 'isSack', False),
@@ -9179,6 +9180,7 @@ class Game:
                 'description': getattr(self.play, 'playText', ''),
                 'playResult': self.play.playResult.value if hasattr(self.play, 'playResult') and self.play.playResult else None,
                 'hoopPair': getattr(self.play, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
+                'conversionPoints': getattr(self.play, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                 'isTouchdown': getattr(self.play, 'isTd', False),
                 'isTurnover': (getattr(self.play, 'isFumbleLost', False) or getattr(self.play, 'isInterception', False)),
                 'isSack': getattr(self.play, 'isSack', False),
@@ -9842,7 +9844,15 @@ class Game:
         else:
             self.play.passPlay(self._selectPassPlay(tier))
 
-        good = self.play.yardage >= distance
+        # A pass only converts on a genuine COMPLETION into the end zone. Guard against an
+        # incompletion (or a pick) whose residual air yards were clamped to the short
+        # conversion field's yardsToEndzone, which would otherwise read yardage >= distance
+        # and wrongly score "Good" on a play the feed narrates as broken up / incomplete.
+        _passIncomplete = (self.play.playType == PlayType.Pass
+                           and not getattr(self.play, 'isPassCompletion', False))
+        if _passIncomplete:
+            self.play.yardage = 0
+        good = (self.play.yardage >= distance) and not _passIncomplete
         if good:
             self._addScore(scoringTeam, points)
             self.play.playResult = PlayResult.Touchdown2PtGood if is2pt else PlayResult.ConversionGood
@@ -9858,11 +9868,9 @@ class Game:
         self.play.awayTeamScore = self.awayScore
 
         self.formatPlayText()
-        # A ladder rung (not the plain 2-pt) prepends the "going for N" context so
-        # the feed reads "Going for 4 from the 10 — <the play>". The 2-pt keeps its
-        # existing narration unchanged.
-        if not is2pt:
-            self.play.playText = f"Going for {points:g} from the {distance} — " + (self.play.playText or '')
+        # The rung context (2/3/4/5-pt) is shown by the feed's down/distance slot as an
+        # "Npt Try" label (via the serialized conversionPoints), so the play text stays the
+        # clean run/pass narration — no "Going for N from the M —" prefix.
 
         # Defensive: only insert if this Play object isn't already at the top
         # of the feed. Guards against any unexpected double-invocation path.
