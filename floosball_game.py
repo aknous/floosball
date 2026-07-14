@@ -5116,17 +5116,16 @@ class Game:
             hoopName = 'end-zone' if getattr(self.play, 'hoopPair', 'midfield') == 'endzone' else 'midfield'
             side = choice(['near-side', 'far-side'])
             if self.play.hoopMade:
-                pts = int(getattr(self.gameRules, 'sidelineGoalPoints', 1))
                 text = choice([
-                    'HOOP SHOT — {} threads it through the {} {} hoop! +{}'.format(qbName, side, hoopName, pts),
-                    'HOOP SHOT — {} drills the {} {} hoop for +{}'.format(qbName, side, hoopName, pts),
-                    'HOOP SHOT — {} finds the {} {} hoop, good for +{}'.format(qbName, side, hoopName, pts),
+                    '{} threads it through the {} {} hoop!'.format(qbName, side, hoopName),
+                    '{} drills the {} {} hoop!'.format(qbName, side, hoopName),
+                    '{} finds the {} {} hoop, good!'.format(qbName, side, hoopName),
                 ])
             else:
                 text = choice([
-                    'HOOP SHOT — {} clangs it off the {} {} rim, no good'.format(qbName, side, hoopName),
-                    'HOOP SHOT — {} sails the {} {} hoop shot wide, incomplete'.format(qbName, side, hoopName),
-                    'HOOP SHOT — {} just misses the {} {} hoop'.format(qbName, side, hoopName),
+                    '{} clangs it off the {} {} rim, no good'.format(qbName, side, hoopName),
+                    '{} sails the {} {} hoop shot wide, incomplete'.format(qbName, side, hoopName),
+                    '{} just misses the {} {} hoop'.format(qbName, side, hoopName),
                 ])
         elif getattr(self.play, 'isScramble', False):
             # QB ran instead of passing (resolves as a run, narrated as a scramble).
