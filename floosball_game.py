@@ -251,8 +251,8 @@ class PlayResult(enum.Enum):
     # reads "reaches the end zone" (no TOUCHDOWN); the contest is its OWN feed entry that
     # banks the TD (win) or stuffs it (no points, back to the LOS, down advances).
     ProvisionalScore = 'Provisional Score'
-    ContestWon = 'Contest Won'
-    ContestStuff = 'Contest Stuff'
+    ContestWon = 'Contest Won'   # deprecated: a won contest now emits Touchdown (regular badge)
+    ContestStuff = 'Contest Lost'
     Safety = 'Safety'
     Fumble = 'Fumble'
     Interception = 'Interception'
@@ -3176,15 +3176,57 @@ class Game:
         weights = self._applyCoachMods(weights, coach)
         weights = self._applyGameplanMods(weights)
         weights = self._applyAwakenedMods(weights)
+        weights = self._applyDriveClockMods(weights, coach)
 
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
-        # moving. Avoid downfield passes (incomplete = clock stop).
+        # moving. Avoid downfield passes (incomplete = clock stop). Runs AFTER the
+        # drive-clock bias so end-of-GAME clock-kill still overrides a drive-clock chunk push.
         if self._isFgDrainMode():
             weights['run'] = weights.get('run', 0) * 3.0
             weights['short'] = weights.get('short', 0) * 1.0
             weights['medium'] = weights.get('medium', 0) * 0.3
             weights['long'] = weights.get('long', 0) * 0.15
             weights['deep'] = weights.get('deep', 0) * 0.05
+        return weights
+
+    def _applyDriveClockMods(self, weights: dict, coach) -> dict:
+        """Drive-clock shot selection: when the possession shot-clock is winding down
+        and the offense still has ground to cover, bias toward CHUNK plays (medium/long/
+        deep) and away from run/short — it must gain yards fast, not just snap fast. The
+        existing hurry-up (_isHurryUp) already makes plays QUICKER; this makes them BIGGER,
+        so together they behave like a 2-minute drill against the drive clock. Keyed on
+        yards-needed-per-remaining-snap and coach-clock-IQ gated (a sharp staff reaches
+        efficiently; a poor one barely reacts). No-op when the drive clock is off."""
+        if not self._driveClockActive() or self.driveClockRemaining <= 0:
+            return weights
+        from constants import (DRIVE_CLOCK_SECS_PER_SNAP, DRIVE_CLOCK_PRESSURE_SNAPS,
+                               DRIVE_CLOCK_CHUNK_THRESHOLD, DRIVE_CLOCK_CHUNK_CEILING)
+        unit = getattr(self.gameRules, 'driveClockUnit', 'seconds')
+        # Snaps left on the drive clock: exact in 'plays', estimated from the hurry-up
+        # tempo in 'seconds'.
+        if unit == 'plays':
+            snapsLeft = float(self.driveClockRemaining)
+        else:
+            snapsLeft = max(1.0, self.driveClockRemaining / DRIVE_CLOCK_SECS_PER_SNAP)
+        if snapsLeft > DRIVE_CLOCK_PRESSURE_SNAPS:
+            return weights   # plenty of possession left — call it straight
+        yards = getattr(self, 'yardsToEndzone', 50) or 50
+        yardsPerSnapNeeded = yards / max(1.0, snapsLeft)
+        if yardsPerSnapNeeded <= DRIVE_CLOCK_CHUNK_THRESHOLD:
+            return weights   # checkdowns/runs still get there (e.g. goal-to-go)
+        urgency = min(1.0, (yardsPerSnapNeeded - DRIVE_CLOCK_CHUNK_THRESHOLD) /
+                           max(1.0, DRIVE_CLOCK_CHUNK_CEILING - DRIVE_CLOCK_CHUNK_THRESHOLD))
+        # Coach-clock-IQ gate, mirroring _applySituationalMods' `sit` scaling.
+        scale = (0.4 + 0.6 * self._coachClockIQ(coach)) * urgency
+
+        def _mul(key, m):
+            weights[key] = weights.get(key, 0) * (1 + (m - 1) * scale)
+
+        _mul('run', 0.35)
+        _mul('short', 0.7)
+        _mul('medium', 1.6)
+        _mul('long', 2.2)
+        _mul('deep', 2.4)
         return weights
 
     def _applyGameplanMods(self, weights: dict) -> dict:
@@ -5558,7 +5600,7 @@ class Game:
         # banked — deliberately NOT the word "TOUCHDOWN") and the contest beat (its own
         # entry, which is the one that books the score or waves it off).
         if getattr(self.play, 'isProvisionalScore', False):
-            text = f"{text or 'breaks free'} — reaches the end zone! (contest to come)"
+            text = f"{text or 'breaks free'} and reaches the end zone."
         elif getattr(self.play, 'isContest', False):
             from constants import CONTEST_NARRATION, CONTEST_TYPE_LABELS
             sc = getattr(self.play, 'contestScorer', None)
@@ -5569,7 +5611,7 @@ class Game:
                 scorer=(sc.name if sc else 'The scorer'),
                 defender=(df.name if df else 'the defender'))
             label = CONTEST_TYPE_LABELS.get(self.play.contestType, 'Contest')
-            text = f"CONTEST · {label}: {body}"
+            text = f"{label}: {body}"
 
         self.play.playText = text
 
@@ -6428,7 +6470,7 @@ class Game:
                     self.down = 1
                 
                 # Quarter start messages
-                if self.currentQuarter == 2:
+                if self.currentQuarter == 2 and self.format.usesQuarterBreaks():
                     if self.timingManager:
                         await self.timingManager.waitForQuarterBreak()
                     self.gameFeed.insert(0, {'event':  {
@@ -6456,7 +6498,7 @@ class Game:
                             awayTeamStats=awayTeamStats
                         )
                         broadcaster.broadcast_sync(self.id, event)
-                elif self.currentQuarter == 3 and getattr(self.format, 'key', '') != 'frames':
+                elif self.currentQuarter == 3 and self.format.usesQuarterBreaks():
                     if self.timingManager:
                         await self.timingManager.waitForQuarterBreak()
                     self.gameFeed.insert(0, {'event':  {
@@ -6484,7 +6526,7 @@ class Game:
                             awayTeamStats=awayTeamStats
                         )
                         broadcaster.broadcast_sync(self.id, event)
-                elif self.currentQuarter == 4 and getattr(self.format, 'key', '') != 'frames':
+                elif self.currentQuarter == 4 and self.format.usesQuarterBreaks():
                     if self.timingManager:
                         await self.timingManager.waitForQuarterBreak()
                     self.gameFeed.insert(0, {'event':  {
@@ -6690,8 +6732,12 @@ class Game:
                 # covering the score/turnover-on-the-last-play cases the stall path misses.
                 self._maybeAnnounceChessLockout()
 
-                # Frames: a frame just ended — reset possession to the alternating team and
-                # start the next frame fresh (overrides whatever the last play settled).
+                # Frames: award any frame the PREVIOUS play's clock just crossed, now that
+                # its score is settled (attributes an end-of-frame score to its own frame),
+                # then reset possession to the alternating team for the next frame. No-op
+                # for non-frames formats. awardFrames sets _frameBoundaryPending, which
+                # _frameBoundaryReset consumes.
+                self.format.awardFrames(self)
                 self._frameBoundaryReset()
 
                 # Create new play (after any possession flip from onside recovery)
@@ -7231,6 +7277,12 @@ class Game:
                             lastPlayFormatted = True
                             break
         
+            # Frames: award the final play's frame(s) before the outer loop re-reads
+            # isGameOver / checkEarlyEnd (both key off frames-won). The last play of a
+            # possession — including the game-deciding one — isn't caught by the
+            # top-of-loop award. No-op for non-frames; idempotent.
+            self.format.awardFrames(self)
+
         # Game over - ensure the final play is formatted, in gameFeed, and broadcast.
         # Scoring plays and special plays (FG, punt, TD) are typically formatted and
         # added to gameFeed inside the loop. Non-scoring plays (kneels, normal runs/passes
@@ -9268,6 +9320,10 @@ class Game:
             'quarter': self.currentQuarter,
             'timeRemaining': self.formatTime(self.gameClockSeconds),
             'down': self.down if hasattr(self, 'down') else None,
+            # Per-game downs-per-series — Criticality chaos can set this to 3 or 5, and it
+            # differs from the season-wide /api/rules value, so the UI needs the game's own
+            # to know which down is the last (do-or-die) one.
+            'downsPerSeries': getattr(self.gameRules, 'downsPerSeries', 4),
             'distance': self.yardsToFirstDown if hasattr(self, 'yardsToFirstDown') else None,
             'yardLine': self.yardLine if hasattr(self, 'yardLine') else None,
             'yardsToEndzone': self.yardsToEndzone if hasattr(self, 'yardsToEndzone') else None,
@@ -9778,7 +9834,10 @@ class Game:
             self._addScore(offense, self.gameRules.touchdownPoints)
             self._applyMomentumEvent(MOMENTUM_TD, offense)
             self.play.isTd = True
-            self.play.playResult = PlayResult.ContestWon
+            # A won contest banks a normal TD — show the regular Touchdown badge (not a
+            # separate "Contest Won" one), and register as a scoring play everywhere that
+            # keys off the Touchdown result. The contest flavor still rides in playText.
+            self.play.playResult = PlayResult.Touchdown
             self.play.scoreChange = True
         else:
             # Stuff — a "contested stop" (a tackle) for the defender; no points.
@@ -10057,6 +10116,8 @@ class Game:
 
     def checkTwoMinuteWarning(self):
         """Check and trigger two-minute warning"""
+        if not self.format.usesQuarterBreaks():
+            return   # no quarters (e.g. frames) -> no two-minute warning
         if not self.twoMinuteWarningShown and self.gameClockSeconds <= self.gameRules.timeoutClockThreshold:
             if self.currentQuarter == 2 or self.currentQuarter == 4:
                 self.twoMinuteWarningShown = True
@@ -13103,6 +13164,11 @@ class Play():
             isLateGame = self.game.currentQuarter >= 4
             mustThrow = isFourthDown and (isTrailing or (isTied and self.game.currentQuarter >= 5))
             if not mustThrow and isLateGame and isTimeExpiring and isTrailing:
+                mustThrow = True
+            # Drive-clock do-or-die: on the last snap of a winding-down possession clock,
+            # a throwaway/checkdown just hands over the ball — force a real attempt (when
+            # there's a reason to press: trailing or tied).
+            if not mustThrow and self.game._driveClockLow() and (isTrailing or isTied):
                 mustThrow = True
             selectedTarget, willThrowAway = self.selectPassTarget(
                 targetList,

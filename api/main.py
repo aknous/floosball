@@ -2227,7 +2227,12 @@ async def get_current_games(response: Response):
             
             # Add down and distance
             if hasattr(game, 'down'):
-                down_text = {1: '1st', 2: '2nd', 3: '3rd', 4: '4th'}.get(game.down, '1st')
+                # Ordinalize generically — chaos rules can set 5+ downs, so a hardcoded
+                # 1st-4th map rendered a 5th down as "1st".
+                d = game.down or 1
+                suffix = 'th' if 11 <= (d % 100) <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(d % 10, 'th')
+                down_text = f'{d}{suffix}'
+                game_dict['downsPerSeries'] = getattr(getattr(game, 'gameRules', None), 'downsPerSeries', 4)
                 if hasattr(game, 'yardsToEndzone') and game.yardsToEndzone < 10:
                     game_dict['downText'] = f'{down_text} & Goal'
                 elif hasattr(game, 'yardsToFirstDown'):
