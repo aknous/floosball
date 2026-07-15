@@ -121,7 +121,7 @@ class GameRules:
     driveClockEnabled: bool = False
     driveClockUnit: str = 'seconds'        # 'seconds' | 'plays'
     driveClockReset: str = 'possession'    # 'possession' | 'series'
-    driveClockLimit: int = 90              # seconds or plays, per the unit
+    driveClockLimit: int = 120             # seconds or plays, per the unit
 
     # ── Sideline Goals (dormant mechanic) ──────────────────────────
     # Quidditch-style: on any down the offense may throw at a sideline hoop for

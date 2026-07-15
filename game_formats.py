@@ -161,6 +161,19 @@ class GameFormat:
         would just double it up."""
         return True
 
+    def usesQuarterBreaks(self) -> bool:
+        """Whether the format has QUARTER structure at all — quarter-start callouts
+        ('Start Nth Quarter') and the two-minute warning. True for clock/quarter
+        formats. frames returns False (its periods are frames, not quarters), so those
+        quarter-flavored beats are suppressed there."""
+        return True
+
+    def awardFrames(self, game) -> None:
+        """Commit any period boundaries the clock has crossed. No-op for every format
+        except frames (see FramesFormat), where it's called from a settled between-plays
+        checkpoint so an end-of-frame play's score lands in its own frame."""
+        return None
+
     # ── Display ───────────────────────────────────────────────────────────────
     def stateExtra(self, game) -> dict:
         """Extra fields merged into the game_state broadcast (format-specific UI)."""
@@ -590,6 +603,9 @@ class FramesFormat(GameFormat):
     def usesQuarterCoachAdjustments(self) -> bool:
         return False   # frames adjust between FRAMES, not quarters
 
+    def usesQuarterBreaks(self) -> bool:
+        return False   # frames have no quarters — no quarter callouts or 2-min warning
+
     def _elapsed(self, game) -> int:
         # Regulation seconds elapsed (capped at the full game; OT is past all frames).
         total = self._regSeconds(game)
@@ -602,13 +618,17 @@ class FramesFormat(GameFormat):
         return False   # the final frame's winner can shift on the last play's score
 
     def consumeTime(self, game, seconds: int) -> None:
-        super().consumeTime(game, seconds)   # normal game-clock drain
-        # Don't award a frame mid-huddle (before the snap) — the game loop flags the
-        # pre-snap drain so a play's score stays in its own frame, not the next one.
-        if getattr(game, '_inPreSnap', False):
-            return
-        # Award every frame whose time boundary the clock just crossed (the final
-        # frame commits when the clock reaches 0 at the end of regulation).
+        super().consumeTime(game, seconds)   # normal game-clock drain ONLY.
+        # Frame AWARDS are NOT done here anymore. This drain runs mid-play, BEFORE
+        # _addScore applies a scoring play's points, so awarding here read a pre-score
+        # board and leaked an end-of-frame play's points into the next frame. The game
+        # loop calls awardFrames() at a settled between-plays checkpoint instead.
+
+    def awardFrames(self, game) -> None:
+        """Commit every frame whose time boundary the clock has now crossed, reading a
+        SETTLED score (called between plays, after _addScore applies the last play's
+        points). Idempotent — keyed on _frameIndex vs elapsed, so repeat calls are
+        no-ops. The final frame commits when the clock reaches 0 at end of regulation."""
         N = self._frames(game)
         frameLen = self._regSeconds(game) / N
         target = min(N, int(self._elapsed(game) / frameLen)) if frameLen else N
