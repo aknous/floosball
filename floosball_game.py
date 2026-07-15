@@ -9668,11 +9668,17 @@ class Game:
         rungs = self._conversionRungs()
         kick = next(r for r in rungs if r['kind'] == 'kick')
         goRungs = [r for r in rungs if r['kind'] == 'go']
-        # "No kick" mode (conversionKickEnabled=False): the safe kick is removed, so every
-        # spot where a team would kick instead takes its FORCED go-rung — the coach's
-        # aggressiveness-picked rung. When the kick is enabled (default) fallback IS the
-        # kick, so this is byte-identical to the old kick-vs-go decision.
-        kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True))
+        # "No kick" mode: the safe kick is removed, so every spot where a team would kick
+        # instead takes its FORCED go-rung — the coach's aggressiveness-picked rung. Two
+        # ways in: the explicit conversionKickEnabled=False flag, OR the Conversion Ladder
+        # being on — the ladder is DEFINED as go-for-it football (enabling it removes the
+        # safe kick). The chaos path couples these by flipping the flag (ruleVoteManager:
+        # ladder on -> conversionKickEnabled False); enforce the same coupling here so a
+        # VOTED/persisted ladder behaves identically without the vote path having to also
+        # flip the flag. When neither applies (kick enabled, ladder off) fallback IS the
+        # kick, byte-identical to the old kick-vs-go decision.
+        ladderOn = bool(getattr(self.gameRules, 'conversionLadderEnabled', False))
+        kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True)) and not ladderOn
         fallback = kick if (kickAllowed or not goRungs) else self._forcedGoRung(scoringTeam, goRungs)
         if self.currentQuarter not in (3, 4) or not goRungs:   # Q1-Q2 / OT: the safe kick (or forced go-rung)
             return fallback
