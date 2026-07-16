@@ -1169,6 +1169,21 @@ DRIVE_CLOCK_PRESSURE_SNAPS = 3.0        # only bias once <= this many snaps of b
 DRIVE_CLOCK_CHUNK_THRESHOLD = 8.0       # yds/snap below which checkdowns/runs still suffice
 DRIVE_CLOCK_CHUNK_CEILING = 20.0        # yds/snap at which urgency saturates (full bias)
 
+# Drive-clock behavior thresholds are FRACTIONS of the configured seconds-limit, so
+# they scale to any preset instead of being hardcoded for the 120s default. Under a
+# 45s/series clock, a fixed `remaining <= 75` was ALWAYS true — the offense pinned in
+# permanent hurry-up and never managed the game clock. Values reproduce the old 120s
+# absolutes: 90→0.75, 75→0.625, 20→0.167, 15→0.125, 12→0.10.
+DRIVE_CLOCK_OOB_FRAC = 0.75             # seek out-of-bounds (pause the clock) below this
+DRIVE_CLOCK_HURRY_FRAC = 0.625          # 2-minute-drill tempo below this
+DRIVE_CLOCK_TAKE_POINTS_FRAC = 0.167    # ~one snap left: take a makeable FG / heave a hail mary
+DRIVE_CLOCK_LOW_FRAC = 0.125            # amber chip / spike-to-stop trigger
+DRIVE_CLOCK_SPIKE_FRAC = 0.10           # critically low: spike to stop the game clock
+# Last-snap PUNT (deep in own territory, can't convert, out of FG range): rather than
+# hand the ball back on downs at your own spot, punt to flip field position.
+DRIVE_CLOCK_PUNT_MIN_YTE = 60           # only "deep" — ball on your own side (>=60 yds to EZ)
+DRIVE_CLOCK_PUNT_MIN_TOGO = 7           # only long yardage — can't realistically convert in one snap
+
 # ── Game Formats / win conditions (docs/GAME_FORMATS_PLAN.md) ──
 # Each preset is a full {gameFormat, ...config} bundle. One format at a time. ONLY the
 # formats we've tested enough to ship are offerable here (a vote / Criticality can only

@@ -24,6 +24,17 @@ changes and `standard` is a pure pass-through — OFF stays byte-identical.
 from typing import Optional, Tuple
 
 
+def _cleanNum(v):
+    """Round a possibly-fractional score for UI display, dropping float-accumulation
+    noise (3.0000000000000018 -> 3) and a trailing .0 on whole numbers. Mirrors
+    api_response_builders.cleanScore but kept local to avoid an api-layer import."""
+    try:
+        n = round(float(v or 0), 1)
+    except (TypeError, ValueError):
+        return v
+    return int(n) if n == int(n) else n
+
+
 class GameFormat:
     """Standard football: cumulative score, higher wins at the end of regulation/OT.
     Every hook here is the identity/no-op the engine assumes by default."""
@@ -744,18 +755,35 @@ class FramesFormat(GameFormat):
         # Time remaining in the current 10-min frame (the mini-game clock).
         frameLen = self._regSeconds(game) / N if N else 0
         frameRem = max(0, int(round(frameLen - (self._elapsed(game) % frameLen)))) if frameLen else 0
+        # Frames-tie tiebreak: when the frames won are level, the match is decided by
+        # TOTAL POINTS (winnerSide). Surface it so a 3-3 frames final doesn't look like a
+        # silent tie — the UI can say "level on frames, decided by points". Live: shows the
+        # current points edge; final: the deciding margin. None when frames aren't level or
+        # points are also tied (→ OT).
+        fh = getattr(game, '_framesWonHome', 0.0)
+        fa = getattr(game, '_framesWonAway', 0.0)
+        tiebreak = None
+        if fh == fa and game.homeScore != game.awayScore:
+            tiebreak = {
+                'decidedByPoints': True,
+                'homePoints': _cleanNum(game.homeScore),
+                'awayPoints': _cleanNum(game.awayScore),
+                'winner': 'home' if game.homeScore > game.awayScore else 'away',
+            }
         return {'frames': {
+            'tiebreak': tiebreak,
             'active': True,
             'framesPerGame': N,
             'currentFrame': min(N, idx + 1),
             'frameClock': game.formatTime(frameRem),
-            'framesWonHome': getattr(game, '_framesWonHome', 0.0),
-            'framesWonAway': getattr(game, '_framesWonAway', 0.0),
-            'frameHome': game.homeScore - getattr(game, '_frameStartHome', 0),
-            'frameAway': game.awayScore - getattr(game, '_frameStartAway', 0),
+            'framesWonHome': _cleanNum(getattr(game, '_framesWonHome', 0.0)),
+            'framesWonAway': _cleanNum(getattr(game, '_framesWonAway', 0.0)),
+            'frameHome': _cleanNum(game.homeScore - getattr(game, '_frameStartHome', 0)),
+            'frameAway': _cleanNum(game.awayScore - getattr(game, '_frameStartAway', 0)),
             # Per-frame line: completed frames (points + winner); the current frame's
             # in-progress points are frameHome/frameAway, future frames render blank.
-            'frameResults': list(getattr(game, '_frameResults', [])),
+            'frameResults': [{'home': _cleanNum(r.get('home')), 'away': _cleanNum(r.get('away')),
+                              'winner': r.get('winner')} for r in getattr(game, '_frameResults', [])],
         }}
 
 
