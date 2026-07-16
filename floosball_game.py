@@ -5828,7 +5828,9 @@ class Game:
         rb = roster.get('rb')
         k  = roster.get('k')
         off = team.seasonTeamStats['Offense']
-        off['pts'] += score
+        # round the running total: scores can be fractional (rule-vote float values,
+        # alternate formats), and raw float summation accrues noise (102.30000000000001)
+        off['pts'] = round(off['pts'] + score, 2)
         passYards = qb.gameStatsDict['passing']['yards'] if qb else 0
         runYards  = rb.gameStatsDict['rushing']['yards'] if rb else 0
         passTds   = qb.gameStatsDict['passing']['tds']  if qb else 0
@@ -5841,7 +5843,8 @@ class Game:
         off['tds']        += passTds + runTds
         if k:
             off['fgs'] += k.gameStatsDict['kicking']['fgs']
-        team.seasonTeamStats['scoreDiff'] += score - team.gameDefenseStats['ptsAlwd']
+        team.seasonTeamStats['scoreDiff'] = round(
+            team.seasonTeamStats['scoreDiff'] + (score - team.gameDefenseStats['ptsAlwd']), 2)
 
     def _accumulateDefenseStats(self, team):
         """Accumulate a team's defensive stats into season totals after a game."""
@@ -5851,6 +5854,7 @@ class Game:
                     'runYardsAlwd', 'passYardsAlwd', 'totalYardsAlwd',
                     'runTdsAlwd', 'passTdsAlwd', 'tdsAlwd', 'ptsAlwd'):
             season[key] += game[key]
+        season['ptsAlwd'] = round(season['ptsAlwd'], 2)  # can be fractional — kill float noise
         total = team.seasonTeamStats['wins'] + team.seasonTeamStats['losses']
         team.seasonTeamStats['winPerc'] = round(team.seasonTeamStats['wins'] / total, 3) if total > 0 else 0.0
 

@@ -24,7 +24,8 @@ from api_response_builders import (
     GameResponseBuilder,
     LeagueResponseBuilder,
     build_success_response,
-    build_error_response
+    build_error_response,
+    cleanScore
 )
 from avatar_generator import getAvatarGenerator
 import floosball_game as FloosGame
@@ -466,11 +467,9 @@ async def get_teams(response: Response, league: Optional[str] = None):
         for team in teams:
             team_dict = TeamResponseBuilder.buildBasicTeamDict(team)
 
-            # Add standings info
-            if team.seasonTeamStats['scoreDiff'] >= 0:
-                team_dict['pointDiff'] = f"+{team.seasonTeamStats['scoreDiff']}"
-            else:
-                team_dict['pointDiff'] = str(team.seasonTeamStats['scoreDiff'])
+            # Add standings info (cleanScore strips float-accumulation noise)
+            sd = cleanScore(team.seasonTeamStats['scoreDiff'])
+            team_dict['pointDiff'] = f"+{sd}" if sd >= 0 else str(sd)
 
             team_dict['coach'] = _buildCoachDict(team)
             team_list.append(team_dict)
