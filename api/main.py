@@ -6452,10 +6452,19 @@ def get_league_facilities():
         levelsByTeam = {}
         for row in session.query(TeamFacility).all():
             levelsByTeam.setdefault(row.team_id, {})[row.facility_key] = row.level
-        # fan counts
+        # fan counts — total (all-time favoriters) and ACTIVE this season (favoriters who
+        # logged in within the activity window, same recency rule as _countActiveUsers).
         fanCounts = dict(session.query(_UserModel.favorite_team_id, func.count())
                          .filter(_UserModel.favorite_team_id.isnot(None))
                          .group_by(_UserModel.favorite_team_id).all())
+        from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
+        import datetime as _dt
+        _activeCutoff = _dt.datetime.utcnow() - _dt.timedelta(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
+        activeFanCounts = dict(session.query(_UserModel.favorite_team_id, func.count())
+                               .filter(_UserModel.favorite_team_id.isnot(None),
+                                       _UserModel.last_login_at.isnot(None),
+                                       _UserModel.last_login_at >= _activeCutoff)
+                               .group_by(_UserModel.favorite_team_id).all())
         # market tier (fanbase label)
         tierByTeam = {r.team_id: r.funding_tier for r in
                       session.query(TeamFunding).filter_by(season=season).all()}
@@ -6472,6 +6481,7 @@ def get_league_facilities():
                 'appeal': facilitiesManager.computeAppeal(levels),
                 'levels': {k: levels.get(k, 0) for k in FACILITY_CATALOG},
                 'fanCount': fanCounts.get(team.id, 0),
+                'activeFanCount': activeFanCounts.get(team.id, 0),
                 'marketTier': tierByTeam.get(team.id, 'MID_MARKET'),
                 '_wp': st.get('winPerc', 0), '_sd': st.get('scoreDiff', 0),
             })
