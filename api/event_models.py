@@ -111,8 +111,17 @@ class GameEvent:
         }
     
     @staticmethod
-    def gameEnd(gameId: int, finalScore: Dict[str, int], winner: str, stats: Optional[Dict] = None) -> Dict[str, Any]:
-        """Create a game end event"""
+    def gameEnd(gameId: int, finalScore: Dict[str, int], winner: str, stats: Optional[Dict] = None,
+                displayScore: Optional[Dict] = None, scoreLabel: Optional[str] = None,
+                tiebreakNote: Optional[str] = None) -> Dict[str, Any]:
+        """Create a game end event.
+
+        `finalScore` is always the raw point totals (kept for existing consumers). For
+        alternate formats where points aren't the result (e.g. frames, where FRAMES WON
+        decides it), pass `displayScore` (the format's resultDisplay) + a `scoreLabel`
+        ('frames') so the final MESSAGE reads the way the game is actually scored — the
+        floosbot was showing total points for frames matches. `tiebreakNote` appends the
+        points tiebreak when a frames match finished level."""
         homeScore = finalScore.get('home', 0)
         awayScore = finalScore.get('away', 0)
         if homeScore > awayScore:
@@ -121,15 +130,22 @@ class GameEvent:
             homeWinProbability, awayWinProbability = 0.0, 100.0
         else:
             homeWinProbability, awayWinProbability = 50.0, 50.0
+        ds = displayScore or finalScore
+        label = f" ({scoreLabel})" if scoreLabel else ""
+        message = f"Final: {ds.get('away', 0)} - {ds.get('home', 0)}{label}"
+        if tiebreakNote:
+            message += f" — {tiebreakNote}"
         return {
             'event': EventType.GAME_END.value,
             'gameId': gameId,
             'finalScore': finalScore,
+            'displayScore': ds,
+            'scoreLabel': scoreLabel,
             'winner': winner,
             'homeWinProbability': homeWinProbability,
             'awayWinProbability': awayWinProbability,
             'stats': stats or {},
-            'message': f"Final: {finalScore['away']} - {finalScore['home']}"
+            'message': message
         }
     
     @staticmethod

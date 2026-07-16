@@ -7513,11 +7513,39 @@ class Game:
             homeTeamStats = self._collect_team_stats_for_broadcast(self.homeTeam, is_home=True)
             awayTeamStats = self._collect_team_stats_for_broadcast(self.awayTeam, is_home=False)
             
+            # Format-aware display score: frames (and any format whose result isn't the
+            # point total) resolve to their own scoring (frames won), so the floosbot's
+            # final message reads correctly instead of showing total points. Plus the
+            # points tiebreak note when a frames match finished level on frames.
+            from game_formats import _cleanNum
+            _fmt = getattr(self, 'format', None)
+            _dispScore = None
+            _scoreLabel = None
+            _tiebreakNote = None
+            if _fmt is not None:
+                try:
+                    _dh, _da = _fmt.resultDisplay(self)
+                    _dispScore = {'home': _cleanNum(_dh), 'away': _cleanNum(_da)}
+                except Exception:
+                    _dispScore = None
+                if getattr(_fmt, 'key', '') == 'frames':
+                    _scoreLabel = 'frames'
+                    fh = getattr(self, '_framesWonHome', 0.0)
+                    fa = getattr(self, '_framesWonAway', 0.0)
+                    if fh == fa and self.homeScore != self.awayScore:
+                        _wt = self.homeTeam if self.homeScore > self.awayScore else self.awayTeam
+                        _wtName = getattr(_wt, 'abbr', None) or getattr(_wt, 'name', 'The winner')
+                        _hi, _lo = max(self.homeScore, self.awayScore), min(self.homeScore, self.awayScore)
+                        _tiebreakNote = f"{_wtName} win on points {_cleanNum(_hi)}-{_cleanNum(_lo)}"
+
             # Broadcast game end with stats
             event = GameEvent.gameEnd(
                 gameId=self.id,
                 finalScore={'home': self.homeScore, 'away': self.awayScore},
                 winner=winner,
+                displayScore=_dispScore,
+                scoreLabel=_scoreLabel,
+                tiebreakNote=_tiebreakNote,
                 stats={
                     'totalPlays': self.totalPlays,
                     'homePlays': self.homePlaysTotal,
