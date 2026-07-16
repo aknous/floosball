@@ -6,6 +6,18 @@ from logger_config import get_logger
 
 logger = get_logger("floosball.api_builders")
 
+
+def cleanScore(v) -> Union[int, float]:
+    """Normalize an accumulated score/differential for display. Scores can be
+    fractional now (rule-vote float FG/TD values, alternate-format scoring), and
+    summing floats across a season leaves noise like 102.30000000000001. Round to
+    one decimal (real precision) and drop a trailing .0 so whole totals show as ints."""
+    try:
+        n = round(float(v or 0), 1)
+    except (TypeError, ValueError):
+        return 0
+    return int(n) if n == int(n) else n
+
 class ResponseBuilder:
     """Base class for building API responses consistently"""
     
@@ -852,9 +864,9 @@ class LeagueResponseBuilder(ResponseBuilder):
             scoreDiff = team.seasonTeamStats.get('scoreDiff', 0)
             pointsFor = (team.seasonTeamStats.get('Offense', {}) or {}).get('pts', 0)
             team_dict.update({
-                'scoreDiff': scoreDiff,
-                'pointsFor': pointsFor,
-                'pointsAgainst': pointsFor - scoreDiff,
+                'scoreDiff': cleanScore(scoreDiff),
+                'pointsFor': cleanScore(pointsFor),
+                'pointsAgainst': cleanScore(pointsFor - scoreDiff),
                 'streak': team.seasonTeamStats.get('streak', 0),
             })
             team_standings.append(team_dict)
