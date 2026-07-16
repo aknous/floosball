@@ -1581,17 +1581,22 @@ def cast_rule_vote(req: _RuleVoteRequest, user: _User = Depends(_getCurrentUser)
         valid = set(RuleVoteRepository.optionsOf(w))
         if w.kind == 'revert':
             # MULTI-SELECT: the full set replaces the user's prior selection. Any
-            # unknown key is rejected; an empty set clears their ballot.
-            picks = [k for k in (req.optionKeys or []) if k and k != 'none']
-            bad = [k for k in picks if k not in valid]
+            # unknown key is rejected. The 'none' sentinel is a KEEP-EVERYTHING ballot
+            # (counts as a voter, approves no rule) — mutually exclusive with rule picks;
+            # an empty set clears their ballot (a full withdrawal).
+            raw = [k for k in (req.optionKeys or []) if k]
+            rulePicks = [k for k in raw if k != 'none']
+            bad = [k for k in rulePicks if k not in valid]
             if bad:
                 raise HTTPException(400, "That option is not on the ballot")
-            repo.setRevertSelection(user.id, w.id, picks)
+            # picking any rule wins over 'none'; otherwise honor an explicit keep-all
+            stored = rulePicks if rulePicks else (['none'] if 'none' in raw else [])
+            repo.setRevertSelection(user.id, w.id, stored)
             session.commit()
             counts, _voters = repo.revertCounts(w.id)
             return build_success_response({
                 "season": season, "windowId": w.id,
-                "myPicks": sorted(set(picks)), "totals": counts,
+                "myPicks": stored, "totals": counts,
             })
         # single-pick change
         if req.optionKey not in (valid | {"none"}):

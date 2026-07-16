@@ -190,13 +190,23 @@ class RuleVoteRepository:
     # the selected keys (SQLite ignores the column length, so no migration + the
     # existing one-row-per-(user,window) constraint still holds).
     def setRevertSelection(self, userId: int, windowId: int, keys: List[str]) -> None:
-        """Replace this user's full revert selection. An empty set clears their row."""
+        """Replace this user's full revert selection. Three cases:
+          - one or more rule keys -> store those (a revert ballot); any 'none' sentinel
+            is dropped, because picking a rule means you are NOT keeping everything.
+          - only the 'none' sentinel -> store ['none'], an explicit KEEP-EVERYTHING
+            ballot. It counts as a voter (raising the approval denominator) but approves
+            no rule, so the "leave the rules alone" camp has real weight.
+          - an empty set -> clear the row entirely (a full withdrawal — not counted)."""
         self.session.query(RuleVote).filter(
             RuleVote.user_id == userId, RuleVote.window_id == windowId).delete()
-        clean = sorted({k for k in (keys or []) if k and k != 'none'})
+        raw = keys or []
+        clean = sorted({k for k in raw if k and k != 'none'})
         if clean:
             self.session.add(RuleVote(user_id=userId, window_id=windowId,
                                       option_key=json.dumps(clean)))
+        elif 'none' in raw:
+            self.session.add(RuleVote(user_id=userId, window_id=windowId,
+                                      option_key=json.dumps(['none'])))
         self.session.flush()
 
     def getUserRevertSelection(self, userId: int, windowId: int) -> List[str]:
@@ -211,7 +221,12 @@ class RuleVoteRepository:
 
     def revertCounts(self, windowId: int):
         """Approval tally for a revert window: (per-option approval counts, distinct
-        voter count). Each row's option_key is a JSON list of the user's selections."""
+        voter count). Each row's option_key is a JSON list of the user's selections.
+
+        A KEEP-EVERYTHING ballot (stored as ['none']) counts toward `voters` but toward
+        no rule — so the approval threshold (ceil(voters * 0.5)) properly includes the
+        "leave the rules alone" camp, and its tally lands under the 'none' key for
+        display. A rule reverts only if half of ALL participating voters approve it."""
         rows = self.session.query(RuleVote.option_key).filter(
             RuleVote.window_id == windowId).all()
         counts: Dict[str, int] = {}
@@ -225,9 +240,12 @@ class RuleVoteRepository:
                     keys = [raw]
             except Exception:
                 keys = [raw]
-            keys = [k for k in keys if k and k != 'none']
-            if keys:
+            ruleKeys = [k for k in keys if k and k != 'none']
+            keepAll = ('none' in keys) and not ruleKeys
+            if ruleKeys or keepAll:
                 voters += 1
-            for k in keys:
+            if keepAll:
+                counts['none'] = counts.get('none', 0) + 1
+            for k in ruleKeys:
                 counts[k] = counts.get(k, 0) + 1
         return counts, voters
