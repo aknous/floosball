@@ -1327,9 +1327,14 @@ def _lastRuleChange():
                 return None
         # Label: a scalar winner key IS a candidate field; a preset winner key
         # (a preset key or 'revert:<candidate>') resolves to its mechanic label.
-        # 'revert:multi' is the multi-select day-3 outcome (several rules put back).
+        # 'revert:multi' is the multi-select day-3 outcome (several rules put back) —
+        # it carries the LIST of reverted labels as its label and has no single
+        # from→to, so the display names them without arrows.
+        _from = _dec(w.winner_prev)
+        _to = _dec(w.winner_value)
         if field == 'revert:multi':
-            label = 'Rules reverted'
+            label = _from or 'Rules reverted'
+            _from = _to = None
         else:
             label = RULE_VOTE_CANDIDATES.get(field, {}).get('label') or _presetMechanicLabel(field)
         return {
@@ -1337,8 +1342,8 @@ def _lastRuleChange():
             "label": label,
             "kind": w.kind,                       # 'change' | 'revert'
             "core": w.core,                       # 'aris' | 'pyre'
-            "from": _dec(w.winner_prev),
-            "to": _dec(w.winner_value),
+            "from": _from,
+            "to": _to,
         }
     except Exception:
         return None
@@ -6452,19 +6457,23 @@ def get_league_facilities():
         levelsByTeam = {}
         for row in session.query(TeamFacility).all():
             levelsByTeam.setdefault(row.team_id, {})[row.facility_key] = row.level
-        # fan counts — total (all-time favoriters) and ACTIVE this season (favoriters who
-        # logged in within the activity window, same recency rule as _countActiveUsers).
+        # fan counts — total (all-time favoriters) and ACTIVE THIS SEASON. "Active" uses
+        # the SAME definition as the GM vote threshold (_snapshotFrontOfficeFans): a
+        # favoriter whose most-recent login lands on/after this season's start, i.e. who
+        # has shown up at all this season. (Not a rolling N-day window — that undercounts
+        # and diverges from the number the rest of the app treats as the fanbase.)
+        from database.models import Season as _SeasonModel
         fanCounts = dict(session.query(_UserModel.favorite_team_id, func.count())
                          .filter(_UserModel.favorite_team_id.isnot(None))
                          .group_by(_UserModel.favorite_team_id).all())
-        from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
-        import datetime as _dt
-        _activeCutoff = _dt.datetime.utcnow() - _dt.timedelta(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
-        activeFanCounts = dict(session.query(_UserModel.favorite_team_id, func.count())
-                               .filter(_UserModel.favorite_team_id.isnot(None),
-                                       _UserModel.last_login_at.isnot(None),
-                                       _UserModel.last_login_at >= _activeCutoff)
-                               .group_by(_UserModel.favorite_team_id).all())
+        _seasonRow = session.get(_SeasonModel, season)
+        _seasonStart = _seasonRow.start_date if _seasonRow else None
+        _activeQuery = (session.query(_UserModel.favorite_team_id, func.count())
+                        .filter(_UserModel.favorite_team_id.isnot(None),
+                                _UserModel.last_login_at.isnot(None)))
+        if _seasonStart is not None:
+            _activeQuery = _activeQuery.filter(_UserModel.last_login_at >= _seasonStart)
+        activeFanCounts = dict(_activeQuery.group_by(_UserModel.favorite_team_id).all())
         # market tier (fanbase label)
         tierByTeam = {r.team_id: r.funding_tier for r in
                       session.query(TeamFunding).filter_by(season=season).all()}
