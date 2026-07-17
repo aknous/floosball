@@ -59,12 +59,23 @@ keepers** by its own assessment (sentiment-tilted). Same guardrails, new decider
 Run per team in the offseason. It must manage the roster like an actual GM, not just
 value players in the abstract:
 
-1. **Value the roster** — estimate each player's value from attributes/`playerRating`,
-   **weighted by positional value** (below), and discounted for age /
-   `computeRetirementOdds` (`playerManager.py:1195`) and contract cost. Accuracy is
-   **gated by the GM's `scouting`**: the GM sees a scouting-*noised* estimate, so a poor
-   evaluator misjudges its own players AND available upgrades (bad churn — cuts a good
-   player for an FA it overrates, or misses a real QB upgrade).
+1. **Value the roster — FORWARD-LOOKING, scouting sees the career ARC.** Value is a
+   *projection*, not the current number, `× POSITION_VALUE`. Scouting doesn't just add
+   noise to `playerRating` — it determines how well the GM reads a player's **trajectory**,
+   leveraging the existing three-tier prospect model (`current < trueSkill < potential`,
+   from last season's parity package) + the age/retirement curve
+   (`computeRetirementOdds`, `playerManager.py:1195`):
+   - **developing** (young, `current < potential`, about to rise),
+   - **prime** (at peak),
+   - **regressing** (past longevity, declining next season).
+
+   **High scouting** values the forward projection: **buys low** on an ascending youngster
+   (mediocre now, about to pop) and **sells high** on a vet before the cliff (looks fine
+   today, falls off next year). **Low scouting** judges on the current number only:
+   overpays to keep a declining vet, cuts a developing player who looks unremarkable, and
+   misses the ascender — genuinely bad personnel decisions, emergent from the attribute.
+   Second-order: paired with `playerDevelopment`, a sharp GM reasons "this kid will rise
+   AND I can develop him," so development-minded GMs rationally take on raw talent.
 2. **Positional value weighting** — a `POSITION_VALUE` table (QB highest → RB/WR → TE →
    K lowest). All fill/upgrade/need decisions rank by `ratingDelta × positionValue`, NOT
    raw rating — this is what stops "best available = a great kicker" when there's a
@@ -77,15 +88,22 @@ value players in the abstract:
    wins. This is the same incumbent-vs-pool comparison as cut-for-upgrade (step 5).
 4. **Detect needs** — weak/vacant slots, weighted by positional value (a weak QB is a
    bigger need than a weak K).
-5. **Cut-for-upgrade DECISION (COMPARATIVE, not absolute)** — for each slot weigh the
-   **incumbent vs. the best available replacement** (FA pool + rookies). If
-   `(replacementValue − incumbentValue)` clears an **upgrade threshold** (accounting for
-   position value + cost + age), CUT the incumbent (in anticipation of drafting a
-   replacement); else stand pat. Cuts are purposeful churn toward improvement, high-value
-   needs first — a decent incumbent isn't cut unless a real upgrade exists in the pool AND
-   the GM expects to actually land it given its FA-draft slot (see the worst-first risk in
-   Offseason ordering). **The actual signing happens later** in the separate worst-first
-   FA + rookie drafts — steps 3 and 5 only DECIDE re-sign/cut.
+5. **Cut-for-upgrade DECISION (COMPARATIVE, threshold scaled by DRAFT POSITION)** — for
+   each slot weigh the **incumbent vs. the best available replacement** (FA pool +
+   rookies). If `(replacementValue − incumbentValue)` clears an **upgrade threshold**, CUT
+   the incumbent (in anticipation of drafting a replacement); else stand pat. **The
+   threshold scales with the team's worst-first draft slot** — this is the aggression dial:
+   - **Early pick (bad teams) → aggressive:** confident of landing the replacement, so a
+     *smaller* edge justifies a cut (lower threshold). Churn to climb.
+   - **Late pick (good teams) → conservative:** cutting is a gamble when you pick last and
+     may get leftovers, so a *bigger* edge is required (higher threshold; lean toward
+     re-signing your own).
+
+   Cuts are purposeful churn toward improvement, high-value needs first. **The actual
+   signing happens later** in the separate worst-first FA + rookie drafts — steps 3 and 5
+   only DECIDE re-sign/cut. (Note the pro-parity loop: bad teams churn aggressively, good
+   teams stand pat; and a high-scouting late-drafter still eats well because the ascending
+   players it values are the ones lesser scouts pass on, so they survive to its pick.)
 6. **Sentiment tilt** — throughout, fan sentiment × `fanTrust` nudges close calls (keep a
    fan-favorite marginal player as a re-sign; cut a fan-villain the GM would otherwise
    keep). See Part D.
@@ -103,11 +121,15 @@ if `simcheck` shows thrash.
 ### Per-team behavior (no global nudge knob)
 Each GM manages differently, driven by **their own attributes** — this is the design's
 main source of emergent identity:
-- `scouting` → valuation accuracy (sharp eye vs. misjudges talent).
+- `scouting` → **career-arc vision** (reads developing/prime/regressing, values the
+  forward projection) — the difference between buying low on an ascender and overpaying a
+  vet about to fall off.
 - `fanTrust` (**new**) → how much sentiment moves them: 0 = ignores the fans entirely,
   high = populist who over-churns fan-villains and regrets it.
-- `playerDevelopment` → patience with young/declining talent.
-- (optional) a `patience`/`aggressiveness` axis → how fast they churn the roster.
+- `playerDevelopment` → patience with young/declining talent (and, with scouting, the
+  confidence to take on raw talent it can grow).
+- **Draft position** (not an attribute — the team's worst-first draft slot) → aggression:
+  early pickers churn boldly, late pickers hold.
 
 Same inputs, different weights → the stubborn GM, the populist, the shrewd evaluator.
 
@@ -327,7 +349,17 @@ decide whether to wire it.
 - **Churn rate (Q5)** — target ~3–5 GM changes league-wide per season (~12–20% of 24
   teams) across fire + retire + leave. Tune fire/leave thresholds against the retire
   curve.
-- **Upgrade threshold (Part A)** — how much better an FA must be to justify a cut.
+- **Upgrade threshold (Part A)** — base "how much better" to justify a cut, and **how
+  hard draft position swings it** (aggressive early ↔ conservative late).
+- **Scouting → arc visibility** — how much a high vs low `scouting` GM sees of the true
+  `current/trueSkill/potential` trajectory (perfect foresight at the top end would be too
+  strong; poor scouts should be genuinely wrong, not just noisy).
+
+**The model in one line:** `perceivedValue(player)` = a **scouting-gated, arc-aware,
+forward-looking** projection (via `current<trueSkill<potential` + age curve) `×
+POSITION_VALUE`; every re-sign/cut compares `perceivedValue(incumbent)` vs
+`perceivedValue(best available)`, with the **upgrade threshold scaled by draft position**
+and the result tilted by **fan sentiment × `fanTrust`**.
 
 ## Still open
 
