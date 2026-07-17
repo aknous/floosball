@@ -47,21 +47,47 @@ The offseason is **NOT** meaningfully autonomous today. Verified:
 - Autonomous logic today is **rating-only**: team record, ELO, and morale feed **no**
   roster decision.
 
-### What to build
-A per-team GM decision model, run in the offseason, that:
+### Hard constraints (KEEP from last season's parity package — do NOT re-tune)
+- **Max 2 re-signs per offseason** (`RESIGN_LIMIT_PER_OFFSEASON=2`, `constants.py:874`).
+- **Each player re-signable only once** (`RESIGN_ONCE_LIMIT=1`).
 
-1. **Values its own roster** by player attributes — accuracy **gated by the GM's
-   `scouting`** (a poor scout misjudges who's actually good, so their roster decays
-   even with zero fan input). Reuse `playerRating` as the truth; the GM sees a
-   scouting-noised estimate of it.
-2. **Decides per player:** re-sign (walk-year), let walk, or actively cut — against
-   contract cost, age / `computeRetirementOdds` (`playerManager.py:1195`), positional
-   need, and roster balance. (Build the re-sign AND cut logic that don't exist.)
-3. **Fills holes:** extend the existing best-available FA + rookie paths; no fan ballot.
-4. **Then tilts every call by fan sentiment × the GM's `fanTrust`** (see Part D).
+These carry over unchanged. The only thing that changes is the *driver*: last season the
+2 keepers were chosen by fan vote; now the **GM picks its 2 most valuable walk-year
+keepers** by its own assessment (sentiment-tilted). Same guardrails, new decider.
 
-Respect the existing retention limits (`RESIGN_ONCE_LIMIT`, `RESIGN_LIMIT_PER_OFFSEASON`)
-or re-tune them for the autonomous world.
+### What to build — a comparative, value-weighted GM model
+Run per team in the offseason. It must manage the roster like an actual GM, not just
+value players in the abstract:
+
+1. **Value the roster** — estimate each player's value from attributes/`playerRating`,
+   **weighted by positional value** (below), and discounted for age /
+   `computeRetirementOdds` (`playerManager.py:1195`) and contract cost. Accuracy is
+   **gated by the GM's `scouting`**: the GM sees a scouting-*noised* estimate, so a poor
+   evaluator misjudges its own players AND available upgrades (bad churn — cuts a good
+   player for an FA it overrates, or misses a real QB upgrade).
+2. **Positional value weighting** — a `POSITION_VALUE` table (QB highest → RB/WR → TE →
+   K lowest). All fill/upgrade/need decisions rank by `ratingDelta × positionValue`, NOT
+   raw rating — this is what stops "best available = a great kicker" when there's a
+   QB/RB hole. Start **universal** (shared table); optional small per-GM biases later.
+3. **Re-sign** — keep the ≤2 most valuable walk-year players (value-weighted,
+   sentiment-tilted), once each. Everyone else on a walk year leaves.
+4. **Detect needs** — weak/vacant slots, weighted by positional value (a weak QB is a
+   bigger need than a weak K).
+5. **Cut-for-upgrade (COMPARATIVE, not absolute)** — for each slot weigh the **incumbent
+   vs. the best available replacement** (FA pool + rookies). If
+   `(replacementValue − incumbentValue)` clears an **upgrade threshold** (accounting for
+   position value + cost + age), cut and upgrade; else stand pat. Cuts are purposeful
+   churn toward improvement, high-value needs first — a decent incumbent isn't cut unless
+   a real upgrade actually exists in the pool.
+6. **Fill vacancies** — remaining holes filled best-**value**-available (extends the
+   existing FA + rookie best-available paths; no fan ballot).
+7. **Sentiment tilt** — throughout, fan sentiment × `fanTrust` nudges close calls (keep a
+   fan-favorite marginal player as a re-sign; cut a fan-villain the GM would otherwise
+   keep). See Part D.
+
+**Churn:** re-signs are hard-capped at 2; cuts/signings are not. Lean is to let churn
+**self-limit** (real upgrades are scarce, every team fishes the same finite FA pool) and
+add a soft per-season cap only if `simcheck` shows thrash.
 
 ### Per-team behavior (no global nudge knob)
 Each GM manages differently, driven by **their own attributes** — this is the design's
@@ -230,13 +256,45 @@ decide whether to wire it.
    remove all vote/ballot UI.
 10. **(Optional)** team-mood → morale/funding second consumer.
 
-## Open questions
+## Decisions (resolved in refinement)
 
-- **Ratings vs posts** — two layers (lean) or posts-are-sentiment?
-- **Team mood** — does aggregate sentiment feed morale/funding/attendance too?
-- **`fanTrust` source** — a brand-new coach attribute, or derived from `attitude`?
-- **Elite/bust tail size** — how rare should all-around great/terrible GMs be?
-- **Churn rate** — target GM changes per league per season across fire/retire/leave.
-- **Economy backfill** — what replaces the removed GM-vote Floobit sink?
-- **Sentiment reuse** — extend the anomaly "attention" signal (love-only today) into a
-  signed approval score, or keep a dedicated ratings/posts system separate?
+- **Sentiment vs attention (Q7)** — **separate axes, shared inputs.** Attention =
+  *magnitude* (unchanged, drives awakening); sentiment = *valence* (new, drives the GM
+  brain). A hated player still draws attention, so don't overload it. Emergent combos:
+  high attention + split sentiment = *polarizing*; high attention + disapproval =
+  *lightning rod*.
+- **Ratings vs posts (Q1)** — **two layers split by tempo.** Ratings (1–5) = standing
+  stance (slow, persistent, one per fan) → drives roster valuation + favorite/villain
+  boards. Posts = emotional pulse (fast, decaying, spammy-fun) → drives the feed + GM
+  fire/leave heat + team mood.
+- **`fanTrust` (Q3)** — **new independent coach attribute** (don't conflate with
+  `attitude`, the locker-room axis).
+- **Team mood (Q2)** — **phase it, keep it out of the money.** Phase 1: sentiment → GM
+  decisions + fire/leave heat only. Phase 2 (optional): team mood → atmosphere /
+  attendance + a small morale nudge — NOT funding dollars (funding stays purely
+  fan-contributed, to avoid a win→sentiment→money→win runaway loop).
+- **Position value (Part A)** — **universal `POSITION_VALUE` table** first; optional
+  small per-GM biases later.
+- **Churn cap (Part A)** — **none initially**; let it self-limit, add a soft cap only if
+  sim shows thrash.
+
+## Tuning targets (nail in `simcheck`, not on paper)
+
+- **Coach generation / elite-bust tail (Q4)** — start `attr = clip(80 + s + N(0, ~9))`
+  with a small shared shift `s ~ N(0, ~3.5)`. σ_shared ≪ σ_indep → mostly specialists
+  near-average-overall, rare all-around elites/busts (~3–5% each tail). Tune σ_shared.
+- **Churn rate (Q5)** — target ~3–5 GM changes league-wide per season (~12–20% of 24
+  teams) across fire + retire + leave. Tune fire/leave thresholds against the retire
+  curve.
+- **Upgrade threshold (Part A)** — how much better an FA must be to justify a cut.
+
+## Still open
+
+- **Economy backfill (Q6)** — MEASURE FIRST: query prod `CurrencyTransaction` for the
+  `gm_vote`/ballot share of total sinks. If meaningful, backfill **on-theme** via the
+  social page (optional paid cosmetic expression: custom post flair, team-page
+  customization, "boosted" posts) while core rating/posting stays free — turning
+  vote-spending into expression-spending. Owner gut-check wanted: on-theme cosmetic sink
+  vs. just let the sink shrink.
+- **Team mood → money (Q2 gut-check)** — confirm funding stays purely fan-contributed
+  (sentiment out of the budget).
