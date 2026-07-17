@@ -10288,9 +10288,13 @@ class SeasonManager:
             if not self.currentSeason:
                 return
             from managers.anomalyManager import isCriticalityWeek
-            week = getattr(game, 'week', None)
-            if week is None:
-                week = self.currentSeason.currentWeek
+            # game.week is 0-indexed (createSchedule convention), but isCriticalityWeek
+            # keys on the 1-indexed week (like currentSeason.currentWeek / start_week) —
+            # a raw game.week queries week N-1 and misses the window entirely, so chaos
+            # rules never apply. Convert, matching the glitch/awakened path in
+            # floosball_game.py:10720. The currentWeek fallback is already 1-indexed.
+            gameWeek = getattr(game, 'week', None)
+            week = (gameWeek + 1) if gameWeek is not None else self.currentSeason.currentWeek
             if isCriticalityWeek(self.currentSeason.seasonNumber, week):
                 game.gameRules = self._ruleVoteMgr().randomChaosRules(self.currentSeason.gameRules)
         except Exception as e:

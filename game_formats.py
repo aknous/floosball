@@ -24,6 +24,17 @@ changes and `standard` is a pure pass-through — OFF stays byte-identical.
 from typing import Optional, Tuple
 
 
+def _cleanNum(v):
+    """Round a possibly-fractional score for UI display, dropping float-accumulation
+    noise (3.0000000000000018 -> 3) and a trailing .0 on whole numbers. Mirrors
+    api_response_builders.cleanScore but kept local to avoid an api-layer import."""
+    try:
+        n = round(float(v or 0), 1)
+    except (TypeError, ValueError):
+        return v
+    return int(n) if n == int(n) else n
+
+
 class GameFormat:
     """Standard football: cumulative score, higher wins at the end of regulation/OT.
     Every hook here is the identity/no-op the engine assumes by default."""
@@ -160,6 +171,19 @@ class GameFormat:
         at FRAME boundaries (which don't line up with quarters), so quarter re-plans
         would just double it up."""
         return True
+
+    def usesQuarterBreaks(self) -> bool:
+        """Whether the format has QUARTER structure at all — quarter-start callouts
+        ('Start Nth Quarter') and the two-minute warning. True for clock/quarter
+        formats. frames returns False (its periods are frames, not quarters), so those
+        quarter-flavored beats are suppressed there."""
+        return True
+
+    def awardFrames(self, game) -> None:
+        """Commit any period boundaries the clock has crossed. No-op for every format
+        except frames (see FramesFormat), where it's called from a settled between-plays
+        checkpoint so an end-of-frame play's score lands in its own frame."""
+        return None
 
     # ── Display ───────────────────────────────────────────────────────────────
     def stateExtra(self, game) -> dict:
@@ -590,6 +614,9 @@ class FramesFormat(GameFormat):
     def usesQuarterCoachAdjustments(self) -> bool:
         return False   # frames adjust between FRAMES, not quarters
 
+    def usesQuarterBreaks(self) -> bool:
+        return False   # frames have no quarters — no quarter callouts or 2-min warning
+
     def _elapsed(self, game) -> int:
         # Regulation seconds elapsed (capped at the full game; OT is past all frames).
         total = self._regSeconds(game)
@@ -602,13 +629,17 @@ class FramesFormat(GameFormat):
         return False   # the final frame's winner can shift on the last play's score
 
     def consumeTime(self, game, seconds: int) -> None:
-        super().consumeTime(game, seconds)   # normal game-clock drain
-        # Don't award a frame mid-huddle (before the snap) — the game loop flags the
-        # pre-snap drain so a play's score stays in its own frame, not the next one.
-        if getattr(game, '_inPreSnap', False):
-            return
-        # Award every frame whose time boundary the clock just crossed (the final
-        # frame commits when the clock reaches 0 at the end of regulation).
+        super().consumeTime(game, seconds)   # normal game-clock drain ONLY.
+        # Frame AWARDS are NOT done here anymore. This drain runs mid-play, BEFORE
+        # _addScore applies a scoring play's points, so awarding here read a pre-score
+        # board and leaked an end-of-frame play's points into the next frame. The game
+        # loop calls awardFrames() at a settled between-plays checkpoint instead.
+
+    def awardFrames(self, game) -> None:
+        """Commit every frame whose time boundary the clock has now crossed, reading a
+        SETTLED score (called between plays, after _addScore applies the last play's
+        points). Idempotent — keyed on _frameIndex vs elapsed, so repeat calls are
+        no-ops. The final frame commits when the clock reaches 0 at end of regulation."""
         N = self._frames(game)
         frameLen = self._regSeconds(game) / N
         target = min(N, int(self._elapsed(game) / frameLen)) if frameLen else N
@@ -724,18 +755,35 @@ class FramesFormat(GameFormat):
         # Time remaining in the current 10-min frame (the mini-game clock).
         frameLen = self._regSeconds(game) / N if N else 0
         frameRem = max(0, int(round(frameLen - (self._elapsed(game) % frameLen)))) if frameLen else 0
+        # Frames-tie tiebreak: when the frames won are level, the match is decided by
+        # TOTAL POINTS (winnerSide). Surface it so a 3-3 frames final doesn't look like a
+        # silent tie — the UI can say "level on frames, decided by points". Live: shows the
+        # current points edge; final: the deciding margin. None when frames aren't level or
+        # points are also tied (→ OT).
+        fh = getattr(game, '_framesWonHome', 0.0)
+        fa = getattr(game, '_framesWonAway', 0.0)
+        tiebreak = None
+        if fh == fa and game.homeScore != game.awayScore:
+            tiebreak = {
+                'decidedByPoints': True,
+                'homePoints': _cleanNum(game.homeScore),
+                'awayPoints': _cleanNum(game.awayScore),
+                'winner': 'home' if game.homeScore > game.awayScore else 'away',
+            }
         return {'frames': {
+            'tiebreak': tiebreak,
             'active': True,
             'framesPerGame': N,
             'currentFrame': min(N, idx + 1),
             'frameClock': game.formatTime(frameRem),
-            'framesWonHome': getattr(game, '_framesWonHome', 0.0),
-            'framesWonAway': getattr(game, '_framesWonAway', 0.0),
-            'frameHome': game.homeScore - getattr(game, '_frameStartHome', 0),
-            'frameAway': game.awayScore - getattr(game, '_frameStartAway', 0),
+            'framesWonHome': _cleanNum(getattr(game, '_framesWonHome', 0.0)),
+            'framesWonAway': _cleanNum(getattr(game, '_framesWonAway', 0.0)),
+            'frameHome': _cleanNum(game.homeScore - getattr(game, '_frameStartHome', 0)),
+            'frameAway': _cleanNum(game.awayScore - getattr(game, '_frameStartAway', 0)),
             # Per-frame line: completed frames (points + winner); the current frame's
             # in-progress points are frameHome/frameAway, future frames render blank.
-            'frameResults': list(getattr(game, '_frameResults', [])),
+            'frameResults': [{'home': _cleanNum(r.get('home')), 'away': _cleanNum(r.get('away')),
+                              'winner': r.get('winner')} for r in getattr(game, '_frameResults', [])],
         }}
 
 

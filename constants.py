@@ -1052,11 +1052,15 @@ SIDELINE_GOAL_ATTEMPT_MAX = 0.90         # cap on the attempt chance
 # scorer/defender attribute is a weighted blend of real `floosball_player` stats.
 CONTEST_TYPES = [
     # key            label            scorer attrs (weighted)          defender attrs (weighted)     solo   weight
-    {'key': 'dunk',        'label': 'Dunk',          'scorer': [('power', 0.7), ('xFactor', 0.3)],     'defender': [('power', 0.6), ('agility', 0.4)], 'solo': False, 'weight': 1.0},
-    {'key': 'race',        'label': 'Race',          'scorer': [('speed', 1.0)],                       'defender': [('speed', 1.0)],                   'solo': False, 'weight': 1.0},
-    {'key': 'arm_wrestle', 'label': 'Arm Wrestle',   'scorer': [('power', 1.0)],                       'defender': [('power', 1.0)],                   'solo': False, 'weight': 1.0},
-    {'key': 'beauty',      'label': 'Beauty Contest', 'scorer': [('xFactor', 0.6), ('creativity', 0.4)], 'defender': [('xFactor', 0.6), ('creativity', 0.4)], 'solo': False, 'weight': 0.8},
-    {'key': 'backflip',    'label': 'Backflip',      'scorer': [('agility', 1.0)],                     'defender': None,                               'solo': True,  'weight': 1.0},
+    {'key': 'dunk',        'label': 'DUNK',           'scorer': [('power', 0.7), ('xFactor', 0.3)],      'defender': [('power', 0.6), ('agility', 0.4)],      'solo': False, 'weight': 1.0},
+    {'key': 'race',        'label': 'RACE',           'scorer': [('speed', 1.0)],                        'defender': [('speed', 1.0)],                        'solo': False, 'weight': 1.0},
+    {'key': 'arm_wrestle', 'label': 'ARM WRESTLE',    'scorer': [('power', 1.0)],                        'defender': [('power', 1.0)],                        'solo': False, 'weight': 1.0},
+    {'key': 'beauty',      'label': 'BEAUTY CONTEST', 'scorer': [('xFactor', 0.6), ('creativity', 0.4)], 'defender': [('xFactor', 0.6), ('creativity', 0.4)], 'solo': False, 'weight': 0.8},
+    {'key': 'backflip',    'label': 'BACKFLIP',       'scorer': [('agility', 1.0)],                      'defender': None,                                    'solo': True,  'weight': 1.0},
+    {'key': 'dance_off',   'label': 'DANCE-OFF',      'scorer': [('creativity', 0.6), ('agility', 0.4)], 'defender': [('creativity', 0.6), ('agility', 0.4)], 'solo': False, 'weight': 1.0},
+    {'key': 'staredown',   'label': 'STARING CONTEST','scorer': [('xFactor', 1.0)],                      'defender': [('xFactor', 1.0)],                      'solo': False, 'weight': 0.8},
+    {'key': 'goalpost',    'label': 'GOALPOST CLIMB', 'scorer': [('agility', 0.6), ('power', 0.4)],      'defender': None,                                    'solo': True,  'weight': 0.9},
+    {'key': 'punt_catch',  'label': 'PUNT & CATCH',   'scorer': [('power', 0.4), ('speed', 0.4), ('xFactor', 0.2)], 'defender': None,                         'solo': True,  'weight': 0.9},
 ]
 # Balance — P(defense wins) scales with the attribute ratio (see the plan). Even-matchup
 # ~13%; a star scorer vs a weak defender almost always banks (~5%); a weak scorer vs a
@@ -1075,34 +1079,58 @@ CONTEST_CRITICALITY_DEFENSE_MULT = 2.2  # x P(def wins) while a Criticality is l
 # that then vanishes. Gender-neutral; {scorer}/{defender} filled at narration time.
 CONTEST_NARRATION = {
     'dunk': {
-        'win':   ["{scorer} rises and HAMMERS it over the crossbar. TOUCHDOWN, six points!",
-                  "{scorer} throws it down on {defender}. That counts — six points!"],
-        'stuff': ["{scorer} goes up for the slam but {defender} swats it away. No good.",
+        'win':   ["{scorer} leaps and HAMMERS the ball over the crossbar. TOUCHDOWN!",
+                  "{scorer} absolutely posterizes {defender} with the dunk over the crossbar. TOUCHDOWN!"],
+        'stuff': ["{scorer} goes up for the slam but {defender} swats it away. No touchdown.",
                   "{defender} rises with {scorer} and stuffs the dunk. No points."],
     },
     'race': {
-        'win':   ["{scorer} beats {defender} across the end zone. TOUCHDOWN!",
-                  "{scorer} outruns {defender} to the far pylon. Six points!"],
-        'stuff': ["{defender} runs {scorer} down before the pylon. No good.",
-                  "{scorer} races for the corner but {defender} tags him short. No points."],
+        'win':   ["{scorer} and {defender} line up on one sideline and race across the field to the other sideline. {scorer} wins by a nose. TOUCHDOWN!",
+                  "{scorer} and {defender} across the endzone. {scorer} leaves {defender} in the dust. TOUCHDOWN!"],
+        'stuff': ["{scorer} and {defender} begin to race, but {scorer} trips and falls flat on their face. No score.",
+                  "{scorer} and {defender} line up on one 10 yard line and race, but {defender} beats them to the endzone cleanly. No touchdown."],
     },
     'arm_wrestle': {
-        'win':   ["{scorer} pins {defender} at the goal line. TOUCHDOWN!",
-                  "{scorer} overpowers {defender} and drives across. Six points!"],
-        'stuff': ["{defender} out-muscles {scorer} at the line. No good.",
-                  "{scorer} can't budge {defender} an inch. Stuffed, no points."],
+        'win':   ["{scorer} and {defender} set up a folding table in the endzone. {scorer} slams {defender}'s arm down as the crowd erupts. TOUCHDOWN!",
+                  "{scorer} locks hands with {defender}, stares deep into their soul, and pins them immediately. TOUCHDOWN!"],
+        'stuff': ["{scorer} grunts mightily for a full thirty seconds before {defender} casually pins them. No touchdown, only embarrassment.",
+                  "{defender} slams {scorer}'s arm through the folding table. The table did not survive. No touchdown."],
     },
     'beauty': {
-        'win':   ["The judges love {scorer}'s pose over {defender}'s. TOUCHDOWN!",
-                  "{scorer} strikes it; {defender} can't match the flair. Six points!"],
-        'stuff': ["{defender} out-poses {scorer} — the judges aren't buying it. No good.",
-                  "{scorer}'s form falls flat next to {defender}. No points."],
+        'win':   ["{scorer} struts down an imaginary runway, hits a pose at the goal line, and blows a kiss to the judges, who begin weeping. TOUCHDOWN!",
+                  "{scorer} serves a stone cold pose, their hair somehow flowing perfectly under their helmet. All 10's across the board. TOUCHDOWN!"],
+        'stuff': ["{scorer} attempts a smolder but it reads more like indigestion. The judges do not approve. No touchdown.",
+                  "{scorer} trips on the runway walk and takes out a judge's table. Rejected."],
     },
     'backflip': {
-        'win':   ["{scorer} flips over the line and STICKS the landing. TOUCHDOWN!",
-                  "{scorer} nails the backflip clean. Six points!"],
-        'stuff': ["{scorer} flips but stumbles the landing. No good, no points.",
-                  "{scorer} can't stick it, hands down. Waved off."],
+        'win':   ["{scorer} launches into a backflip and sticks the landing like they've been waiting their whole life for this. TOUCHDOWN!",
+                  "{scorer} throws a full backflip in pads and helmet and lands it clean. TOUCHDOWN!"],
+        'stuff': ["{scorer} gets about 40% of the way around a backflip and lands face-first in the endzone. No touchdown.",
+                  "{scorer} attempts the backflip, panics mid-air, and absolutely beefs it. No points awarded."],
+    },
+    'dance_off': {
+        'win':   ["{scorer} breaks into a routine so filthy that {defender} just walks off the field mid-song. TOUCHDOWN!",
+                  "{scorer} hits a move that could be considered illegal in some jurisdictions. {defender} counters with something resembling a seizure. Judges side with {scorer}. TOUCHDOWN!"],
+        'stuff': ["{scorer} opens with the sprinkler. Who do they think they are? {defender} wins by default. No touchdown.",
+                  "{defender} unleashes footwork nobody knew they had while {scorer} is still doing warmup shoulder rolls. No points."],
+    },
+    'staredown': {
+        'win':   ["{scorer} and {defender} lock eyes at midfield. Ninety seconds of pure silence later, {defender} blinks and immediately regrets everything. TOUCHDOWN!",
+                  "{scorer} stares directly into {defender}'s soul and apparently finds nothing there worth fearing. {defender} looks away. TOUCHDOWN!"],
+        'stuff': ["{scorer} lasts eleven seconds before a gnat flies into their eye. {defender} never even flinched. No touchdown.",
+                  "{defender} stares back with the dead-eyed calm of someone who has seen things. {scorer} cracks immediately. No points."],
+    },
+    'goalpost': {
+        'win':   ["{scorer} scales the goalpost like there's money at the top and perches on the crossbar, arms raised. TOUCHDOWN!",
+                  "{scorer} shimmies up the upright, sits on top, and waves down at everyone like this is completely normal. TOUCHDOWN!"],
+        'stuff': ["{scorer} gets about four feet up the post, loses grip, and slides down in embarrassment. No touchdown.",
+                  "{scorer} jumps for the crossbar, misses it entirely, and lands in a heap of shattered confidence. No points."],
+    },
+    'punt_catch': {
+        'win':   ["{scorer} booms a punt into the stratosphere, sprints fifty yards, and catches their own kick without breaking stride. TOUCHDOWN!",
+                  "{scorer} punts it sky-high and sprints down the field to catch it. TOUCHDOWN!"],
+        'stuff': ["{scorer} launches a beautiful punt, sprints after it and dives to try and catch it, but it lands a full ten yards further. No touchdown.",
+                  "{scorer} shanks the punt directly sideways into the bench. Good luck catching that. No points."],
     },
 }
 CONTEST_TYPE_LABELS = {t['key']: t['label'] for t in CONTEST_TYPES}
@@ -1113,15 +1141,15 @@ CONTEST_TYPE_LABELS = {t['key']: t['label'] for t in CONTEST_TYPES}
 # 'series' = refills on each first down). Expire before scoring (or a first down,
 # in series mode) = turnover on downs. Off by default; a Cores vote picks a PRESET
 # (each a full {enabled, unit, reset, limit} bundle — the compound-rule vote).
-DRIVE_CLOCK_DEFAULT_LIMIT = {"seconds": 90, "plays": 6}
+DRIVE_CLOCK_DEFAULT_LIMIT = {"seconds": 120, "plays": 6}
 # Tuned against the clock-management behavior: when the drive clock is low the
 # offense hurries up (~17s/play instead of ~40s), so the seconds limits are kept
 # tight enough to still bite. plays/series is deliberately OMITTED — a snap counter
 # that refills on each first down is just the down system (N tries to convert).
 DRIVE_CLOCK_PRESETS = [
-    {"key": "dc_90s_possession", "label": "90 seconds, whole drive",
+    {"key": "dc_120s_possession", "label": "120 seconds, whole drive",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
-               "driveClockReset": "possession", "driveClockLimit": 90}},
+               "driveClockReset": "possession", "driveClockLimit": 120}},
     {"key": "dc_45s_series", "label": "45 seconds, resets each first down",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
                "driveClockReset": "series", "driveClockLimit": 45}},
@@ -1132,6 +1160,29 @@ DRIVE_CLOCK_PRESETS = [
 # Wire the presets into the vote candidate (declared above with presets=None to
 # avoid a forward-reference).
 RULE_VOTE_CANDIDATES["driveClock"]["presets"] = DRIVE_CLOCK_PRESETS
+
+# Drive-clock SHOT SELECTION (play-caller awareness): as the possession clock winds
+# down the offense must gain yards FAST, not just snap fast, so bias toward chunk
+# plays. `_applyDriveClockMods` keys off yards-needed-per-remaining-snap.
+DRIVE_CLOCK_SECS_PER_SNAP = 18.0        # est. seconds/snap in hurry-up (12s huddle + play)
+DRIVE_CLOCK_PRESSURE_SNAPS = 3.0        # only bias once <= this many snaps of budget remain
+DRIVE_CLOCK_CHUNK_THRESHOLD = 8.0       # yds/snap below which checkdowns/runs still suffice
+DRIVE_CLOCK_CHUNK_CEILING = 20.0        # yds/snap at which urgency saturates (full bias)
+
+# Drive-clock behavior thresholds are FRACTIONS of the configured seconds-limit, so
+# they scale to any preset instead of being hardcoded for the 120s default. Under a
+# 45s/series clock, a fixed `remaining <= 75` was ALWAYS true — the offense pinned in
+# permanent hurry-up and never managed the game clock. Values reproduce the old 120s
+# absolutes: 90→0.75, 75→0.625, 20→0.167, 15→0.125, 12→0.10.
+DRIVE_CLOCK_OOB_FRAC = 0.75             # seek out-of-bounds (pause the clock) below this
+DRIVE_CLOCK_HURRY_FRAC = 0.625          # 2-minute-drill tempo below this
+DRIVE_CLOCK_TAKE_POINTS_FRAC = 0.167    # ~one snap left: take a makeable FG / heave a hail mary
+DRIVE_CLOCK_LOW_FRAC = 0.125            # amber chip / spike-to-stop trigger
+DRIVE_CLOCK_SPIKE_FRAC = 0.10           # critically low: spike to stop the game clock
+# Last-snap PUNT (deep in own territory, can't convert, out of FG range): rather than
+# hand the ball back on downs at your own spot, punt to flip field position.
+DRIVE_CLOCK_PUNT_MIN_YTE = 60           # only "deep" — ball on your own side (>=60 yds to EZ)
+DRIVE_CLOCK_PUNT_MIN_TOGO = 7           # only long yardage — can't realistically convert in one snap
 
 # ── Game Formats / win conditions (docs/GAME_FORMATS_PLAN.md) ──
 # Each preset is a full {gameFormat, ...config} bundle. One format at a time. ONLY the

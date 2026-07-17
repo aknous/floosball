@@ -405,22 +405,45 @@ class RuleVoteManager:
                 winners = [k for k in options
                            if threshold and counts.get(k, 0) >= threshold]
                 revertedLabels = []
+                singlePrev = singleNew = None
                 for k in winners:
                     winOpt = next((s for s in specs if s["key"] == k), None)
                     if not winOpt:
                         continue
-                    for fld in (winOpt.get("patch") or {}):
+                    patch = winOpt.get("patch") or {}
+                    isScalar = winOpt.get("field") is not None
+                    # Capture the REAL before/after for the 'what changed' line, the same
+                    # way the change path does — storing the label as the "from" produced
+                    # "Pyre restored Game Format: Game Format → Reverted".
+                    if isScalar:
+                        _prev = getattr(gameRules, winOpt["field"], None)
+                    elif 'gameFormat' in patch:
+                        _prev = self._formatDisplayName(getattr(gameRules, 'gameFormat', 'standard'))
+                    else:
+                        _prev = "On"
+                    for fld in patch:
                         gr.revertRule(gameRules, fld, reason="pyre revert vote",
                                       source="cores_vote")
+                    if isScalar:
+                        _new = getattr(gameRules, winOpt["field"], None)
+                    elif 'gameFormat' in patch:
+                        _new = self._formatDisplayName(getattr(gameRules, 'gameFormat', 'standard'))
+                    else:
+                        _new = "Off"
                     revertedLabels.append(winOpt.get("label") or k)
+                    if len(winners) == 1:
+                        singlePrev, singleNew = _prev, _new
                 applied = len(winners) > 0
                 if not applied:
                     winnerKey, prevValue, newValue = 'none', None, None
                 elif len(winners) == 1:
-                    winnerKey, prevValue, newValue = winners[0], revertedLabels[0], "reverted"
+                    # e.g. "Pyre restored Game Format: Frames → Standard"
+                    winnerKey, prevValue, newValue = winners[0], singlePrev, singleNew
                 else:
+                    # Several rules put back at once — no single from→to reads sensibly, so
+                    # carry the LIST of labels and let the display name them without arrows.
                     winnerKey = 'revert:multi'
-                    prevValue, newValue = ", ".join(revertedLabels), "reverted"
+                    prevValue, newValue = ", ".join(revertedLabels), None
                 repo.resolveWindow(window.id, winnerKey=winnerKey, applied=applied,
                                    prevValue=prevValue, newValue=newValue)
                 session.commit()

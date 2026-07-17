@@ -24,7 +24,8 @@ from api_response_builders import (
     GameResponseBuilder,
     LeagueResponseBuilder,
     build_success_response,
-    build_error_response
+    build_error_response,
+    cleanScore
 )
 from avatar_generator import getAvatarGenerator
 import floosball_game as FloosGame
@@ -466,11 +467,9 @@ async def get_teams(response: Response, league: Optional[str] = None):
         for team in teams:
             team_dict = TeamResponseBuilder.buildBasicTeamDict(team)
 
-            # Add standings info
-            if team.seasonTeamStats['scoreDiff'] >= 0:
-                team_dict['pointDiff'] = f"+{team.seasonTeamStats['scoreDiff']}"
-            else:
-                team_dict['pointDiff'] = str(team.seasonTeamStats['scoreDiff'])
+            # Add standings info (cleanScore strips float-accumulation noise)
+            sd = cleanScore(team.seasonTeamStats['scoreDiff'])
+            team_dict['pointDiff'] = f"+{sd}" if sd >= 0 else str(sd)
 
             team_dict['coach'] = _buildCoachDict(team)
             team_list.append(team_dict)
@@ -1328,18 +1327,30 @@ def _lastRuleChange():
                 return None
         # Label: a scalar winner key IS a candidate field; a preset winner key
         # (a preset key or 'revert:<candidate>') resolves to its mechanic label.
-        # 'revert:multi' is the multi-select day-3 outcome (several rules put back).
+        # 'revert:multi' is the multi-select day-3 outcome (several rules put back) —
+        # it carries the LIST of reverted labels as its label and has no single
+        # from→to, so the display names them without arrows.
+        _from = _dec(w.winner_prev)
+        _to = _dec(w.winner_value)
         if field == 'revert:multi':
-            label = 'Rules reverted'
+            label = _from or 'Rules reverted'
+            _from = _to = None
         else:
             label = RULE_VOTE_CANDIDATES.get(field, {}).get('label') or _presetMechanicLabel(field)
+        # LEGACY rows (resolved before reverts recorded real before/after values) stored
+        # the LABEL as `from` and the literal "reverted" as `to` — which rendered
+        # "Pyre restored Game Format: Game Format → Reverted". They can't be repaired
+        # (the pre-revert value wasn't kept), so drop the bogus arrow and just name the
+        # rule that was put back. New rows carry real values and are unaffected.
+        if isinstance(_to, str) and _to.strip().lower() == 'reverted':
+            _from = _to = None
         return {
             "field": field,
             "label": label,
             "kind": w.kind,                       # 'change' | 'revert'
             "core": w.core,                       # 'aris' | 'pyre'
-            "from": _dec(w.winner_prev),
-            "to": _dec(w.winner_value),
+            "from": _from,
+            "to": _to,
         }
     except Exception:
         return None
@@ -1581,17 +1592,22 @@ def cast_rule_vote(req: _RuleVoteRequest, user: _User = Depends(_getCurrentUser)
         valid = set(RuleVoteRepository.optionsOf(w))
         if w.kind == 'revert':
             # MULTI-SELECT: the full set replaces the user's prior selection. Any
-            # unknown key is rejected; an empty set clears their ballot.
-            picks = [k for k in (req.optionKeys or []) if k and k != 'none']
-            bad = [k for k in picks if k not in valid]
+            # unknown key is rejected. The 'none' sentinel is a KEEP-EVERYTHING ballot
+            # (counts as a voter, approves no rule) — mutually exclusive with rule picks;
+            # an empty set clears their ballot (a full withdrawal).
+            raw = [k for k in (req.optionKeys or []) if k]
+            rulePicks = [k for k in raw if k != 'none']
+            bad = [k for k in rulePicks if k not in valid]
             if bad:
                 raise HTTPException(400, "That option is not on the ballot")
-            repo.setRevertSelection(user.id, w.id, picks)
+            # picking any rule wins over 'none'; otherwise honor an explicit keep-all
+            stored = rulePicks if rulePicks else (['none'] if 'none' in raw else [])
+            repo.setRevertSelection(user.id, w.id, stored)
             session.commit()
             counts, _voters = repo.revertCounts(w.id)
             return build_success_response({
                 "season": season, "windowId": w.id,
-                "myPicks": sorted(set(picks)), "totals": counts,
+                "myPicks": stored, "totals": counts,
             })
         # single-pick change
         if req.optionKey not in (valid | {"none"}):
@@ -2227,7 +2243,12 @@ async def get_current_games(response: Response):
             
             # Add down and distance
             if hasattr(game, 'down'):
-                down_text = {1: '1st', 2: '2nd', 3: '3rd', 4: '4th'}.get(game.down, '1st')
+                # Ordinalize generically — chaos rules can set 5+ downs, so a hardcoded
+                # 1st-4th map rendered a 5th down as "1st".
+                d = game.down or 1
+                suffix = 'th' if 11 <= (d % 100) <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(d % 10, 'th')
+                down_text = f'{d}{suffix}'
+                game_dict['downsPerSeries'] = getattr(getattr(game, 'gameRules', None), 'downsPerSeries', 4)
                 if hasattr(game, 'yardsToEndzone') and game.yardsToEndzone < 10:
                     game_dict['downText'] = f'{down_text} & Goal'
                 elif hasattr(game, 'yardsToFirstDown'):
@@ -6443,10 +6464,23 @@ def get_league_facilities():
         levelsByTeam = {}
         for row in session.query(TeamFacility).all():
             levelsByTeam.setdefault(row.team_id, {})[row.facility_key] = row.level
-        # fan counts
+        # fan counts — total (all-time favoriters) and ACTIVE THIS SEASON. "Active" uses
+        # the SAME definition as the GM vote threshold (_snapshotFrontOfficeFans): a
+        # favoriter whose most-recent login lands on/after this season's start, i.e. who
+        # has shown up at all this season. (Not a rolling N-day window — that undercounts
+        # and diverges from the number the rest of the app treats as the fanbase.)
+        from database.models import Season as _SeasonModel
         fanCounts = dict(session.query(_UserModel.favorite_team_id, func.count())
                          .filter(_UserModel.favorite_team_id.isnot(None))
                          .group_by(_UserModel.favorite_team_id).all())
+        _seasonRow = session.get(_SeasonModel, season)
+        _seasonStart = _seasonRow.start_date if _seasonRow else None
+        _activeQuery = (session.query(_UserModel.favorite_team_id, func.count())
+                        .filter(_UserModel.favorite_team_id.isnot(None),
+                                _UserModel.last_login_at.isnot(None)))
+        if _seasonStart is not None:
+            _activeQuery = _activeQuery.filter(_UserModel.last_login_at >= _seasonStart)
+        activeFanCounts = dict(_activeQuery.group_by(_UserModel.favorite_team_id).all())
         # market tier (fanbase label)
         tierByTeam = {r.team_id: r.funding_tier for r in
                       session.query(TeamFunding).filter_by(season=season).all()}
@@ -6463,6 +6497,7 @@ def get_league_facilities():
                 'appeal': facilitiesManager.computeAppeal(levels),
                 'levels': {k: levels.get(k, 0) for k in FACILITY_CATALOG},
                 'fanCount': fanCounts.get(team.id, 0),
+                'activeFanCount': activeFanCounts.get(team.id, 0),
                 'marketTier': tierByTeam.get(team.id, 'MID_MARKET'),
                 '_wp': st.get('winPerc', 0), '_sd': st.get('scoreDiff', 0),
             })
