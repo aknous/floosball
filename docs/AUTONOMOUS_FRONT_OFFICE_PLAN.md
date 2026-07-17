@@ -69,8 +69,12 @@ value players in the abstract:
    K lowest). All fill/upgrade/need decisions rank by `ratingDelta × positionValue`, NOT
    raw rating — this is what stops "best available = a great kicker" when there's a
    QB/RB hole. Start **universal** (shared table); optional small per-GM biases later.
-3. **Re-sign** — keep the ≤2 most valuable walk-year players (value-weighted,
-   sentiment-tilted), once each. Everyone else on a walk year leaves.
+3. **Re-sign (COMPARATIVE vs the market — not auto-best-2)** — a walk-year incumbent
+   gets one of the ≤2 re-sign slots ONLY if he beats the best available replacement at
+   his position (value-weighted, scouting-noised) AND is worth locking up over an FA
+   move. Otherwise let him walk and chase the upgrade / spend the slot elsewhere. Slots
+   are scarce (cap 2, once each), so they're spent only where the incumbent genuinely
+   wins. This is the same incumbent-vs-pool comparison as cut-for-upgrade (step 5).
 4. **Detect needs** — weak/vacant slots, weighted by positional value (a weak QB is a
    bigger need than a weak K).
 5. **Cut-for-upgrade (COMPARATIVE, not absolute)** — for each slot weigh the **incumbent
@@ -99,6 +103,32 @@ main source of emergent identity:
 - (optional) a `patience`/`aggressiveness` axis → how fast they churn the roster.
 
 Same inputs, different weights → the stubborn GM, the populist, the shrewd evaluator.
+
+### Offseason ordering — the "invisible draft board" (best-first sweep)
+
+The roster-assessment + FA phase is a **sequential sweep**, one team at a time, in
+**best-to-worst** order: **Floos Bowl champion first, then by win% descending** (same
+tiebreaker chain as standings). Each team, on its turn, runs its full pass — evaluate
+the FA pool → re-sign / cut / sign FAs — and **cut players drop into the shared FA pool
+LIVE**, so every later (worse) team can sign them. Deterministic to implement: walk the
+order, mutate one shared pool.
+
+**This reorders the offseason.** Today: rookie draft → FA draft. New flow:
+`GM turnover → best-first roster/FA sweep → worst-first rookie draft → training`.
+- **GM turnover resolves FIRST** (fire/retire/leave + replacement) so the GM making a
+  team's roster calls is the one who'll coach it.
+- **Rookie draft stays WORST-FIRST** — the deliberate parity counterweight (FA rewards
+  success; the draft rebuilds the cellar).
+
+**Parity tension (validate in sim).** Best-first FA means strong teams pick free agents
+first and the worst team signs leftovers — a mild anti-parity force that could compound,
+which rubs against last season's parity package. Mitigations: champions have few needs
+and act marginally (they don't drain the pool); the re-sign cap forces good teams to shed
+walk-year talent into the pool; a strong team's cuts are real upgrades for a weak team;
+and the worst-first rookie draft counterbalances. **Build best-first, then `simcheck`
+several seasons for hierarchy entrenchment** (repeat champions, widening win% spread). If
+it entrenches, the lever is easy: flip the sweep to worst-first, or split it (assess/cut
+best-first, but *claim* new FAs worst-first).
 
 ---
 
@@ -269,10 +299,12 @@ decide whether to wire it.
   fire/leave heat + team mood.
 - **`fanTrust` (Q3)** — **new independent coach attribute** (don't conflate with
   `attitude`, the locker-room axis).
-- **Team mood (Q2)** — **phase it, keep it out of the money.** Phase 1: sentiment → GM
-  decisions + fire/leave heat only. Phase 2 (optional): team mood → atmosphere /
-  attendance + a small morale nudge — NOT funding dollars (funding stays purely
-  fan-contributed, to avoid a win→sentiment→money→win runaway loop).
+- **Team mood (Q2)** — **phase it, and funding stays PURELY fan-contributed** (owner
+  confirmed — sentiment never touches the budget). Phase 1: sentiment → GM decisions +
+  fire/leave heat only. Phase 2 (optional): team mood → atmosphere / attendance + a small
+  morale nudge only — NOT funding dollars.
+- **Economy backfill (Q6)** — **let the sink shrink** (owner confirmed). No replacement
+  sink; core rating/posting is free.
 - **Position value (Part A)** — **universal `POSITION_VALUE` table** first; optional
   small per-GM biases later.
 - **Churn cap (Part A)** — **none initially**; let it self-limit, add a soft cap only if
@@ -290,11 +322,7 @@ decide whether to wire it.
 
 ## Still open
 
-- **Economy backfill (Q6)** — MEASURE FIRST: query prod `CurrencyTransaction` for the
-  `gm_vote`/ballot share of total sinks. If meaningful, backfill **on-theme** via the
-  social page (optional paid cosmetic expression: custom post flair, team-page
-  customization, "boosted" posts) while core rating/posting stays free — turning
-  vote-spending into expression-spending. Owner gut-check wanted: on-theme cosmetic sink
-  vs. just let the sink shrink.
-- **Team mood → money (Q2 gut-check)** — confirm funding stays purely fan-contributed
-  (sentiment out of the budget).
+- **Parity of the best-first FA sweep** — validate in `simcheck` (see Part A). If the
+  hierarchy entrenches, flip to worst-first or split assess-vs-claim ordering.
+- **Position value: universal vs small per-GM biases** (start universal; biases are a
+  later flavor option).
