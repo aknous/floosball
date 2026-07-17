@@ -1337,6 +1337,13 @@ def _lastRuleChange():
             _from = _to = None
         else:
             label = RULE_VOTE_CANDIDATES.get(field, {}).get('label') or _presetMechanicLabel(field)
+        # LEGACY rows (resolved before reverts recorded real before/after values) stored
+        # the LABEL as `from` and the literal "reverted" as `to` — which rendered
+        # "Pyre restored Game Format: Game Format → Reverted". They can't be repaired
+        # (the pre-revert value wasn't kept), so drop the bogus arrow and just name the
+        # rule that was put back. New rows carry real values and are unaffected.
+        if isinstance(_to, str) and _to.strip().lower() == 'reverted':
+            _from = _to = None
         return {
             "field": field,
             "label": label,
