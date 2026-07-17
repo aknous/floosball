@@ -77,21 +77,28 @@ value players in the abstract:
    wins. This is the same incumbent-vs-pool comparison as cut-for-upgrade (step 5).
 4. **Detect needs** — weak/vacant slots, weighted by positional value (a weak QB is a
    bigger need than a weak K).
-5. **Cut-for-upgrade (COMPARATIVE, not absolute)** — for each slot weigh the **incumbent
-   vs. the best available replacement** (FA pool + rookies). If
+5. **Cut-for-upgrade DECISION (COMPARATIVE, not absolute)** — for each slot weigh the
+   **incumbent vs. the best available replacement** (FA pool + rookies). If
    `(replacementValue − incumbentValue)` clears an **upgrade threshold** (accounting for
-   position value + cost + age), cut and upgrade; else stand pat. Cuts are purposeful
-   churn toward improvement, high-value needs first — a decent incumbent isn't cut unless
-   a real upgrade actually exists in the pool.
-6. **Fill vacancies** — remaining holes filled best-**value**-available (extends the
-   existing FA + rookie best-available paths; no fan ballot).
-7. **Sentiment tilt** — throughout, fan sentiment × `fanTrust` nudges close calls (keep a
+   position value + cost + age), CUT the incumbent (in anticipation of drafting a
+   replacement); else stand pat. Cuts are purposeful churn toward improvement, high-value
+   needs first — a decent incumbent isn't cut unless a real upgrade exists in the pool AND
+   the GM expects to actually land it given its FA-draft slot (see the worst-first risk in
+   Offseason ordering). **The actual signing happens later** in the separate worst-first
+   FA + rookie drafts — steps 3 and 5 only DECIDE re-sign/cut.
+6. **Sentiment tilt** — throughout, fan sentiment × `fanTrust` nudges close calls (keep a
    fan-favorite marginal player as a re-sign; cut a fan-villain the GM would otherwise
    keep). See Part D.
 
-**Churn:** re-signs are hard-capped at 2; cuts/signings are not. Lean is to let churn
-**self-limit** (real upgrades are scarce, every team fishes the same finite FA pool) and
-add a soft per-season cap only if `simcheck` shows thrash.
+> **Sweep vs. drafts:** steps 1–6 are the best-first **assessment sweep** and produce only
+> cut/re-sign **decisions** (no signing). Vacancies are filled afterward in the existing
+> **worst-first** rookie + FA drafts (best-*value*-available, position-need aware; no fan
+> ballot). See "Offseason ordering" below.
+
+**Churn:** re-signs are hard-capped at 2; cuts are not. Lean is to let churn
+**self-limit** (real upgrades are scarce, every team fishes the same finite FA pool, and
+worst-first FA order means a cut may not be replaced) and add a soft per-season cap only
+if `simcheck` shows thrash.
 
 ### Per-team behavior (no global nudge knob)
 Each GM manages differently, driven by **their own attributes** — this is the design's
@@ -104,31 +111,33 @@ main source of emergent identity:
 
 Same inputs, different weights → the stubborn GM, the populist, the shrewd evaluator.
 
-### Offseason ordering — the "invisible draft board" (best-first sweep)
+### Offseason ordering — the "invisible draft board" (best-first ASSESSMENT sweep)
 
-The roster-assessment + FA phase is a **sequential sweep**, one team at a time, in
+Before the drafts, a **sequential assessment sweep** runs one team at a time in
 **best-to-worst** order: **Floos Bowl champion first, then by win% descending** (same
-tiebreaker chain as standings). Each team, on its turn, runs its full pass — evaluate
-the FA pool → re-sign / cut / sign FAs — and **cut players drop into the shared FA pool
-LIVE**, so every later (worse) team can sign them. Deterministic to implement: walk the
-order, mutate one shared pool.
+tiebreaker chain as standings). **This sweep makes CUT and RE-SIGN decisions ONLY — it
+does NOT sign free agents.** Each team, on its turn, evaluates the market for context,
+decides who to re-sign (≤2) and who to cut, and its **cut players drop into the shared FA
+pool LIVE** — purely so the teams after it assess with the *full* market visible.
+Deterministic: walk the order, mutate one shared pool.
 
-**This reorders the offseason.** Today: rookie draft → FA draft. New flow:
-`GM turnover → best-first roster/FA sweep → worst-first rookie draft → training`.
-- **GM turnover resolves FIRST** (fire/retire/leave + replacement) so the GM making a
-  team's roster calls is the one who'll coach it.
-- **Rookie draft stays WORST-FIRST** — the deliberate parity counterweight (FA rewards
-  success; the draft rebuilds the cellar).
+**Actual acquisition is unchanged and parity-safe.** The **FA draft is still its own
+worst-to-best step**, and the rookie draft stays worst-first. So the best teams do NOT
+get first crack at free agents — best-first only sets the order in which teams finalize
+their own keep/cut lists and feed cuts into the pool. No anti-parity effect.
 
-**Parity tension (validate in sim).** Best-first FA means strong teams pick free agents
-first and the worst team signs leftovers — a mild anti-parity force that could compound,
-which rubs against last season's parity package. Mitigations: champions have few needs
-and act marginally (they don't drain the pool); the re-sign cap forces good teams to shed
-walk-year talent into the pool; a strong team's cuts are real upgrades for a weak team;
-and the worst-first rookie draft counterbalances. **Build best-first, then `simcheck`
-several seasons for hierarchy entrenchment** (repeat champions, widening win% spread). If
-it entrenches, the lever is easy: flip the sweep to worst-first, or split it (assess/cut
-best-first, but *claim* new FAs worst-first).
+**Reordered offseason.** Old: (vote-driven frontoffice) → rookie draft → FA draft. New:
+`GM turnover → best-first assessment sweep (cut/re-sign only) → worst-first rookie draft
+→ worst-first FA draft → training`. GM turnover (fire/retire/leave + replacement)
+resolves FIRST so the GM making a team's calls is the one who'll coach it. (Rookie-then-FA
+draft ordering kept as today.)
+
+**Emergent risk (a feature).** Because the FA draft is worst-first, a team that cuts or
+lets a decent player walk *hoping to upgrade* picks LATER in the draft and may not land
+the replacement — a champion cutting for an upgrade gambles the target survives ~23 picks.
+So cut/re-sign decisions carry real risk, and a sharp GM (high `scouting`) weighs its own
+FA-draft slot before dumping someone; a cautious GM holds a decent incumbent rather than
+risk the leftovers. Front-office tension for free.
 
 ---
 
@@ -322,7 +331,10 @@ decide whether to wire it.
 
 ## Still open
 
-- **Parity of the best-first FA sweep** — validate in `simcheck` (see Part A). If the
-  hierarchy entrenches, flip to worst-first or split assess-vs-claim ordering.
 - **Position value: universal vs small per-GM biases** (start universal; biases are a
   later flavor option).
+- **Rookie/FA draft order relative to the sweep** — kept as today (sweep → rookie → FA,
+  both worst-first); revisit only if sim suggests otherwise.
+
+_(Parity of the assessment sweep is a non-issue: it makes cut/re-sign decisions only;
+actual FA + rookie acquisition stays worst-first.)_
