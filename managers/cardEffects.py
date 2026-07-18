@@ -756,7 +756,7 @@ EFFECT_TOOLTIPS = {
     "stacked_deck": "Multiply the multipliers. FPx for each FPx card in your hand.",
     "copycat": "Copies the best. FP equal to the highest flat FP bonus from your other cards.",
     "chain_reaction": "Cards feeding cards. FPx that scales with how many of your other 4 cards produced a non-zero bonus.",
-    "bonus_round": "Everyone chipped in. FP if 4 or more of your other cards triggered a non-zero bonus this week.",
+    "bonus_round": "Everyone chipped in. FP if 6 or more of your other cards triggered a non-zero bonus this week.",
     "double_down": "With the lemons. Multiplies your lowest-earning card's FP this week.",
     "last_resort": "When nothing else works. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more of your other cards fail to produce a bonus.",
     "high_roller": "Built for the gamble. FPx that scales with how many of your chance cards hit enhanced this week.",
@@ -902,7 +902,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "stacked_deck": "Self-compounds: each other FPx card in your hand stacks +{perCardMult} on this card's own delta",
     "copycat": "+FP equal to highest flat FP bonus from your other cards",
     "chain_reaction": "+{perCardXMult} FPx for every card in your hand that produced a non-zero bonus this week",
-    "bonus_round": "+{rewardValue} FP when 4 or more of your other cards produced a non-zero bonus this week",
+    "bonus_round": "+{rewardValue} FP when 6 or more of your other cards produced a non-zero bonus this week",
     "double_down": "Multiplies your lowest-earning card's FP by {rewardValue} this week",
     "last_resort": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. 15% per card that produced no bonus this week, up to 70%",
     "high_roller": "+{perCardMult} FPx per chance card that triggered enhanced bonuses this week",
@@ -3931,18 +3931,24 @@ def _computeChainReaction(primary, ctx, cardPlayerId, eqId):
     return EffectResult(equation=eq)
 
 
+_BONUS_ROUND_THRESHOLD = 6  # Fusion: raised 4->6. With a 6-7 card lineup, 4+ cards
+                            # triggering was ~guaranteed; 6 means nearly the whole hand
+                            # must pop, keeping it a real "everything fires" payoff.
+
+
 def _computeBonusRound(primary, ctx, cardPlayerId, eqId):
-    """Large FP if 4+ other cards triggered a non-zero bonus."""
+    """Large FP if 6+ other cards triggered a non-zero bonus."""
     rewardValue = primary.get("rewardValue", 8)
+    threshold = _BONUS_ROUND_THRESHOLD
     breakdowns = ctx._firstPassBreakdowns or []
     triggeredCount = sum(1 for b in breakdowns
                          if b.totalFP > 0 or b.floobitsEarned > 0 or b.primaryMult > 0)
     preTriggers = getattr(ctx, '_secondPassPreTriggers', None) or {}
     triggeredCount += sum(1 for otherId, t in preTriggers.items() if otherId != eqId and t)
-    if triggeredCount >= 4:
-        eq = f"+{rewardValue} FP ({triggeredCount}/4+ cards triggered)"
+    if triggeredCount >= threshold:
+        eq = f"+{rewardValue} FP ({triggeredCount}/{threshold}+ cards triggered)"
         return EffectResult(fpBonus=rewardValue, equation=eq)
-    eq = f"{triggeredCount}/4 cards triggered (need 4+)"
+    eq = f"{triggeredCount}/{threshold} cards triggered (need {threshold}+)"
     return EffectResult(equation=eq)
 
 

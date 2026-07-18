@@ -49,30 +49,39 @@ separate roster / match bonus / swaps / temp_flex.
 | 2+3. Scoring/context from equipped (weekly-sum) — **getSnapshot** | ✅ DONE (math-validated) | `5a56c80` |
 | 2+3. Remaining repoint sites | ✅ DONE (math-validated) | `0b8ffbe` |
 | 4. Remove match bonus + Wildcard/Overdrive | ✅ DONE (unit-validated) | `1061150` |
-| 5a. Effects: retire stockpiler/vagabond + loyalty snapshot | ✅ DONE (unit-validated) | (this commit) |
-| 5b. Effects: retune trivially-true batch | ⏸ PENDING design decision | — |
+| 5a. Effects: retire stockpiler/vagabond + loyalty snapshot | ✅ DONE (unit-validated) | `850ddda` |
+| 5b. Effects: bonus_round threshold 4→6 | ✅ DONE (unit-validated) | (this commit) |
+| 5c. OVERHAUL full_roster + all_in (design TBD) | ⬜ TODO (deferred) | — |
 | 6. FLEX unlock + retire temp_flex/extra_swap + no-dup-player rule | ⬜ | — |
 | 7. Collapse fantasy-roster API into equipped-cards endpoints | ⬜ | — |
 | 8. Frontend unified lineup page (floosball-react) | ⬜ | — |
 | 9. Tuning pass + `simcheck` | ⬜ | — |
 
-## START HERE — Phase 5b (retune trivially-true batch) — NEEDS DESIGN DECISION
-Phase 5a (retire + loyalty) is done. The retune batch is paused pending owner input on
-approach (the plan lists WHICH effects but no target values, and magnitude is coupled to
-the Phase 9 ×1.5-absorption pass). Analysis of the batch under position-locked slots:
-- **Genuinely trivially-true (auto-satisfied, ~free every week):**
-  - `full_roster` — the 6 base slots are QB/RB/WR1/WR2/TE/K = 5 unique positions, so
-    "all 5 positions" is ALWAYS true once a full lineup is fielded → free FPx.
-  - `all_in` — WR1 + WR2 are both position 3, so it always sees ≥1 duplicate position for
-    free (before FLEX). Reliably fires at 1 dupe.
-  - `bonus_round` — "4+ cards triggered" is ≈ guaranteed with a 6–7 card lineup.
-- **Composition-shifted (still a real choice, just easier/reliably higher):** `anthem`
-  (3+ flat-FP), `diversified`, `gold_rush`, `stacked_deck`, `chain_reaction`, `copycat` —
-  these read hand composition, which is still a deckbuilding choice; mostly a **magnitude**
-  concern → fold into Phase 9.
-- **Actually fine / more interesting in fusion:** `home_alone` (austerity) — rewards
-  running a LEAN lineup (fewer cards = bigger FPx); that's a valid risk/reward play now.
-- Deep retune magnitude (absorb the lost ×1.5) is the **Phase 9** tuning pass.
+## START HERE — Phase 5c: OVERHAUL full_roster + all_in (owner: "completely overhaul")
+Owner decision (2026-07-18): `bonus_round` got the threshold fix (done); `full_roster` and
+`all_in` are NOT to be patched — they need a **complete redesign** for fusion, deferred to
+a dedicated effort (likely alongside the Phase 9 tuning / a fresh design pass). Do NOT ship
+the quick condition-patches that were proposed for them. Why each is broken under fusion:
+- **`full_roster` (Diamond)** — currently ×1.4 FPx when the hand has all 5 positions. The 6
+  base slots (QB/RB/WR1/WR2/TE/K) always span all 5 positions, so it fires free every week —
+  wrong for a Diamond (should be conditional / useless-if-misdeployed). Its whole "collect
+  every position" premise is dead when the lineup is position-locked. Needs a new premise.
+- **`all_in` (Prismatic)** — FPx scaling with max duplicate position count. WR1 + WR2 are
+  both position 3, so a standard lineup always shows ≥1 duplicate → it always fires for free.
+  Needs a new premise (the "stack the same position" idea barely survives, since only the
+  FLEX slot can add a genuine extra of a position).
+
+The rest of the plan's "retune" list is a **magnitude** concern folded into Phase 9:
+- Composition-shifted (still a real choice, just easier/higher): `anthem`, `diversified`,
+  `gold_rush`, `stacked_deck`, `chain_reaction`, `copycat`.
+- Fine / more interesting in fusion: `home_alone` (austerity) rewards a lean lineup now.
+- Deep magnitude retune (absorb the lost ×1.5) is the Phase 9 tuning pass.
+
+## Phase 5b (bonus_round threshold) — DONE
+- `_computeBonusRound`: raised the trigger from **4 → 6** other cards (new module const
+  `_BONUS_ROUND_THRESHOLD`), since 4+ was ~guaranteed with a 6–7 card fusion lineup. Value
+  (`rewardValue`) untouched (magnitude → Phase 9). Description + detail text updated to
+  "6 or more". **Validated:** unit test — fires at 6/7 triggered, not at 5.
 
 ## Phase 5a (retire stockpiler/vagabond + loyalty snapshot) — DONE
 - **Retired** `stockpiler` (FPx per UNUSED swap) and `vagabond` (FPx per swap USED) — both
