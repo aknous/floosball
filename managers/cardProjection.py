@@ -434,7 +434,8 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
 
     # FLEX slot detection — mirrors the fantasyTracker logic. Fusion: a card
     # equipped in the FLEX slot means the slot is in play; the entitlement checks
-    # below (champion card / temp_flex powerup) cover the unlocked-but-empty case.
+    # below (MVP card OR Accession/temp_card_slot powerup) cover the
+    # unlocked-but-empty case.
     hasFlexSlot = any(getattr(eq, 'slot', '') == 'FLEX' for eq in equipped)
     if not hasFlexSlot:
         try:
@@ -443,14 +444,14 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                 uc = getattr(eq, 'user_card', None)
                 tmpl = getattr(uc, 'card_template', None) if uc else None
                 cls = getattr(tmpl, 'classification', None) or ''
-                if 'champion' in cls:
+                if 'mvp' in cls:
                     hasFlexSlot = True
                     break
             if not hasFlexSlot:
                 activeFlex = session.query(_SP).filter(
                     _SP.user_id == userId,
                     _SP.season == season,
-                    _SP.item_slug == 'temp_flex',
+                    _SP.item_slug == 'temp_card_slot',
                     _SP.expires_at_week >= week,
                 ).first()
                 if activeFlex:

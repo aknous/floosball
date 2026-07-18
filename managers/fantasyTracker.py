@@ -1436,11 +1436,11 @@ class FantasyTracker:
         from managers.cardEffectCalculator import computeEminenceData
         positionAvgFPs, playerSeasonFPPerGame, top10PerPosition, top1PerPosition = computeEminenceData(session, season, currentWeek)
 
-        # FLEX slot detection — Home Alone needs to know whether the user
-        # has a 7th roster slot in play (empty or filled) so an open FLEX
-        # counts as a vacancy. Fusion: a card equipped in the FLEX slot means
-        # the slot is in play; the entitlement checks below (champion card /
-        # temp_flex powerup) cover the unlocked-but-empty FLEX case.
+        # FLEX slot detection — Home Alone needs to know whether the user has a
+        # 7th slot in play (empty or filled) so an open FLEX counts as a vacancy.
+        # Fusion: a card equipped in the FLEX slot means it's in play; the
+        # entitlement checks below (MVP card equipped OR Accession/temp_card_slot
+        # powerup) cover the unlocked-but-empty FLEX case.
         hasFlexSlot = any(getattr(eq, 'slot', '') == 'FLEX' for eq in userEquipped)
         if not hasFlexSlot:
             try:
@@ -1449,14 +1449,14 @@ class FantasyTracker:
                     uc = getattr(eq, 'user_card', None)
                     tmpl = getattr(uc, 'card_template', None) if uc else None
                     cls = getattr(tmpl, 'classification', None) or ''
-                    if 'champion' in cls:
+                    if 'mvp' in cls:
                         hasFlexSlot = True
                         break
                 if not hasFlexSlot:
                     activeFlex = session.query(_SP).filter(
                         _SP.user_id == userId,
                         _SP.season == season,
-                        _SP.item_slug == 'temp_flex',
+                        _SP.item_slug == 'temp_card_slot',
                         _SP.expires_at_week >= currentWeek,
                     ).first()
                     if activeFlex:

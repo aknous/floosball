@@ -1670,6 +1670,7 @@ class SeasonManager:
                             season=season,
                             week=currentWeek,
                             slot_number=prev.slot_number,
+                            slot=prev.slot,  # fusion: carry the position-slot string too
                             user_card_id=prev.user_card_id,
                             locked=False,
                             streak_count=prevStreak,
@@ -2238,14 +2239,14 @@ class SeasonManager:
                                 uc2 = getattr(eqRow, 'user_card', None)
                                 tmpl = getattr(uc2, 'card_template', None) if uc2 else None
                                 cls = getattr(tmpl, 'classification', None) or ''
-                                if 'champion' in cls:
+                                if 'mvp' in cls:
                                     hasFlexSlot = True
                                     break
                             if not hasFlexSlot:
                                 activeFlex = session.query(_SP).filter(
                                     _SP.user_id == userId,
                                     _SP.season == season,
-                                    _SP.item_slug == 'temp_flex',
+                                    _SP.item_slug == 'temp_card_slot',
                                     _SP.expires_at_week >= week,
                                 ).first()
                                 if activeFlex:

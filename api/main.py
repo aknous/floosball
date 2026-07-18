@@ -9862,6 +9862,7 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                     season=currentSeason,
                     week=currentWeek,
                     slot_number=prev.slot_number,
+                    slot=prev.slot,  # fusion: carry the position-slot string too
                     user_card_id=prev.user_card_id,
                     locked=gamesActive,
                     streak_count=prevStreak,
@@ -9887,6 +9888,7 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
             isAllPro = bool(template.classification and "all_pro" in template.classification)
             swapBonusActive = bool(getattr(eq, 'swap_bonus_active', False)) if isAllPro else None
             result.append({
+                "slot": eq.slot,  # fusion position slot (QB/RB/WR1/WR2/TE/K/FLEX)
                 "slotNumber": eq.slot_number,
                 "card": cardData,
                 "playerId": template.player_id,
@@ -9976,6 +9978,7 @@ def getEquippedCardsPublic(user_id: int, season: int, week: int):
             cardData = cardManager.serializeCard(eq.user_card, season)
             template = eq.user_card.card_template
             result.append({
+                "slot": eq.slot,  # fusion position slot (QB/RB/WR1/WR2/TE/K/FLEX)
                 "slotNumber": eq.slot_number,
                 "card": cardData,
                 "playerId": template.player_id,
@@ -9995,7 +9998,9 @@ def getEquippedCardsPublic(user_id: int, season: int, week: int):
 
 
 class EquipCardSlot(BaseModel):
-    slotNumber: int
+    # Fusion: cards are equipped into POSITION slots (QB/RB/WR1/WR2/TE/K/FLEX). The
+    # server derives slot_number from the slot via SLOT_TO_ORDINAL.
+    slot: str
     userCardId: int
 
 class EquipCardsRequest(BaseModel):
@@ -10011,22 +10016,25 @@ def setEquippedCards(
     from database.connection import get_session
     from database.models import FantasyRoster, EquippedCard, UserCard, CardTemplate
     from database.repositories.card_repositories import EquippedCardRepository
+    from managers.cardManager import (
+        FUSION_ALL_SLOTS, FLEX_SLOT, SLOT_TO_ORDINAL, cardFitsSlot,
+    )
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
 
-    # Pre-validate slot range loosely (detailed check after MVP classification lookup)
+    # Validate slot names (fusion position slots: QB/RB/WR1/WR2/TE/K/FLEX)
     for c in req.cards:
-        if c.slotNumber not in (1, 2, 3, 4, 5, 6):
-            raise HTTPException(status_code=400, detail=f"Invalid slot number: {c.slotNumber}")
+        if c.slot not in FUSION_ALL_SLOTS:
+            raise HTTPException(status_code=400, detail=f"Invalid slot: {c.slot}")
 
-    # Check for duplicate slots
-    slots = [c.slotNumber for c in req.cards]
+    # No duplicate slots
+    slots = [c.slot for c in req.cards]
     if len(slots) != len(set(slots)):
-        raise HTTPException(status_code=400, detail="Duplicate slot numbers")
+        raise HTTPException(status_code=400, detail="Duplicate slot")
 
-    # Check for duplicate card IDs
+    # No duplicate card IDs
     cardIds = [c.userCardId for c in req.cards]
     if len(cardIds) != len(set(cardIds)):
         raise HTTPException(status_code=400, detail="Cannot equip the same card in multiple slots")
@@ -10063,6 +10071,29 @@ def setEquippedCards(
             if template.classification and "mvp" in template.classification:
                 hasMvp = True
 
+        # Fusion: a card's depicted player position must fit its slot (FLEX = any).
+        for c in req.cards:
+            tmpl = cardTemplates[c.userCardId]
+            if not cardFitsSlot(tmpl.position, c.slot):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{tmpl.player_name} can't fill the {c.slot} slot",
+                )
+
+        # Fusion: no duplicate PLAYER across slots. Two different cards can depict
+        # the same player; equipping both would field that player twice. Reject
+        # here alongside the no-dup-card-id + no-dup-effect checks.
+        seenPlayers: Dict[int, int] = {}
+        for c in req.cards:
+            pid = cardTemplates[c.userCardId].player_id
+            if pid in seenPlayers:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{cardTemplates[c.userCardId].player_name} is already in your "
+                    f"lineup — the same player can't fill two slots.",
+                )
+            seenPlayers[pid] = c.userCardId
+
         # No-duplicate-effects rule: a user can equip at most one card with
         # each effectName. Two of the same effect stacked too hard under
         # bonus-additive math (two Droughts both growing their streak, two
@@ -10082,20 +10113,21 @@ def setEquippedCards(
                 )
             effectCounts[effectName] = effectName
 
-        # Enforce slot limits: 5 base, 6 if MVP card equipped OR temp_card_slot active
-        hasExtraSlot = hasMvp
-        if not hasExtraSlot:
-            from database.repositories.shop_repository import ShopPurchaseRepository
-            shopRepo = ShopPurchaseRepository(session)
-            activeSlot = shopRepo.getActiveTempCardSlot(user.id, currentSeason, currentWeek)
-            hasExtraSlot = activeSlot is not None
-        maxSlots = 6 if hasExtraSlot else 5
-        for c in req.cards:
-            if c.slotNumber > maxSlots:
+        # FLEX slot unlock (fusion): the 7th slot is available only with an MVP card
+        # equipped this set OR an active Accession (temp_card_slot) power-up. The six
+        # base slots are always available (one per position).
+        if any(c.slot == FLEX_SLOT for c in req.cards):
+            hasFlexUnlock = hasMvp
+            if not hasFlexUnlock:
+                from database.repositories.shop_repository import ShopPurchaseRepository
+                shopRepo = ShopPurchaseRepository(session)
+                hasFlexUnlock = shopRepo.getActiveTempCardSlot(
+                    user.id, currentSeason, currentWeek
+                ) is not None
+            if not hasFlexUnlock:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Slot 6 requires an MVP card or Accession power-up"
-                    if not hasExtraSlot else f"Invalid slot number: {c.slotNumber}"
+                    detail="The FLEX slot requires an MVP card equipped or the Accession power-up",
                 )
 
         # Track previously equipped cards before clearing
@@ -10161,7 +10193,8 @@ def setEquippedCards(
                 user_id=user.id,
                 season=currentSeason,
                 week=currentWeek,
-                slot_number=c.slotNumber,
+                slot=c.slot,
+                slot_number=SLOT_TO_ORDINAL[c.slot],
                 user_card_id=c.userCardId,
                 locked=False,
                 streak_count=prevStreakByCardId.get(c.userCardId, 1),

@@ -50,14 +50,51 @@ separate roster / match bonus / swaps / temp_flex.
 | 2+3. Remaining repoint sites | ✅ DONE (math-validated) | `0b8ffbe` |
 | 4. Remove match bonus + Wildcard/Overdrive | ✅ DONE (unit-validated) | `1061150` |
 | 5a. Effects: retire stockpiler/vagabond + loyalty snapshot | ✅ DONE (unit-validated) | `850ddda` |
-| 5b. Effects: bonus_round threshold 4→6 | ✅ DONE (unit-validated) | (this commit) |
+| 5b. Effects: bonus_round threshold 4→6 | ✅ DONE (unit-validated) | `ea0f154` |
 | 5c. OVERHAUL full_roster + all_in (design TBD) | ⬜ TODO (deferred) | — |
-| 6. FLEX unlock + retire temp_flex/extra_swap + no-dup-player rule | ⬜ | — |
-| 7. Collapse fantasy-roster API into equipped-cards endpoints | ⬜ | — |
+| 6. FLEX unlock + slot wiring + retire temp_flex/extra_swap + no-dup-player | ✅ DONE (unit-validated) | (this commit) |
+| 7. Collapse fantasy-roster API into equipped-cards endpoints | ⬜ NEXT | — |
 | 8. Frontend unified lineup page (floosball-react) | ⬜ | — |
 | 9. Tuning pass + `simcheck` | ⬜ | — |
 
-## START HERE — Phase 5c: OVERHAUL full_roster + all_in (owner: "completely overhaul")
+## START HERE — Phase 7 (collapse fantasy-roster API into equipped-cards endpoints)
+Phase 6 is done (the equip endpoint now drives position-locked slots + FLEX + no-dup-player;
+`EquippedCard.slot` is wired). Next: Phase 7 — retire the old fantasy-roster endpoints and
+`FantasyRosterPlayer`/`FantasyRosterSwap`. Known remaining `roster.players` / `temp_flex`
+readers to collapse (all in `api/main.py`): the roster GET/PUT (7827, 7877, 7970, 8034,
+8300, 8327…), swap/remove endpoints (8225, 8374), the admin stats top-rostered query (5831),
+and the dead `points_at_lock` loop at `seasonManager.py:863`. Keep the `FantasyRoster` row
+(leaderboard anchor + `WeeklyCardBonus.roster_id` FK) — only its `players`/`swaps` children go.
+
+Also still OPEN (deferred): **Phase 5c** — full redesign of `full_roster` + `all_in` (owner
+said "completely overhaul", not patch); see below. And the AP/CH classification reuse (plan
+open question) now that FLEX is MVP/Accession-gated — Champion no longer unlocks FLEX, All-Pro
+no longer grants swaps, so both are FREED. The All-Pro swap-grant machinery in the equip
+endpoint + `_grantAllProSwapsForRoster` is now inert (swaps gone) — remove during Phase 7.
+
+## Phase 6 (FLEX unlock + slot wiring + retire powerups + no-dup-player) — DONE
+- **Slot wiring:** the equip endpoint (`PUT /api/cards/equipped`) now takes a position `slot`
+  string per card (`EquipCardSlot.slot`), validates it against `FUSION_ALL_SLOTS`, checks
+  `cardManager.cardFitsSlot(template.position, slot)` (FLEX = any), and persists both
+  `EquippedCard.slot` and `slot_number` (from `SLOT_TO_ORDINAL`). Both carry-forward paths
+  (`seasonManager._carryForwardEquippedCards` + the GET-endpoint carry-forward) now copy
+  `slot` too. Both equipped GETs expose `slot` in the response.
+- **FLEX unlock consolidated:** placing a card in the FLEX slot requires an **MVP card
+  equipped OR an active Accession (`temp_card_slot`) powerup** — replaces the old
+  slot-6/maxSlots gate. The three calc-site FLEX detections (`_buildCardCalcContext`,
+  `_processWeekCardEffects`, `cardProjection`) had their fallback repointed from the old
+  champion-card / `temp_flex` signals to `mvp` / `temp_card_slot`.
+- **No-duplicate-player rule:** the equip endpoint rejects two cards depicting the same
+  player (alongside the existing no-dup-card-id + no-dup-effect checks).
+- **Powerups retired:** `extra_swap` (Dispensation) + `temp_flex` (Conscription) removed from
+  `POWERUP_CATALOG` (can't be bought; defs kept for historical display). `temp_card_slot`
+  (Accession) reworded to "Unlocks the FLEX lineup slot".
+- **Validated:** unit tests — `cardFitsSlot` / `SLOT_TO_ORDINAL` / `FUSION_ALL_SLOTS`; catalog
+  no longer offers the retired slugs. Full equip-flow e2e deferred to Phase 9 simcheck.
+- Note: the pre-fusion **fantasy-roster** endpoints still read `temp_flex` / `roster.players`
+  — untouched here, collapsed in Phase 7.
+
+## Phase 5c: OVERHAUL full_roster + all_in (owner: "completely overhaul")
 Owner decision (2026-07-18): `bonus_round` got the threshold fix (done); `full_roster` and
 `all_in` are NOT to be patched — they need a **complete redesign** for fusion, deferred to
 a dedicated effort (likely alongside the Phase 9 tuning / a fresh design pass). Do NOT ship

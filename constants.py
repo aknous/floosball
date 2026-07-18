@@ -1403,6 +1403,9 @@ RB_SCREEN_CHANCE = 1                # % of clean (non-pressure) dropbacks that a
 RB_SCREEN_BASE_YAC = 5.5           # mean YAC on a screen at RB speed pivot 78
 
 # Power-Up Shop
+# RETIRED (fantasy/cards fusion): roster swaps are gone, so Dispensation has nothing
+# to grant. Kept for display of any historical purchases; removed from POWERUP_CATALOG
+# so it can't be bought.
 POWERUP_EXTRA_SWAP = {
     "slug": "extra_swap",
     "displayName": "Dispensation",
@@ -1415,6 +1418,9 @@ POWERUP_MODIFIER_NULLIFIER = {
     "description": "Your cards operate under Steady (no modifier effect) this week.",
     "price": 60,
 }
+# RETIRED (fantasy/cards fusion): the FLEX slot is now unlocked by Accession
+# (temp_card_slot) or an MVP card, so Conscription is redundant. Kept for display of
+# any historical purchases; removed from POWERUP_CATALOG so it can't be bought.
 POWERUP_TEMP_FLEX = {
     "slug": "temp_flex",
     "displayName": "Conscription",
@@ -1426,7 +1432,7 @@ POWERUP_TEMP_FLEX = {
 POWERUP_TEMP_CARD_SLOT = {
     "slug": "temp_card_slot",
     "displayName": "Accession",
-    "description": "Adds a 6th card equipment slot for 4 weeks.",
+    "description": "Unlocks the FLEX lineup slot (any position) for 4 weeks.",
     "price": 200,
     "durationWeeks": 4,
     "seasonLimit": 2,
@@ -1453,10 +1459,10 @@ POWERUP_INCOME_BOOST = {
     "boostMultiplier": INCOME_BOOST_MULTIPLIER,
 }
 
+# extra_swap + temp_flex retired in the fantasy/cards fusion (see notes above) — not
+# listed here so the shop never offers them; their defs remain for historical display.
 POWERUP_CATALOG = {
-    "extra_swap": POWERUP_EXTRA_SWAP,
     "modifier_nullifier": POWERUP_MODIFIER_NULLIFIER,
-    "temp_flex": POWERUP_TEMP_FLEX,
     "temp_card_slot": POWERUP_TEMP_CARD_SLOT,
     "fortunes_favor": POWERUP_FORTUNES_FAVOR,
     "income_boost": POWERUP_INCOME_BOOST,
