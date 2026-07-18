@@ -48,26 +48,54 @@ separate roster / match bonus / swaps / temp_flex.
 | 1. EquippedCard slot model + migration | ✅ DONE | `269c804` |
 | 2+3. Scoring/context from equipped (weekly-sum) — **getSnapshot** | ✅ DONE (math-validated) | `5a56c80` |
 | 2+3. Remaining repoint sites | ✅ DONE (math-validated) | `0b8ffbe` |
-| 4. Remove match bonus + Wildcard/Overdrive | ✅ DONE (unit-validated) | (this commit) |
-| 5. Effects (retire stockpiler/vagabond, loyalty snapshot, retune) | ⬜ NEXT | — |
+| 4. Remove match bonus + Wildcard/Overdrive | ✅ DONE (unit-validated) | `1061150` |
+| 5a. Effects: retire stockpiler/vagabond + loyalty snapshot | ✅ DONE (unit-validated) | (this commit) |
+| 5b. Effects: retune trivially-true batch | ⏸ PENDING design decision | — |
 | 6. FLEX unlock + retire temp_flex/extra_swap + no-dup-player rule | ⬜ | — |
 | 7. Collapse fantasy-roster API into equipped-cards endpoints | ⬜ | — |
 | 8. Frontend unified lineup page (floosball-react) | ⬜ | — |
 | 9. Tuning pass + `simcheck` | ⬜ | — |
 
-## START HERE — Phase 5 (effects: retire stockpiler/vagabond, loyalty snapshot, retune)
-Phases 2+3 and 4 are closed. Next: Phase 5.
-- **RETIRE** `stockpiler` (`cardEffects.py:~2431`, reads unused swaps) and `vagabond`
-  (`cardEffects.py:~4246`, reads swaps used) — both swap-dependent, swaps are gone.
-- **`loyalty`**: replace the `initial_player_ids` snapshot (first-saved *fantasy roster*)
-  with an "initial equipped set this season" snapshot. `_buildCardCalcContext` +
-  `_processWeekCardEffects` + `cardProjection` all still read `roster.initial_player_ids`
-  for `ctx.initialRosterPlayerIds` — repoint the *source* of that snapshot to the equipped
-  cards (where/when it's captured), keep the ctx field.
-- **RETUNE batch** (trivially-true / composition-shifted under position-locked slots):
-  `full_roster`, `home_alone`, `bonus_round`, `diversified`, `anthem`, `gold_rush`,
-  `stacked_deck`, `all_in`, `chain_reaction`, `copycat`. See the plan's "Effect verdict".
-- Deep retune magnitude (absorb the lost ×1.5) is the **Phase 9** tuning pass, not here.
+## START HERE — Phase 5b (retune trivially-true batch) — NEEDS DESIGN DECISION
+Phase 5a (retire + loyalty) is done. The retune batch is paused pending owner input on
+approach (the plan lists WHICH effects but no target values, and magnitude is coupled to
+the Phase 9 ×1.5-absorption pass). Analysis of the batch under position-locked slots:
+- **Genuinely trivially-true (auto-satisfied, ~free every week):**
+  - `full_roster` — the 6 base slots are QB/RB/WR1/WR2/TE/K = 5 unique positions, so
+    "all 5 positions" is ALWAYS true once a full lineup is fielded → free FPx.
+  - `all_in` — WR1 + WR2 are both position 3, so it always sees ≥1 duplicate position for
+    free (before FLEX). Reliably fires at 1 dupe.
+  - `bonus_round` — "4+ cards triggered" is ≈ guaranteed with a 6–7 card lineup.
+- **Composition-shifted (still a real choice, just easier/reliably higher):** `anthem`
+  (3+ flat-FP), `diversified`, `gold_rush`, `stacked_deck`, `chain_reaction`, `copycat` —
+  these read hand composition, which is still a deckbuilding choice; mostly a **magnitude**
+  concern → fold into Phase 9.
+- **Actually fine / more interesting in fusion:** `home_alone` (austerity) — rewards
+  running a LEAN lineup (fewer cards = bigger FPx); that's a valid risk/reward play now.
+- Deep retune magnitude (absorb the lost ×1.5) is the **Phase 9** tuning pass.
+
+## Phase 5a (retire stockpiler/vagabond + loyalty snapshot) — DONE
+- **Retired** `stockpiler` (FPx per UNUSED swap) and `vagabond` (FPx per swap USED) — both
+  swap-dependent, swaps are gone. Removed from `SHARED_EFFECT_POOL` (mint pool) following
+  the existing `surplus` precedent; handler + display + payout reader kept so any existing
+  owned copies still render (they compute 0 with no swaps).
+- **Loyalty snapshot** repointed to the fusion source: the initial EQUIPPED set this season
+  is captured on the first non-empty equip (`setEquippedCards`, from the depicted players),
+  stored on `roster.initial_player_ids`. The old first-fantasy-roster-save capture is
+  removed from the fantasy PUT. All read sites (`_buildCardCalcContext`,
+  `_processWeekCardEffects`, `cardProjection`, `_computeLoyalty`) already read
+  `initial_player_ids` / `ctx.initialRosterPlayerIds` — unchanged; only the source moved.
+  Display/detail/docstring text updated ("first lineup this season").
+- **Validated:** unit tests — loyalty pays per original still equipped (2 originals × 12 =
+  24) and no-ops with no snapshot; retired effects confirmed out of the mint pool with
+  handlers intact.
+
+> **Watch-out (found during Phase 5):** the equip endpoint (`setEquippedCards`) still writes
+> only `slot_number` (1–6), NOT the fusion `slot` string — that wiring is Phase 6/7. So
+> `EquippedCard.slot` is currently NULL. The Phase 2+3 auto-lock gate was therefore keyed
+> off `slot_number` (distinct slot_numbers = distinct filled slots), which is robust now and
+> after Phase 6. FLEX detection via `eq.slot == 'FLEX'` currently falls back to the
+> entitlement check (champion/temp_flex) until Phase 6 wires the slot string + FLEX unlock.
 
 ## Phase 4 (match bonus + Wildcard/Overdrive) — DONE
 - `cardEffectCalculator._computeCardPass`: removed the ×1.5/×2.5 match multiplier entirely

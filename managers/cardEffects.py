@@ -796,7 +796,7 @@ EFFECT_TOOLTIPS = {
     "synergy": "Two heads, one team. FPx per pair of roster players on the same actual team.",
     "vanguard": "The old guard endures. FPx per roster player with 5 or more seasons played.",
     "range": "Distance is the reward. FP scaling with the total FG yardage your roster's K kicked this week.",
-    "loyalty": "Keep the band together. FP per roster player still on roster from your first save this season.",
+    "loyalty": "Keep the band together. FP per player still equipped from your first lineup this season.",
     "charmed": "Pays out every time luck breaks your way. FP per chance card that triggered this week.",
     "cornerstone": "Roster the position leaders. FPx per roster player ranked #1 at their position by season FP.",
     # ── Diamond stat amplifiers ──
@@ -942,7 +942,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "synergy": "+{perPairMult} FPx per pair of roster players on the same actual team. Max +{maxDelta} FPx.",
     "vanguard": "+{perVetMult} FPx per roster player with 5+ seasons played. Max +{maxDelta} FPx.",
     "range": "+{perYardFP} FP per yard of FG kicked by your roster's K this week.",
-    "loyalty": "+{perPlayerFP} FP per roster player still on roster from your first save this season.",
+    "loyalty": "+{perPlayerFP} FP per player still equipped from your first lineup this season.",
     "charmed": "+{perTriggerFP} FP per chance card that triggered this week.",
     "cornerstone": "+{perPlayerMult} FPx per roster player ranked #1 at their position. Max +{maxDelta} FPx. Active from week 3.",
     "doubler": "Roster TDs count {tdMult}x for every other card's effect this week.",
@@ -962,7 +962,11 @@ SHARED_EFFECT_POOL = [
     # multiplier effects
     "big_deal", "cornucopia", "babysitter",
     "martyr", "juggernaut", "resplendent",
-    "underdog", "stockpiler",
+    "underdog",
+    # NOTE: "stockpiler" retired in the fantasy/cards fusion — it scaled FPx with
+    # UNUSED roster swaps, and swaps are gone. Removed from the minting pool so no
+    # new copies are created; the handler + display + payout reader are kept so any
+    # existing owned copies still render (they compute 0 with no swaps).
     "providence", "house_money", "rising_tide",
     # floobits effects
     "allowance", "cha_ching", "piggy_bank",
@@ -1000,7 +1004,10 @@ SHARED_EFFECT_POOL = [
     # weekly Floobit income cap, which no longer exists. Removed from the minting
     # pool so no new copies are created; the effect handler + display + payout
     # reader are kept so the existing owned copies still render and pay out.
-    "vagabond", "fat_cat", "bonsai",
+    # NOTE: "vagabond" retired in the fantasy/cards fusion — it scaled FPx with
+    # roster swaps USED this season, and swaps are gone. Removed from the minting
+    # pool (handler + display + payout reader kept for existing owned copies).
+    "fat_cat", "bonsai",
     # New cards (FP/FPx rebalance)
     "anthem", "conductor",
     "castaway", "sleeper", "patient", "rookie_hype", "wanderer",
@@ -2946,8 +2953,9 @@ def _computeCornerstone(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeLoyalty(primary, ctx, cardPlayerId, eqId):
-    """FP per roster player still on roster from the user's first-save
-    snapshot. Rewards keeping originals through the season."""
+    """FP per player still fielded from the user's INITIAL equipped set this
+    season (fusion: the roster IS the equipped cards). Rewards keeping the
+    originals equipped through the season."""
     perPlayerFP = primary.get("perPlayerFP", 12)
     initial = getattr(ctx, 'initialRosterPlayerIds', None) or set()
     if not initial:

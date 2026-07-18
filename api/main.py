@@ -8037,14 +8037,9 @@ def set_fantasy_roster(req: FantasyRosterRequest, user: _User = Depends(_getCurr
                 slot=rp.slot,
             ))
 
-        # Snapshot the initial roster on the FIRST save only. The Loyalty card
-        # pays per player still on roster from this snapshot, so we never
-        # overwrite it after the first commit.
-        if not roster.initial_player_ids:
-            import json as _json
-            roster.initial_player_ids = _json.dumps(
-                [int(rp.playerId) for rp in req.players]
-            )
+        # Fusion: the Loyalty snapshot now comes from the initial EQUIPPED set
+        # (captured in the equip endpoint), not the first fantasy-roster save —
+        # so this endpoint no longer writes initial_player_ids.
         # Achievement hooks — first-time roster set + secrets (Shoestring, Homer)
         from managers import achievementManager as _am
         _am.onFantasyRosterSet(session, user.id)
@@ -10173,6 +10168,20 @@ def setEquippedCards(
                 peak_output=prevPeakByCardId.get(c.userCardId),
                 weeks_since_break=prevWeeksSinceByCardId.get(c.userCardId, 0),
             ))
+
+        # Fusion: the roster IS the equipped cards, so the Loyalty snapshot is the
+        # user's INITIAL equipped set this season (the depicted players), captured on
+        # the first non-empty equip and never overwritten. Replaces the old
+        # first-fantasy-roster-save snapshot.
+        if req.cards:
+            snapRoster = roster or session.query(FantasyRoster).filter_by(
+                user_id=user.id, season=currentSeason
+            ).first()
+            if snapRoster and not snapRoster.initial_player_ids:
+                import json as _json
+                snapRoster.initial_player_ids = _json.dumps(
+                    [int(cardTemplates[c.userCardId].player_id) for c in req.cards]
+                )
 
         # All-Pro swap bonuses — only apply when roster is locked
         if roster:

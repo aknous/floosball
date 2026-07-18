@@ -848,13 +848,13 @@ class SeasonManager:
                 from constants import ROSTER_MIN_PLAYERS as _ROSTER_MIN
                 # Fusion: the roster IS the equipped cards, so a user's lineup is
                 # legal (auto-lockable) when their equipped cards fill >= ROSTER_MIN
-                # distinct position slots — not FantasyRosterPlayer rows. Batch the
-                # week's equipped cards once and group filled slots by user.
+                # distinct slots — not FantasyRosterPlayer rows. Key off slot_number
+                # (always set; the position-slot string is wired in Phase 6/7) so
+                # distinct slot_numbers == distinct filled positions. Batch once.
                 allEquippedThisWeek = equippedRepo.getAllForWeek(seasonNum, currentWeek)
                 slotsByUser = {}
                 for eq in allEquippedThisWeek:
-                    if eq.slot:
-                        slotsByUser.setdefault(eq.user_id, set()).add(eq.slot)
+                    slotsByUser.setdefault(eq.user_id, set()).add(eq.slot_number)
                 for roster in unlocked:
                     filledSlots = slotsByUser.get(roster.user_id, set())
                     if len(filledSlots) >= _ROSTER_MIN:
