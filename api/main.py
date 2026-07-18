@@ -9877,13 +9877,10 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
             session.commit()
             equipped = equippedRepo.getByUserWeek(user.id, currentSeason, currentWeek)
 
-        # Get roster player IDs for match detection
-        roster = session.query(FantasyRoster).filter_by(
-            user_id=user.id, season=currentSeason
-        ).first()
-        rosterPlayerIds = set()
-        if roster:
-            rosterPlayerIds = {rp.player_id for rp in roster.players}
+        # Fusion: the roster IS the equipped cards, so "match" detection runs
+        # against the players DEPICTED by the equipped cards (not FantasyRosterPlayer
+        # rows). The match multiplier itself is removed in Phase 4.
+        rosterPlayerIds = {eq.user_card.card_template.player_id for eq in equipped}
 
         result = []
         for eq in equipped:
@@ -9975,11 +9972,9 @@ def getEquippedCardsPublic(user_id: int, season: int, week: int):
         equippedRepo = EquippedCardRepository(session)
         equipped = equippedRepo.getByUserWeek(user_id, season, week)
 
-        roster = session.query(FantasyRoster).filter_by(user_id=user_id, season=season).first()
-        rosterPlayerIds = set()
-        if roster:
-            for rp in roster.players:
-                rosterPlayerIds.add(rp.player_id)
+        # Fusion: match detection runs against the depicted players of the
+        # equipped cards (the roster IS the equipped cards).
+        rosterPlayerIds = {eq.user_card.card_template.player_id for eq in equipped}
 
         result = []
         for eq in equipped:

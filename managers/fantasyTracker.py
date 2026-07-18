@@ -1438,11 +1438,10 @@ class FantasyTracker:
 
         # FLEX slot detection — Home Alone needs to know whether the user
         # has a 7th roster slot in play (empty or filled) so an open FLEX
-        # counts as a vacancy. Active entitlement (champion card / temp_flex
-        # powerup) OR a FLEX row already on the roster both indicate the
-        # slot is in play — covers the entitlement-just-expired-but-roster-
-        # still-has-FLEX edge case.
-        hasFlexSlot = any(getattr(rp, 'slot', '') == 'FLEX' for rp in roster.players)
+        # counts as a vacancy. Fusion: a card equipped in the FLEX slot means
+        # the slot is in play; the entitlement checks below (champion card /
+        # temp_flex powerup) cover the unlocked-but-empty FLEX case.
+        hasFlexSlot = any(getattr(eq, 'slot', '') == 'FLEX' for eq in userEquipped)
         if not hasFlexSlot:
             try:
                 from database.models import ShopPurchase as _SP

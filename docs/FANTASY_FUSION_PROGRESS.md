@@ -47,30 +47,50 @@ separate roster / match bonus / swaps / temp_flex.
 |---|---|---|
 | 1. EquippedCard slot model + migration | ✅ DONE | `269c804` |
 | 2+3. Scoring/context from equipped (weekly-sum) — **getSnapshot** | ✅ DONE (math-validated) | `5a56c80` |
-| 2+3. Remaining repoint sites | ⬜ NEXT | — |
-| 4. Remove match bonus + Wildcard/Overdrive | ⬜ | — |
+| 2+3. Remaining repoint sites | ✅ DONE (math-validated) | (this commit) |
+| 4. Remove match bonus + Wildcard/Overdrive | ⬜ NEXT | — |
 | 5. Effects (retire stockpiler/vagabond, loyalty snapshot, retune) | ⬜ | — |
 | 6. FLEX unlock + retire temp_flex/extra_swap + no-dup-player rule | ⬜ | — |
 | 7. Collapse fantasy-roster API into equipped-cards endpoints | ⬜ | — |
 | 8. Frontend unified lineup page (floosball-react) | ⬜ | — |
 | 9. Tuning pass + `simcheck` | ⬜ | — |
 
-## START HERE — remaining Phase 2+3 repoint sites
-`getSnapshot` (live leaderboard) is done. Repoint these to compute off the **depicted
-players of the equipped cards** for the relevant week, NOT `roster.players`
-(FantasyRosterPlayer). Use `_equippedRostersByWeek` / the same pattern as the committed
-`getSnapshot` rewrite.
+## START HERE — Phase 4 (remove match bonus + Wildcard/Overdrive)
+Phase 2+3 is fully closed (see below). Next: Phase 4 — remove the ×1.5/×2.5 match path
+in `_computeCardPass` (`cardEffectCalculator.py:696–720`, `isMatch = cardPlayerId in
+ctx.rosterPlayerIds`), and retire/repurpose the Wildcard + Overdrive WeeklyModifiers.
+Every equipped card's player is now trivially "on the roster," so the match multiplier is
+flat inflation. Retune base effect values to absorb the lost ×1.5 (tuning pass, Phase 9).
 
-1. **`seasonManager._processWeekCardEffects`** (`managers/seasonManager.py:1778`) — the
-   week-end `WeeklyCardBonus` banking. **Most important** (getSnapshot reads these banked
-   bonuses for historical weeks). `roster.players` at `:1876, 1962, 1967, 2171, 2214`;
-   FLEX detect at `:2214`; `_buildCardCalcContext`-mirroring context built here.
-2. **`managers/cardProjection.py:315, 615`** — projected weekly payout.
-3. **`api/main.py:9886, 9979`** — endpoints reading roster player ids.
-4. Minor: `seasonManager.py:850,854` (filledSlots), `:5844`.
+## Phase 2+3 repoint sites — DONE
+All scoring/context now computes off the **depicted players of the equipped cards** for the
+relevant week (not `roster.players`). Each repoint keeps the per-card list so a player
+depicted by two cards is counted per-card, matching the committed `getSnapshot` rewrite.
 
-After these: the current-week AND historical scoring both run off equipped cards → Phase
-2+3 fully closed. Then Phase 4.
+1. ✅ **`seasonManager._processWeekCardEffects`** — week-end `WeeklyCardBonus` banking.
+   `allPlayerIds`, `rosterPlayerIds`, `weekRawFP`/`rosterTotalTds`, `kickerPids`, and FLEX
+   detect all derive from `depictedPairs = [(eq, eq.user_card.card_template.player_id) …]`.
+2. ✅ **`cardProjection.buildProjectionContext`** — equipped query moved to the top;
+   `rosterPlayerIds` + the per-player stat loop + FLEX detect all off `depictedPairs`.
+3. ✅ **`api/main.py`** equipped-cards GET + public GET — `isMatch` derivation off the
+   equipped cards' depicted players (match multiplier itself removed in Phase 4).
+4. ✅ Minor: `seasonManager` auto-lock gate (`:850`, now off equipped-card filled slots,
+   batched via `getAllForWeek`); season finalization `_processUserSeasonTransitions`
+   (weekly-sum: Σ over weeks of that week's lineup's `WeeklyPlayerFP`, no `points_at_lock`
+   offset); Discord day-FP report (per-week equipped lineup, not a fixed roster).
+5. ✅ Consistency: `fantasyTracker._buildCardCalcContext` FLEX detect repointed to
+   `userEquipped` so the live path matches the banked path.
+
+**Validated:** parse + runtime-import of all four modules; a constructed in-memory-SQLite
+test of the weekly-sum finalization math + `_equippedRostersByWeek` (per-card double-count
+of a duplicated player confirmed). Full `simcheck` deferred to Phase 9.
+
+**Left for later phases (still reading `roster.players`, intentionally):**
+- `seasonManager.py:863` — `points_at_lock` loop in auto-lock. Dead under weekly-sum but
+  harmless during transition (operates on existing FantasyRosterPlayer rows). Cleanup ~P7.
+- `api/main.py` fantasy-roster endpoints (7827, 7877, 8116, 8127, 8225, 8374, 8829, 8906,
+  14173) + admin stats (5831) — collapse into equipped-cards endpoints in **Phase 7**.
+- Loyalty `initial_player_ids` snapshot — **Phase 5**.
 
 ## Validation approach
 - Per-edit: parse-check + a constructed-scenario unit test of the math (see the weekly-sum

@@ -312,7 +312,17 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     roster = session.query(FantasyRoster).filter_by(user_id=userId, season=season).first()
     if not roster:
         return None
-    rosterPlayerIds = {rp.player_id for rp in roster.players}
+    # Fusion: the roster IS the equipped cards, so the projected lineup = the
+    # players DEPICTED by the equipped cards for the week (not FantasyRosterPlayer
+    # rows). Keep a per-card list so a player depicted by two cards is counted
+    # per-card, matching the live/week-end paths.
+    equipped = (session.query(EquippedCard)
+                .filter(EquippedCard.user_id == userId,
+                        EquippedCard.season == season,
+                        EquippedCard.week == week)
+                .all())
+    depictedPairs = [(eq, eq.user_card.card_template.player_id) for eq in equipped]
+    rosterPlayerIds = {pid for _eq, pid in depictedPairs}
     if not rosterPlayerIds:
         return None
     # Loyalty snapshot — original roster from first save.
@@ -339,8 +349,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     rosterPlayerTeamIds = {}
     playerSeasonFPPerGame = {}
 
-    for rp in roster.players:
-        pid = rp.player_id
+    for _eq, pid in depictedPairs:
         dbPlayer = playerManager.getPlayerById(pid) if playerManager else None
         if dbPlayer:
             rosterPlayerNames[pid] = getattr(dbPlayer, 'name', '')
@@ -423,15 +432,10 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
 
     teamResults = {favTeamId: winProb > 0.5} if favTeamId else {}
 
-    equipped = (session.query(EquippedCard)
-                .filter(EquippedCard.user_id == userId,
-                        EquippedCard.season == season,
-                        EquippedCard.week == week)
-                .all())
-    # FLEX slot detection — mirrors the fantasyTracker logic. Either an
-    # active entitlement (champion card / temp_flex powerup) or a FLEX
-    # row already on the roster signals the slot is in play.
-    hasFlexSlot = any(getattr(rp, 'slot', '') == 'FLEX' for rp in roster.players)
+    # FLEX slot detection — mirrors the fantasyTracker logic. Fusion: a card
+    # equipped in the FLEX slot means the slot is in play; the entitlement checks
+    # below (champion card / temp_flex powerup) cover the unlocked-but-empty case.
+    hasFlexSlot = any(getattr(eq, 'slot', '') == 'FLEX' for eq in equipped)
     if not hasFlexSlot:
         try:
             from database.models import ShopPurchase as _SP

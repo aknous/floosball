@@ -846,8 +846,17 @@ class SeasonManager:
                 # floor. Previously required all 6 slots filled, so a
                 # partially-set-up roster silently forfeited the week.
                 from constants import ROSTER_MIN_PLAYERS as _ROSTER_MIN
+                # Fusion: the roster IS the equipped cards, so a user's lineup is
+                # legal (auto-lockable) when their equipped cards fill >= ROSTER_MIN
+                # distinct position slots — not FantasyRosterPlayer rows. Batch the
+                # week's equipped cards once and group filled slots by user.
+                allEquippedThisWeek = equippedRepo.getAllForWeek(seasonNum, currentWeek)
+                slotsByUser = {}
+                for eq in allEquippedThisWeek:
+                    if eq.slot:
+                        slotsByUser.setdefault(eq.user_id, set()).add(eq.slot)
                 for roster in unlocked:
-                    filledSlots = {rp.slot for rp in roster.players}
+                    filledSlots = slotsByUser.get(roster.user_id, set())
                     if len(filledSlots) >= _ROSTER_MIN:
                         roster.is_locked = True
                         roster.locked_at = datetime.datetime.utcnow()
@@ -1866,14 +1875,15 @@ class SeasonManager:
                     teamGameMap[g.home_team_id] = g
                     teamGameMap[g.away_team_id] = g
 
-                # Player ratings and positions
+                # Player ratings and positions — Fusion: the roster IS the equipped
+                # cards, so gather the players DEPICTED by every user's locked cards
+                # (not FantasyRosterPlayer rows).
                 allPlayerIds = set()
                 for userId, userEquipped in byUser.items():
-                    roster = session.query(FantasyRoster).filter_by(
-                        user_id=userId, season=season, is_locked=True
-                    ).first()
-                    if roster:
-                        allPlayerIds.update(rp.player_id for rp in roster.players)
+                    for eq in userEquipped:
+                        pid = eq.user_card.card_template.player_id
+                        if pid:
+                            allPlayerIds.add(pid)
 
                 playerRatingsMap = {}
                 playerPositionMap = {}
@@ -1959,13 +1969,20 @@ class SeasonManager:
                     if not roster:
                         continue
 
-                    rosterPlayerIds = {rp.player_id for rp in roster.players}
+                    # Fusion: this user's lineup = the players DEPICTED by their locked
+                    # equipped cards (one per slot), NOT FantasyRosterPlayer rows. Keep a
+                    # per-card list so the base FP mirrors getSnapshot exactly (a player
+                    # depicted by two cards contributes twice, matching the live path).
+                    depictedPairs = [
+                        (eq, eq.user_card.card_template.player_id) for eq in userEquipped
+                    ]
+                    rosterPlayerIds = {pid for _eq, pid in depictedPairs}
 
                     # Compute user's raw weekly FP and TDs
                     weekRawFP = 0.0
                     rosterTotalTds = 0
-                    for rp in roster.players:
-                        pStats = weekPlayerStats.get(rp.player_id, {})
+                    for _eq, pid in depictedPairs:
+                        pStats = weekPlayerStats.get(pid, {})
                         weekRawFP += pStats.get("fantasyPoints", 0)
                         rosterTotalTds += _countPlayerTds(pStats)
 
@@ -2168,8 +2185,8 @@ class SeasonManager:
 
                     # Compute kicker season FG misses for Good Neighbor
                     kickerSeasonFgMisses = 0
-                    kickerPids = [rp.player_id for rp in roster.players
-                                  if playerPositionMap.get(rp.player_id) == 5]
+                    kickerPids = [pid for _eq, pid in depictedPairs
+                                  if playerPositionMap.get(pid) == 5]
                     if kickerPids:
                         seasonKickerStats = (
                             session.query(GamePlayerStats)
@@ -2210,8 +2227,10 @@ class SeasonManager:
                         logger.warning(f"Failed to fetch Floobits balance for user {userId}: {e}")
 
                     # FLEX slot detection — mirrors fantasyTracker._buildCardCalcContext.
-                    # Without this, Home Alone misses an empty FLEX slot at week-end.
-                    hasFlexSlot = any(getattr(rp, 'slot', '') == 'FLEX' for rp in roster.players)
+                    # Fusion: the FLEX is an equipped-card slot, so detect a card in the
+                    # FLEX slot (not a FantasyRosterPlayer FLEX row). Without this, Home
+                    # Alone misses an empty FLEX slot at week-end.
+                    hasFlexSlot = any(getattr(eq, 'slot', '') == 'FLEX' for eq in userEquipped)
                     if not hasFlexSlot:
                         try:
                             from database.models import ShopPurchase as _SP
@@ -5814,7 +5833,7 @@ class SeasonManager:
         """Apply pending favorite team changes and finalize fantasy scores."""
         from database.connection import get_session
         from database.models import (
-            User, FantasyRoster, PlayerSeasonStats,
+            User, FantasyRoster, WeeklyPlayerFP,
         )
 
         completedSeason = self.currentSeason.seasonNumber if self.currentSeason else None
@@ -5835,19 +5854,26 @@ class SeasonManager:
                 u.pending_favorite_team_id = None
                 u.favorite_team_locked_season = None
 
-            # Finalize fantasy roster scores from DB season stats
+            # Finalize fantasy roster scores. Fusion: the roster IS the equipped
+            # cards, so the season base = Σ over weeks of that week's equipped
+            # lineup's per-player WeeklyPlayerFP (weekly-sum, no season-lock offset).
+            # Card bonuses are tracked separately in card_bonus_points.
+            from managers.fantasyTracker import FantasyTracker
             lockedRosters = session.query(FantasyRoster).filter_by(
                 season=completedSeason, is_locked=True
             ).all()
+            equippedByUserWeek = FantasyTracker._equippedRostersByWeek(session, completedSeason)
+            weekFpRows = session.query(
+                WeeklyPlayerFP.player_id, WeeklyPlayerFP.week, WeeklyPlayerFP.fantasy_points
+            ).filter(WeeklyPlayerFP.season == completedSeason).all()
+            weekFpMap = {(pid, wk): fp for pid, wk, fp in weekFpRows}
             for roster in lockedRosters:
                 totalPoints = 0.0
-                for rp in roster.players:
-                    seasonStat = session.query(PlayerSeasonStats).filter_by(
-                        player_id=rp.player_id, season=completedSeason
-                    ).first()
-                    finalFp = seasonStat.fantasy_points if seasonStat else 0
-                    earned = max(0, finalFp - rp.points_at_lock)
-                    totalPoints += earned
+                for (uId, wk), lineup in equippedByUserWeek.items():
+                    if uId != roster.user_id:
+                        continue
+                    for _eq, pid in lineup:
+                        totalPoints += weekFpMap.get((pid, wk), 0)
                 roster.total_points = totalPoints
                 logger.info(f"Fantasy roster {roster.id} (user {roster.user_id}): finalized at {totalPoints:.1f} pts")
 
@@ -8745,22 +8771,39 @@ class SeasonManager:
                         # Day FP: roster player FP + card bonus FP for this day's weeks
                         dayFP = 0.0
                         if userEntry:
-                            from database.models import WeeklyPlayerFP, WeeklyCardBonus, FantasyRoster
+                            from database.models import (
+                                WeeklyPlayerFP, WeeklyCardBonus, FantasyRoster,
+                                EquippedCard, UserCard, CardTemplate,
+                            )
                             roster = session.query(FantasyRoster).filter_by(
                                 user_id=user.id, season=season
                             ).first()
                             if roster:
                                 from sqlalchemy import func
-                                rosterPlayerIds = [rp.player_id for rp in roster.players]
-                                if rosterPlayerIds:
-                                    dayPlayerFP = session.query(
-                                        func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0)
+                                # Fusion: sum each week's equipped lineup's per-player
+                                # WeeklyPlayerFP (the lineup can differ week to week), not
+                                # a single fixed roster across the day.
+                                eqRows = (
+                                    session.query(EquippedCard.week, CardTemplate.player_id)
+                                    .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                                    .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                                    .filter(
+                                        EquippedCard.user_id == user.id,
+                                        EquippedCard.season == season,
+                                        EquippedCard.week.in_(weekRange),
+                                    ).all()
+                                )
+                                if eqRows:
+                                    fpRows = session.query(
+                                        WeeklyPlayerFP.player_id, WeeklyPlayerFP.week,
+                                        WeeklyPlayerFP.fantasy_points,
                                     ).filter(
-                                        WeeklyPlayerFP.player_id.in_(rosterPlayerIds),
                                         WeeklyPlayerFP.season == season,
                                         WeeklyPlayerFP.week.in_(weekRange),
-                                    ).scalar()
-                                    dayFP += float(dayPlayerFP or 0)
+                                    ).all()
+                                    fpMap = {(pid, wk): fp for pid, wk, fp in fpRows}
+                                    for wk, pid in eqRows:
+                                        dayFP += float(fpMap.get((pid, wk), 0) or 0)
                                 dayCardBonus = session.query(
                                     func.coalesce(func.sum(WeeklyCardBonus.bonus_fp), 0)
                                 ).filter(
