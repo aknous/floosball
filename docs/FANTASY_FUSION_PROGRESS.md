@@ -59,6 +59,9 @@ separate roster / match bonus / swaps / temp_flex.
 | 9. Tuning pass + `simcheck` | ⬜ | — |
 
 ## START HERE — Phase 8 (frontend unified lineup page) + Phase 7b (retire the old API)
+> **Full frontend scope: `../floosball-react/FANTASY_FUSION_FRONTEND_PLAN.md`** (component
+> -level breakdown with file:line anchors, the co-landing 7b checklist, and milestones).
+
 Phase 7a made the equip endpoint self-sufficient (it owns the FantasyRoster row now).
 Phase 7b (delete the old fantasy-roster API + the swap web) is intentionally folded into
 Phase 8 so the endpoint removal and the new frontend land together and can be
