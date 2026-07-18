@@ -304,7 +304,7 @@ def _findUpcomingOpponent(session, favTeamId, season, week, teamManager) -> Tupl
 def buildProjectionContext(session, userId, season, week, seasonManager, playerManager) -> Optional[CardCalcContext]:
     from database.models import (
         FantasyRoster, PlayerSeasonStats,
-        User, UserCurrency, WeeklyModifier, FantasyRosterSwap,
+        User, UserCurrency, WeeklyModifier,
         EquippedCard,
     )
     from managers.cardEffectCalculator import computeEminenceData
@@ -562,11 +562,10 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     except Exception:
         pass
 
-    lastSwap = (session.query(FantasyRosterSwap.swap_week)
-                .filter_by(roster_id=roster.id)
-                .order_by(FantasyRosterSwap.swap_week.desc()).first())
-    rosterUnchangedWeeks = week if not lastSwap else max(0, week - lastSwap[0])
-    seasonSwapsUsed = session.query(FantasyRosterSwap).filter_by(roster_id=roster.id).count()
+    # Fusion: swaps are retired — treat the lineup as unchanged; swap-based effects
+    # (retired) project 0 off these zeros.
+    rosterUnchangedWeeks = week
+    seasonSwapsUsed = 0
 
     activeModifier = ""
     try:
@@ -666,7 +665,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         priorSeasonMissedPlayoffTeamIds=_lookupPriorSeasonMissedPlayoffTeams(session, season),
         currentTop6TeamIds=_lookupCurrentTop6Teams(session, season),
         activeModifier=activeModifier,
-        unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
+        unusedSwaps=0,
         seasonSwapsUsed=seasonSwapsUsed,
         hasFlexSlot=hasFlexSlot,
         userFloobitsBalance=userFloobitsBalance,

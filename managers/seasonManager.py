@@ -1394,9 +1394,7 @@ class SeasonManager:
             if fantasyTracker:
                 fantasyTracker.bankWeek(self.currentSeason.seasonNumber, week)
 
-        # Grant roster swap every week (regular season only)
-        if not in_playoffs:
-            self._grantRosterSwaps(self.currentSeason.seasonNumber)
+        # (Weekly roster-swap grant retired with the swap system in the fusion.)
 
         # Process card effects for this week (regular season only)
         if not in_playoffs:
@@ -1670,78 +1668,12 @@ class SeasonManager:
             session.flush()
             logger.info(f"Auto-carried equipped cards for {carried} users into week {currentWeek}")
 
-    def _grantRosterSwaps(self, season: int) -> None:
-        """Grant 1 organic swap to all locked rosters at week end.
-
-        Cap = 1 baseline + 1 per equipped All-Pro card whose grant is still
-        unused this cycle (swap_bonus_active=True). The AP bump exists so an
-        AP grant doesn't immediately suppress the next weekly organic refill
-        (without it, swaps would already be at the cap of 1 and the refill
-        check `1 < 1` would fail).
-
-        Champion used to bump this cap by 1 — leftover from when adding a
-        FLEX player consumed a swap. That cost was removed long ago (empty
-        FLEX adds are free), so the Champion bump no longer has a purpose
-        and was removed.
-        """
-        try:
-            from database.connection import get_session as _getSession
-            from database.models import FantasyRoster, EquippedCard, UserCard, CardTemplate
-            swapSession = _getSession()
-            currentWeek = (
-                self.currentSeason.currentWeek
-                if self.currentSeason and self.currentSeason.currentWeek
-                else 0
-            )
-            rosters = swapSession.query(FantasyRoster).filter_by(
-                season=season, is_locked=True
-            ).all()
-            updated = 0
-            for roster in rosters:
-                # AP bump — count equipped AP cards (THIS WEEK only) whose
-                # grants are still unused this cycle (swap_bonus_active=True).
-                # Each adds room for one extra outstanding swap so the weekly
-                # organic refill can stack on top of the AP grant.
-                # Without the week filter, carry-forward rows from earlier
-                # weeks would inflate the count and the cap would ratchet up
-                # by 1 every week.
-                apActiveCount = swapSession.query(EquippedCard).join(
-                    UserCard, EquippedCard.user_card_id == UserCard.id
-                ).join(
-                    CardTemplate, UserCard.card_template_id == CardTemplate.id
-                ).filter(
-                    EquippedCard.user_id == roster.user_id,
-                    EquippedCard.season == season,
-                    EquippedCard.week == currentWeek,
-                    EquippedCard.swap_bonus_active == True,
-                    CardTemplate.classification.isnot(None),
-                    CardTemplate.classification.contains("all_pro"),
-                ).count() if currentWeek > 0 else 0
-                maxSwaps = 1 + apActiveCount
-                if roster.swaps_available < maxSwaps:
-                    roster.swaps_available = min(roster.swaps_available + 1, maxSwaps)
-                    updated += 1
-                    # Secret — Arsenal (3+ swaps available at once)
-                    totalSwaps = (roster.swaps_available or 0) + (roster.purchased_swaps or 0)
-                    if totalSwaps >= 3:
-                        try:
-                            from managers import achievementManager as _am
-                            _am.unlockSecret(swapSession, roster.user_id, "arsenal")
-                        except Exception:
-                            pass
-            swapSession.commit()
-            swapSession.close()
-            if updated > 0:
-                logger.info(f"Granted roster swap to {updated} users for season {season}")
-        except Exception as e:
-            logger.error(f"Failed to grant roster swaps: {e}")
-
     def _processWeekCardEffects(self, season: int, week: int) -> None:
         """Calculate and persist card effect bonuses for all users after a week completes."""
         try:
             from database.connection import get_session as _getSession
             from database.models import (
-                FantasyRoster, FantasyRosterSwap, Game, GamePlayerStats,
+                FantasyRoster, Game, GamePlayerStats,
                 Player, User, UserCurrency, WeeklyCardBonus, WeeklyPlayerFP
             )
             from database.repositories.card_repositories import EquippedCardRepository, CurrencyRepository
@@ -2109,19 +2041,11 @@ class SeasonManager:
                         if allTeams:
                             leagueAverageElo = sum(getattr(t, 'elo', 1500.0) for t in allTeams) / len(allTeams)
 
-                    # Roster unchanged weeks (from swap history)
-                    lastSwap = (
-                        session.query(FantasyRosterSwap.swap_week)
-                        .filter_by(roster_id=roster.id)
-                        .order_by(FantasyRosterSwap.swap_week.desc())
-                        .first()
-                    )
-                    rosterUnchangedWeeks = week if not lastSwap else max(0, week - lastSwap[0])
-
-                    # Season swaps used (for Vagabond card effect)
-                    seasonSwapsUsed = session.query(FantasyRosterSwap).filter_by(
-                        roster_id=roster.id
-                    ).count()
+                    # Fusion: swaps are retired — no swap history, so the lineup is
+                    # treated as unchanged this season, and the swap-based effects
+                    # (retired) compute 0 off these zeros.
+                    rosterUnchangedWeeks = week
+                    seasonSwapsUsed = 0
 
                     # Check for user-level modifier override (Modifier Nullifier power-up)
                     userModifier = activeModifier
@@ -2246,7 +2170,7 @@ class SeasonManager:
                         rosterPlayerTeamIds=rosterPlayerTeamIds,
                         rosterPlayerNames=rosterPlayerNames,
                         activeModifier=userModifier,
-                        unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
+                        unusedSwaps=0,
                         seasonSwapsUsed=seasonSwapsUsed,
                         hasFlexSlot=hasFlexSlot,
                         userFloobitsBalance=userFloobitsBalance,
@@ -5458,20 +5382,10 @@ class SeasonManager:
             logger.info("Step 7.5: Prospect development window advancement")
             self.playerManager._advanceProspectWindow()
 
-            # STEP 8: Handle retired players on fantasy rosters
-            # Must run before HoF which clears newlyRetiredPlayers
-            retiredPlayerIds = {
-                p.id for p in self.playerManager.newlyRetiredPlayers
-                if hasattr(p, 'id')
-            }
-            retiredPlayerIds.update(
-                p.id for p in self.playerManager.retiredPlayers
-                if hasattr(p, 'id')
-            )
-            if retiredPlayerIds:
-                nextSeason = (self.currentSeason.seasonNumber if self.currentSeason else 0) + 1
-                logger.info(f"Step 8: Handling {len(retiredPlayerIds)} retired players on fantasy rosters")
-                self._handleRetiredPlayerRosters(retiredPlayerIds, nextSeason)
+            # STEP 8: (retired) Handling retired players on fantasy rosters is gone in
+            # the fantasy/cards fusion — the roster IS the equipped cards, so a retired
+            # player's card simply isn't re-minted next season (templates are
+            # season-scoped); there is no bare-player roster slot to auto-fill.
 
             # STEP 9: Reset season performance ratings + season WPA value totals
             logger.info("Step 9: Reset season performance ratings")
@@ -7870,104 +7784,6 @@ class SeasonManager:
             except Exception as e:
                 session.rollback()
                 logger.error(f"Error during end-of-regular-season cleanup: {e}")
-            finally:
-                session.close()
-        except ImportError:
-            pass
-
-    def _handleRetiredPlayerRosters(self, retiredPlayerIds: set, nextSeason: int) -> None:
-        """Remove retired players from fantasy rosters and auto-fill if enabled.
-
-        Called during offseason after retirements are processed.
-        """
-        if not retiredPlayerIds:
-            return
-
-        try:
-            from database.connection import get_session
-            from database.models import FantasyRoster, FantasyRosterPlayer, Player, User
-
-            session = get_session()
-            try:
-                # Find all roster slots containing retired players (from the most recent season)
-                completedSeason = nextSeason - 1
-                affectedSlots = (
-                    session.query(FantasyRosterPlayer)
-                    .join(FantasyRoster)
-                    .filter(
-                        FantasyRoster.season == completedSeason,
-                        FantasyRosterPlayer.player_id.in_(retiredPlayerIds),
-                    )
-                    .all()
-                )
-
-                if not affectedSlots:
-                    return
-
-                # Group by roster for auto-fill processing
-                rosterSlots: dict = {}  # rosterId → list of (slot, position)
-                for rp in affectedSlots:
-                    rosterSlots.setdefault(rp.roster_id, []).append(rp)
-
-                # Get all rostered player IDs (to exclude from auto-fill candidates)
-                allRosteredIds = {
-                    rp.player_id
-                    for rp in session.query(FantasyRosterPlayer.player_id)
-                    .join(FantasyRoster)
-                    .filter(FantasyRoster.season == completedSeason)
-                    .all()
-                }
-
-                # Position mapping for slot names
-                slotPositionMap = {"QB": 1, "RB": 2, "WR1": 3, "WR2": 3, "TE": 4, "K": 5}
-
-                for rosterId, retiredSlots in rosterSlots.items():
-                    roster = session.get(FantasyRoster, rosterId)
-                    if not roster:
-                        continue
-
-                    user = session.get(User, roster.user_id)
-                    autoFill = user.auto_fill_roster if user else True
-
-                    for rp in retiredSlots:
-                        retiredName = rp.player_id  # For logging
-                        slot = rp.slot
-                        session.delete(rp)
-                        logger.info(f"Removed retired player {retiredName} from roster {rosterId} slot {slot}")
-
-                        if autoFill:
-                            posValue = slotPositionMap.get(slot)
-                            if posValue is not None:
-                                # Find best available player at this position
-                                activeIds = {p.id for p in self.playerManager.activePlayers}
-                                bestPlayer = (
-                                    session.query(Player)
-                                    .filter(
-                                        Player.position == posValue,
-                                        Player.id.in_(activeIds),
-                                        ~Player.id.in_(allRosteredIds),
-                                    )
-                                    .order_by(Player.player_rating.desc())
-                                    .first()
-                                )
-                                if bestPlayer:
-                                    newRp = FantasyRosterPlayer(
-                                        roster_id=rosterId,
-                                        player_id=bestPlayer.id,
-                                        slot=slot,
-                                        points_at_lock=0.0,
-                                    )
-                                    session.add(newRp)
-                                    allRosteredIds.add(bestPlayer.id)
-                                    logger.info(f"Auto-filled {slot} with {bestPlayer.id} (rating {bestPlayer.player_rating})")
-
-                session.commit()
-                logger.info(f"Processed {len(affectedSlots)} retired player roster removals")
-            except Exception as e:
-                session.rollback()
-                logger.error(f"Error handling retired player rosters: {e}")
-                import traceback
-                logger.debug(traceback.format_exc())
             finally:
                 session.close()
         except ImportError:
@@ -10417,15 +10233,17 @@ class SeasonManager:
 
                 # Monk — never opened a pack all season (only for engaged users with a roster)
                 from database.models import (
-                    PackOpening, FantasyRoster, FantasyRosterPlayer, FantasyRosterSwap,
+                    PackOpening, FantasyRoster, EquippedCard,
                     TeamSeasonStats, CurrencyTransaction,
                 )
                 from sqlalchemy import func
-                engagedUserRows = session.query(FantasyRoster.user_id).join(
-                    FantasyRosterPlayer, FantasyRosterPlayer.roster_id == FantasyRoster.id,
-                ).filter(FantasyRoster.season == season).group_by(
-                    FantasyRoster.user_id,
-                ).having(func.count(FantasyRosterPlayer.id) >= 6).all()
+                # Fusion: an "engaged" user fielded a full lineup — equipped cards
+                # covering >= 6 distinct slots this season (not FantasyRosterPlayer).
+                engagedUserRows = session.query(EquippedCard.user_id).filter(
+                    EquippedCard.season == season,
+                ).group_by(EquippedCard.user_id).having(
+                    func.count(func.distinct(EquippedCard.slot_number)) >= 6
+                ).all()
                 engagedUserIds = {uid for (uid,) in engagedUserRows}
 
                 for uid in engagedUserIds:
@@ -10444,17 +10262,9 @@ class SeasonManager:
                     if packTxCount == 0:
                         _am.unlockSecret(session, uid, "monk")
 
-                    # Stalwart — no roster swaps this season. Swaps are
-                    # keyed to a FantasyRoster (per-season, per-user), not
-                    # directly to the user; join via roster_id.
-                    swapCount = session.query(func.count(FantasyRosterSwap.id)).join(
-                        FantasyRoster, FantasyRosterSwap.roster_id == FantasyRoster.id,
-                    ).filter(
-                        FantasyRoster.user_id == uid,
-                        FantasyRoster.season == season,
-                    ).scalar() or 0
-                    if swapCount == 0:
-                        _am.unlockSecret(session, uid, "stalwart")
+                    # Stalwart ("no roster swaps this season") is retired with the
+                    # swap system — every user would trivially qualify, so it no
+                    # longer auto-grants. (Existing holders keep it.)
 
                 # Faithful — favorite team missed playoffs 3 seasons in a row (this + prior 2)
                 if season >= 3:
@@ -10533,28 +10343,9 @@ class SeasonManager:
 
             session = get_session()
             try:
-                # Users with a FULL roster (5 players) this season
-                fullRosterRows = session.query(
-                    FantasyRoster.user_id,
-                    func.count(FantasyRosterPlayer.id).label("playerCount"),
-                ).join(
-                    FantasyRosterPlayer, FantasyRosterPlayer.roster_id == FantasyRoster.id,
-                ).filter(
-                    FantasyRoster.season == season,
-                ).group_by(FantasyRoster.user_id).having(
-                    func.count(FantasyRosterPlayer.id) >= 6,
-                ).all()
-                fullRosterUserIds = {uid for uid, _cnt in fullRosterRows}
-
-                # Purist — full roster set this week with zero cards equipped
-                for uid in fullRosterUserIds:
-                    equippedCount = session.query(func.count(EquippedCard.id)).filter(
-                        EquippedCard.user_id == uid,
-                        EquippedCard.season == season,
-                        EquippedCard.week == week,
-                    ).scalar() or 0
-                    if equippedCount == 0:
-                        _am.unlockSecret(session, uid, "purist")
+                # Purist ("full roster with zero cards equipped") is impossible in the
+                # fusion — the equipped cards ARE the roster — so the secret is retired
+                # and no longer auto-grants. (Existing holders keep it.)
 
                 # Zenith — Perfect Week AND 800+ FP in the same week.
                 # Threshold rescaled with the Balatro pass (was 300 — trivial

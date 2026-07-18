@@ -355,7 +355,7 @@ class FantasyTracker:
         """
         from database.connection import get_session
         from database.models import (
-            EquippedCard, FantasyRoster, FantasyRosterSwap, Game, GamePlayerStats,
+            EquippedCard, FantasyRoster, Game, GamePlayerStats,
             Player, User, UserCard, WeeklyCardBonus, WeeklyPlayerFP, WeeklyModifier
         )
         from database.repositories.card_repositories import EquippedCardRepository
@@ -1016,7 +1016,7 @@ class FantasyTracker:
         gamesActive=False,
     ):
         """Build a CardCalcContext for card bonus computation."""
-        from database.models import FantasyRosterSwap, Game, User, UserCurrency
+        from database.models import Game, User, UserCurrency
         from managers.cardEffectCalculator import CardCalcContext
 
         sm = self._seasonManager
@@ -1155,14 +1155,10 @@ class FantasyTracker:
                         self._weekPerfRatingSnapshot[p.id] = perfRating
         playerPerfRatings = self._weekPerfRatingSnapshot
 
-        # Roster unchanged weeks
-        lastSwap = (
-            session.query(FantasyRosterSwap.swap_week)
-            .filter_by(roster_id=roster.id)
-            .order_by(FantasyRosterSwap.swap_week.desc())
-            .first()
-        )
-        rosterUnchangedWeeks = currentWeek if not lastSwap else max(0, currentWeek - lastSwap[0])
+        # Roster unchanged weeks — fusion: swaps are retired, so there's no swap
+        # history to measure against; the lineup is treated as unchanged this season.
+        # (A precise equip-change tracker is a Phase 9 refinement.)
+        rosterUnchangedWeeks = currentWeek
 
         # Weekly modifier
         activeModifier = ""
@@ -1302,10 +1298,9 @@ class FantasyTracker:
                     kStats = _jsonk.loads(kStats)
                 kickerSeasonFgMisses += kStats.get("fg_missed", 0)
 
-        # Season swaps used (for swap-based card effects)
-        seasonSwapsUsed = session.query(FantasyRosterSwap).filter_by(
-            roster_id=roster.id
-        ).count() if roster else 0
+        # Swaps are retired in the fusion — the swap-based effects (stockpiler/
+        # vagabond) are out of the mint pool and compute 0 off these zeros.
+        seasonSwapsUsed = 0
 
         # User Floobits balance (for balance-based card effects)
         userFloobitsBalance = 0
@@ -1510,7 +1505,7 @@ class FantasyTracker:
             priorSeasonMissedPlayoffTeamIds=priorSeasonMissedPlayoffTeamIds,
             currentTop6TeamIds=currentTop6TeamIds,
             activeModifier=activeModifier,
-            unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
+            unusedSwaps=0,
             seasonSwapsUsed=seasonSwapsUsed,
             hasFlexSlot=hasFlexSlot,
             userFloobitsBalance=userFloobitsBalance,

@@ -2090,14 +2090,17 @@ async def get_personalized_off_day_quotes(
     capped = max(1, min(count, 5))
 
     # Build the user's player scope: favorite-team roster + fantasy
-    # roster + followed players. We resolve through the in-memory
+    # lineup + followed players. We resolve through the in-memory
     # activePlayers list so personality data is already attached.
-    from database.models import FollowedPlayer, FantasyRoster, FantasyRosterPlayer, User as _UserModel
+    from database.models import (
+        FollowedPlayer, EquippedCard, UserCard, CardTemplate, User as _UserModel,
+    )
     from database.connection import get_session as _getSession
 
     scopedIds: set[int] = set()
     sm = floosball_app.seasonManager
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
 
     _s = _getSession()
     try:
@@ -2107,14 +2110,20 @@ async def get_personalized_off_day_quotes(
                 team = getattr(p, 'team', None)
                 if getattr(team, 'id', None) == dbUser.favorite_team_id:
                     scopedIds.add(p.id)
-        # Fantasy roster — current season's rostered player ids
-        roster = _s.query(FantasyRoster).filter_by(
-            user_id=user.id, season=currentSeason,
-        ).first()
-        if roster:
-            for rp in _s.query(FantasyRosterPlayer).filter_by(roster_id=roster.id).all():
-                if rp.player_id is not None:
-                    scopedIds.add(rp.player_id)
+        # Fantasy lineup — fusion: the players DEPICTED by this week's equipped cards.
+        eqRows = (
+            _s.query(CardTemplate.player_id)
+            .join(UserCard, CardTemplate.id == UserCard.card_template_id)
+            .join(EquippedCard, UserCard.id == EquippedCard.user_card_id)
+            .filter(
+                EquippedCard.user_id == user.id,
+                EquippedCard.season == currentSeason,
+                EquippedCard.week == currentWeek,
+            ).all()
+        )
+        for (pid,) in eqRows:
+            if pid is not None:
+                scopedIds.add(pid)
         for fid, in _s.query(FollowedPlayer.player_id).filter_by(user_id=user.id).all():
             scopedIds.add(fid)
     finally:
@@ -5655,8 +5664,8 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
     from database.connection import get_session
     from database.models import (
         User, UserCurrency, CurrencyTransaction, CardTemplate, UserCard,
-        EquippedCard, PackOpening, PackType, FantasyRoster, FantasyRosterPlayer,
-        FantasyRosterSwap, PickEmPick, TeamFunding, Team, Player,
+        EquippedCard, PackOpening, PackType, FantasyRoster,
+        PickEmPick, TeamFunding, Team, Player,
         BetaAccessRequest, BetaAllowlist, CardUpgradeLog,
     )
     from sqlalchemy import func, case
@@ -5813,31 +5822,29 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
         ).filter(EquippedCard.season == seasonNum).scalar()
 
         # ── Fantasy Engagement ──────────────────────────────────────────
+        # Fusion: swaps are retired; "top rostered" = top players DEPICTED by
+        # equipped cards this season.
         rosterRow = session.query(
             func.count(FantasyRoster.id),
             func.coalesce(func.avg(FantasyRoster.total_points), 0),
             func.coalesce(func.avg(FantasyRoster.card_bonus_points), 0),
-            func.coalesce(func.sum(FantasyRoster.purchased_swaps), 0),
         ).filter(FantasyRoster.season == seasonNum).first()
         totalRosters = rosterRow[0]
         avgTotalPoints = round(float(rosterRow[1]), 1)
         avgCardBonus = round(float(rosterRow[2]), 1)
-        totalPurchasedSwaps = rosterRow[3]
-
-        totalSwapsUsed = session.query(func.count(FantasyRosterSwap.id)).join(
-            FantasyRoster, FantasyRosterSwap.roster_id == FantasyRoster.id,
-        ).filter(FantasyRoster.season == seasonNum).scalar()
 
         topRosteredRows = session.query(
-            Player.name, func.count(FantasyRosterPlayer.id).label('cnt'),
+            Player.name, func.count(EquippedCard.id).label('cnt'),
         ).join(
-            FantasyRosterPlayer, FantasyRosterPlayer.player_id == Player.id,
+            UserCard, EquippedCard.user_card_id == UserCard.id,
         ).join(
-            FantasyRoster, FantasyRosterPlayer.roster_id == FantasyRoster.id,
+            CardTemplate, UserCard.card_template_id == CardTemplate.id,
+        ).join(
+            Player, CardTemplate.player_id == Player.id,
         ).filter(
-            FantasyRoster.season == seasonNum,
+            EquippedCard.season == seasonNum,
         ).group_by(Player.id, Player.name).order_by(
-            func.count(FantasyRosterPlayer.id).desc(),
+            func.count(EquippedCard.id).desc(),
         ).limit(5).all()
         topRosteredPlayers = [{"name": n, "count": c} for n, c in topRosteredRows]
 
@@ -5987,8 +5994,6 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
                 "totalRosters": totalRosters,
                 "avgTotalPoints": avgTotalPoints,
                 "avgCardBonus": avgCardBonus,
-                "totalSwapsUsed": totalSwapsUsed,
-                "totalPurchasedSwaps": totalPurchasedSwaps,
                 "topRosteredPlayers": topRosteredPlayers,
             },
             "users": {
@@ -13388,15 +13393,17 @@ def bot_get_cards(discordId: str = Query(...), _auth: None = Depends(_checkBotAu
 
 @app.get("/api/bot/roster")
 def bot_get_roster(discordId: str = Query(...), _auth: None = Depends(_checkBotAuth)):
-    """Get fantasy roster for a linked Discord user."""
+    """Get fantasy lineup for a linked Discord user (fusion: the equipped cards)."""
     from database.connection import get_session
     from database.models import User, FantasyRoster
+    from database.repositories.card_repositories import EquippedCardRepository
 
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
 
     sm = floosball_app.seasonManager
     currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else None
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
 
     session = get_session()
     try:
@@ -13414,18 +13421,22 @@ def bot_get_roster(discordId: str = Query(...), _auth: None = Depends(_checkBotA
         if roster is None:
             return build_success_response({"username": user.username, "roster": None, "season": currentSeasonNum})
 
+        # Fusion: the lineup IS the equipped cards' depicted players. earnedPoints is
+        # each fielded player's live season FP (an approximate summary — the precise
+        # weekly-sum total lives on the fantasy leaderboard).
+        equipped = EquippedCardRepository(session).getByUserWeek(user.id, currentSeasonNum, currentWeek)
         players = []
-        for rp in roster.players:
-            playerObj = floosball_app.playerManager.getPlayerById(rp.player_id) if floosball_app else None
-            currentFp = _getPlayerLiveFantasyPoints(playerObj) if playerObj else 0
-            earnedPoints = max(0, currentFp - rp.points_at_lock) if roster.is_locked else 0
+        for eq in equipped:
+            pid = eq.user_card.card_template.player_id
+            playerObj = floosball_app.playerManager.getPlayerById(pid) if floosball_app else None
+            liveFp = _getPlayerLiveFantasyPoints(playerObj) if playerObj else 0
             players.append({
-                "slot": rp.slot,
+                "slot": eq.slot or "",
                 "playerName": playerObj.name if playerObj else "Unknown",
                 "position": playerObj.position.name if playerObj and hasattr(playerObj.position, 'name') else "",
                 "teamAbbr": getattr(playerObj.team, 'abbr', '') if playerObj and hasattr(playerObj.team, 'name') else "",
                 "teamName": getattr(playerObj.team, 'name', '') if playerObj and hasattr(playerObj.team, 'name') else "",
-                "earnedPoints": round(earnedPoints, 1),
+                "earnedPoints": round(liveFp, 1),
             })
 
         # Sort by slot order
