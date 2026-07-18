@@ -47,20 +47,45 @@ separate roster / match bonus / swaps / temp_flex.
 |---|---|---|
 | 1. EquippedCard slot model + migration | ✅ DONE | `269c804` |
 | 2+3. Scoring/context from equipped (weekly-sum) — **getSnapshot** | ✅ DONE (math-validated) | `5a56c80` |
-| 2+3. Remaining repoint sites | ✅ DONE (math-validated) | (this commit) |
-| 4. Remove match bonus + Wildcard/Overdrive | ⬜ NEXT | — |
-| 5. Effects (retire stockpiler/vagabond, loyalty snapshot, retune) | ⬜ | — |
+| 2+3. Remaining repoint sites | ✅ DONE (math-validated) | `0b8ffbe` |
+| 4. Remove match bonus + Wildcard/Overdrive | ✅ DONE (unit-validated) | (this commit) |
+| 5. Effects (retire stockpiler/vagabond, loyalty snapshot, retune) | ⬜ NEXT | — |
 | 6. FLEX unlock + retire temp_flex/extra_swap + no-dup-player rule | ⬜ | — |
 | 7. Collapse fantasy-roster API into equipped-cards endpoints | ⬜ | — |
 | 8. Frontend unified lineup page (floosball-react) | ⬜ | — |
 | 9. Tuning pass + `simcheck` | ⬜ | — |
 
-## START HERE — Phase 4 (remove match bonus + Wildcard/Overdrive)
-Phase 2+3 is fully closed (see below). Next: Phase 4 — remove the ×1.5/×2.5 match path
-in `_computeCardPass` (`cardEffectCalculator.py:696–720`, `isMatch = cardPlayerId in
-ctx.rosterPlayerIds`), and retire/repurpose the Wildcard + Overdrive WeeklyModifiers.
-Every equipped card's player is now trivially "on the roster," so the match multiplier is
-flat inflation. Retune base effect values to absorb the lost ×1.5 (tuning pass, Phase 9).
+## START HERE — Phase 5 (effects: retire stockpiler/vagabond, loyalty snapshot, retune)
+Phases 2+3 and 4 are closed. Next: Phase 5.
+- **RETIRE** `stockpiler` (`cardEffects.py:~2431`, reads unused swaps) and `vagabond`
+  (`cardEffects.py:~4246`, reads swaps used) — both swap-dependent, swaps are gone.
+- **`loyalty`**: replace the `initial_player_ids` snapshot (first-saved *fantasy roster*)
+  with an "initial equipped set this season" snapshot. `_buildCardCalcContext` +
+  `_processWeekCardEffects` + `cardProjection` all still read `roster.initial_player_ids`
+  for `ctx.initialRosterPlayerIds` — repoint the *source* of that snapshot to the equipped
+  cards (where/when it's captured), keep the ctx field.
+- **RETUNE batch** (trivially-true / composition-shifted under position-locked slots):
+  `full_roster`, `home_alone`, `bonus_round`, `diversified`, `anthem`, `gold_rush`,
+  `stacked_deck`, `all_in`, `chain_reaction`, `copycat`. See the plan's "Effect verdict".
+- Deep retune magnitude (absorb the lost ×1.5) is the **Phase 9** tuning pass, not here.
+
+## Phase 4 (match bonus + Wildcard/Overdrive) — DONE
+- `cardEffectCalculator._computeCardPass`: removed the ×1.5/×2.5 match multiplier entirely
+  (the `isMatch`-gated `matchedFP *= matchMult` block, the `wildcard` force-match, the
+  `overdrive` ×2.5). `isMatch` is still computed and gates the **position conditional**
+  (always true in fusion; robust for transitional edge cases). Retired the
+  `DEFAULT_MATCH_MULTIPLIER` constant.
+- `CardBreakdown`: `matchMultiplied` is now always `False`, `matchMultiplier` always `1.0`
+  (fields kept for breakdowns_json / recap schema stability; frontend cleanup is Phase 8).
+- `_applyConductorBoost`: dropped the dead match-scale-up of the boost % (rode
+  `matchMultiplied`, now always False).
+- `seasonManager`: `overdrive` + `wildcard` dropped from `MODIFIER_WEIGHTS` (never rolled);
+  kept in `MODIFIER_DISPLAY`/`_DESCRIPTIONS` as legacy labels for any historical rows.
+- **Validated:** unit test (SimpleNamespace fixture, like `test_doubler_double_count.py`) —
+  flat-FP card scores its primary with no ×1.5; overdrive/wildcard are no-ops; the position
+  conditional still fires. Existing `test_doubler_double_count` + `test_lemons_marker_leak`
+  still pass (doubler pinata FP dropped from the ×1.5-inflated value to primary+conditional,
+  as intended).
 
 ## Phase 2+3 repoint sites — DONE
 All scoring/context now computes off the **depicted players of the equipped cards** for the

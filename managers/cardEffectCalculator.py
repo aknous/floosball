@@ -34,8 +34,6 @@ CONDITIONAL_STAT_MAP = {
     "longFg":    ("kicking_stats", "longest"),
 }
 
-DEFAULT_MATCH_MULTIPLIER = 1.5
-
 
 @dataclass
 class CardCalcContext:
@@ -218,9 +216,12 @@ class CardBreakdown:
     primaryFloobits: int = 0
     primaryMult: float = 0.0   # FPx factor (e.g. 1.3 means ×1.3)
 
-    # Match bonus
+    # Match bonus — RETIRED in the fantasy/cards fusion (every equipped card's
+    # player is trivially rostered, so the ×1.5/×2.5 multiplier was flat
+    # inflation). Fields kept for breakdowns_json / recap schema stability;
+    # matchMultiplied is always False and matchMultiplier always 1.0 now.
     matchMultiplied: bool = False
-    matchMultiplier: float = DEFAULT_MATCH_MULTIPLIER
+    matchMultiplier: float = 1.0
     preMatchFP: float = 0.0
     preMatchFloobits: int = 0
     preMatchMult: float = 0.0
@@ -692,13 +693,14 @@ def _computeCardPass(
             ):
                 primary.equation = _rescaleEquationValue(primary.equation, m)
 
-    # 2. Apply match bonus and weekly modifier
+    # 2. Weekly modifier. Fusion: the match multiplier (×1.5 / ×2.5) is REMOVED —
+    # every equipped card's player is trivially "on the roster," so a match bonus
+    # would be flat inflation. The Wildcard ("force all matched") and Overdrive
+    # ("×2.5 match") modifiers are retired alongside it. The card's own player
+    # being rostered still gates the position conditional below (always true in
+    # fusion, but the check stays robust for any transitional edge case).
     isMatch = cardPlayerId in ctx.rosterPlayerIds
     mod = ctx.activeModifier
-
-    # Wildcard modifier: force all cards to be matched
-    if mod == "wildcard":
-        isMatch = True
 
     preMatchFP = primary.fpBonus
     preMatchFloobits = primary.floobits
@@ -706,17 +708,6 @@ def _computeCardPass(
     matchedFP = primary.fpBonus
     matchedFloobits = primary.floobits
     matchedMult = primary.multBonus
-
-    # Overdrive: match multiplier is 2.5x instead of 1.5x
-    matchMult = 2.5 if mod == "overdrive" else DEFAULT_MATCH_MULTIPLIER
-
-    if isMatch:
-        matchedFP *= matchMult
-        matchedFloobits = int(matchedFloobits * matchMult)
-        # FPx match bonus: scale the bonus portion above 1
-        if matchedMult > 1:
-            bonusPortion = (matchedMult - 1) * matchMult
-            matchedMult = 1 + bonusPortion
 
     # Apply modifier effects to primary values
     if mod in ("amplify", "cascade"):
@@ -802,8 +793,8 @@ def _computeCardPass(
         primaryFP=round(matchedFP, 2),
         primaryFloobits=matchedFloobits,
         primaryMult=round(matchedMult, 2),
-        matchMultiplied=isMatch,
-        matchMultiplier=matchMult,
+        matchMultiplied=False,
+        matchMultiplier=1.0,
         preMatchFP=round(preMatchFP, 2),
         preMatchFloobits=preMatchFloobits,
         preMatchMult=round(preMatchMult, 2),
@@ -1163,9 +1154,8 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
     Conductor's own breakdown produces no output. Reads boostPct from
     Conductor's effectConfig.primary so seeded variance is honored.
 
-    Match bonus: when Conductor's card-player is on the user's roster,
-    the boost percentage scales up by DEFAULT_MATCH_MULTIPLIER (e.g. +20%
-    becomes +30%). Mirrors how FPx match bonuses scale their bonus portion.
+    (The old match-bonus scale-up of the boost percentage is retired with the
+    match multiplier in the fantasy/cards fusion.)
     """
     conductorBreakdown = next(
         (b for b in breakdowns if b.effectName == "conductor"), None,
@@ -1184,9 +1174,6 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
             tier = getattr(eq.user_card, "tier", 1) or 1
             boostPct = tierScaledStrength("conductor", prim, CARD_TIER_MULT.get(tier, 1.0)).get("boostPct", boostPct)
             break
-    matched = bool(conductorBreakdown.matchMultiplied)
-    if matched:
-        boostPct = int(round(boostPct * DEFAULT_MATCH_MULTIPLIER))
     factor = 1.0 + (boostPct / 100.0)
     boosted = 0
     for b in breakdowns:

@@ -8027,38 +8027,44 @@ class SeasonManager:
     # bonus portions). Existing prod rows with modifier='cascade' resolve
     # through the same code path as amplify in the calculator, but new
     # weekly rolls won't pick cascade.
+    # Fantasy/Cards fusion: 'overdrive' (×2.5 match) and 'wildcard' (force all
+    # matched) are retired — the match multiplier is gone, so both are no-ops.
+    # Dropped from the roll weights so they never surface; display/description
+    # entries stay below (legacy) for any historical rows.
     MODIFIER_WEIGHTS = {
-        "amplify": 10, "ironclad": 10, "overdrive": 10,
-        "payday": 10, "grounded": 5, "wildcard": 8,
+        "amplify": 10, "ironclad": 10,
+        "payday": 10, "grounded": 5,
         "longshot": 10, "frenzy": 10, "synergy": 10, "steady": 10,
         "fortunate": 8,
     }
 
     MODIFIER_DISPLAY = {
         "amplify": "Amplify", "ironclad": "Ironclad",
-        "overdrive": "Overdrive", "payday": "Payday", "grounded": "Grounded",
-        "wildcard": "Wildcard", "longshot": "Longshot",
+        "payday": "Payday", "grounded": "Grounded",
+        "longshot": "Longshot",
         "frenzy": "Frenzy", "synergy": "Synergy", "steady": "Steady",
         "fortunate": "Fortunate",
-        # Legacy display label kept so historical "cascade" rows still
-        # render with a friendly name in the recap screens.
+        # Legacy display labels kept so historical rows still render with a
+        # friendly name in the recap screens. 'cascade' == amplify; 'overdrive'
+        # and 'wildcard' are retired with the match multiplier (fusion).
         "cascade": "Amplify",
+        "overdrive": "Overdrive", "wildcard": "Wildcard",
     }
 
     MODIFIER_DESCRIPTIONS = {
         "amplify": "FPx bonus portions are doubled",
         "ironclad": "Streak cards can't reset this week",
-        "overdrive": "Match bonus is 2.5x instead of 1.5x",
         "payday": "Floobits earned are tripled",
         "grounded": "All FPx effects disabled",
-        "wildcard": "All cards treated as matched",
         "longshot": "Conditional card rewards doubled",
         "frenzy": "+FP values are doubled",
         "synergy": "Bonus FPx for each unique position in your card slots",
         "steady": "No special effect — all normal rules apply",
         "fortunate": "Chance card trigger rates increased by 15%",
-        # Legacy — same behavior as amplify for historical rows.
+        # Legacy — retired modifiers, kept for historical row rendering.
         "cascade": "FPx bonus portions are doubled",
+        "overdrive": "Match bonus (retired)",
+        "wildcard": "All cards treated as matched (retired)",
     }
 
     def _selectWeeklyModifier(self, season: int, week: int) -> str:
