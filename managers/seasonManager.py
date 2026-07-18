@@ -838,7 +838,6 @@ class SeasonManager:
                     )
                 equippedRepo.lockAllForWeek(seasonNum, currentWeek)
                 # Auto-lock rosters that have all slots filled
-                tracker = self.serviceContainer.getService('fantasy_tracker') if self.serviceContainer else None
                 unlocked = lockSession.query(FantasyRoster).filter_by(
                     season=self.currentSeason.seasonNumber, is_locked=False
                 ).all()
@@ -860,21 +859,8 @@ class SeasonManager:
                     if len(filledSlots) >= _ROSTER_MIN:
                         roster.is_locked = True
                         roster.locked_at = datetime.datetime.utcnow()
-                        for rp in roster.players:
-                            rp.points_at_lock = (
-                                tracker.getPlayerSeasonFP(
-                                    rp.player_id, self.currentSeason.seasonNumber
-                                ) if tracker else 0
-                            )
-                        # Replay All-Pro swap grants now that the roster is
-                        # locked. Users who equipped AP cards before lock had
-                        # the grant skipped (the equip endpoint requires a
-                        # locked roster); without this, swap_bonus_active
-                        # stays False and the UI shows "Swap used" even
-                        # though no swap was consumed.
-                        self._grantAllProSwapsForRoster(
-                            lockSession, roster, seasonNum, currentWeek
-                        )
+                        # Fusion: no points_at_lock offset (weekly-sum scoring) and no
+                        # All-Pro swap replay (swaps retired) — just lock the row.
                         logger.info(f"Auto-locked roster for user {roster.user_id}")
                 lockSession.commit()
                 lockSession.close()
@@ -1683,41 +1669,6 @@ class SeasonManager:
         if carried:
             session.flush()
             logger.info(f"Auto-carried equipped cards for {carried} users into week {currentWeek}")
-
-    def _grantAllProSwapsForRoster(self, session, roster, season: int, currentWeek: int) -> None:
-        """Replay All-Pro swap grants for an equipped roster.
-
-        Mirrors the All-Pro grant block in PUT /api/cards/equipped: for each
-        equipped All-Pro card whose UserCard.last_swap_grant_cycle is below
-        the current cycle, grant +1 swap, advance the cycle marker, and flag
-        the EquippedCard's swap_bonus_active=True. Idempotent — cards that
-        already granted in this cycle are skipped.
-        """
-        if not currentWeek or currentWeek < 1:
-            return
-        try:
-            from database.models import EquippedCard, UserCard, CardTemplate
-            swapCycle = (currentWeek - 1) // 7 + 1
-            equippedAP = (
-                session.query(EquippedCard, UserCard, CardTemplate)
-                .join(UserCard, EquippedCard.user_card_id == UserCard.id)
-                .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
-                .filter(
-                    EquippedCard.user_id == roster.user_id,
-                    EquippedCard.season == season,
-                    EquippedCard.week == currentWeek,
-                    CardTemplate.classification.isnot(None),
-                    CardTemplate.classification.contains("all_pro"),
-                )
-                .all()
-            )
-            for eqCard, uc, _tmpl in equippedAP:
-                if uc.last_swap_grant_cycle < swapCycle:
-                    roster.swaps_available += 1
-                    uc.last_swap_grant_cycle = swapCycle
-                    eqCard.swap_bonus_active = True
-        except Exception as e:
-            logger.warning(f"Failed to grant All-Pro swaps for roster {roster.id}: {e}")
 
     def _grantRosterSwaps(self, season: int) -> None:
         """Grant 1 organic swap to all locked rosters at week end.

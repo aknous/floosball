@@ -52,25 +52,50 @@ separate roster / match bonus / swaps / temp_flex.
 | 5a. Effects: retire stockpiler/vagabond + loyalty snapshot | ✅ DONE (unit-validated) | `850ddda` |
 | 5b. Effects: bonus_round threshold 4→6 | ✅ DONE (unit-validated) | `ea0f154` |
 | 5c. OVERHAUL full_roster + all_in (design TBD) | ⬜ TODO (deferred) | — |
-| 6. FLEX unlock + slot wiring + retire temp_flex/extra_swap + no-dup-player | ✅ DONE (unit-validated) | (this commit) |
-| 7. Collapse fantasy-roster API into equipped-cards endpoints | ⬜ NEXT | — |
-| 8. Frontend unified lineup page (floosball-react) | ⬜ | — |
+| 6. FLEX unlock + slot wiring + retire temp_flex/extra_swap + no-dup-player | ✅ DONE (unit-validated) | `a12e906` |
+| 7a. Equip endpoint owns the FantasyRoster row + drop All-Pro swap machinery | ✅ DONE | (this commit) |
+| 7b. Delete old fantasy-roster endpoints + swap web (co-dev w/ frontend) | ⬜ → Phase 8 | — |
+| 8. Frontend unified lineup page (floosball-react) + 7b API retirement | ⬜ NEXT | — |
 | 9. Tuning pass + `simcheck` | ⬜ | — |
 
-## START HERE — Phase 7 (collapse fantasy-roster API into equipped-cards endpoints)
-Phase 6 is done (the equip endpoint now drives position-locked slots + FLEX + no-dup-player;
-`EquippedCard.slot` is wired). Next: Phase 7 — retire the old fantasy-roster endpoints and
-`FantasyRosterPlayer`/`FantasyRosterSwap`. Known remaining `roster.players` / `temp_flex`
-readers to collapse (all in `api/main.py`): the roster GET/PUT (7827, 7877, 7970, 8034,
-8300, 8327…), swap/remove endpoints (8225, 8374), the admin stats top-rostered query (5831),
-and the dead `points_at_lock` loop at `seasonManager.py:863`. Keep the `FantasyRoster` row
-(leaderboard anchor + `WeeklyCardBonus.roster_id` FK) — only its `players`/`swaps` children go.
+## START HERE — Phase 8 (frontend unified lineup page) + Phase 7b (retire the old API)
+Phase 7a made the equip endpoint self-sufficient (it owns the FantasyRoster row now).
+Phase 7b (delete the old fantasy-roster API + the swap web) is intentionally folded into
+Phase 8 so the endpoint removal and the new frontend land together and can be
+integration-tested. Concretely, to retire in 7b/8 (all `api/main.py` unless noted):
+- **Endpoints to delete** (replaced by the equipped-cards endpoints): `GET/PUT
+  /api/fantasy/roster` (7762/7932), `POST /api/fantasy/roster/{lock,remove,swap}`
+  (8082/8180/8276). Migrate their still-wanted achievement hooks to the equip endpoint:
+  `onFantasyRosterSet` + the composition secrets **Shoestring** (all ≤3-star), **Homer**
+  (all fav-team), **Greenhorn** (all rookies) — recompute off the equipped lineup's
+  depicted players. (**Arsenal**, a 3+-swaps secret, dies with swaps — already unreachable.)
+- **Swap web to remove:** `_grantRosterSwaps` (seasonManager, called ~:1399), the
+  `swaps_available`/`purchased_swaps` reads/writes, the `extra_swap` shop-buy (11268) +
+  reward-grant (14469) branches, admin-stats swap counters (5820), and the CardCalcContext
+  `unusedSwaps` field (only fed the retired stockpiler).
+- **Repoint reads:** `GET /api/bot/roster` (14181) and the admin-stats top-rostered query
+  (5831) still read `FantasyRosterPlayer` — repoint to the equipped lineup or drop.
+- Keep the `FantasyRoster` row (leaderboard anchor + `WeeklyCardBonus.roster_id` FK) — only
+  its `players`/`swaps` children retire. Don't DROP the tables until nothing references them.
 
-Also still OPEN (deferred): **Phase 5c** — full redesign of `full_roster` + `all_in` (owner
-said "completely overhaul", not patch); see below. And the AP/CH classification reuse (plan
-open question) now that FLEX is MVP/Accession-gated — Champion no longer unlocks FLEX, All-Pro
-no longer grants swaps, so both are FREED. The All-Pro swap-grant machinery in the equip
-endpoint + `_grantAllProSwapsForRoster` is now inert (swaps gone) — remove during Phase 7.
+Also still OPEN: **Phase 5c** — full redesign of `full_roster` + `all_in` (owner: "completely
+overhaul"). And **AP/CH classification reuse** (plan open question): FLEX is now MVP/Accession
+-gated, so Champion no longer unlocks FLEX and All-Pro no longer grants swaps — both FREED.
+
+## Phase 7a (equip endpoint owns the roster lifecycle) — DONE
+- **The linchpin:** the only creator of the `FantasyRoster` row was the old fantasy-roster
+  PUT, so an equip-only user would never get a leaderboard row. The equip endpoint
+  (`setEquippedCards`) now **get-or-creates** the row (previously it only looked up a
+  *locked* one for All-Pro logic). Auto-lock + snapshot + `WeeklyCardBonus` FK all key off it.
+- **Removed the (now-inert) All-Pro swap-grant block** from the equip endpoint — swaps are
+  retired, and with the roster row always present it would have started misfiring for every
+  user. Removed the orphaned `_grantAllProSwapsForRoster` method + its auto-lock call, and
+  the dead `points_at_lock` loop in the auto-lock (weekly-sum scoring has no lock offset).
+- Loyalty-snapshot capture simplified (roster always exists now). Removed the orphaned
+  `cardUserCards` map.
+- Deferred the rest of the swap web + endpoint deletion to 7b/Phase 8 (see above) — those
+  are frontend-coupled and want an integration test.
+- **Validated:** parse + import of both modules. Full equip→lock→score e2e in the Phase 9 simcheck.
 
 ## Phase 6 (FLEX unlock + slot wiring + retire powerups + no-dup-player) — DONE
 - **Slot wiring:** the equip endpoint (`PUT /api/cards/equipped`) now takes a position `slot`

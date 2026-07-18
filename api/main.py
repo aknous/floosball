@@ -10041,10 +10041,17 @@ def setEquippedCards(
 
     session = get_session()
     try:
-        # Look up locked roster (needed for All-Pro swap logic, but not required to equip)
+        # Fusion: the equip endpoint OWNS the FantasyRoster row — it's the leaderboard
+        # anchor + WeeklyCardBonus.roster_id FK, and the season-end auto-lock only locks
+        # rows that exist. Get-or-create it here so a user who only ever equips cards
+        # (never touched the old fantasy-roster PUT) still gets a row.
         roster = session.query(FantasyRoster).filter_by(
-            user_id=user.id, season=currentSeason, is_locked=True
+            user_id=user.id, season=currentSeason
         ).first()
+        if roster is None:
+            roster = FantasyRoster(user_id=user.id, season=currentSeason)
+            session.add(roster)
+            session.flush()
 
         equippedRepo = EquippedCardRepository(session)
 
@@ -10056,7 +10063,6 @@ def setEquippedCards(
         # Validate each card belongs to user and is active; collect classifications
         hasMvp = False
         cardTemplates = {}  # userCardId → template
-        cardUserCards = {}  # userCardId → userCard
         for c in req.cards:
             userCard = session.query(UserCard).filter_by(id=c.userCardId, user_id=user.id).first()
             if not userCard:
@@ -10067,7 +10073,6 @@ def setEquippedCards(
             if not template or template.season_created != currentSeason:
                 raise HTTPException(status_code=400, detail=f"Card {c.userCardId} is not active this season")
             cardTemplates[c.userCardId] = template
-            cardUserCards[c.userCardId] = userCard
             if template.classification and "mvp" in template.classification:
                 hasMvp = True
 
@@ -10185,8 +10190,7 @@ def setEquippedCards(
 
         # Clear existing and set new. Mark the roster so the GET auto-carry-forward
         # doesn't un-do an intentional empty equip set.
-        if roster:
-            roster.last_equipped_set_week = currentWeek
+        roster.last_equipped_set_week = currentWeek
         equippedRepo.deleteByUserWeek(user.id, currentSeason, currentWeek)
         for c in req.cards:
             equippedRepo.save(EquippedCard(
@@ -10206,76 +10210,14 @@ def setEquippedCards(
         # user's INITIAL equipped set this season (the depicted players), captured on
         # the first non-empty equip and never overwritten. Replaces the old
         # first-fantasy-roster-save snapshot.
-        if req.cards:
-            snapRoster = roster or session.query(FantasyRoster).filter_by(
-                user_id=user.id, season=currentSeason
-            ).first()
-            if snapRoster and not snapRoster.initial_player_ids:
-                import json as _json
-                snapRoster.initial_player_ids = _json.dumps(
-                    [int(cardTemplates[c.userCardId].player_id) for c in req.cards]
-                )
+        if req.cards and not roster.initial_player_ids:
+            import json as _json
+            roster.initial_player_ids = _json.dumps(
+                [int(cardTemplates[c.userCardId].player_id) for c in req.cards]
+            )
 
-        # All-Pro swap bonuses — only apply when roster is locked
-        if roster:
-            swapCycle = ((currentWeek - 1) // 7 + 1) if isinstance(currentWeek, int) and currentWeek > 0 else 1
-
-            prevAllProIds = set()
-            for prev in previousEquipped:
-                if prev.swap_bonus_active:
-                    prevAllProIds.add(prev.user_card_id)
-
-            newAllProIds = set()
-            for c in req.cards:
-                template = cardTemplates[c.userCardId]
-                if template.classification and "all_pro" in template.classification:
-                    newAllProIds.add(c.userCardId)
-
-            # Cards being unequipped (were equipped with their grant unused —
-            # prevAllProIds is filtered on swap_bonus_active=True, so a card
-            # whose grant was already consumed via a swap won't be in this
-            # set and won't be refunded here).
-            unequippedAllPro = prevAllProIds - newAllProIds
-            for ucId in unequippedAllPro:
-                uc = cardUserCards.get(ucId) or session.get(UserCard, ucId)
-                if uc and roster.swaps_available > 0:
-                    roster.swaps_available -= 1
-                    # Reset the cycle marker so re-equipping later in the same
-                    # cycle re-grants. (If the swap had been used we'd never
-                    # reach this branch — the card's swap_bonus_active would
-                    # already be False, excluding it from prevAllProIds.)
-                    uc.last_swap_grant_cycle = 0
-
-            # Cards being newly equipped
-            freshAllPro = newAllProIds - prevAllProIds
-            for ucId in freshAllPro:
-                uc = cardUserCards.get(ucId) or session.get(UserCard, ucId)
-                if uc and uc.last_swap_grant_cycle < swapCycle:
-                    roster.swaps_available += 1
-                    uc.last_swap_grant_cycle = swapCycle
-                    # Secret — Arsenal (3+ swaps available at once)
-                    if (roster.swaps_available or 0) + (roster.purchased_swaps or 0) >= 3:
-                        try:
-                            from managers import achievementManager as _amArs
-                            _amArs.unlockSecret(session, user.id, "arsenal")
-                        except Exception:
-                            pass
-                    eqCard = session.query(EquippedCard).filter_by(
-                        user_id=user.id, season=currentSeason, week=currentWeek,
-                        user_card_id=ucId,
-                    ).first()
-                    if eqCard:
-                        eqCard.swap_bonus_active = True
-
-            # Cards staying equipped — preserve swap_bonus_active
-            stayingAllPro = prevAllProIds & newAllProIds
-            for ucId in stayingAllPro:
-                eqCard = session.query(EquippedCard).filter_by(
-                    user_id=user.id, season=currentSeason, week=currentWeek,
-                    user_card_id=ucId,
-                ).first()
-                if eqCard:
-                    eqCard.swap_bonus_active = True
+        # (The All-Pro swap-grant machinery is retired with the swap system in the
+        # fantasy/cards fusion — All-Pro is a FREED classification, reuse TBD.)
 
         # Achievement hooks — first card equipped + Gilded (all Prismatic/Diamond full set)
         if req.cards:
