@@ -53,14 +53,51 @@ separate roster / match bonus / swaps / temp_flex.
 | 5b. Effects: bonus_round threshold 4→6 | ✅ DONE (unit-validated) | `ea0f154` |
 | 5c. OVERHAUL full_roster + all_in (design TBD) | ⬜ TODO (deferred) | — |
 | 6. FLEX unlock + slot wiring + retire temp_flex/extra_swap + no-dup-player | ✅ DONE (unit-validated) | `a12e906` |
-| 7a. Equip endpoint owns the FantasyRoster row + drop All-Pro swap machinery | ✅ DONE | (this commit) |
-| 7b. Delete old fantasy-roster endpoints + swap web (co-dev w/ frontend) | ⬜ → Phase 8 | — |
-| 8. Frontend unified lineup page (floosball-react) + 7b API retirement | ⬜ NEXT | — |
+| 7a. Equip endpoint owns the FantasyRoster row + drop All-Pro swap machinery | ✅ DONE | `2721c12` |
+| 7b-i. Delete old fantasy-roster endpoints + migrate achievements | ✅ DONE | (this commit) |
+| 7b-ii. Repoint remaining FantasyRosterPlayer readers + swap web (co-dev w/ FE) | ⬜ → Phase 8 | — |
+| 8. Frontend unified lineup page (floosball-react) + 7b-ii | ⬜ NEXT | — |
 | 9. Tuning pass + `simcheck` | ⬜ | — |
 
-## START HERE — Phase 8 (frontend unified lineup page) + Phase 7b (retire the old API)
-> **Full frontend scope: `../floosball-react/FANTASY_FUSION_FRONTEND_PLAN.md`** (component
-> -level breakdown with file:line anchors, the co-landing 7b checklist, and milestones).
+## Phase 7b-i (delete write endpoints + migrate achievements) — DONE
+- Deleted the five old fantasy-roster endpoints + their 4 request models (`api/main.py`,
+  ~758 lines): `GET/PUT /api/fantasy/roster`, `POST /api/fantasy/roster/{lock,remove,swap}`.
+  (Shared helper `_getPlayerLiveFantasyPoints` + the `_liveStatsToDbFormat` /
+  `_computeLeaderboardData` snapshot helpers were preserved.)
+- Migrated the achievement hooks into `setEquippedCards`, computed off the equipped
+  lineup's DEPICTED players: `onFantasyRosterSet`, and the composition secrets **Shoestring**
+  (all ≤3-star), **Homer** (all fav-team), **Greenhorn** (all rookies), keyed on a full
+  lineup (≥6 base slots). **Validated:** parse OK.
+- Frontend impact (expected, fixed in Phase 8): `AuthContext.tsx:99` + `FantasyRoster.tsx`
+  calls to `/fantasy/roster` now 404. That's the point — the new lineup page uses the
+  equipped-cards endpoints.
+
+## START HERE — Phase 7b-ii + Phase 8 (frontend + finish the API retirement)
+> **Full frontend scope: `../floosball-react/FANTASY_FUSION_FRONTEND_PLAN.md`.**
+
+**7b-ii is bigger than first scoped** — a sweep found more `FantasyRosterPlayer` readers than
+the roster endpoints. Finish these alongside Phase 8 so the leaderboard numbers can be
+integration-tested end-to-end (all `api/main.py` unless noted):
+- **`GET /api/fantasy/leaderboard/weekly`** (~8033, `roster.players` at ~8065) — the frontend
+  weekly leaderboard. Repoint to the equipped lineup, or DELETE if `getSnapshot` supersedes it
+  (check what `FantasyLeaderboard.tsx` needs first).
+- **`GET /api/history/user-records`** (~3871) — raw SQL joins `fantasy_roster_players` for
+  per-user weekly-FP records. Repoint to the equipped lineup (or accept as legacy/frozen).
+- **Personality/quote player scope** (~2090) — includes fantasy-roster players; repoint to the
+  equipped lineup's depicted players.
+- **`GET /api/bot/roster`** (~13389, `roster.players` ~13418) — Discord roster view; repoint.
+- **Admin stats top-rostered** (~5832) + swap counters (~the `purchased_swaps` sum) — repoint
+  or drop (admin-only).
+- **Retired-player fantasy autofill** (`seasonManager.py` ~:7954, `newRp = FantasyRosterPlayer(`)
+  — dead in fusion (you can't autofill a card slot with a bare player); remove that block.
+- **Swap web:** `_grantRosterSwaps` (seasonManager ~:1399 call), `swaps_available` /
+  `purchased_swaps` reads/writes, the `extra_swap` shop-buy + reward-grant branches, and the
+  CardCalcContext `unusedSwaps` field (only fed the retired stockpiler).
+- **Keep:** the account-deletion cleanup that deletes `FantasyRosterPlayer`/`Swap` rows
+  (~5358/5377) is harmless — leave until the tables are dropped. Keep the `FantasyRoster` row +
+  `WeeklyCardBonus.roster_id` FK. Don't DROP the child tables until nothing references them.
+
+Also still OPEN: **Phase 5c** (redesign `full_roster` + `all_in`) and **AP/CH reuse**.
 
 Phase 7a made the equip endpoint self-sufficient (it owns the FantasyRoster row now).
 Phase 7b (delete the old fantasy-roster API + the swap web) is intentionally folded into
