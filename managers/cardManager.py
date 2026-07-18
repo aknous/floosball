@@ -143,6 +143,27 @@ def getActivePackNames(shopDay: int) -> list:
 # Map position code → position int for theme filtering
 _POSITION_CODE_TO_INT = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
 
+# ── Fantasy/Cards fusion: position-locked equipped-card slots ──────────────────
+# Equipped cards ARE the fantasy roster, so each slot is tied to a position. Six base
+# slots (one per position, mirroring the old FantasyRosterPlayer.slot) + FLEX (7th).
+FUSION_BASE_SLOTS = ['QB', 'RB', 'WR1', 'WR2', 'TE', 'K']
+FLEX_SLOT = 'FLEX'
+FUSION_ALL_SLOTS = FUSION_BASE_SLOTS + [FLEX_SLOT]
+# slot → 1-based position (matches CardTemplate.position / the Position enum); FLEX = any.
+SLOT_TO_POSITION = {'QB': 1, 'RB': 2, 'WR1': 3, 'WR2': 3, 'TE': 4, 'K': 5, FLEX_SLOT: None}
+# slot → stable display/order ordinal (EquippedCard.slot_number).
+SLOT_TO_ORDINAL = {'QB': 1, 'RB': 2, 'WR1': 3, 'WR2': 4, 'TE': 5, 'K': 6, FLEX_SLOT: 7}
+
+
+def cardFitsSlot(templatePosition, slot) -> bool:
+    """Whether a card whose depicted player sits at `templatePosition` (1-based, matching
+    CardTemplate.position / the Position enum) may fill `slot`. FLEX accepts any position;
+    a base slot requires an exact position match. Unknown slot → False."""
+    if slot == FLEX_SLOT:
+        return True
+    expected = SLOT_TO_POSITION.get(slot)
+    return expected is not None and int(templatePosition) == expected
+
 # Champion pack draws one card per player (dedup). After a title most of the winning
 # roster can retire (season 11: 5 of 6 winners retired), leaving too few with current
 # templates to fill the pack — below this many distinct champions, top up from the
