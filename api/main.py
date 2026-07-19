@@ -8038,14 +8038,25 @@ def get_fantasy_leaderboard(response: Response, season: Optional[int] = Query(de
 
 @app.get("/api/fantasy/leaderboard/weekly")
 def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Query(default=None)):
-    """Get fantasy leaderboard broken down by week."""
+    """Get fantasy leaderboard broken down by week.
+
+    Fusion model: a user's weekly lineup IS their equipped cards for that week
+    (FantasyTracker._equippedRostersByWeek), and per-player weekly FP comes from
+    the banked WeeklyPlayerFP table. There are no roster swaps / points_at_lock —
+    the previous FantasyRosterPlayer + FantasyRosterSwap sources (which surfaced
+    swapped-out/prior players) are gone.
+    """
     response.headers["Cache-Control"] = "public, max-age=10"
     from database.connection import get_session
-    from database.models import FantasyRoster, FantasyRosterPlayer, FantasyRosterSwap, User, Game, GamePlayerStats, WeeklyCardBonus
+    from database.models import User
 
     seasonNum = season if season is not None else _getCurrentSeasonNumber()
     if seasonNum is None:
         return build_success_response({"weeks": [], "season": None})
+
+    tracker = floosball_app.fantasyTracker if floosball_app else None
+    if tracker is None:
+        return build_success_response({"weeks": [], "season": seasonNum})
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
@@ -8054,202 +8065,90 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
 
     session = get_session()
     try:
-        rosters = session.query(FantasyRoster).filter_by(
-            season=seasonNum, is_locked=True
-        ).all()
-
-        if not rosters:
+        # Per-week equipped lineups: {(userId, week): [(EquippedCard, depicted_player_id), ...]}
+        equippedByWeek = tracker._equippedRostersByWeek(session, seasonNum)
+        if not equippedByWeek:
             return build_success_response({"weeks": [], "season": seasonNum})
 
-        # Collect all roster player IDs and build lookup maps
-        rostersByUser = {}  # userId -> { roster, playerSlots: {playerId -> slot} }
-        allPlayerIds = set()
-        for roster in rosters:
-            rosterUser = session.get(User, roster.user_id)
-            playerSlots = {}
-            for rp in roster.players:
-                playerSlots[rp.player_id] = rp.slot
-                allPlayerIds.add(rp.player_id)
-            rostersByUser[roster.user_id] = {
-                "roster": roster,
-                "username": rosterUser.username or rosterUser.email if rosterUser else "Unknown",
-                "playerSlots": playerSlots,
-            }
+        allPlayerIds = {pid for lineup in equippedByWeek.values() for (_eq, pid) in lineup}
 
-        # Query all game stats for these players in this season, joined with Game for week info
-        gameStats = (
-            session.query(GamePlayerStats, Game.week, Game.game_date)
-            .join(Game, GamePlayerStats.game_id == Game.id)
-            .filter(
-                Game.season == seasonNum,
-                Game.is_playoff == False,
-                GamePlayerStats.player_id.in_(allPlayerIds),
-            )
-            .all()
-        )
+        # Banked per-player weekly FP: {playerId: {week: fp}}
+        weekPlayerFP = tracker._getWeekPlayerFPFromDB(session, seasonNum, allPlayerIds)
+        # Banked per-user weekly card bonuses: {userId: {week: {fp, breakdowns, equationSummary}}}
+        weekCardBonus = tracker._getWeekCardBonusesFromDB(session, seasonNum)
 
-        # Build raw per-player per-week FP totals (no lock filtering yet)
-        # rawWeekFP[playerId][week] = total FP from games that week
-        rawWeekFP = {}  # playerId -> {week -> fp}
-        allWeeks = set()
-        for gps, week, _ in gameStats:
-            allWeeks.add(week)
-            if gps.player_id not in rawWeekFP:
-                rawWeekFP[gps.player_id] = {}
-            rawWeekFP[gps.player_id][week] = rawWeekFP[gps.player_id].get(week, 0) + (gps.fantasy_points or 0)
-
-        # Overlay current week with live in-memory data when games are active
-        # DB values may be 0 during active games since stats haven't been saved yet
-        # Only overlay when liveFP > 0 — after a game ends, gameStatsDict.fantasyPoints
-        # is zeroed by _accumulatePostgameStats but the DB already has the correct value
-        if gamesActive and isCurrentSeason and floosball_app:
-            allWeeks.add(currentWeek)
+        # Overlay the current week with live in-memory FP when games are active
+        # (WeeklyPlayerFP is only banked at week end). Only overlay > 0 so a
+        # post-game zeroing of gameStatsDict doesn't wipe a banked value.
+        liveFPByPlayer: Dict[int, float] = {}
+        if gamesActive and isCurrentSeason:
             for playerId in allPlayerIds:
                 playerObj = floosball_app.playerManager.getPlayerById(playerId)
                 if playerObj:
                     liveFP = playerObj.gameStatsDict.get('fantasyPoints', 0)
                     if liveFP > 0:
-                        if playerId not in rawWeekFP:
-                            rawWeekFP[playerId] = {}
-                        rawWeekFP[playerId][currentWeek] = liveFP
+                        liveFPByPlayer[playerId] = liveFP
 
-        sortedWeeks = sorted(allWeeks)
+        def playerWeekFP(playerId: int, week: int) -> float:
+            if week == currentWeek and playerId in liveFPByPlayer:
+                return liveFPByPlayer[playerId]
+            return weekPlayerFP.get(playerId, {}).get(week, 0.0)
 
-        # ─── Card bonus per week ───────────────────────────────────────
-        # storedBonuses[userId][week] = bonus_fp  (from completed weeks)
-        # storedBreakdowns[userId][week] = parsed breakdowns_json list
-        storedBonuses = {}
-        storedBreakdowns: Dict[int, Dict[int, list]] = {}
-        rosterIds = [info["roster"].id for info in rostersByUser.values()]
-        if rosterIds:
-            bonusRows = session.query(WeeklyCardBonus).filter(
-                WeeklyCardBonus.roster_id.in_(rosterIds),
-                WeeklyCardBonus.season == seasonNum,
-            ).all()
-            import json as _json
-            for row in bonusRows:
-                storedBonuses.setdefault(row.user_id, {})[row.week] = row.bonus_fp
-                if row.breakdowns_json:
-                    try:
-                        storedBreakdowns.setdefault(row.user_id, {})[row.week] = _json.loads(row.breakdowns_json)
-                    except (ValueError, TypeError):
-                        pass
+        # Cache user lookups
+        userCache: Dict[int, Any] = {}
+        def getUser(uid: int):
+            if uid not in userCache:
+                userCache[uid] = session.get(User, uid)
+            return userCache[uid]
 
-        # Compute live card bonus for the current week when games are active
-        liveCardBonusByUser = {}
-        if gamesActive and isCurrentSeason and floosball_app:
-            liveCardBonusByUser = _computeLiveWeekCardBonuses(session, rosters, rostersByUser)
+        # Build per-week entries from the equipped lineups
+        weekData: Dict[int, Dict[int, dict]] = {}
+        for (userId, week), lineup in equippedByWeek.items():
+            players = []
+            rosterFP = 0.0
+            for eq, playerId in lineup:
+                fp = playerWeekFP(playerId, week)
+                rosterFP += fp
+                playerObj = floosball_app.playerManager.getPlayerById(playerId) if floosball_app else None
+                hasTeam = playerObj is not None and hasattr(playerObj, 'team') and hasattr(playerObj.team, 'name')
+                players.append({
+                    "slot": eq.slot or "?",
+                    "playerName": playerObj.name if playerObj else "Unknown",
+                    "teamAbbr": getattr(playerObj.team, 'abbr', '') if hasTeam else "",
+                    "teamId": getattr(playerObj.team, 'id', None) if hasTeam else None,
+                    "weekPoints": round(fp, 1),
+                })
 
-        # For each user, compute earned FP per player per week using points_at_lock
-        # earned = max(0, cumulativeAfterWeek - max(cumulativeBeforeWeek, pointsAtLock))
-        weekData = {}  # week -> userId -> { weekPoints, cardBonusPoints, playerPoints: { playerId -> fp } }
-        for userId, info in rostersByUser.items():
-            rosterPlayers = {rp.player_id: rp.points_at_lock for rp in info["roster"].players}
+            bonus = weekCardBonus.get(userId, {}).get(week, {})
+            cardBonusFP = float(bonus.get("fp", 0) or 0)
+            weekPoints = rosterFP + cardBonusFP
 
-            for playerId, pointsAtLock in rosterPlayers.items():
-                playerWeekFP = rawWeekFP.get(playerId, {})
-                cumulativeBefore = 0.0
-                for week in sortedWeeks:
-                    weekFP = playerWeekFP.get(week, 0)
-                    cumulativeAfter = cumulativeBefore + weekFP
-                    earned = max(0, cumulativeAfter - max(cumulativeBefore, pointsAtLock))
-                    cumulativeBefore = cumulativeAfter
+            # Skip empty weeks (nothing scored yet) — keeps pre-game weeks out.
+            if weekPoints <= 0:
+                continue
 
-                    if earned <= 0:
-                        continue
-
-                    if week not in weekData:
-                        weekData[week] = {}
-                    if userId not in weekData[week]:
-                        weekData[week][userId] = {"weekPoints": 0.0, "cardBonusPoints": 0.0, "playerPoints": {}}
-
-                    weekData[week][userId]["weekPoints"] += earned
-                    weekData[week][userId]["playerPoints"][playerId] = (
-                        weekData[week][userId]["playerPoints"].get(playerId, 0) + earned
-                    )
-
-        # Add swapped-out players' contribution per swap_week. Without this
-        # the weekly view drops the old player's FP the moment a user swaps
-        # them out, even though the week's games already played out with
-        # the old player on the roster. banked_week_fp is the snapshot
-        # captured at swap time.
-        if rosterIds:
-            swapRows = session.query(FantasyRosterSwap).filter(
-                FantasyRosterSwap.roster_id.in_(rosterIds),
-            ).all()
-            rosterIdToUserId = {info["roster"].id: uId for uId, info in rostersByUser.items()}
-            for swap in swapRows:
-                userId = rosterIdToUserId.get(swap.roster_id)
-                if userId is None:
-                    continue
-                bankedWeek = float(getattr(swap, 'banked_week_fp', 0) or 0)
-                if bankedWeek <= 0:
-                    continue
-                week = swap.swap_week
-                if week not in weekData:
-                    weekData[week] = {}
-                if userId not in weekData[week]:
-                    weekData[week][userId] = {"weekPoints": 0.0, "cardBonusPoints": 0.0, "playerPoints": {}}
-                weekData[week][userId]["weekPoints"] += bankedWeek
-
-        # Inject card bonus into weekData for each user/week. Stored bonuses
-        # (from WeeklyCardBonus) win over the live recomputation — at week-end
-        # both can exist simultaneously for the same week (stored was just
-        # written by _processWeekCardEffects, and gamesActive is still True
-        # because activeGames hasn't been cleared yet). Without this guard
-        # the current-week bonus gets counted twice, inflating weekPoints by
-        # roughly the card bonus amount — visible to anyone hitting the
-        # endpoint right when week_end fires (e.g. the Discord bot).
-        for userId in rostersByUser:
-            userStoredBonuses = storedBonuses.get(userId, {})
-            for week, bonusFP in userStoredBonuses.items():
-                if week not in weekData:
-                    weekData[week] = {}
-                if userId not in weekData[week]:
-                    weekData[week][userId] = {"weekPoints": 0.0, "cardBonusPoints": 0.0, "playerPoints": {}}
-                weekData[week][userId]["cardBonusPoints"] = bonusFP
-                weekData[week][userId]["weekPoints"] += bonusFP
-
-            # Live card bonus for current active week — only used when there's
-            # no stored bonus yet for this week.
-            if userId in liveCardBonusByUser:
-                week = currentWeek
-                hasStoredThisWeek = week in userStoredBonuses
-                if hasStoredThisWeek:
-                    continue
-                if week not in weekData:
-                    weekData[week] = {}
-                if userId not in weekData[week]:
-                    weekData[week][userId] = {"weekPoints": 0.0, "cardBonusPoints": 0.0, "playerPoints": {}}
-                weekData[week][userId]["cardBonusPoints"] = liveCardBonusByUser[userId]
-                weekData[week][userId]["weekPoints"] += liveCardBonusByUser[userId]
+            players.sort(key=lambda p: p["weekPoints"], reverse=True)
+            weekData.setdefault(week, {})[userId] = {
+                "weekPoints": weekPoints,
+                "cardBonusPoints": cardBonusFP,
+                "players": players,
+                "cardBreakdowns": bonus.get("breakdowns", []),
+            }
 
         # Build response
         weeks = []
         for week in sorted(weekData.keys()):
             entries = []
             for userId, data in weekData[week].items():
-                info = rostersByUser[userId]
-                players = []
-                for playerId, fp in data["playerPoints"].items():
-                    playerObj = floosball_app.playerManager.getPlayerById(playerId) if floosball_app else None
-                    players.append({
-                        "slot": info["playerSlots"].get(playerId, "?"),
-                        "playerName": playerObj.name if playerObj else "Unknown",
-                        "teamAbbr": getattr(playerObj.team, 'abbr', '') if playerObj and hasattr(playerObj.team, 'name') else "",
-                        "teamId": getattr(playerObj.team, 'id', None) if playerObj and hasattr(playerObj.team, 'name') else None,
-                        "weekPoints": round(fp, 1),
-                    })
-                players.sort(key=lambda p: p["weekPoints"], reverse=True)
-                rosterUser = session.get(User, userId)
+                rosterUser = getUser(userId)
                 entries.append({
                     "userId": userId,
-                    "username": info["username"],
+                    "username": (rosterUser.username or rosterUser.email) if rosterUser else "Unknown",
                     "favoriteTeamId": rosterUser.favorite_team_id if rosterUser else None,
                     "weekPoints": round(data["weekPoints"], 1),
-                    "cardBonusPoints": round(data.get("cardBonusPoints", 0), 1),
-                    "players": players,
-                    "cardBreakdowns": storedBreakdowns.get(userId, {}).get(week, []),
+                    "cardBonusPoints": round(data["cardBonusPoints"], 1),
+                    "players": data["players"],
+                    "cardBreakdowns": data["cardBreakdowns"],
                 })
             entries.sort(key=lambda e: e["weekPoints"], reverse=True)
             for i, entry in enumerate(entries, 1):
@@ -9059,9 +8958,10 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 prevEquipped = equippedRepo.getByUserWeek(user.id, currentSeason, lookback)
                 if prevEquipped:
                     break
-            # Check if user qualifies for slot 6 this week (MVP or active powerup)
+            # Check if user qualifies for the FLEX slot this week (slot_number 7 —
+            # MVP card or active powerup). NOTE: slot 6 is the KICKER, not gated.
             hasExtraSlotForCarry = False
-            if any(prev.slot_number == 6 for prev in prevEquipped):
+            if any(prev.slot_number == 7 for prev in prevEquipped):
                 from database.repositories.shop_repository import ShopPurchaseRepository
                 # Check for MVP card in the carry-forward set
                 for prev in prevEquipped:
@@ -9077,8 +8977,8 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                     hasExtraSlotForCarry = activeSlot is not None
 
             for prev in prevEquipped:
-                # Skip slot 6 if user no longer qualifies for extra slot
-                if prev.slot_number == 6 and not hasExtraSlotForCarry:
+                # Skip the FLEX card (slot 7) if user no longer qualifies for it
+                if prev.slot_number == 7 and not hasExtraSlotForCarry:
                     continue
                 # Verify card still exists, is active season, and isn't vaulted
                 userCard = session.get(UserCard, prev.user_card_id)

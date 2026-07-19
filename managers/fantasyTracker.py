@@ -454,12 +454,15 @@ class FantasyTracker:
             if isCurrentSeason:
                 equippedRepo = EquippedCardRepository(session)
                 allEquipped = equippedRepo.getAllForWeek(seasonNum, currentWeek)
-                # Pre-check which users have slot 6 cards so we can validate eligibility
-                slot6UserIds = {eq.user_id for eq in allEquipped if eq.slot_number == 6}
+                # Pre-check which users have a FLEX card (slot_number 7 — the
+                # powerup/MVP-gated extra slot) so we can validate eligibility.
+                # NOTE: slot_number 6 is the KICKER (QB1/RB2/WR1=3/WR2=4/TE5/K6/FLEX7);
+                # only FLEX is gated.
+                flexUserIds = {eq.user_id for eq in allEquipped if eq.slot_number == 7}
                 extraSlotUserIds = set()
-                if slot6UserIds:
+                if flexUserIds:
                     from database.models import ShopPurchase, CardTemplate as CT2
-                    # MVP cards among slot-6 users
+                    # MVP cards among FLEX users
                     mvpRows = (
                         session.query(EquippedCard.user_id)
                         .join(UserCard, EquippedCard.user_card_id == UserCard.id)
@@ -467,14 +470,14 @@ class FantasyTracker:
                         .filter(
                             EquippedCard.season == seasonNum,
                             EquippedCard.week == currentWeek,
-                            EquippedCard.user_id.in_(slot6UserIds),
+                            EquippedCard.user_id.in_(flexUserIds),
                             CT2.classification.isnot(None),
                             CT2.classification.contains("mvp"),
                         ).distinct().all()
                     )
                     extraSlotUserIds.update(r[0] for r in mvpRows)
                     # Active temp_card_slot powerup
-                    remaining = slot6UserIds - extraSlotUserIds
+                    remaining = flexUserIds - extraSlotUserIds
                     if remaining:
                         slotRows = (
                             session.query(ShopPurchase.user_id)
@@ -491,8 +494,8 @@ class FantasyTracker:
                     # During active games, only locked cards produce output
                     if gamesActive and not eq.locked:
                         continue
-                    # Skip stale slot 6 cards from expired powerups
-                    if eq.slot_number == 6 and eq.user_id not in extraSlotUserIds:
+                    # Skip a stale FLEX card (slot 7) from an expired powerup
+                    if eq.slot_number == 7 and eq.user_id not in extraSlotUserIds:
                         continue
                     equippedByUser.setdefault(eq.user_id, []).append(eq)
 
