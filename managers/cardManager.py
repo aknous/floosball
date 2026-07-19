@@ -162,6 +162,27 @@ SLOT_TO_POSITION = {'QB': 1, 'RB': 2, 'WR1': 3, 'WR2': 3, 'TE': 4, 'K': 5, FLEX_
 SLOT_TO_ORDINAL = {'QB': 1, 'RB': 2, 'WR1': 3, 'WR2': 4, 'TE': 5, 'K': 6, FLEX_SLOT: 7}
 
 
+def _deriveStarterSlotCounts():
+    """(position, count) pairs covering every base lineup slot, in slot order —
+    e.g. QB/RB/WR1/WR2/TE/K → [(1,1),(2,1),(3,2),(4,1),(5,1)] (two WR cards)."""
+    ordered: list = []
+    seen: dict = {}
+    for slot in FUSION_BASE_SLOTS:
+        pos = SLOT_TO_POSITION[slot]
+        if pos in seen:
+            seen[pos][1] += 1
+        else:
+            entry = [pos, 1]
+            seen[pos] = entry
+            ordered.append(entry)
+    return [(pos, count) for pos, count in ordered]
+
+
+# Ordered (position, count) the starter pack draws — one card per base slot,
+# so WR yields two (WR1 + WR2). Kept in sync with FUSION_BASE_SLOTS.
+_STARTER_SLOT_COUNTS = _deriveStarterSlotCounts()
+
+
 def cardFitsSlot(templatePosition, slot) -> bool:
     """Whether a card whose depicted player sits at `templatePosition` (1-based, matching
     CardTemplate.position / the Position enum) may fill `slot`. FLEX accepts any position;
@@ -1445,10 +1466,10 @@ class CardManager:
         return self._weightedDraw(pool, packWeights, count=count)
 
     def _drawStarterLineup(self, pool: list, packWeights: dict) -> list:
-        """Draw a full one-per-position starter lineup: one card for each of
-        QB/RB/WR/TE/K, with distinct players AND distinct effects so the whole
-        pack is equippable at once. Restricted to the editions the pack allows
-        (base-only for the starter)."""
+        """Draw a full starter lineup covering every lineup slot — QB/RB/WR/WR/TE/K
+        (two WR cards for the WR1 + WR2 slots) — with distinct players AND distinct
+        effects so the whole pack is equippable at once. Restricted to the editions
+        the pack allows (base-only for the starter)."""
         allowed = {e for e, w in (packWeights or {}).items() if w > 0} or {'base'}
         eligible = [t for t in pool if t.edition in allowed]
 
@@ -1463,22 +1484,26 @@ class CardManager:
         picked: list = []
         usedPlayers: set = set()
         usedEffects: set = set()
-        for pos in range(1, 6):  # QB=1, RB=2, WR=3, TE=4, K=5
+        for pos, count in _STARTER_SLOT_COUNTS:  # (position, how many cards)
             candidates = list(byPos.get(pos, []))
             if not candidates:
                 logger.warning(f"Starter pack: no card for position {pos}")
                 continue
             random.shuffle(candidates)
-            chosen = next(
-                (t for t in candidates
-                 if t.player_id not in usedPlayers
-                 and (effName(t) is None or effName(t) not in usedEffects)),
-                candidates[0],  # fall back to any if every candidate collided
-            )
-            picked.append(chosen)
-            usedPlayers.add(chosen.player_id)
-            if effName(chosen):
-                usedEffects.add(effName(chosen))
+            for _ in range(count):
+                chosen = next(
+                    (t for t in candidates
+                     if t.player_id not in usedPlayers
+                     and (effName(t) is None or effName(t) not in usedEffects)),
+                    None,
+                )
+                if chosen is None:  # every candidate collided — take any unused player
+                    chosen = next((t for t in candidates if t.player_id not in usedPlayers),
+                                  candidates[0])
+                picked.append(chosen)
+                usedPlayers.add(chosen.player_id)
+                if effName(chosen):
+                    usedEffects.add(effName(chosen))
         return picked
 
     def _weightedDrawDedup(self, pool: list, packWeights: dict, count: int,
