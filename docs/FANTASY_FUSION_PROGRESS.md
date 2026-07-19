@@ -57,8 +57,22 @@ separate roster / match bonus / swaps / temp_flex.
 | 7b-i. Delete old fantasy-roster endpoints + migrate achievements | ✅ DONE | `4973eb3` |
 | 7b-ii. Backend swap-web teardown + FantasyRosterPlayer reader repoints | ✅ DONE (sim-validated) | (this commit) |
 | 7b-iii. Frontend-facing leaderboard/history repoints + residual no-ops | ⬜ → Phase 8 | — |
-| 8. Frontend unified lineup page (floosball-react) + 7b-iii | ⬜ NEXT | — |
-| 9. Tuning pass + `simcheck` | ⬜ | — |
+| 8. Frontend: TradingCard redesign + sub-base tier + unified lineup page | ✅ DONE (tsc-clean; live QA pending) | FE `0e8a7d2`/`15d232a`, BE `e612e8c` |
+| 8b. Frontend 7b-iii (leaderboard/history) + retire shop swap UI | ⬜ | — |
+| 9. Tuning pass + `simcheck` — incl. **card power rebalance for full lineups** | ⬜ | — |
+
+## Phase 9 tuning — MUST rebalance card power for full lineups (owner note, 2026-07-18)
+Fusion means **every user fields a full 6–7 card lineup** (cards ARE the roster), so the
+aggregate card bonus per user is structurally higher than the old ~5-card hand → **cards
+need to be less powerful per-card overall.** The tuning sweep must weigh the competing
+forces together, not in isolation:
+- **−** the ×1.5/×2.5 match bonus is gone (≈ −33% per card).
+- **+** more effect cards can be equipped by default (up to 7 vs ~5), and everyone always
+  fields a full slate (no partial hands).
+- **0** the sub-base `standard` floor cards contribute nothing (they gate, don't score).
+Do a holistic `simcheck`-driven sweep against the card-tier targets (Base ~7.6/ceil 12,
+Holo ~6.6/20, Prismatic ~12.3/42, Diamond ~9.9/21) under the full-lineup reality; fold in
+the deferred **5c** (`full_roster`/`all_in` redesign) + the composition-shifted retune batch.
 
 ## Phase 7b-i (delete write endpoints + migrate achievements) — DONE
 - Deleted the five old fantasy-roster endpoints + their 4 request models (`api/main.py`,
