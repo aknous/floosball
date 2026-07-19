@@ -1407,6 +1407,12 @@ class CardManager:
         # every starter card without hitting the no-duplicate-effects rule.
         dedupByEffect = (packType.name == 'starter')
 
+        # Starter pack: hand a full ONE-PER-POSITION lineup (QB/RB/WR/TE/K) with
+        # distinct players and effects, so a new user can equip the entire pack as a
+        # complete, legal lineup. Overrides the generic weighted draw below.
+        if packType.name == 'starter':
+            return self._drawStarterLineup(pool, packWeights)
+
         # ── Guaranteed-rarity slot ──
         # If the pack guarantees a minimum rarity, draw one slot constrained
         # to that rarity (or higher) and fill the rest with normal weights.
@@ -1437,6 +1443,43 @@ class CardManager:
                 dedupByEffect=dedupByEffect,
             )
         return self._weightedDraw(pool, packWeights, count=count)
+
+    def _drawStarterLineup(self, pool: list, packWeights: dict) -> list:
+        """Draw a full one-per-position starter lineup: one card for each of
+        QB/RB/WR/TE/K, with distinct players AND distinct effects so the whole
+        pack is equippable at once. Restricted to the editions the pack allows
+        (base-only for the starter)."""
+        allowed = {e for e, w in (packWeights or {}).items() if w > 0} or {'base'}
+        eligible = [t for t in pool if t.edition in allowed]
+
+        def effName(t):
+            e = (t.effect_config or {}).get('effectName') or ''
+            return e if e and e != 'none' else None
+
+        byPos: Dict[int, list] = {}
+        for t in eligible:
+            byPos.setdefault(t.position, []).append(t)
+
+        picked: list = []
+        usedPlayers: set = set()
+        usedEffects: set = set()
+        for pos in range(1, 6):  # QB=1, RB=2, WR=3, TE=4, K=5
+            candidates = list(byPos.get(pos, []))
+            if not candidates:
+                logger.warning(f"Starter pack: no card for position {pos}")
+                continue
+            random.shuffle(candidates)
+            chosen = next(
+                (t for t in candidates
+                 if t.player_id not in usedPlayers
+                 and (effName(t) is None or effName(t) not in usedEffects)),
+                candidates[0],  # fall back to any if every candidate collided
+            )
+            picked.append(chosen)
+            usedPlayers.add(chosen.player_id)
+            if effName(chosen):
+                usedEffects.add(effName(chosen))
+        return picked
 
     def _weightedDrawDedup(self, pool: list, packWeights: dict, count: int,
                            dedupByPlayer: bool = False,

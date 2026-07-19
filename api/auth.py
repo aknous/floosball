@@ -239,16 +239,42 @@ def _provisionStarterPack(session, user, currentSeason: Optional[int] = None):
             latestSeason = baseTemplates[0].season_created
             latestTemplates = [t for t in baseTemplates if t.season_created == latestSeason]
 
-            # Group by position and pick one random card from each
+            # Group by position and pick ONE card per position — guaranteeing the
+            # starter covers all five slots with no duplicate player and no duplicate
+            # effect (so the whole set is equippable at once). Distinct players is
+            # inherent to one-per-position, but we track it defensively; effect-dedup
+            # only matters on the base fallback (standard cards are all effect 'none',
+            # which is exempt from the no-duplicate-effect rule anyway).
             byPosition: dict[int, list] = {}
             for t in latestTemplates:
                 byPosition.setdefault(t.position, []).append(t)
 
+            def _effName(t):
+                e = (t.effect_config or {}).get('effectName') or ''
+                return e if e and e != 'none' else None
+
             picked = []
+            usedPlayers: set = set()
+            usedEffects: set = set()
             for pos in range(1, 6):  # QB=1, RB=2, WR=3, TE=4, K=5
-                candidates = byPosition.get(pos, [])
-                if candidates:
-                    picked.append(_random.choice(candidates))
+                candidates = list(byPosition.get(pos, []))
+                _random.shuffle(candidates)
+                chosen = next(
+                    (t for t in candidates
+                     if t.player_id not in usedPlayers
+                     and (_effName(t) is None or _effName(t) not in usedEffects)),
+                    None,
+                )
+                # Fall back to any candidate if every one collided (shouldn't happen).
+                if chosen is None and candidates:
+                    chosen = candidates[0]
+                if chosen is None:
+                    logger.warning(f"Starter pack: no card available for position {pos}")
+                    continue
+                picked.append(chosen)
+                usedPlayers.add(chosen.player_id)
+                if _effName(chosen):
+                    usedEffects.add(_effName(chosen))
 
             for template in picked:
                 card = UserCard(
