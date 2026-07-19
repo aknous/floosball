@@ -321,8 +321,9 @@ def _buildClassification(
     if isRookie:
         return "rookie"
 
-    # MVP, Champion, All-Pro only on holographic and above
-    if edition == "base":
+    # MVP, Champion, All-Pro only on holographic and above — the floor tiers
+    # ('standard' no-effect + 'base') never carry a prestige classification.
+    if edition in ("standard", "base"):
         return None
 
     tags = []
