@@ -8399,9 +8399,9 @@ def getCardCollection(
                 continue
             data = cardManager.serializeCard(card, currentSeason)
             data["isEquipped"] = card.id in equippedCardIds
-            # Vaulted cards drop their effect and become keepsakes — attach the
-            # player's stat line for the season the card is from (back of card).
-            if data.get("vaulted") and tpl.player_id:
+            # Attach the player's stat line for the card's season — shown on the
+            # back of every card (vaulted keepsakes AND the effect/standard backs).
+            if tpl.player_id:
                 stats = cardManager.buildPlayerSeasonStats(
                     session, tpl.player_id, tpl.season_created, tpl.position,
                 )
