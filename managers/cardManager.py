@@ -9,16 +9,22 @@ logger = get_logger("floosball.cardManager")
 
 # ─── Edition Configuration ────────────────────────────────────────────────────
 
-# Rating thresholds for edition eligibility
+# Rating thresholds for edition eligibility.
+# 'standard' is the sub-base, NO-EFFECT floor print (fusion): every player gets one,
+# it just fields the player for their FP. Kept OUT of paid pack pools (weight 0) — it's
+# distributed as the starter/floor lineup, not a pack drop.
 EDITION_THRESHOLDS = {
+    'standard': 0,      # All players (no-effect floor card)
     'base': 0,          # All players
     'holographic': 75,  # Rating >= 75
     'prismatic': 80,    # Rating >= 80
     'diamond': 90,      # Rating >= 90
 }
 
-# Base rarity weights (before player-rating adjustment)
+# Base rarity weights (before player-rating adjustment). standard=0 keeps the floor
+# card out of every pack roll (see _weightedDraw's fallback).
 EDITION_BASE_WEIGHTS = {
+    'standard': 0,
     'base': 100,
     'holographic': 25,
     'prismatic': 10,
@@ -27,6 +33,7 @@ EDITION_BASE_WEIGHTS = {
 
 # Sell values by edition (active season)
 EDITION_SELL_VALUES = {
+    'standard': 2,
     'base': 5,
     'holographic': 30,
     'prismatic': 75,
@@ -1365,8 +1372,11 @@ class CardManager:
         templateRepo = CardTemplateRepository(session)
         allTemplates = templateRepo.getBySeason(currentSeason)
         # Skip any templates with NULL team_id — defensive guard against legacy
-        # prospect/rookie templates polluting fresh pack rolls.
-        allTemplates = [t for t in allTemplates if t.team_id is not None]
+        # prospect/rookie templates polluting fresh pack rolls. Also drop 'standard'
+        # (the no-effect floor print): packs deliver effect cards only; standard is
+        # the starter/floor lineup, never a pack drop.
+        allTemplates = [t for t in allTemplates
+                        if t.team_id is not None and t.edition != 'standard']
         if not allTemplates:
             raise ValueError("No card templates available for the current season")
 

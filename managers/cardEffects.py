@@ -1820,7 +1820,18 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     minus excluded effects. Category is derived from the effect's natural type,
     not the card's position.
     forceEffect/forceCategory allow admin overrides.
+
+    The 'standard' sub-base edition (fusion) is the NO-EFFECT floor print: it carries
+    no effect at all, so a card equipped from it just fields the player for their FP.
     """
+    if edition == 'standard' and not forceEffect:
+        return {
+            "effectName": "none", "displayName": "", "tagline": "", "tooltip": "",
+            "detail": "", "category": "none", "outputType": "",
+            "editionScale": 1.0, "primary": {},
+            "posLabel": POSITION_LABELS.get(position, "??"),
+        }
+
     # Pool selection: shared + position exclusive, minus excluded, filtered by edition tier
     excluded = POSITION_EXCLUDED_EFFECTS.get(position, set())
     pool = [n for n in SHARED_EFFECT_POOL if n not in excluded]
@@ -4507,6 +4518,11 @@ def computeEffect(effectConfig: dict, ctx, cardPlayerId: int, equippedCardId: in
     first-pass cards so they can react to other cards' outputs.
     """
     effectName = effectConfig.get("effectName", "")
+    # No-effect floor cards (sub-base 'standard') carry effectName 'none' (or blank) —
+    # they produce nothing on purpose, so return an empty result WITHOUT the
+    # unknown-effect warning below.
+    if effectName in ("", "none"):
+        return EffectResult()
     handler = EFFECT_REGISTRY.get(effectName)
     if not handler:
         # Prior-season templates may reference effects that were removed or

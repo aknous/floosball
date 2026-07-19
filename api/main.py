@@ -9354,7 +9354,9 @@ def setEquippedCards(
         for c in req.cards:
             cfg = cardTemplates[c.userCardId].effect_config or {}
             effectName = cfg.get("effectName") or ""
-            if not effectName:
+            # No-effect floor cards ('none'/blank) are exempt — a legal floor lineup
+            # can field several sub-base "standard" cards, all effectName 'none'.
+            if effectName in ("", "none"):
                 continue
             if effectName in effectCounts:
                 displayName = cfg.get("displayName") or effectName

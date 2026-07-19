@@ -112,6 +112,26 @@ separate roster / match bonus / swaps / temp_flex.
 
 Also still OPEN: **Phase 5c** (redesign `full_roster` + `all_in`) and **AP/CH reuse**.
 
+## Sub-base "no-effect" card tier — DONE (backend, sim-validated)
+New floor edition `standard` (below base): a NO-EFFECT print that just fields the player
+for their FP. Everyone can always ice a legal lineup; effect cards become the upgrade.
+- `cardEffects.buildEffectConfig('standard', …)` returns a no-effect config
+  (`effectName:'none'`, empty primary); `computeEffect` no-ops silently on `none`/blank
+  (no "unknown effect" warning); it scores 0 bonus.
+- `cardManager`: `EDITION_THRESHOLDS['standard']=0` (one per player, like base),
+  `EDITION_BASE_WEIGHTS['standard']=0`, `EDITION_SELL_VALUES['standard']=2`; the openPack
+  pool excludes `edition=='standard'` so it's never a pack drop.
+- `auth._provisionStarterPack` grants one `standard` card per position (the floor lineup),
+  base fallback if no standard templates exist yet.
+- Equip endpoint no-dup-effect rule exempts `none`/blank so a lineup can field several
+  standard cards.
+- Frontend `TradingCard` renders the `standard` edition (matte, no foil, "No Effect"
+  rarity, blank effect footer) — already committed on the frontend branch.
+- **Validated:** fresh fast boot generated 144 standard templates (one per player), all
+  `effectName:'none'`, no errors/warnings; unit test confirms a standard card scores 0.
+- **Open (deferred):** can standard upgrade/blend INTO an effect card, or stay effect-less
+  forever? Left as a permanent floor for now (blends never produce `standard`).
+
 Phase 7a made the equip endpoint self-sufficient (it owns the FantasyRoster row now).
 Phase 7b (delete the old fantasy-roster API + the swap web) is intentionally folded into
 Phase 8 so the endpoint removal and the new frontend land together and can be
