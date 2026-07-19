@@ -1525,7 +1525,12 @@ class SeasonManager:
             for eq, uc, tmpl in rows:
                 cfg = tmpl.effect_config or {}
                 effName = cfg.get('effectName') or ''
-                if not effName:
+                # No-effect floor cards ('none'/blank) are EXEMPT from the
+                # no-duplicate-effect rule (same as the equip setter) — a legal
+                # fusion lineup fields several sub-base 'standard' cards, all with
+                # effectName 'none'. Without this they'd be treated as one big
+                # duplicate group and all but one unequipped every week.
+                if effName in ('', 'none'):
                     continue
                 byUser.setdefault(eq.user_id, {}).setdefault(effName, []).append((eq, uc, tmpl))
 
