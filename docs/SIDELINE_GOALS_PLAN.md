@@ -70,6 +70,43 @@ through one. Phase it:
 - During Criticality the hoop (like the other chaos rules) is hidden/glitched in the Rulebook, but a live shot
   still narrates its point value.
 
+## Play-caller refinement (2026-07-19)
+Two down/score-aware rules added to `_shouldAttemptHoopShot` (a make or miss both consume
+the down with **no yardage**, so the down cost is the whole point):
+- **Never on the penultimate down** (previously only the final down was blocked). A hoop on
+  3rd-of-4 forces 4th down regardless of the result, so normal play now shoots only on
+  1st/2nd down (guard: `down >= downsPerSeries - 1`). The final-down block stays absolute
+  (a hoop there forfeits the scoring play).
+- **Late-game deficit / tie awareness** (`_hoopPointsNeeded`): when late (Q4 clock ≤
+  `SIDELINE_GOAL_DESPERATION_SECS`, or any OT) and a hoop point is what reaches a tie/lead,
+  the offense reliably banks BOTH hoops (`SIDELINE_GOAL_DESPERATION_CHANCE` ≈ 0.92). All
+  bands derive from `_fgValue()`/`_maxPossession()`, so they stay correct under MUTATED
+  FG/TD values (nothing hardcoded to 3/6).
+  - `critical` → mandatory, lifts the penultimate-down + hurry-up guards (still never the
+    final down — a FG/kick there is safer). Two cases: (a) TRAILING and no single
+    conventional score reaches the deficit alone, but score + remaining hoops does
+    (default rules: deficit 9–10); (b) TIED in **sudden death** (`_hoopScoreWinsNow`:
+    2nd+ OT, or 1st OT after both guaranteed possessions) — a single hoop point wins outright.
+  - `helpful` → reliable on the affordable (1st/2nd, non-hurry) downs only; doesn't burn a
+    late down a real scoring drive still needs. Cases: a FG can't tie/win but FG + hoops
+    can while a TD alone would (deficit 4–5); or TIED and the go-ahead point isn't
+    game-ending (1st-OT-before-both-possessions, or a regulation tie late).
+  Committed regression suite: `test_sideline_goals.py` (Scenario-based, real engine
+  decisions incl. a full-playCaller integration check; covers the down guards, all
+  need-tiers, OT tie-break, hurry-up interaction, and mutated fg/td bands). Also
+  validated in a headless 400-game STANDARD-format live run with the rule ON: 0 crashes,
+  9 games reached OT, hoop shots fire end-to-end, and the invariants held across 5,565
+  attempts (no final-down attempts; the only 3rd-down attempts were late+critical
+  overrides; OT tie-break shots resolved cleanly). NOTE: base volume ran ~14 shots/game
+  on evenly-matched headless teams — higher than the plan's earlier ~2.7/game figure and
+  driven entirely by the pre-existing `SIDELINE_GOAL_ATTEMPT_INRANGE` (0.55) base rate,
+  not this change; worth a separate balance pass if it holds on real league rosters.
+
+  **Judgment call:** a regulation tie in **hurry-up** (final ~2:30) does NOT force a hoop —
+  a mid-drive go-ahead point there hands the opponent the ball back rather than walking it
+  off, and burns a down you want for the actual scoring drive. OT sudden-death ties DO force
+  it (a make ends the game). Flip regulation-tie to `critical` if maximum aggression is wanted.
+
 ## Build status (2026-07-12)
 **BUILT (phases 1–6) on `feature/rule-changes`** — backend `f6e5dce`, frontend `6756272`.
 Rule gate + config, the hoop-shot play type (make/miss/tip resolution), the play-caller
