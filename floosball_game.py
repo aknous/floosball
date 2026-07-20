@@ -3671,20 +3671,93 @@ class Game:
                 return ('midfield', float(d))
         return None
 
-    def _shouldAttemptHoopShot(self) -> bool:
-        """Choice to throw at a sideline hoop instead of a normal play. Only when a
-        fresh pair is IN RANGE (near midfield or in the red zone), on a NON-final down,
-        never in hurry-up. A low-risk point-grab now (a miss is just an incompletion),
-        so a moderate chance when in range, up on a stalling drive / for an aggressive
-        coach; the per-drive one-shot-per-pair cap keeps the volume down."""
-        if not self._sidelineGoalsActive():
+    def _hoopScoreWinsNow(self) -> bool:
+        """Would an OFFENSIVE score by the team on offense end the game the instant it
+        happens? Mirrors checkOvertimeEnd for a non-defensive score: 2nd+ OT is pure
+        sudden death (any score wins); 1st OT ends on a go-ahead score only once both
+        guaranteed possessions are done. False in regulation (the opponent always has
+        answering time left on the clock)."""
+        if not getattr(self, 'isOvertime', False) or self.currentQuarter < 5:
             return False
-        if self.down >= self.gameRules.downsPerSeries or self._isHurryUp():
+        if getattr(self, 'otPeriod', 0) >= 2:
+            return True
+        return bool(getattr(self, 'otSecondPossComplete', False))
+
+    def _hoopPointsNeeded(self, scoreDiff: int):
+        """How badly the offense needs a sideline-goal point still bankable this drive
+        to reach a tie/lead, combined with a conventional score. All bands derive from
+        _fgValue / _maxPossession, so they stay correct under mutated FG/TD values.
+          'critical' — the point is decisive and the game state makes it MANDATORY, so
+                       the penultimate-down + hurry-up guards are overridden. Two cases:
+                       (a) TRAILING and no single conventional score (a FG OR even the
+                           best TD) reaches the deficit alone, but that score PLUS the
+                           remaining hoop(s) does; (b) TIED in sudden death (OT where an
+                           offensive score wins now) — a single hoop point ends it.
+          'helpful'  — a valuable go-ahead/bridging point, but not game-ending, so grab
+                       it reliably on the downs where a hoop is affordable without
+                       spending the late downs a real scoring drive still needs. Cases:
+                       a FG can't tie/win but FG + hoops can (a TD alone still would); or
+                       the game is TIED and the point takes the lead (last-possession
+                       regulation ties are gated to 'late' by the caller).
+          None       — leading, no hoops left, or a conventional score alone already ties.
+        """
+        if not self._sidelineGoalsActive():
+            return None
+        pts = int(getattr(self.gameRules, 'sidelineGoalPoints', 1))
+        remainingHoop = max(0, 2 - len(getattr(self, '_hoopPairResult', None) or {})) * pts
+        if remainingHoop <= 0:
+            return None
+        # Tied: a single hoop point breaks the tie and takes the lead.
+        if scoreDiff == 0:
+            if self._hoopScoreWinsNow():   # OT sudden death — the go-ahead point wins outright
+                return 'critical'
+            return 'helpful'
+        if scoreDiff > 0:
+            return None
+        deficit = -scoreDiff
+        fg = self._fgValue()
+        tdMax = self._maxPossession()
+        if tdMax < deficit <= tdMax + remainingHoop:
+            return 'critical'
+        if fg < deficit <= fg + remainingHoop:
+            return 'helpful'
+        return None
+
+    def _shouldAttemptHoopShot(self) -> bool:
+        """Choice to throw at a sideline hoop instead of a normal play, when a fresh
+        pair is IN RANGE (near midfield or in the red zone). A make or a miss both
+        CONSUME the down with no yardage, so:
+          - NEVER on the final down (it would forfeit the actual scoring play), and
+          - normally NOT on the penultimate down either (a hoop there forces the final
+            down regardless of the result) nor in hurry-up.
+        Late and trailing, when the bonus point is what bridges a FG/TD to a tie/lead
+        (_hoopPointsNeeded), the offense goes out of its way to bank BOTH hoops: a
+        'critical' need (no conventional score reaches alone) lifts the penultimate-down
+        and hurry-up guards too; a 'helpful' need just makes the attempt reliable on the
+        downs where a hoop is already affordable."""
+        if not self._sidelineGoalsActive():
             return False
         if self._hoopTarget() is None:
             return False
+        # Final down: a hoop always forfeits the scoring play — never shoot.
+        if self.down >= self.gameRules.downsPerSeries:
+            return False
+        isHome = self.offensiveTeam is self.homeTeam
+        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
         from constants import (SIDELINE_GOAL_ATTEMPT_INRANGE, SIDELINE_GOAL_ATTEMPT_STALL_MULT,
-                               SIDELINE_GOAL_ATTEMPT_AGGR_SPAN, SIDELINE_GOAL_ATTEMPT_MAX)
+                               SIDELINE_GOAL_ATTEMPT_AGGR_SPAN, SIDELINE_GOAL_ATTEMPT_MAX,
+                               SIDELINE_GOAL_DESPERATION_SECS, SIDELINE_GOAL_DESPERATION_CHANCE)
+        need = self._hoopPointsNeeded(scoreDiff)
+        late = (getattr(self, 'isOvertime', False)
+                or (self.currentQuarter >= 4 and self.gameClockSeconds <= SIDELINE_GOAL_DESPERATION_SECS))
+        critical = late and need == 'critical'
+        # Normal guards (penultimate down + hurry-up) apply unless the point is mandatory.
+        if not critical:
+            if self.down >= self.gameRules.downsPerSeries - 1 or self._isHurryUp():
+                return False
+        # Mandatory or FG-bridging point → attempt reliably (go grab both hoops).
+        if critical or (late and need == 'helpful'):
+            return _random.random() < SIDELINE_GOAL_DESPERATION_CHANCE
         chance = SIDELINE_GOAL_ATTEMPT_INRANGE
         if self.down >= 2 and self.yardsToFirstDown >= self.gameRules.firstDownDistance - 2:
             chance *= SIDELINE_GOAL_ATTEMPT_STALL_MULT

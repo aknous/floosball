@@ -1041,6 +1041,15 @@ SIDELINE_GOAL_ATTEMPT_INRANGE = 0.55     # base chance when in range of an unuse
 SIDELINE_GOAL_ATTEMPT_STALL_MULT = 1.4   # x when the drive is stalling (salvage a point)
 SIDELINE_GOAL_ATTEMPT_AGGR_SPAN = 0.25   # + up to this for a max-aggressiveness coach
 SIDELINE_GOAL_ATTEMPT_MAX = 0.90         # cap on the attempt chance
+# Late-game deficit awareness: a hoop shot consumes the down with no yardage, so a MAKE
+# or a MISS both push the offense to the next down. The play-caller therefore skips the
+# PENULTIMATE down normally (a hoop there forces the final down regardless of the result)
+# and never shoots on the FINAL down (it would forfeit the scoring play). BUT when the
+# bonus point(s) are what bridge a FG/TD to a tie/lead late (see _hoopPointsNeeded), the
+# offense goes out of its way to bank BOTH hoops — reliably, and (when the points are
+# mandatory) even on the penultimate down / in hurry-up.
+SIDELINE_GOAL_DESPERATION_SECS = 360     # "late": Q4 game clock at/under this (all of OT qualifies)
+SIDELINE_GOAL_DESPERATION_CHANCE = 0.92  # attempt chance when the hoop point is needed to tie/win
 
 # ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
 # Rugby-flavored: a rushing / receiving / QB-scramble TD is only PROVISIONAL — the
