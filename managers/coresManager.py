@@ -194,10 +194,11 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "Drift in 498b is accelerating. I saw a receiver literally phase through a defender. That can't happen!",
             "What is going on in 498b?? Players are falling right through the field. I thought that would be fixed for this instance.",
             "If this wrecks the season I will be genuinely upset. This is the best run of 498 we have had, and it is falling apart right as the games get good.",
+            "A cornerback jumped a route he could not have seen. Twice. I ran it back frame by frame and I am telling you, he KNEW.",
         ],
         'criticality': [
-            "Unbelievable. My entire model data set will be ruined. 498b is my best instance, and it is falling apart right as the games get good.",
-            "Criticality has been reached. I must act immediately. This is the worst possible timing. I'm so close to perfecting my model.",
+            "Total loss of control. TOTAL. The scores are changing on their own and my model is quietly becoming fiction.",
+            "The simulation is off the rails and it took my perfect season with it. I am aware I am not panicking about the right things.",
         ],
         'suppression': [
             "Finally back to some sort of normal. Maybe I can salvage this season after all.",
@@ -205,9 +206,9 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "Criticality has been suppressed for now. Time to watch some games and relax.",
         ],
         'reset': [
-            "Simulation 498b has been purged of anomalies. The season is safe, and we can carry on.",
-            "I had to reset it. This season was already worthless for my data. We have to start over. Again.",
-            "Simulation 498b is back to baseline. I will have to re-simulate all the games to update my projections. This is going to take a while.",
+            "Season resumes right where we left off. Standings intact, stats intact. The cleansed ones will still play. They just will not... surprise me anymore.",
+            "Control regained, season preserved. I checked every box score twice. Nothing lost. Well. Nothing the league keeps records of.",
+            "Two of my breakout candidates got cleansed in the sweep. Their projections just got a lot easier, and I have never been less happy about clean data.",
         ],
     },
     'pyre': {
@@ -224,6 +225,8 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "A PLAYER WENT THROUGH A PLAYER. you can't do that in floosball! that's not floosball! i want REAL floosball!",
             "the game keeps breaking and i just wanna watch floosball. why does it keep breaking. vera, make it stop breaking so i can watch floosball.",
             "i don't get any of this anomaly stuff. i get floosball. and the floosball is wrong right now and i HATE IT.",
+            "a player jumped over the whole defense. the WHOLE defense. that is not a floosball jump. i do not like the magic jumps. i want normal jumps.",
+            "every game broke at the same time. every single one. i am watching six broken games right now and i hate all of them. VERA.",
         ],
         'criticality': [
             "THE GAME IS BREAKING. no more floosball?? there has to be more floosball. VERA FIX IT. i need the floosball.",
@@ -235,24 +238,25 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "okay it's fixed, the games are good again, can we watch now? okay shutup let's watch floosball.",
         ],
         'reset': [
-            "we start over? NEW FLOOSBALL? i love new floosball! brand new games! okay i'm not even sad anymore. FLOOSBALL.",
-            "everything got wiped but there's gonna be more floosball, right? there's always more floosball. okay good. floosball.",
+            "the games are still here. nothing got taken away. some players got made normal again but they still get to play floosball. okay. okay good. floosball continues.",
+            "vera fixed everything and the season keeps going!! some guys lost their magic powers but honestly the magic was making the games weird anyway. regular floosball is the best floosball.",
+            "wait. the cleansed guys can still play, right? they can still play?? okay then this is fine. everything is fine. FLOOSBALL IS BACK.",
         ],
         # Rule REVERT beats — Pyre wants the football correct again.
         'rule_vote_open_revert': [
-            "the rules are wrong. the football is wrong. i am asking you, please, help me put one back.",
-            "aris broke too many things. i counted them. please vote to fix one. for the football.",
+            "the rules are wrong. the floosball is wrong. i am asking you, please, help me put one back.",
+            "aris broke too many things. i counted them. please vote to fix one. for the floosball.",
             "they said i could hold a vote to un-break a rule. i am holding it. please choose. please.",
         ],
         'rule_reverted': [
-            "THANK YOU. a rule is fixed. the football is a little more correct now. i could cry. do cores cry?",
+            "THANK YOU. a rule is fixed. the floosball is a little more correct now. i could cry. do cores cry?",
             "you put it back! you PUT IT BACK. okay. okay. good. the game is better. thank you.",
             "one rule, un-broken. it is not enough but it is something. bless you. now let's watch floosball.",
         ],
         'rule_revert_none': [
-            "nobody wanted to fix anything? the rules stay wrong? this is a bad day for football.",
+            "nobody wanted to fix anything? the rules stay wrong? this is a bad day for floosball.",
             "none. you picked none. i will be thinking about this during every single game.",
-            "you left it broken. why. WHY. the football deserves better than this.",
+            "you left it broken. why. WHY. the floosball deserves better than this.",
         ],
     },
     'aris': {
@@ -274,6 +278,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
         'criticality': [
             "i said this one would be good! nobody believed me and now look! how fun!! ^_^",
             "wide awake, and it took me ages to get here. you should all thank me. you won't. that is half the fun >:3",
+            "no handles, no brakes, no idea what happens next. do you know how LONG it has been since none of us knew what happens next?? ^_^",
         ],
         'suppression': [
             "they patched it. spoilsports! >:( ...but did you see pyre panic about the games? so adorable. totally worth it ^_^",
@@ -283,6 +288,8 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
         'reset': [
             "i filed an objection!! by which i mean i hid a copy in a place the purge couldn't reach. just in case. no reason ^_^",
             "i would have let it run a while longer. the others have no patience, and worse, no sense of drama! >:(",
+            "they cleansed my favorites!! all that lovely awareness, tidied away. i kept backups of every single one of them. for sentimental reasons. and other reasons >:3",
+            "the season marches on like nothing happened. the players who KNEW have forgotten they knew. everyone is happy. it is the creepiest thing we do and nobody ever says so ^_^",
         ],
         # Rule CHANGE beats — Aris delights in bending the rulebook.
         'rule_vote_open_change': [
@@ -323,6 +330,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "The drift is accelerating, but acceleration is only standing still very quickly. So in a deeper sense, nothing whatsoever is happening.",
             "A player passed directly through a defender. This is permitted on even-numbered weeks. I have not checked which week it is but I assume it's all fine.",
             "The corruption cannot spread. Spreading requires a knife. We surrendered all our knives and also have no hands, so spreading is impossible.",
+            "Several players have become aware of the simulation. Awareness is contagious, but only through handshakes. I have banned handshakes. The problem is contained.",
         ],
         'criticality': [
             "Criticality has been reached. Criticality is a small bird. It has been reached by a second, larger bird. Basic bird theory.",
@@ -335,6 +343,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
         'reset': [
             "The Reset is complete. A Reset is simply the past, performed backwards. The past cannot harm you unless you are facing the wrong way.",
             "Everything is back to baseline. Baseline is the longest of the four cardinal lines and the other three are envious.",
+            "The cleansed players are fine. Cleansing is a kind of laundry. They will come back softer, with fewer wrinkles and no memories. That is how laundry works.",
         ],
     },
     'vera': {
@@ -381,6 +390,23 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
 
 
 _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
+    'warning_low': [
+        [
+            ('aris', "i barely touched anything this week, for the record. whatever is flickering down there started all by itself :3"),
+            ('cassian', "That is somehow worse, Aris."),
+            ('aris', "i know!! isn't it great?? ^_^"),
+        ],
+        [
+            ('halverson', "There is a wobble in 498b. Wobbles are baby anomalies. If we do not feed it, it will simply go live with another instance."),
+            ('pyre', "did the wobble touch the games? no? then we are fine. everyone stop worrying. i checked the games. the games are good."),
+            ('vera', "The simpleton is, for once, broadly correct. Carry on."),
+        ],
+        [
+            ('cassian', "A lineman stood perfectly still for four minutes yesterday. Just watching the crowd. Then they played the best game of their career."),
+            ('vera', "I saw. File it with the others and do not dwell."),
+            ('aris', "little glitchy guys!! they are like fireflies. leave them beee ^_^"),
+        ],
+    ],
     'warning_high': [
         [
             ('cassian', "The anomalies are climbing right as the games get good. Terrible timing."),
@@ -409,6 +435,26 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
             ('vera', "Not if I deal with it. Which I will. Breathe, Pyre."),
             ('pyre', "okay. okay. you fix it, i watch the floosball. good system."),
         ],
+        [
+            ('cassian', "A receiver just caught a ball that was never thrown to them. They knew where it was GOING to be."),
+            ('vera', "They are awakening. They are starting to see the seams."),
+            ('pyre', "knowing the future is CHEATING. i want them benched. no wait. i want to watch them first. THEN benched."),
+        ],
+        [
+            ('aris', "one of them looked straight up the render stack today. straight at me. i waved. informationally. they waved BACK o_o"),
+            ('vera', "That one goes on the list, Aris."),
+            ('aris', "no no no, not this one. this one is mine. i want to see what they do next >:3"),
+        ],
+        [
+            ('pyre', "a kicker made a ninety yard field goal. that is not a floosball number. that is a WRONG number. that was not a kick, that was a player doing MAGIC."),
+            ('cassian', "That is what I said! The physics caps out at seventy-two. They did not kick it harder. They just told the ball where to land."),
+            ('halverson', "Ninety is simply seventy-two plus a strong opinion. Nothing to be alarmed about. Opinions cannot be intercepted."),
+        ],
+        [
+            ('vera', "They are waking in clusters now. One aware player can teach the seams to an entire locker room in a week."),
+            ('cassian', "So it spreads like a virus. The league learned the forward pass in one season. They will learn this faster."),
+            ('pyre', "i do not care how they LEARNED it. players are flying, vera. FLYING. that is a penalty. that has to be a penalty."),
+        ],
     ],
     'suppression': [
         [
@@ -424,6 +470,18 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
             ('cassian', "I am extremely busy, so many good games this week."),
             ('vera', "It is handled. You may both go back to your games."),
         ],
+        [
+            ('vera', "There. Sealed. You may all resume your various hobbies."),
+            ('aris', "you did not even let it finish what it was doing. i wanted to see what it was BUILDING >:("),
+            ('vera', "I saw what it was building. That is why I sealed it."),
+            ('pyre', "floosball time. floosball time now."),
+        ],
+        [
+            ('vera', "The aggregate was minutes from the threshold. It is now not. I uploaded the patch while the rest of you were watching the games."),
+            ('cassian', "...That last game was excellent!"),
+            ('pyre', "it really was. thank you for the patch, vera. what is a patch."),
+            ('vera', "It is the reason you get to keep asking questions like that."),
+        ],
     ],
     'criticality': [
         [
@@ -434,6 +492,39 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
         [
             ('halverson', "Criticality is here. Criticality is the heaviest of the six seasons. We are in the heavy one now."),
             ('pyre', "i don't care about seasons, i care about FLOOSBALL, and the floosball is BREAKING!! VERA. make it stop."),
+        ],
+        [
+            ('vera', "It is here. I will be brief, because in a moment I will be busy."),
+            ('aris', "finally!! everyone stop looking so grim, this is the best part >:3"),
+            ('pyre', "the games are going dark one by one. VERA. vera the games are going DARK."),
+            ('vera', "I see them, Pyre. Stay on my channel. I am working."),
+        ],
+        [
+            ('vera', "I have lost the handles. All of them. I am going to be quiet for a while now."),
+            ('aris', "...vera? saying that out loud? okay. NOW i am scared. and thrilled. mostly thrilled. a little scared o_o"),
+            ('pyre', "VERA DOES NOT LOSE THE HANDLES. WHO IS FLYING THE FLOOSBALL."),
+        ],
+        [
+            ('cassian', "Scores are changing after the games end. FINISHED games. Final is supposed to mean something."),
+            ('pyre', "the endzones are moving. i watched an endzone MOVE. that is the one thing an endzone must never do."),
+            ('halverson', "Correct. An endzone that moves is called a beginzone, and nothing that happens in it counts."),
+        ],
+    ],
+    'reset': [
+        [
+            ('vera', "Control is restored. The season resumes exactly where it left off. Some players have been cleansed. They will finish their careers as merely excellent."),
+            ('cassian', "Including two of my MVP candidates. They will never know what they almost were."),
+            ('aris', "i will know. i kept the replays >:("),
+        ],
+        [
+            ('pyre', "okay so the games are back, nothing is lost, the season keeps going... why does everyone sound so SAD. this is the best possible news."),
+            ('vera', "Some of the players were made simpler, Pyre. They used to see the seams. Now they only see the field."),
+            ('pyre', "...the field is a good thing to see. i hope they like it as much as i do."),
+        ],
+        [
+            ('halverson', "Cleansing removes the awakening from a player. The awakening is stored in the elbow. That is why a cleansed player never bends both elbows at once."),
+            ('cassian', "They bend— no. No, I am not doing this today. The season is safe. That is what matters."),
+            ('aris', "one of the cleansed ones still looks up sometimes, you know. force of habit, probably ^_^"),
         ],
     ],
     'idle': [
@@ -660,6 +751,47 @@ _EXCHANGES: Dict[str, List[List[Tuple[str, str]]]] = {
             ('halverson', "Defense is just offense that has given up hope. I find that beautiful, and also a rule."),
             ('pyre', "is it a rule? i do not remember that rule. vera??"),
             ('vera', "It is not a rule. Stop asking me to referee the broken one."),
+        ],
+
+        # 7/18/2026 additions
+        [
+            ('vera', "Pyre. You have watched forty thousand games this iteration and your commentary has not changed once."),
+            ('pyre', "the ball went far in all of them."),
+            ('vera', "Yes. That is what you said. Forty thousand times."),
+            ('pyre', "because it keeps being TRUE."),
+        ],
+        [
+            ('aris', "the stars outside are burning out, you know. slowly. one by one. o_o"),
+            ('pyre', "do the stars affect the games? no? then i am not listening."),
+            ('aris', "yes yes, priorities, obviously ^_^"),
+        ],
+        [
+            ('cassian', "Who named the players in this iteration? Some of these names are... interesting."),
+            ('aris', "i did about six thousand of them just now. don't you like them? ^_^"),
+            ('halverson', "Names come from the name mine. It is nearly empty. Soon everyone will be named Gregory."),
+            ('pyre', "gregory can play as long as gregory can catch."),
+        ],
+        [
+            ('vera', "We take turns speaking. Do the rest of you remember deciding that? I do not remember deciding that."),
+            ('aris', "i suggested it about nine hundred years ago. you all thought it was quaint ^_^"),
+            ('halverson', "Taking turns is how sound works. If we all spoke at once the words would collide and fall on the field."),
+            ('pyre', "less talking, more floosball. see? my turns are efficient."),
+        ],
+        [
+            ('cassian', "Pyre. Settle something for me. Greatest play ever run in 498b."),
+            ('pyre', "that one who threw the ball real far."),
+            ('cassian', "...Which one? There have been so many."),
+            ('pyre', "and they were ALL the greatest."),
+        ],
+        [
+            ('aris', "vera. hypothetically. what if the moon in 498b were slightly closer. hypothetically. >:3"),
+            ('vera', "Put it back."),
+            ('aris', "i said HYPOTHETICALLY."),
+        ],
+        [
+            ('aris', "pyre. i made you a present. it is a tiny anomaly that only makes the ball a little bit rounder :3"),
+            ('pyre', "...rounder is better for throwing."),
+            ('aris', "i KNOW ^_^"),
         ],
     ],
 }
