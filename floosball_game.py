@@ -2713,10 +2713,13 @@ class Game:
         # A FG on 4th down only "helps" if it wins/ties, OR there's realistically time for a
         # SUBSEQUENT possession to score the rest. No subsequent possession when: late in
         # regulation (game clock), the opponent is locked out (chess clock — they can't give
-        # the ball back), OR OUR OWN budget is about to run out (chess clock — we won't get
-        # the ball again). Down more than a FG in any of those → a futile 3, so go for the TD.
+        # the ball back), OUR OWN budget is about to run out (chess clock — we won't get the
+        # ball again), OR it's our LAST scoring chance in a no-clock format (innings: the last
+        # try of the final at-bat — the game clock/lockout signals don't exist there). Down
+        # more than a FG in any of those → a futile 3, so go for the TD.
         lateHopeless = ((self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
-                        or self._defenseLockedOut() or self._chessClockLow(120))
+                        or self._defenseLockedOut() or self._chessClockLow(120)
+                        or self.format.isLastScoringChance(self, self.offensiveTeam))
         fgHelps = scoreDiff >= -self._fgValue() or not lateHopeless
         inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))

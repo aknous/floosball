@@ -95,6 +95,13 @@ class GameFormat:
         innings returns it always (a punt is an out for nothing)."""
         return False
 
+    def isLastScoringChance(self, game, offense) -> bool:
+        """True when `offense` has NO future possession to make up points after this one,
+        so a FG that still leaves them trailing is futile and the 4th-down caller should
+        push for the touchdown. Default False — clock formats detect the endgame via the
+        game clock / chess-clock lockout instead; innings (no clock) needs this signal."""
+        return False
+
     def newDriveYardsToEndzone(self, game):
         """A fixed yards-to-endzone for EVERY new possession, or None to use the natural
         spot. innings starts every drive at the batting team's own 20 (a fresh at-bat)."""
@@ -491,6 +498,17 @@ class InningsFormat(GameFormat):
 
     def suppressPunt(self, game) -> bool:
         return True    # a punt is a try for nothing; going for it is strictly better
+
+    def isLastScoringChance(self, game, offense) -> bool:
+        # The batting team is on its LAST try of its FINAL at-bat — no possession to come.
+        # A FG that doesn't tie/take the lead here is futile, so the 4th-down caller should
+        # go for the TD. The current inning/half already implies which team bats (top = away,
+        # bottom = home), and offense IS that team, so the inning/try state is sufficient.
+        # Covers regulation AND extra innings (inning >= N), and both halves. Non-last tries
+        # / earlier innings return False so a team with a future at-bat can still kick.
+        lastTry = getattr(game, '_inningsTries', 0) >= self._tries(game) - 1
+        lastInning = getattr(game, '_inningsNumber', 1) >= self._innings(game)
+        return lastTry and lastInning
 
     def newDriveYardsToEndzone(self, game):
         return game.gameRules.fieldLength - 20   # every at-bat starts at own 20
