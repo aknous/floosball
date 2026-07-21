@@ -9843,6 +9843,13 @@ class Game:
         ladderOn = bool(getattr(self.gameRules, 'conversionLadderEnabled', False))
         kickAllowed = bool(getattr(self.gameRules, 'conversionKickEnabled', True)) and not ladderOn
         fallback = kick if (kickAllowed or not goRungs) else self._forcedGoRung(scoringTeam, goRungs)
+        # Innings: no game clock (quarter is always 1), so the standard Q3/Q4 comeback gate
+        # never fires. Going for the TOP rung is the only way to CONTINUE the at-bat, which is
+        # worth far more than a clock game's points-only gamble — so innings has its own policy.
+        from constants import INNINGS_CONTINUATION_ENABLED
+        if (INNINGS_CONTINUATION_ENABLED and goRungs
+                and getattr(self.format, 'key', '') == 'innings'):
+            return self._chooseInningsConversion(scoringTeam, goRungs, fallback)
         if self.currentQuarter not in (3, 4) or not goRungs:   # Q1-Q2 / OT: the safe kick (or forced go-rung)
             return fallback
         scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
@@ -9898,6 +9905,47 @@ class Game:
         if eligible:
             return max(eligible, key=lambda r: r['points'])   # reach as high as the odds allow
         return min(goRungs, key=lambda r: r['distance'])       # else the safest (closest) rung
+
+    def _chooseInningsConversion(self, scoringTeam: FloosTeam.Team, goRungs: list, fallback: dict) -> dict:
+        """Innings post-TD decision (docs/INNINGS_REDESIGN_PLAN.md). Making the TOP rung (max
+        points) is the ONLY way to CONTINUE the at-bat — a made top conversion doesn't consume
+        a try — so a team reaches for it far more than in a clock game. Anything else (the safe
+        `fallback`, or a lesser rung) ends the try, so the choice is simply top-rung-gamble vs
+        fallback. Go harder the further behind, softer when comfortably ahead; temper by the top
+        rung's make odds and coach aggressiveness. TD points are already banked before this."""
+        from constants import (INNINGS_CONVERSION_BASE_GO, INNINGS_CONVERSION_TRAIL_STEP,
+                               INNINGS_CONVERSION_TRAIL_CAP, INNINGS_CONVERSION_LEAD_STEP,
+                               INNINGS_CONVERSION_LEAD_CAP, INNINGS_CONVERSION_AGGR_SPAN)
+        top = max(goRungs, key=lambda r: r['points'])
+        scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
+        opponentScore = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
+        deficit = opponentScore - scoringScore   # positive = still trailing after the TD
+        lastChance = self.format.isLastScoringChance(self, scoringTeam)
+        fbPts = float(fallback.get('points', 0))
+        # WALK-OFF: on the last chance in the BOTTOM of the final inning, if the safe `fallback`
+        # already takes the lead it ENDS the game (checkEarlyEnd) — take the guaranteed win, don't
+        # gamble it on a harder rung that could miss and send it to extra innings.
+        if (lastChance and getattr(self, '_inningsHalf', 'top') == 'bottom'
+                and deficit - fbPts < 0):
+            return fallback
+        # MANDATORY on the last scoring chance (last try of the final at-bat): if the safe
+        # `fallback` still leaves the team TRAILING (a guaranteed loss) but the TOP rung reaches
+        # a tie/lead, GO FOR THE TOP — never kick a conversion that loses. Analog of the
+        # last-scoring-chance FG fix. (A made top rung that only TIES still continues the at-bat,
+        # so the team keeps batting for the win.)
+        if (lastChance and deficit - fbPts > 0 and deficit - float(top['points']) <= 0):
+            return top
+        p = self._estimateConversionProb(scoringTeam, top['distance'])
+        coach = getattr(scoringTeam, 'coach', None)
+        aggressNorm = (getattr(coach, 'aggressiveness', COACH_ATTR_NEUTRAL) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+        desire = INNINGS_CONVERSION_BASE_GO
+        if deficit > 0:
+            desire += min(INNINGS_CONVERSION_TRAIL_CAP, INNINGS_CONVERSION_TRAIL_STEP * deficit)
+        elif deficit < 0:
+            desire -= min(INNINGS_CONVERSION_LEAD_CAP, INNINGS_CONVERSION_LEAD_STEP * (-deficit))
+        desire += aggressNorm * INNINGS_CONVERSION_AGGR_SPAN
+        pct = max(0.02, min(0.97, desire)) * (0.4 + 0.6 * p)   # temper by the top rung's make odds
+        return top if _random.random() < pct else fallback
 
     # ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
     def _contestedScoringActive(self) -> bool:
@@ -10041,6 +10089,17 @@ class Game:
             self._simulateExtraPointPlay(scoringTeam, opposingTeam, trackPtsAllowed=trackPtsAllowed)
         else:
             self._simulateConversionPlay(scoringTeam, opposingTeam, rung['points'], rung['distance'])
+        # Innings: a MADE TOP conversion (the single max-value 'go' rung) by the BATTING team
+        # keeps its at-bat alive — the try isn't consumed (read in InningsFormat.possession-
+        # Receiver). A kick, a lesser rung, or a miss all consume the try. No-op elsewhere.
+        from constants import INNINGS_CONTINUATION_ENABLED
+        self._inningsContinue = bool(
+            INNINGS_CONTINUATION_ENABLED
+            and getattr(self.format, 'key', '') == 'innings'
+            and scoringTeam is self.offensiveTeam            # the batting team (not a defensive score)
+            and rung['kind'] == 'go'
+            and float(rung['points']) >= self._maxLadderPoints()   # the TOP rung is the gate
+            and bool(getattr(self.play, 'scoreChange', False)))    # and it was MADE
 
     def _simulateConversionPlay(self, scoringTeam: FloosTeam.Team, opposingTeam: FloosTeam.Team,
                                 points, distance):

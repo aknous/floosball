@@ -1013,6 +1013,26 @@ CONVERSION_GO_AGGRESSION     = 1.3       # master multiplier on the whole chart 
 # dampened since it's earlier and a miss has more time to hurt.
 CONVERSION_GO_Q3_DAMPEN      = 0.55
 
+# ── Innings: conversion-gated continuation (docs/INNINGS_REDESIGN_PLAN.md) ──────
+# In the innings format a TD whose TOP conversion (the max-value 'go' rung — the 2-pt
+# when the ladder is off, the longest rung when it's on) is MADE keeps the at-bat alive
+# WITHOUT consuming a try (baseball-style: scoring doesn't make an out). A kick, a lesser
+# rung, or a miss all consume a try. Removes the old hard comeback ceiling; self-limiting
+# because conversions miss. Master toggle for A/B validation:
+INNINGS_CONTINUATION_ENABLED = True
+INNINGS_MAX_CONTINUATIONS = 6            # safety cap: max free continuations per at-bat
+                                         # (a freak no-miss streak can't hang the game;
+                                         # rarely hit — probability ends most at-bats first)
+# Innings post-TD go-for-the-top-rung eagerness (the ONLY way to continue the at-bat, so
+# teams reach for it far more than in a clock game). desire = base (+trail / -lead) + aggr,
+# then tempered by the top rung's make odds. Tunable against sim measurements.
+INNINGS_CONVERSION_BASE_GO   = 0.55      # baseline eagerness to extend the at-bat
+INNINGS_CONVERSION_TRAIL_STEP = 0.12     # + per point of deficit (trailing → chase harder)
+INNINGS_CONVERSION_TRAIL_CAP  = 0.45     # cap on the trailing boost
+INNINGS_CONVERSION_LEAD_STEP  = 0.12     # − per point of lead (ahead → bank the safe point,
+INNINGS_CONVERSION_LEAD_CAP   = 0.55     #   don't run it up); a ~score-plus lead ≈ never gambles
+INNINGS_CONVERSION_AGGR_SPAN  = 0.15     # ± across the coach-aggressiveness range
+
 # ── Sideline Goals (dormant mechanic — docs/SIDELINE_GOALS_PLAN.md) ────────────
 # Hoop shots at sideline hoops for `sidelineGoalPoints`. TWO pairs per attacking
 # direction: a MIDFIELD pair (~the 50) and an END-ZONE pair (flanking the goal being

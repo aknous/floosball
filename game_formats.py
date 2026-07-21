@@ -521,15 +521,43 @@ class InningsFormat(GameFormat):
             game._inningsNumber = 1
             game._inningsHalf = 'top'
             game._inningsTries = 0
+            game._inningsContinue = False
+            game._inningsContinues = 0
 
     def possessionReceiver(self, game, giver, receiver):
-        # Every possession-end is a TRY used by the batting team (the giver). Under 3
+        # Conversion-gated continuation (docs/INNINGS_REDESIGN_PLAN.md): a TD whose TOP
+        # conversion was MADE keeps the batting team's at-bat alive WITHOUT consuming a try
+        # (baseball-style — scoring doesn't make an out). `_inningsContinue` is set by the
+        # conversion resolver; a per-at-bat safety cap stops a freak no-miss streak hanging
+        # the game. Everything else (kick / lesser rung / miss / failed drive) consumes a try.
+        if getattr(game, '_inningsContinue', False):
+            game._inningsContinue = False
+            from constants import INNINGS_MAX_CONTINUATIONS
+            cont = getattr(game, '_inningsContinues', 0)
+            if cont < INNINGS_MAX_CONTINUATIONS:
+                game._inningsContinues = cont + 1
+                # Mark the extended at-bat in the play feed, styled like the inning marker
+                # (batting team made its top conversion and keeps batting — no try spent).
+                try:
+                    game.gameFeed.insert(0, {'event': {
+                        'text': f"{giver.abbr} · Try extended!",
+                        '_type': 'inning',
+                        'quarter': getattr(game, 'currentQuarter', 1),
+                        'timeRemaining': '',
+                    }})
+                except Exception:
+                    pass
+                return giver   # keep batting — same at-bat, try NOT consumed
+            # cap reached → fall through and consume a try like any other outcome
+        game._inningsContinue = False   # clear any stale flag before a normal resolution
+        # Every OTHER possession-end is a TRY used by the batting team (the giver). Under 3
         # tries they keep batting; at 3 the at-bat flips to the other team.
         tries = getattr(game, '_inningsTries', 0) + 1
         if tries < self._tries(game):
             game._inningsTries = tries
             return giver
         game._inningsTries = 0
+        game._inningsContinues = 0   # at-bat over → reset the continuation counter
         if getattr(game, '_inningsHalf', 'top') == 'top':
             game._inningsHalf = 'bottom'
         else:
