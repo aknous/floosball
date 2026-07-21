@@ -2505,6 +2505,33 @@ class Game:
         fa = self.awayScore - getattr(self, '_frameStartAway', 0)
         return (fh - fa) if self.offensiveTeam is self.homeTeam else (fa - fh)
 
+    def _framesLeadingNow(self):
+        """Frames only (else None): would the OFFENSE win if the match ended right now?
+        Frames is decided by FRAMES WON — total points only break a frames tie — so a team
+        can outscore its opponent and still be losing. Any clock decision that ENDS the
+        match (draining it out with kneels) has to read this, not the raw score margin.
+        Counts frames already banked plus the credit for the frame in progress (a tied
+        frame splits 0.5/0.5, mirroring `awardFrames`), then the points tiebreak."""
+        if getattr(self.format, 'key', '') != 'frames':
+            return None
+        fh = float(getattr(self, '_framesWonHome', 0.0))
+        fa = float(getattr(self, '_framesWonAway', 0.0))
+        curH = self.homeScore - getattr(self, '_frameStartHome', 0)
+        curA = self.awayScore - getattr(self, '_frameStartAway', 0)
+        if curH > curA:
+            fh += 1
+        elif curA > curH:
+            fa += 1
+        else:
+            fh += 0.5
+            fa += 0.5
+        isHome = self.offensiveTeam is self.homeTeam
+        if fh != fa:
+            return (fh > fa) if isHome else (fa > fh)
+        if self.homeScore != self.awayScore:   # frames level → total points break it
+            return (self.homeScore > self.awayScore) if isHome else (self.awayScore > self.homeScore)
+        return False   # dead level — not leading, so don't drain the match out
+
     def _frameEndSoon(self, threshold: int = 120) -> bool:
         """True when the current frame is winding down (frames only) — teams should manage
         the clock like the end of a game (hurry if behind in the frame, drain if ahead)."""
@@ -4177,8 +4204,13 @@ class Game:
             # Field-position guard: kneel loses 1 yard, so on own 1 (or goal line) it
             # would back into the endzone for a self-inflicted safety. Skip and fall
             # through to the normal play caller — it'll pick a run.
+            # "Leading" means leading THE MATCH, which isn't the score margin in frames —
+            # a team can be ahead on total points while losing on frames won, and draining
+            # the clock there kneels away a loss.
+            _framesLead = self._framesLeadingNow()
+            _leading = (scoreDiff > 0) if _framesLead is None else _framesLead
             if ((self.currentQuarter == 4 or self.currentQuarter >= 5)
-                    and scoreDiff > 0 and self.yardsToSafety > 2):
+                    and _leading and self.yardsToSafety > 2):
                 # Chess clock: a kneel drains the offense's OWN possession budget 1:1 with
                 # the game clock. If that budget can't outlast the clock remaining, the
                 # kneels run it to 0 and the team is LOCKED OUT — a turnover that hands the
@@ -4211,7 +4243,11 @@ class Game:
                 # STARTS the clock, then the play clock runs off; see the drain in the
                 # game loop). A timed-out kneel drains only the 4s snap.
                 maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
-                effectiveOppTos = oppTimeouts if scoreDiff <= maxComebackPts else 0
+                # How far the opponent has to come back is a POINTS gap — in frames that's
+                # the margin inside the live frame, not the running total.
+                _comebackDiff = self._frameScoreDiff()
+                _comebackDiff = _comebackDiff if _comebackDiff is not None else scoreDiff
+                effectiveOppTos = oppTimeouts if _comebackDiff <= maxComebackPts else 0
                 # TO'd kneels still drain 4s (snap time); free kneels drain full ~40s
                 toadKneels = min(effectiveOppTos, availableKneels)
                 freeKneels = availableKneels - toadKneels
@@ -6802,11 +6838,12 @@ class Game:
                                 )
                         elif getattr(self.format, 'key', '') == 'innings':
                             # Innings: no kickoff — the next at-bat just starts at the own
-                            # 20. Mark "next try" UNLESS a batting change already inserted an
-                            # inning event (that covers the transition), to avoid two markers.
-                            _top = self.gameFeed[0] if self.gameFeed else None
-                            _flipped = isinstance(_top, dict) and (_top.get('event') or {}).get('_type') == 'inning'
-                            if not _flipped:
+                            # 20. Mark "next try" UNLESS the possession resolution already
+                            # inserted an inning marker (a batting change, or an extended try)
+                            # — that covers the transition, so a second marker is noise.
+                            _marked = getattr(self, '_inningsMarked', False)
+                            self._inningsMarked = False
+                            if not _marked:
                                 nextTryEvent = {
                                     'text': f'{self.offensiveTeam.abbr} · next try',
                                     '_type': 'inning',
@@ -7176,6 +7213,7 @@ class Game:
                             break
 
                         self.broadcastGameState(includeLastPlay=True)
+                        await self._pauseBetweenBeats()
                         self._attemptConversion(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
                         self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
                     else:
@@ -7208,10 +7246,14 @@ class Game:
                             self.gameFeed.insert(0, {'play': self.play})
                             self.broadcastGameState(includeLastPlay=True)
                             # BEAT 2 — the contest (its own entry) books the TD or stuffs it.
+                            # Paced like any other play so the end-zone arrival can land
+                            # before the contest resolves it.
+                            await self._pauseBetweenBeats()
                             won = self._runContest(scorer, scoringPlay)
                             if won:
                                 if self.checkOvertimeEnd():
                                     break
+                                await self._pauseBetweenBeats()
                                 self._attemptConversion(self.offensiveTeam, self.defensiveTeam)
                                 self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
                                 self._pendingPossessionChange = True
@@ -7273,6 +7315,7 @@ class Game:
                         if self.checkOvertimeEnd():
                             break
 
+                        await self._pauseBetweenBeats()
                         self._attemptConversion(self.offensiveTeam, self.defensiveTeam)
 
                         self.turnover(self.offensiveTeam, self.defensiveTeam, possReset)
@@ -7339,6 +7382,7 @@ class Game:
                                 self.otSecondPossComplete = True  # defensive score decides OT — let isGameOver() end it
                                 break
 
+                            await self._pauseBetweenBeats()
                             self._attemptConversion(self.defensiveTeam, self.offensiveTeam, trackPtsAllowed=False)
 
                             self.turnover(self.defensiveTeam, self.offensiveTeam, possReset)
@@ -9920,21 +9964,20 @@ class Game:
         scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
         opponentScore = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
         deficit = opponentScore - scoringScore   # positive = still trailing after the TD
-        lastChance = self.format.isLastScoringChance(self, scoringTeam)
-        fbPts = float(fallback.get('points', 0))
-        # WALK-OFF: on the last chance in the BOTTOM of the final inning, if the safe `fallback`
-        # already takes the lead it ENDS the game (checkEarlyEnd) — take the guaranteed win, don't
-        # gamble it on a harder rung that could miss and send it to extra innings.
-        if (lastChance and getattr(self, '_inningsHalf', 'top') == 'bottom'
-                and deficit - fbPts < 0):
-            return fallback
-        # MANDATORY on the last scoring chance (last try of the final at-bat): if the safe
-        # `fallback` still leaves the team TRAILING (a guaranteed loss) but the TOP rung reaches
-        # a tie/lead, GO FOR THE TOP — never kick a conversion that loses. Analog of the
-        # last-scoring-chance FG fix. (A made top rung that only TIES still continues the at-bat,
-        # so the team keeps batting for the win.)
-        if (lastChance and deficit - fbPts > 0 and deficit - float(top['points']) <= 0):
-            return top
+        # Last try of the final at-bat, with a decisive threshold to hit: either this is the
+        # BOTTOM half (any lead walks it off) or the team is tied/trailing (it must reach at
+        # least a tie or it loses). Nothing comes after the try, so the eagerness heuristic
+        # below — which is about whether buying another drive is worth it — doesn't apply;
+        # pick the best expected OUTCOME instead. A team already LEADING in the top half has
+        # no such cliff (the opponent still bats, so it's purely a margin call) and keeps
+        # using the heuristic.
+        if self.format.isLastScoringChance(self, scoringTeam):
+            if deficit >= 0 or getattr(self, '_inningsHalf', 'top') == 'bottom':
+                return self._lastChanceConversion(scoringTeam, goRungs, fallback, deficit)
+            # Already AHEAD in the top half: the opponent still bats, so this settles
+            # nothing, and with the at-bat ending there's no continuation to buy either.
+            # Take the sure points; only an aggressive coach gambles to pad the lead.
+            return self._lastChanceLeadConversion(scoringTeam, goRungs, fallback)
         p = self._estimateConversionProb(scoringTeam, top['distance'])
         coach = getattr(scoringTeam, 'coach', None)
         aggressNorm = (getattr(coach, 'aggressiveness', COACH_ATTR_NEUTRAL) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
@@ -9946,6 +9989,81 @@ class Game:
         desire += aggressNorm * INNINGS_CONVERSION_AGGR_SPAN
         pct = max(0.02, min(0.97, desire)) * (0.4 + 0.6 * p)   # temper by the top rung's make odds
         return top if _random.random() < pct else fallback
+
+    def _estimateKickConversionProb(self, scoringTeam) -> float:
+        """Make odds for the safe PAT kick (from the 15, like `_simulateExtraPointPlay`),
+        so the last-chance chooser can weigh it against the go-for-it rungs on the same
+        scale. Mirrors `_estimateFgProbability`'s model at that fixed spot."""
+        kicker = scoringTeam.rosterDict.get('k')
+        if not kicker:
+            return 0.0
+        fgDist = 15 + self.gameRules.fgSnapDistance
+        base = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
+        normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
+        prob = base * (0.52 + normalizedSkill * 0.85)
+        if fgDist < 30:
+            prob = min(0.96, prob + 0.10)
+        return max(0.05, min(0.96, prob))
+
+    def _lastChanceLeadConversion(self, scoringTeam, goRungs: list, fallback: dict) -> dict:
+        """Innings, last try of the final at-bat, already AHEAD in the TOP half. Nothing is
+        settled here (the opponent bats next) and the at-bat is over either way, so unlike
+        mid-game there's no continuation to buy — the gamble is strictly worse than it
+        looks. Taking the sure points is the natural call; coach aggressiveness is what
+        makes a team reach for the extra margin anyway. With no safe kick on the board
+        (ladder + kick off), "sure" means the most makeable rung rather than the biggest."""
+        from constants import (INNINGS_LASTCHANCE_LEAD_GO_BASE,
+                               INNINGS_LASTCHANCE_LEAD_AGGR_SPAN)
+        top = max(goRungs, key=lambda r: r['points'])
+        safe = fallback if fallback.get('kind') == 'kick' else min(
+            goRungs, key=lambda r: r.get('distance', 0))
+        if safe is top:
+            return top
+        coach = getattr(scoringTeam, 'coach', None)
+        aggressNorm = (getattr(coach, 'aggressiveness', COACH_ATTR_NEUTRAL)
+                       - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+        p = self._estimateConversionProb(scoringTeam, top['distance'])
+        pct = max(0.02, min(0.90, INNINGS_LASTCHANCE_LEAD_GO_BASE
+                            + aggressNorm * INNINGS_LASTCHANCE_LEAD_AGGR_SPAN))
+        pct *= (0.4 + 0.6 * p)   # and only if the rung is actually makeable
+        return top if _random.random() < pct else safe
+
+    def _lastChanceConversion(self, scoringTeam, goRungs: list, fallback: dict, deficit: float) -> dict:
+        """Innings, last try of the final at-bat: the at-bat ENDS here, so take the option
+        with the best expected OUTCOME rather than the biggest one. Taking the lead beats
+        tying beats staying behind, each weighted by how likely the attempt actually is —
+        so a team down 2 with 3/4/5-point rungs available takes the SHORT 3 that already
+        wins instead of reaching for a 5 it probably misses, and never kicks a conversion
+        that leaves it losing. A made TOP rung also extends the at-bat (the continuation
+        gate), which is worth a little extra on a TIE — it means batting on for the win."""
+        from constants import (INNINGS_LASTCHANCE_WIN_VALUE, INNINGS_LASTCHANCE_TIE_VALUE,
+                               INNINGS_LASTCHANCE_CONTINUE_BONUS)
+        cands = list(goRungs)
+        if not any(c is fallback for c in cands):
+            cands.append(fallback)
+        topPts = max((float(r['points']) for r in goRungs), default=None)
+
+        def prob(r):
+            if r.get('kind') == 'kick':
+                return self._estimateKickConversionProb(scoringTeam)
+            return self._estimateConversionProb(scoringTeam, r.get('distance', 2))
+
+        def value(r):
+            after = deficit - float(r.get('points', 0))
+            if after < 0:
+                return prob(r) * INNINGS_LASTCHANCE_WIN_VALUE
+            if after > 0:
+                return 0.0        # still losing — no value in the result itself
+            base = INNINGS_LASTCHANCE_TIE_VALUE
+            if r.get('kind') == 'go' and topPts is not None and float(r['points']) >= topPts:
+                base += INNINGS_LASTCHANCE_CONTINUE_BONUS   # a made top rung keeps batting
+            return prob(r) * base
+
+        best = max(cands, key=lambda r: (value(r), prob(r)))
+        if value(best) <= 0:
+            # Nothing on the board even reaches a tie — chase the most likely points.
+            best = max(cands, key=lambda r: (float(r.get('points', 0)) * prob(r), prob(r)))
+        return best
 
     # ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
     def _contestedScoringActive(self) -> bool:
@@ -10078,6 +10196,15 @@ class Game:
         self.gameFeed.insert(0, {'play': self.play})
         self.broadcastGameState(includeLastPlay=True)
         return won
+
+    async def _pauseBetweenBeats(self) -> None:
+        """Breathing room inside a multi-beat scoring sequence (TD → contest → conversion).
+        Each beat is its own feed entry and its own broadcast, but they resolve inside the
+        scoring block — the possession loop's `waitBetweenPlays` only paces the loop itself,
+        so without this the whole sequence lands in the viewer's feed at once. No-op when
+        the mode has no in-game delays (fast/turbo), so sims are unaffected."""
+        if self.timingManager:
+            await self.timingManager.waitBetweenPlays()
 
     def _attemptConversion(self, scoringTeam: 'FloosTeam.Team', opposingTeam: 'FloosTeam.Team',
                            trackPtsAllowed: bool = True):
@@ -10914,7 +11041,9 @@ class Game:
                 ls = self._inningsLineScore = {'home': {}, 'away': {}}
             _inn = int(getattr(self, '_inningsNumber', 1))
             _side = 'home' if team is self.homeTeam else 'away'
-            ls[_side][_inn] = ls[_side].get(_inn, 0) + points
+            # Round like the running totals above — fractional (rule-vote) point values
+            # otherwise leave float noise (14.600000000000001) in the inning column.
+            ls[_side][_inn] = round(ls[_side].get(_inn, 0) + points, 2)
 
         # Broadcast score update
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
@@ -11372,7 +11501,8 @@ class Play():
         # instead of the meaningless quarter/clock (the clock loop is inert). None off
         # innings, so no effect on other formats.
         if getattr(game.format, 'key', '') == 'innings':
-            self.inning = int(getattr(game, '_inningsNumber', 1))
+            _di = getattr(game.format, 'displayInning', None)
+            self.inning = int(_di(game) if _di else getattr(game, '_inningsNumber', 1))
             self.inningHalf = getattr(game, '_inningsHalf', 'top')
             self.inningTry = int(getattr(game, '_inningsTries', 0)) + 1
         else:

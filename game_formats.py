@@ -525,6 +525,11 @@ class InningsFormat(GameFormat):
             game._inningsContinues = 0
 
     def possessionReceiver(self, game, giver, receiver):
+        # One-shot: set when this resolution inserts an inning-style feed marker (a batting
+        # change or an extended try), so the post-score "next try" marker knows to stay
+        # quiet. A flag, not a peek at the feed head — an interleaved entry (a rally line,
+        # say) used to hide the marker and let a duplicate through.
+        game._inningsMarked = False
         # Conversion-gated continuation (docs/INNINGS_REDESIGN_PLAN.md): a TD whose TOP
         # conversion was MADE keeps the batting team's at-bat alive WITHOUT consuming a try
         # (baseball-style — scoring doesn't make an out). `_inningsContinue` is set by the
@@ -545,6 +550,7 @@ class InningsFormat(GameFormat):
                         'quarter': getattr(game, 'currentQuarter', 1),
                         'timeRemaining': '',
                     }})
+                    game._inningsMarked = True
                 except Exception:
                     pass
                 return giver   # keep batting — same at-bat, try NOT consumed
@@ -576,6 +582,7 @@ class InningsFormat(GameFormat):
                     'quarter': game.currentQuarter,
                     'timeRemaining': '',
                 }})
+                game._inningsMarked = True
             except Exception:
                 pass
         # The at-bat is over and the teams switch — give the coaches a moment to
@@ -608,6 +615,21 @@ class InningsFormat(GameFormat):
                 return True   # accept a tie after too many extra innings
         return None
 
+    def displayInning(self, game) -> int:
+        """The inning number to SHOW. The flip that ends the final inning increments the
+        counter to N+1 before the game-over check reads it (that increment is what tells
+        `checkEarlyEnd` an inning completed), so a game decided in regulation would
+        otherwise finish reading "inning 4". Clamp only while parked on that boundary
+        state with the game actually over — extra innings really are inning N+1, and a
+        game still sitting there undecided is tied and heading to extras."""
+        N = self._innings(game)
+        inning = getattr(game, '_inningsNumber', 1)
+        if (inning > N and getattr(game, '_inningsHalf', 'top') == 'top'
+                and getattr(game, '_inningsTries', 0) == 0
+                and self.checkEarlyEnd(game)):
+            return inning - 1
+        return inning
+
     def adjustGameProgress(self, game, gameProgress: float) -> float:
         # Progress = fraction of the scheduled innings played (completed innings +
         # current half + tries within it), so WP reads late innings as "late game".
@@ -620,7 +642,7 @@ class InningsFormat(GameFormat):
 
     def stateExtra(self, game) -> dict:
         ls = getattr(game, '_inningsLineScore', None) or {'home': {}, 'away': {}}
-        inning = getattr(game, '_inningsNumber', 1)
+        inning = self.displayInning(game)
         # Always show the full scheduled slate of innings (1..inningsPerGame), plus any
         # extra innings reached — future innings render blank on the frontend.
         maxInn = max([inning, self._innings(game)] + list(ls['home'].keys()) + list(ls['away'].keys()))

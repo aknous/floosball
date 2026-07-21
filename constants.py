@@ -1032,6 +1032,16 @@ INNINGS_CONVERSION_TRAIL_CAP  = 0.45     # cap on the trailing boost
 INNINGS_CONVERSION_LEAD_STEP  = 0.12     # − per point of lead (ahead → bank the safe point,
 INNINGS_CONVERSION_LEAD_CAP   = 0.55     #   don't run it up); a ~score-plus lead ≈ never gambles
 INNINGS_CONVERSION_AGGR_SPAN  = 0.15     # ± across the coach-aggressiveness range
+# Last try of the final at-bat: the conversion is weighed by expected OUTCOME, not by
+# whether it buys another drive. Relative worth of where the try leaves you.
+INNINGS_LASTCHANCE_WIN_VALUE  = 1.0      # the try takes the lead
+INNINGS_LASTCHANCE_TIE_VALUE  = 0.5      # the try only ties (roughly a coin flip after)
+INNINGS_LASTCHANCE_CONTINUE_BONUS = 0.15 # extra for a TYING top rung — it extends the at-bat
+# Last try, already ahead, opponent still to bat: take the sure points by default. The
+# spread is what separates coaches — a conservative one basically never gambles the safe
+# point, an aggressive one reaches for the extra margin fairly often.
+INNINGS_LASTCHANCE_LEAD_GO_BASE   = 0.10
+INNINGS_LASTCHANCE_LEAD_AGGR_SPAN = 0.25
 
 # ── Sideline Goals (dormant mechanic — docs/SIDELINE_GOALS_PLAN.md) ────────────
 # Hoop shots at sideline hoops for `sidelineGoalPoints`. TWO pairs per attacking
@@ -1115,7 +1125,7 @@ CONTEST_NARRATION = {
     },
     'race': {
         'win':   ["{scorer} and {defender} line up on one sideline and race across the field to the other sideline. {scorer} wins by a nose. TOUCHDOWN!",
-                  "{scorer} and {defender} across the endzone. {scorer} leaves {defender} in the dust. TOUCHDOWN!"],
+                  "{scorer} and {defender} race across the endzone. {scorer} leaves {defender} in the dust. TOUCHDOWN!"],
         'stuff': ["{scorer} and {defender} begin to race, but {scorer} trips and falls flat on their face. No score.",
                   "{scorer} and {defender} line up on one 10 yard line and race, but {defender} beats them to the endzone cleanly. No touchdown."],
     },

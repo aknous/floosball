@@ -139,9 +139,10 @@ expect("last try, down 2 after TD (kick loses, 2pt ties) → ALWAYS goes for 2",
 # Inverse: a safe kick that walks it off (bottom, takes the lead) → never gamble it.
 expect("last try, tied after TD (kick walks it off) → NEVER gambles, kicks the win",
        goRate(half='bottom', home=30, away=30) == 0.0)
-# Not forced when a kick already ties (down 1) — a genuine gamble-for-the-win vs safe-tie choice.
-_r = goRate(half='bottom', home=29, away=30)
-expect(f"last try, down 1 after TD (kick ties) → not forced either way (rate {_r:.2f})", 0.0 < _r < 1.0)
+# Down 1 (a kick TIES): going for the win is the better expected outcome — a ~70% 2-pt
+# win beats a ~95% tie that's then a coin flip in extras.
+expect("last try, down 1 after TD (kick ties) → goes for the win",
+       goRate(half='bottom', home=29, away=30) == 1.0)
 # Not the last chance → not forced (earlier try, same deficit).
 _r0 = goRate(half='bottom', home=28, away=30, tries=0)
 expect(f"NOT last try, down 2 → not forced (heuristic, rate {_r0:.2f})", _r0 < 1.0)
@@ -149,6 +150,63 @@ expect(f"NOT last try, down 2 → not forced (heuristic, rate {_r0:.2f})", _r0 <
 # 1-point lead after the TD isn't a walk-off → not forced-to-kick.
 _rt = goRate(half='top', home=29, away=30, offense='away')
 expect(f"top of last inning, away +1 after TD → not forced-kick (rate {_rt:.2f})", _rt > 0.0)
+
+
+# ── 5. Last chance WITH the Conversion Ladder — take the EASIEST rung that does the job ──
+print("5. Last try + ladder: pick the best expected outcome, not the biggest rung")
+def _ladderRules():
+    gr = GameRules(); gr.gameFormat = 'innings'; gr.inningsPerGame = 3; gr.triesPerInning = 3
+    gr.conversionLadderEnabled = True
+    return gr
+def rungPicked(*, home, away, tries=2, inning=3, half='bottom', offense='home', trials=25):
+    """The distinct conversion(s) the real chooser picks, as {points: count}."""
+    s = Scenario(gameRules=_ladderRules()); out = {}
+    for _ in range(trials):
+        s.situation(offense=offense, offScore=(home if offense == 'home' else away),
+                    defScore=(away if offense == 'home' else home))
+        g = s.g; g._inningsNumber = inning; g._inningsHalf = half; g._inningsTries = tries
+        team = g.homeTeam if offense == 'home' else g.awayTeam
+        pts = float(g._chooseConversion(team)['points'])
+        out[pts] = out.get(pts, 0) + 1
+    return out
+# THE REPORTED BUG: down 2 with 3/4/5-pt rungs on the board — the 3 already WINS, so
+# reaching for the 4 (or 5) is strictly worse: same result, worse odds.
+_d2 = rungPicked(home=28, away=30)
+expect(f"last try, down 2, ladder → takes the SHORT winning rung, never over-reaches ({_d2})",
+       set(_d2) == {3.0})
+# Down 3: the 3 only ties, so step up to the 4 that wins.
+_d3 = rungPicked(home=27, away=30)
+expect(f"last try, down 3, ladder → steps up to the rung that WINS ({_d3})", set(_d3) == {4.0})
+# Down 4: the 4 ties, the 5 wins → take the 5.
+_d4 = rungPicked(home=26, away=30)
+expect(f"last try, down 4, ladder → takes the winning rung ({_d4})", set(_d4) == {5.0})
+# Tied: every rung wins it, so take the most likely one.
+_t = rungPicked(home=30, away=30)
+expect(f"last try, tied, ladder → takes the most makeable winning rung ({_t})",
+       set(_t) == {min(_t)})
+
+
+# ── 6. Last try, already AHEAD, opponent still to bat → take the sure points ──
+print("6. Last try while leading (top half): sure points by default, coach drives the risk")
+def leadGoRate(aggr, *, lead=1, trials=300):
+    """Top of the final inning, away leads by `lead` after the TD. How often does it
+    gamble the safe point to pad the lead?"""
+    s = Scenario(gameRules=_irules()); k = 0
+    for _ in range(trials):
+        s.situation(offense='away', offScore=30, defScore=30 - lead)
+        g = s.g; g._inningsNumber = 3; g._inningsHalf = 'top'; g._inningsTries = 2
+        g.awayTeam.coach.aggressiveness = aggr
+        if g._chooseConversion(g.awayTeam)['kind'] == 'go':
+            k += 1
+    return k / trials
+_cons, _neut, _aggr = leadGoRate(60), leadGoRate(80), leadGoRate(100)
+# Nothing is settled by this try (home still bats) and the at-bat ends either way, so
+# there's no continuation to buy — the safe point is the natural call.
+expect(f"neutral coach mostly takes the sure points (gambles {_neut:.0%})", _neut <= 0.20)
+expect(f"conservative coach almost never gambles ({_cons:.0%})", _cons <= 0.08)
+expect(f"aggressive coach gambles meaningfully more ({_aggr:.0%})", _aggr >= 0.20)
+expect("risk appetite rises monotonically with coach aggressiveness",
+       _cons < _neut < _aggr)
 
 
 print()

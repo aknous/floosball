@@ -96,6 +96,33 @@ expect("FG=4, last try, down 5 (>FG) → goes for TD (rate 0.0)",
               fieldGoalPoints=4) == 0.0)
 
 
+# ── 5. Displayed inning — the end-of-game counter leak stays off the board ─
+print("5. displayInning: a regulation finish never reads as an extra inning")
+import game_formats as _GFMT
+from types import SimpleNamespace as _NS
+_fmt = _GFMT.InningsFormat()
+def _state(num, half, tries, home, away, innings=3):
+    return _NS(_inningsNumber=num, _inningsHalf=half, _inningsTries=tries,
+               homeScore=home, awayScore=away,
+               gameRules=_NS(inningsPerGame=innings, triesPerInning=3))
+# The flip that ends the final inning bumps the counter to N+1 (checkEarlyEnd reads that
+# as "an inning completed"), so the raw value is 4 on a decided 3-inning game.
+expect("regulation finish (counter leaked to 4) displays inning 3",
+       _fmt.displayInning(_state(4, 'top', 0, 45, 41)) == 3)
+# Extra innings are REAL — never clamp a game that's actually still playing.
+expect("tied after 3 (heading to extras) displays inning 4",
+       _fmt.displayInning(_state(4, 'top', 0, 41, 41)) == 4)
+expect("mid extra inning (top 4, try in progress) displays inning 4",
+       _fmt.displayInning(_state(4, 'top', 1, 41, 41)) == 4)
+expect("walk-off during extra inning 4 displays inning 4",
+       _fmt.displayInning(_state(4, 'bottom', 1, 44, 41)) == 4)
+expect("extras finished (counter leaked to 5) displays inning 4",
+       _fmt.displayInning(_state(5, 'top', 0, 48, 41)) == 4)
+expect("a tie accepted at the extra-innings cap displays the last inning played",
+       _fmt.displayInning(_state(9, 'top', 0, 41, 41)) == 8)
+expect("mid-regulation inning is untouched", _fmt.displayInning(_state(2, 'top', 1, 10, 7)) == 2)
+
+
 print()
 if failures:
     print(f"FAILED: {len(failures)} check(s):")
