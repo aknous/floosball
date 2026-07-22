@@ -734,6 +734,14 @@ class Game(Base):
     away_ints:       Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     away_fum_rec:    Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # Format-specific display state at completion, as JSON (the payload GameFormat.stateExtra
+    # emits live: the innings line score, frames results, chess-clock budgets...). Quarter
+    # scores get dedicated columns, but a format's breakdown is shaped per format, so it's a
+    # blob. Without this the innings/frames box score only existed in the live WS stream and
+    # vanished on a restart. NULL for standard games and for anything finished before this
+    # column existed (the state is gone — not backfillable).
+    format_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Relationships
     home_team: Mapped["Team"] = relationship("Team", foreign_keys=[home_team_id], back_populates="home_games")
     away_team: Mapped["Team"] = relationship("Team", foreign_keys=[away_team_id], back_populates="away_games")
@@ -1242,6 +1250,33 @@ class PendingName(Base):
 
     def __repr__(self):
         return f"<PendingName(name='{self.name}', available_season={self.available_season})>"
+
+
+class NameSubmission(Base):
+    """A name suggested by a user through the Discord bot, held for admin review.
+
+    Submissions do NOT go into `unused_names` — they wait here until an admin approves
+    them, at which point the name is added to the pool exactly as a direct admin add
+    would be (same in-use / duplicate checks). Rejected rows are KEPT rather than
+    deleted, so the same name can't be resubmitted on a loop and there's a record of
+    what was turned down. `name` is unique for that reason: one row per name ever
+    submitted, whatever its outcome."""
+    __tablename__ = "name_submissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(12), default='pending', nullable=False, index=True)
+    # Who sent it. Only Discord-linked users may submit, so there's always a real user
+    # behind a row; the username is snapshotted so the queue still reads correctly if
+    # they later change it, and user_id stays nullable so deleting a user can't orphan.
+    discord_id: Mapped[Optional[str]] = mapped_column(String(50), index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    submitted_username: Mapped[Optional[str]] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<NameSubmission(name='{self.name}', status='{self.status}')>"
 
 
 class BetaAllowlist(Base):

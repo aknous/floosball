@@ -2486,7 +2486,30 @@ async def get_game_by_id(game_id: int, response: Response):
         game_dict['status'] = game.status.name
         game_dict['isHalftime'] = game.isHalftime
         game_dict['isOvertime'] = game.isOvertime
-        
+
+        # Per-format display state (innings line score, frames results, chess-clock
+        # budgets). This rides the live game_state broadcasts, so a client that wasn't
+        # watching — a refresh, or opening a finished game — had no way to get it and the
+        # box score came up empty. Prefer the live object; fall back to what was persisted
+        # at completion for a game rebuilt from the DB after a restart.
+        try:
+            _formatExtra = game.format.stateExtra(game)
+        except Exception:
+            _formatExtra = None
+        if not _formatExtra:
+            try:
+                import json as _json
+                from database.connection import get_session as _getSession
+                from database.models import Game as _DBGame
+                _row = _getSession().query(_DBGame.format_state).filter(
+                    _DBGame.id == game_id).first()
+                if _row and _row[0]:
+                    _formatExtra = _json.loads(_row[0])
+            except Exception:
+                _formatExtra = None
+        if _formatExtra:
+            game_dict.update(_formatExtra)
+
         # Add possession info
         if hasattr(game, 'offensiveTeam'):
             game_dict['homeTeamPoss'] = (game.offensiveTeam == game.homeTeam)
@@ -4500,6 +4523,47 @@ def _checkAdminAuth(
     raise HTTPException(status_code=403, detail="Forbidden")
 
 
+def _acceptNamesIntoPool(pm, names: list) -> dict:
+    """Vet a batch of names and add the survivors to the unused-name pool.
+
+    Shared by the direct admin add and the approval of a Discord submission, so a name
+    that arrives via the bot goes through exactly the same checks as one typed into the
+    admin box. Rejects anything already attached to a live player or coach, and dedupes
+    within the batch. Returns the accepted list plus what was skipped and why.
+    """
+    seen: set = set()
+    deduped: list = []
+    duplicatesInBatch: list = []
+    for n in names:
+        if not isinstance(n, str):
+            continue
+        n = n.strip()
+        if not n:
+            continue
+        if n in seen:
+            duplicatesInBatch.append(n)
+            continue
+        seen.add(n)
+        deduped.append(n)
+
+    rejectedInUse: list = []
+    accepted: list = []
+    for n in deduped:
+        if hasattr(pm, 'isNameInUse') and pm.isNameInUse(n):
+            rejectedInUse.append(n)
+        else:
+            accepted.append(n)
+
+    if accepted:
+        pm.unusedNames.extend(accepted)
+        if getattr(pm, 'name_repo', None):
+            pm.name_repo.add_names_batch(accepted)
+            pm.db_session.commit()
+
+    return {"accepted": accepted, "rejectedInUse": rejectedInUse,
+            "duplicatesInBatch": duplicatesInBatch}
+
+
 @app.post("/api/admin/names")
 async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
     """Add names to the unused player name pool.
@@ -4518,43 +4582,13 @@ async def admin_add_names(payload: Dict[str, Any], _auth: None = Depends(_checkA
         raise HTTPException(status_code=400, detail="Too many names; maximum 500 per request")
 
     pm = floosball_app.playerManager
-
-    # Dedupe the submitted batch first (preserves order)
-    seen: set = set()
-    deduped: list = []
-    duplicatesInBatch: list = []
-    for n in names:
-        if not isinstance(n, str):
-            continue
-        n = n.strip()
-        if not n:
-            continue
-        if n in seen:
-            duplicatesInBatch.append(n)
-            continue
-        seen.add(n)
-        deduped.append(n)
-
-    # Reject anything already attached to a live player or coach.
-    rejectedInUse: list = []
-    accepted: list = []
-    for n in deduped:
-        if hasattr(pm, 'isNameInUse') and pm.isNameInUse(n):
-            rejectedInUse.append(n)
-        else:
-            accepted.append(n)
-
-    if accepted:
-        pm.unusedNames.extend(accepted)
-        if getattr(pm, 'name_repo', None):
-            pm.name_repo.add_names_batch(accepted)
-            pm.db_session.commit()
+    result = _acceptNamesIntoPool(pm, names)
 
     return {
-        "added": len(accepted),
+        "added": len(result["accepted"]),
         "total": len(pm.unusedNames),
-        "rejectedInUse": rejectedInUse,
-        "duplicatesInBatch": duplicatesInBatch,
+        "rejectedInUse": result["rejectedInUse"],
+        "duplicatesInBatch": result["duplicatesInBatch"],
     }
 
 
@@ -14200,6 +14234,167 @@ def bot_get_roster(discordId: str = Query(...), _auth: None = Depends(_checkBotA
             },
             "season": currentSeasonNum,
         })
+    finally:
+        session.close()
+
+
+class _BotNameBody(BaseModel):
+    discordId: str
+    name: str
+
+
+@app.post("/api/bot/names")
+def bot_submit_name(body: _BotNameBody, _auth: None = Depends(_checkBotAuth)):
+    """Suggest a player name from Discord. Goes to the admin review queue, NOT the pool.
+
+    Only Discord-linked users may submit, so every suggestion is attributable. The name
+    is checked against live players/coaches, the existing pool, and prior submissions up
+    front, so an obviously-doomed name is rejected at submit time with a useful message
+    rather than sitting in the queue to be rejected by hand later.
+    """
+    from database.connection import get_session
+    from database.models import User, NameSubmission, UnusedName
+    from constants import (NAME_SUBMISSION_PENDING_CAP, NAME_SUBMISSION_MIN_LENGTH,
+                           NAME_SUBMISSION_MAX_LENGTH)
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    name = ' '.join((body.name or '').split())   # trim + collapse inner whitespace
+    if len(name) < NAME_SUBMISSION_MIN_LENGTH or len(name) > NAME_SUBMISSION_MAX_LENGTH:
+        raise HTTPException(400, f"Name must be {NAME_SUBMISSION_MIN_LENGTH}-"
+                                 f"{NAME_SUBMISSION_MAX_LENGTH} characters")
+    if not any(c.isalpha() for c in name):
+        raise HTTPException(400, "Name must contain letters")
+
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.discord_id == body.discordId).first()
+        if not user:
+            raise HTTPException(404, "Account not linked — use /link first")
+
+        existing = session.query(NameSubmission).filter(
+            NameSubmission.name.ilike(name)).first()
+        if existing:
+            if existing.status == 'pending':
+                raise HTTPException(409, f"'{name}' has already been suggested and is waiting for review")
+            if existing.status == 'approved':
+                raise HTTPException(409, f"'{name}' was already approved and is in the pool")
+            raise HTTPException(409, f"'{name}' was already reviewed and turned down")
+
+        pm = floosball_app.playerManager
+        if hasattr(pm, 'isNameInUse') and pm.isNameInUse(name):
+            raise HTTPException(409, f"'{name}' already belongs to someone in the league")
+        if session.query(UnusedName).filter(UnusedName.name.ilike(name)).first():
+            raise HTTPException(409, f"'{name}' is already in the name pool")
+
+        pending = session.query(NameSubmission).filter(
+            NameSubmission.user_id == user.id,
+            NameSubmission.status == 'pending').count()
+        if pending >= NAME_SUBMISSION_PENDING_CAP:
+            raise HTTPException(429, f"You have {pending} suggestions awaiting review "
+                                     f"(limit {NAME_SUBMISSION_PENDING_CAP}). Wait for those "
+                                     f"to be reviewed before sending more.")
+
+        session.add(NameSubmission(name=name, status='pending', discord_id=body.discordId,
+                                   user_id=user.id, submitted_username=user.username))
+        session.commit()
+        return build_success_response({"name": name, "status": "pending", "pending": pending + 1},
+                                      message="Suggestion received")
+    finally:
+        session.close()
+
+
+@app.get("/api/admin/names/submissions")
+async def admin_list_name_submissions(status: str = Query('pending'),
+                                      _auth: None = Depends(_checkAdminAuth)):
+    """Discord-suggested names for review. `status` is pending / approved / rejected / all."""
+    from database.connection import get_session
+    from database.models import NameSubmission
+    session = get_session()
+    try:
+        q = session.query(NameSubmission)
+        if status and status != 'all':
+            q = q.filter(NameSubmission.status == status)
+        rows = q.order_by(NameSubmission.created_at.desc()).limit(500).all()
+        counts = {}
+        for st in ('pending', 'approved', 'rejected'):
+            counts[st] = session.query(NameSubmission).filter(
+                NameSubmission.status == st).count()
+        return {
+            "submissions": [{
+                "id": r.id,
+                "name": r.name,
+                "status": r.status,
+                "submittedBy": r.submitted_username,
+                "discordId": r.discord_id,
+                "createdAt": r.created_at.isoformat() if r.created_at else None,
+                "reviewedAt": r.reviewed_at.isoformat() if r.reviewed_at else None,
+            } for r in rows],
+            "counts": counts,
+        }
+    finally:
+        session.close()
+
+
+@app.post("/api/admin/names/submissions/review")
+async def admin_review_name_submissions(payload: Dict[str, Any],
+                                        _auth: None = Depends(_checkAdminAuth)):
+    """Approve or reject queued name suggestions (one id or many).
+
+    Approving runs the name through the SAME vetting as a direct admin add, so a name
+    that became unavailable while it sat in the queue (someone got it in the meantime)
+    is reported back rather than silently shadowing a live player. Rejected rows are
+    kept, not deleted — that's what stops the same name being resubmitted forever.
+    """
+    from database.connection import get_session
+    from database.models import NameSubmission
+    from datetime import datetime as _dt
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    ids = payload.get("ids")
+    if ids is None and payload.get("id") is not None:
+        ids = [payload["id"]]
+    action = (payload.get("action") or "").lower()
+    if action not in ("approve", "reject"):
+        raise HTTPException(400, "'action' must be 'approve' or 'reject'")
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(400, "'ids' must be a non-empty list")
+
+    session = get_session()
+    try:
+        rows = session.query(NameSubmission).filter(
+            NameSubmission.id.in_(ids), NameSubmission.status == 'pending').all()
+        if not rows:
+            return {"approved": 0, "rejected": 0, "unavailable": [],
+                    "message": "Nothing pending matched those ids"}
+
+        now = _dt.utcnow()
+        if action == 'reject':
+            for r in rows:
+                r.status = 'rejected'
+                r.reviewed_at = now
+            session.commit()
+            return {"approved": 0, "rejected": len(rows), "unavailable": []}
+
+        pm = floosball_app.playerManager
+        result = _acceptNamesIntoPool(pm, [r.name for r in rows])
+        acceptedSet = {n.lower() for n in result["accepted"]}
+        approved, unavailable = 0, []
+        for r in rows:
+            if r.name.lower() in acceptedSet:
+                r.status = 'approved'
+                r.reviewed_at = now
+                approved += 1
+            else:
+                # Taken while it sat in the queue — leave it PENDING so it stays visible
+                # and the decision isn't silently lost.
+                unavailable.append(r.name)
+        session.commit()
+        return {"approved": approved, "rejected": 0, "unavailable": unavailable,
+                "poolTotal": len(pm.unusedNames)}
     finally:
         session.close()
 

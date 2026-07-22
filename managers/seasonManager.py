@@ -2596,6 +2596,19 @@ class SeasonManager:
         except ImportError as e:
             logger.warning(f"Card effect processing unavailable: {e}")
 
+    def _applyFormatStateToRow(self, dbRow, game) -> None:
+        """Persist the format's display state (innings line score, frames results, ...) so
+        the box score survives a restart. It's only ever computed live, so a finished game
+        rebuilt from the DB has no other source for it. No-op for standard games, whose
+        breakdown already lives in the quarter-score columns."""
+        try:
+            extra = game.format.stateExtra(game)
+            if extra:
+                import json
+                dbRow.format_state = json.dumps(extra)
+        except Exception:
+            logger.debug("Could not serialize format state for game", exc_info=True)
+
     def _applyGameStatsToRow(self, dbRow, gameStatsDict: dict) -> None:
         """Copy team stat totals from gameDict['gameStats'] into a DB Game row."""
         if not gameStatsDict:
@@ -3030,6 +3043,7 @@ class SeasonManager:
                         if len(game.awayScoresByQuarter) > 3: db_game.away_score_q4 = game.awayScoresByQuarter[3]
                         if len(game.awayScoresByQuarter) > 4: db_game.away_score_ot = sum(game.awayScoresByQuarter[4:])
                     self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
+                    self._applyFormatStateToRow(db_game, game)
                     self.db_session.flush()
                     playerStats = self._extractPlayerStatsFromGame(game)
                     if playerStats:
@@ -3080,6 +3094,7 @@ class SeasonManager:
                     db_game.away_score_ot = sum(game.awayScoresByQuarter[4:])
             
             self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
+            self._applyFormatStateToRow(db_game, game)
             self.game_repo.save(db_game)
             self.db_session.flush()  # Get the ID
 

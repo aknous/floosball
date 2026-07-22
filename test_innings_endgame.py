@@ -122,6 +122,21 @@ expect("a tie accepted at the extra-innings cap displays the last inning played"
        _fmt.displayInning(_state(9, 'top', 0, 41, 41)) == 8)
 expect("mid-regulation inning is untouched", _fmt.displayInning(_state(2, 'top', 1, 10, 7)) == 2)
 
+# The displayed HALF must describe the same at-bat as the displayed inning. Consumers ask
+# "has the home team batted this inning yet?" (the line score's blank-vs-value gate); a
+# clamped inning paired with the raw post-flip 'top' half hid the whole bottom of the
+# final inning on any game that went the distance (walk-offs were unaffected — hence
+# "sometimes the points show, sometimes they don't").
+expect("regulation finish reports the BOTTOM of the last inning, not the top of the next",
+       _fmt.displayHalf(_state(4, 'top', 0, 45, 41)) == 'bottom')
+expect("extras finished likewise reports the bottom of the last inning played",
+       _fmt.displayHalf(_state(5, 'top', 0, 48, 41)) == 'bottom')
+expect("walk-off is already in the bottom half — untouched",
+       _fmt.displayHalf(_state(3, 'bottom', 1, 44, 41)) == 'bottom')
+expect("tied into extras is still genuinely the TOP of the new inning",
+       _fmt.displayHalf(_state(4, 'top', 0, 41, 41)) == 'top')
+expect("mid-regulation half is untouched", _fmt.displayHalf(_state(2, 'top', 1, 10, 7)) == 'top')
+
 
 print()
 if failures:

@@ -624,11 +624,28 @@ class InningsFormat(GameFormat):
         game still sitting there undecided is tied and heading to extras."""
         N = self._innings(game)
         inning = getattr(game, '_inningsNumber', 1)
-        if (inning > N and getattr(game, '_inningsHalf', 'top') == 'top'
-                and getattr(game, '_inningsTries', 0) == 0
-                and self.checkEarlyEnd(game)):
+        if self._pastFinalInning(game):
             return inning - 1
         return inning
+
+    def _pastFinalInning(self, game) -> bool:
+        """Parked on the post-final-flip boundary with the game already decided — the
+        counter has rolled to N+1/top but no at-bat is going to be played there."""
+        return bool(getattr(game, '_inningsNumber', 1) > self._innings(game)
+                    and getattr(game, '_inningsHalf', 'top') == 'top'
+                    and getattr(game, '_inningsTries', 0) == 0
+                    and self.checkEarlyEnd(game))
+
+    def displayHalf(self, game) -> str:
+        """The half to SHOW, paired with `displayInning`. On the post-final-flip boundary
+        the raw half has already rolled over to 'top' of the inning that never gets played;
+        clamping the inning without clamping the half leaves the two describing DIFFERENT
+        at-bats, and consumers that ask "has the home team batted this inning yet?" (the
+        line score) then hide the whole bottom half of the final inning. The last at-bat
+        actually played there is the BOTTOM of the clamped inning."""
+        if self._pastFinalInning(game):
+            return 'bottom'
+        return getattr(game, '_inningsHalf', 'top')
 
     def adjustGameProgress(self, game, gameProgress: float) -> float:
         # Progress = fraction of the scheduled innings played (completed innings +
@@ -650,7 +667,7 @@ class InningsFormat(GameFormat):
         return {'innings': {
             'active': True,
             'inning': inning,
-            'half': getattr(game, '_inningsHalf', 'top'),
+            'half': self.displayHalf(game),
             'tries': getattr(game, '_inningsTries', 0),
             'inningsPerGame': self._innings(game),
             'triesPerInning': self._tries(game),

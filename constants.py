@@ -910,7 +910,11 @@ RULE_VOTE_CANDIDATES = {
     # option to feel worth it (owner 2026-07-12).
     # One general dead-ball clock rule (incompletion / out of bounds / turnover). Default
     # True; the only proposable CHANGE is turning it OFF (a running clock).
-    "clockStopsOnDeadBall":       {"label": "Clock stops on dead balls", "values": [False]},
+    # `requiresClock` withholds the candidate under formats whose game clock doesn't
+    # actually run (innings / play_limit / chess_clock — see GameFormat.consumesRealTime).
+    # A running-clock rule can't mean anything when nothing is driven by the clock.
+    "clockStopsOnDeadBall":       {"label": "Clock stops on dead balls", "values": [False],
+                                   "requiresClock": True},
     # Display-only ENUM: how the score is shown (no engine effect). `valueLabels`
     # gives each option a clean display name for the ballot/Rulebook.
     "scoringModel":               {"label": "How the score is shown",
@@ -1613,6 +1617,15 @@ DAILY_RESET_HOUR_UTC = 10
 GM_VOTE_TYPES = {"fire_coach", "cut_player", "resign_player", "sign_fa", "hire_coach"}
 
 # Cost per vote (Floobits)
+# ── Discord name submissions (/name) ──────────────────────────────────────────
+# Suggested names wait in `name_submissions` for admin approval; only Discord-LINKED
+# users may submit. The cap is per user and counts only PENDING rows, so approving or
+# rejecting frees a slot back up — it throttles a flood without punishing a regular
+# contributor whose suggestions keep getting used.
+NAME_SUBMISSION_PENDING_CAP = 10
+NAME_SUBMISSION_MIN_LENGTH = 2
+NAME_SUBMISSION_MAX_LENGTH = 60
+
 GM_VOTE_COST = {
     "fire_coach": 15,
     "cut_player": 10,
