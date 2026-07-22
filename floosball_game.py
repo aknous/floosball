@@ -10255,32 +10255,23 @@ class Game:
             await self.timingManager.waitBetweenPlays()
 
     def _conversionIsMoot(self, scoringTeam: 'FloosTeam.Team') -> bool:
-        """True when the touchdown ended the game and no try outcome can change the
-        result, so no attempt is made.
+        """True ONLY for a walk-off: the touchdown ended the game and the scoring team
+        is now ahead, so the try is cosmetic and isn't attempted.
 
         Format-agnostic by construction: `isGameOver()` already defers to
-        `format.checkEarlyEnd`, so this covers a walk-off in innings (home ahead in
-        the bottom of the final at-bat), target's first-to-X, and a clock format's
-        winning score as time expires, without any per-format branching.
+        `format.checkEarlyEnd`, so this covers the innings walk-off (home ahead in the
+        bottom of the final at-bat), target's first-to-X, and a clock format's winning
+        score as time expires, without any per-format branching.
 
-        A try is still attempted when it could change something: the touchdown only
-        TIED the game (a make wins it), or the scoring team is still behind but
-        within reach of the biggest rung on the board. Only a decided game with a
-        result no conversion can move skips the play."""
+        Deliberately narrow. A trailing team's try is still attempted even when the
+        arithmetic says nothing can reach a tie, because the risk is asymmetric: a
+        meaningless try costs a few seconds of feed, while wrongly skipping one that
+        mattered changes a result. Only "already won" is safe to skip."""
         if not self.isGameOver():
             return False
         scoring = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
         other = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
-        margin = scoring - other
-        if margin > 0:
-            return True          # walk-off — already won, the try is cosmetic
-        if margin == 0:
-            return False         # a made try wins it
-        try:
-            best = max(float(r['points']) for r in self._conversionRungs())
-        except (ValueError, KeyError, TypeError):
-            return False         # can't tell what's available — attempt it
-        return abs(margin) > best   # still losing and can't reach a tie
+        return scoring > other
 
     def _attemptConversion(self, scoringTeam: 'FloosTeam.Team', opposingTeam: 'FloosTeam.Team',
                            trackPtsAllowed: bool = True):

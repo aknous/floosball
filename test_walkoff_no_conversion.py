@@ -4,10 +4,11 @@ Owner rule (2026-07-22): if a team scores a TD on the very last play — the clo
 has run out, or in innings and the other formats it's effectively a walk-off —
 the try isn't needed.
 
-The rule is deliberately "no outcome can change the result", not just "the clock
-hit zero": a TD that only TIES the game still needs its try (a make wins it), and
-a team still within one rung of a tie still has something to play for. Only a
-decided game with a result no conversion can move skips the play.
+The rule is deliberately NARROW: only a walk-off (game over AND the scoring team
+now ahead) skips the try. A tied or trailing team always attempts, even when the
+arithmetic says nothing can reach a tie — the risk is asymmetric, since a
+meaningless try costs a few seconds of feed while wrongly skipping one that
+mattered changes a result.
 
 Format-agnostic: `isGameOver()` already defers to `format.checkEarlyEnd`, so
 innings walk-offs and target's first-to-X come along for free.
@@ -71,8 +72,10 @@ expect("TD that only TIES as time expires → try IS attempted (a make wins it)"
        moot(rules=_clockRules(), quarter=4, clock=0, homeScore=20, awayScore=20) is False)
 expect("TD leaves them down 1 → within a kick of a tie → try IS attempted",
        moot(rules=_clockRules(), quarter=4, clock=0, homeScore=20, awayScore=21) is False)
-expect("TD leaves them down 9 → nothing reaches a tie → NO try",
-       moot(rules=_clockRules(), quarter=4, clock=0, homeScore=20, awayScore=29) is True)
+expect("TD leaves them down 9 → still attempted (never skip a trailing team's try)",
+       moot(rules=_clockRules(), quarter=4, clock=0, homeScore=20, awayScore=29) is False)
+expect("TD leaves them down 20 → still attempted",
+       moot(rules=_clockRules(), quarter=4, clock=0, homeScore=20, awayScore=40) is False)
 
 print("2. Clock still running → always attempted")
 for cl in (1, 45, 600):
@@ -107,13 +110,20 @@ expect("TOP half of the final inning, away ahead → away still has to be batted
        moot(rules=_inningsRules(), quarter=1, clock=900, homeScore=17, awayScore=21,
             scoring='away', inning=3, half='top', tries=2) is False)
 
-print("5. Innings + Conversion Ladder — the bigger rungs widen 'still reachable'")
-# Down 8 with a 5-pt rung on the board: unreachable by the ladder, so if the game
-# were over there'd be no point. But batting last it is NOT over — the try can
-# extend the at-bat — so it must still be attempted.
+print("5. Innings + Conversion Ladder — a trailing team always keeps its try")
+# Batting last and down 8: the game is NOT over (a made top rung extends the
+# at-bat), and even if it were, a trailing team is never skipped.
 expect("down 8 batting last with the ladder on → try attempted",
        moot(rules=_inningsRules(ladder=True), quarter=1, clock=900,
             homeScore=13, awayScore=21, inning=3, half='bottom', tries=2) is False)
+
+print("6. Only 'already ahead' is ever skipped")
+expect("game over, scoring team AHEAD → skipped",
+       moot(rules=_clockRules(), quarter=4, clock=0, homeScore=21, awayScore=20) is True)
+expect("game over, scoring team TIED → attempted",
+       moot(rules=_clockRules(), quarter=4, clock=0, homeScore=21, awayScore=21) is False)
+expect("game over, scoring team BEHIND → attempted",
+       moot(rules=_clockRules(), quarter=4, clock=0, homeScore=21, awayScore=22) is False)
 
 print()
 if failures:
