@@ -71,6 +71,9 @@ def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
         "passing_stats": {
             "passYards": (passingStats or {}).get("yards", 0),
             "tds": (passingStats or {}).get("tds", 0),
+            # Exposed for card gates (a QB card can gate on completions / attempts).
+            "comp": (passingStats or {}).get("comp", 0),
+            "att": (passingStats or {}).get("att", 0),
         },
         "rushing_stats": {
             "runYards": (rushingStats or {}).get("yards", 0),

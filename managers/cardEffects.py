@@ -1972,6 +1972,11 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
         config["isChanceEffect"] = True
     if primary.get("isChanceAmplifier"):
         config["isChanceAmplifier"] = True
+    # Card gate: freeze the depicted-player performance gate into the config so live
+    # scoring and projection read the same spec (docs/CARD_ONCARD_REBASE_PLAN.md).
+    gate = buildGateSpec(effectName, position)
+    if gate:
+        config["gate"] = gate
     return config
 
 
@@ -4513,6 +4518,69 @@ EFFECT_REGISTRY = {
 
 _LOGGED_UNKNOWN_EFFECTS: set = set()
 
+# Effects that ALREADY scale with the card player's own stat (the Stage-1
+# position-specific set) — ramping them would double-count, so they carry no gate.
+_GATE_EXEMPT_EFFECTS = frozenset({
+    'ace_up_the_sleeve', 'air_raid', 'cha_ching', 'crescendo', 'expedition',
+    'goal_line_vulture', 'gunslinger', 'indemnity', 'jailbreak', 'luminary',
+    'mismatch', 'possession', 'safety_blanket', 'slippery', 'spectacle',
+    'spotlight_moment', 'squire', 'stampede', 'traverse', 'trebuchet', 'workhorse',
+})
+
+
+def buildGateSpec(effectName: str, position: int) -> Optional[dict]:
+    """The gate spec frozen into a card's effect_config at mint, or None.
+
+    A gate ties the card's output to how well the DEPICTED PLAYER played this week:
+    - 'ramp'  (value effects): output scales linearly with stat/threshold, capped at 1.0.
+    - 'hard'  (cross / hand-modifier effects — copycat, doubler, conductor, …): the
+      effect is all-or-nothing since "60% of a 2x multiplier" is meaningless; it fires
+      only if the player clears the threshold.
+    The gate STAT is rolled from the position's menu (so cards vary in what they key
+    off). Exempt effects (already stat-scaled) and no-effect floor cards get no gate."""
+    from constants import CARD_GATE_ENABLED, CARD_GATE_STAT_MENU
+    if not CARD_GATE_ENABLED:
+        return None
+    if not effectName or effectName in ('none', '') or effectName in _GATE_EXEMPT_EFFECTS:
+        return None
+    menu = CARD_GATE_STAT_MENU.get(position)
+    if not menu:
+        return None
+    group, stat, threshold, label = random.choice(menu)
+    mode = 'hard' if EFFECT_CATEGORY.get(effectName) == 'cross' else 'ramp'
+    return {'mode': mode, 'group': group, 'stat': stat,
+            'threshold': threshold, 'label': label}
+
+
+def gateRatio(gate: dict, ctx, cardPlayerId: int) -> float:
+    """How much of a gated card's output survives, 0..1.
+
+    The depicted player's week stat over the threshold, capped at 1.0. 'hard' gates
+    snap to 0 or 1 (cleared or not); 'ramp' gates scale linearly. Missing stats read
+    as 0 (the card pays nothing / doesn't fire), which is correct for a player who
+    didn't produce."""
+    threshold = gate.get('threshold', 0) or 0
+    if threshold <= 0:
+        return 1.0
+    stats = (getattr(ctx, 'weekPlayerStats', None) or {}).get(cardPlayerId) or {}
+    val = float((stats.get(gate.get('group')) or {}).get(gate.get('stat'), 0) or 0)
+    ratio = max(0.0, min(1.0, val / threshold))
+    if gate.get('mode') == 'hard':
+        return 1.0 if ratio >= 1.0 else 0.0
+    return ratio
+
+
+def _applyGateRatio(result: 'EffectResult', ratio: float) -> 'EffectResult':
+    """Scale an EffectResult's magnitude by `ratio`. FP and floobits scale directly;
+    an FPx factor scales its DELTA above 1.0 (a +1 FPx card at ratio 0.5 pays +0.5)."""
+    if ratio >= 1.0 or result is None:
+        return result
+    result.fpBonus = round((result.fpBonus or 0.0) * ratio, 2)
+    result.floobits = int(round((result.floobits or 0) * ratio))
+    if result.multBonus and result.multBonus > 1.0:
+        result.multBonus = 1.0 + (result.multBonus - 1.0) * ratio
+    return result
+
 
 def computeEffect(effectConfig: dict, ctx, cardPlayerId: int, equippedCardId: int,
                    firstPassBreakdowns=None) -> EffectResult:
@@ -4547,7 +4615,20 @@ def computeEffect(effectConfig: dict, ctx, cardPlayerId: int, equippedCardId: in
     # Stash first-pass breakdowns on ctx for second-pass effects
     ctx._firstPassBreakdowns = firstPassBreakdowns
 
-    return handler(primary, ctx, cardPlayerId, equippedCardId)
+    result = handler(primary, ctx, cardPlayerId, equippedCardId)
+
+    # Card gate: scale the card's output by how well its depicted player performed
+    # this week (docs/CARD_ONCARD_REBASE_PLAN.md). Applied centrally so every effect
+    # obeys it — value effects ramp, cross/hand-modifier effects hard-gate. The ratio
+    # is stashed on ctx for the breakdown so the UI can show "142/200 yds → 71%".
+    gate = effectConfig.get("gate")
+    if gate:
+        ratio = gateRatio(gate, ctx, cardPlayerId)
+        if getattr(ctx, '_gateRatios', None) is None:
+            ctx._gateRatios = {}
+        ctx._gateRatios[equippedCardId] = ratio
+        result = _applyGateRatio(result, ratio)
+    return result
 
 
 # ─── Streak Condition Checking (for week-end reset logic) ────────────────────

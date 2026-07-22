@@ -1178,6 +1178,35 @@ CONTEST_NARRATION = {
 }
 CONTEST_TYPE_LABELS = {t['key']: t['label'] for t in CONTEST_TYPES}
 
+# ── Card gate (fantasy/cards fusion — docs/CARD_ONCARD_REBASE_PLAN.md) ──
+# An equipped card's output scales with how well the DEPICTED PLAYER played this week:
+# a linear ramp on one of their stats, capped at 1.0. A card giving +1 FPx whose player
+# reaches the threshold pays the full +1; at half the threshold it pays +0.5. So a card
+# is tied to who's on it — you can't score a full hand off a bench-warming roster.
+# Thresholds sit near each position's AVERAGE weekly output, so a typical game ~= full
+# card and a poor game pays proportionally less. Effects that ALREADY scale with the
+# card player's own stat (the Stage-1 position-specific set) are exempt — ramping them
+# would double-count. Off by default so it stays dormant until the fusion cutover.
+CARD_GATE_ENABLED = True
+# Per-position MENU of gate stats, so cards vary in what they key off (a WR card might
+# gate on rec yards, receptions, or YAC). One is rolled per card at mint and frozen.
+# Each entry: (statGroup, statKey, threshold, label). Thresholds sit near each stat's
+# average weekly output, so a typical game ~= full card. 1-based positions (QB=1…K=5).
+CARD_GATE_STAT_MENU = {
+    1: [('passing_stats', 'passYards', 250, 'pass yds'),
+        ('passing_stats', 'comp',       30, 'completions'),
+        ('passing_stats', 'att',        45, 'pass attempts')],
+    2: [('rushing_stats', 'runYards',  100, 'rush yds'),
+        ('rushing_stats', 'carries',    25, 'carries')],
+    3: [('receiving_stats', 'rcvYards',   100, 'rec yds'),
+        ('receiving_stats', 'receptions', 11, 'receptions'),
+        ('receiving_stats', 'yac',        35, 'YAC')],
+    4: [('receiving_stats', 'rcvYards',   60, 'rec yds'),
+        ('receiving_stats', 'receptions',  9, 'receptions'),
+        ('receiving_stats', 'yac',        25, 'YAC')],
+    5: [('kicking_stats', 'fgYards', 80, 'FG yds')],
+}
+
 # ── Drive Clock (dormant mechanic — docs/DRIVE_CLOCK_PLAN.md) ──
 # A shot-clock for possessions. Two mode knobs: unit ('seconds' of game clock vs
 # 'plays' per snap) × reset ('possession' = a hard cap on the whole drive,
