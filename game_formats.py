@@ -544,13 +544,19 @@ class InningsFormat(GameFormat):
                 # Mark the extended at-bat in the play feed, styled like the inning marker
                 # (batting team made its top conversion and keeps batting — no try spent).
                 try:
-                    game.gameFeed.insert(0, {'event': {
+                    _ev = {
                         'text': f"{giver.abbr} · Try extended!",
                         '_type': 'inning',
                         'quarter': getattr(game, 'currentQuarter', 1),
                         'timeRemaining': '',
-                    }})
+                    }
+                    game.gameFeed.insert(0, {'event': _ev})
                     game._inningsMarked = True
+                    # Hand the event to the drive loop to BROADCAST. Inserting into the
+                    # feed here only reaches clients that refetch over REST, and the
+                    # _inningsMarked flag suppresses the "next try" marker that would
+                    # otherwise have carried the socket update.
+                    game._inningsMarkerEvent = _ev
                 except Exception:
                     pass
                 return giver   # keep batting — same at-bat, try NOT consumed
@@ -576,13 +582,15 @@ class InningsFormat(GameFormat):
             try:
                 _bat = game.homeTeam if game._inningsHalf == 'bottom' else game.awayTeam
                 _lbl = ('Bottom' if game._inningsHalf == 'bottom' else 'Top') + f" {game._inningsNumber}"
-                game.gameFeed.insert(0, {'event': {
+                _ev = {
                     'text': f"{_lbl} · {_bat.abbr} up",
                     '_type': 'inning',
                     'quarter': game.currentQuarter,
                     'timeRemaining': '',
-                }})
+                }
+                game.gameFeed.insert(0, {'event': _ev})
                 game._inningsMarked = True
+                game._inningsMarkerEvent = _ev   # broadcast by the drive loop
             except Exception:
                 pass
         # The at-bat is over and the teams switch — give the coaches a moment to

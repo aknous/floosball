@@ -338,6 +338,21 @@ async def game_websocket(websocket: WebSocket, game_id: int):
         logger.info(f"Client disconnected from game {game_id}")
 
 
+async def _broadcastViewerCounts(gameIds) -> None:
+    """Push the current viewer count for each of `gameIds` to the season channel.
+
+    Called on watch/unwatch/disconnect rather than on a timer, so a game nobody is
+    looking at costs nothing. Counts are per DISTINCT USER (see
+    ConnectionManager.get_viewer_count)."""
+    from api.event_models import ViewerEvent
+    for gid in (gameIds or []):
+        try:
+            await ws_manager.broadcast(
+                ViewerEvent.count(gid, ws_manager.get_viewer_count(gid)), "season")
+        except Exception:
+            logger.debug("viewer count broadcast failed for game %s", gid)
+
+
 @app.websocket("/ws/season")
 async def season_websocket(websocket: WebSocket):
     """
@@ -367,8 +382,20 @@ async def season_websocket(websocket: WebSocket):
                     msg = _json.loads(data)
                     if msg.get("type") == "identify" and msg.get("userId"):
                         ws_manager.identify(websocket, msg["userId"])
+                        # A late identify can change a viewer count: the modal may
+                        # have sent `watch` before auth resolved, and an unidentified
+                        # socket isn't counted.
+                        _watching = ws_manager.connection_watching.get(websocket)
+                        if _watching:
+                            await _broadcastViewerCounts([_watching])
+                    elif msg.get("type") in ("watch", "unwatch"):
+                        _gid = msg.get("gameId") if msg.get("type") == "watch" else None
+                        await _broadcastViewerCounts(ws_manager.watch(websocket, _gid))
                 except Exception:
-                    pass
+                    # Was a bare `pass`. A malformed frame is expected and harmless,
+                    # but silently swallowing handler errors hid a broken viewer-count
+                    # wiring completely, so log it at debug rather than dropping it.
+                    logger.debug("season socket message handling failed", exc_info=True)
                 logger.debug(f"Received from season client: {data}")
             except asyncio.TimeoutError:
                 # Send ping to keep connection alive
@@ -380,7 +407,15 @@ async def season_websocket(websocket: WebSocket):
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
+        # Note which game this socket was watching BEFORE disconnect clears it, so
+        # the remaining viewers see the count drop.
+        _wasWatching = ws_manager.connection_watching.get(websocket)
         ws_manager.disconnect(websocket, channel)
+        if _wasWatching:
+            try:
+                await _broadcastViewerCounts([_wasWatching])
+            except Exception:
+                pass
         logger.info("Client disconnected from season updates")
 
 
@@ -2553,6 +2588,7 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'description': getattr(play_data, 'playText', ''),
                                 'playResult': play_data.playResult.value if hasattr(play_data, 'playResult') and play_data.playResult else None,
                                 'conversionPoints': getattr(play_data, 'conversionPoints', None),
+                                'isProvisionalScore': getattr(play_data, 'isProvisionalScore', False),
                                 'isTouchdown': getattr(play_data, 'isTd', False),
                                 'isTurnover': (getattr(play_data, 'isFumbleLost', False) or getattr(play_data, 'isInterception', False)),
                                 'isSack': getattr(play_data, 'isSack', False),
