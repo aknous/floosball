@@ -25,6 +25,12 @@ class ConnectionManager:
         # Track user IDs per connection for unique user count
         self.connection_user_ids: Dict[WebSocket, int] = {}
 
+        # Which game each connection currently has open (viewer counts). Set by the
+        # client's `watch` message when a game modal opens, cleared on `unwatch` or
+        # disconnect. Counted by DISTINCT USER, so one person with several tabs is
+        # one viewer.
+        self.connection_watching: Dict[WebSocket, str] = {}
+
         logger.info("WebSocket ConnectionManager initialized")
     
     async def connect(self, websocket: WebSocket, channel: str, metadata: Optional[Dict[str, Any]] = None):
@@ -75,6 +81,9 @@ class ConnectionManager:
         # Remove user ID tracking
         if websocket in self.connection_user_ids:
             del self.connection_user_ids[websocket]
+
+        # Stop counting this connection as a viewer
+        self.connection_watching.pop(websocket, None)
 
         logger.info(f"WebSocket disconnected from channel '{channel}'")
     
@@ -139,6 +148,36 @@ class ConnectionManager:
         tasks = [self.broadcast(message, channel) for channel in channels]
         await asyncio.gather(*tasks)
     
+    def watch(self, websocket: WebSocket, gameId: Optional[str]) -> List[str]:
+        """Mark this connection as watching `gameId` (None / '' = watching nothing).
+
+        Returns the game ids whose viewer count may have changed — the one being
+        left and the one being joined — so the caller can broadcast just those."""
+        previous = self.connection_watching.get(websocket)
+        if gameId:
+            self.connection_watching[websocket] = str(gameId)
+        else:
+            self.connection_watching.pop(websocket, None)
+        changed = []
+        if previous:
+            changed.append(previous)
+        if gameId and str(gameId) != previous:
+            changed.append(str(gameId))
+        return changed
+
+    def get_viewer_count(self, gameId: str) -> int:
+        """How many DISTINCT USERS have this game open.
+
+        Counted by user id so a person with several tabs is one viewer. A socket
+        that never identified (logged out) has no user id and isn't counted."""
+        target = str(gameId)
+        users = {
+            self.connection_user_ids[ws]
+            for ws, gid in self.connection_watching.items()
+            if gid == target and ws in self.connection_user_ids
+        }
+        return len(users)
+
     def identify(self, websocket: WebSocket, userId: int):
         """Associate a user ID with a WebSocket connection."""
         self.connection_user_ids[websocket] = userId
