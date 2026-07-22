@@ -10251,6 +10251,22 @@ class Game:
             and float(rung['points']) >= self._maxLadderPoints()   # the TOP rung is the gate
             and bool(getattr(self.play, 'scoreChange', False)))    # and it was MADE
 
+    def _refreshYardLine(self) -> None:
+        """Recompute the display yard line from the current field state.
+
+        The drive loop does this inline before every snap, but the post-TD plays
+        (PAT kick, 2-pt, any Conversion-Ladder rung) set up their own line of
+        scrimmage outside that loop. Without this they snapshot the PREVIOUS play's
+        yard line into `Play`, so a conversion reported the spot of the touchdown
+        that preceded it rather than its own snap — which the field graphic then
+        drew the attempt from."""
+        if self.offensiveTeam is None or self.defensiveTeam is None:
+            return
+        if self.yardsToEndzone > 50:
+            self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, 100 - self.yardsToEndzone)
+        else:
+            self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
+
     def _simulateConversionPlay(self, scoringTeam: FloosTeam.Team, opposingTeam: FloosTeam.Team,
                                 points, distance):
         """Simulate a go-for-it conversion — the 2-pt try or a higher Conversion-
@@ -10277,6 +10293,7 @@ class Game:
         self.yardsToSafety = self.gameRules.fieldLength - distance
         self.down = 1
         self.yardsToFirstDown = distance
+        self._refreshYardLine()   # else Play() snapshots the touchdown's yard line
 
         self.play = Play(self)
         # Give the conversion its own play number so it has a stable identity
@@ -10387,6 +10404,7 @@ class Game:
         self.yardsToSafety = self.gameRules.fieldLength - 15
         self.down = 1
         self.yardsToFirstDown = 15
+        self._refreshYardLine()   # else Play() snapshots the touchdown's yard line
 
         self.play = Play(self)
         # Stable identity separate from the touchdown — same reasoning as
