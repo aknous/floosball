@@ -6842,7 +6842,9 @@ class Game:
                             # inserted an inning marker (a batting change, or an extended try)
                             # — that covers the transition, so a second marker is noise.
                             _marked = getattr(self, '_inningsMarked', False)
+                            _pending = getattr(self, '_inningsMarkerEvent', None)
                             self._inningsMarked = False
+                            self._inningsMarkerEvent = None
                             if not _marked:
                                 nextTryEvent = {
                                     'text': f'{self.offensiveTeam.abbr} · next try',
@@ -6854,6 +6856,18 @@ class Game:
                                 self.broadcastGameState(includeLastPlay=False,
                                                         isPossessionChange=True,
                                                         eventMessage=nextTryEvent)
+                            elif _pending is not None:
+                                # The batting-change / try-extended marker was inserted into
+                                # the feed by InningsFormat.possessionReceiver, which has no
+                                # broadcast of its own — and its `_inningsMarked` flag then
+                                # suppressed the "next try" marker that WOULD have broadcast.
+                                # So the transition emitted nothing over the socket and the
+                                # line only appeared once the game was reopened and the feed
+                                # refetched over REST. Broadcast the marker the format
+                                # actually inserted.
+                                self.broadcastGameState(includeLastPlay=False,
+                                                        isPossessionChange=True,
+                                                        eventMessage=_pending)
                         else:
                             # Normal kickoff
                             kickoffEvent = {
@@ -9436,7 +9450,18 @@ class Game:
                 'inningTry': getattr(self.play, 'inningTry', None),
                 'frame': getattr(self.play, 'frame', None),
                 'frameClock': getattr(self.play, 'frameClock', None),
-                'timeRemaining': self.formatTime(self.gameClockSeconds),
+                # The PLAY's own clock, not the live one. `quarter` above already comes
+                # from the play, and mixing the two sources corrupted any re-emitted
+                # play: the backend re-sends a play at quarter boundaries and turnovers,
+                # and the re-send used to carry the CURRENT clock, so the frontend's
+                # merge stamped an old play with "now". On the win-probability chart
+                # (x = elapsed time, drawn in playNumber order) that play jumped to the
+                # live edge and the following plays drew back to their real times — the
+                # line running to the end mid-game and then going backwards. The REST
+                # play list always used the play's own value, which is why reopening the
+                # game fixed it.
+                'timeRemaining': (getattr(self.play, 'timeRemaining', None)
+                                  or self.formatTime(self.gameClockSeconds)),
                 'down': self.play.down if hasattr(self.play, 'down') else self.down,
                 'distance': self.play.yardsTo1st if hasattr(self.play, 'yardsTo1st') else self.yardsToFirstDown,
                 'yardLine': self.play.yardLine if hasattr(self.play, 'yardLine') else self.yardLine,
@@ -10061,9 +10086,32 @@ class Game:
 
         best = max(cands, key=lambda r: (value(r), prob(r)))
         if value(best) <= 0:
-            # Nothing on the board even reaches a tie — chase the most likely points.
+            # Nothing on the board even reaches a tie, so EVERY outcome that ends the
+            # at-bat is a loss. A made top rung doesn't consume the try, so it is the
+            # only line that survives to score again — take it whatever the odds.
+            # Chasing expected points here picks a rung that loses whether it converts
+            # or not (down 8 with 3/4/5 rungs, 4 x 0.5 beats 5 x 0.35 on points, and
+            # both leave the team behind with the at-bat over).
+            keepAlive = self._continuationRung(goRungs)
+            if keepAlive is not None:
+                return keepAlive
             best = max(cands, key=lambda r: (float(r.get('points', 0)) * prob(r), prob(r)))
         return best
+
+    def _continuationRung(self, goRungs: list):
+        """The rung whose make would EXTEND the at-bat (innings continuation), or None.
+
+        Mirrors the gate in the conversion resolver: innings only, the single top-value
+        'go' rung, continuation enabled, and the per-at-bat safety cap not yet reached.
+        Past the cap a made top rung consumes the try like anything else, so there is
+        nothing to keep alive."""
+        from constants import INNINGS_CONTINUATION_ENABLED, INNINGS_MAX_CONTINUATIONS
+        if not (INNINGS_CONTINUATION_ENABLED and goRungs
+                and getattr(self.format, 'key', '') == 'innings'):
+            return None
+        if getattr(self, '_inningsContinues', 0) >= INNINGS_MAX_CONTINUATIONS:
+            return None
+        return max(goRungs, key=lambda r: float(r['points']))
 
     # ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
     def _contestedScoringActive(self) -> bool:
@@ -10206,11 +10254,36 @@ class Game:
         if self.timingManager:
             await self.timingManager.waitBetweenPlays()
 
+    def _conversionIsMoot(self, scoringTeam: 'FloosTeam.Team') -> bool:
+        """True ONLY for a walk-off: the touchdown ended the game and the scoring team
+        is now ahead, so the try is cosmetic and isn't attempted.
+
+        Format-agnostic by construction: `isGameOver()` already defers to
+        `format.checkEarlyEnd`, so this covers the innings walk-off (home ahead in the
+        bottom of the final at-bat), target's first-to-X, and a clock format's winning
+        score as time expires, without any per-format branching.
+
+        Deliberately narrow. A trailing team's try is still attempted even when the
+        arithmetic says nothing can reach a tie, because the risk is asymmetric: a
+        meaningless try costs a few seconds of feed, while wrongly skipping one that
+        mattered changes a result. Only "already won" is safe to skip."""
+        if not self.isGameOver():
+            return False
+        scoring = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
+        other = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
+        return scoring > other
+
     def _attemptConversion(self, scoringTeam: 'FloosTeam.Team', opposingTeam: 'FloosTeam.Team',
                            trackPtsAllowed: bool = True):
         """Single post-TD conversion entry point: choose a rung, then run it. The
         safe kick goes through the PAT path; any go-for-it rung (2-pt or a higher
-        Conversion-Ladder rung) runs as a real run/pass from its distance."""
+        Conversion-Ladder rung) runs as a real run/pass from its distance.
+
+        A touchdown that ends the game skips the try entirely (see
+        `_conversionIsMoot`) — a walk-off needs no extra point."""
+        if self._conversionIsMoot(scoringTeam):
+            self._inningsContinue = False   # game's over; nothing to keep alive
+            return
         rung = self._chooseConversion(scoringTeam)
         if rung['kind'] == 'kick':
             self._simulateExtraPointPlay(scoringTeam, opposingTeam, trackPtsAllowed=trackPtsAllowed)
@@ -10227,6 +10300,22 @@ class Game:
             and rung['kind'] == 'go'
             and float(rung['points']) >= self._maxLadderPoints()   # the TOP rung is the gate
             and bool(getattr(self.play, 'scoreChange', False)))    # and it was MADE
+
+    def _refreshYardLine(self) -> None:
+        """Recompute the display yard line from the current field state.
+
+        The drive loop does this inline before every snap, but the post-TD plays
+        (PAT kick, 2-pt, any Conversion-Ladder rung) set up their own line of
+        scrimmage outside that loop. Without this they snapshot the PREVIOUS play's
+        yard line into `Play`, so a conversion reported the spot of the touchdown
+        that preceded it rather than its own snap — which the field graphic then
+        drew the attempt from."""
+        if self.offensiveTeam is None or self.defensiveTeam is None:
+            return
+        if self.yardsToEndzone > 50:
+            self.yardLine = '{0} {1}'.format(self.offensiveTeam.abbr, 100 - self.yardsToEndzone)
+        else:
+            self.yardLine = '{0} {1}'.format(self.defensiveTeam.abbr, self.yardsToEndzone)
 
     def _simulateConversionPlay(self, scoringTeam: FloosTeam.Team, opposingTeam: FloosTeam.Team,
                                 points, distance):
@@ -10254,6 +10343,7 @@ class Game:
         self.yardsToSafety = self.gameRules.fieldLength - distance
         self.down = 1
         self.yardsToFirstDown = distance
+        self._refreshYardLine()   # else Play() snapshots the touchdown's yard line
 
         self.play = Play(self)
         # Give the conversion its own play number so it has a stable identity
@@ -10364,6 +10454,7 @@ class Game:
         self.yardsToSafety = self.gameRules.fieldLength - 15
         self.down = 1
         self.yardsToFirstDown = 15
+        self._refreshYardLine()   # else Play() snapshots the touchdown's yard line
 
         self.play = Play(self)
         # Stable identity separate from the touchdown — same reasoning as
