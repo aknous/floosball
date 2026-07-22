@@ -72,10 +72,14 @@ data/leagueData.json
 *.log
 logs/floosball.log
 
-# SQLite database files
-data/floosball.db
-data/floosball.db-shm
-data/floosball.db-wal
+# SQLite database files — never commit these, they run to hundreds of MB
+*.db
+*.db-shm
+*.db-wal
+data/backups/
+
+# macOS
+.DS_Store
 
 # Generated avatars
 data/avatars/
