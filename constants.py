@@ -910,7 +910,11 @@ RULE_VOTE_CANDIDATES = {
     # option to feel worth it (owner 2026-07-12).
     # One general dead-ball clock rule (incompletion / out of bounds / turnover). Default
     # True; the only proposable CHANGE is turning it OFF (a running clock).
-    "clockStopsOnDeadBall":       {"label": "Clock stops on dead balls", "values": [False]},
+    # `requiresClock` withholds the candidate under formats whose game clock doesn't
+    # actually run (innings / play_limit / chess_clock — see GameFormat.consumesRealTime).
+    # A running-clock rule can't mean anything when nothing is driven by the clock.
+    "clockStopsOnDeadBall":       {"label": "Clock stops on dead balls", "values": [False],
+                                   "requiresClock": True},
     # Display-only ENUM: how the score is shown (no engine effect). `valueLabels`
     # gives each option a clean display name for the ballot/Rulebook.
     "scoringModel":               {"label": "How the score is shown",
@@ -1013,6 +1017,36 @@ CONVERSION_GO_AGGRESSION     = 1.3       # master multiplier on the whole chart 
 # dampened since it's earlier and a miss has more time to hurt.
 CONVERSION_GO_Q3_DAMPEN      = 0.55
 
+# ── Innings: conversion-gated continuation (docs/INNINGS_REDESIGN_PLAN.md) ──────
+# In the innings format a TD whose TOP conversion (the max-value 'go' rung — the 2-pt
+# when the ladder is off, the longest rung when it's on) is MADE keeps the at-bat alive
+# WITHOUT consuming a try (baseball-style: scoring doesn't make an out). A kick, a lesser
+# rung, or a miss all consume a try. Removes the old hard comeback ceiling; self-limiting
+# because conversions miss. Master toggle for A/B validation:
+INNINGS_CONTINUATION_ENABLED = True
+INNINGS_MAX_CONTINUATIONS = 6            # safety cap: max free continuations per at-bat
+                                         # (a freak no-miss streak can't hang the game;
+                                         # rarely hit — probability ends most at-bats first)
+# Innings post-TD go-for-the-top-rung eagerness (the ONLY way to continue the at-bat, so
+# teams reach for it far more than in a clock game). desire = base (+trail / -lead) + aggr,
+# then tempered by the top rung's make odds. Tunable against sim measurements.
+INNINGS_CONVERSION_BASE_GO   = 0.55      # baseline eagerness to extend the at-bat
+INNINGS_CONVERSION_TRAIL_STEP = 0.12     # + per point of deficit (trailing → chase harder)
+INNINGS_CONVERSION_TRAIL_CAP  = 0.45     # cap on the trailing boost
+INNINGS_CONVERSION_LEAD_STEP  = 0.12     # − per point of lead (ahead → bank the safe point,
+INNINGS_CONVERSION_LEAD_CAP   = 0.55     #   don't run it up); a ~score-plus lead ≈ never gambles
+INNINGS_CONVERSION_AGGR_SPAN  = 0.15     # ± across the coach-aggressiveness range
+# Last try of the final at-bat: the conversion is weighed by expected OUTCOME, not by
+# whether it buys another drive. Relative worth of where the try leaves you.
+INNINGS_LASTCHANCE_WIN_VALUE  = 1.0      # the try takes the lead
+INNINGS_LASTCHANCE_TIE_VALUE  = 0.5      # the try only ties (roughly a coin flip after)
+INNINGS_LASTCHANCE_CONTINUE_BONUS = 0.15 # extra for a TYING top rung — it extends the at-bat
+# Last try, already ahead, opponent still to bat: take the sure points by default. The
+# spread is what separates coaches — a conservative one basically never gambles the safe
+# point, an aggressive one reaches for the extra margin fairly often.
+INNINGS_LASTCHANCE_LEAD_GO_BASE   = 0.10
+INNINGS_LASTCHANCE_LEAD_AGGR_SPAN = 0.25
+
 # ── Sideline Goals (dormant mechanic — docs/SIDELINE_GOALS_PLAN.md) ────────────
 # Hoop shots at sideline hoops for `sidelineGoalPoints`. TWO pairs per attacking
 # direction: a MIDFIELD pair (~the 50) and an END-ZONE pair (flanking the goal being
@@ -1041,6 +1075,15 @@ SIDELINE_GOAL_ATTEMPT_INRANGE = 0.55     # base chance when in range of an unuse
 SIDELINE_GOAL_ATTEMPT_STALL_MULT = 1.4   # x when the drive is stalling (salvage a point)
 SIDELINE_GOAL_ATTEMPT_AGGR_SPAN = 0.25   # + up to this for a max-aggressiveness coach
 SIDELINE_GOAL_ATTEMPT_MAX = 0.90         # cap on the attempt chance
+# Late-game deficit awareness: a hoop shot consumes the down with no yardage, so a MAKE
+# or a MISS both push the offense to the next down. The play-caller therefore skips the
+# PENULTIMATE down normally (a hoop there forces the final down regardless of the result)
+# and never shoots on the FINAL down (it would forfeit the scoring play). BUT when the
+# bonus point(s) are what bridge a FG/TD to a tie/lead late (see _hoopPointsNeeded), the
+# offense goes out of its way to bank BOTH hoops — reliably, and (when the points are
+# mandatory) even on the penultimate down / in hurry-up.
+SIDELINE_GOAL_DESPERATION_SECS = 360     # "late": Q4 game clock at/under this (all of OT qualifies)
+SIDELINE_GOAL_DESPERATION_CHANCE = 0.92  # attempt chance when the hoop point is needed to tie/win
 
 # ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
 # Rugby-flavored: a rushing / receiving / QB-scramble TD is only PROVISIONAL — the
@@ -1086,7 +1129,7 @@ CONTEST_NARRATION = {
     },
     'race': {
         'win':   ["{scorer} and {defender} line up on one sideline and race across the field to the other sideline. {scorer} wins by a nose. TOUCHDOWN!",
-                  "{scorer} and {defender} across the endzone. {scorer} leaves {defender} in the dust. TOUCHDOWN!"],
+                  "{scorer} and {defender} race across the endzone. {scorer} leaves {defender} in the dust. TOUCHDOWN!"],
         'stuff': ["{scorer} and {defender} begin to race, but {scorer} trips and falls flat on their face. No score.",
                   "{scorer} and {defender} line up on one 10 yard line and race, but {defender} beats them to the endzone cleanly. No touchdown."],
     },
@@ -1580,6 +1623,15 @@ DAILY_RESET_HOUR_UTC = 10
 GM_VOTE_TYPES = {"fire_coach", "cut_player", "resign_player", "sign_fa", "hire_coach"}
 
 # Cost per vote (Floobits)
+# ── Discord name submissions (/name) ──────────────────────────────────────────
+# Suggested names wait in `name_submissions` for admin approval; only Discord-LINKED
+# users may submit. The cap is per user and counts only PENDING rows, so approving or
+# rejecting frees a slot back up — it throttles a flood without punishing a regular
+# contributor whose suggestions keep getting used.
+NAME_SUBMISSION_PENDING_CAP = 10
+NAME_SUBMISSION_MIN_LENGTH = 2
+NAME_SUBMISSION_MAX_LENGTH = 60
+
 GM_VOTE_COST = {
     "fire_coach": 15,
     "cut_player": 10,

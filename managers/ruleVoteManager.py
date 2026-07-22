@@ -116,6 +116,18 @@ class RuleVoteManager:
             return bool(gate and getattr(gameRules, gate, None) != gr.defaultRuleValue(gate))
         return getattr(gameRules, f, None) != gr.defaultRuleValue(f)
 
+    def _formatHasClock(self, fmtKey) -> bool:
+        """Whether the active format's GAME CLOCK actually drives anything. innings is
+        clock-inert, play_limit runs off a play counter and chess_clock off possession
+        budgets — under all three the clock is synthetic, so a rule about when it stops
+        changes nothing. Reuses the format's own `consumesRealTime` declaration rather
+        than a second hand-maintained list that could drift from it."""
+        try:
+            from game_formats import getFormat
+            return bool(getFormat(fmtKey).consumesRealTime())
+        except Exception:
+            return True   # unknown format: don't silently hide options
+
     def _changeOptions(self, gameRules) -> List[dict]:
         """Options available for a CHANGE vote, as generic {key, label, patch, field,
         value} dicts. A scalar candidate proposes one specific new value; a PRESET
@@ -123,11 +135,17 @@ class RuleVoteManager:
         the mechanic is currently off."""
         from constants import RULE_VOTE_CANDIDATES, SCORING_MODEL_FORMATS
         fmt = getattr(gameRules, 'gameFormat', 'standard') or 'standard'
+        clockRuns = self._formatHasClock(fmt)
         out = []
         for f, spec in RULE_VOTE_CANDIDATES.items():
             # Score-display alternates only make sense under cumulative-point formats;
             # withhold the candidate under target/bust/frames (only additive reads there).
             if f == 'scoringModel' and fmt not in SCORING_MODEL_FORMATS:
+                continue
+            # Clock rules are meaningless under a format whose clock doesn't run
+            # (innings, play_limit, chess_clock) — don't offer a running clock in a
+            # game that has no clock to run.
+            if spec.get('requiresClock') and not clockRuns:
                 continue
             if 'presets' in spec:
                 if f == 'gameFormat':
@@ -141,7 +159,14 @@ class RuleVoteManager:
                         out.append({"key": p['key'], "label": p['label'],
                                     "patch": dict(p['patch']), "field": None, "value": None})
                 elif not self._isChangedCandidate(f, spec, gameRules):   # only when off
-                    p = random.choice(spec['presets'])
+                    # Drop presets that need a running clock (a seconds-unit Drive Clock
+                    # can't drain under innings/play_limit/chess_clock — the plays unit
+                    # still works, so the candidate survives on that preset alone).
+                    pool = [p for p in spec['presets']
+                            if clockRuns or p['patch'].get('driveClockUnit') != 'seconds']
+                    if not pool:
+                        continue
+                    p = random.choice(pool)
                     out.append({"key": p['key'], "label": p['label'],
                                 "patch": dict(p['patch']), "field": None, "value": None})
             else:
@@ -215,8 +240,10 @@ class RuleVoteManager:
                 formatFields.add(fld)
         fmt = getattr(g, 'gameFormat', 'standard') or 'standard'
         # The Drive Clock is a GAME-clock shot clock — it only combines with formats that
-        # actually run the game clock (skip the synthetic / no-clock formats).
-        realClock = fmt in ('standard', 'target', 'bust', 'frames')
+        # actually run the game clock (skip the synthetic / no-clock formats). Read from
+        # the format itself rather than a hardcoded list, so adding a format can't leave
+        # this behind.
+        realClock = self._formatHasClock(fmt)
 
         # 1b) DORMANT MECHANICS — each independently coin-flipped ON/OFF (they don't all
         # have to be on). Contested Scoring is held out (in _CHAOS_EXCLUDE) until vetted.
@@ -233,6 +260,10 @@ class RuleVoteManager:
         # 2) EVERY OTHER RULE — random, but within ranges that fit the chosen format.
         for f, spec in RULE_VOTE_CANDIDATES.items():
             if f == 'gameFormat' or f in _CHAOS_EXCLUDE or f in formatFields:
+                continue
+            # Same gate as the ballot: don't scramble a clock rule under a format whose
+            # clock doesn't run — it would be a rule that changes nothing.
+            if spec.get('requiresClock') and not realClock:
                 continue
             if 'presets' in spec:
                 # A preset mechanic (Drive Clock): coin-flip it on with a random preset

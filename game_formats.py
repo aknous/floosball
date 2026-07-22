@@ -95,6 +95,13 @@ class GameFormat:
         innings returns it always (a punt is an out for nothing)."""
         return False
 
+    def isLastScoringChance(self, game, offense) -> bool:
+        """True when `offense` has NO future possession to make up points after this one,
+        so a FG that still leaves them trailing is futile and the 4th-down caller should
+        push for the touchdown. Default False — clock formats detect the endgame via the
+        game clock / chess-clock lockout instead; innings (no clock) needs this signal."""
+        return False
+
     def newDriveYardsToEndzone(self, game):
         """A fixed yards-to-endzone for EVERY new possession, or None to use the natural
         spot. innings starts every drive at the batting team's own 20 (a fresh at-bat)."""
@@ -492,6 +499,17 @@ class InningsFormat(GameFormat):
     def suppressPunt(self, game) -> bool:
         return True    # a punt is a try for nothing; going for it is strictly better
 
+    def isLastScoringChance(self, game, offense) -> bool:
+        # The batting team is on its LAST try of its FINAL at-bat — no possession to come.
+        # A FG that doesn't tie/take the lead here is futile, so the 4th-down caller should
+        # go for the TD. The current inning/half already implies which team bats (top = away,
+        # bottom = home), and offense IS that team, so the inning/try state is sufficient.
+        # Covers regulation AND extra innings (inning >= N), and both halves. Non-last tries
+        # / earlier innings return False so a team with a future at-bat can still kick.
+        lastTry = getattr(game, '_inningsTries', 0) >= self._tries(game) - 1
+        lastInning = getattr(game, '_inningsNumber', 1) >= self._innings(game)
+        return lastTry and lastInning
+
     def newDriveYardsToEndzone(self, game):
         return game.gameRules.fieldLength - 20   # every at-bat starts at own 20
 
@@ -503,15 +521,49 @@ class InningsFormat(GameFormat):
             game._inningsNumber = 1
             game._inningsHalf = 'top'
             game._inningsTries = 0
+            game._inningsContinue = False
+            game._inningsContinues = 0
 
     def possessionReceiver(self, game, giver, receiver):
-        # Every possession-end is a TRY used by the batting team (the giver). Under 3
+        # One-shot: set when this resolution inserts an inning-style feed marker (a batting
+        # change or an extended try), so the post-score "next try" marker knows to stay
+        # quiet. A flag, not a peek at the feed head — an interleaved entry (a rally line,
+        # say) used to hide the marker and let a duplicate through.
+        game._inningsMarked = False
+        # Conversion-gated continuation (docs/INNINGS_REDESIGN_PLAN.md): a TD whose TOP
+        # conversion was MADE keeps the batting team's at-bat alive WITHOUT consuming a try
+        # (baseball-style — scoring doesn't make an out). `_inningsContinue` is set by the
+        # conversion resolver; a per-at-bat safety cap stops a freak no-miss streak hanging
+        # the game. Everything else (kick / lesser rung / miss / failed drive) consumes a try.
+        if getattr(game, '_inningsContinue', False):
+            game._inningsContinue = False
+            from constants import INNINGS_MAX_CONTINUATIONS
+            cont = getattr(game, '_inningsContinues', 0)
+            if cont < INNINGS_MAX_CONTINUATIONS:
+                game._inningsContinues = cont + 1
+                # Mark the extended at-bat in the play feed, styled like the inning marker
+                # (batting team made its top conversion and keeps batting — no try spent).
+                try:
+                    game.gameFeed.insert(0, {'event': {
+                        'text': f"{giver.abbr} · Try extended!",
+                        '_type': 'inning',
+                        'quarter': getattr(game, 'currentQuarter', 1),
+                        'timeRemaining': '',
+                    }})
+                    game._inningsMarked = True
+                except Exception:
+                    pass
+                return giver   # keep batting — same at-bat, try NOT consumed
+            # cap reached → fall through and consume a try like any other outcome
+        game._inningsContinue = False   # clear any stale flag before a normal resolution
+        # Every OTHER possession-end is a TRY used by the batting team (the giver). Under 3
         # tries they keep batting; at 3 the at-bat flips to the other team.
         tries = getattr(game, '_inningsTries', 0) + 1
         if tries < self._tries(game):
             game._inningsTries = tries
             return giver
         game._inningsTries = 0
+        game._inningsContinues = 0   # at-bat over → reset the continuation counter
         if getattr(game, '_inningsHalf', 'top') == 'top':
             game._inningsHalf = 'bottom'
         else:
@@ -530,6 +582,7 @@ class InningsFormat(GameFormat):
                     'quarter': game.currentQuarter,
                     'timeRemaining': '',
                 }})
+                game._inningsMarked = True
             except Exception:
                 pass
         # The at-bat is over and the teams switch — give the coaches a moment to
@@ -562,6 +615,38 @@ class InningsFormat(GameFormat):
                 return True   # accept a tie after too many extra innings
         return None
 
+    def displayInning(self, game) -> int:
+        """The inning number to SHOW. The flip that ends the final inning increments the
+        counter to N+1 before the game-over check reads it (that increment is what tells
+        `checkEarlyEnd` an inning completed), so a game decided in regulation would
+        otherwise finish reading "inning 4". Clamp only while parked on that boundary
+        state with the game actually over — extra innings really are inning N+1, and a
+        game still sitting there undecided is tied and heading to extras."""
+        N = self._innings(game)
+        inning = getattr(game, '_inningsNumber', 1)
+        if self._pastFinalInning(game):
+            return inning - 1
+        return inning
+
+    def _pastFinalInning(self, game) -> bool:
+        """Parked on the post-final-flip boundary with the game already decided — the
+        counter has rolled to N+1/top but no at-bat is going to be played there."""
+        return bool(getattr(game, '_inningsNumber', 1) > self._innings(game)
+                    and getattr(game, '_inningsHalf', 'top') == 'top'
+                    and getattr(game, '_inningsTries', 0) == 0
+                    and self.checkEarlyEnd(game))
+
+    def displayHalf(self, game) -> str:
+        """The half to SHOW, paired with `displayInning`. On the post-final-flip boundary
+        the raw half has already rolled over to 'top' of the inning that never gets played;
+        clamping the inning without clamping the half leaves the two describing DIFFERENT
+        at-bats, and consumers that ask "has the home team batted this inning yet?" (the
+        line score) then hide the whole bottom half of the final inning. The last at-bat
+        actually played there is the BOTTOM of the clamped inning."""
+        if self._pastFinalInning(game):
+            return 'bottom'
+        return getattr(game, '_inningsHalf', 'top')
+
     def adjustGameProgress(self, game, gameProgress: float) -> float:
         # Progress = fraction of the scheduled innings played (completed innings +
         # current half + tries within it), so WP reads late innings as "late game".
@@ -574,7 +659,7 @@ class InningsFormat(GameFormat):
 
     def stateExtra(self, game) -> dict:
         ls = getattr(game, '_inningsLineScore', None) or {'home': {}, 'away': {}}
-        inning = getattr(game, '_inningsNumber', 1)
+        inning = self.displayInning(game)
         # Always show the full scheduled slate of innings (1..inningsPerGame), plus any
         # extra innings reached — future innings render blank on the frontend.
         maxInn = max([inning, self._innings(game)] + list(ls['home'].keys()) + list(ls['away'].keys()))
@@ -582,7 +667,7 @@ class InningsFormat(GameFormat):
         return {'innings': {
             'active': True,
             'inning': inning,
-            'half': getattr(game, '_inningsHalf', 'top'),
+            'half': self.displayHalf(game),
             'tries': getattr(game, '_inningsTries', 0),
             'inningsPerGame': self._innings(game),
             'triesPerInning': self._tries(game),

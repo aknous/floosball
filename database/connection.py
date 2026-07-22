@@ -1264,6 +1264,16 @@ def _runPendingMigrations():
             logger.info("  Migration: added gm_fa_ballots.position_priority")
         except Exception:
             conn.rollback()
+        # Per-format display state at completion (innings line score, frames results,
+        # chess-clock budgets) as JSON — the box-score breakdown that has no dedicated
+        # columns. NULL for standard games and for anything already final (that state
+        # only ever lived in the live broadcast, so there's nothing to backfill from).
+        try:
+            conn.execute(text("ALTER TABLE games ADD COLUMN format_state TEXT"))
+            conn.commit()
+            logger.info("  Migration: added games.format_state")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
