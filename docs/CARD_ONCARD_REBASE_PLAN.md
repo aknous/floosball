@@ -273,6 +273,36 @@ the lineup experiment samples.
 
 ### DECISION — edition-scaled STATIC bars (owner, 2026-07-22, session 2)
 ### The rating floor caps the risk (owner, 2026-07-22, session 2)
+### RAMP vs CLIFF — the gate\'s response curve (owner idea, 2026-07-22, session 2)
+
+Owner proposal: instead of a binary gate, the card\'s output is a RATIO of how close the
+player is to the threshold. Example: +1 FPx card, 200-yd threshold, player gains 100 yds
+-> +0.5 FPx. That is a linear ramp `k = min(1, stat / threshold)`.
+
+Measured on the edition-scaled thresholds (100% signal = cards track roster; the fix is
+from the 35% "roster irrelevant" state):
+
+| model | base | holo | prismatic |
+|---|---|---|---|
+| no gate | 68% | 38% | 35% |
+| linear ramp | 72% | 49% | 50% |
+| gate + 0.25 floor | 84% | 99% | 72% |
+| hard cliff | 91% | 195%* | 106% |
+(*holo cliff 195% is the extreme-weak-lineup artifact; real editions are milder.)
+
+Trade-off: the ramp has the BEST feel/legibility (no dead cards, "half the yards = half
+the card") and matches "reward the player\'s actual performance", but addresses the
+balance problem LEAST because partial credit lets a weak week still pay partial. Still a
+real fix (35% -> 50-72%), and combined with the rating floor + Stage 3 magnitude tuning
+may land right. The cliff fixes balance most but is binary/harsh; gate+floor is the
+middle (never dead, keeps most of the bite).
+
+Tuning knob if the ramp needs more bite without losing its feel: start the ramp from a
+FLOOR (0 below e.g. half the threshold, ramping to full at the threshold) so a genuine
+dud is still denied but the meaningful range stays smooth. DECISION PENDING owner pick
+between: linear ramp / floored ramp / gate+floor / hard cliff.
+
+
 
 High editions can ONLY depict high-rated players — `EDITION_THRESHOLDS`: holographic
 rating>=75, prismatic>=80, diamond>=90. So a weak lineup of powerful cards CANNOT EXIST:
