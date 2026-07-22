@@ -121,6 +121,67 @@ everything and accept the loss; keep a deliberate minority as roster-scoped
 Folds in the deferred **Phase 5c** (`full_roster`, `all_in`) — both fire free under
 position-locked slots and need new premises, not patches.
 
+## The real problem: cards CARRY weak rosters (measured 2026-07-22)
+
+Owner framing: *"what I want to reduce is the ability for users to equip a full hand of
+cards that make the actual roster irrelevant, which is the meta in the current roster +
+cards iteration."*
+
+**Controlled experiment** (`scratchpad/probe_controlled.py`): synthesize templates so the
+SAME 6 effects are played by a strong lineup and a weak one (20th vs 80th percentile of
+actual week-14 performers, players who actually played), 40 random effect sets each.
+Only player quality varies, so the confound below is removed.
+
+| edition | strong player FP | weak player FP | strong card bonus | weak card bonus | roster signal retained |
+|---|---|---|---|---|---|
+| base | 243.0 | 19.0 | 52.7 | 29.8 | **68%** |
+| holographic | 243.0 | 19.0 | 114.0 | 71.3 | **46%** |
+| prismatic | 243.0 | 19.0 | 126.3 | 90.4 | **44%** |
+
+"Roster signal retained" = scoreRatio / playerRatio. The lineups differ **12.8x** in
+their own production; final scores differ only 5.6x at prismatic.
+
+**The smoking gun:** a weak lineup producing 19 FP still collects **90 FP of card bonus**
+at prismatic — 4.8x its own player output, and 72% of what the strong lineup's cards pay.
+Cards don't merely add to your score, they SUBSTITUTE for having a good roster. And it
+scales with edition: base keeps two thirds of the roster signal, holo/prismatic under half.
+
+### Two methodology traps (both hit, both cost a wrong answer)
+
+1. **Projection contexts have no variance.** `buildProjectionContext` feeds per-game
+   season AVERAGES, so any factor defined as `weekFP / seasonAvgFP` is identically 1.0
+   and the mechanic is invisible. Real week stats must be loaded from `GamePlayerStats`
+   + `WeeklyPlayerFP` (mirror `seasonManager`'s week-end build via
+   `_dbStatsToCardFormat`). The whole existing harness lineage feeds averages.
+2. **Effects are tied to players.** A `CardTemplate` is (player, edition, effect), so
+   strong and weak rosters necessarily hold DIFFERENT effects. Any per-effect
+   "this one levels the field" reading off real rosters is confounded — it is measuring
+   which players happen to hold which effects. Synthesize templates to control it.
+
+### Result: the performance-factor idea does NOT fix this
+
+Tested both shapes against real week stats, applied only to the 63 not-yet-coupled
+effects (per the owner's scoping call, to avoid squaring the coupling):
+
+| lineup | roster spread (target) | current | A season-avg | B positional |
+|---|---|---|---|---|
+| base | 1.61x | 1.68x | 1.62x | 1.65x |
+| holographic | 1.61x | 1.16x | 1.25x | 1.29x |
+| prismatic | 1.57x | 1.09x | 0.96x | 0.97x |
+
+It barely moves holo, makes prismatic worse, and inflates the aggregate everywhere
+(prismatic 183% → 195%). It aims at the wrong target: at prismatic 71% of bonus is
+ALREADY production-coupled and the spread is flat regardless.
+
+**Working hypothesis for the real cause** — effects carry a FLAT base component
+alongside their production component (e.g. `trebuchet` = "3.0 base + 8 bonus", every
+chance card has a `baseFP`/`baseFloobits` floor). The flat floor pays out identically
+no matter who's in the slot, and there are 6-7 of them per lineup. That is what a weak
+roster is collecting. Levers to test next, in order:
+1. Cut or proportionalize the flat floors (`baseFP` / `baseFloobits` / `baseChance`).
+2. Scale magnitude down specifically at holographic+, where the signal loss concentrates.
+3. Re-shape the factor as a GATE on the whole card rather than a multiplier on part of it.
+
 ## Stage 3 — magnitude tuning
 
 Rebuild the harness first (see below), then tune to the parity target.
