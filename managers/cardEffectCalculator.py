@@ -276,20 +276,31 @@ _ROSTER_POSITION_EFFECTS = {
 }
 
 
-def _buildPlayerStatLine(effectName: str, cardPlayerId: int, ctx) -> str:
-    """Build a short stat summary for roster-position-based effects.
+# Effects still scored against the roster slot rather than the card's own
+# player, so their stat line must keep the old position lookup or it would
+# advertise stats the card didn't actually score on. Everything else in
+# _ROSTER_POSITION_EFFECTS was re-based in Stage 1 of the on-card re-base
+# (docs/CARD_ONCARD_REBASE_PLAN.md) and reads the card player directly.
+_ROSTER_SCOPED_STAT_LINE = {"showoff", "double_trouble", "sniper"}
 
-    Looks up the roster player(s) at the card's position (ctx.cardPosition)
-    instead of the card player. For WR (pos 3), combines both WR1+WR2 stats.
+
+def _buildPlayerStatLine(effectName: str, cardPlayerId: int, ctx) -> str:
+    """Build a short stat summary for position-based effects.
+
+    Re-based effects report the CARD'S OWN player. The few still roster-scoped
+    (see _ROSTER_SCOPED_STAT_LINE) keep the old lookup of whoever occupies the
+    card's position, combining WR1+WR2 for pos 3.
     """
     if effectName not in _ROSTER_POSITION_EFFECTS:
         return ""
 
-    # Find roster player(s) at the card's position
-    rosterPids = [
-        pid for pid, pos in ctx.rosterPlayerPositions.items()
-        if pos == ctx.cardPosition and pid in ctx.rosterPlayerIds
-    ]
+    if effectName in _ROSTER_SCOPED_STAT_LINE:
+        rosterPids = [
+            pid for pid, pos in ctx.rosterPlayerPositions.items()
+            if pos == ctx.cardPosition and pid in ctx.rosterPlayerIds
+        ]
+    else:
+        rosterPids = [cardPlayerId] if cardPlayerId else []
     if not rosterPids:
         return ""
 

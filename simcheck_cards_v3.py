@@ -72,6 +72,7 @@ SUBSTRATE = {
     'all_in': (SUB_FP, 'same'),
 }
 DEFAULT_SUB = (SUB_FP, None)  # FP/FPx/Floobit standalone cards: read against a plain FP hand
+_CALC_FAILED = []  # one-shot guard so a broken calc reports once, not per card
 
 BANDS = {'FP': '~35 base / 50 holo / 70 prismatic', 'FPx': 'judged on its own',
          'Floobit': 'separate currency (margF)', 'Synergy/Amp': 'best-case marginal w/ substrate'}
@@ -270,6 +271,14 @@ def main():
         try:
             res = calculateWeekCardBonuses(eqs, ctx)
         except Exception:
+            # A swallowed exception here reads as a uniform 0.0 across every
+            # card, which looks like "all effects are worthless" rather than a
+            # broken harness. Surface the first one, then stay quiet.
+            if not _CALC_FAILED:
+                import traceback
+                _CALC_FAILED.append(1)
+                print("\n!! calculateWeekCardBonuses raised — values below are meaningless:\n")
+                traceback.print_exc()
             return 0.0, 0.0
         mult = aggregateMultFactors(res.multFactors or [])
         return (base + res.totalBonusFP) * mult, float(res.floobitsEarned)

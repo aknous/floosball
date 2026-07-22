@@ -1,0 +1,150 @@
+# Card Effects — On-Card Player Re-base
+
+**Branch:** `feature/fantasy-cards-fusion`
+**Status:** Stage 1 in progress
+**Owner decision (2026-07-22):** "We need to look at every effect and see what still
+makes sense. It's a big rework but necessary. In the interim we can just work on the
+current position-specific cards, then move to the roster-aggregate cards and think
+about what to do with them."
+
+## Goal
+
+Under fusion each equipped card **is** a rostered player, so there's a natural 1:1
+card → player link. Today effects don't use it: they read either the **roster
+aggregate** (`rosterTotalTds`, `rosterPlayerRatings`, …) or the roster player **at the
+card's position** (`_getRosterStatsAtPosition(ctx, ctx.cardPosition)`). Re-base them
+onto the player actually depicted on the card.
+
+## Why this blocks the Phase 9 tuning
+
+Magnitude tuning to the ~100% parity target (owner, 2026-07-22 — card bonus ≈ the
+lineup's own player FP) must happen **after** the re-base: re-basing changes every
+number. Measured baseline on the current model, full 6-card lineups converted from
+real season-13 rosters:
+
+| lineup edition | n | player FP | card bonus | FPx | bonus as % of player FP |
+|---|---|---|---|---|---|
+| base | 16 | 100.6 | 123.4 | 1.21 | 123% |
+| holographic | 16 | 100.6 | 180.3 | 1.26 | 179% |
+| prismatic | 8 | 106.7 | 232.9 | 1.15 | 218% |
+| diamond | — | — | — | — | no full lineup possible (45 templates / 144 players) |
+
+Parity target = **100%**, on the AVERAGE lineup. Higher editions reach it through
+ceiling and variance, not a higher mean — per the tier philosophy (base = dependable,
+diamond = swingy). Flattening every edition to 100% average would delete the rarity
+ladder.
+
+## Effect census (helper-aware, all 126 registered effects)
+
+Counted by static analysis with call-graph propagation — a first pass that only looked
+at direct `ctx.field` reads misfiled ~30 effects as "external", because their roster
+reads hide inside `_getRosterStatsAtPosition` / `_getRosterPlayersByPosition`.
+
+| bucket | n | disposition |
+|---|---|---|
+| **1. Position-indirect** | 23 | Mechanical re-base → the card's own player. **Stage 1.** |
+| **2. True roster-aggregate** | 62 | Needs a new premise or retirement. **Stage 2**, effect by effect. |
+| **3. Card-to-card** (hand composition) | 12 | Orthogonal — the hand is still a hand. Unaffected. |
+| **4. External** (team / league / economy / chance) | 29 | Unaffected. |
+
+### The WR double-count (live bug, fixed by Stage 1)
+
+`_getRosterStatsAtPosition(ctx, 3)` **sums WR1 + WR2** (it predates position-locked
+slots, where "the roster's WR" was genuinely two players). Under fusion both WR cards
+each score off the combined output of both receivers, so every position-specific stat
+effect landing on a WR pays roughly double. This is part of the measured inflation
+above. Re-basing to the card's own player fixes it as a side effect.
+
+## Stage 1 — position-indirect (23) — DONE
+
+Mechanical: replace the position lookup with the card's own player. These are the
+"RB carries / QB completions / receiver yards" family — re-basing IS the position gate,
+since a card in the WR1 slot depicts a WR.
+
+- New helper `cardEffects._getCardPlayerStats(ctx, cardPlayerId)` replaces
+  `_getRosterStatsAtPosition(ctx, ctx.cardPosition or N)` at all 16 self-referential
+  call sites.
+- `_getPositionTds` / `_getPositionYards` take an optional `cardPlayerId`
+  (position selects WHICH stat counts, the card player selects WHOSE) — used by
+  `crescendo` and `traverse`, which derive their position from `ctx.cardPosition`.
+- `trebuchet`, `spectacle`, `indemnity` re-based off their `_getRosterPlayersByPosition`
+  loops to read the card player directly.
+- Display: `_buildPlayerStatLine` reports the card's own player, except for the
+  still-roster-scoped `_ROSTER_SCOPED_STAT_LINE = {showoff, double_trouble, sniper}`,
+  which keep the old lookup so the stat line matches what they actually score on.
+
+**Deliberately NOT re-based** (premise is genuinely multi-player → Stage 2):
+`double_trouble` (tiered "one WR scores" vs "BOTH WRs score" — a mechanical re-base
+would delete the effect), `showoff`, `sniper` (reads the roster's K regardless of the
+card's own position).
+
+**Regression:** `test_oncard_rebase.py` — two WR cards depicting different receivers
+must each score off their own line. Verified to FAIL against the pre-change code
+(both cards scored the combined 12 receptions; WR2's trebuchet inherited WR1's 44-yd
+catch) and PASS after.
+
+### Measured impact
+
+| lineup edition | before | after |
+|---|---|---|
+| base | 123% | **116%** |
+| holographic | 179% | **169%** |
+| prismatic | 218% | 224% (n=8, noise) |
+
+Smaller than the correctness of the fix suggests — only a subset of effects are both
+position-specific and landing on a WR. The bulk of the gap to the 100% parity target
+lives in the 62 roster-aggregate effects (Stage 2) and in raw magnitudes (Stage 3).
+
+## Stage 2 — true roster-aggregate (62)
+
+Not mechanical; each needs a judgement call. They sort roughly into:
+
+- **Trivial translations that read BETTER on-card** — `touchdown_pinata`, `avalanche`,
+  `cornucopia`, `feeding_frenzy` (roster TDs → that player's TDs); `windfall`,
+  `reclamation`, `resplendent`, `rising_tide`, `buy_low` (→ that player over/under
+  performing their own rating); `honor_roll`, `closer`, `walk_off`, `odometer`
+  (→ that player's stats); `showoff`, `entourage`, `scrappy`, `sleeper`, `patient`
+  (→ that player's rating).
+- **Inherently multi-player — would die** — `stack`, `backfield_buddies`, `synergy`,
+  `lead_blocker`, `hometown_hero` (same-team-across-positions).
+- **Roster-composition premises — the deckbuilding layer** — `vanguard` (5+ veterans),
+  `rookie_hype`, `home_alone`, `loyalty`, `eminence`, `cornerstone`, `dark_horse`.
+- **Scale on total roster FP** — `catalyst`, `piggy_bank`, `hedge`, `luminary`.
+- **Other** — `trust_fund` (`rosterUnchangedWeeks`).
+
+**Open design tension (settle before starting Stage 2):** the roster-aggregate effects
+ARE the deckbuilding layer. A full re-base makes every card self-contained and legible
+but removes the reason to think about the lineup as a whole. Options: re-base
+everything and accept the loss; keep a deliberate minority as roster-scoped
+"composition" effects; or give the dying ones new on-card premises.
+
+Folds in the deferred **Phase 5c** (`full_roster`, `all_in`) — both fire free under
+position-locked slots and need new premises, not patches.
+
+## Stage 3 — magnitude tuning
+
+Rebuild the harness first (see below), then tune to the parity target.
+
+## Harness state
+
+`simcheck_cards_v3.py` is **non-functional under fusion** and silently reported `0.0`
+for every effect. Root cause: `buildProjectionContext` sources the lineup from
+`EquippedCard` rows, and the prod DB is pre-fusion (25 equipped rows, none in the
+sampled week), so the context returned `None`; a bare `except Exception: return 0.0`
+turned that into "every card is worthless". The swallow now reports (`_CALC_FAILED`).
+
+Still needed — a fusion substrate builder. The approach validated by the baseline probe:
+convert a real user's `FantasyRosterPlayer` rows into `EquippedCard` rows on a temp DB
+copy (the old `FantasyRosterPlayer.slot` vocabulary — QB/RB/WR1/WR2/TE/K — is identical
+to fusion's, so it maps 1:1), then run the real context + calculator over them.
+
+Two modelling changes v3 needs for fusion:
+- **Marginal = replace-a-standard-card, not add-a-card.** Lineups are fixed-size, so a
+  card's value is what it adds over the no-effect `standard` card in the same slot —
+  not over an empty slot.
+- **Position is forced by slot**, so v3's `distinct`/`same` position schemes are
+  obsolete. An effect can only be tested in slots matching its template position.
+
+Use strict edition matching in any lineup builder — season 13 has no `standard`
+templates and only 45 diamonds for 144 players, so a cross-edition fallback silently
+substitutes and produces meaningless per-edition rows.

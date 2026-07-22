@@ -59,7 +59,19 @@ separate roster / match bonus / swaps / temp_flex.
 | 7b-iii. Frontend-facing leaderboard/history repoints + residual no-ops | ⬜ → Phase 8 | — |
 | 8. Frontend: TradingCard redesign + sub-base tier + unified lineup page | ✅ DONE (tsc-clean; live QA pending) | FE `0e8a7d2`/`15d232a`, BE `e612e8c` |
 | 8b. Frontend 7b-iii (leaderboard/history) + retire shop swap UI | ⬜ | — |
-| 9. Tuning pass + `simcheck` — incl. **card power rebalance for full lineups** | ⬜ | — |
+| 9. Tuning pass + `simcheck` — incl. **card power rebalance for full lineups** | ⬜ blocked on the on-card re-base | — |
+| R1. On-card re-base Stage 1 — position-specific effects (23) | ✅ DONE (unit-validated) | (this commit) |
+| R2. On-card re-base Stage 2 — roster-aggregate effects (62) | ⬜ NEXT — needs per-effect design | — |
+
+## On-card re-base (owner, 2026-07-22) — Phase 9 now runs AFTER it
+Effects should trigger off the player depicted on the card, not the whole roster.
+Owner: *"We need to look at every effect and see what still makes sense. It's a big
+rework but necessary. In the interim we can just work on the current position-specific
+cards, then move to the roster-aggregate cards and think about what to do with them."*
+Magnitude tuning waits until the re-base lands — re-basing changes every number.
+**Full census, staging, measured baselines: `docs/CARD_ONCARD_REBASE_PLAN.md`.**
+Parity target set the same day: card bonus ≈ 100% of the lineup's own player FP, on
+the AVERAGE lineup (higher editions get there via ceiling/variance, not a higher mean).
 
 ## Phase 9 tuning — MUST rebalance card power for full lineups (owner note, 2026-07-18)
 Fusion means **every user fields a full 6–7 card lineup** (cards ARE the roster), so the

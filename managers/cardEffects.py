@@ -2025,6 +2025,23 @@ def _getRosterStatsAtPosition(ctx, position: int) -> dict:
     return combined
 
 
+def _getCardPlayerStats(ctx, cardPlayerId: int) -> dict:
+    """Weekly stats for the player depicted ON THIS CARD.
+
+    Fusion re-base: an equipped card IS its depicted player's lineup slot, so a
+    position-specific effect (RB carries, QB completions, receiver yards) scores
+    off that player directly. Replaces `_getRosterStatsAtPosition(ctx,
+    ctx.cardPosition)`, which resolved to "whoever occupies this position" — and
+    for WR (position 3, two slots) SUMMED WR1+WR2, so both receiver cards scored
+    off the pair's combined output and paid roughly double.
+
+    Cross-position effects that genuinely read another slot (Lead Blocker, Stack,
+    Backfield Buddies) still use the position lookups — they're roster-scoped by
+    design and are handled in Stage 2 of docs/CARD_ONCARD_REBASE_PLAN.md.
+    """
+    return ctx.weekPlayerStats.get(cardPlayerId, {}) or {}
+
+
 def _countPlayerTds(playerStats: dict) -> int:
     """Count total TDs from a player's weekly game stats."""
     tds = 0
@@ -2276,27 +2293,27 @@ def _computeTriggerHappy(primary, ctx, cardPlayerId, eqId):
 def _computeMainCharacter(primary, ctx, cardPlayerId, eqId):
     # Roster player's FP share (keyed off card position)
     posLabel = POSITION_LABELS.get(ctx.cardPosition, "??")
-    rosterStats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 1)
+    rosterStats = _getCardPlayerStats(ctx, cardPlayerId)
     rosterFP = rosterStats.get("fantasyPoints", 0)
     fpShare = rosterFP / max(ctx.weekRawFP, 1)
     scale = primary.get("fpShareScale", 0)
     delta = round(scale * fpShare, 2)
-    eq = f"{scale} × {round(fpShare * 100)}% roster {posLabel} FP share = +{delta:.2f} FPx"
+    eq = f"{scale} × {round(fpShare * 100)}% {posLabel} FP share = +{delta:.2f} FPx"
     return EffectResult(multBonus=1 + scale * fpShare, equation=eq)
 
 
 def _computeHypeMan(primary, ctx, cardPlayerId, eqId):
     # Roster player's TDs (keyed off card position)
     posLabel = POSITION_LABELS.get(ctx.cardPosition, "??")
-    rosterStats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 1)
+    rosterStats = _getCardPlayerStats(ctx, cardPlayerId)
     rosterTds = _countPlayerTds(rosterStats)
     # Normalize legacy cards: perTdXMult/xMultValue → perTdFP
     perTdFP = primary.get("perTdFP") or primary.get("perTdXMult") or primary.get("xMultValue") or 0
     if rosterTds > 0:
         bonus = round(perTdFP * rosterTds, 1)
-        eq = f"{perTdFP}/TD × {rosterTds} roster {posLabel} TD{'s' if rosterTds != 1 else ''}"
+        eq = f"{perTdFP}/TD × {rosterTds} {posLabel} TD{'s' if rosterTds != 1 else ''}"
         return EffectResult(fpBonus=bonus, equation=eq)
-    return EffectResult(equation=f"{perTdFP} FP/TD × 0 roster {posLabel} TDs")
+    return EffectResult(equation=f"{perTdFP} FP/TD × 0 {posLabel} TDs")
 
 
 def _computeBabysitter(primary, ctx, cardPlayerId, eqId):
@@ -2494,10 +2511,10 @@ def _computeAllowance(primary, ctx, cardPlayerId, eqId):
 def _computeChaChing(primary, ctx, cardPlayerId, eqId):
     # Roster player's TDs (keyed off card position)
     posLabel = POSITION_LABELS.get(ctx.cardPosition, "??")
-    rosterStats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 2)
+    rosterStats = _getCardPlayerStats(ctx, cardPlayerId)
     rosterTds = _countPlayerTds(rosterStats)
     perTd = primary.get("perTdFloobits", 0)
-    eq = f"{perTd}F/TD × {rosterTds} roster {posLabel} TDs"
+    eq = f"{perTd}F/TD × {rosterTds} {posLabel} TDs"
     return EffectResult(floobits=perTd * rosterTds, equation=eq)
 
 
@@ -2606,7 +2623,7 @@ def _computeAceUpTheSleeve(primary, ctx, cardPlayerId, eqId):
     threshold = primary.get("threshold", 125)
     baseFP = primary.get("baseFP", 3.0)
     bonusFP = primary.get("rewardValue", 0)
-    rosterStats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 3)
+    rosterStats = _getCardPlayerStats(ctx, cardPlayerId)
     actualValue = _getStatValue(rosterStats, stat)
     if actualValue >= threshold:
         total = round(baseFP + bonusFP, 1)
@@ -2679,12 +2696,12 @@ def _computeFeedingFrenzy(primary, ctx, cardPlayerId, eqId):
 def _computeSpotlightMoment(primary, ctx, cardPlayerId, eqId):
     # +FP if player at card's position scores a TD
     posLabel = POSITION_LABELS.get(ctx.cardPosition, "??")
-    rosterStats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 3)
+    rosterStats = _getCardPlayerStats(ctx, cardPlayerId)
     rosterTds = _countPlayerTds(rosterStats)
     rewardFP = primary.get("rewardValue", 0)
     if rosterTds > 0:
-        return EffectResult(fpBonus=rewardFP, equation=f"roster {posLabel} scored {rosterTds} TD{'s' if rosterTds != 1 else ''}")
-    return EffectResult(equation=f"waiting for roster {posLabel} TD")
+        return EffectResult(fpBonus=rewardFP, equation=f"{posLabel} scored {rosterTds} TD{'s' if rosterTds != 1 else ''}")
+    return EffectResult(equation=f"waiting for {posLabel} TD")
 
 
 def _computeHighlightReel(primary, ctx, cardPlayerId, eqId):
@@ -3252,7 +3269,7 @@ def _getStatValue(playerStats: dict, statKey: str) -> float:
 def _computeGunslinger(primary, ctx, cardPlayerId, eqId):
     """FP scaling with QB slot's pass yards."""
     perHundredFP = primary.get("perHundredYardsFP", 6.0)
-    stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 1)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     passYards = stats.get("passing_stats", {}).get("passYards", 0) if isinstance(stats.get("passing_stats"), dict) else 0
     chunks = passYards / 100.0
     fp = round(perHundredFP * chunks, 1)
@@ -3263,7 +3280,7 @@ def _computeGunslinger(primary, ctx, cardPlayerId, eqId):
 def _computeAirRaid(primary, ctx, cardPlayerId, eqId):
     """Floobits per QB slot passing TD."""
     perTdF = primary.get("perTdFloobits", 12)
-    stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 1)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     tds = stats.get("passing_stats", {}).get("tds", 0) if isinstance(stats.get("passing_stats"), dict) else 0
     floobits = int(perTdF * tds)
     eq = f"{perTdF}F/TD × {tds} QB pass TD{'s' if tds != 1 else ''}"
@@ -3273,7 +3290,7 @@ def _computeAirRaid(primary, ctx, cardPlayerId, eqId):
 def _computeWorkhorse(primary, ctx, cardPlayerId, eqId):
     """FP scaling with RB slot's rushing attempts."""
     perAttFP = primary.get("perAttemptFP", 0.8)
-    stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 2)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     attempts = stats.get("rushing_stats", {}).get("carries", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
     fp = round(perAttFP * attempts, 1)
     eq = f"{perAttFP} FP/att × {attempts} rush attempts = +{fp} FP"
@@ -3283,7 +3300,7 @@ def _computeWorkhorse(primary, ctx, cardPlayerId, eqId):
 def _computeExpedition(primary, ctx, cardPlayerId, eqId):
     """FP scaling with RB slot's rushing yards."""
     perFiftyFP = primary.get("perFiftyYardsFP", 2.5)
-    stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 2)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     rushYards = stats.get("rushing_stats", {}).get("runYards", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
     chunks = rushYards / 50.0
     fp = round(perFiftyFP * chunks, 1)
@@ -3296,7 +3313,7 @@ def _computeStampede(primary, ctx, cardPlayerId, eqId):
     baseMult = primary.get("baseMult", 1.08)
     enhancedMult = primary.get("enhancedMult", 1.25)
     threshold = primary.get("yardThreshold", 75)
-    stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 2)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     rushYards = stats.get("rushing_stats", {}).get("runYards", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
     if rushYards >= threshold:
         eq = f"+{enhancedMult - 1.0:.2f} FPx ({rushYards} rush yds >= {threshold})"
@@ -3308,7 +3325,7 @@ def _computeStampede(primary, ctx, cardPlayerId, eqId):
 def _computeGoalLineVulture(primary, ctx, cardPlayerId, eqId):
     """Floobits per RB slot rushing TD."""
     perTd = primary.get("perTdFloobits", 4)
-    stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 2)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     tds = stats.get("rushing_stats", {}).get("runTds", 0) if isinstance(stats.get("rushing_stats"), dict) else 0
     floobits = int(perTd * tds)
     eq = f"{perTd}/TD × {tds} RB rush TDs"
@@ -3318,10 +3335,10 @@ def _computeGoalLineVulture(primary, ctx, cardPlayerId, eqId):
 def _computePossession(primary, ctx, cardPlayerId, eqId):
     """FP scaling with WR slots' combined receptions."""
     perRec = primary.get("perReceptionFP", 0.5)
-    stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 3)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     recs = stats.get("receiving_stats", {}).get("receptions", 0) if isinstance(stats.get("receiving_stats"), dict) else 0
     bonus = round(perRec * recs, 1)
-    eq = f"{perRec}/rec × {recs} WR receptions"
+    eq = f"{perRec}/rec × {recs} receptions"
     return EffectResult(fpBonus=bonus, equation=eq)
 
 
@@ -3330,20 +3347,16 @@ def _computeDeepThreat(primary, ctx, cardPlayerId, eqId):
     baseFP = primary.get("baseFP", 3.0)
     bonusFP = primary.get("rewardValue", 8)
     threshold = primary.get("threshold", 25)
-    pids = _getRosterPlayersByPosition(ctx, ctx.cardPosition or 3)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     bestCatch = 0
-    for pid in pids:
-        stats = ctx.weekPlayerStats.get(pid, {})
-        rcvStats = stats.get("receiving_stats", {})
-        if isinstance(rcvStats, dict):
-            longest = rcvStats.get("longest", 0) or rcvStats.get("longestRec", 0)
-            if longest > bestCatch:
-                bestCatch = longest
+    rcvStats = stats.get("receiving_stats", {})
+    if isinstance(rcvStats, dict):
+        bestCatch = rcvStats.get("longest", 0) or rcvStats.get("longestRec", 0)
     if bestCatch >= threshold:
         total = round(baseFP + bonusFP, 1)
-        eq = f"{baseFP} base + {bonusFP} bonus (WR longest: {bestCatch} yd)"
+        eq = f"{baseFP} base + {bonusFP} bonus (longest catch: {bestCatch} yd)"
         return EffectResult(fpBonus=total, equation=eq)
-    eq = f"{baseFP} base (WR longest: {bestCatch}/{threshold} yd)"
+    eq = f"{baseFP} base (longest catch: {bestCatch}/{threshold} yd)"
     return EffectResult(fpBonus=baseFP, equation=eq)
 
 
@@ -3371,7 +3384,7 @@ def _computeDoubleTrouble(primary, ctx, cardPlayerId, eqId):
 def _computeSlippery(primary, ctx, cardPlayerId, eqId):
     """FP scaling with WR slots' combined YAC."""
     perYac = primary.get("perYacFP", 0.3)
-    stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 3)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     yac = stats.get("receiving_stats", {}).get("yac", 0) if isinstance(stats.get("receiving_stats"), dict) else 0
     bonus = round(perYac * (yac / 10), 1)
     eq = f"{perYac}/10yac × {yac} YAC"
@@ -3383,7 +3396,7 @@ def _computeYacAttack(primary, ctx, cardPlayerId, eqId):
     baseFP = primary.get("baseFP", 3.0)
     bonusFP = primary.get("rewardValue", 7)
     threshold = primary.get("threshold", 30)
-    stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 3)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     yac = stats.get("receiving_stats", {}).get("yac", 0) if isinstance(stats.get("receiving_stats"), dict) else 0
     if yac >= threshold:
         total = round(baseFP + bonusFP, 1)
@@ -3397,7 +3410,7 @@ def _computeYacAttack(primary, ctx, cardPlayerId, eqId):
 def _computeSafetyBlanket(primary, ctx, cardPlayerId, eqId):
     """FP scaling with TE slot's receptions."""
     perRec = primary.get("perReceptionFP", 0.6)
-    stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 4)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     recs = stats.get("receiving_stats", {}).get("receptions", 0) if isinstance(stats.get("receiving_stats"), dict) else 0
     bonus = round(perRec * recs, 1)
     eq = f"{perRec}/rec × {recs} TE receptions"
@@ -3455,7 +3468,7 @@ def _computeMismatch(primary, ctx, cardPlayerId, eqId):
     perTdFP = primary.get("perTdFP", 5)
     bonusFP = primary.get("bonusFP", 8)
     tdThreshold = primary.get("tdThreshold", 2)
-    stats = _getRosterStatsAtPosition(ctx, ctx.cardPosition or 4)
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
     tds = _countPlayerTds(stats)
     perTdPayout = round(perTdFP * tds, 1)
     if tds >= tdThreshold:
@@ -3478,18 +3491,11 @@ def _computeSniper(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeBoomWeek(primary, ctx, cardPlayerId, eqId):
-    """FP scaling with how much roster player overperformed this week."""
+    """FP scaling with how much THIS CARD'S player overperformed this week."""
     if not ctx.gamePerformanceRatings or getattr(ctx, 'gamesActive', False):
         return EffectResult(equation="Waiting for games to complete")
-    pos = ctx.cardPosition or 1
-    pids = _getRosterPlayersByPosition(ctx, pos)
-    bestOver = 0
-    for pid in pids:
-        gameRating = ctx.gamePerformanceRatings.get(pid, 0)
-        baseRating = ctx.rosterPlayerRatings.get(pid, 60)
-        over = gameRating - baseRating
-        if over > bestOver:
-            bestOver = over
+    bestOver = (ctx.gamePerformanceRatings.get(cardPlayerId, 0)
+                - ctx.rosterPlayerRatings.get(cardPlayerId, 60))
     if bestOver <= 0:
         return EffectResult(equation="Did not overperform")
     # New FP path
@@ -3513,30 +3519,16 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
         if not ctx.gamePerformanceRatings or getattr(ctx, 'gamesActive', False):
             return EffectResult(equation="Waiting for games to complete")
         perPoint = primary["perPointUnder"]
-        pos = ctx.cardPosition or 1
-        pids = _getRosterPlayersByPosition(ctx, pos)
-        worstUnder = 0
-        for pid in pids:
-            gameRating = ctx.gamePerformanceRatings.get(pid, 0)
-            baseRating = ctx.rosterPlayerRatings.get(pid, 60)
-            under = baseRating - gameRating
-            if under > worstUnder:
-                worstUnder = under
+        worstUnder = (ctx.rosterPlayerRatings.get(cardPlayerId, 60)
+                      - ctx.gamePerformanceRatings.get(cardPlayerId, 0))
         if worstUnder > 0:
             floobits = int(perPoint * worstUnder)
             return EffectResult(floobits=floobits, equation=f"Underperformed — +{floobits} Floobits")
         return EffectResult(equation="Did not underperform")
     if not ctx.gamePerformanceRatings or getattr(ctx, 'gamesActive', False):
         return EffectResult(equation="Waiting for games to complete")
-    pos = ctx.cardPosition or 1
-    pids = _getRosterPlayersByPosition(ctx, pos)
-    worstUnder = 0
-    for pid in pids:
-        gameRating = ctx.gamePerformanceRatings.get(pid, 0)
-        baseRating = ctx.rosterPlayerRatings.get(pid, 60)
-        under = baseRating - gameRating
-        if under > worstUnder:
-            worstUnder = under
+    worstUnder = (ctx.rosterPlayerRatings.get(cardPlayerId, 60)
+                  - ctx.gamePerformanceRatings.get(cardPlayerId, 0))
     if worstUnder <= 0:
         return EffectResult(floobits=baseFloobits, equation=f"+{baseFloobits}F. Did not underperform")
     baseChance = min(0.85, worstUnder * 0.030 + 0.100)
@@ -3553,11 +3545,16 @@ def _computeDudInsurance(primary, ctx, cardPlayerId, eqId):
 
 # ── Escalating / Pace Effects ────────────────────────────────────────────────
 
-def _getPositionTds(ctx, position: int) -> int:
-    """Get TDs relevant to position from roster stats. Always returns int
+def _getPositionTds(ctx, position: int, cardPlayerId: int = 0) -> int:
+    """Get TDs relevant to position for the CARD'S OWN player. Always returns int
     so callers that iterate range(tds) don't choke on the float per-game
-    averages the projection context feeds in (e.g., 0.7 TDs/game)."""
-    stats = _getRosterStatsAtPosition(ctx, position)
+    averages the projection context feeds in (e.g., 0.7 TDs/game).
+
+    Position selects WHICH stat counts (passing / rushing / receiving / FGs);
+    cardPlayerId selects WHOSE. Falls back to the position lookup when no card
+    player is supplied, for any legacy caller."""
+    stats = (_getCardPlayerStats(ctx, cardPlayerId) if cardPlayerId
+             else _getRosterStatsAtPosition(ctx, position))
     raw = 0
     if position == 1:  # QB — passing TDs
         raw = stats.get("passing_stats", {}).get("tds", 0) if isinstance(stats.get("passing_stats"), dict) else 0
@@ -3566,17 +3563,24 @@ def _getPositionTds(ctx, position: int) -> int:
     elif position == 3:  # WR — receiving TDs
         raw = stats.get("receiving_stats", {}).get("rcvTds", 0) if isinstance(stats.get("receiving_stats"), dict) else 0
     elif position == 5:  # K — FGs made
-        fgMade, _, _, _ = _getKickerFgStats(ctx)
-        raw = fgMade
+        if cardPlayerId:
+            ks = stats.get("kicking_stats", {})
+            raw = ks.get("fgs", 0) if isinstance(ks, dict) else 0
+        else:
+            fgMade, _, _, _ = _getKickerFgStats(ctx)
+            raw = fgMade
     try:
         return int(round(float(raw)))
     except Exception:
         return 0
 
 
-def _getPositionYards(ctx, position: int) -> int:
-    """Get yards relevant to position from roster stats."""
-    stats = _getRosterStatsAtPosition(ctx, position)
+def _getPositionYards(ctx, position: int, cardPlayerId: int = 0) -> int:
+    """Get yards relevant to position for the CARD'S OWN player.
+
+    Position selects WHICH yardage counts; cardPlayerId selects WHOSE."""
+    stats = (_getCardPlayerStats(ctx, cardPlayerId) if cardPlayerId
+             else _getRosterStatsAtPosition(ctx, position))
     if position == 1:  # QB — passing yards
         return stats.get("passing_stats", {}).get("passYards", 0) if isinstance(stats.get("passing_stats"), dict) else 0
     if position == 2:  # RB — rushing yards
@@ -3599,7 +3603,7 @@ def _computeCrescendo(primary, ctx, cardPlayerId, eqId):
     baseChance, chanceStep = _CRESCENDO_POSITION_TUNING.get(pos, (20, 15))
 
     triggerLabel = "FGs" if pos == 5 else "TDs"
-    triggers = _getPositionTds(ctx, pos)
+    triggers = _getPositionTds(ctx, pos, cardPlayerId)
 
     if triggers <= 0:
         eq = f"+{baseFP} FP. 0 {triggerLabel}"
@@ -3680,7 +3684,7 @@ def _computeTraverse(primary, ctx, cardPlayerId, eqId):
     pos = ctx.cardPosition or 1
     yardStep, chancePerStep, yardType = _TRAVERSE_POSITION_TUNING.get(pos, (50, 8, "passing"))
 
-    yards = _getPositionYards(ctx, pos)
+    yards = _getPositionYards(ctx, pos, cardPlayerId)
     steps = int(yards // yardStep)
     baseChance = (primary.get("baseChance", 5) + steps * chancePerStep) / 100.0
     totalChance = min(0.97, baseChance + ctx.chanceBonus)
