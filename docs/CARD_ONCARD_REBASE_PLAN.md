@@ -272,6 +272,29 @@ genuinely selective rather than a rubber stamp, and it holds up beyond the singl
 the lineup experiment samples.
 
 ### DECISION — edition-scaled STATIC bars (owner, 2026-07-22, session 2)
+### The rating floor caps the risk (owner, 2026-07-22, session 2)
+
+High editions can ONLY depict high-rated players — `EDITION_THRESHOLDS`: holographic
+rating>=75, prismatic>=80, diamond>=90. So a weak lineup of powerful cards CANNOT EXIST:
+you can't put a prismatic card on a 60-rated player. Re-measuring the gate signal with
+the player pool restricted to each edition's eligible ratings drops prismatic from 182%
+to 106%; diamond can't even be tested (0 eligible TEs at rating>=90, so a full diamond
+lineup can't be built). The earlier overshoot was an artifact of synthesizing impossible
+cards onto weak players.
+
+What remains of the "overshoot" is the gate correctly gating a GOOD player's BAD WEEK —
+which is the spec ("high enough that the occasional bad game gates it"), not a balance
+bug. The signal metric conflated roster quality with single-week variance; the gate is
+SUPPOSED to respond to weekly performance, so a star's 0-yard week gating its card is the
+feature working. So we are NOT chasing a lower high-edition signal — the rating floor plus
+the intended bad-week gating already make it sound.
+
+Net: edition-scaled static bars, base easy -> diamond hard, are the model. The gate does
+most of its work at base/holo (any player eligible); at prismatic/diamond the rating floor
+already restricts the pool. Exact bars are a dial; magnitude tuning (Stage 3) is a second
+lever. Build it.
+
+
 
 Owner chose simplicity over the self-relative gate: a STATIC stat threshold per card,
 "low enough the player clears it most weeks, high enough a bad game gates it", with the
