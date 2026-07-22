@@ -271,6 +271,33 @@ bonus across six cards. That reads as dead, not challenging.
 genuinely selective rather than a rubber stamp, and it holds up beyond the single week
 the lineup experiment samples.
 
+### GATE MODEL CORRECTED (measured 2026-07-22, session 2)
+
+The earlier calibration below assumed a FIXED LEAGUE THRESHOLD per stat (e.g. "74+ rec
+yards"). Measured on the controlled substrate, that OVERSHOOTS badly — 149% / 195% /
+182% signal (base/holo/prismatic), stripping weak lineups to ~1-13 FP of bonus. A fixed
+league bar cleared 58% of the time league-wide is cleared FAR less than 58% by a
+consistently-weak player, so weak lineups almost never fire. Same failure as the
+positional-average gate.
+
+**The gate must be SELF-RELATIVE**: the card player's week stat vs THAT PLAYER'S OWN
+season average of that stat (>= 0.75x), NOT a league threshold. Measured signal
+118% / 103% / 113% — matches the own-average-FP gate and keeps balance, because even a
+weak player clears their own average ~half the time.
+
+This keeps BOTH goals:
+- the gate STAT still varies per card (rush yards / receptions / YAC / completions / FP)
+  → diversity, the owner's vision;
+- self-relative normalisation → ~100-115% roster signal → balance.
+
+Card text becomes "activates on a strong rushing game" / "when they beat their receiving
+average", NOT a fixed number. So the per-stat percentile calibration table below is the
+WRONG model and is retained only as a record of what was tried. The live data needed is
+each player's per-stat SEASON AVERAGE (like eminence's playerSeasonFPPerGame, but
+per-stat), computed live at calc time — thresholds are never frozen at mint.
+
+Probe: `scratchpad/probe_statgate.py` (session-local).
+
 ### Varying the gate STAT (owner, 2026-07-22)
 
 *"the stat that gates the effect should vary, like one card it could be FP production,
