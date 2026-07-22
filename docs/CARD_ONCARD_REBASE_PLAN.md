@@ -271,6 +271,34 @@ bonus across six cards. That reads as dead, not challenging.
 genuinely selective rather than a rubber stamp, and it holds up beyond the single week
 the lineup experiment samples.
 
+### COLD START — the early-season average (measured 2026-07-22, session 2)
+
+The self-relative gate divides by the player's own season average, which is undefined
+in week 1 and noisy on 1-2 games. Measured pass rate by week (target ~58%):
+
+| week | current-only | prior-only | blend |
+|---|---|---|---|
+| 1 | 100% | 70% | 70% |
+| 2 | 65% | 65% | 66% |
+| 3 | 64% | 70% | 66% |
+| 4-7 | 55-65% | 58-70% | 62-65% |
+
+Current-season-ONLY fails open in week 1 (no average → the gate does nothing) and is
+noisy for a few weeks after. **Use a shrinkage blend**: the player's PRIOR-season
+average as a prior, pulled toward the current-season average as games accumulate
+(`w = gamesSoFar / (gamesSoFar + K)`, K≈3). Week 1 leans entirely on last season, so no
+dead week and no swing — the first eight weeks stay in a tight 62-66% band.
+`PlayerSeasonStats` is season-keyed, so the prior is already available.
+
+Edges:
+- **Rookies have no prior season** → fail-open in week 1 (their card fires their first
+  game), then build their own average within a game or two. Optionally seed from a
+  rating/positional baseline instead. Minor.
+- The blend runs slightly HOT (62-66% vs 58%), so the 0.75 ratio tightens a touch at
+  tuning time — a calibration note, not a cold-start issue.
+
+Probe: `scratchpad/probe_coldstart.py` (session-local).
+
 ### GATE MODEL CORRECTED (measured 2026-07-22, session 2)
 
 The earlier calibration below assumed a FIXED LEAGUE THRESHOLD per stat (e.g. "74+ rec
