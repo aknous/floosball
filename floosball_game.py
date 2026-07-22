@@ -10075,6 +10075,15 @@ class Game:
         # pick the best expected OUTCOME instead. A team already LEADING in the top half has
         # no such cliff (the opponent still bats, so it's purely a margin call) and keeps
         # using the heuristic.
+        # WALK-OFF: batting last in the final at-bat, a made conversion that takes the
+        # LEAD ends the game on the spot — whatever tries remain, because a home lead in
+        # the bottom half is `checkEarlyEnd`. So take the MOST MAKEABLE rung that wins;
+        # reaching higher only buys points that can never matter. Without this a team
+        # that tied it with a touchdown fell through to the eagerness heuristic below
+        # and gambled on a far rung when the 2-pt already won the game.
+        _walkOff = self._walkOffConversion(scoringTeam, goRungs, fallback, deficit)
+        if _walkOff is not None:
+            return _walkOff
         if self.format.isLastScoringChance(self, scoringTeam):
             if deficit >= 0 or getattr(self, '_inningsHalf', 'top') == 'bottom':
                 return self._lastChanceConversion(scoringTeam, goRungs, fallback, deficit)
@@ -10131,6 +10140,37 @@ class Game:
                             + aggressNorm * INNINGS_LASTCHANCE_LEAD_AGGR_SPAN))
         pct *= (0.4 + 0.6 * p)   # and only if the rung is actually makeable
         return top if _random.random() < pct else safe
+
+    def _walkOffConversion(self, scoringTeam, goRungs: list, fallback: dict, deficit: float):
+        """The most makeable conversion that WINS IT OUTRIGHT, or None if this isn't a
+        walk-off spot.
+
+        Batting last in the final (or an extra) at-bat, any conversion that takes the
+        lead ends the game immediately — `InningsFormat.checkEarlyEnd` walks it off the
+        moment the home side leads in the bottom half. Tries remaining are irrelevant:
+        the game is over before they'd be used. So the only thing that matters is the
+        ODDS of converting, not the size of the rung."""
+        if getattr(self.format, 'key', '') != 'innings':
+            return None
+        if getattr(self, '_inningsHalf', 'top') != 'bottom':
+            return None
+        try:
+            if int(getattr(self, '_inningsNumber', 1)) < self.format._innings(self):
+                return None
+        except Exception:
+            return None
+
+        cands = list(goRungs) + ([fallback] if fallback not in goRungs else [])
+
+        def prob(r):
+            if r.get('kind') == 'kick':
+                return self._estimateKickConversionProb(scoringTeam)
+            return self._estimateConversionProb(scoringTeam, r.get('distance', 2))
+
+        winners = [r for r in cands if float(r.get('points', 0)) > deficit]
+        if not winners:
+            return None      # nothing wins it here — defer to the normal policy
+        return max(winners, key=prob)
 
     def _lastChanceConversion(self, scoringTeam, goRungs: list, fallback: dict, deficit: float) -> dict:
         """Innings, last try of the final at-bat: the at-bat ENDS here, so take the option
