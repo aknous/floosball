@@ -41,11 +41,15 @@ Stage 3 magnitude tuning.
 generated from a position->stat table (stays calibrated automatically); and Phase 5c
 (`full_roster`, `all_in` — both still mintable, both need new premises on top of a gate).
 
-**Harness:** the probes live in the session scratchpad, NOT the repo —
-`probe_controlled.py` (the confound-free instrument), `probe_gate.py` (variant compare),
-`probe_gatestats.py` (threshold calibration), `probe_coupling.py`. If they're gone,
-`docs/CARD_ONCARD_REBASE_PLAN.md` has enough to rebuild them; the two methodology traps
-below are the things that cost real time.
+**Harness (now in the repo):**
+- `simcheck_cards_fusion.py` — the confound-free instrument. Synthesizes templates so the
+  SAME effect set is played by a strong and a weak lineup; only player quality varies.
+- `simcheck_gate_variants.py` — compares gate variants. Derives the already-on-card
+  effect set from source, so it stays correct as more effects are re-based.
+- `simcheck_gate_calibration.py` — per-stat gate thresholds at a target pass rate.
+
+Run as `PROBE_EDITION=prismatic PROBE_TRIALS=40 PYTHONPATH=. .venv/bin/python <script>`.
+`simcheck_cards_v3.py` is superseded — it is non-functional under fusion.
 **Owner decision (2026-07-22):** "We need to look at every effect and see what still
 makes sense. It's a big rework but necessary. In the interim we can just work on the
 current position-specific cards, then move to the roster-aggregate cards and think
