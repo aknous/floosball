@@ -9472,6 +9472,11 @@ class Game:
                 'hoopPair': getattr(self.play, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                 'conversionPoints': getattr(self.play, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                 'isTouchdown': getattr(self.play, 'isTd', False),
+                # Contested Scoring beat 1: the ball reached the end zone but the TD
+                # isn't banked until the contest resolves, so isTd is still False here.
+                # Without this the frontend can't tell a provisional score from a play
+                # that died short, and drew the trajectory stopping before the goal line.
+                'isProvisionalScore': getattr(self.play, 'isProvisionalScore', False),
                 'isTurnover': (getattr(self.play, 'isFumbleLost', False) or getattr(self.play, 'isInterception', False)),
                 'isSack': getattr(self.play, 'isSack', False),
                 'scoreChange': getattr(self.play, 'scoreChange', False),
