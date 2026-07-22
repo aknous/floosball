@@ -182,6 +182,53 @@ roster is collecting. Levers to test next, in order:
 2. Scale magnitude down specifically at holographic+, where the signal loss concentrates.
 3. Re-shape the factor as a GATE on the whole card rather than a multiplier on part of it.
 
+## The fix: gate the card on its own player (owner design, 2026-07-22)
+
+Owner: *"if a card already keys off the card player's performance, then we don't need to
+do anything to it. if the card keys off a different metric or is just a boost like some
+diamond cards, then the card player needs to clear a threshold first before the effect
+on the card actually goes into effect. some can even scale to the card player's
+production."*
+
+- **21 effects** already key off the card player (the Stage 1 re-based set) — leave alone.
+- **105 effects** key off something else (roster totals, favourite team, economy, chance)
+  or are flat boosts — these get a **gate**: below the bar the card pays NOTHING.
+
+A gate, not a multiplier. The multiplier experiment failed because a 0.25x floor still
+paid weak rosters; a gate zeroes them.
+
+Measured on the controlled substrate (same effect set on a strong and a weak lineup,
+40 random sets per edition, only player quality varying). *signal* = scoreRatio /
+playerRatio; 100% = cards fully preserve roster choice.
+
+| variant | base | holographic | prismatic |
+|---|---|---|---|
+| none (current) | 49% | 32% | 31% |
+| **own avg x0.75 gate** | **88%** | **87%** | **88%** |
+| pos avg x0.75 gate | 109% | 145% | 134% |
+| pos avg ramp 0->1 | 79% | 71% | 69% |
+
+**Own-average x0.75 is the standout** — ~88% signal, and near-identical across all three
+editions, so the fix is not edition-dependent (the problem was). Weak-lineup card bonus
+drops from 90.4 to 23.2 at prismatic.
+
+The positional gate OVERSHOOTS (134-145%): it strips weak lineups to ~2 FP of bonus,
+which over-punishes and would feel dead in the hand. The ramp is gentler but leaves
+too much carry.
+
+### Open questions before building
+
+- **`pos avg x0.75` and `x1.00` returned identical numbers** — with a 12.8x lineup gap
+  both thresholds partition the same way, so this substrate cannot distinguish them.
+  Needs a mid-strength lineup to separate.
+- **Single week (14).** The "weak lineup" is the bottom 20% of performers THAT WEEK,
+  which conflates *bad players* with *good players having a bad week*. The two gate
+  bases punish different things: own-average punishes a bad week (a consistently poor
+  player still clears their own low bar ~half the time), positional punishes bad
+  players outright. Re-run across several weeks before committing to a base.
+- **Which effects should SCALE rather than gate** (owner: "some can even scale") — a
+  ramp reads better for continuous effects (FPx, per-TD payouts) than a cliff.
+
 ## Stage 3 — magnitude tuning
 
 Rebuild the harness first (see below), then tune to the parity target.
