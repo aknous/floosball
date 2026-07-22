@@ -1,7 +1,51 @@
 # Card Effects — On-Card Player Re-base
 
 **Branch:** `feature/fantasy-cards-fusion`
-**Status:** Stage 1 in progress
+**Status:** Stage 1 DONE · gate design validated · Stage 2 not started
+
+## WHERE WE ARE (paused 2026-07-22)
+
+Committed on `feature/fantasy-cards-fusion`, pushed through `081cb86`; the five
+commits below are local-only unless pushed since:
+
+| commit | what |
+|---|---|
+| `023c0ef` | Stage 1 — 23 position-specific effects re-based onto the card player (code) |
+| `cebbcc2` | measured how much cards carry weak rosters |
+| `8135e08` | gate design measured |
+| `511a333` | corrected results + position-encoding fix |
+| `e1c3cb8` | `docs/CARD_GATE_ASSIGNMENT.md`, the 105-effect worklist |
+
+**Settled:**
+- Effects trigger off the card's own player. 21 already do; 105 need a **gate** — the
+  card player must clear a stat threshold before the effect fires (a gate, NOT a
+  multiplier; the multiplier's 0.25x floor still paid weak rosters and failed).
+- Gate base: **card player's week FP >= 0.75 x their own season average**. Takes roster
+  signal from 64/33/33% (base/holo/prismatic) to 121/102/113%. Passes 58% of all
+  player-weeks. The `0.75` is the dial for the overshoot.
+- The gate STAT should VARY per card (FP, yards, completions, YAC) for diversity,
+  authored as percentiles calibrated to that same 58% pass rate so the stat is flavour
+  not power. Calibration table below.
+- Roster-aggregate effects are KEPT (they're the deckbuilding layer) — they get gates,
+  not deletion.
+
+**NEXT UP — pick one:**
+1. **Group A re-base-or-gate calls** (42 effects). Re-basing onto the card player removes
+   the need for a gate; but `garbage_time` and `hedge` lose their premise if re-based.
+2. **Assign gate stats to groups C + F** (31 effects) — the purest carry, easiest calls,
+   biggest win.
+Then: build the gate mechanism itself (constants + calculator hook + card text), then
+Stage 3 magnitude tuning.
+
+**Still open:** whether gate stats are hand-authored per effect (reads better) or
+generated from a position->stat table (stays calibrated automatically); and Phase 5c
+(`full_roster`, `all_in` — both still mintable, both need new premises on top of a gate).
+
+**Harness:** the probes live in the session scratchpad, NOT the repo —
+`probe_controlled.py` (the confound-free instrument), `probe_gate.py` (variant compare),
+`probe_gatestats.py` (threshold calibration), `probe_coupling.py`. If they're gone,
+`docs/CARD_ONCARD_REBASE_PLAN.md` has enough to rebuild them; the two methodology traps
+below are the things that cost real time.
 **Owner decision (2026-07-22):** "We need to look at every effect and see what still
 makes sense. It's a big rework but necessary. In the interim we can just work on the
 current position-specific cards, then move to the roster-aggregate cards and think
