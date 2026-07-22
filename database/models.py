@@ -153,7 +153,7 @@ class Player(Base):
     preferred_number: Mapped[Optional[int]] = mapped_column(Integer)
     tier: Mapped[Optional[str]] = mapped_column(String(20))
     team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"))
-    position: Mapped[Optional[int]] = mapped_column(Integer)  # Enum: QB=0, RB=1, WR=2, TE=3, K=4
+    position: Mapped[Optional[int]] = mapped_column(Integer)  # Enum: QB=1, RB=2, WR=3, TE=4, K=5 (1-based, matches floosball_player.Position and CardTemplate.position)
     seasons_played: Mapped[int] = mapped_column(Integer, default=0)
     term: Mapped[Optional[int]] = mapped_column(Integer)
     term_remaining: Mapped[Optional[int]] = mapped_column(Integer)

@@ -50,8 +50,11 @@ Position-locked slots. Base = 6 (mirrors the current fantasy roster's 6), + FLEX
 | **FLEX** | any position | **MVP card equipped** (permanent, season) **OR Accession powerup** (temp) |
 
 - Validation: a card's `template.position` must match the slot (FLEX accepts any).
-  Mind the **position encoding mismatch**: `CardTemplate.position` is 1-based (QB=1…K=5),
-  `Player.position` is 0-based (QB=0…K=4). Reuse `_SLOT_POSITION_MAP` (`main.py:7706`) and
+  Position encoding is **uniformly 1-based** (QB=1…K=5): `CardTemplate.position`, the
+  `floosball_player.Position` enum, and the `players.position` DB column all agree.
+  (An earlier draft of this line claimed `Player.position` was 0-based — it is not, and
+  the stale `database/models.py` comment saying so has been corrected.)
+  Reuse `_SLOT_POSITION_MAP` (`main.py:7706`) and
   `_POSITION_CODE_TO_INT` (`cardManager.py:143`).
 - Keep the existing **no-duplicate-effect** rule (`main.py:10041`, max 1 card per
   `effectName`) — still sensible with 6–7 cards.

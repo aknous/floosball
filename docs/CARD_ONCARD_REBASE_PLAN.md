@@ -199,22 +199,61 @@ paid weak rosters; a gate zeroes them.
 
 Measured on the controlled substrate (same effect set on a strong and a weak lineup,
 40 random sets per edition, only player quality varying). *signal* = scoreRatio /
-playerRatio; 100% = cards fully preserve roster choice.
+playerRatio; 100% = cards exactly preserve roster choice, below = cards carry weak
+rosters, above = cards amplify roster choice.
 
 | variant | base | holographic | prismatic |
 |---|---|---|---|
-| none (current) | 49% | 32% | 31% |
-| **own avg x0.75 gate** | **88%** | **87%** | **88%** |
-| pos avg x0.75 gate | 109% | 145% | 134% |
-| pos avg ramp 0->1 | 79% | 71% | 69% |
+| none (current) | 64% | 33% | 33% |
+| **own avg x0.75 gate** | **121%** | **102%** | **113%** |
+| pos avg x0.75 gate | 148% | 192% | 190% |
+| pos avg ramp 0->1 | 106% | 77% | 79% |
 
-**Own-average x0.75 is the standout** — ~88% signal, and near-identical across all three
-editions, so the fix is not edition-dependent (the problem was). Weak-lineup card bonus
-drops from 90.4 to 23.2 at prismatic.
+**Own-average x0.75 is the pick.** It takes holographic and prismatic from 33% to
+102-113%, and weak-lineup card bonus at prismatic falls from 143.6 to 32.8. It lands
+slightly ABOVE parity, i.e. cards now mildly amplify roster choice instead of erasing
+it, which is the right side of 100% to sit on. The `0.75` ratio is the dial to trim the
+overshoot (lower ratio = more cards fire = closer to 100%).
 
-The positional gate OVERSHOOTS (134-145%): it strips weak lineups to ~2 FP of bonus,
-which over-punishes and would feel dead in the hand. The ramp is gentler but leaves
-too much carry.
+The positional gate overshoots wildly (148-192%), stripping a weak lineup to ~2 FP of
+bonus across six cards. That reads as dead, not challenging.
+
+**Multi-week validation:** across EVERY player-week of the season (not just week 14),
+`weekFP >= 0.75 x own season average` passes **58%** of the time. So the gate is
+genuinely selective rather than a rubber stamp, and it holds up beyond the single week
+the lineup experiment samples.
+
+### Varying the gate STAT (owner, 2026-07-22)
+
+*"the stat that gates the effect should vary, like one card it could be FP production,
+others could be total yards, or completions, or YAC. this instantly diversifies the
+available cards."*
+
+Hazard: uneven difficulty makes two cards unequal for reasons unrelated to their
+effect. Fix — author gates as PERCENTILES of the real stat distribution, calibrated to
+the same 58% pass rate. The stat becomes flavour, not power. Season-13 values:
+
+| position | gate stat @ 58-60% pass |
+|---|---|
+| QB | 217 pass yards · 28 completions · 43 attempts · 1 pass TD |
+| RB | 77 rush yards · 21 carries · 19 longest run |
+| WR | 74 rec yards · 9 receptions · 23 YAC · 10 targets · 18 longest catch |
+| TE | 45 rec yards · 7 receptions · 15 YAC |
+| K | 2 FGs made · 55 FG yards · 41 longest FG |
+
+**TD-count and 20+-play stats cannot be calibrated to 58%** — the distribution is too
+coarse (median 0, so any "1+" bar sits well under the target rate). They make good
+HIGH-difficulty gates for big-ceiling effects, not standard ones. Thresholds are
+season-relative and want recomputing per season, like the eminence data.
+
+### Harness bug found (cost one wrong answer)
+
+`players.position` is **1-BASED** (QB=1..K=5), matching `floosball_player.Position` and
+`CardTemplate.position`. The `database/models.py` comment claimed 0-based and
+`FANTASY_CARDS_FUSION_PLAN.md` repeated it; both are now corrected.
+`FANTASY_FUSION_PROGRESS.md` had it right all along ("uniformly 1-based"). The probes
+trusted the stale comment and added 1, so every player landed in the wrong slot. The
+pre-fix numbers (49/32/31% current, 88% gated) are superseded by the table above.
 
 ### Open questions before building
 
