@@ -6842,7 +6842,9 @@ class Game:
                             # inserted an inning marker (a batting change, or an extended try)
                             # — that covers the transition, so a second marker is noise.
                             _marked = getattr(self, '_inningsMarked', False)
+                            _pending = getattr(self, '_inningsMarkerEvent', None)
                             self._inningsMarked = False
+                            self._inningsMarkerEvent = None
                             if not _marked:
                                 nextTryEvent = {
                                     'text': f'{self.offensiveTeam.abbr} · next try',
@@ -6854,6 +6856,18 @@ class Game:
                                 self.broadcastGameState(includeLastPlay=False,
                                                         isPossessionChange=True,
                                                         eventMessage=nextTryEvent)
+                            elif _pending is not None:
+                                # The batting-change / try-extended marker was inserted into
+                                # the feed by InningsFormat.possessionReceiver, which has no
+                                # broadcast of its own — and its `_inningsMarked` flag then
+                                # suppressed the "next try" marker that WOULD have broadcast.
+                                # So the transition emitted nothing over the socket and the
+                                # line only appeared once the game was reopened and the feed
+                                # refetched over REST. Broadcast the marker the format
+                                # actually inserted.
+                                self.broadcastGameState(includeLastPlay=False,
+                                                        isPossessionChange=True,
+                                                        eventMessage=_pending)
                         else:
                             # Normal kickoff
                             kickoffEvent = {
@@ -9436,7 +9450,18 @@ class Game:
                 'inningTry': getattr(self.play, 'inningTry', None),
                 'frame': getattr(self.play, 'frame', None),
                 'frameClock': getattr(self.play, 'frameClock', None),
-                'timeRemaining': self.formatTime(self.gameClockSeconds),
+                # The PLAY's own clock, not the live one. `quarter` above already comes
+                # from the play, and mixing the two sources corrupted any re-emitted
+                # play: the backend re-sends a play at quarter boundaries and turnovers,
+                # and the re-send used to carry the CURRENT clock, so the frontend's
+                # merge stamped an old play with "now". On the win-probability chart
+                # (x = elapsed time, drawn in playNumber order) that play jumped to the
+                # live edge and the following plays drew back to their real times — the
+                # line running to the end mid-game and then going backwards. The REST
+                # play list always used the play's own value, which is why reopening the
+                # game fixed it.
+                'timeRemaining': (getattr(self.play, 'timeRemaining', None)
+                                  or self.formatTime(self.gameClockSeconds)),
                 'down': self.play.down if hasattr(self.play, 'down') else self.down,
                 'distance': self.play.yardsTo1st if hasattr(self.play, 'yardsTo1st') else self.yardsToFirstDown,
                 'yardLine': self.play.yardLine if hasattr(self.play, 'yardLine') else self.yardLine,
