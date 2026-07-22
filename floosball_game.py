@@ -4263,53 +4263,6 @@ class Game:
                     self.play.kneel()
                     return
 
-            # ── Frames: drain out a frame you're WINNING ──────────────────────────
-            # Each frame is its own mini-game — whoever outscores the other inside it
-            # takes the frame (+1), and a blowout frame is worth exactly the same as a
-            # squeaker. So once ahead IN THE CURRENT FRAME with the frame running out,
-            # running more plays can only risk the frame; kneel it out and bank it.
-            # Deliberately NOT gated on Q4: frames end on their own boundaries anywhere
-            # in the match, and unlike the game-end kneel above this doesn't end the
-            # match — play resumes in the next frame.
-            _frameSecs = self._frameSecsRemaining()
-            _frameDiff = self._frameScoreDiff()
-            if (_frameSecs is not None and _frameDiff is not None and _frameDiff > 0
-                    and self.yardsToSafety > 2):
-                _availableKneels = self.gameRules.downsPerSeries - self.down
-                # A kneel can't outlast the FRAME if it can't outlast the possession
-                # budget / drive clock either — same lockout trap as the game-end kneel,
-                # measured against the frame deadline rather than the game clock.
-                _chessSecs = self._chessClockOffenseSecs()
-                _chessOk = (_chessSecs is None) or (_chessSecs >= _frameSecs)
-                _driveOk = True
-                if self._driveClockActive():
-                    if getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'seconds':
-                        _driveOk = self.driveClockRemaining >= _frameSecs
-                    else:
-                        import math as _math
-                        _need = min(_availableKneels, max(1, _math.ceil(
-                            _frameSecs / max(1, self.gameRules.kneelDrainSeconds))))
-                        _driveOk = self.driveClockRemaining >= _need
-                # Opponent timeouts only matter while they could still answer inside the
-                # frame; the margin that counts is the frame's, not the running total.
-                _oppTos = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
-                _maxComeback = 8 if _frameSecs <= 60 else 16
-                _effTos = _oppTos if _frameDiff <= _maxComeback else 0
-                _toadKneels = min(_effTos, _availableKneels)
-                _freeKneels = _availableKneels - _toadKneels
-                _drainable = _toadKneels * 4 + _freeKneels * self.gameRules.kneelDrainSeconds
-                if _chessOk and _driveOk and _drainable >= _frameSecs:
-                    self.play.insights['clockMgmt'] = {
-                        'decision': 'kneel',
-                        'reason': 'Leading the frame — kneel out the rest of it',
-                        'frameSecondsRemaining': _frameSecs,
-                        'frameMargin': _frameDiff,
-                        'drainableSeconds': _drainable,
-                        'oppTimeouts': _oppTos,
-                    }
-                    self.play.kneel()
-                    return
-
             # Coach game-management quality gates all situational decisions below.
             # Good coaches (IQ~1.0) almost always make the right call.
             # Bad coaches (IQ~0.0) frequently miss the correct situational play.
