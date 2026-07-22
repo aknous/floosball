@@ -44,9 +44,13 @@ def _rules():
 
 
 def chooseRung(*, deficit, half='bottom', offense='home', tries=2, inning=3,
-               continues=0, trials=40):
+               continues=0, trials=40, topLevel=False):
     """Distribution of rung point-values the REAL chooser picks, for a team that has
-    just scored (TD already banked) and now trails by `deficit`."""
+    just scored (TD already banked) and now trails by `deficit`.
+
+    topLevel=True drives `_chooseConversion` (the whole decision including the
+    last-chance gate) rather than `_lastChanceConversion` directly, so the gating
+    itself is under test."""
     counts = {}
     for _ in range(trials):
         s = Scenario(gameRules=_rules())
@@ -58,10 +62,13 @@ def chooseRung(*, deficit, half='bottom', offense='home', tries=2, inning=3,
         g = s.g
         g._inningsNumber = inning; g._inningsHalf = half; g._inningsTries = tries
         g._inningsContinues = continues
-        rungs = g._conversionRungs()
-        goRungs = [r for r in rungs if r['kind'] == 'go']
-        fallback = g._forcedGoRung(g.offensiveTeam, goRungs)
-        pick = g._lastChanceConversion(g.offensiveTeam, goRungs, fallback, float(deficit))
+        if topLevel:
+            pick = g._chooseConversion(g.offensiveTeam)
+        else:
+            rungs = g._conversionRungs()
+            goRungs = [r for r in rungs if r['kind'] == 'go']
+            fallback = g._forcedGoRung(g.offensiveTeam, goRungs)
+            pick = g._lastChanceConversion(g.offensiveTeam, goRungs, fallback, float(deficit))
         pts = float(pick['points'])
         counts[pts] = counts.get(pts, 0) + 1
     return counts
@@ -105,6 +112,29 @@ print("4. At the continuation cap a made top rung no longer extends the try")
 c = chooseRung(deficit=8, continues=INNINGS_MAX_CONTINUATIONS, trials=30)
 expect(f"cap reached → free to chase points, not forced to the top  {c}", len(c) >= 1)
 expect("cap reached → still returns a legal rung", all(p > 0 for p in c))
+
+# ── 5. SCOPE: only a true last try is forced. Earlier tries keep the normal
+#    risk heuristic, which can and should pick a lesser rung.
+print("5. Scope — earlier tries in the LAST inning are NOT forced to the top rung")
+lastTryPicks = chooseRung(deficit=8, tries=2, trials=60, topLevel=True)
+expect(f"try 3 of 3 (the true last try) → top rung only  {lastTryPicks}",
+       set(lastTryPicks) == {TOP})
+for tries, label in ((0, 'try 1 of 3'), (1, 'try 2 of 3')):
+    picks = chooseRung(deficit=8, tries=tries, trials=60, topLevel=True)
+    expect(f"{label}, down 8 → NOT forced to the top; lesser rungs still chosen  {picks}",
+           len(picks) > 1 or set(picks) != {TOP})
+
+# and the same in the TOP half of the last inning
+picks = chooseRung(deficit=8, tries=1, half='top', offense='away', trials=60, topLevel=True)
+expect(f"top half, try 2 of 3, down 8 → not forced  {picks}",
+       len(picks) > 1 or set(picks) != {TOP})
+
+# ── 6. SCOPE: earlier INNINGS are untouched at every try ─────────────────
+print("6. Scope — earlier innings are untouched, including their last try")
+for inning in (1, 2):
+    picks = chooseRung(deficit=8, tries=2, inning=inning, trials=60, topLevel=True)
+    expect(f"inning {inning}, last try, down 8 → not forced  {picks}",
+           len(picks) > 1 or set(picks) != {TOP})
 
 print()
 if failures:
