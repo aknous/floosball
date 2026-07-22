@@ -10061,9 +10061,32 @@ class Game:
 
         best = max(cands, key=lambda r: (value(r), prob(r)))
         if value(best) <= 0:
-            # Nothing on the board even reaches a tie — chase the most likely points.
+            # Nothing on the board even reaches a tie, so EVERY outcome that ends the
+            # at-bat is a loss. A made top rung doesn't consume the try, so it is the
+            # only line that survives to score again — take it whatever the odds.
+            # Chasing expected points here picks a rung that loses whether it converts
+            # or not (down 8 with 3/4/5 rungs, 4 x 0.5 beats 5 x 0.35 on points, and
+            # both leave the team behind with the at-bat over).
+            keepAlive = self._continuationRung(goRungs)
+            if keepAlive is not None:
+                return keepAlive
             best = max(cands, key=lambda r: (float(r.get('points', 0)) * prob(r), prob(r)))
         return best
+
+    def _continuationRung(self, goRungs: list):
+        """The rung whose make would EXTEND the at-bat (innings continuation), or None.
+
+        Mirrors the gate in the conversion resolver: innings only, the single top-value
+        'go' rung, continuation enabled, and the per-at-bat safety cap not yet reached.
+        Past the cap a made top rung consumes the try like anything else, so there is
+        nothing to keep alive."""
+        from constants import INNINGS_CONTINUATION_ENABLED, INNINGS_MAX_CONTINUATIONS
+        if not (INNINGS_CONTINUATION_ENABLED and goRungs
+                and getattr(self.format, 'key', '') == 'innings'):
+            return None
+        if getattr(self, '_inningsContinues', 0) >= INNINGS_MAX_CONTINUATIONS:
+            return None
+        return max(goRungs, key=lambda r: float(r['points']))
 
     # ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
     def _contestedScoringActive(self) -> bool:
