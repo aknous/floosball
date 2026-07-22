@@ -1184,21 +1184,31 @@ CONTEST_TYPE_LABELS = {t['key']: t['label'] for t in CONTEST_TYPES}
 # 'series' = refills on each first down). Expire before scoring (or a first down,
 # in series mode) = turnover on downs. Off by default; a Cores vote picks a PRESET
 # (each a full {enabled, unit, reset, limit} bundle — the compound-rule vote).
-DRIVE_CLOCK_DEFAULT_LIMIT = {"seconds": 120, "plays": 6}
+DRIVE_CLOCK_DEFAULT_LIMIT = {"seconds": 120, "plays": 8}
 # Tuned against the clock-management behavior: when the drive clock is low the
 # offense hurries up (~17s/play instead of ~40s), so the seconds limits are kept
 # tight enough to still bite. plays/series is deliberately OMITTED — a snap counter
 # that refills on each first down is just the down system (N tries to convert).
+#
+# Limits are set so the clock ends roughly 1 drive in 7 rather than dominating the
+# down system. Measured on live games the original 6-plays and 45s/series presets
+# ended 27% and 32% of all drives — at 45s/series the clock killed as many drives as
+# PUNTS did. Both were structurally too tight: 6 snaps allows at most ONE first down
+# before expiry, and 45s is barely two hurry-up snaps (DRIVE_CLOCK_SECS_PER_SNAP=18),
+# so it forced permanent hurry-up and expired anyway. Re-measured with
+# `tune_drive_clock.py`: 6 plays 26% -> 8 plays 10%, 45s/series 51% -> 70s 17%.
+# 120s/possession is left alone — it already sits at/under target on both the local
+# sweep (9%) and live games (19%), and loosening it to 150s made it nearly inert (5%).
 DRIVE_CLOCK_PRESETS = [
     {"key": "dc_120s_possession", "label": "120 seconds, whole drive",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
                "driveClockReset": "possession", "driveClockLimit": 120}},
-    {"key": "dc_45s_series", "label": "45 seconds, resets each first down",
+    {"key": "dc_70s_series", "label": "70 seconds, resets each first down",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "seconds",
-               "driveClockReset": "series", "driveClockLimit": 45}},
-    {"key": "dc_6plays_possession", "label": "6 plays, whole drive",
+               "driveClockReset": "series", "driveClockLimit": 70}},
+    {"key": "dc_8plays_possession", "label": "8 plays, whole drive",
      "patch": {"driveClockEnabled": True, "driveClockUnit": "plays",
-               "driveClockReset": "possession", "driveClockLimit": 6}},
+               "driveClockReset": "possession", "driveClockLimit": 8}},
 ]
 # Wire the presets into the vote candidate (declared above with presets=None to
 # avoid a forward-reference).

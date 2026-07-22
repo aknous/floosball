@@ -4262,6 +4262,7 @@ class Game:
                     }
                     self.play.kneel()
                     return
+
             # Coach game-management quality gates all situational decisions below.
             # Good coaches (IQ~1.0) almost always make the right call.
             # Bad coaches (IQ~0.0) frequently miss the correct situational play.
@@ -6925,6 +6926,14 @@ class Game:
                 self.format.awardFrames(self)
                 self._frameBoundaryReset()
 
+                # This loop's condition (which tests checkEarlyEnd) was evaluated BEFORE
+                # the award above, so a frame that CLINCHES the match here would let one
+                # more play run in the next frame before the outer loop noticed — a match
+                # won 4-0 of 6 showed a play in frame 5. Re-check now that frames-won is
+                # settled. No-op for every other format (checkEarlyEnd defers with None).
+                if self.format.checkEarlyEnd(self) is True:
+                    break
+
                 # Create new play (after any possession flip from onside recovery)
                 self.play = Play(self)
 
@@ -9472,6 +9481,11 @@ class Game:
                 'hoopPair': getattr(self.play, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                 'conversionPoints': getattr(self.play, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                 'isTouchdown': getattr(self.play, 'isTd', False),
+                # Contested Scoring beat 1: the ball reached the end zone but the TD
+                # isn't banked until the contest resolves, so isTd is still False here.
+                # Without this the frontend can't tell a provisional score from a play
+                # that died short, and drew the trajectory stopping before the goal line.
+                'isProvisionalScore': getattr(self.play, 'isProvisionalScore', False),
                 'isTurnover': (getattr(self.play, 'isFumbleLost', False) or getattr(self.play, 'isInterception', False)),
                 'isSack': getattr(self.play, 'isSack', False),
                 'scoreChange': getattr(self.play, 'scoreChange', False),
@@ -9919,6 +9933,13 @@ class Game:
         if (INNINGS_CONTINUATION_ENABLED and goRungs
                 and getattr(self.format, 'key', '') == 'innings'):
             return self._chooseInningsConversion(scoringTeam, goRungs, fallback)
+        # Frames: when the frames finish LEVEL the match falls to the total-points
+        # tiebreak, so in the final frame the exact points margin is the whole game.
+        # Returns None to defer to the standard policy whenever points aren't decisive.
+        if goRungs and getattr(self.format, 'key', '') == 'frames':
+            _framesPick = self._chooseFramesConversion(scoringTeam, goRungs, fallback)
+            if _framesPick is not None:
+                return _framesPick
         if self.currentQuarter not in (3, 4) or not goRungs:   # Q1-Q2 / OT: the safe kick (or forced go-rung)
             return fallback
         scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
@@ -9956,6 +9977,64 @@ class Game:
         aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         pct = max(0.05, min(0.95, desire + aggressNorm * 0.15))
         return target if random.random() < pct else fallback
+
+    def _chooseFramesConversion(self, scoringTeam: FloosTeam.Team, goRungs: list, fallback: dict):
+        """Frames post-TD decision, or None to defer to the standard policy.
+
+        Frames is decided by FRAMES WON; total points only matter as the tiebreak when
+        the frames finish LEVEL (`FramesFormat.winnerSide`). So in the final frame, a
+        team that has just levelled the frames is playing a pure points game — and the
+        standard "you're within one score, take the kick" chart is exactly wrong there,
+        because there is no future possession to make the points up. It cost a real match:
+        a team levelled the frames 3-3 with a touchdown and lost the tiebreak by 1.8,
+        when the 4-point rung would have won it.
+
+        Only decisive when the frames actually finish level. If either side is ahead on
+        frames the points are irrelevant (defer), and if the scoring team is already
+        ahead on the tiebreak the safe points are the right call (defer)."""
+        fmt = self.format
+        try:
+            n = fmt._frames(self)
+        except Exception:
+            return None
+        # Only the LAST frame settles the tiebreak — earlier frames still have frames
+        # to win, and points there can be made up later.
+        if int(getattr(self, '_frameIndex', 0)) < n - 1:
+            return None
+
+        fh = float(getattr(self, '_framesWonHome', 0.0))
+        fa = float(getattr(self, '_framesWonAway', 0.0))
+        curH = self.homeScore - getattr(self, '_frameStartHome', 0)
+        curA = self.awayScore - getattr(self, '_frameStartAway', 0)
+        if curH > curA:
+            fh += 1
+        elif curA > curH:
+            fa += 1
+        else:
+            fh += 0.5
+            fa += 0.5
+        if fh != fa:
+            return None      # frames decide the match — points don't come into it
+
+        # Frames finish LEVEL, so the match is decided by a RAW POINTS COMPARISON.
+        # Every point carries equal weight toward that total and there is no "safe
+        # enough" margin, so the right objective is EXPECTED POINTS rather than the
+        # standard chart's "am I behind, do I need to catch up". That chart returns the
+        # safe kick whenever the team is level or ahead — which is how a side that
+        # levelled the frames 3-3 settled for 1 point and lost the tiebreak by 1.8.
+        cands = list(goRungs) + ([fallback] if fallback not in goRungs else [])
+
+        def prob(r):
+            if r.get('kind') == 'kick':
+                return self._estimateKickConversionProb(scoringTeam)
+            return self._estimateConversionProb(scoringTeam, r.get('distance', 2))
+
+        def expected(r):
+            return float(r.get('points', 0)) * prob(r)
+
+        # Tie-break toward the SAFER (more makeable) option so a coin-flip between two
+        # equal-EV rungs doesn't reach for the long one.
+        return max(cands, key=lambda r: (round(expected(r), 3), prob(r)))
 
     def _forcedGoRung(self, scoringTeam: FloosTeam.Team, goRungs: list) -> dict:
         """No-kick mode, NON-comeback pick: with the safe kick gone, a team going for it
