@@ -271,6 +271,43 @@ bonus across six cards. That reads as dead, not challenging.
 genuinely selective rather than a rubber stamp, and it holds up beyond the single week
 the lineup experiment samples.
 
+### DECISION — edition-scaled STATIC bars (owner, 2026-07-22, session 2)
+
+Owner chose simplicity over the self-relative gate: a STATIC stat threshold per card,
+"low enough the player clears it most weeks, high enough a bad game gates it", with the
+bar EASIER for lower rarities (base clears almost always) and HARDER for higher ones.
+
+This drops the self-relative machinery AND the cold-start blend below — a static number
+works from week 1, no per-player averages needed. The thresholds are league percentiles
+per position per edition, computed from the season distribution (stable season to
+season; can be frozen from the prior season).
+
+Measured (bars: base 85% / holo 72% / prismatic 60% / diamond 50% league pass rate):
+
+FUN — pass rate = how often the card fires, by the CARD PLAYER's quality:
+| edition | on a STRONG player | MID | WEAK |
+|---|---|---|---|
+| base | 97% | 90% | 70% |
+| holographic | 92% | 79% | 50% |
+| prismatic | 85% | 66% | 37% |
+| diamond | 79% | 53% | 28% |
+A diamond on a star still fires 79% (reliable, not punishing); on a scrub 28% (the
+intended punishment for bad deployment). Base is dependable everywhere.
+
+BALANCE — signal (100% = cards track roster): base 91% (good), holo/prismatic overshoot
+to ~195%/182% AGAINST THE EXTREME weak lineup (single-week bottom-20%, ~0 output). Against
+a normal weak-AVERAGE player those cards fire 37-50%, so the real overshoot is milder.
+Overshoot = "powerful cards strongly reward good rosters", arguably intended for the
+rarest cards. The exact per-edition bar is a DIAL; Stage 3 magnitude tuning is a second
+lever. Not chasing exactly 100%.
+
+**Superseded:** the self-relative gate and the cold-start blend (both below) are NOT the
+chosen model — kept as the record of why the simpler static bar is acceptable (it improves
+on 35% massively and the overshoot is tunable). The per-stat percentile calibration IS
+reused, now per EDITION.
+
+Probes: `scratchpad/probe_statgate.py`, `probe_edition_bar.py` (session-local).
+
 ### COLD START — the early-season average (measured 2026-07-22, session 2)
 
 The self-relative gate divides by the player's own season average, which is undefined
