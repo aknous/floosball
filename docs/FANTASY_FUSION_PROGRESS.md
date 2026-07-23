@@ -51,7 +51,8 @@ separate roster / match bonus / swaps / temp_flex.
 | 4. Remove match bonus + Wildcard/Overdrive | ✅ DONE (unit-validated) | `1061150` |
 | 5a. Effects: retire stockpiler/vagabond + loyalty snapshot | ✅ DONE (unit-validated) | `850ddda` |
 | 5b. Effects: bonus_round threshold 4→6 | ✅ DONE (unit-validated) | `ea0f154` |
-| 5c. OVERHAUL full_roster + all_in (design TBD) | ⬜ TODO (deferred) | — |
+| 5c. OVERHAUL full_roster (Full House) | ✅ DONE (unit+e2e validated) | (this branch) |
+| 5c. OVERHAUL all_in ("Bet Big") | ✅ DONE (unit validated) | (this branch) |
 | 6. FLEX unlock + slot wiring + retire temp_flex/extra_swap + no-dup-player | ✅ DONE (unit-validated) | `a12e906` |
 | 7a. Equip endpoint owns the FantasyRoster row + drop All-Pro swap machinery | ✅ DONE | `2721c12` |
 | 7b-i. Delete old fantasy-roster endpoints + migrate achievements | ✅ DONE | `4973eb3` |
@@ -59,12 +60,46 @@ separate roster / match bonus / swaps / temp_flex.
 | 7b-iii. Frontend-facing leaderboard/history repoints + residual no-ops | ⬜ → Phase 8 | — |
 | 8. Frontend: TradingCard redesign + sub-base tier + unified lineup page | ✅ DONE (tsc-clean; live QA pending) | FE `0e8a7d2`/`15d232a`, BE `e612e8c` |
 | 8b. Frontend 7b-iii (leaderboard/history) + retire shop swap UI | ⬜ | — |
+| 8c. FE: delete dead FantasyRoster.tsx, extract PointsBreakdownPanel | ✅ DONE (tsc-clean) | (FE this branch) |
 | 9. Tuning pass + `simcheck` — incl. **card power rebalance for full lineups** | ⬜ blocked on the on-card re-base | — |
 | R1. On-card re-base Stage 1 — position-specific effects (21) | ✅ DONE | `023c0ef` |
 | R2. On-card re-base Stage 2 — 9 roster aggregates | ✅ DONE | `232d439` |
 | G1. Card gate — FP POWER BAR (replaced the varied-stat ramp) | ✅ DONE, validated end-to-end | `d1fb64c` |
 | G2. Descriptions say "this player" + show the gate | ✅ DONE | `d1d56ae` |
 | G3. Position-stat guardrail test | ✅ DONE | `792d4fc` |
+
+## Phase 8c — dead FantasyRoster.tsx untangle (DONE, 2026-07-23, frontend branch)
+The old `FantasyRoster` component (the pre-fusion roster/swap page, ~1900 lines) was fully
+dead — nothing renders `<FantasyRoster>` since Phase 8 replaced it with `FantasyPage →
+Lineup + ScoringPane`. But it still held the ONE live export ScoringPane needs
+(`PointsBreakdownPanel`, the card-scoring breakdown panel), plus a dead sibling
+(`ProjectedWeekSummary`, only used inside the dead component).
+- **Extracted** `PointsBreakdownPanel` into its own `Components/Fantasy/PointsBreakdownPanel.tsx`
+  (595 lines) with only the helpers it uses (fmtSignedFP1, TYPE/CATEGORY/EDITION colors,
+  BEHAVIOR_TAGS, getBreakdownBehavior, EDITION_SHORT, TIER_ROMAN, PlayerSummary). Dropped
+  the entirely-unused `MODIFIER_COLORS` block along the way.
+- **Deleted** `FantasyRoster.tsx` (main component + `ProjectedWeekSummary` + the unreachable
+  swap logic / `Roster`/`SwapHistoryEntry`/`ActivePowerup`/`BASE_SLOTS`/`FLEX_SLOT` types).
+- **Repointed** ScoringPane's import to the new module. tsc clean (the 8 remaining errors are
+  all pre-existing, in unrelated files).
+- **Follow-up DONE (AuthContext dead-endpoint repoint, 2026-07-23):** `contexts/AuthContext.tsx`
+  was still fetching the DELETED `GET /api/fantasy/roster` (404 → `fantasyPlayerIds` was
+  permanently empty, silently breaking roster-match highlighting in CardEquipment /
+  PlayerLeaders / HighlightFeed). Repointed it to `GET /api/cards/equipped` (the fusion
+  source of truth) and derived `fantasyPlayerIds` from the depicted players.
+  - Replaced `fantasyRoster: FantasyRosterData | null` with `fantasyLineupLocked: boolean`
+    (Navbar's only use of it was `fantasyRoster?.isLocked`, which gates the navbar FP
+    readout); `fantasyPlayerIds` is now `useState` fed by the equipped fetch.
+  - `refetchRoster` → **`refetchLineup`** (updated Navbar); dropped a dead `refetchRoster`
+    destructure in ShopModal (never called).
+  - Deleted the now-orphaned `hooks/useFantasyLivePoints.ts` (zero consumers — only the
+    deleted FantasyRoster used it) and the `FantasyRosterData`/`FantasyRosterPlayer` types.
+  - Also cleaned 4 dead locals carried over into `PointsBreakdownPanel.tsx`
+    (`sectionHeader`, `colorizeEffectText`, `baseFP`, `multProduct`). tsc + eslint clean on
+    all touched files.
+- **Still open (Phase 8b proper):** the leaderboard/history endpoints that join
+  `fantasy_roster_players` (`GET /api/fantasy/leaderboard/weekly`, `/api/history/user-records`)
+  and retiring the shop swap UI — see the START HERE / 7b-iii section below.
 
 ## CARD DESIGN — where it stands + backlog (2026-07-23)
 
@@ -272,7 +307,63 @@ overhaul"). And **AP/CH classification reuse** (plan open question): FLEX is now
 - Note: the pre-fusion **fantasy-roster** endpoints still read `temp_flex` / `roster.players`
   — untouched here, collapsed in Phase 7.
 
-## Phase 5c: OVERHAUL full_roster + all_in (owner: "completely overhaul")
+## Phase 5c — full_roster REDESIGNED as "Full House" (DONE, 2026-07-23)
+Owner call: the "Full House" premise (of the three offered). `full_roster` (Diamond) now
+fires ONLY in a week where EVERY performing card in the lineup cleared its FP power bar —
+one cold player and it pays nothing. Truest Diamond: high ceiling, dead in any off week.
+- **Mechanism:** moved to `_SECOND_PASS_EFFECTS` (`cardEffectCalculator.py`) so all
+  first-pass gates are resolved first. Right after the first pass the calculator snapshots
+  `ctx._firstPassGatedCount` / `_firstPassGatedOn` (from `ctx._gateRatios`, the per-card
+  on/off tally) BEFORE any second-pass card computes — order-independent, counts first-pass
+  value cards only (no-effect floor cards carry no gate; second-pass cross cards excluded).
+- **Handler** (`_computeFullRoster`): needs `_FULL_HOUSE_MIN_CARDS` (5) first-pass gated
+  cards present AND all ON to fire. A full 6-slot effect lineup that includes Full House
+  itself (second-pass, uncounted) leaves exactly 5 first-pass value cards → "your other
+  five slots all showed up." Full House's own gate (its depicted player) still applies
+  centrally, so its own player must show up too.
+- Renamed display "Second String" → **"Full House"**; description/detail/tagline updated.
+- **Validated:** `test_full_house.py` (e2e through `calculateWeekCardBonuses`): fires on a
+  full clean lineup, dies on one cold player, can't fire below the 5-card floor, self-zeros
+  when its own player is cold. Existing card tests still pass.
+- **⚠ Phase 9 magnitude flag:** the fire condition is now MUCH stricter (all cards on, ~a
+  fraction of weeks) than the old free-firing version, so the minted FPx (currently ~1.79x
+  at diamond) likely wants raising to keep the Diamond ceiling worth chasing. Left to the
+  Phase 9 retune (frozen-at-mint, so it re-values cleanly at the season boundary).
+
+## Phase 5c — all_in REDESIGNED as "Bet Big" (DONE, 2026-07-23)
+Owner call: **Bet Big** (over Top Dog / the dead FLEX-only "True Stack"). `all_in`
+(Prismatic) is now a one-player gamble: the card's normal FP power-bar gate handles on/off,
+and a higher **stud line** (well above the gate) scales the payout — nothing until the
+depicted player clears a genuinely big week, then FPx grows with every FP past the line
+(capped). An average starter pays nothing; a monster individual game pays big.
+- **Stays first-pass** (reads only the on-card player). Handler `_computeAllIn`:
+  `mult = 1 + min(maxXBonus, perFPx × (playerFP − studLine))`, 1.0x below the line.
+- **Frozen params:** `perFPx` + `maxXBonus` from `_buildCrossPositionParams`; `studLine`
+  injected per-position at mint in `buildEffectConfig` from `_ALL_IN_STUD_LINE`
+  (QB22/RB22/WR20/TE14/K15 — above the QB8/RB9/WR8/TE4/K6 gates). Detail/description/tagline
+  updated; old `baseXMult`/`perDuplicateXMult` params retired.
+- **Validated:** `test_all_in.py` — nothing under the stud line or gate, scales above it,
+  bigger FP → bigger FPx, freak week capped, stud line is position-aware.
+- **⚠ Phase 9 magnitude flag:** at prismatic, perFPx≈0.03 / cap≈0.77 → a monster week tops
+  out ~1.77x. Fold into the Phase-9 retune with Full House.
+
+### 5c end-to-end validation on REAL season data (`simcheck_new_effects.py`, 2026-07-23)
+Boots the app against a COPY of the prod DB (real users/rosters/played games) and runs the
+real two-pass calculator against actual week-14 stats — the thing a fresh-DB simcheck can't
+show (0 users). Equips Full House + Bet Big on real players:
+- **Full House FIRES (x1.79 FPx)** when all 5 first-pass cards clear their bars; **pays 0**
+  the moment one WR is cold (1 FP → its bar empty), while every other card still scores.
+- **Bet Big** rides a 30-FP QB (over the 22 stud line) → x1.24; a 10-FP median QB (under it)
+  → no payout. Uses the real minted position-aware params.
+- Confirms the FP power-bar gate zeros a value card (freebie) on a 1-FP player.
+- **CAVEAT baked into the harness:** the prod DB copy predates the gate (fusion is unmerged),
+  so its stored `effect_config` has no `gate` key and lacks the new all_in params. The probe
+  **rebuilds each synth card's config via `buildEffectConfig`** so it carries the gate + current
+  params; cloning prod's stored JSON leaves cards ungated and falls back to hardcoded defaults.
+  (Same reason live prod cards won't get these effects until the branch deploys at a season
+  boundary — effect params are frozen at mint.)
+
+### (historical) Phase 5c framing: OVERHAUL full_roster + all_in (owner: "completely overhaul")
 Owner decision (2026-07-18): `bonus_round` got the threshold fix (done); `full_roster` and
 `all_in` are NOT to be patched — they need a **complete redesign** for fusion, deferred to
 a dedicated effort (likely alongside the Phase 9 tuning / a fresh design pass). Do NOT ship

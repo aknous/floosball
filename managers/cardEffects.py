@@ -443,7 +443,7 @@ EFFECT_DISPLAY_NAMES = {
     "domination": "Domination",
     "walk_off": "Walk Off",
     # ── Card-to-Card Interaction Effects ──
-    "full_roster": "Second String",
+    "full_roster": "Full House",
     "all_in": "All In",
     "diversified": "Diversified",
     "gold_rush": "Gold Rush",
@@ -613,7 +613,7 @@ EFFECT_TAGLINES = {
     "domination": "Ride the contenders",
     "walk_off": "Show up when it counts",
     # ── Card-to-Card Interaction Effects ──
-    "full_roster": "Backup team",
+    "full_roster": "Whole squad shows up",
     "all_in": "Eggs + basket",
     "diversified": "Variety pack",
     "gold_rush": "Floobits love company",
@@ -749,8 +749,8 @@ EFFECT_TOOLTIPS = {
     "domination": "Ride with the leaders. FP per roster player whose team is currently top-6 in their league. Bonus floobits if your favorite team wins by 21+.",
     "walk_off": "Built for the late game. FP per Q4 or OT TD or field goal scored by a roster player. Bonus floobits if your favorite team wins on a walk-off.",
     # ── Card-to-Card Interaction Effects ──
-    "full_roster": "Cover all your bases. FPx when your equipped hand has cards from all 5 positions (QB, RB, WR, TE, K).",
-    "all_in": "Bet big on one position. FPx that grows with how many of your equipped cards share the same position.",
+    "full_roster": "Cover all your bases. Big FPx, but only in a week where every performing card in your lineup clears its FP power bar. One cold player and it pays nothing.",
+    "all_in": "Bet big on one player. Nothing on an average week, but the FPx climbs with every fantasy point this player scores past a high stud line. A monster game pays huge.",
     "diversified": "Don't put all your eggs in one basket. FP per unique output type (FP, FPx, Floobits) across your equipped cards.",
     "gold_rush": "Floobits cards amplify each other. Floobits bonus for each other floobits card in your hand.",
     "stacked_deck": "Multiply the multipliers. FPx for each FPx card in your hand.",
@@ -895,8 +895,8 @@ EFFECT_DETAIL_TEMPLATES = {
     "domination": "+{perPlayerFP} FP per roster player whose team is top-6 in their league, +{floobitsOnTrigger}F if your favorite team wins by {marginThreshold}+ this week",
     "walk_off": "+{perScoreFP} FP per Q4/OT TD or FG by this player, +{floobitsOnTrigger}F when your favorite team wins with a walk-off",
     # ── Card-to-Card Interaction Effects ──
-    "full_roster": "+{rewardDelta} FPx when hand has all 5 positions",
-    "all_in": "+{baseXDelta} FPx base, plus +{perDuplicateXMult} FPx for each card of your most-equipped position after the first.",
+    "full_roster": "+{rewardDelta} FPx when every card in your lineup clears its power bar",
+    "all_in": "+{perFPx} FPx for every fantasy point this player scores past the {studLine}-FP stud line. A big week pays off; an average one pays nothing.",
     "diversified": "+{perTypeFP} FP per unique output type in your hand (FP, FPx, Floobits)",
     "gold_rush": "{perCardFloobits} Floobits per other Floobits card in your hand",
     "stacked_deck": "Self-compounds: each other FPx card in your hand stacks +{perCardMult} on this card's own delta",
@@ -1148,8 +1148,12 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
     if effectName == "full_roster":
         return {"rewardType": "mult", "rewardValue": round(1 + (1.575 + rn * 0.033) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "all_in":
-        return {"rewardType": "mult", "baseXMult": round(1 + (0.105 + rn * 0.0063) * editionScale * _BAL_FPX_MULT, 2),
-                "perDuplicateXMult": round((0.168 + rn * 0.0084) * editionScale * _BAL_FPX_MULT, 2)}
+        # Bet Big: FPx scales with FP over the (position-aware) stud line, set in
+        # buildEffectConfig. perFPx = FPx delta per FP past the line; capped so a freak
+        # week can't run away. studLine itself is injected per-position at mint.
+        return {"rewardType": "mult",
+                "perFPx": round((0.05 + rn * 0.0015) * editionScale * _BAL_FPX_MULT, 3),
+                "maxXBonus": round((1.4 + rn * 0.02) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "diversified":
         return {"rewardType": "fp", "perTypeFP": round((63.0 + rn * 1.5) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "gold_rush":
@@ -1808,6 +1812,13 @@ _TRAVERSE_POSITION_TUNING = {
     4: (15, 8, "receiving"),  # TE: 30-70 rec yds/game
 }
 
+# All In / "Bet Big" (all_in) — the per-position STUD LINE. Well above the FP power-bar
+# gate (QB 8 / RB 9 / WR 8 / TE 4 / K 6, a "showed up" bar): a genuinely big individual
+# week. all_in pays nothing until the depicted player's week FP clears this line, then
+# scales the FPx above it. Frozen into the config at mint (position-aware). Magnitudes
+# are Phase-9-tunable. Position encoding is 1-based (QB1/RB2/WR3/TE4/K5).
+_ALL_IN_STUD_LINE = {1: 22, 2: 22, 3: 20, 4: 14, 5: 15}
+
 
 # ─── Config Builder ──────────────────────────────────────────────────────────
 
@@ -1882,6 +1893,9 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
         primary["yardStep"] = yardStep
         primary["chancePerStep"] = chancePerStep
         primary["yardType"] = yardType
+    if effectName == "all_in":
+        # Bet Big: freeze the position-aware stud line the payout scales above.
+        primary["studLine"] = _ALL_IN_STUD_LINE.get(position, 20)
 
     conditionals = POSITION_CONDITIONALS.get(position, [])
     # Copy and apply the Balatro FP dial so the stored config carries the
@@ -3850,37 +3864,54 @@ def _computeHometownHero(primary, ctx, cardPlayerId, eqId):
 # -- Hand Composition (first pass) --
 
 def _computeFullRoster(primary, ctx, cardPlayerId, eqId):
-    """FPx when equipped hand has all 5 positions."""
-    rewardValue = primary.get("rewardValue", 1.4)
-    positions = set(ctx.equippedCardPositions)
-    if len(positions) >= 5:
-        eq = f"{rewardValue} (all 5 positions in hand)"
-        return EffectResult(multBonus=rewardValue, equation=eq)
-    missing = 5 - len(positions)
-    eq = f"{len(positions)}/5 positions ({missing} missing)"
-    return EffectResult(equation=eq)
+    """Full House (Diamond): a big FPx, but only in a week where EVERY performing card
+    in the lineup cleared its FP power bar. One cold player and it pays nothing.
+
+    Under fusion the old "hand has all 5 positions" premise fired free (the position-locked
+    base slots always span all 5). This re-bases it onto the power-bar gate: it fires only
+    when all of the lineup's gated (effect-bearing) cards are ON this week. Runs second-pass
+    (see _SECOND_PASS_EFFECTS) so every first-pass card's gate is already resolved; the
+    calculator snapshots that outcome into ctx._firstPassGatedCount / _firstPassGatedOn
+    before any second-pass card computes, so this reads a clean, order-independent tally of
+    the first-pass value cards only (no-effect floor cards carry no gate and second-pass
+    cross cards aren't counted). Full House's own gate (on its depicted player) is applied
+    centrally afterward, so its own player must show up too."""
+    rewardValue = primary.get("rewardValue", 2.5)
+    gatedCount = int(getattr(ctx, "_firstPassGatedCount", 0) or 0)
+    onCount = int(getattr(ctx, "_firstPassGatedOn", 0) or 0)
+    if gatedCount < _FULL_HOUSE_MIN_CARDS:
+        eq = f"Need {_FULL_HOUSE_MIN_CARDS}+ performing cards in the lineup ({gatedCount})"
+        return EffectResult(equation=eq)
+    if onCount < gatedCount:
+        cold = gatedCount - onCount
+        eq = f"{onCount}/{gatedCount} cards cleared their bar ({cold} cold) — no bonus"
+        return EffectResult(equation=eq)
+    eq = f"{rewardValue} (all {gatedCount} cards cleared their power bar)"
+    return EffectResult(multBonus=rewardValue, equation=eq)
 
 
 def _computeAllIn(primary, ctx, cardPlayerId, eqId):
-    """FPx scaling with duplicate position cards."""
-    baseXMult = primary.get("baseXMult", 1.1)
-    perDupe = primary.get("perDuplicateXMult", 0.15)
-    positions = ctx.equippedCardPositions
-    if not positions:
-        return EffectResult(equation="No cards equipped")
-    # Count max duplicates for any single position
-    from collections import Counter
-    posCounts = Counter(positions)
-    maxCount = max(posCounts.values())
-    if maxCount <= 1:
-        eq = "No duplicate positions"
+    """All In / "Bet Big" (Prismatic): a one-player gamble.
+
+    Under fusion the old "stack duplicate positions" premise fired free (WR1+WR2 are both
+    WR, so every lineup showed a duplicate). Re-based onto the depicted player: the card's
+    normal FP power-bar gate handles on/off, and THIS adds a higher STUD LINE that scales
+    the payout — nothing until the player clears a genuinely big week, then FPx grows with
+    every FP past the line (capped). An average starter pays nothing; a monster individual
+    game pays big. Reads only the on-card player, so it stays a first-pass effect."""
+    studLine = primary.get("studLine", 20)
+    perFPx = primary.get("perFPx", 0.05)
+    maxBonus = primary.get("maxXBonus", 1.4)
+    stats = (ctx.weekPlayerStats or {}).get(cardPlayerId, {}) or {}
+    fp = float(stats.get("fantasyPoints", 0) or 0)
+    over = fp - studLine
+    if over <= 0:
+        eq = f"{fp:.0f} FP under the {studLine}-FP stud line — no payout"
         return EffectResult(equation=eq)
-    dupes = maxCount - 1
-    bonus = round(baseXMult + perDupe * dupes, 2)
-    baseDelta = round(baseXMult - 1.0, 2)
-    delta = round(bonus - 1.0, 2)
-    eq = f"+{baseDelta:.2f} base + ({perDupe} × {dupes} dupes) = +{delta:.2f} FPx"
-    return EffectResult(multBonus=bonus, equation=eq)
+    bonus = min(maxBonus, round(perFPx * over, 2))
+    mult = round(1.0 + bonus, 2)
+    eq = f"+{bonus:.2f} FPx ({fp:.0f} FP, +{over:.0f} over the {studLine} stud line)"
+    return EffectResult(multBonus=mult, equation=eq)
 
 
 def _computeDiversified(primary, ctx, cardPlayerId, eqId):
@@ -3965,6 +3996,14 @@ def _computeChainReaction(primary, ctx, cardPlayerId, eqId):
 _BONUS_ROUND_THRESHOLD = 6  # Fusion: raised 4->6. With a 6-7 card lineup, 4+ cards
                             # triggering was ~guaranteed; 6 means nearly the whole hand
                             # must pop, keeping it a real "everything fires" payoff.
+
+_FULL_HOUSE_MIN_CARDS = 5   # Full House (full_roster) needs at least this many first-pass
+                            # gated (effect) cards present AND all ON to fire. A full 6-slot
+                            # effect lineup that includes Full House itself (second-pass, so
+                            # not counted) leaves exactly 5 first-pass value cards, so this
+                            # means "your other five slots all showed up." Fewer performing
+                            # cards than this and it can't fire (you haven't fielded a full
+                            # squad). See _computeFullRoster.
 
 
 def _computeBonusRound(primary, ctx, cardPlayerId, eqId):

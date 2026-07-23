@@ -392,6 +392,11 @@ _SECOND_PASS_EFFECTS = frozenset({
     "high_roller",
     "fortitude",
     "charmed",  # FP per chance card trigger this week
+    # Full House (Diamond): fires only if EVERY first-pass card cleared its power
+    # bar this week, so it must run after every first-pass gate is resolved. It
+    # reads the snapshot taken right after the first pass (ctx._firstPassGatedCount
+    # / _firstPassGatedOn), not per-card breakdowns.
+    "full_roster",
 })
 
 # Tradeoff effects that modify the overall bonus aggregation
@@ -1039,6 +1044,16 @@ def calculateWeekCardBonuses(
     for eq in firstPassCards:
         breakdown = _computeCardPass(eq, ctx)
         firstPassBreakdowns.append(breakdown)
+
+    # Snapshot first-pass gate outcomes for Full House (full_roster). Its gate is
+    # applied per-card inside computeEffect, which stashes each first-pass card's
+    # ratio (1.0 on / 0.0 off) into ctx._gateRatios. Freeze the tally here, before
+    # any second-pass card computes and adds its own ratio, so Full House reads a
+    # clean, order-independent count of the first-pass value cards only. Cards with
+    # no gate (the no-effect floor cards) aren't in _gateRatios and so don't count.
+    _fpGate = getattr(ctx, "_gateRatios", None) or {}
+    ctx._firstPassGatedCount = len(_fpGate)
+    ctx._firstPassGatedOn = sum(1 for r in _fpGate.values() if r >= 1.0)
 
     # Pre-trigger pass: for each second-pass card, determine whether it would
     # produce non-zero output given only first-pass results. Stash on ctx so
