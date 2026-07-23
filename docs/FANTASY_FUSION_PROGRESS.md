@@ -60,7 +60,46 @@ separate roster / match bonus / swaps / temp_flex.
 | 8. Frontend: TradingCard redesign + sub-base tier + unified lineup page | ✅ DONE (tsc-clean; live QA pending) | FE `0e8a7d2`/`15d232a`, BE `e612e8c` |
 | 8b. Frontend 7b-iii (leaderboard/history) + retire shop swap UI | ⬜ | — |
 | 9. Tuning pass + `simcheck` — incl. **card power rebalance for full lineups** | ⬜ blocked on the on-card re-base | — |
-| R1. On-card re-base Stage 1 — position-specific effects (23) | ✅ DONE (unit-validated) | (this commit) |
+| R1. On-card re-base Stage 1 — position-specific effects (21) | ✅ DONE | `023c0ef` |
+| R2. On-card re-base Stage 2 — 9 roster aggregates | ✅ DONE | `232d439` |
+| G1. Card gate — FP POWER BAR (replaced the varied-stat ramp) | ✅ DONE, validated end-to-end | `d1fb64c` |
+| G2. Descriptions say "this player" + show the gate | ✅ DONE | `d1d56ae` |
+| G3. Position-stat guardrail test | ✅ DONE | `792d4fc` |
+
+## CARD DESIGN — where it stands + backlog (2026-07-23)
+
+**The gate is the FP power bar** (docs/CARD_ONCARD_REBASE_PLAN.md, redesign note at top):
+every effect-bearing card unlocks once the depicted player fills a position FP threshold
+(QB 8 / RB 9 / WR 8 / TE 4 / K 6); inverse/underdog cards run the bar in reverse. Pure
+on/off, no scaling, no exempt set. Validated on real full lineups through the two-pass
+calc: 0 errors, ~24-35% of cards gate off each week (the roster-irrelevance fix working).
+Aggregate baseline for the retune: base 89% / holo 107% / prismatic 143% of the lineup's
+own player FP.
+
+**Open card backlog (DECIDED, not built):**
+1. **Inverse set 11 → 7.** Move `rock_bottom`, `martyr`, `underdog`, `home_alone` OUT of
+   `_INVERSE_GATE_EFFECTS` to normal gates — their payoff is team/slot-based, not tied to
+   the player's performance. Keep the 7 that track performance down (snake_eyes, hedge,
+   buy_low, reclamation, babysitter, consolation_prize, drought).
+2. **Chance cards → "luck bar" (middle option).** The bar aggregates ALL odds sources:
+   the player's FP (SMALL base contributor) + the card's unique trigger + innate synergy +
+   amplifiers + Patronage. Fuller bar = better odds, CAPPED below 100% (never a lock).
+   Chance cards need a HIGHER total fill than reliable cards (their payoff is a jackpot,
+   so it must hit less often for fair EV, and stay a gamble). A lone chance card sits at a
+   low bar (correctly weak). Keeps every unique trigger relevant.
+3. **Chance rarity on-ramp** (docs/CHANCE_SYNERGY_AUDIT.md). Today the archetype is only
+   buildable at prismatic (9 prismatic / 3 base / 0 holo chance cards; all 3 base output
+   floobits; only 2 amplifiers, both holo/diamond). Seed holo chance cards + an FP-output
+   base chance card + an accessible (base/holo) amplifier so a low-rarity chance build is
+   possible.
+4. **Stage 3 — retune card power for the 6-card lineup.** Now that lineups are a full
+   6-7 cards (was ~5) and the gate zeros ~30%, recalibrate per-edition magnitudes against
+   the parity target using the baseline above. Harnesses in repo: `simcheck_cards_fusion`,
+   `simcheck_gate_variants`, `simcheck_gate_calibration`.
+
+**Priority note (owner, 2026-07-23):** with ~11 fantasy players, the real lever for card
+engagement is SHIPPING fusion, not deeper roster surgery. Do the finish-line frontend/API
+work first; the backlog above is polish for after.
 | R2. On-card re-base Stage 2 — roster-aggregate effects (62) | ⬜ NEXT — needs per-effect design | — |
 
 ## On-card re-base (owner, 2026-07-22) — Phase 9 now runs AFTER it
