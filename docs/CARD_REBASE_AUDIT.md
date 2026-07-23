@@ -80,6 +80,23 @@ Read `rosterTotalTds` as a per-week streak TRIGGER, not a payout: `automatic`,
 player's TDs, but that changes streak semantics AND hits the same TD-scale problem. Lower
 priority — leave unless we want streaks to be player-specific.
 
+
+## DECISION (owner, 2026-07-22)
+
+Two rules:
+1. A card re-based onto its player's stats gets NO stat gate — the re-base already ties
+   it to the player, so gating too would double-tie. Re-based effects join
+   `_GATE_EXEMPT_EFFECTS`.
+2. Do NOT re-base the over/under-PERFORMANCE effects — they stay roster-scoped (and keep
+   their gate). That is the whole over/under family AND the two underperformer-triggered
+   chance cards.
+
+**RE-BASE (9):** `closer`, `walk_off`, `odometer` (gate values re-tuned for one player),
+`honor_roll`, `piggy_bank`, `catalyst`, `hedge`, `bonsai`, `snake_eyes` (Bizarro).
+
+**LEAVE roster-scoped (over/under):** `rising_tide`, `buy_low`, `reclamation`,
+`resplendent`, `windfall`, `babysitter`, `consolation_prize`.
+
 ## Recommended order
 
 1. **Group A** — the clean wins, ~14 effects, no re-tune, immediately more legible on-card.
