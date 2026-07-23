@@ -47,16 +47,22 @@ Chance cards keyed on roster stats — re-point the trigger to the card player:
 - `babysitter`, `bonsai`, `consolation_prize`, `snake_eyes` — their trigger stat becomes
   the card player's.
 
-## B. RE-BASE BUT RE-TUNE — TD-scale mismatch  [~6]
+## B. TD-count family — DECISION: leave roster-based + gated (owner, 2026-07-22)
 
-These multiply by `rosterTotalTds` (0–8 across a roster). One player scores 0–2, so a
-straight re-base makes them weak and their escalating gates unreachable. Re-base AND bump
-the per-TD value / lower the gates.
-- `touchdown_pinata`, `avalanche`, `cornucopia`, `feeding_frenzy`, `touchdown_jackpot`.
+`touchdown_pinata`, `avalanche`, `cornucopia`, `feeding_frenzy`, `touchdown_jackpot`
+multiply by roster TDs. They will NOT be re-based. Two reasons:
 
-⚠️ **Doubler interaction:** `doubler` doubles `rosterTotalTds` "for other cards". If the
-pinata family reads the card player's TDs instead, `doubler`'s mechanic no longer feeds
-them — decide whether doubler doubles the card player's TDs, or these leave the doubler web.
+1. **Single-player TDs are too volatile.** Measured share of player-weeks with 0 TDs
+   (= the card pays $0): QB 41%, RB 50%, WR 69%, TE 82%. A Touchdown Piñata on a TE
+   would be dead 82% of weeks — brutal for a base-tier card, and far swingier than the
+   gate cards whose gate stat (yards) is non-zero ~90%+ of weeks.
+2. **The gate already ties them to the card player, smoothly.** Left roster-based + gated,
+   a Piñata pays `perTD × rosterTDs × (cardPlayerYards / threshold)` — rewards a TD-heavy
+   roster, scaled by whether the depicted player showed up, via a stat that is rarely 0.
+   Strictly better than tying to volatile TDs.
+
+The doubler interaction is a non-issue either way: `doubler` already doubles the per-player
+TD stats in `weekPlayerStats` (and `q4ScoringPlays`), not just `rosterTotalTds`.
 
 ## C. KEEP ROSTER — the deckbuilding layer (owner: preserve it)  [~15]
 
