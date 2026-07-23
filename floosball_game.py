@@ -13757,6 +13757,17 @@ class Play():
                 self.receiver = selectedTarget['receiver']
                 self.passType = selectedTarget['route']
 
+                # Read-down flag: the QB targeted a receiver shallower than the called
+                # concept (e.g. a "deep shot" where the deep option was covered and the QB
+                # took the open checkdown). Surfaced in play insights so a low air-yards
+                # number next to a deep play call reads as intentional, not contradictory.
+                _tierDepth = {'short': 1, 'medium': 2, 'long': 3, 'deep': 4}
+                _calledTier = self.insights.get('playCall')
+                _actualDepth = _tierDepth.get(getattr(self.passType, 'name', ''))
+                if (_calledTier in _tierDepth and _actualDepth is not None
+                        and _actualDepth < _tierDepth[_calledTier]):
+                    self.insights['pass']['checkedDown'] = True
+
                 # QB discipline check: does the QB follow the sideline play call?
                 # Discipline range is 60-100
                 if self.targetSideline:
@@ -13996,9 +14007,11 @@ class Play():
                         if hasattr(self.interceptedBy, 'stat_tracker'):
                             self.interceptedBy.stat_tracker.add_defensive_int(self.game.isRegularSeasonGame)
                     self.playResult = PlayResult.Interception
+                    self.insights['pass']['outcome'] = 'int'
                 # Check for catch
                 elif outcomeRoll <= (catchProbs['intProb'] + catchProbs['catchProb']):
                     # COMPLETION!
+                    self.insights['pass']['outcome'] = 'catch'
                     # A grab off a lay-out on a contested ball gets the diving-catch tag.
                     if getattr(self, '_diveAttempt', False):
                         self._diveCatch = True
@@ -14263,13 +14276,15 @@ class Play():
                     self.defense.updateInGameConfidence(.005)
                     self.passIsDropped = True
                     self.yardage = 0
-                
+                    self.insights['pass']['outcome'] = 'drop'
+
                 else:
                     # INCOMPLETE (missed throw / coverage disruption)
                     self.passer.addMissedPass(self.game.isRegularSeasonGame)
                     self.defense.updateInGameConfidence(.003)
                     self.passer.updateInGameConfidence(-.003)
                     self.yardage = 0
+                    self.insights['pass']['outcome'] = 'incomplete'
                     # Credit covering defender with pass breakup
                     if coveringDefender and hasattr(coveringDefender, 'stat_tracker'):
                         coveringDefender.stat_tracker.add_pass_breakup(self.game.isRegularSeasonGame)
