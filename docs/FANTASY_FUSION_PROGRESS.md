@@ -92,7 +92,22 @@ own player FP.
    floobits; only 2 amplifiers, both holo/diamond). Seed holo chance cards + an FP-output
    base chance card + an accessible (base/holo) amplifier so a low-rarity chance build is
    possible.
-4. **Stage 3 — retune card power for the 6-card lineup.** Now that lineups are a full
+4. **Repurpose the AP / CH classifications.** Under fusion MVP took over the FLEX
+   unlock; Champion's old FLEX-slot job and All-Pro's old roster-swap grant both
+   evaporated, so those two classifications have NO gameplay effect now (they still get
+   stamped, still drive the Champion/All-Pro themed packs, and still boost sell/combine
+   value — champion 2.0x / all_pro 1.5x — but do nothing during scoring). Give them an
+   in-game purpose. Options, in the power-bar world:
+   - **Lower the FP threshold** — a prestige card unlocks its bar at a lower FP ("proven
+     players deliver"). Fits the power bar with no new mechanic. Cleanest.
+   - **A gate floor** — prestige cards never fully gate off; even a bad game leaves a small
+     partial effect (they're never dead).
+   - **Self-boost** — the prestige card's effect is a flat % stronger (the plan's original
+     "elite cards boost their own effect" candidate). Adds a multiplier layer.
+   - **Set bonus** — equipping N prestige cards grants a "dream team" bonus (deckbuilding
+     incentive; more complex). NEEDS an owner design call.
+
+5. **Stage 3 — retune card power for the 6-card lineup.** Now that lineups are a full
    6-7 cards (was ~5) and the gate zeros ~30%, recalibrate per-edition magnitudes against
    the parity target using the baseline above. Harnesses in repo: `simcheck_cards_fusion`,
    `simcheck_gate_variants`, `simcheck_gate_calibration`.
