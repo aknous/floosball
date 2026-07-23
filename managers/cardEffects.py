@@ -674,15 +674,15 @@ EFFECT_TOOLTIPS = {
     "rng": "Feeling lucky? Random FP rolled each week.",
     "snake_eyes": "Bad is good. The lower your lowest-scoring roster player's FP this week, the bigger the FPx on your total.",
     "avalanche": "Momentum builds with every score. Each roster TD pays more FP than the last.",
-    "hedge": "Insurance policy for a full roster of underperformers. Starts with an FP pool. Your roster's FP subtracts from it, and whatever remains is your payout. Needs a full 6-player roster.",
+    "hedge": "Insurance policy for a full roster of underperformers. Starts with an FP pool. Your this player's FP subtracts from it, and whatever remains is your payout. Needs a full 6-player roster.",
     "complacency": "Put the phone down. FP that grows each week you don't touch your roster. Stacking streak cards accelerates growth.",
-    "spotlight_moment": "Lights, camera, action. FP whenever your roster's {posLabel} scores a TD. For WR, either counts.",
-    "ace_up_the_sleeve": "Pocket Rockets. Base FP every week, plus bonus FP when your roster's WRs hit a combined stat threshold.",
+    "spotlight_moment": "Lights, camera, action. FP whenever this player scores a TD. For WR, either counts.",
+    "ace_up_the_sleeve": "Pocket Rockets. Base FP every week, plus bonus FP when this player hit a combined stat threshold.",
     # Multiplier (QB)
     "big_deal": "Don't you know who I am? Flat FPx on your total score.",
     "cornucopia": "Every touchdown compounds, but each one matters a little less. FPx that stacks per roster TD with diminishing returns.",
-    "luminary": "Your {posLabel} runs the offense. FPx that increases the more FP your roster's {posLabel} earns.",
-    "squire": "The crowd goes wild. FP that stacks with each TD your roster's {posLabel} scores.",
+    "luminary": "Your {posLabel} runs the offense. FPx that increases the more FP this player earns.",
+    "squire": "The crowd goes wild. FP that stacks with each TD this player scores.",
     "babysitter": "Someone has to do the heavy lifting. Guaranteed FP floor plus a chance at enhanced FP. Odds increase the more roster players underperform.",
     "martyr": "Pain builds character. FP floor plus a chance at enhanced FP. Odds scale with your favorite team's season losses.",
     "juggernaut": "Momentum is a beautiful thing. FPx grows with every win in your favorite team's streak, with diminishing returns past long runs.",
@@ -694,8 +694,8 @@ EFFECT_TOOLTIPS = {
     "rising_tide": "A rising tide lifts all boats. FPx that grows with each roster player outperforming their rating.",
     # Floobits (RB)
     "allowance": "Don't spend it all in one place. Free Floobits every week just for existing.",
-    "cha_ching": "The endzone is your cash register. Floobits for every TD your roster's {posLabel} scores.",
-    "piggy_bank": "Automatic savings plan. Converts a chunk of your roster's total FP into Floobits.",
+    "cha_ching": "The endzone is your cash register. Floobits for every TD this player scores.",
+    "piggy_bank": "Automatic savings plan. Converts a chunk of this player's total FP into Floobits.",
     "good_neighbor": "Worry free. Guaranteed Floobits plus a bonus for each FG your kicker misses.",
     "consolation_prize": "Here's a little something for your troubles. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the more roster players have a bad week.",
     "rock_bottom": "Rock bottom has a cash reward. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the longer your favorite team's losing streak.",
@@ -715,29 +715,29 @@ EFFECT_TOOLTIPS = {
     "fairweather_fan": "Fair-weather fandom has its perks. Floobits growing each week your favorite team wins. Stacking streak cards accelerates growth.",
     "bandwagon_express": "Next stop: more points. FP growing each week your favorite team wins. Stacking streak cards accelerates growth.",
     "touchdown_jackpot": "Fresh lottery every week. Floobits stacking per roster TD, resets weekly.",
-    "odometer": "Hit the milestones. Escalating FP at each yardage gate your roster hits. Resets weekly.",
+    "odometer": "Hit the milestones. Escalating FP at each yardage gate this player hits. Resets weekly.",
     "leg_day": "Never skip it. FP growing each week your roster's K nails a 35+ yard FG. Stacking streak cards accelerates growth.",
     "automatic": "Perfection pays. FP growing each consecutive week your roster's K goes perfect on FGs. Stacking streak cards accelerates growth.",
     "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 100 FP. Stacking streak cards accelerates growth.",
     # ── New Position-Based Effects ──
-    "gunslinger": "Let it fly. FP that scales with how many passing yards your roster's QB racks up.",
-    "air_raid": "Death from above. Floobits for each passing TD your roster's QB throws.",
-    "workhorse": "Pound the rock. FP scaling with rushing attempts by your roster's RB.",
-    "expedition": "Yards are yards. FP that scales with how many rushing yards your roster's RB gains.",
-    "stampede": "Get rolling. Base FPx, enhanced FPx when your roster's RB hits 75+ rushing yards.",
-    "goal_line_vulture": "Vulture season. Floobits for every rushing TD your roster's RB punches in.",
-    "possession": "Chain-mover. FP that scales with how many catches your roster's WRs haul in combined.",
-    "trebuchet": "Send it deep. Base FP every week, plus bonus FP when either of your roster's WRs catches a pass of 25+ yards.",
+    "gunslinger": "Let it fly. FP that scales with how many passing yards this player racks up.",
+    "air_raid": "Death from above. Floobits for each passing TD this player throws.",
+    "workhorse": "Pound the rock. FP scaling with rushing attempts by this player.",
+    "expedition": "Yards are yards. FP that scales with how many rushing yards this player gains.",
+    "stampede": "Get rolling. Base FPx, enhanced FPx when this player hits 75+ rushing yards.",
+    "goal_line_vulture": "Vulture season. Floobits for every rushing TD this player punches in.",
+    "possession": "Chain-mover. FP that scales with how many catches this player haul in combined.",
+    "trebuchet": "Send it deep. Base FP every week, plus bonus FP when either of this player catches a pass of 25+ yards.",
     "double_trouble": "Two is better than one. FP when either WR scores a TD, bonus when both WRs score.",
-    "slippery": "Yards after the catch turn into points. FP that scales with your roster's WRs' combined YAC.",
-    "jailbreak": "Can't catch them. Base FP every week, plus bonus FP when your roster's WRs combine for enough yards after catch.",
-    "safety_blanket": "Every QB needs one. FP scaling with receptions by your roster's TE.",
+    "slippery": "Yards after the catch turn into points. FP that scales with this player' combined YAC.",
+    "jailbreak": "Can't catch them. Base FP every week, plus bonus FP when this player combine for enough yards after catch.",
+    "safety_blanket": "Every QB needs one. FP scaling with receptions by this player.",
     "industrious": "Honest work deserves honest pay. Floobits scaling with receptions by your roster's TE.",
     "lead_blocker": "Clearing the path. FP per TD by your TE. RB TDs count as TE TDs if they are on the same team.",
-    "mismatch": "They can't cover this guy. FP per TD by your roster's {posLabel}, plus a bonus when they score multiple TDs.",
+    "mismatch": "They can't cover this guy. FP per TD by this player, plus a bonus when they score multiple TDs.",
     "sniper": "From long range. FP for each field goal your roster's K makes from 40+ yards out.",
-    "spectacle": "Going off. FP that scales with how much your roster's {posLabel} overperforms expectations this week.",
-    "indemnity": "At least you got floobits. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the more your roster's {posLabel} underperforms.",
+    "spectacle": "Going off. FP that scales with how much this player overperforms expectations this week.",
+    "indemnity": "At least you got floobits. Guaranteed Floobits floor plus a chance at enhanced Floobits. Odds increase the more this player underperforms.",
     # ── Same-Team Stacking Effects ──
     "stack": "Stack attack. FPx when your roster's QB and any WR play on the same team.",
     "backfield_buddies": "Same backfield, double the payoff. FPx when your roster's QB and RB play on the same team.",
@@ -762,16 +762,16 @@ EFFECT_TOOLTIPS = {
     "high_roller": "Built for the gamble. FPx that scales with how many of your chance cards hit enhanced this week.",
     "fortitude": "Are you feeling the heat? FPx that scales with how many of your streak cards have active streaks.",
     # ── Escalating / Pace Effects ──
-    "crescendo": "Miss enough and eventually you can't miss. Each TD by your roster's {posLabel} rolls for a bonus. Miss and the odds go up. For K, triggers on FGs.",
+    "crescendo": "Miss enough and eventually you can't miss. Each TD by this player rolls for a bonus. Miss and the odds go up. For K, triggers on FGs.",
     "eminence": "Top of the heap. FPx per roster player ranked top-10 at their position by season FP/game.",
-    "traverse": "High stakes yardage gamble. FP floor plus a jackpot chance based on yardage by your roster's {posLabel}.",
+    "traverse": "High stakes yardage gamble. FP floor plus a jackpot chance based on yardage by this player.",
     # ── Chance Synergy Effects ──
     "advantage": "Loaded dice. Every chance card in your hand rolls twice, keeping the better result.",
     "catalyst": "Compound interest. Roster FP boosts odds on all your chance cards. Also pays Floobits.",
     # ── Strategy-Warping Effects ──
     "alchemy": "Transmutation complete. Each FG by your roster's K counts as a TD for fantasy scoring and other card effects.",
     "home_alone": "Embrace the void. FPx that grows with each empty roster slot.",
-    "closer": "Always be closing. Bonus FP from your roster's Q4 and OT production.",
+    "closer": "Always be closing. Bonus FP from this player's Q4 and OT production.",
     "dark_horse": "The stars shine brightest from below. FPx that scales inversely with the star rating of your roster's {posLabel}.",
     "vagabond": "Never settle. FPx that grows with each roster swap you've made this season.",
     "fat_cat": "Money talks. FP that scales with your Floobits balance. Excludes current week earnings.",
@@ -821,16 +821,16 @@ EFFECT_DETAIL_TEMPLATES = {
     "avalanche": "Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing",
     "hedge": "Tops this player up to a {floorSoloFP} FP floor if they have a quiet week.",
     "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged.",
-    "spotlight_moment": "+{rewardValue} FP when your roster's {posLabel} scores a TD. WR counts either WR scoring a TD.",
-    "ace_up_the_sleeve": "+{baseFP} FP base, +{rewardValue} bonus if your roster's WRs combine for {threshold}+ {statDisplay}",
+    "spotlight_moment": "+{rewardValue} FP when this player scores a TD. WR counts either WR scoring a TD.",
+    "ace_up_the_sleeve": "+{baseFP} FP base, +{rewardValue} bonus if this player combine for {threshold}+ {statDisplay}",
     # Multiplier (QB) — FPx
     "cornucopia": "FPx that grows as your roster scores TDs.",
     "babysitter": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. 20% with 1 underperformer (under {fpThreshold} FP), up to 70%",
     "martyr": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. 10% at 1 loss, grows with your favorite team's season losses, up to 60%",
     "resplendent": "+{perPlayerFP} FP per overperforming roster player",
     "big_deal": "+{xMultDelta} FPx",
-    "luminary": "FPx that grows the more FP your roster's {posLabel} earns compared to teammates",
-    "squire": "+{perTdFP} FP per TD by your roster's {posLabel}",
+    "luminary": "FPx that grows the more FP this player earns compared to teammates",
+    "squire": "+{perTdFP} FP per TD by this player",
     "juggernaut": "+{baseXDelta} FPx base, grows with your favorite team's win streak.",
     "underdog": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. Chance grows the lower your favorite team's ELO rating is, up to 75%",
     "stockpiler": "+{perSwapXMult} FPx per unused roster swap",
@@ -839,7 +839,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "rising_tide": "+{perPlayerMult} FPx per overperforming roster player (max +{maxDelta})",
     # Floobits (RB)
     "allowance": "{floobits} Floobits per week",
-    "cha_ching": "{perTdFloobits} Floobits per TD by your roster's {posLabel}",
+    "cha_ching": "{perTdFloobits} Floobits per TD by this player",
     "piggy_bank": "{fpPercent}% of this player's FP → Floobits",
     "good_neighbor": "+{baseFloobits}F base + {perMissFloobits}F per missed FG this week",
     "consolation_prize": "+{baseFloobits}F guaranteed, chance at {enhancedFloobits}F. 20% with 1 underperformer (under {fpThreshold} FP), up to 70%",
@@ -866,23 +866,23 @@ EFFECT_DETAIL_TEMPLATES = {
     "automatic": "+{baseReward} FP base, +{growthPerTick} per consecutive week your K makes all FG attempts. A week with no FG attempts will not break the streak.",
     "momentum": "+{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week your roster scores 100+ FP.",
     # ── New Position-Based Effects ──
-    "gunslinger": "+{perHundredYardsFP} FP for every 100 passing yards in one game by your roster's QB",
-    "air_raid": "{perTdFloobits} Floobits for every passing TD in one game by your roster's QB",
-    "workhorse": "+{perAttemptFP} FP for every rushing attempt in one game by your roster's RB",
-    "expedition": "+{perFiftyYardsFP} FP for every 50 rushing yards in one game by your roster's RB",
-    "stampede": "+{baseDelta} FPx base, +{enhancedDelta} FPx when your RB hits {yardThreshold}+ rush yards in a game",
-    "goal_line_vulture": "{perTdFloobits} Floobits for every rushing TD by your roster's RB in a game",
-    "possession": "+{perReceptionFP} FP for every reception by your roster's WRs (combined) in a game",
-    "trebuchet": "+{baseFP} FP base, +{rewardValue} bonus if either of your roster's WRs catches a {threshold}+ yard pass",
+    "gunslinger": "+{perHundredYardsFP} FP for every 100 passing yards in one game by this player",
+    "air_raid": "{perTdFloobits} Floobits for every passing TD in one game by this player",
+    "workhorse": "+{perAttemptFP} FP for every rushing attempt in one game by this player",
+    "expedition": "+{perFiftyYardsFP} FP for every 50 rushing yards in one game by this player",
+    "stampede": "+{baseDelta} FPx base, +{enhancedDelta} FPx when this player hits {yardThreshold}+ rush yards in a game",
+    "goal_line_vulture": "{perTdFloobits} Floobits for every rushing TD by this player in a game",
+    "possession": "+{perReceptionFP} FP for every reception by this player (combined) in a game",
+    "trebuchet": "+{baseFP} FP base, +{rewardValue} bonus if either of this player catches a {threshold}+ yard pass",
     "double_trouble": "+{singleWrFP} FP when a WR scores, +{rewardValue} bonus FP when both WRs score",
-    "slippery": "+{perYacFP} FP per 10 yards after catch by your roster's WRs in a game",
-    "jailbreak": "+{baseFP} FP base, +{rewardValue} bonus if your roster's WRs combine for {threshold}+ yards after catch in a game",
-    "safety_blanket": "+{perReceptionFP} FP per reception by your roster's TE in a game",
+    "slippery": "+{perYacFP} FP per 10 yards after catch by this player in a game",
+    "jailbreak": "+{baseFP} FP base, +{rewardValue} bonus if this player combine for {threshold}+ yards after catch in a game",
+    "safety_blanket": "+{perReceptionFP} FP per reception by this player in a game",
     "industrious": "{perReceptionFloobits} Floobits per reception by your roster's TE in a game",
     "lead_blocker": "+{perTdFP} FP per TE TD in a game. Rushing touchdowns by the TE team's RB count as TE TDs",
-    "mismatch": "+{perTdFP} FP per TD by your roster's {posLabel}, +{bonusFP} bonus at {tdThreshold}+ TDs",
+    "mismatch": "+{perTdFP} FP per TD by this player, +{bonusFP} bonus at {tdThreshold}+ TDs",
     "sniper": "+{perFgFP} FP per 40+ yard FG by your roster's K in a game",
-    "spectacle": "+{perPointFP} FP per point your roster's {posLabel} overperforms by",
+    "spectacle": "+{perPointFP} FP per point this player overperforms by",
     "indemnity": "+{baseFloobits}F guaranteed, chance at {enhancedFloobits}F. Chance grows with {posLabel} underperformance, up to 70%",
     # ── Same-Team Stacking Effects ──
     "stack": "+{rewardDelta} FPx when your roster's QB and WR share a team",
@@ -908,7 +908,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "high_roller": "+{perCardMult} FPx per chance card that triggered enhanced bonuses this week",
     "fortitude": "+{perCardMult} FPx per active streak card in your hand",
     # ── Escalating / Pace Effects ──
-    "crescendo": "+{baseFP} FP guaranteed. {baseChance}% chance at {bonusFP} FP on roster's {posLabel}'s first TD, chance increases by +{chanceStep}% if bonus doesn't trigger.",
+    "crescendo": "+{baseFP} FP guaranteed. {baseChance}% chance at {bonusFP} FP on this player's first TD, chance increases by +{chanceStep}% if bonus doesn't trigger.",
     "eminence": "+{perPlayerMult} FPx per roster player ranked top-10 at their position. Max +{maxDelta} FPx. Active from week 3.",
     "traverse": "+{baseFP} FP floor + {bonusFP} FP jackpot. Jackpot chance starts at {baseChance}%, +{chancePerStep}% per {yardStep} {yardType} yards",
     # ── Chance Synergy Effects ──
@@ -1977,6 +1977,14 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     gate = buildGateSpec(effectName, position)
     if gate:
         config["gate"] = gate
+        # Surface the gate on the card. Kept as its own field so the frontend can
+        # render it as a distinct requirement chip, and appended to the detail so it
+        # shows anywhere the detail does.
+        config["gateText"] = gate["text"]
+        if config.get("detail"):
+            config["detail"] = f"{config['detail']} · {gate['text']}"
+        else:
+            config["detail"] = gate["text"]
     return config
 
 
@@ -4556,8 +4564,12 @@ def buildGateSpec(effectName: str, position: int) -> Optional[dict]:
         return None
     group, stat, threshold, label = random.choice(menu)
     mode = 'hard' if EFFECT_CATEGORY.get(effectName) == 'cross' else 'ramp'
+    if mode == 'hard':
+        text = f"Only fires if this player records {threshold}+ {label}"
+    else:
+        text = f"Scales with this player's {label} (full at {threshold})"
     return {'mode': mode, 'group': group, 'stat': stat,
-            'threshold': threshold, 'label': label}
+            'threshold': threshold, 'label': label, 'text': text}
 
 
 def gateRatio(gate: dict, ctx, cardPlayerId: int) -> float:
