@@ -1,14 +1,14 @@
-"""Card gate: a card's output scales with how well its depicted player played.
+"""Card gate — the FP power bar.
 
-Fantasy/cards fusion (docs/CARD_ONCARD_REBASE_PLAN.md). An equipped card's output is
-tied to the DEPICTED PLAYER's week — a linear ramp on one of their stats, capped at 1.0,
-so a full hand can't score off a bench-warming roster:
+Fantasy/cards fusion (docs/CARD_ONCARD_REBASE_PLAN.md). Every effect-bearing card has a
+power bar filled by the depicted player's weekly fantasy points:
 
-  * VALUE effects (FP / FPx / floobits): output * min(1, stat/threshold).
-    +1 FPx card, 100-yd threshold, player gains 50 yds -> +0.5 FPx.
-  * CROSS / hand-modifier effects (copycat, doubler, …): all-or-nothing, since "60% of a
-    2x multiplier" is meaningless — fires only if the player clears the threshold.
-  * EXEMPT effects (already scale with the card player's own stat) get no gate.
+  * normal cards: the bar FILLS with FP; the effect unlocks once it's full (player clears
+    the position threshold). Pure on/off, no scaling above.
+  * inverse / underdog cards: the bar runs in REVERSE — full at 0 FP, depleting as they
+    score, the effect disabled once it empties.
+
+One stat (FP), one threshold per position. Only the no-effect floor card is ungated.
 
 Run: .venv/bin/python test_card_gate.py
 """
@@ -18,6 +18,7 @@ import logging; logging.disable(logging.CRITICAL)
 from managers.cardEffects import (buildGateSpec, gateRatio, _applyGateRatio,
                                    EffectResult, buildEffectConfig)
 from managers.cardEffectCalculator import CardCalcContext
+from constants import CARD_GATE_FP_THRESHOLDS
 
 failures = []
 def expect(desc, cond):
@@ -25,78 +26,62 @@ def expect(desc, cond):
     if not cond:
         failures.append(desc)
 
+WR = 3
+WR_THR = CARD_GATE_FP_THRESHOLDS[WR]   # 8
 
-# WR threshold is 100 rec yards (constants.CARD_GATE_THRESHOLDS[3]).
-def ctxWith(pid, recYards):
+
+def ctxFP(pid, fp):
     c = CardCalcContext()
     c.rosterPlayerIds = {pid}
-    c.rosterPlayerPositions = {pid: 3}
-    c.weekPlayerStats = {pid: {"receiving_stats": {"rcvYards": recYards}}}
+    c.rosterPlayerPositions = {pid: WR}
+    c.weekPlayerStats = {pid: {"fantasyPoints": fp}}
     return c
 
 
-print("1. buildGateSpec — value vs cross vs exempt")
-g = buildGateSpec("freebie", 3)          # a flat-FP WR effect
-expect(f"a value effect gets a ramp gate from the WR menu  {g}",
-       g and g['mode'] == 'ramp' and g['stat'] in ('rcvYards', 'receptions', 'yac'))
-g = buildGateSpec("copycat", 3)          # a cross / hand modifier
-expect(f"a cross effect gets a HARD gate  {g}", g and g['mode'] == 'hard')
-expect("an exempt (already-on-card) effect gets no gate",
-       buildGateSpec("possession", 3) is None)
-expect("the no-effect floor card gets no gate", buildGateSpec("none", 3) is None)
+print("1. Every effect-bearing card gets an FP bar; only the floor card is ungated")
+g = buildGateSpec("freebie", WR)
+expect(f"a value effect gets a bar at the WR threshold  {g}",
+       g and g['threshold'] == WR_THR)
+expect("a cross / hand-modifier effect gets a bar too (uniform)",
+       buildGateSpec("copycat", 1) is not None)
+expect("a re-based / on-card effect gets a bar too (no exemptions)",
+       buildGateSpec("possession", WR) is not None and buildGateSpec("piggy_bank", WR) is not None)
+expect("the no-effect floor card gets no gate", buildGateSpec("none", WR) is None)
 
-# An explicit rec-yards ramp gate (threshold 100), so the ratio math is deterministic
-# regardless of which stat a random mint would have rolled.
-GATE_RECYDS = {'mode': 'ramp', 'group': 'receiving_stats', 'stat': 'rcvYards',
-               'threshold': 100, 'label': 'rec yds'}
-GATE_HARD = {'mode': 'hard', 'group': 'receiving_stats', 'stat': 'rcvYards',
-             'threshold': 100, 'label': 'rec yds'}
+print("2. gateRatio — pure on/off, no scaling")
+gate = buildGateSpec("freebie", WR)
+expect(f"below {WR_THR} FP -> 0 (bar not full, effect off)", gateRatio(gate, ctxFP(1, WR_THR - 1), 1) == 0.0)
+expect("0 FP -> 0", gateRatio(gate, ctxFP(1, 0), 1) == 0.0)
+expect(f"at {WR_THR} FP -> 1.0 (unlocked)", gateRatio(gate, ctxFP(1, WR_THR), 1) == 1.0)
+expect("well above -> still exactly 1.0 (no overflow)", gateRatio(gate, ctxFP(1, WR_THR * 5), 1) == 1.0)
 
-print("2. gateRatio — linear ramp on the value effect")
-gate = GATE_RECYDS
-expect("100 of 100 yds -> full (1.0)", gateRatio(gate, ctxWith(1, 100), 1) == 1.0)
-expect("150 of 100 yds -> capped at 1.0", gateRatio(gate, ctxWith(1, 150), 1) == 1.0)
-r = gateRatio(gate, ctxWith(1, 50), 1)
-expect(f"50 of 100 yds -> 0.5  (got {r})", abs(r - 0.5) < 1e-9)
-r = gateRatio(gate, ctxWith(1, 20), 1)
-expect(f"20 of 100 yds -> 0.2  (got {r})", abs(r - 0.2) < 1e-9)
-expect("0 yds -> 0.0 (card pays nothing)", gateRatio(gate, ctxWith(1, 0), 1) == 0.0)
+print("3. Inverse cards run the bar in reverse")
+inv = buildGateSpec("hedge", WR)
+expect("hedge is an inverse gate", inv.get("inverse") is True)
+expect(f"0 FP -> 1.0 (rough week, effect ON)", gateRatio(inv, ctxFP(1, 0), 1) == 1.0)
+expect(f"under {WR_THR} FP -> 1.0", gateRatio(inv, ctxFP(1, WR_THR - 1), 1) == 1.0)
+expect(f"at/over {WR_THR} FP -> 0.0 (bar emptied, effect OFF)", gateRatio(inv, ctxFP(1, WR_THR), 1) == 0.0)
+expect("a normal effect is NOT inverse", buildGateSpec("freebie", WR).get("inverse") is False)
 
-print("3. gateRatio — hard gate snaps to 0 or 1")
-hg = GATE_HARD
-expect("99 of 100 -> 0 (didn't clear)", gateRatio(hg, ctxWith(1, 99), 1) == 0.0)
-expect("100 of 100 -> 1 (cleared)", gateRatio(hg, ctxWith(1, 100), 1) == 1.0)
-expect("50 of 100 -> 0 (no partial for a hand modifier)",
-       gateRatio(hg, ctxWith(1, 50), 1) == 0.0)
-
-print("4. _applyGateRatio — FP, FPx and floobits all scale (the +1 FPx example)")
-r = _applyGateRatio(EffectResult(fpBonus=10.0), 0.5)
-expect(f"+10 FP at 0.5 -> +5 FP (got {r.fpBonus})", r.fpBonus == 5.0)
-r = _applyGateRatio(EffectResult(floobits=20), 0.5)
-expect(f"+20 floobits at 0.5 -> +10 (got {r.floobits})", r.floobits == 10)
-# multBonus is the FACTOR: +1 FPx = factor 2.0. At 0.5 -> +0.5 FPx = factor 1.5.
-r = _applyGateRatio(EffectResult(multBonus=2.0), 0.5)
-expect(f"+1 FPx (x2.0) at 0.5 -> +0.5 FPx (x1.5)  (got x{r.multBonus})", r.multBonus == 1.5)
+print("3b. _applyGateRatio — on/off only")
+r = _applyGateRatio(EffectResult(fpBonus=10.0), 0.0)
+expect("off zeroes the effect", r.fpBonus == 0.0)
 r = _applyGateRatio(EffectResult(fpBonus=10.0), 1.0)
-expect("ratio 1.0 leaves output untouched", r.fpBonus == 10.0)
-# a full-miss zeroes a value card but must not turn an unset mult into a penalty
-r = _applyGateRatio(EffectResult(fpBonus=8.0, multBonus=0.0), 0.0)
-expect("0.0 zeroes FP", r.fpBonus == 0.0)
-expect("0.0 leaves an unset mult (0.0) alone, not a penalty", r.multBonus == 0.0)
+expect("on leaves it untouched (no scaling)", r.fpBonus == 10.0)
+r = _applyGateRatio(EffectResult(multBonus=2.0), 0.0)
+expect("off resets an FPx factor to 1.0", r.multBonus == 1.0)
 
-print("5. Minted templates actually carry the gate")
-cfgVal = buildEffectConfig('base', 80, 3, forceEffect='freebie')
-expect(f"minted value card carries a ramp gate  {cfgVal.get('gate')}",
-       cfgVal.get('gate', {}).get('mode') == 'ramp')
-cfgExempt = buildEffectConfig('base', 3, 3, forceEffect='possession')
-expect("minted exempt card carries no gate", 'gate' not in cfgExempt)
+print("4. Thresholds are position-tuned")
+expect(f"QB {CARD_GATE_FP_THRESHOLDS[1]} / RB {CARD_GATE_FP_THRESHOLDS[2]} / "
+       f"TE {CARD_GATE_FP_THRESHOLDS[4]} differ by position",
+       len(set(CARD_GATE_FP_THRESHOLDS.values())) > 1)
 
-print("6. The gate STAT varies across mints (diversity)")
-seen = {buildGateSpec("freebie", 3)['stat'] for _ in range(60)}
-expect(f"WR value cards roll a variety of gate stats  {seen}", len(seen) >= 2)
-seenQb = {buildGateSpec("freebie", 1)['stat'] for _ in range(60)}
-expect(f"QB cards can gate on completions/attempts too  {seenQb}",
-       {'comp', 'att'} & seenQb)
+print("5. Minted templates carry the gate + power-bar text")
+cfg = buildEffectConfig('base', 80, WR, forceEffect='freebie')
+expect(f"minted card has a gate  {cfg.get('gate')}", cfg.get('gate', {}).get('threshold') == WR_THR)
+expect(f"and gateText  {cfg.get('gateText')}", 'Unlocks' in (cfg.get('gateText') or ''))
+floor = buildEffectConfig('standard', 80, WR)
+expect("the no-effect floor card has no gate", 'gate' not in floor)
 
 print()
 if failures:
@@ -104,4 +89,4 @@ if failures:
     for f in failures:
         print("   -", f)
     sys.exit(1)
-print("PASS — card output scales with the depicted player; value ramps, cross hard-gates.")
+print("PASS — the FP power bar switches every card on/off; inverse cards run in reverse.")

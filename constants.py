@@ -1178,34 +1178,18 @@ CONTEST_NARRATION = {
 }
 CONTEST_TYPE_LABELS = {t['key']: t['label'] for t in CONTEST_TYPES}
 
-# ── Card gate (fantasy/cards fusion — docs/CARD_ONCARD_REBASE_PLAN.md) ──
-# An equipped card's output scales with how well the DEPICTED PLAYER played this week:
-# a linear ramp on one of their stats, capped at 1.0. A card giving +1 FPx whose player
-# reaches the threshold pays the full +1; at half the threshold it pays +0.5. So a card
-# is tied to who's on it — you can't score a full hand off a bench-warming roster.
-# Thresholds sit near each position's AVERAGE weekly output, so a typical game ~= full
-# card and a poor game pays proportionally less. Effects that ALREADY scale with the
-# card player's own stat (the Stage-1 position-specific set) are exempt — ramping them
-# would double-count. Off by default so it stays dormant until the fusion cutover.
+# ── Card gate — the FP power bar (fantasy/cards fusion, docs/CARD_ONCARD_REBASE_PLAN.md) ──
+# Every equipped card has a POWER BAR tied to the depicted player's weekly fantasy points.
+# You always get the player's FP; the card's EFFECT is a bonus on top, unlocked by the bar.
+# One stat (FP), one number per position, a pure on/off gate (no scaling):
+#   * MOST cards fill the bar with FP — the effect unlocks once it's full (player clears the
+#     threshold), and a bench-warmer never fills it.
+#   * INVERSE / underdog cards (insurance, "reward a rough week") run the bar in REVERSE — it
+#     starts full and DEPLETES as the player scores; the effect is disabled once it empties.
 CARD_GATE_ENABLED = True
-# Per-position MENU of gate stats, so cards vary in what they key off (a WR card might
-# gate on rec yards, receptions, or YAC). One is rolled per card at mint and frozen.
-# Each entry: (statGroup, statKey, threshold, label). Thresholds sit near each stat's
-# average weekly output, so a typical game ~= full card. 1-based positions (QB=1…K=5).
-CARD_GATE_STAT_MENU = {
-    1: [('passing_stats', 'passYards', 250, 'pass yds'),
-        ('passing_stats', 'comp',       30, 'completions'),
-        ('passing_stats', 'att',        45, 'pass attempts')],
-    2: [('rushing_stats', 'runYards',  100, 'rush yds'),
-        ('rushing_stats', 'carries',    25, 'carries')],
-    3: [('receiving_stats', 'rcvYards',   100, 'rec yds'),
-        ('receiving_stats', 'receptions', 11, 'receptions'),
-        ('receiving_stats', 'yac',        35, 'YAC')],
-    4: [('receiving_stats', 'rcvYards',   60, 'rec yds'),
-        ('receiving_stats', 'receptions',  9, 'receptions'),
-        ('receiving_stats', 'yac',        25, 'YAC')],
-    5: [('kicking_stats', 'fgYards', 80, 'FG yds')],
-}
+# Per-position FP threshold (1-based QB=1…K=5). ~60-75% of each position's median weekly FP,
+# so a decent game fills a normal bar (~70% of weeks) / empties an inverse one.
+CARD_GATE_FP_THRESHOLDS = {1: 8, 2: 9, 3: 8, 4: 4, 5: 6}
 
 # ── Drive Clock (dormant mechanic — docs/DRIVE_CLOCK_PLAN.md) ──
 # A shot-clock for possessions. Two mode knobs: unit ('seconds' of game clock vs

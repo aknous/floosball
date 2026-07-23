@@ -2,9 +2,8 @@
 
 An effect that reads a position stat (carries=RB, receptions=WR/TE, completions=QB,
 YAC=WR/TE, ...) must only ever mint on a card of a matching position — otherwise it
-reads ~0 and the card is dead. Likewise a card's GATE stat must be valid for its
-position. Both hold today by construction (POSITION_EXCLUSIVE_POOLS +
-CARD_GATE_STAT_MENU keyed by position); this locks it so a pool edit can't break it.
+reads ~0 and the card is dead. Both hold today by construction (POSITION_EXCLUSIVE_POOLS); this locks it so a pool
+edit can't break it. (Gates are now FP-based, so gate stats no longer vary by position.)
 
 Run: .venv/bin/python test_card_position_stats.py
 """
@@ -14,7 +13,6 @@ import logging; logging.disable(logging.CRITICAL)
 import random
 from managers.cardEffects import (buildEffectConfig, POSITION_EXCLUSIVE_POOLS,
                                    SHARED_EFFECT_POOL)
-from constants import CARD_GATE_STAT_MENU
 
 failures = []
 def expect(desc, cond):
@@ -47,31 +45,6 @@ print("2. No position-exclusive effect leaks into the shared (any-position) pool
 shared = {e['effectName'] if isinstance(e, dict) else e for e in SHARED_EFFECT_POOL}
 leaked = {e for lst in POSITION_EXCLUSIVE_POOLS.values() for e in lst} & shared
 expect(f"no exclusive effect in the shared pool  {leaked or ''}", not leaked)
-
-print("3. A card's GATE stat is always valid for its position")
-crossGate = set()
-for pos in CARD_GATE_STAT_MENU:
-    validStats = {stat for _g, stat, _t, _l in CARD_GATE_STAT_MENU[pos]}
-    for _ in range(200):
-        cfg = buildEffectConfig('base', 80, pos, forceEffect='freebie')  # a gated card
-        g = cfg.get('gate')
-        if g and g['stat'] not in validStats:
-            crossGate.add((pos, g['stat']))
-expect(f"gate stats never cross position  {crossGate or ''}", not crossGate)
-
-print("4. The named stats are correctly scoped")
-# carries only gates RB; receptions only WR/TE; completions only QB; YAC only WR/TE.
-def gatePositionsFor(stat):
-    return {pos for pos, menu in CARD_GATE_STAT_MENU.items()
-            if any(s == stat for _g, s, _t, _l in menu)}
-expect(f"carries gate → RB only  {gatePositionsFor('carries')}",
-       gatePositionsFor('carries') == {2})
-expect(f"receptions gate → WR/TE only  {gatePositionsFor('receptions')}",
-       gatePositionsFor('receptions') == {3, 4})
-expect(f"completions gate → QB only  {gatePositionsFor('comp')}",
-       gatePositionsFor('comp') == {1})
-expect(f"YAC gate → WR/TE only  {gatePositionsFor('yac')}",
-       gatePositionsFor('yac') == {3, 4})
 
 print()
 if failures:

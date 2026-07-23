@@ -4527,78 +4527,65 @@ EFFECT_REGISTRY = {
 
 _LOGGED_UNKNOWN_EFFECTS: set = set()
 
-# Effects that scale with the card player's OWN stat, so they carry no stat gate —
-# gating them would double-tie (owner rule, 2026-07-22). Two sources:
-#   * the Stage-1 position-specific set, and
-#   * the Stage-2 re-based set (docs/CARD_REBASE_AUDIT.md) — roster aggregates rewritten
-#     to read the depicted player.
-_GATE_EXEMPT_EFFECTS = frozenset({
-    # Stage 1 — position-specific
-    'ace_up_the_sleeve', 'air_raid', 'cha_ching', 'crescendo', 'expedition',
-    'goal_line_vulture', 'gunslinger', 'indemnity', 'jailbreak', 'luminary',
-    'mismatch', 'possession', 'safety_blanket', 'slippery', 'spectacle',
-    'spotlight_moment', 'squire', 'stampede', 'traverse', 'trebuchet', 'workhorse',
-    # Stage 2 — re-based off the roster to the card player
-    'closer', 'walk_off', 'odometer', 'honor_roll', 'piggy_bank', 'catalyst',
-    'hedge', 'bonsai', 'snake_eyes',
+# INVERSE / underdog effects — they reward a BAD game, so a normal "unlock on a good game"
+# bar would kill them exactly when they should fire. Their bar runs in reverse: full at 0 FP,
+# depleting as the player scores, disabled once the player clears the threshold.
+_INVERSE_GATE_EFFECTS = frozenset({
+    'snake_eyes', 'hedge', 'buy_low', 'reclamation', 'babysitter', 'consolation_prize',
+    'rock_bottom', 'martyr', 'drought', 'home_alone', 'underdog',
 })
 
 
 def buildGateSpec(effectName: str, position: int) -> Optional[dict]:
-    """The gate spec frozen into a card's effect_config at mint, or None.
+    """The FP power-bar gate frozen into a card's effect_config at mint, or None.
 
-    A gate ties the card's output to how well the DEPICTED PLAYER played this week:
-    - 'ramp'  (value effects): output scales linearly with stat/threshold, capped at 1.0.
-    - 'hard'  (cross / hand-modifier effects — copycat, doubler, conductor, …): the
-      effect is all-or-nothing since "60% of a 2x multiplier" is meaningless; it fires
-      only if the player clears the threshold.
-    The gate STAT is rolled from the position's menu (so cards vary in what they key
-    off). Exempt effects (already stat-scaled) and no-effect floor cards get no gate."""
-    from constants import CARD_GATE_ENABLED, CARD_GATE_STAT_MENU
+    Every effect-bearing card is gated on the depicted player's weekly FP against a
+    position threshold — one stat, one rule, pure on/off. Normal cards unlock once the bar
+    fills; INVERSE cards (`_INVERSE_GATE_EFFECTS`) run it in reverse and switch OFF once it
+    fills. No per-effect exemptions beyond that; only the no-effect floor card ('none') is
+    ungated (owner call 2026-07-23)."""
+    from constants import CARD_GATE_ENABLED, CARD_GATE_FP_THRESHOLDS
     if not CARD_GATE_ENABLED:
         return None
-    if not effectName or effectName in ('none', '') or effectName in _GATE_EXEMPT_EFFECTS:
+    if not effectName or effectName in ('none', ''):
         return None
-    menu = CARD_GATE_STAT_MENU.get(position)
-    if not menu:
+    threshold = CARD_GATE_FP_THRESHOLDS.get(position)
+    if not threshold:
         return None
-    group, stat, threshold, label = random.choice(menu)
-    mode = 'hard' if EFFECT_CATEGORY.get(effectName) == 'cross' else 'ramp'
-    if mode == 'hard':
-        text = f"Only fires if this player records {threshold}+ {label}"
+    inverse = effectName in _INVERSE_GATE_EFFECTS
+    if inverse:
+        text = f"Active while this player stays under {threshold} FP (rewards a rough week)"
     else:
-        text = f"Scales with this player's {label} (full at {threshold})"
-    return {'mode': mode, 'group': group, 'stat': stat,
-            'threshold': threshold, 'label': label, 'text': text}
+        text = f"Unlocks once this player reaches {threshold} FP"
+    return {'threshold': threshold, 'inverse': inverse, 'text': text}
 
 
 def gateRatio(gate: dict, ctx, cardPlayerId: int) -> float:
-    """How much of a gated card's output survives, 0..1.
+    """The card's power-bar switch from the depicted player's weekly FP — 1.0 (on) or 0.0
+    (off), no scaling.
 
-    The depicted player's week stat over the threshold, capped at 1.0. 'hard' gates
-    snap to 0 or 1 (cleared or not); 'ramp' gates scale linearly. Missing stats read
-    as 0 (the card pays nothing / doesn't fire), which is correct for a player who
-    didn't produce."""
+    Normal cards: on once FP clears the threshold (a bench-warmer never fills the bar).
+    Inverse cards: on WHILE FP stays under the threshold (the bar depletes as they score,
+    off once it empties). Missing FP reads as 0."""
     threshold = gate.get('threshold', 0) or 0
     if threshold <= 0:
         return 1.0
     stats = (getattr(ctx, 'weekPlayerStats', None) or {}).get(cardPlayerId) or {}
-    val = float((stats.get(gate.get('group')) or {}).get(gate.get('stat'), 0) or 0)
-    ratio = max(0.0, min(1.0, val / threshold))
-    if gate.get('mode') == 'hard':
-        return 1.0 if ratio >= 1.0 else 0.0
-    return ratio
+    fp = float(stats.get('fantasyPoints', 0) or 0)
+    if gate.get('inverse'):
+        return 1.0 if fp < threshold else 0.0
+    return 1.0 if fp >= threshold else 0.0
 
 
 def _applyGateRatio(result: 'EffectResult', ratio: float) -> 'EffectResult':
-    """Scale an EffectResult's magnitude by `ratio`. FP and floobits scale directly;
-    an FPx factor scales its DELTA above 1.0 (a +1 FPx card at ratio 0.5 pays +0.5)."""
+    """Apply the power-bar switch: `ratio` is 1.0 (on, leave the effect) or 0.0 (off, zero
+    it). No fractional scaling — the gate is pure on/off."""
     if ratio >= 1.0 or result is None:
         return result
-    result.fpBonus = round((result.fpBonus or 0.0) * ratio, 2)
-    result.floobits = int(round((result.floobits or 0) * ratio))
+    result.fpBonus = 0.0
+    result.floobits = 0
     if result.multBonus and result.multBonus > 1.0:
-        result.multBonus = 1.0 + (result.multBonus - 1.0) * ratio
+        result.multBonus = 1.0
     return result
 
 

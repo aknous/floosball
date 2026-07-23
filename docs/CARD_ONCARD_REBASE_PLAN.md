@@ -1,5 +1,21 @@
 # Card Effects — On-Card Player Re-base
 
+> **REDESIGN (owner, 2026-07-23): the FP power bar.** The varied-stat ramp/hard gate is
+> replaced by a single, uniform mechanic. Every effect-bearing card has a POWER BAR tied
+> to the depicted player's weekly FP against a position threshold (QB 8 / RB 9 / WR 8 /
+> TE 4 / K 6). Pure ON/OFF, no scaling:
+> - normal cards unlock once the bar fills (player clears the threshold, ~70% of weeks);
+> - INVERSE / underdog cards (hedge, Bizarro, buy_low, reclamation, babysitter,
+>   consolation_prize, rock_bottom, martyr, drought, home_alone, underdog) run the bar in
+>   REVERSE — full at 0 FP, depleting as they score, disabled once it empties.
+> No per-card stat menu, no ramp, no overflow, no exempt set. The Stage-1/Stage-2 re-bases
+> are KEPT (they read "this player") and also carry a bar. Mechanism: `buildGateSpec` /
+> `gateRatio` in `cardEffects.py`; thresholds in `constants.CARD_GATE_FP_THRESHOLDS`.
+> Everything below about varied stats / ramp / cold-start / self-relative is SUPERSEDED,
+> kept only as the record of how we got here.
+
+
+
 **Branch:** `feature/fantasy-cards-fusion`
 **Status:** Stage 1 DONE · gate design validated · Stage 2 not started
 
