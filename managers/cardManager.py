@@ -9,16 +9,22 @@ logger = get_logger("floosball.cardManager")
 
 # ─── Edition Configuration ────────────────────────────────────────────────────
 
-# Rating thresholds for edition eligibility
+# Rating thresholds for edition eligibility.
+# 'standard' is the sub-base, NO-EFFECT floor print (fusion): every player gets one,
+# it just fields the player for their FP. Kept OUT of paid pack pools (weight 0) — it's
+# distributed as the starter/floor lineup, not a pack drop.
 EDITION_THRESHOLDS = {
+    'standard': 0,      # All players (no-effect floor card)
     'base': 0,          # All players
     'holographic': 75,  # Rating >= 75
     'prismatic': 80,    # Rating >= 80
     'diamond': 90,      # Rating >= 90
 }
 
-# Base rarity weights (before player-rating adjustment)
+# Base rarity weights (before player-rating adjustment). standard=0 keeps the floor
+# card out of every pack roll (see _weightedDraw's fallback).
 EDITION_BASE_WEIGHTS = {
+    'standard': 0,
     'base': 100,
     'holographic': 25,
     'prismatic': 10,
@@ -27,6 +33,7 @@ EDITION_BASE_WEIGHTS = {
 
 # Sell values by edition (active season)
 EDITION_SELL_VALUES = {
+    'standard': 2,
     'base': 5,
     'holographic': 30,
     'prismatic': 75,
@@ -142,6 +149,48 @@ def getActivePackNames(shopDay: int) -> list:
 
 # Map position code → position int for theme filtering
 _POSITION_CODE_TO_INT = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
+
+# ── Fantasy/Cards fusion: position-locked equipped-card slots ──────────────────
+# Equipped cards ARE the fantasy roster, so each slot is tied to a position. Six base
+# slots (one per position, mirroring the old FantasyRosterPlayer.slot) + FLEX (7th).
+FUSION_BASE_SLOTS = ['QB', 'RB', 'WR1', 'WR2', 'TE', 'K']
+FLEX_SLOT = 'FLEX'
+FUSION_ALL_SLOTS = FUSION_BASE_SLOTS + [FLEX_SLOT]
+# slot → 1-based position (matches CardTemplate.position / the Position enum); FLEX = any.
+SLOT_TO_POSITION = {'QB': 1, 'RB': 2, 'WR1': 3, 'WR2': 3, 'TE': 4, 'K': 5, FLEX_SLOT: None}
+# slot → stable display/order ordinal (EquippedCard.slot_number).
+SLOT_TO_ORDINAL = {'QB': 1, 'RB': 2, 'WR1': 3, 'WR2': 4, 'TE': 5, 'K': 6, FLEX_SLOT: 7}
+
+
+def _deriveStarterSlotCounts():
+    """(position, count) pairs covering every base lineup slot, in slot order —
+    e.g. QB/RB/WR1/WR2/TE/K → [(1,1),(2,1),(3,2),(4,1),(5,1)] (two WR cards)."""
+    ordered: list = []
+    seen: dict = {}
+    for slot in FUSION_BASE_SLOTS:
+        pos = SLOT_TO_POSITION[slot]
+        if pos in seen:
+            seen[pos][1] += 1
+        else:
+            entry = [pos, 1]
+            seen[pos] = entry
+            ordered.append(entry)
+    return [(pos, count) for pos, count in ordered]
+
+
+# Ordered (position, count) the starter pack draws — one card per base slot,
+# so WR yields two (WR1 + WR2). Kept in sync with FUSION_BASE_SLOTS.
+_STARTER_SLOT_COUNTS = _deriveStarterSlotCounts()
+
+
+def cardFitsSlot(templatePosition, slot) -> bool:
+    """Whether a card whose depicted player sits at `templatePosition` (1-based, matching
+    CardTemplate.position / the Position enum) may fill `slot`. FLEX accepts any position;
+    a base slot requires an exact position match. Unknown slot → False."""
+    if slot == FLEX_SLOT:
+        return True
+    expected = SLOT_TO_POSITION.get(slot)
+    return expected is not None and int(templatePosition) == expected
 
 # Champion pack draws one card per player (dedup). After a title most of the winning
 # roster can retire (season 11: 5 of 6 winners retired), leaving too few with current
@@ -293,8 +342,9 @@ def _buildClassification(
     if isRookie:
         return "rookie"
 
-    # MVP, Champion, All-Pro only on holographic and above
-    if edition == "base":
+    # MVP, Champion, All-Pro only on holographic and above — the floor tiers
+    # ('standard' no-effect + 'base') never carry a prestige classification.
+    if edition in ("standard", "base"):
         return None
 
     tags = []
@@ -393,7 +443,9 @@ class CardManager:
                     edition=edition,
                 )
 
-                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId)
+                # Pass classification so a Champion card mints a lower (on-card) gate threshold.
+                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId,
+                                                  classification=classification)
                 rarityWeight = computeRarityWeight(edition, rating)
                 sellValue = getSellValue(edition, isActive=True)
 
@@ -1344,8 +1396,11 @@ class CardManager:
         templateRepo = CardTemplateRepository(session)
         allTemplates = templateRepo.getBySeason(currentSeason)
         # Skip any templates with NULL team_id — defensive guard against legacy
-        # prospect/rookie templates polluting fresh pack rolls.
-        allTemplates = [t for t in allTemplates if t.team_id is not None]
+        # prospect/rookie templates polluting fresh pack rolls. Also drop 'standard'
+        # (the no-effect floor print): packs deliver effect cards only; standard is
+        # the starter/floor lineup, never a pack drop.
+        allTemplates = [t for t in allTemplates
+                        if t.team_id is not None and t.edition != 'standard']
         if not allTemplates:
             raise ValueError("No card templates available for the current season")
 
@@ -1374,6 +1429,12 @@ class CardManager:
         # Starter pack: no duplicate effectNames so new users can equip
         # every starter card without hitting the no-duplicate-effects rule.
         dedupByEffect = (packType.name == 'starter')
+
+        # Starter pack: hand a full ONE-PER-POSITION lineup (QB/RB/WR/TE/K) with
+        # distinct players and effects, so a new user can equip the entire pack as a
+        # complete, legal lineup. Overrides the generic weighted draw below.
+        if packType.name == 'starter':
+            return self._drawStarterLineup(pool, packWeights)
 
         # ── Guaranteed-rarity slot ──
         # If the pack guarantees a minimum rarity, draw one slot constrained
@@ -1405,6 +1466,47 @@ class CardManager:
                 dedupByEffect=dedupByEffect,
             )
         return self._weightedDraw(pool, packWeights, count=count)
+
+    def _drawStarterLineup(self, pool: list, packWeights: dict) -> list:
+        """Draw a full starter lineup covering every lineup slot — QB/RB/WR/WR/TE/K
+        (two WR cards for the WR1 + WR2 slots) — with distinct players AND distinct
+        effects so the whole pack is equippable at once. Restricted to the editions
+        the pack allows (base-only for the starter)."""
+        allowed = {e for e, w in (packWeights or {}).items() if w > 0} or {'base'}
+        eligible = [t for t in pool if t.edition in allowed]
+
+        def effName(t):
+            e = (t.effect_config or {}).get('effectName') or ''
+            return e if e and e != 'none' else None
+
+        byPos: Dict[int, list] = {}
+        for t in eligible:
+            byPos.setdefault(t.position, []).append(t)
+
+        picked: list = []
+        usedPlayers: set = set()
+        usedEffects: set = set()
+        for pos, count in _STARTER_SLOT_COUNTS:  # (position, how many cards)
+            candidates = list(byPos.get(pos, []))
+            if not candidates:
+                logger.warning(f"Starter pack: no card for position {pos}")
+                continue
+            random.shuffle(candidates)
+            for _ in range(count):
+                chosen = next(
+                    (t for t in candidates
+                     if t.player_id not in usedPlayers
+                     and (effName(t) is None or effName(t) not in usedEffects)),
+                    None,
+                )
+                if chosen is None:  # every candidate collided — take any unused player
+                    chosen = next((t for t in candidates if t.player_id not in usedPlayers),
+                                  candidates[0])
+                picked.append(chosen)
+                usedPlayers.add(chosen.player_id)
+                if effName(chosen):
+                    usedEffects.add(effName(chosen))
+        return picked
 
     def _weightedDrawDedup(self, pool: list, packWeights: dict, count: int,
                            dedupByPlayer: bool = False,

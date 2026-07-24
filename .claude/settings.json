@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git branch*)",
+      "Bash(git show*)",
+      "Bash(git stash list)",
+      "Bash(git push origin development)",
+      "Bash(git push origin feature/*)",
+      "Bash(git push origin hotfix/*)",
+      "Bash(python -c *)",
+      "Bash(python3 -c *)",
+      "Bash(sqlite3 data/floosball.db *)",
+      "Bash(fly status*)",
+      "Bash(fly logs*)",
+      "Bash(fly releases*)"
+    ]
+  }
+}

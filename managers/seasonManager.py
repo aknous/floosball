@@ -838,7 +838,6 @@ class SeasonManager:
                     )
                 equippedRepo.lockAllForWeek(seasonNum, currentWeek)
                 # Auto-lock rosters that have all slots filled
-                tracker = self.serviceContainer.getService('fantasy_tracker') if self.serviceContainer else None
                 unlocked = lockSession.query(FantasyRoster).filter_by(
                     season=self.currentSeason.seasonNumber, is_locked=False
                 ).all()
@@ -846,26 +845,22 @@ class SeasonManager:
                 # floor. Previously required all 6 slots filled, so a
                 # partially-set-up roster silently forfeited the week.
                 from constants import ROSTER_MIN_PLAYERS as _ROSTER_MIN
+                # Fusion: the roster IS the equipped cards, so a user's lineup is
+                # legal (auto-lockable) when their equipped cards fill >= ROSTER_MIN
+                # distinct slots — not FantasyRosterPlayer rows. Key off slot_number
+                # (always set; the position-slot string is wired in Phase 6/7) so
+                # distinct slot_numbers == distinct filled positions. Batch once.
+                allEquippedThisWeek = equippedRepo.getAllForWeek(seasonNum, currentWeek)
+                slotsByUser = {}
+                for eq in allEquippedThisWeek:
+                    slotsByUser.setdefault(eq.user_id, set()).add(eq.slot_number)
                 for roster in unlocked:
-                    filledSlots = {rp.slot for rp in roster.players}
+                    filledSlots = slotsByUser.get(roster.user_id, set())
                     if len(filledSlots) >= _ROSTER_MIN:
                         roster.is_locked = True
                         roster.locked_at = datetime.datetime.utcnow()
-                        for rp in roster.players:
-                            rp.points_at_lock = (
-                                tracker.getPlayerSeasonFP(
-                                    rp.player_id, self.currentSeason.seasonNumber
-                                ) if tracker else 0
-                            )
-                        # Replay All-Pro swap grants now that the roster is
-                        # locked. Users who equipped AP cards before lock had
-                        # the grant skipped (the equip endpoint requires a
-                        # locked roster); without this, swap_bonus_active
-                        # stays False and the UI shows "Swap used" even
-                        # though no swap was consumed.
-                        self._grantAllProSwapsForRoster(
-                            lockSession, roster, seasonNum, currentWeek
-                        )
+                        # Fusion: no points_at_lock offset (weekly-sum scoring) and no
+                        # All-Pro swap replay (swaps retired) — just lock the row.
                         logger.info(f"Auto-locked roster for user {roster.user_id}")
                 lockSession.commit()
                 lockSession.close()
@@ -1399,9 +1394,7 @@ class SeasonManager:
             if fantasyTracker:
                 fantasyTracker.bankWeek(self.currentSeason.seasonNumber, week)
 
-        # Grant roster swap every week (regular season only)
-        if not in_playoffs:
-            self._grantRosterSwaps(self.currentSeason.seasonNumber)
+        # (Weekly roster-swap grant retired with the swap system in the fusion.)
 
         # Process card effects for this week (regular season only)
         if not in_playoffs:
@@ -1532,7 +1525,12 @@ class SeasonManager:
             for eq, uc, tmpl in rows:
                 cfg = tmpl.effect_config or {}
                 effName = cfg.get('effectName') or ''
-                if not effName:
+                # No-effect floor cards ('none'/blank) are EXEMPT from the
+                # no-duplicate-effect rule (same as the equip setter) — a legal
+                # fusion lineup fields several sub-base 'standard' cards, all with
+                # effectName 'none'. Without this they'd be treated as one big
+                # duplicate group and all but one unequipped every week.
+                if effName in ('', 'none'):
                     continue
                 byUser.setdefault(eq.user_id, {}).setdefault(effName, []).append((eq, uc, tmpl))
 
@@ -1661,6 +1659,7 @@ class SeasonManager:
                             season=season,
                             week=currentWeek,
                             slot_number=prev.slot_number,
+                            slot=prev.slot,  # fusion: carry the position-slot string too
                             user_card_id=prev.user_card_id,
                             locked=False,
                             streak_count=prevStreak,
@@ -1674,113 +1673,12 @@ class SeasonManager:
             session.flush()
             logger.info(f"Auto-carried equipped cards for {carried} users into week {currentWeek}")
 
-    def _grantAllProSwapsForRoster(self, session, roster, season: int, currentWeek: int) -> None:
-        """Replay All-Pro swap grants for an equipped roster.
-
-        Mirrors the All-Pro grant block in PUT /api/cards/equipped: for each
-        equipped All-Pro card whose UserCard.last_swap_grant_cycle is below
-        the current cycle, grant +1 swap, advance the cycle marker, and flag
-        the EquippedCard's swap_bonus_active=True. Idempotent — cards that
-        already granted in this cycle are skipped.
-        """
-        if not currentWeek or currentWeek < 1:
-            return
-        try:
-            from database.models import EquippedCard, UserCard, CardTemplate
-            swapCycle = (currentWeek - 1) // 7 + 1
-            equippedAP = (
-                session.query(EquippedCard, UserCard, CardTemplate)
-                .join(UserCard, EquippedCard.user_card_id == UserCard.id)
-                .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
-                .filter(
-                    EquippedCard.user_id == roster.user_id,
-                    EquippedCard.season == season,
-                    EquippedCard.week == currentWeek,
-                    CardTemplate.classification.isnot(None),
-                    CardTemplate.classification.contains("all_pro"),
-                )
-                .all()
-            )
-            for eqCard, uc, _tmpl in equippedAP:
-                if uc.last_swap_grant_cycle < swapCycle:
-                    roster.swaps_available += 1
-                    uc.last_swap_grant_cycle = swapCycle
-                    eqCard.swap_bonus_active = True
-        except Exception as e:
-            logger.warning(f"Failed to grant All-Pro swaps for roster {roster.id}: {e}")
-
-    def _grantRosterSwaps(self, season: int) -> None:
-        """Grant 1 organic swap to all locked rosters at week end.
-
-        Cap = 1 baseline + 1 per equipped All-Pro card whose grant is still
-        unused this cycle (swap_bonus_active=True). The AP bump exists so an
-        AP grant doesn't immediately suppress the next weekly organic refill
-        (without it, swaps would already be at the cap of 1 and the refill
-        check `1 < 1` would fail).
-
-        Champion used to bump this cap by 1 — leftover from when adding a
-        FLEX player consumed a swap. That cost was removed long ago (empty
-        FLEX adds are free), so the Champion bump no longer has a purpose
-        and was removed.
-        """
-        try:
-            from database.connection import get_session as _getSession
-            from database.models import FantasyRoster, EquippedCard, UserCard, CardTemplate
-            swapSession = _getSession()
-            currentWeek = (
-                self.currentSeason.currentWeek
-                if self.currentSeason and self.currentSeason.currentWeek
-                else 0
-            )
-            rosters = swapSession.query(FantasyRoster).filter_by(
-                season=season, is_locked=True
-            ).all()
-            updated = 0
-            for roster in rosters:
-                # AP bump — count equipped AP cards (THIS WEEK only) whose
-                # grants are still unused this cycle (swap_bonus_active=True).
-                # Each adds room for one extra outstanding swap so the weekly
-                # organic refill can stack on top of the AP grant.
-                # Without the week filter, carry-forward rows from earlier
-                # weeks would inflate the count and the cap would ratchet up
-                # by 1 every week.
-                apActiveCount = swapSession.query(EquippedCard).join(
-                    UserCard, EquippedCard.user_card_id == UserCard.id
-                ).join(
-                    CardTemplate, UserCard.card_template_id == CardTemplate.id
-                ).filter(
-                    EquippedCard.user_id == roster.user_id,
-                    EquippedCard.season == season,
-                    EquippedCard.week == currentWeek,
-                    EquippedCard.swap_bonus_active == True,
-                    CardTemplate.classification.isnot(None),
-                    CardTemplate.classification.contains("all_pro"),
-                ).count() if currentWeek > 0 else 0
-                maxSwaps = 1 + apActiveCount
-                if roster.swaps_available < maxSwaps:
-                    roster.swaps_available = min(roster.swaps_available + 1, maxSwaps)
-                    updated += 1
-                    # Secret — Arsenal (3+ swaps available at once)
-                    totalSwaps = (roster.swaps_available or 0) + (roster.purchased_swaps or 0)
-                    if totalSwaps >= 3:
-                        try:
-                            from managers import achievementManager as _am
-                            _am.unlockSecret(swapSession, roster.user_id, "arsenal")
-                        except Exception:
-                            pass
-            swapSession.commit()
-            swapSession.close()
-            if updated > 0:
-                logger.info(f"Granted roster swap to {updated} users for season {season}")
-        except Exception as e:
-            logger.error(f"Failed to grant roster swaps: {e}")
-
     def _processWeekCardEffects(self, season: int, week: int) -> None:
         """Calculate and persist card effect bonuses for all users after a week completes."""
         try:
             from database.connection import get_session as _getSession
             from database.models import (
-                FantasyRoster, FantasyRosterSwap, Game, GamePlayerStats,
+                FantasyRoster, Game, GamePlayerStats,
                 Player, User, UserCurrency, WeeklyCardBonus, WeeklyPlayerFP
             )
             from database.repositories.card_repositories import EquippedCardRepository, CurrencyRepository
@@ -1866,14 +1764,15 @@ class SeasonManager:
                     teamGameMap[g.home_team_id] = g
                     teamGameMap[g.away_team_id] = g
 
-                # Player ratings and positions
+                # Player ratings and positions — Fusion: the roster IS the equipped
+                # cards, so gather the players DEPICTED by every user's locked cards
+                # (not FantasyRosterPlayer rows).
                 allPlayerIds = set()
                 for userId, userEquipped in byUser.items():
-                    roster = session.query(FantasyRoster).filter_by(
-                        user_id=userId, season=season, is_locked=True
-                    ).first()
-                    if roster:
-                        allPlayerIds.update(rp.player_id for rp in roster.players)
+                    for eq in userEquipped:
+                        pid = eq.user_card.card_template.player_id
+                        if pid:
+                            allPlayerIds.add(pid)
 
                 playerRatingsMap = {}
                 playerPositionMap = {}
@@ -1959,13 +1858,20 @@ class SeasonManager:
                     if not roster:
                         continue
 
-                    rosterPlayerIds = {rp.player_id for rp in roster.players}
+                    # Fusion: this user's lineup = the players DEPICTED by their locked
+                    # equipped cards (one per slot), NOT FantasyRosterPlayer rows. Keep a
+                    # per-card list so the base FP mirrors getSnapshot exactly (a player
+                    # depicted by two cards contributes twice, matching the live path).
+                    depictedPairs = [
+                        (eq, eq.user_card.card_template.player_id) for eq in userEquipped
+                    ]
+                    rosterPlayerIds = {pid for _eq, pid in depictedPairs}
 
                     # Compute user's raw weekly FP and TDs
                     weekRawFP = 0.0
                     rosterTotalTds = 0
-                    for rp in roster.players:
-                        pStats = weekPlayerStats.get(rp.player_id, {})
+                    for _eq, pid in depictedPairs:
+                        pStats = weekPlayerStats.get(pid, {})
                         weekRawFP += pStats.get("fantasyPoints", 0)
                         rosterTotalTds += _countPlayerTds(pStats)
 
@@ -2140,19 +2046,11 @@ class SeasonManager:
                         if allTeams:
                             leagueAverageElo = sum(getattr(t, 'elo', 1500.0) for t in allTeams) / len(allTeams)
 
-                    # Roster unchanged weeks (from swap history)
-                    lastSwap = (
-                        session.query(FantasyRosterSwap.swap_week)
-                        .filter_by(roster_id=roster.id)
-                        .order_by(FantasyRosterSwap.swap_week.desc())
-                        .first()
-                    )
-                    rosterUnchangedWeeks = week if not lastSwap else max(0, week - lastSwap[0])
-
-                    # Season swaps used (for Vagabond card effect)
-                    seasonSwapsUsed = session.query(FantasyRosterSwap).filter_by(
-                        roster_id=roster.id
-                    ).count()
+                    # Fusion: swaps are retired — no swap history, so the lineup is
+                    # treated as unchanged this season, and the swap-based effects
+                    # (retired) compute 0 off these zeros.
+                    rosterUnchangedWeeks = week
+                    seasonSwapsUsed = 0
 
                     # Check for user-level modifier override (Modifier Nullifier power-up)
                     userModifier = activeModifier
@@ -2168,8 +2066,8 @@ class SeasonManager:
 
                     # Compute kicker season FG misses for Good Neighbor
                     kickerSeasonFgMisses = 0
-                    kickerPids = [rp.player_id for rp in roster.players
-                                  if playerPositionMap.get(rp.player_id) == 5]
+                    kickerPids = [pid for _eq, pid in depictedPairs
+                                  if playerPositionMap.get(pid) == 5]
                     if kickerPids:
                         seasonKickerStats = (
                             session.query(GamePlayerStats)
@@ -2210,8 +2108,10 @@ class SeasonManager:
                         logger.warning(f"Failed to fetch Floobits balance for user {userId}: {e}")
 
                     # FLEX slot detection — mirrors fantasyTracker._buildCardCalcContext.
-                    # Without this, Home Alone misses an empty FLEX slot at week-end.
-                    hasFlexSlot = any(getattr(rp, 'slot', '') == 'FLEX' for rp in roster.players)
+                    # Fusion: the FLEX is an equipped-card slot, so detect a card in the
+                    # FLEX slot (not a FantasyRosterPlayer FLEX row). Without this, Home
+                    # Alone misses an empty FLEX slot at week-end.
+                    hasFlexSlot = any(getattr(eq, 'slot', '') == 'FLEX' for eq in userEquipped)
                     if not hasFlexSlot:
                         try:
                             from database.models import ShopPurchase as _SP
@@ -2219,14 +2119,14 @@ class SeasonManager:
                                 uc2 = getattr(eqRow, 'user_card', None)
                                 tmpl = getattr(uc2, 'card_template', None) if uc2 else None
                                 cls = getattr(tmpl, 'classification', None) or ''
-                                if 'champion' in cls:
+                                if 'mvp' in cls:
                                     hasFlexSlot = True
                                     break
                             if not hasFlexSlot:
                                 activeFlex = session.query(_SP).filter(
                                     _SP.user_id == userId,
                                     _SP.season == season,
-                                    _SP.item_slug == 'temp_flex',
+                                    _SP.item_slug == 'temp_card_slot',
                                     _SP.expires_at_week >= week,
                                 ).first()
                                 if activeFlex:
@@ -2275,7 +2175,7 @@ class SeasonManager:
                         rosterPlayerTeamIds=rosterPlayerTeamIds,
                         rosterPlayerNames=rosterPlayerNames,
                         activeModifier=userModifier,
-                        unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
+                        unusedSwaps=0,
                         seasonSwapsUsed=seasonSwapsUsed,
                         hasFlexSlot=hasFlexSlot,
                         userFloobitsBalance=userFloobitsBalance,
@@ -5502,20 +5402,10 @@ class SeasonManager:
             logger.info("Step 7.5: Prospect development window advancement")
             self.playerManager._advanceProspectWindow()
 
-            # STEP 8: Handle retired players on fantasy rosters
-            # Must run before HoF which clears newlyRetiredPlayers
-            retiredPlayerIds = {
-                p.id for p in self.playerManager.newlyRetiredPlayers
-                if hasattr(p, 'id')
-            }
-            retiredPlayerIds.update(
-                p.id for p in self.playerManager.retiredPlayers
-                if hasattr(p, 'id')
-            )
-            if retiredPlayerIds:
-                nextSeason = (self.currentSeason.seasonNumber if self.currentSeason else 0) + 1
-                logger.info(f"Step 8: Handling {len(retiredPlayerIds)} retired players on fantasy rosters")
-                self._handleRetiredPlayerRosters(retiredPlayerIds, nextSeason)
+            # STEP 8: (retired) Handling retired players on fantasy rosters is gone in
+            # the fantasy/cards fusion — the roster IS the equipped cards, so a retired
+            # player's card simply isn't re-minted next season (templates are
+            # season-scoped); there is no bare-player roster slot to auto-fill.
 
             # STEP 9: Reset season performance ratings + season WPA value totals
             logger.info("Step 9: Reset season performance ratings")
@@ -5829,7 +5719,7 @@ class SeasonManager:
         """Apply pending favorite team changes and finalize fantasy scores."""
         from database.connection import get_session
         from database.models import (
-            User, FantasyRoster, PlayerSeasonStats,
+            User, FantasyRoster, WeeklyPlayerFP,
         )
 
         completedSeason = self.currentSeason.seasonNumber if self.currentSeason else None
@@ -5850,19 +5740,26 @@ class SeasonManager:
                 u.pending_favorite_team_id = None
                 u.favorite_team_locked_season = None
 
-            # Finalize fantasy roster scores from DB season stats
+            # Finalize fantasy roster scores. Fusion: the roster IS the equipped
+            # cards, so the season base = Σ over weeks of that week's equipped
+            # lineup's per-player WeeklyPlayerFP (weekly-sum, no season-lock offset).
+            # Card bonuses are tracked separately in card_bonus_points.
+            from managers.fantasyTracker import FantasyTracker
             lockedRosters = session.query(FantasyRoster).filter_by(
                 season=completedSeason, is_locked=True
             ).all()
+            equippedByUserWeek = FantasyTracker._equippedRostersByWeek(session, completedSeason)
+            weekFpRows = session.query(
+                WeeklyPlayerFP.player_id, WeeklyPlayerFP.week, WeeklyPlayerFP.fantasy_points
+            ).filter(WeeklyPlayerFP.season == completedSeason).all()
+            weekFpMap = {(pid, wk): fp for pid, wk, fp in weekFpRows}
             for roster in lockedRosters:
                 totalPoints = 0.0
-                for rp in roster.players:
-                    seasonStat = session.query(PlayerSeasonStats).filter_by(
-                        player_id=rp.player_id, season=completedSeason
-                    ).first()
-                    finalFp = seasonStat.fantasy_points if seasonStat else 0
-                    earned = max(0, finalFp - rp.points_at_lock)
-                    totalPoints += earned
+                for (uId, wk), lineup in equippedByUserWeek.items():
+                    if uId != roster.user_id:
+                        continue
+                    for _eq, pid in lineup:
+                        totalPoints += weekFpMap.get((pid, wk), 0)
                 roster.total_points = totalPoints
                 logger.info(f"Fantasy roster {roster.id} (user {roster.user_id}): finalized at {totalPoints:.1f} pts")
 
@@ -7912,142 +7809,50 @@ class SeasonManager:
         except ImportError:
             pass
 
-    def _handleRetiredPlayerRosters(self, retiredPlayerIds: set, nextSeason: int) -> None:
-        """Remove retired players from fantasy rosters and auto-fill if enabled.
-
-        Called during offseason after retirements are processed.
-        """
-        if not retiredPlayerIds:
-            return
-
-        try:
-            from database.connection import get_session
-            from database.models import FantasyRoster, FantasyRosterPlayer, Player, User
-
-            session = get_session()
-            try:
-                # Find all roster slots containing retired players (from the most recent season)
-                completedSeason = nextSeason - 1
-                affectedSlots = (
-                    session.query(FantasyRosterPlayer)
-                    .join(FantasyRoster)
-                    .filter(
-                        FantasyRoster.season == completedSeason,
-                        FantasyRosterPlayer.player_id.in_(retiredPlayerIds),
-                    )
-                    .all()
-                )
-
-                if not affectedSlots:
-                    return
-
-                # Group by roster for auto-fill processing
-                rosterSlots: dict = {}  # rosterId → list of (slot, position)
-                for rp in affectedSlots:
-                    rosterSlots.setdefault(rp.roster_id, []).append(rp)
-
-                # Get all rostered player IDs (to exclude from auto-fill candidates)
-                allRosteredIds = {
-                    rp.player_id
-                    for rp in session.query(FantasyRosterPlayer.player_id)
-                    .join(FantasyRoster)
-                    .filter(FantasyRoster.season == completedSeason)
-                    .all()
-                }
-
-                # Position mapping for slot names
-                slotPositionMap = {"QB": 1, "RB": 2, "WR1": 3, "WR2": 3, "TE": 4, "K": 5}
-
-                for rosterId, retiredSlots in rosterSlots.items():
-                    roster = session.get(FantasyRoster, rosterId)
-                    if not roster:
-                        continue
-
-                    user = session.get(User, roster.user_id)
-                    autoFill = user.auto_fill_roster if user else True
-
-                    for rp in retiredSlots:
-                        retiredName = rp.player_id  # For logging
-                        slot = rp.slot
-                        session.delete(rp)
-                        logger.info(f"Removed retired player {retiredName} from roster {rosterId} slot {slot}")
-
-                        if autoFill:
-                            posValue = slotPositionMap.get(slot)
-                            if posValue is not None:
-                                # Find best available player at this position
-                                activeIds = {p.id for p in self.playerManager.activePlayers}
-                                bestPlayer = (
-                                    session.query(Player)
-                                    .filter(
-                                        Player.position == posValue,
-                                        Player.id.in_(activeIds),
-                                        ~Player.id.in_(allRosteredIds),
-                                    )
-                                    .order_by(Player.player_rating.desc())
-                                    .first()
-                                )
-                                if bestPlayer:
-                                    newRp = FantasyRosterPlayer(
-                                        roster_id=rosterId,
-                                        player_id=bestPlayer.id,
-                                        slot=slot,
-                                        points_at_lock=0.0,
-                                    )
-                                    session.add(newRp)
-                                    allRosteredIds.add(bestPlayer.id)
-                                    logger.info(f"Auto-filled {slot} with {bestPlayer.id} (rating {bestPlayer.player_rating})")
-
-                session.commit()
-                logger.info(f"Processed {len(affectedSlots)} retired player roster removals")
-            except Exception as e:
-                session.rollback()
-                logger.error(f"Error handling retired player rosters: {e}")
-                import traceback
-                logger.debug(traceback.format_exc())
-            finally:
-                session.close()
-        except ImportError:
-            pass
-
     # ─── Weekly Modifier Selection ────────────────────────────────────────────
 
     # Cascade was removed — it was a duplicate of Amplify (both doubled FPx
     # bonus portions). Existing prod rows with modifier='cascade' resolve
     # through the same code path as amplify in the calculator, but new
     # weekly rolls won't pick cascade.
+    # Fantasy/Cards fusion: 'overdrive' (×2.5 match) and 'wildcard' (force all
+    # matched) are retired — the match multiplier is gone, so both are no-ops.
+    # Dropped from the roll weights so they never surface; display/description
+    # entries stay below (legacy) for any historical rows.
     MODIFIER_WEIGHTS = {
-        "amplify": 10, "ironclad": 10, "overdrive": 10,
-        "payday": 10, "grounded": 5, "wildcard": 8,
+        "amplify": 10, "ironclad": 10,
+        "payday": 10, "grounded": 5,
         "longshot": 10, "frenzy": 10, "synergy": 10, "steady": 10,
         "fortunate": 8,
     }
 
     MODIFIER_DISPLAY = {
         "amplify": "Amplify", "ironclad": "Ironclad",
-        "overdrive": "Overdrive", "payday": "Payday", "grounded": "Grounded",
-        "wildcard": "Wildcard", "longshot": "Longshot",
+        "payday": "Payday", "grounded": "Grounded",
+        "longshot": "Longshot",
         "frenzy": "Frenzy", "synergy": "Synergy", "steady": "Steady",
         "fortunate": "Fortunate",
-        # Legacy display label kept so historical "cascade" rows still
-        # render with a friendly name in the recap screens.
+        # Legacy display labels kept so historical rows still render with a
+        # friendly name in the recap screens. 'cascade' == amplify; 'overdrive'
+        # and 'wildcard' are retired with the match multiplier (fusion).
         "cascade": "Amplify",
+        "overdrive": "Overdrive", "wildcard": "Wildcard",
     }
 
     MODIFIER_DESCRIPTIONS = {
         "amplify": "FPx bonus portions are doubled",
         "ironclad": "Streak cards can't reset this week",
-        "overdrive": "Match bonus is 2.5x instead of 1.5x",
         "payday": "Floobits earned are tripled",
         "grounded": "All FPx effects disabled",
-        "wildcard": "All cards treated as matched",
         "longshot": "Conditional card rewards doubled",
         "frenzy": "+FP values are doubled",
         "synergy": "Bonus FPx for each unique position in your card slots",
         "steady": "No special effect — all normal rules apply",
         "fortunate": "Chance card trigger rates increased by 15%",
-        # Legacy — same behavior as amplify for historical rows.
+        # Legacy — retired modifiers, kept for historical row rendering.
         "cascade": "FPx bonus portions are doubled",
+        "overdrive": "Match bonus (retired)",
+        "wildcard": "All cards treated as matched (retired)",
     }
 
     def _selectWeeklyModifier(self, season: int, week: int) -> str:
@@ -8760,22 +8565,39 @@ class SeasonManager:
                         # Day FP: roster player FP + card bonus FP for this day's weeks
                         dayFP = 0.0
                         if userEntry:
-                            from database.models import WeeklyPlayerFP, WeeklyCardBonus, FantasyRoster
+                            from database.models import (
+                                WeeklyPlayerFP, WeeklyCardBonus, FantasyRoster,
+                                EquippedCard, UserCard, CardTemplate,
+                            )
                             roster = session.query(FantasyRoster).filter_by(
                                 user_id=user.id, season=season
                             ).first()
                             if roster:
                                 from sqlalchemy import func
-                                rosterPlayerIds = [rp.player_id for rp in roster.players]
-                                if rosterPlayerIds:
-                                    dayPlayerFP = session.query(
-                                        func.coalesce(func.sum(WeeklyPlayerFP.fantasy_points), 0)
+                                # Fusion: sum each week's equipped lineup's per-player
+                                # WeeklyPlayerFP (the lineup can differ week to week), not
+                                # a single fixed roster across the day.
+                                eqRows = (
+                                    session.query(EquippedCard.week, CardTemplate.player_id)
+                                    .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+                                    .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                                    .filter(
+                                        EquippedCard.user_id == user.id,
+                                        EquippedCard.season == season,
+                                        EquippedCard.week.in_(weekRange),
+                                    ).all()
+                                )
+                                if eqRows:
+                                    fpRows = session.query(
+                                        WeeklyPlayerFP.player_id, WeeklyPlayerFP.week,
+                                        WeeklyPlayerFP.fantasy_points,
                                     ).filter(
-                                        WeeklyPlayerFP.player_id.in_(rosterPlayerIds),
                                         WeeklyPlayerFP.season == season,
                                         WeeklyPlayerFP.week.in_(weekRange),
-                                    ).scalar()
-                                    dayFP += float(dayPlayerFP or 0)
+                                    ).all()
+                                    fpMap = {(pid, wk): fp for pid, wk, fp in fpRows}
+                                    for wk, pid in eqRows:
+                                        dayFP += float(fpMap.get((pid, wk), 0) or 0)
                                 dayCardBonus = session.query(
                                     func.coalesce(func.sum(WeeklyCardBonus.bonus_fp), 0)
                                 ).filter(
@@ -10431,15 +10253,17 @@ class SeasonManager:
 
                 # Monk — never opened a pack all season (only for engaged users with a roster)
                 from database.models import (
-                    PackOpening, FantasyRoster, FantasyRosterPlayer, FantasyRosterSwap,
+                    PackOpening, FantasyRoster, EquippedCard,
                     TeamSeasonStats, CurrencyTransaction,
                 )
                 from sqlalchemy import func
-                engagedUserRows = session.query(FantasyRoster.user_id).join(
-                    FantasyRosterPlayer, FantasyRosterPlayer.roster_id == FantasyRoster.id,
-                ).filter(FantasyRoster.season == season).group_by(
-                    FantasyRoster.user_id,
-                ).having(func.count(FantasyRosterPlayer.id) >= 6).all()
+                # Fusion: an "engaged" user fielded a full lineup — equipped cards
+                # covering >= 6 distinct slots this season (not FantasyRosterPlayer).
+                engagedUserRows = session.query(EquippedCard.user_id).filter(
+                    EquippedCard.season == season,
+                ).group_by(EquippedCard.user_id).having(
+                    func.count(func.distinct(EquippedCard.slot_number)) >= 6
+                ).all()
                 engagedUserIds = {uid for (uid,) in engagedUserRows}
 
                 for uid in engagedUserIds:
@@ -10458,17 +10282,9 @@ class SeasonManager:
                     if packTxCount == 0:
                         _am.unlockSecret(session, uid, "monk")
 
-                    # Stalwart — no roster swaps this season. Swaps are
-                    # keyed to a FantasyRoster (per-season, per-user), not
-                    # directly to the user; join via roster_id.
-                    swapCount = session.query(func.count(FantasyRosterSwap.id)).join(
-                        FantasyRoster, FantasyRosterSwap.roster_id == FantasyRoster.id,
-                    ).filter(
-                        FantasyRoster.user_id == uid,
-                        FantasyRoster.season == season,
-                    ).scalar() or 0
-                    if swapCount == 0:
-                        _am.unlockSecret(session, uid, "stalwart")
+                    # Stalwart ("no roster swaps this season") is retired with the
+                    # swap system — every user would trivially qualify, so it no
+                    # longer auto-grants. (Existing holders keep it.)
 
                 # Faithful — favorite team missed playoffs 3 seasons in a row (this + prior 2)
                 if season >= 3:
@@ -10547,28 +10363,9 @@ class SeasonManager:
 
             session = get_session()
             try:
-                # Users with a FULL roster (5 players) this season
-                fullRosterRows = session.query(
-                    FantasyRoster.user_id,
-                    func.count(FantasyRosterPlayer.id).label("playerCount"),
-                ).join(
-                    FantasyRosterPlayer, FantasyRosterPlayer.roster_id == FantasyRoster.id,
-                ).filter(
-                    FantasyRoster.season == season,
-                ).group_by(FantasyRoster.user_id).having(
-                    func.count(FantasyRosterPlayer.id) >= 6,
-                ).all()
-                fullRosterUserIds = {uid for uid, _cnt in fullRosterRows}
-
-                # Purist — full roster set this week with zero cards equipped
-                for uid in fullRosterUserIds:
-                    equippedCount = session.query(func.count(EquippedCard.id)).filter(
-                        EquippedCard.user_id == uid,
-                        EquippedCard.season == season,
-                        EquippedCard.week == week,
-                    ).scalar() or 0
-                    if equippedCount == 0:
-                        _am.unlockSecret(session, uid, "purist")
+                # Purist ("full roster with zero cards equipped") is impossible in the
+                # fusion — the equipped cards ARE the roster — so the secret is retired
+                # and no longer auto-grants. (Existing holders keep it.)
 
                 # Zenith — Perfect Week AND 800+ FP in the same week.
                 # Threshold rescaled with the Balatro pass (was 300 — trivial

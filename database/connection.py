@@ -483,6 +483,25 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Fantasy/Cards fusion: EquippedCard slots become POSITION-LOCKED. Add the `slot`
+        # string (QB/RB/WR1/WR2/TE/K/FLEX) + a unique index enforcing one card per position
+        # slot per user/week. Pre-fusion rows keep slot=NULL (SQLite treats NULLs as distinct,
+        # so they don't collide); new equips always set it.
+        try:
+            conn.execute(text("ALTER TABLE equipped_cards ADD COLUMN slot TEXT"))
+            conn.commit()
+            logger.info("  Migration: added equipped_cards.slot")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_equipped_card_slot_pos "
+                "ON equipped_cards(user_id, season, week, slot)"))
+            conn.commit()
+            logger.info("  Migration: created uq_equipped_card_slot_pos index")
+        except Exception:
+            conn.rollback()
+
         # Rename achievement keys that collided with existing card effect names:
         #   windfall_* → racket_*
         #   crescendo  → zenith

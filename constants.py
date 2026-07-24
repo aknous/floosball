@@ -1178,6 +1178,38 @@ CONTEST_NARRATION = {
 }
 CONTEST_TYPE_LABELS = {t['key']: t['label'] for t in CONTEST_TYPES}
 
+# ── Card gate — the FP power bar (fantasy/cards fusion, docs/CARD_ONCARD_REBASE_PLAN.md) ──
+# Every equipped card has a POWER BAR tied to the depicted player's weekly fantasy points.
+# You always get the player's FP; the card's EFFECT is a bonus on top, unlocked by the bar.
+# One stat (FP), one number per position, a pure on/off gate (no scaling):
+#   * MOST cards fill the bar with FP — the effect unlocks once it's full (player clears the
+#     threshold), and a bench-warmer never fills it.
+#   * INVERSE / underdog cards (insurance, "reward a rough week") run the bar in REVERSE — it
+#     starts full and DEPLETES as the player scores; the effect is disabled once it empties.
+CARD_GATE_ENABLED = True
+# Per-position FP threshold (1-based QB=1…K=5). ~60-75% of each position's median weekly FP,
+# so a decent game fills a normal bar (~70% of weeks) / empties an inverse one.
+CARD_GATE_FP_THRESHOLDS = {1: 8, 2: 9, 3: 8, 4: 4, 5: 6}
+# All-Pro classification (prior-season All-Pro selections, holo+ only) lowers ITS OWN card's
+# gate threshold — an individual accolade, so it buys individual reliability ("the best
+# players deliver even on an off day"). On-card only (each card's gate.threshold is
+# independent in its effect_config); never touches the hand. Frozen at mint.
+# e.g. 0.7 -> QB 8->6, RB 9->6, WR 8->6, TE 4->3, K 6->4. Floored at 1.
+CARD_GATE_ALLPRO_MULT = 0.7
+
+# Team stacking — the lineup-synergy mechanic. Fielding N cards whose depicted players share
+# a real team grants a lineup-wide FPx that ESCALATES with the size of the largest such group
+# (correlated upside: when a team's offense goes off, its players score together — and it's
+# higher variance, trading against the FP meter's reward for consistency). Keyed by stack
+# size, capped at the highest key; a lone same-team pair starts at 2.
+CARD_TEAM_STACK_BONUS = {2: 0.05, 3: 0.12, 4: 0.22, 5: 0.35, 6: 0.50}
+# Champion classification (prior-season title winners = one team) AMPLIFIES a stack: the
+# stack bonus is multiplied by (1 + championFraction × premium), so a stack of the reigning
+# champions ("Dynasty") pays more than the same-size stack of a random team. A team accolade
+# → a team-synergy perk. Per-champion (championFraction = champions in the stack / stack
+# size), so no cliff. e.g. 0.5 -> an all-champion stack pays 1.5× the base stack bonus.
+CARD_CHAMPION_STACK_PREMIUM = 0.5
+
 # ── Drive Clock (dormant mechanic — docs/DRIVE_CLOCK_PLAN.md) ──
 # A shot-clock for possessions. Two mode knobs: unit ('seconds' of game clock vs
 # 'plays' per snap) × reset ('possession' = a hard cap on the whole drive,
@@ -1456,6 +1488,9 @@ RB_SCREEN_CHANCE = 1                # % of clean (non-pressure) dropbacks that a
 RB_SCREEN_BASE_YAC = 5.5           # mean YAC on a screen at RB speed pivot 78
 
 # Power-Up Shop
+# RETIRED (fantasy/cards fusion): roster swaps are gone, so Dispensation has nothing
+# to grant. Kept for display of any historical purchases; removed from POWERUP_CATALOG
+# so it can't be bought.
 POWERUP_EXTRA_SWAP = {
     "slug": "extra_swap",
     "displayName": "Dispensation",
@@ -1468,6 +1503,9 @@ POWERUP_MODIFIER_NULLIFIER = {
     "description": "Your cards operate under Steady (no modifier effect) this week.",
     "price": 60,
 }
+# RETIRED (fantasy/cards fusion): the FLEX slot is now unlocked by Accession
+# (temp_card_slot) or an MVP card, so Conscription is redundant. Kept for display of
+# any historical purchases; removed from POWERUP_CATALOG so it can't be bought.
 POWERUP_TEMP_FLEX = {
     "slug": "temp_flex",
     "displayName": "Conscription",
@@ -1479,7 +1517,7 @@ POWERUP_TEMP_FLEX = {
 POWERUP_TEMP_CARD_SLOT = {
     "slug": "temp_card_slot",
     "displayName": "Accession",
-    "description": "Adds a 6th card equipment slot for 4 weeks.",
+    "description": "Unlocks the FLEX lineup slot (any position) for 4 weeks.",
     "price": 200,
     "durationWeeks": 4,
     "seasonLimit": 2,
@@ -1506,10 +1544,10 @@ POWERUP_INCOME_BOOST = {
     "boostMultiplier": INCOME_BOOST_MULTIPLIER,
 }
 
+# extra_swap + temp_flex retired in the fantasy/cards fusion (see notes above) — not
+# listed here so the shop never offers them; their defs remain for historical display.
 POWERUP_CATALOG = {
-    "extra_swap": POWERUP_EXTRA_SWAP,
     "modifier_nullifier": POWERUP_MODIFIER_NULLIFIER,
-    "temp_flex": POWERUP_TEMP_FLEX,
     "temp_card_slot": POWERUP_TEMP_CARD_SLOT,
     "fortunes_favor": POWERUP_FORTUNES_FAVOR,
     "income_boost": POWERUP_INCOME_BOOST,
