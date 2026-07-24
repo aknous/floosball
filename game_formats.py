@@ -55,6 +55,16 @@ class GameFormat:
         stable-state check instead of latching on a transient score."""
         return True
 
+    # ── Game pressure ─────────────────────────────────────────────────────────
+    def pressureQuarterClock(self, game) -> Tuple[int, int]:
+        """The (quarter, clock-seconds) the pressure model should read for its
+        primary 'how late / how decisive' axis. Default is the real clock/quarter —
+        correct for standard and every format whose quarter advances off a real or
+        synthetic clock (frames/play_limit/chess_clock/target). Clock-LESS formats
+        (innings) leave the real quarter stuck at 1, so they override this to map
+        their own period counters onto an effective quarter+clock."""
+        return game.currentQuarter, game.gameClockSeconds
+
     # ── Win probability ───────────────────────────────────────────────────────
     def adjustGameProgress(self, game, gameProgress: float) -> float:
         """Map elapsed-fraction (0 kickoff → 1 end of regulation). Formats where the
@@ -486,6 +496,24 @@ class InningsFormat(GameFormat):
 
     def _tries(self, game) -> int:
         return max(1, int(getattr(game.gameRules, 'triesPerInning', 3)))
+
+    def pressureQuarterClock(self, game):
+        """Map the try/inning counters onto an effective (quarter, seconds) for the
+        pressure model — the real clock/quarter are inert here. Innings-remaining sets
+        the quarter (final inning → Q4, then count back; extra innings → Q5/OT), and
+        how deep into the at-bat (bottom half + outs used) drains a synthetic clock."""
+        N = self._innings(game)
+        inning = getattr(game, '_inningsNumber', 1)
+        if inning > N:            # extra innings — every at-bat decides
+            return 5, 0
+        # Final inning → Q4, second-to-last → Q3, … (clamped so long games ramp only
+        # over their final few innings, like a real 4th-quarter push).
+        effQ = max(1, 4 - (N - inning))
+        T = self._tries(game)
+        half = getattr(game, '_inningsHalf', 'top')
+        tries = getattr(game, '_inningsTries', 0)
+        consumed = min(1.0, ((0 if half == 'top' else T) + tries) / (2 * T))
+        return effQ, int(round(900 * (1 - consumed)))
 
     def consumesRealTime(self) -> bool:
         return False

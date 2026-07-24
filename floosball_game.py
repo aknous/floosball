@@ -7727,10 +7727,14 @@ class Game:
         # bucketing makes 'decisive moment' a natural function of when in
         # the game it happens — final 2 min and OT spike pressure hard, mid-
         # quarter plays don't.
-        secs = self.gameClockSeconds
-        if self.currentQuarter == 5:  # OT — every play decides
+        # Format-aware: clock-less formats (innings) never advance the real quarter/
+        # clock, so they map their own period counters onto an EFFECTIVE (quarter, secs)
+        # here — otherwise every play reads as Q1 and pressure never ramps. Standard
+        # (and the clock-driven formats) return the real values unchanged.
+        effQuarter, secs = self.format.pressureQuarterClock(self)
+        if effQuarter == 5:  # OT — every play decides
             pressure += 50
-        elif self.currentQuarter == 4:
+        elif effQuarter == 4:
             if secs <= 60:    # final minute
                 pressure += 55
             elif secs <= 120: # final 2 min — crunch time
@@ -7741,9 +7745,9 @@ class Game:
                 pressure += 18
             else:
                 pressure += 10
-        elif self.currentQuarter == 3:
+        elif effQuarter == 3:
             pressure += 15 if secs <= 60 else 10  # end-of-quarter bump
-        elif self.currentQuarter == 2:
+        elif effQuarter == 2:
             pressure += 15 if secs <= 60 else 5   # end-of-half bump
         else:
             pressure += 5
@@ -7763,7 +7767,7 @@ class Game:
 
         # Scale score pressure by quarter: Q1=25%, Q2=50%, Q3=75%, Q4/OT=100%
         quarterScale = {1: 0.25, 2: 0.5, 3: 0.75, 4: 1.0, 5: 1.0}
-        pressure += scorePressure * quarterScale.get(self.currentQuarter, 1.0)
+        pressure += scorePressure * quarterScale.get(effQuarter, 1.0)
 
         # Down and distance pressure (0-20)
         if self.down == self.gameRules.downsPerSeries:
@@ -7790,7 +7794,7 @@ class Game:
         # prevents high team modifiers (Floosbowl 2.5x) from inflating
         # routine early plays into clutch/choke territory
         earlyGameScale = {1: 0.3, 2: 0.5, 3: 0.7, 4: 1.0, 5: 1.0}
-        pressure *= earlyGameScale.get(self.currentQuarter, 1.0)
+        pressure *= earlyGameScale.get(effQuarter, 1.0)
 
         # Apply the team pressure modifier (playoff importance, Floosbowl,
         # prior-season expectations, in-season elimination state, etc.) with
