@@ -86,6 +86,8 @@ class EventType(Enum):
 
     # Live in-game rally — fans cheering for a team mid-game
     GAME_RALLY = "game_rally"
+    # How many distinct users currently have a game open (viewer count).
+    VIEWER_COUNT = "viewer_count"
 
     # Currency — passive grants (excludes user-initiated spends/refunds)
     FLOOBITS_RECEIVED = "floobits_received"
@@ -731,6 +733,23 @@ class GmEvent:
             'event': EventType.GM_FA_DIRECTIVES.value,
             'timestamp': datetime.now().isoformat(),
             'directives': directives,
+        }
+
+
+class ViewerEvent:
+    """Factory for viewer-count messages."""
+
+    @staticmethod
+    def count(gameId: str, count: int) -> Dict[str, Any]:
+        """How many distinct users have `gameId` open right now.
+
+        Emitted when a viewer joins or leaves rather than on a timer, so a quiet
+        game costs nothing. Counted by user id, so several tabs are one viewer and
+        a logged-out socket isn't counted at all."""
+        return {
+            'event': EventType.VIEWER_COUNT.value,
+            'gameId': str(gameId),
+            'count': int(count),
         }
 
 
