@@ -4618,10 +4618,12 @@ def buildGateSpec(effectName: str, position: int, classification: str = None) ->
     fills. No per-effect exemptions beyond that; only the no-effect floor card ('none') is
     ungated (owner call 2026-07-23).
 
-    A **Champion**-classified card (prior-season title winner) lowers ITS OWN threshold by
-    `CARD_GATE_CHAMPION_MULT` — "proven players deliver." This is on-card only: it's baked
-    into this card's frozen gate.threshold and never touches any other card in the hand."""
-    from constants import CARD_GATE_ENABLED, CARD_GATE_FP_THRESHOLDS, CARD_GATE_CHAMPION_MULT
+    An **All-Pro**-classified card (prior-season All-Pro) lowers ITS OWN threshold by
+    `CARD_GATE_ALLPRO_MULT` — an individual accolade buys individual reliability ("the best
+    players deliver"). On-card only: baked into this card's frozen gate.threshold, never
+    touches any other card. (Champion is a TEAM accolade → it amplifies a team STACK instead;
+    see calculateWeekCardBonuses.)"""
+    from constants import CARD_GATE_ENABLED, CARD_GATE_FP_THRESHOLDS, CARD_GATE_ALLPRO_MULT
     if not CARD_GATE_ENABLED:
         return None
     if not effectName or effectName in ('none', ''):
@@ -4629,16 +4631,16 @@ def buildGateSpec(effectName: str, position: int, classification: str = None) ->
     threshold = CARD_GATE_FP_THRESHOLDS.get(position)
     if not threshold:
         return None
-    champion = bool(classification) and 'champion' in classification
-    if champion:
-        threshold = max(1, round(threshold * CARD_GATE_CHAMPION_MULT))
+    allPro = bool(classification) and 'all_pro' in classification
+    if allPro:
+        threshold = max(1, round(threshold * CARD_GATE_ALLPRO_MULT))
     inverse = effectName in _INVERSE_GATE_EFFECTS
-    champNote = " (Champion)" if champion else ""
+    apNote = " (All-Pro)" if allPro else ""
     if inverse:
-        text = f"Active while this player stays under {threshold} FP (rewards a rough week){champNote}"
+        text = f"Active while this player stays under {threshold} FP (rewards a rough week){apNote}"
     else:
-        text = f"Unlocks once this player reaches {threshold} FP{champNote}"
-    return {'threshold': threshold, 'inverse': inverse, 'text': text, 'champion': champion}
+        text = f"Unlocks once this player reaches {threshold} FP{apNote}"
+    return {'threshold': threshold, 'inverse': inverse, 'text': text, 'allPro': allPro}
 
 
 def gateRatio(gate: dict, ctx, cardPlayerId: int) -> float:

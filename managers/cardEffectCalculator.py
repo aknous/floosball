@@ -272,10 +272,12 @@ class CardBonusResult:
     multFactors: List[float] = field(default_factory=list)  # All FPx factors (each >1)
     floobitsEarned: int = 0
     cardBreakdowns: List[CardBreakdown] = field(default_factory=list)
-    # Dream Team (All-Pro set bonus): how many All-Pro cards were fielded and the
-    # lineup-wide FPx delta they granted (0 below 2). For the hand-synergy display.
-    dreamTeamCount: int = 0
-    dreamTeamBonus: float = 0.0
+    # Team stacking: the size of the largest same-team group fielded, how many of those are
+    # Champion-classified (which amplifies the stack), and the lineup-wide FPx delta granted
+    # (0 below a 2-stack). For the hand-synergy display.
+    stackSize: int = 0
+    stackChampions: int = 0
+    stackBonus: float = 0.0
 
 
 # Effects that use the roster player's stats at the card's position
@@ -1159,18 +1161,37 @@ def calculateWeekCardBonuses(
             synergyMult = 1 + uniquePositions * 0.1
             result.multFactors.append(round(synergyMult, 2))
 
-    # Dream Team — the All-Pro set bonus. Fielding N All-Pro-classified cards grants a
-    # lineup-wide FPx that escalates with the count (a lone All-Pro is not a dream team,
-    # so it starts at 2). Hand-wide prestige, distinct from the on-card Champion gate cut.
-    from constants import CARD_DREAM_TEAM_BONUS
-    apCount = sum(1 for eq in equippedCards
-                  if 'all_pro' in (getattr(eq.user_card.card_template, 'classification', None) or ''))
-    if apCount >= 2 and CARD_DREAM_TEAM_BONUS:
-        dtDelta = CARD_DREAM_TEAM_BONUS.get(min(apCount, max(CARD_DREAM_TEAM_BONUS)), 0.0)
-        if dtDelta > 0:
-            result.multFactors.append(round(1.0 + dtDelta, 2))
-            result.dreamTeamCount = apCount
-            result.dreamTeamBonus = dtDelta
+    # Team stacking — fielding multiple cards whose depicted players share a real team grants
+    # a lineup-wide FPx that escalates with the largest same-team group. Champion cards in the
+    # stack AMPLIFY it (the reigning champs are one team, so a champ stack is the premium
+    # "Dynasty" stack). Pick the best-paying group so ties resolve toward the champion one.
+    from constants import CARD_TEAM_STACK_BONUS, CARD_CHAMPION_STACK_PREMIUM
+    if CARD_TEAM_STACK_BONUS:
+        byTeam = {}
+        for eq in equippedCards:
+            tmpl = eq.user_card.card_template
+            tid = getattr(tmpl, 'team_id', None)
+            if not tid:
+                continue
+            isChamp = 'champion' in (getattr(tmpl, 'classification', None) or '')
+            grp = byTeam.setdefault(tid, [0, 0])  # [size, champions]
+            grp[0] += 1
+            if isChamp:
+                grp[1] += 1
+        _maxKey = max(CARD_TEAM_STACK_BONUS)
+        best = None  # (delta, size, champions)
+        for size, champs in byTeam.values():
+            if size < 2:
+                continue
+            base = CARD_TEAM_STACK_BONUS.get(min(size, _maxKey), 0.0)
+            delta = base * (1.0 + (champs / size) * CARD_CHAMPION_STACK_PREMIUM)
+            if best is None or delta > best[0]:
+                best = (delta, size, champs)
+        if best and best[0] > 0:
+            result.multFactors.append(round(1.0 + best[0], 3))
+            result.stackSize = best[1]
+            result.stackChampions = best[2]
+            result.stackBonus = round(best[0], 3)
 
     result.totalBonusFP = round(result.totalBonusFP, 2)
     return result

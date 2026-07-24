@@ -843,9 +843,10 @@ class FantasyTracker:
                             "count": sum(1 for b in calcResult.cardBreakdowns if b.matchMultiplied),
                             "total": len(calcResult.cardBreakdowns),
                         },
-                        "dreamTeam": {
-                            "count": calcResult.dreamTeamCount,
-                            "bonus": round(calcResult.dreamTeamBonus, 2),
+                        "stack": {
+                            "size": calcResult.stackSize,
+                            "champions": calcResult.stackChampions,
+                            "bonus": round(calcResult.stackBonus, 2),
                         },
                     }
                     eqSummary = {

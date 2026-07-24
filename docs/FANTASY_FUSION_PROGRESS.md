@@ -175,26 +175,38 @@ own player FP.
    floobits; only 2 amplifiers, both holo/diamond). Seed holo chance cards + an FP-output
    base chance card + an accessible (base/holo) amplifier so a low-rarity chance build is
    possible.
-4. **Repurpose the AP / CH classifications — DONE (2026-07-24).** Both freed
-   classifications now have a gameplay purpose (owner calls):
-   - **Champion (CH) → on-card gate reduction.** A champion-classified card mints a LOWER
-     gate threshold (`CARD_GATE_CHAMPION_MULT` 0.7 → QB/RB/WR 8-9→6, TE 4→3, K 6→4), so its
-     power bar fills more easily — "proven players deliver." Strictly on-card (baked into
-     that card's frozen `gate.threshold`; never touches the hand). `buildGateSpec` /
-     `buildEffectConfig` take `classification`; `cardManager` passes it at mint. The power-bar
-     UI already shows the lower threshold + a "(Champion)" note. Compound classifications
-     (e.g. `mvp_champion`) get it too.
-   - **All-Pro (AP) → "Dream Team" set bonus.** Fielding N All-Pro-classified cards grants a
-     lineup-wide FPx that ESCALATES with the count (`CARD_DREAM_TEAM_BONUS` {2:.06, 3:.14,
-     4:.24, 5:.36, 6:.50}); a lone All-Pro is not a dream team (starts at 2), a full 6-AP
-     lineup is +50%. Hand-wide by design (distinct from CH's on-card cut). Counts EQUIPPED
-     (fielded) AP cards regardless of whether each fired. Applied as an FPx factor in
-     `calculateWeekCardBonuses` (like the synergy modifier); surfaced in `handSynergies` +
-     a gold "Dream Team · N All-Pros +X% FPx" row in the scoring breakdown.
-   - Validated: champion thresholds per position, escalating dream-team bonus (2→+6% … 6→
-     +50%), all card unit tests pass, tsc/eslint clean. **Open (minor):** the pre-lock
-     projection preview includes the dream-team FPx in its total but doesn't yet render the
-     synergy label (scoring breakdown does).
+4. **New strategy layer: team stacking + classification roles — DONE (2026-07-24).**
+   Replaces the removed match-bonus tension ("best player vs. player that fires my card")
+   with a fusion-native one. Design walked through with the owner: since Champion cards are
+   all one team (the title roster) while All-Pros are cross-team, a "Champion set bonus"
+   would just re-label same-team stacking — so Champion AMPLIFIES the stack (a modifier, not
+   a parallel bonus), All-Pro takes the on-card gate cut, and the old Dream Team set retired.
+   - **Team stacking (the mechanic).** Fielding N cards whose depicted players share a real
+     team grants a lineup-wide FPx that escalates with the LARGEST same-team group
+     (`CARD_TEAM_STACK_BONUS` {2:.05, 3:.12, 4:.22, 5:.35, 6:.50}). Correlated upside (a
+     team's offense booms together) at higher variance — trades against the FP meter's reward
+     for consistency. Computed in `calculateWeekCardBonuses` off each card's
+     `card_template.team_id`; the best-paying group wins ties.
+   - **Champion (CH) → stack amplifier.** A stack's bonus is `× (1 + championFraction ×
+     CARD_CHAMPION_STACK_PREMIUM 0.5)`, per-champion so no cliff — an all-champion stack pays
+     1.5× the base ("Dynasty"). Team accolade → team-synergy perk. A lone champion does
+     nothing special (needs a stack of 2+); the champions pack in circulation means users can
+     get ≥2 champion players/season (owner).
+   - **All-Pro (AP) → on-card gate cut.** An All-Pro card mints a LOWER gate threshold
+     (`CARD_GATE_ALLPRO_MULT` 0.7 → QB/RB/WR 8-9→6, TE 4→3, K 6→4) — individual accolade →
+     individual reliability. Frozen at mint (`buildGateSpec`/`buildEffectConfig` take
+     `classification`; `cardManager` passes it). The power-bar UI shows the lower bar + an
+     "(All-Pro)" note. Champion no longer cuts the gate.
+   - **Emergent dynasty synergy:** stacking the champ team gives the team-stack bonus AND the
+     champion amplifier AND each card's All-Pro-style reliability (if also All-Pro) — the
+     dynasty is the biggest, most-amplified, most-dependable stack, with no bespoke rule.
+   - Surfaced in `handSynergies.stack` (size/champions/bonus) + a "Dynasty / Team Stack · N
+     same-team (M champs) +X% FPx" row in the scoring breakdown. Deterministic (team
+     composition), so it flows into the projection total automatically.
+   - Validated: `test_team_stack.py` (escalation, champion amplifier, per-champion scaling,
+     tie-break, gate cut moved to All-Pro); all live tests pass; tsc/eslint clean.
+     **Open (minor):** projection preview includes the stack FPx in its total but doesn't
+     render the synergy label (same as the other hand synergies).
 
 5. **Stage 3 — retune card power for the 6-card lineup.** Now that lineups are a full
    6-7 cards (was ~5) and the gate zeros ~30%, recalibrate per-edition magnitudes against
