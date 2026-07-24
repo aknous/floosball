@@ -443,7 +443,9 @@ class CardManager:
                     edition=edition,
                 )
 
-                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId)
+                # Pass classification so a Champion card mints a lower (on-card) gate threshold.
+                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId,
+                                                  classification=classification)
                 rarityWeight = computeRarityWeight(edition, rating)
                 sellValue = getSellValue(edition, isActive=True)
 

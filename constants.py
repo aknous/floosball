@@ -1190,6 +1190,19 @@ CARD_GATE_ENABLED = True
 # Per-position FP threshold (1-based QB=1…K=5). ~60-75% of each position's median weekly FP,
 # so a decent game fills a normal bar (~70% of weeks) / empties an inverse one.
 CARD_GATE_FP_THRESHOLDS = {1: 8, 2: 9, 3: 8, 4: 4, 5: 6}
+# Champion classification (prior-season title winners, holo+ only) lowers ITS OWN card's
+# gate threshold — "proven players deliver," so the bar fills more easily. On-card only
+# (each card's gate.threshold is independent in its effect_config); never touches the hand.
+# Frozen at mint. e.g. 0.7 -> QB 8->6, RB 9->6, WR 8->6, TE 4->3, K 6->4. Floored at 1.
+CARD_GATE_CHAMPION_MULT = 0.7
+
+# "Dream Team" — the All-Pro (AP) set bonus. Fielding N All-Pro-classified cards in the
+# lineup grants a lineup-wide FPx that ESCALATES with the count (a single All-Pro is not a
+# dream team, so it starts at 2). Values are FPx deltas keyed by AP count, capped at the
+# highest key; AP cards are holo+ and rare (last season's 6-player All-Pro team), so a full
+# stack is a genuine prestige flex. Hand-wide by design (distinct from the on-card Champion
+# gate reduction). Tune here.
+CARD_DREAM_TEAM_BONUS = {2: 0.06, 3: 0.14, 4: 0.24, 5: 0.36, 6: 0.50}
 
 # ── Drive Clock (dormant mechanic — docs/DRIVE_CLOCK_PLAN.md) ──
 # A shot-clock for possessions. Two mode knobs: unit ('seconds' of game clock vs

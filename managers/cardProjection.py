@@ -608,6 +608,16 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
             kickerSeasonFgMisses += (fgAtt - fgs)
             break
 
+    # Per-week FP history for the expected-value gate: P(player clears the bar) is
+    # estimated from these completed weeks (weeks before the one being projected).
+    from database.models import WeeklyPlayerFP as _WPF
+    playerWeeklyFP: Dict[int, list] = {}
+    for _r in (session.query(_WPF)
+               .filter(_WPF.season == season, _WPF.week < week,
+                       _WPF.player_id.in_(rosterPlayerIds))
+               .all()):
+        playerWeeklyFP.setdefault(_r.player_id, []).append(_r.fantasy_points or 0)
+
     return CardCalcContext(
         isProjection=True,
         favoriteTeamWinProb=winProb,
@@ -618,6 +628,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         kickerSeasonFgMisses=kickerSeasonFgMisses,
         rosterPlayerIds=rosterPlayerIds,
         weekPlayerStats=weekPlayerStats,
+        playerWeeklyFP=playerWeeklyFP,
         weekRawFP=weekRawFP,
         rosterPlayerRatings=rosterPlayerRatings,
         rosterTotalTds=int(round(rosterTotalTds)),

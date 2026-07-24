@@ -67,6 +67,7 @@ separate roster / match bonus / swaps / temp_flex.
 | G1. Card gate — FP POWER BAR (replaced the varied-stat ramp) | ✅ DONE, validated end-to-end | `d1fb64c` |
 | G2. Descriptions say "this player" + show the gate | ✅ DONE | `d1d56ae` |
 | G3. Position-stat guardrail test | ✅ DONE | `792d4fc` |
+| G4. FP power-bar UI — live meter on the card + breakdown GATE marker | ✅ DONE (tsc/eslint clean) | (this branch) |
 
 ## Phase 8c — dead FantasyRoster.tsx untangle (DONE, 2026-07-23, frontend branch)
 The old `FantasyRoster` component (the pre-fusion roster/swap page, ~1900 lines) was fully
@@ -100,6 +101,25 @@ Lineup + ScoringPane`. But it still held the ONE live export ScoringPane needs
 - **Still open (Phase 8b proper):** the leaderboard/history endpoints that join
   `fantasy_roster_players` (`GET /api/fantasy/leaderboard/weekly`, `/api/history/user-records`)
   and retiring the shop swap UI — see the START HERE / 7b-iii section below.
+
+## G4 — FP power-bar UI (DONE, 2026-07-23)
+The gate was mechanically live but invisible to players (backend exposed `gateText` for a
+chip that was never built; the mint-time gate line was even stripped from the served detail
+by the serializer's `_rebuildTemplates`). Built the surfacing:
+- **Live power bar on the card** (`TradingCard.tsx`, new `GateBar` + optional `gateFP` prop):
+  on the lineup a fill meter shows the depicted player's week FP vs the threshold, colored
+  green (ON) / grey (`X / T FP · OFF`), and the effect name/tagline dim when the bar isn't
+  met. In collection/shop (no live FP) it shows the static requirement chip ("Unlocks at 8
+  FP" / "Active under 8 FP" for inverse). Reads `card.effectConfig.gate` (already serialized).
+- **Wired** `Lineup.tsx` to pass `gateFP={weekFPBySlot[slot]}` (the depicted player's live
+  week FP, already computed there from the snapshot).
+- **Scoring-breakdown marker** — `CardBreakdown` now carries `gateActive` / `gateThreshold`
+  (`cardEffectCalculator.py`, from `ctx._gateRatios`), serialized in `_breakdownToDict`
+  (`fantasyTracker.py`) and surfaced as a grey **GATE** pill (hover: "needs N FP — scored
+  nothing this week") on gated-off cards in `PointsBreakdownPanel.tsx`.
+- **Note:** the chip/bar is the gate's surface, so the serializer's detail-strip was left
+  as-is (re-appending would double-show the gate). Verified: `gateActive` True→fired /
+  False→zeroed on the breakdown; all card unit tests pass; tsc + eslint clean on touched files.
 
 ## Phase 9 — per-edition power retune (DONE, 2026-07-23)
 Fusion fields a full 6-card lineup instead of ~5, so aggregate card bonus per user was
@@ -155,20 +175,26 @@ own player FP.
    floobits; only 2 amplifiers, both holo/diamond). Seed holo chance cards + an FP-output
    base chance card + an accessible (base/holo) amplifier so a low-rarity chance build is
    possible.
-4. **Repurpose the AP / CH classifications.** Under fusion MVP took over the FLEX
-   unlock; Champion's old FLEX-slot job and All-Pro's old roster-swap grant both
-   evaporated, so those two classifications have NO gameplay effect now (they still get
-   stamped, still drive the Champion/All-Pro themed packs, and still boost sell/combine
-   value — champion 2.0x / all_pro 1.5x — but do nothing during scoring). Give them an
-   in-game purpose. Options, in the power-bar world:
-   - **Lower the FP threshold** — a prestige card unlocks its bar at a lower FP ("proven
-     players deliver"). Fits the power bar with no new mechanic. Cleanest.
-   - **A gate floor** — prestige cards never fully gate off; even a bad game leaves a small
-     partial effect (they're never dead).
-   - **Self-boost** — the prestige card's effect is a flat % stronger (the plan's original
-     "elite cards boost their own effect" candidate). Adds a multiplier layer.
-   - **Set bonus** — equipping N prestige cards grants a "dream team" bonus (deckbuilding
-     incentive; more complex). NEEDS an owner design call.
+4. **Repurpose the AP / CH classifications — DONE (2026-07-24).** Both freed
+   classifications now have a gameplay purpose (owner calls):
+   - **Champion (CH) → on-card gate reduction.** A champion-classified card mints a LOWER
+     gate threshold (`CARD_GATE_CHAMPION_MULT` 0.7 → QB/RB/WR 8-9→6, TE 4→3, K 6→4), so its
+     power bar fills more easily — "proven players deliver." Strictly on-card (baked into
+     that card's frozen `gate.threshold`; never touches the hand). `buildGateSpec` /
+     `buildEffectConfig` take `classification`; `cardManager` passes it at mint. The power-bar
+     UI already shows the lower threshold + a "(Champion)" note. Compound classifications
+     (e.g. `mvp_champion`) get it too.
+   - **All-Pro (AP) → "Dream Team" set bonus.** Fielding N All-Pro-classified cards grants a
+     lineup-wide FPx that ESCALATES with the count (`CARD_DREAM_TEAM_BONUS` {2:.06, 3:.14,
+     4:.24, 5:.36, 6:.50}); a lone All-Pro is not a dream team (starts at 2), a full 6-AP
+     lineup is +50%. Hand-wide by design (distinct from CH's on-card cut). Counts EQUIPPED
+     (fielded) AP cards regardless of whether each fired. Applied as an FPx factor in
+     `calculateWeekCardBonuses` (like the synergy modifier); surfaced in `handSynergies` +
+     a gold "Dream Team · N All-Pros +X% FPx" row in the scoring breakdown.
+   - Validated: champion thresholds per position, escalating dream-team bonus (2→+6% … 6→
+     +50%), all card unit tests pass, tsc/eslint clean. **Open (minor):** the pre-lock
+     projection preview includes the dream-team FPx in its total but doesn't yet render the
+     synergy label (scoring breakdown does).
 
 5. **Stage 3 — retune card power for the 6-card lineup.** Now that lineups are a full
    6-7 cards (was ~5) and the gate zeros ~30%, recalibrate per-edition magnitudes against

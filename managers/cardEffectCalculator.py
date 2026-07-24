@@ -41,6 +41,10 @@ class CardCalcContext:
     # Core roster data
     rosterPlayerIds: Set[int] = field(default_factory=set)
     weekPlayerStats: Dict[int, dict] = field(default_factory=dict)
+    # Projection only: each depicted player's per-week FP history this season, so the
+    # expected-value projection can weight a gated card by P(player clears the bar) instead
+    # of hard-gating on the season average. Empty in the live/week-end paths.
+    playerWeeklyFP: Dict[int, list] = field(default_factory=dict)
     weekRawFP: float = 0.0
     rosterPlayerRatings: Dict[int, int] = field(default_factory=dict)
     rosterTotalTds: int = 0
@@ -255,6 +259,12 @@ class CardBreakdown:
     streakActive: Optional[bool] = None  # None = not a streak card, True/False = condition met this week
     streakCount: int = 0  # Current streak count
 
+    # FP power-bar gate: None = ungated (no-effect floor card), True = the depicted
+    # player cleared the bar this week (effect fired), False = bar not met (effect
+    # scored nothing). Drives the "gate not met" marker in the scoring breakdown.
+    gateActive: Optional[bool] = None
+    gateThreshold: float = 0.0  # the position FP threshold this card's bar needs
+
 
 @dataclass
 class CardBonusResult:
@@ -262,6 +272,10 @@ class CardBonusResult:
     multFactors: List[float] = field(default_factory=list)  # All FPx factors (each >1)
     floobitsEarned: int = 0
     cardBreakdowns: List[CardBreakdown] = field(default_factory=list)
+    # Dream Team (All-Pro set bonus): how many All-Pro cards were fielded and the
+    # lineup-wide FPx delta they granted (0 below 2). For the hand-synergy display.
+    dreamTeamCount: int = 0
+    dreamTeamBonus: float = 0.0
 
 
 # Effects that use the roster player's stats at the card's position
@@ -795,6 +809,16 @@ def _computeCardPass(
         elif category == "floobits" or any(k in configAndPrimary for k in _FLOOBITS_KEYS):
             outputType = "floobits"
 
+    # FP power-bar gate outcome for this card — computeEffect (above) stashed the
+    # on/off ratio on ctx._gateRatios[eq.id] for gated cards.
+    _gate = effectConfig.get("gate") or {}
+    _gateThreshold = _gate.get("threshold", 0) or 0
+    _gateActive = None
+    if _gateThreshold:
+        _ratio = (getattr(ctx, "_gateRatios", None) or {}).get(eq.id)
+        if _ratio is not None:
+            _gateActive = _ratio >= 1.0
+
     return CardBreakdown(
         slotNumber=eq.slot_number,
         edition=cardEdition,
@@ -829,6 +853,8 @@ def _computeCardPass(
         chanceTriggered=primary.chanceTriggered,
         streakActive=ctx.liveStreakConditionsMet.get(eq.id) if category == "streak" and not (effectConfig.get("streakConfig") or {}).get("noReset") else None,
         streakCount=ctx.streakCounts.get(eq.id, 0) if category == "streak" and not (effectConfig.get("streakConfig") or {}).get("noReset") else 0,
+        gateActive=_gateActive,
+        gateThreshold=_gateThreshold,
     )
 
 
@@ -1054,6 +1080,14 @@ def calculateWeekCardBonuses(
     _fpGate = getattr(ctx, "_gateRatios", None) or {}
     ctx._firstPassGatedCount = len(_fpGate)
     ctx._firstPassGatedOn = sum(1 for r in _fpGate.values() if r >= 1.0)
+    # Product of the first-pass gate ratios — Full House scales its reward by it. Live
+    # ratios are 1.0/0.0 so this is 1.0 iff every first-pass card cleared (else 0.0), an
+    # exact fire/no-fire. In the expected projection the ratios are fractional clear
+    # probabilities, so the product is the JOINT chance all of them clear (its true EV).
+    _prod = 1.0
+    for _r in _fpGate.values():
+        _prod *= _r
+    ctx._firstPassGateProduct = _prod
 
     # Pre-trigger pass: for each second-pass card, determine whether it would
     # produce non-zero output given only first-pass results. Stash on ctx so
@@ -1124,6 +1158,19 @@ def calculateWeekCardBonuses(
         if uniquePositions > 1:
             synergyMult = 1 + uniquePositions * 0.1
             result.multFactors.append(round(synergyMult, 2))
+
+    # Dream Team — the All-Pro set bonus. Fielding N All-Pro-classified cards grants a
+    # lineup-wide FPx that escalates with the count (a lone All-Pro is not a dream team,
+    # so it starts at 2). Hand-wide prestige, distinct from the on-card Champion gate cut.
+    from constants import CARD_DREAM_TEAM_BONUS
+    apCount = sum(1 for eq in equippedCards
+                  if 'all_pro' in (getattr(eq.user_card.card_template, 'classification', None) or ''))
+    if apCount >= 2 and CARD_DREAM_TEAM_BONUS:
+        dtDelta = CARD_DREAM_TEAM_BONUS.get(min(apCount, max(CARD_DREAM_TEAM_BONUS)), 0.0)
+        if dtDelta > 0:
+            result.multFactors.append(round(1.0 + dtDelta, 2))
+            result.dreamTeamCount = apCount
+            result.dreamTeamBonus = dtDelta
 
     result.totalBonusFP = round(result.totalBonusFP, 2)
     return result

@@ -843,6 +843,10 @@ class FantasyTracker:
                             "count": sum(1 for b in calcResult.cardBreakdowns if b.matchMultiplied),
                             "total": len(calcResult.cardBreakdowns),
                         },
+                        "dreamTeam": {
+                            "count": calcResult.dreamTeamCount,
+                            "bonus": round(calcResult.dreamTeamBonus, 2),
+                        },
                     }
                     eqSummary = {
                         "weekRawFP": round(weekRawFP, 1),
@@ -1633,4 +1637,6 @@ class FantasyTracker:
             "chanceTriggered": b.chanceTriggered,
             "streakActive": b.streakActive,
             "streakCount": b.streakCount,
+            "gateActive": b.gateActive,
+            "gateThreshold": b.gateThreshold,
         }

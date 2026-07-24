@@ -1842,7 +1842,8 @@ _ALL_IN_STUD_LINE = {1: 22, 2: 22, 3: 20, 4: 14, 5: 15}
 # ─── Config Builder ──────────────────────────────────────────────────────────
 
 def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=None,
-                      forceEffect: str = None, forceCategory: str = None) -> dict:
+                      forceEffect: str = None, forceCategory: str = None,
+                      classification: str = None) -> dict:
     """Build the effect_config JSON for a new card template.
 
     Effects are drawn from a shared pool (all positions) plus position-exclusive
@@ -2010,7 +2011,7 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
         config["isChanceAmplifier"] = True
     # Card gate: freeze the depicted-player performance gate into the config so live
     # scoring and projection read the same spec (docs/CARD_ONCARD_REBASE_PLAN.md).
-    gate = buildGateSpec(effectName, position)
+    gate = buildGateSpec(effectName, position, classification)
     if gate:
         config["gate"] = gate
         # Surface the gate on the card. Kept as its own field so the frontend can
@@ -3897,19 +3898,30 @@ def _computeFullRoster(primary, ctx, cardPlayerId, eqId):
     before any second-pass card computes, so this reads a clean, order-independent tally of
     the first-pass value cards only (no-effect floor cards carry no gate and second-pass
     cross cards aren't counted). Full House's own gate (on its depicted player) is applied
-    centrally afterward, so its own player must show up too."""
+    centrally afterward, so its own player must show up too.
+
+    Scales its reward by the PRODUCT of the first-pass gate ratios. Live those ratios are
+    1.0/0.0, so the product is exactly 1.0 (all cleared → full reward) or 0.0 (any cold →
+    nothing). In the expected projection the ratios are fractional clear probabilities, so
+    the product is the joint chance all of them clear and the reward becomes the true EV
+    (instead of the old all-or-nothing on the season averages)."""
     rewardValue = primary.get("rewardValue", 2.5)
     gatedCount = int(getattr(ctx, "_firstPassGatedCount", 0) or 0)
-    onCount = int(getattr(ctx, "_firstPassGatedOn", 0) or 0)
     if gatedCount < _FULL_HOUSE_MIN_CARDS:
         eq = f"Need {_FULL_HOUSE_MIN_CARDS}+ performing cards in the lineup ({gatedCount})"
         return EffectResult(equation=eq)
-    if onCount < gatedCount:
+    product = float(getattr(ctx, "_firstPassGateProduct", 0.0) or 0.0)
+    if product <= 0.0:
+        onCount = int(getattr(ctx, "_firstPassGatedOn", 0) or 0)
         cold = gatedCount - onCount
         eq = f"{onCount}/{gatedCount} cards cleared their bar ({cold} cold) — no bonus"
         return EffectResult(equation=eq)
-    eq = f"{rewardValue} (all {gatedCount} cards cleared their power bar)"
-    return EffectResult(multBonus=rewardValue, equation=eq)
+    mult = round(1.0 + (rewardValue - 1.0) * product, 2)
+    if product >= 0.999:
+        eq = f"{rewardValue} (all {gatedCount} cards cleared their power bar)"
+    else:
+        eq = f"~{mult} expected ({round(product * 100)}% chance all {gatedCount} clear)"
+    return EffectResult(multBonus=mult, equation=eq)
 
 
 def _computeAllIn(primary, ctx, cardPlayerId, eqId):
@@ -4597,15 +4609,19 @@ _INVERSE_GATE_EFFECTS = frozenset({
 })
 
 
-def buildGateSpec(effectName: str, position: int) -> Optional[dict]:
+def buildGateSpec(effectName: str, position: int, classification: str = None) -> Optional[dict]:
     """The FP power-bar gate frozen into a card's effect_config at mint, or None.
 
     Every effect-bearing card is gated on the depicted player's weekly FP against a
     position threshold — one stat, one rule, pure on/off. Normal cards unlock once the bar
     fills; INVERSE cards (`_INVERSE_GATE_EFFECTS`) run it in reverse and switch OFF once it
     fills. No per-effect exemptions beyond that; only the no-effect floor card ('none') is
-    ungated (owner call 2026-07-23)."""
-    from constants import CARD_GATE_ENABLED, CARD_GATE_FP_THRESHOLDS
+    ungated (owner call 2026-07-23).
+
+    A **Champion**-classified card (prior-season title winner) lowers ITS OWN threshold by
+    `CARD_GATE_CHAMPION_MULT` — "proven players deliver." This is on-card only: it's baked
+    into this card's frozen gate.threshold and never touches any other card in the hand."""
+    from constants import CARD_GATE_ENABLED, CARD_GATE_FP_THRESHOLDS, CARD_GATE_CHAMPION_MULT
     if not CARD_GATE_ENABLED:
         return None
     if not effectName or effectName in ('none', ''):
@@ -4613,40 +4629,67 @@ def buildGateSpec(effectName: str, position: int) -> Optional[dict]:
     threshold = CARD_GATE_FP_THRESHOLDS.get(position)
     if not threshold:
         return None
+    champion = bool(classification) and 'champion' in classification
+    if champion:
+        threshold = max(1, round(threshold * CARD_GATE_CHAMPION_MULT))
     inverse = effectName in _INVERSE_GATE_EFFECTS
+    champNote = " (Champion)" if champion else ""
     if inverse:
-        text = f"Active while this player stays under {threshold} FP (rewards a rough week)"
+        text = f"Active while this player stays under {threshold} FP (rewards a rough week){champNote}"
     else:
-        text = f"Unlocks once this player reaches {threshold} FP"
-    return {'threshold': threshold, 'inverse': inverse, 'text': text}
+        text = f"Unlocks once this player reaches {threshold} FP{champNote}"
+    return {'threshold': threshold, 'inverse': inverse, 'text': text, 'champion': champion}
 
 
 def gateRatio(gate: dict, ctx, cardPlayerId: int) -> float:
-    """The card's power-bar switch from the depicted player's weekly FP — 1.0 (on) or 0.0
-    (off), no scaling.
+    """The card's power-bar switch from the depicted player's weekly FP.
 
-    Normal cards: on once FP clears the threshold (a bench-warmer never fills the bar).
-    Inverse cards: on WHILE FP stays under the threshold (the bar depletes as they score,
-    off once it empties). Missing FP reads as 0."""
+    LIVE (and the optimistic-ceiling projection): pure on/off — 1.0 / 0.0. Normal cards are
+    on once FP clears the threshold (a bench-warmer never fills the bar); inverse cards are
+    on WHILE FP stays under it. Missing FP reads as 0.
+
+    EXPECTED PROJECTION: returns the empirical PROBABILITY the player clears the bar this
+    week (fraction of their weekly games meeting the condition, Laplace-smoothed so it's
+    never a hard 0/1), so a card near its threshold projects as its expected value instead
+    of an all-or-nothing read on the season average. `_applyGateRatio` scales the card's
+    output by this fraction, mirroring how chance cards are EV-scaled in projection."""
     threshold = gate.get('threshold', 0) or 0
     if threshold <= 0:
         return 1.0
+    inverse = bool(gate.get('inverse'))
+    if (getattr(ctx, 'isProjection', False)
+            and getattr(ctx, 'projectionVariant', 'expected') == 'expected'):
+        weekly = (getattr(ctx, 'playerWeeklyFP', None) or {}).get(cardPlayerId)
+        if weekly:
+            n = len(weekly)
+            clears = sum(1 for fp in weekly if (fp < threshold if inverse else fp >= threshold))
+            p = (clears + 1) / (n + 2)  # Laplace-smoothed empirical clear rate
+            return max(0.02, min(0.98, p))
+        return 0.5  # no weekly history — unknown, not a false certainty
     stats = (getattr(ctx, 'weekPlayerStats', None) or {}).get(cardPlayerId) or {}
     fp = float(stats.get('fantasyPoints', 0) or 0)
-    if gate.get('inverse'):
+    if inverse:
         return 1.0 if fp < threshold else 0.0
     return 1.0 if fp >= threshold else 0.0
 
 
 def _applyGateRatio(result: 'EffectResult', ratio: float) -> 'EffectResult':
-    """Apply the power-bar switch: `ratio` is 1.0 (on, leave the effect) or 0.0 (off, zero
-    it). No fractional scaling — the gate is pure on/off."""
-    if ratio >= 1.0 or result is None:
+    """Apply the power-bar switch. `ratio` >= 1.0 leaves the effect; 0.0 zeros it. A
+    FRACTIONAL ratio (only produced by the expected-value projection) SCALES the output by
+    the player's clear probability — live scoring never sees a fraction (gateRatio is pure
+    on/off there), so this is a projection-only path."""
+    if result is None or ratio >= 1.0:
         return result
-    result.fpBonus = 0.0
-    result.floobits = 0
+    if ratio <= 0.0:
+        result.fpBonus = 0.0
+        result.floobits = 0
+        if result.multBonus and result.multBonus > 1.0:
+            result.multBonus = 1.0
+        return result
+    result.fpBonus = round(result.fpBonus * ratio, 2)
+    result.floobits = int(round(result.floobits * ratio))
     if result.multBonus and result.multBonus > 1.0:
-        result.multBonus = 1.0
+        result.multBonus = round(1.0 + (result.multBonus - 1.0) * ratio, 3)
     return result
 
 
