@@ -311,6 +311,25 @@ EFFECT_EDITION_TIER = {
 _BAL_FP_MULT  = 0.5    # scales FP outputs (chips) added by the Balatro pass
 _BAL_FPX_MULT = 0.5    # scales FPx deltas (multiplier portions) added by the Balatro pass
 
+# Per-edition power dial (Phase 9 fusion retune). Fusion fields a full 6-7 card
+# lineup instead of ~5, so aggregate card bonus per user is structurally higher —
+# measured post-gate on real lineups at base ~89% / holo ~107% / prismatic ~143%
+# of the lineup's own player FP (target: ~100% MEAN for every edition; rarity buys
+# ceiling/variance, not a higher mean). This scales an edition's minted FP + FPx +
+# floobits params (via `editionScale`, which every param builder already threads).
+# Frozen at mint, so a change re-values every scoreable card cleanly at the next
+# season boundary. Tune here; re-measure with simcheck_edition_power.py.
+# Tuned 2026-07-23 to ~100% mean per edition (simcheck_edition_power.py, N=100 real
+# lineups): base 103% / holo 99% / prismatic 99% / diamond 109%, with variance rising
+# into diamond (p90 220%, median 80%). Baseline before the retune was 84/161/218/89%.
+EDITION_POWER_SCALE = {
+    'standard': 1.0,      # no-effect floor card — no params, scale is moot
+    'base': 1.10,         # 84% -> 103%: nudge the flat/reliable floor to parity
+    'holographic': 0.47,  # 161% -> 99%
+    'prismatic': 0.30,    # 218% -> 99% (FPx-heavy; compounds, so needs the deepest cut)
+    'diamond': 1.0,       # ~100-109% mean; low median/high p90 is its by-design variance
+}
+
 # Rookie Hype pays flat FP per rookie in the fantasy lineup, uncapped by roster
 # size. It is intentionally left uncapped: rookies are usually weak, low-FP
 # players, so a rare rookie-stacked lineup that pushes past the holo-tier ceiling
@@ -1862,7 +1881,10 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     # Category from effect's natural type (not position)
     category = forceCategory or EFFECT_CATEGORY.get(effectName, "flat_fp")
 
-    editionScale = 1.0  # Edition no longer scales effect params — tier determines effect
+    # Per-edition power dial (Phase 9 fusion retune). Repurposes the long-dormant
+    # `editionScale` hook every param builder already multiplies through — so one
+    # number per edition scales that edition's FP/FPx/floobits magnitudes at mint.
+    editionScale = EDITION_POWER_SCALE.get(edition, 1.0)
 
     # Dampen player rating scaling for rarer tiers — higher tiers have narrow
     # rating bands already, and the tier itself IS the power signal.

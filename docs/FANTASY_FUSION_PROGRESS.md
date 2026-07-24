@@ -61,7 +61,7 @@ separate roster / match bonus / swaps / temp_flex.
 | 8. Frontend: TradingCard redesign + sub-base tier + unified lineup page | ✅ DONE (tsc-clean; live QA pending) | FE `0e8a7d2`/`15d232a`, BE `e612e8c` |
 | 8b. Frontend 7b-iii (leaderboard/history) + retire shop swap UI | ⬜ | — |
 | 8c. FE: delete dead FantasyRoster.tsx, extract PointsBreakdownPanel | ✅ DONE (tsc-clean) | (FE this branch) |
-| 9. Tuning pass + `simcheck` — incl. **card power rebalance for full lineups** | ⬜ blocked on the on-card re-base | — |
+| 9. Tuning pass — per-edition power dial to ~100% mean (full-lineup rebalance) | ✅ DONE (harness-tuned) | (this branch) |
 | R1. On-card re-base Stage 1 — position-specific effects (21) | ✅ DONE | `023c0ef` |
 | R2. On-card re-base Stage 2 — 9 roster aggregates | ✅ DONE | `232d439` |
 | G1. Card gate — FP POWER BAR (replaced the varied-stat ramp) | ✅ DONE, validated end-to-end | `d1fb64c` |
@@ -100,6 +100,34 @@ Lineup + ScoringPane`. But it still held the ONE live export ScoringPane needs
 - **Still open (Phase 8b proper):** the leaderboard/history endpoints that join
   `fantasy_roster_players` (`GET /api/fantasy/leaderboard/weekly`, `/api/history/user-records`)
   and retiring the shop swap UI — see the START HERE / 7b-iii section below.
+
+## Phase 9 — per-edition power retune (DONE, 2026-07-23)
+Fusion fields a full 6-card lineup instead of ~5, so aggregate card bonus per user was
+structurally too high — measured on real lineups (`simcheck_edition_power.py`, N=100, card
+bonus as % of the lineup's own player FP): **baseline 84 / 161 / 218 / 89%** for base / holo
+/ prismatic / diamond vs the ~100% mean parity target (rarity buys ceiling/variance, not a
+higher mean — owner call).
+- **Mechanism: `EDITION_POWER_SCALE`** (`cardEffects.py`) — one dial per edition, applied at
+  mint via the long-dormant `editionScale` hook every param builder already threads (so it
+  scales that edition's FP/FPx/floobits magnitudes). Frozen at mint → re-values every
+  scoreable card cleanly at the season boundary.
+- **Tuned values:** base 1.10, holo 0.47, prismatic 0.30 (FPx-heavy → compounds → deepest
+  cut), diamond 1.0. **Result: 103 / 99 / 99 / 109% mean**, variance rising into diamond
+  (p90 220%, median 80% — the "useless if misdeployed" high-ceiling profile).
+- **Bug found + fixed during the pass:** `_applyConductorBoost` (`cardEffectCalculator.py`)
+  referenced an undefined `matched` left dangling by the Phase-4 match-bonus removal — it
+  **crashed card scoring for any lineup with a Conductor + a flat-FP card**. Now emits a
+  plain `+N%` tag. (Fusion-branch only.)
+- **Harness:** `simcheck_edition_power.py` (boots a prod-DB copy, N random 6-card lineups per
+  edition on real players, rebuilds configs so the gate + dial apply, scores through the real
+  two-pass calc against real week stats). Deterministic seed → tune-and-remeasure.
+- **Validated:** all card unit tests pass (direction-preserving); mint path exercised
+  hundreds of times across editions with no errors.
+- **Per-effect follow-ups (not blockers):** the dial tunes each edition's MEAN; individual
+  outliers still want a per-effect look — esp. **full_roster** (diamond, fires only when the
+  whole lineup clears → rare, so its per-fire magnitude may want raising within the diamond
+  budget) and **all_in** (now rides the 0.30 prismatic cut on top of its own stud-line gate).
+  These are the deferred per-effect surgery, item 3 below.
 
 ## CARD DESIGN — where it stands + backlog (2026-07-23)
 

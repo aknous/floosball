@@ -1218,8 +1218,10 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
         b.equation = f"{b.equation} +{boostPct}% (Conductor)"
         boosted += 1
     if boosted > 0:
-        matchTag = " (matched)" if matched else ""
-        conductorBreakdown.equation = f"+{boostPct}%{matchTag} on {boosted} flat-FP card{'s' if boosted != 1 else ''}"
+        # Match multiplier was removed in the fusion Phase 4 retune, so there's no
+        # "(matched)" tag any more (the old `matched` reference was left dangling and
+        # crashed any lineup with a Conductor + a flat-FP card).
+        conductorBreakdown.equation = f"+{boostPct}% on {boosted} flat-FP card{'s' if boosted != 1 else ''}"
     else:
         conductorBreakdown.equation = "No flat-FP cards to amplify"
 
