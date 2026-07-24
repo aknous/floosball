@@ -10288,6 +10288,23 @@ class Game:
             pDef = min(0.85, pDef * CONTEST_CRITICALITY_DEFENSE_MULT)
         return _random.random() >= pDef
 
+    def _newBeatPlay(self):
+        """Create the next Play in a SCORING SEQUENCE (contest / conversion / kickoff),
+        inheriting the scoring play's at-bat context. A score is a "try", so the possession
+        change already advanced the innings counters — a fresh Play() would stamp the beat
+        with the NEXT at-bat (and, on the final inning, the WP graph would jump the point to
+        the far end). The beat belongs to the at-bat that scored, so carry that play's
+        inning/half/try onto it. No-op off innings (inning is None)."""
+        prevInning = self.play.inning
+        prevHalf = self.play.inningHalf
+        prevTry = self.play.inningTry
+        self.play = Play(self)
+        if prevInning is not None:
+            self.play.inning = prevInning
+            self.play.inningHalf = prevHalf
+            self.play.inningTry = prevTry
+        return self.play
+
     def _runContest(self, scorer, scoringPlay) -> bool:
         """Beat 2 of Contested Scoring: run the contest as its OWN play-feed entry (mirrors
         `_simulate2PointConversionPlay`'s separate-entry pattern). Rolls a contest type,
@@ -10305,7 +10322,7 @@ class Game:
         scoringType = scoringPlay.playType
 
         # Fresh Play for the contest beat (stable playNumber for React keys / REST).
-        self.play = Play(self)
+        self._newBeatPlay()
         self.totalPlays += 1
         self.play.playNumber = self.totalPlays
         self.play.playType = scoringType   # so _attributeWpa credits the scorer on a win
@@ -10468,7 +10485,7 @@ class Game:
         self.yardsToFirstDown = distance
         self._refreshYardLine()   # else Play() snapshots the touchdown's yard line
 
-        self.play = Play(self)
+        self._newBeatPlay()
         # Give the conversion its own play number so it has a stable identity
         # separate from the touchdown that preceded it (React keys + REST
         # serialization need a unique playNumber per feed entry).
@@ -10579,7 +10596,7 @@ class Game:
         self.yardsToFirstDown = 15
         self._refreshYardLine()   # else Play() snapshots the touchdown's yard line
 
-        self.play = Play(self)
+        self._newBeatPlay()
         # Stable identity separate from the touchdown — same reasoning as
         # the 2-pt path; React keys + REST serialization need a unique
         # playNumber per feed entry.
