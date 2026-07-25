@@ -1640,4 +1640,5 @@ class FantasyTracker:
             "streakCount": b.streakCount,
             "gateActive": b.gateActive,
             "gateThreshold": b.gateThreshold,
+            "gateInverse": b.gateInverse,
         }

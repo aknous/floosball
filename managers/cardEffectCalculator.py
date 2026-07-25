@@ -17,7 +17,6 @@ from typing import Dict, List, Optional, Set
 
 from managers.cardEffects import (
     computeEffect, checkStreakCondition, EffectResult,
-    POSITION_CONDITIONALS,
 )
 
 logger = logging.getLogger(__name__)
@@ -264,6 +263,7 @@ class CardBreakdown:
     # scored nothing). Drives the "gate not met" marker in the scoring breakdown.
     gateActive: Optional[bool] = None
     gateThreshold: float = 0.0  # the position FP threshold this card's bar needs
+    gateInverse: bool = False   # inverse gate — the effect is active WHILE under the threshold
 
 
 @dataclass
@@ -728,10 +728,7 @@ def _computeCardPass(
     # 2. Weekly modifier. Fusion: the match multiplier (×1.5 / ×2.5) is REMOVED —
     # every equipped card's player is trivially "on the roster," so a match bonus
     # would be flat inflation. The Wildcard ("force all matched") and Overdrive
-    # ("×2.5 match") modifiers are retired alongside it. The card's own player
-    # being rostered still gates the position conditional below (always true in
-    # fusion, but the check stays robust for any transitional edge case).
-    isMatch = cardPlayerId in ctx.rosterPlayerIds
+    # ("×2.5 match") modifiers are retired alongside it, as is the position conditional.
     mod = ctx.activeModifier
 
     preMatchFP = primary.fpBonus
@@ -763,20 +760,15 @@ def _computeCardPass(
         matchedFloobits *= 2
         if matchedMult > 1:
             matchedMult = 1 + (matchedMult - 1) * 2
-    # 3. Check position conditional if matched. Skip pure-marker cards: they
-    #    produce no output of their own, so a conditional bonus would fabricate
-    #    a phantom FP row (and make them a Lemons/Conductor target).
+    # 3. Position conditional — RETIRED in the fusion cleanup (owner call 2026-07-25).
+    #    It was the last remnant of the match-bonus system (Phase 4 removed the ×1.5/×2.5
+    #    multiplier; this flat "player hit a stat milestone" bonus lingered). It fired on
+    #    EVERY card (isMatch is always true in fusion) — including no-effect floor cards —
+    #    and double-counted the player's performance, which their FP (the base) already
+    #    rewards. The card's gated effect is now the only value-add. Fields kept at 0/None
+    #    for breakdowns_json / recap schema stability.
     conditionalBonus = 0.0
     conditionalLabel = None
-    if isMatch and effectName not in _NO_OUTPUT_MARKERS:
-        conditionals = POSITION_CONDITIONALS.get(position, [])
-        cardPlayerStats = ctx.weekPlayerStats.get(cardPlayerId, {})
-        for cond in conditionals:
-            bonus, label = _checkConditional(cond, cardPlayerStats)
-            if bonus > 0:
-                conditionalBonus += bonus
-                conditionalLabel = label
-                break  # Only apply the first triggered conditional
 
     # 4. Secondary effects removed — edition determines effect tier only
     secondaryFP = 0.0
@@ -815,6 +807,7 @@ def _computeCardPass(
     # on/off ratio on ctx._gateRatios[eq.id] for gated cards.
     _gate = effectConfig.get("gate") or {}
     _gateThreshold = _gate.get("threshold", 0) or 0
+    _gateInverse = bool(_gate.get("inverse"))
     _gateActive = None
     if _gateThreshold:
         _ratio = (getattr(ctx, "_gateRatios", None) or {}).get(eq.id)
@@ -857,6 +850,7 @@ def _computeCardPass(
         streakCount=ctx.streakCounts.get(eq.id, 0) if category == "streak" and not (effectConfig.get("streakConfig") or {}).get("noReset") else 0,
         gateActive=_gateActive,
         gateThreshold=_gateThreshold,
+        gateInverse=_gateInverse,
     )
 
 
