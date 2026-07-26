@@ -1304,6 +1304,7 @@ def _runPendingMigrations():
     _backfillChampionRosterSnapshots()
     _backfillTeamPeakStreaks()
     _backfillCardTemplateOutputType()
+    _backfillStandardFloorTemplates()
     # Tier→facilities migration: seed team_facilities from current market tiers
     # so facility-derived effects reproduce today's tier perks at launch.
     _seedTeamFacilitiesFromTiers()
@@ -1451,6 +1452,66 @@ def _backfillCardTemplateOutputType():
     except Exception as e:
         conn.rollback()
         logger.warning(f"  Migration: output_type backfill skipped ({e})")
+    finally:
+        conn.close()
+
+
+def _backfillStandardFloorTemplates():
+    """Ensure every season that has card templates also has the no-effect 'standard' FLOOR
+    template per player. The 'standard' edition (fusion floor print, effectName='none') was
+    added after some DBs generated their season templates, and the per-season regen guard
+    (existingCount > 0) prevents re-minting the missing floor. Without it the starter pack's
+    standard-first query falls back to 'base' (Metallic). Create the missing floor templates
+    from each player's existing 'base' template. Idempotent (only creates where absent)."""
+    import json as _json
+    from datetime import datetime as _dt
+    from managers.cardEffects import buildEffectConfig
+    from managers.cardManager import getSellValue
+    from sqlalchemy import text
+    conn = engine.connect()
+    try:
+        rows = conn.execute(text('''
+            SELECT t1.season_created, t1.player_id, t1.player_name, t1.team_id,
+                   t1.player_rating, t1.position, t1.is_rookie
+            FROM card_templates t1
+            WHERE t1.edition = 'base' AND t1.is_upgraded = 0
+              AND NOT EXISTS (
+                SELECT 1 FROM card_templates t2
+                WHERE t2.player_id = t1.player_id
+                  AND t2.season_created = t1.season_created
+                  AND t2.edition = 'standard')
+        ''')).fetchall()
+        if not rows:
+            conn.rollback()
+            return
+        created = 0
+        for r in rows:
+            season, pid, pname, teamId, rating, position, isRookie = r
+            cfg = buildEffectConfig('standard', rating, position, teamId)
+            conn.execute(text('''
+                INSERT INTO card_templates
+                  (player_id, edition, season_created, is_rookie, classification,
+                   player_name, team_id, player_rating, position, effect_config,
+                   rarity_weight, sell_value, is_upgraded, output_type, created_at)
+                VALUES
+                  (:pid, 'standard', :season, :isRookie, NULL,
+                   :pname, :teamId, :rating, :position, :cfg,
+                   0, :sell, 0, '', :now)
+            '''), {
+                "pid": pid, "season": season, "isRookie": bool(isRookie),
+                "pname": pname, "teamId": teamId, "rating": rating, "position": position,
+                "cfg": _json.dumps(cfg), "sell": getSellValue('standard', True),
+                "now": _dt.utcnow(),
+            })
+            created += 1
+        if created:
+            conn.commit()
+            logger.info(f"  Migration: backfilled {created} standard floor templates")
+        else:
+            conn.rollback()
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"  Migration: standard floor backfill skipped ({e})")
     finally:
         conn.close()
 

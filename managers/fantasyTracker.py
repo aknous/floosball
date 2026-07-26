@@ -1594,6 +1594,13 @@ class FantasyTracker:
                     favoriteTeamWonThisWeek
                     and favoriteTeamOpponentElo > favoriteTeamElo
                 )
+            elif condition == "player_cleared_bar":
+                from constants import CARD_GATE_FP_THRESHOLDS
+                cardPlayerId = eq.user_card.card_template.player_id
+                pos = playerPositionMap.get(cardPlayerId, 0)
+                thr = CARD_GATE_FP_THRESHOLDS.get(pos, 0)
+                fp = weekPlayerStats.get(cardPlayerId, {}).get("fantasyPoints", 0) or 0
+                conditionMet = fp >= thr
 
             result[eq.id] = conditionMet
             if conditionMet:

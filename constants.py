@@ -1197,6 +1197,18 @@ CARD_GATE_FP_THRESHOLDS = {1: 8, 2: 9, 3: 8, 4: 4, 5: 6}
 # e.g. 0.7 -> QB 8->6, RB 9->6, WR 8->6, TE 4->3, K 6->4. Floored at 1.
 CARD_GATE_ALLPRO_MULT = 0.7
 
+# Chance cards work differently from the on/off bar above. Their power bar IS the trigger
+# probability for the enhanced payout, filled ADDITIVELY from two sources: the depicted
+# player's own FP (toward their position threshold) plus the card's own condition (struggling
+# roster, favorite-team losses, etc.). Each source maxes out at its weight below; the two sum
+# (capped at 100%) so a big on-card week AND a maxed condition together guarantee the enhanced
+# hit. Group-C chance cards whose condition already IS the on-card player's performance
+# (crescendo/traverse/bonsai) skip the FP source and fill the whole bar from their condition.
+CARD_CHANCE_FP_WEIGHT = 0.5         # max bar fill from the depicted player's FP
+CARD_CHANCE_CONDITION_WEIGHT = 0.5  # max bar fill from the card's own condition
+# How many struggling roster players (or failed cards) max out the condition source.
+CARD_CHANCE_CONDITION_FULL_COUNT = 3
+
 # Team stacking — the lineup-synergy mechanic. Fielding N cards whose depicted players share
 # a real team grants a lineup-wide FPx that ESCALATES with the size of the largest such group
 # (correlated upside: when a team's offense goes off, its players score together — and it's
@@ -1596,6 +1608,16 @@ CARD_TIER_DIVIDEND_FLOOBITS = {
 CARD_TIER_UPGRADE_COST = {2: 50, 3: 150, 4: 350}
 CARD_TIER_EDITION_COST_MULT = {
     "base": 1.0, "holographic": 1.2, "prismatic": 1.4, "diamond": 1.6,
+}
+
+# ─── Effect Transplant ("The Transplant") ────────────────────────────────────
+# Graft one card's effect onto another player card you own. Both cards must be the
+# SAME edition and SAME position; the target keeps its identity + upgrade tier and
+# takes on the donor's effect (re-scaled to the target's rating), the donor is
+# consumed. Cost scales with edition — the pricier the effect, the pricier the move.
+# ('base' slug = the "Metallic" display edition; 'standard'/no-effect can't transplant.)
+TRANSPLANT_COST_BY_EDITION = {
+    "base": 40, "holographic": 70, "prismatic": 120, "diamond": 180,
 }
 
 # ─── Card Showcase (seasonal collection payout) ──────────────────────────────

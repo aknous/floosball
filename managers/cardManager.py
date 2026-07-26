@@ -3,7 +3,7 @@
 import random
 from typing import List, Dict, Any, Optional
 from logger_config import get_logger
-from managers.cardEffects import buildEffectConfig as _buildEffectConfig, getEffectOutputType
+from managers.cardEffects import buildEffectConfig as _buildEffectConfig, getEffectOutputType, effectValidPositions as _effectValidPositions
 
 logger = get_logger("floosball.cardManager")
 
@@ -757,6 +757,10 @@ class CardManager:
             "tagline": effectConfig.get("tagline"),
             "tooltip": effectConfig.get("tooltip"),
             "detail": effectConfig.get("detail"),
+            "gateText": effectConfig.get("gateText"),
+            # Positions this effect can validly land on via a transplant (shared effects
+            # span all five; position-specific ones only their own).
+            "validPositions": sorted(_effectValidPositions(effectName)),
             "sellValue": sellValue,
             "combineValue": getCardValue(userCard, currentSeason),
             "isActive": isActive,
@@ -1037,6 +1041,107 @@ class CardManager:
             "resultEdition": resultEdition,
             "cardCount": len(cards),
         }
+
+    def _validateTransplantPair(self, session, userId: int, donorCardId: int,
+                                targetCardId: int, currentSeason: int, currentWeek: int = 0):
+        """Validate a donor/target pair for a transplant. Returns (donor, target)
+        UserCards, or raises ValueError. Gate: same edition, both effect-bearing (not
+        the no-effect floor), not already the same effect, and — for a position-specific
+        donor effect — the target's position must be one the effect is valid for (shared
+        effects go on any same-edition card)."""
+        if donorCardId == targetCardId:
+            raise ValueError("Pick two different cards")
+        cards = self._validateUpgradeCards(session, userId, [donorCardId, targetCardId],
+                                           currentSeason, currentWeek)
+        byId = {c.id: c for c in cards}
+        donor, target = byId[donorCardId], byId[targetCardId]
+        dt, tt = donor.card_template, target.card_template
+        if dt.edition == 'standard' or tt.edition == 'standard':
+            raise ValueError("No-effect (Base) cards can't be transplanted")
+        donorEffect = self._effectName(donor)
+        if not donorEffect or donorEffect in ('none', ''):
+            raise ValueError("The donor card has no effect to transplant")
+        if dt.edition != tt.edition:
+            raise ValueError("Both cards must be the same edition")
+        # Position-specific effects can only land on a player whose position they're
+        # valid for; shared effects go on any same-edition card.
+        from managers.cardEffects import effectValidPositions
+        valid = effectValidPositions(donorEffect)
+        if valid and tt.position not in valid:
+            posName = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}.get(tt.position, 'that')
+            raise ValueError(f"{donorEffect} is position-specific and can't go on a {posName} card")
+        if donorEffect == self._effectName(target):
+            raise ValueError("Both cards already have that effect")
+        return donor, target
+
+    def previewTransplant(self, session, userId: int, donorCardId: int,
+                          targetCardId: int, currentSeason: int, currentWeek: int = 0) -> dict:
+        """Validate a transplant pairing and return its cost + summary (or raise)."""
+        from constants import TRANSPLANT_COST_BY_EDITION
+        donor, target = self._validateTransplantPair(session, userId, donorCardId,
+                                                     targetCardId, currentSeason, currentWeek)
+        edition = target.card_template.edition
+        return {
+            "cost": TRANSPLANT_COST_BY_EDITION.get(edition, 0),
+            "edition": edition,
+            "donorEffect": self._effectName(donor),
+            "targetEffect": self._effectName(target),
+            "donorPlayer": donor.card_template.player_name,
+            "targetPlayer": target.card_template.player_name,
+        }
+
+    def transplantEffect(self, session, userId: int, donorCardId: int,
+                         targetCardId: int, currentSeason: int, currentWeek: int = 0) -> dict:
+        """Graft the donor card's effect onto the target player card (same edition +
+        position). The target keeps its identity, upgrade tier and vault state and
+        takes on the donor's effect (re-scaled to the target's rating, so a high-rating
+        donor can't dump strong params on a weaker player); the donor is consumed.
+        Costs Floobits scaling with edition."""
+        from database.models import CardUpgradeLog
+        from database.repositories.card_repositories import (
+            UserCardRepository, CurrencyRepository,
+        )
+        from constants import TRANSPLANT_COST_BY_EDITION
+
+        donor, target = self._validateTransplantPair(session, userId, donorCardId,
+                                                     targetCardId, currentSeason, currentWeek)
+        tt = target.card_template
+        donorEffect = self._effectName(donor)
+        edition = tt.edition
+        cost = TRANSPLANT_COST_BY_EDITION.get(edition, 0)
+
+        if cost > 0:
+            currencyRepo = CurrencyRepository(session)
+            result = currencyRepo.spendFunds(
+                userId, cost,
+                transactionType="card_transplant",
+                description=f"Transplanted {donorEffect} onto {tt.player_name}",
+                season=currentSeason,
+            )
+            if result is None:
+                raise ValueError("Insufficient Floobits")
+
+        oldTemplateId = target.card_template_id
+        # Mint an upgraded template on the TARGET's identity/rating carrying the donor's
+        # effect. Classification follows the target player (baked into _createUpgradedTemplate).
+        newTemplate = self._createUpgradedTemplate(session, tt, edition,
+                                                   forceEffect=donorEffect,
+                                                   currentSeason=currentSeason)
+        # Assign the relationship (not just the FK) so the in-session view + serialized
+        # result reflect the new template immediately. Keeps tier + vault + identity.
+        target.card_template = newTemplate
+        UserCardRepository(session).deleteBatch([donor])
+        session.add(CardUpgradeLog(
+            user_id=userId,
+            upgrade_type="transplant",
+            subject_user_card_id=target.id,
+            offering_user_card_ids=[donor.id],
+            old_template_id=oldTemplateId,
+            new_template_id=newTemplate.id,
+            floobits_spent=cost,
+        ))
+        session.flush()
+        return self.serializeCard(target, currentSeason)
 
     # ─── Card Upgrade Tiers (Level Up) ────────────────────────────────────────
 

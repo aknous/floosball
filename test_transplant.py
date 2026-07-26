@@ -1,0 +1,88 @@
+"""Effect transplant — graft a donor card's effect onto a target player card.
+
+Same edition + position; target keeps identity + tier, donor consumed, Floobits charged.
+Run: DATABASE_DIR=/tmp/floo_transplant .venv/bin/python test_transplant.py
+"""
+import sys, os, shutil
+sys.path.insert(0, '/Users/andrew/Projects/floosball')
+os.environ['DATABASE_DIR'] = '/tmp/floo_transplant'
+import logging; logging.disable(logging.CRITICAL)
+
+shutil.rmtree('/tmp/floo_transplant', ignore_errors=True)
+os.makedirs('/tmp/floo_transplant', exist_ok=True)
+
+from database.connection import init_db, get_session
+from database.models import User, Player, CardTemplate, UserCard, UserCurrency
+from database.repositories.card_repositories import CurrencyRepository
+from managers.cardEffects import buildEffectConfig
+from managers.cardManager import CardManager
+from constants import TRANSPLANT_COST_BY_EDITION
+
+failures = []
+def expect(desc, cond):
+    print(f"  [{'OK' if cond else 'FAIL'}] {desc}")
+    if not cond: failures.append(desc)
+
+init_db()
+s = get_session()
+
+u = User(email='t@t.com', username='tester'); s.add(u); s.flush()
+CurrencyRepository(s).addFunds(u.id, 500, transactionType='test', season=1)
+
+WR, HOLO = 3, 'holographic'
+p1 = Player(name='Donor Guy'); p2 = Player(name='Keeper Guy'); s.add_all([p1, p2]); s.flush()
+
+def mkTemplate(player, effect):
+    cfg = buildEffectConfig(HOLO, 85, WR, None, forceEffect=effect)
+    t = CardTemplate(player_id=player.id, edition=HOLO, season_created=1, player_name=player.name,
+                     player_rating=85, position=WR, effect_config=cfg, rarity_weight=10, sell_value=20)
+    s.add(t); s.flush(); return t
+
+tDonor = mkTemplate(p1, 'possession')
+tTarget = mkTemplate(p2, 'slippery')
+donor = UserCard(user_id=u.id, card_template_id=tDonor.id, acquired_via='test')
+target = UserCard(user_id=u.id, card_template_id=tTarget.id, acquired_via='test', tier=3)
+s.add_all([donor, target]); s.flush()
+donorId, targetId, oldTargetTemplateId = donor.id, target.id, tTarget.id
+balBefore = s.get(UserCurrency, u.id).balance
+
+print("Transplant 'possession' (donor) onto the Keeper (target), holographic WR")
+cm = CardManager(None)
+result = cm.transplantEffect(s, u.id, donorId, targetId, currentSeason=1, currentWeek=0)
+
+target = s.get(UserCard, targetId)
+newTpl = target.card_template
+expect("target now points at a NEW template", target.card_template_id != oldTargetTemplateId)
+expect(f"target carries the donor's effect (possession)  got={newTpl.effect_config.get('effectName')}",
+       newTpl.effect_config.get('effectName') == 'possession')
+expect("target keeps its own player (Keeper Guy)", newTpl.player_id == p2.id and newTpl.player_name == 'Keeper Guy')
+expect("target keeps its edition (holographic)", newTpl.edition == HOLO)
+expect("target keeps its upgrade tier (III)", target.tier == 3)
+expect("donor card is consumed", s.get(UserCard, donorId) is None)
+cost = TRANSPLANT_COST_BY_EDITION[HOLO]
+s.refresh(s.get(UserCurrency, u.id)); balAfter = s.get(UserCurrency, u.id).balance
+expect(f"charged {cost} F  ({balBefore} -> {balAfter})", balAfter == balBefore - cost)
+
+print("\nGuards")
+for desc, dt, tt, err in [
+    ("same-card rejected", targetId, targetId, "different"),
+]:
+    try:
+        cm.transplantEffect(s, u.id, dt, tt, 1, 0); expect(desc, False)
+    except ValueError as e:
+        expect(f"{desc}  ({e})", err.lower() in str(e).lower())
+
+# cross-edition guard: make a prismatic WR and try to donate to the holo target
+p3 = Player(name='Prism Guy'); s.add(p3); s.flush()
+tPrism = CardTemplate(player_id=p3.id, edition='prismatic', season_created=1, player_name='Prism Guy',
+                      player_rating=85, position=WR, effect_config=buildEffectConfig('prismatic', 85, WR, None, forceEffect='chain_reaction'),
+                      rarity_weight=8, sell_value=30)
+s.add(tPrism); s.flush()
+prismCard = UserCard(user_id=u.id, card_template_id=tPrism.id, acquired_via='test'); s.add(prismCard); s.flush()
+try:
+    cm.transplantEffect(s, u.id, prismCard.id, targetId, 1, 0); expect("cross-edition rejected", False)
+except ValueError as e:
+    expect(f"cross-edition rejected  ({e})", 'edition' in str(e).lower())
+
+print(f"\n{'ALL PASS' if not failures else f'{len(failures)} FAILED: ' + '; '.join(failures)}")
+sys.exit(1 if failures else 0)

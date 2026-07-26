@@ -8544,6 +8544,69 @@ def previewBlend(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
         session.close()
 
 
+class TransplantRequest(BaseModel):
+    donorCardId: int
+    targetCardId: int
+
+
+@app.post("/api/cards/transplant")
+def transplantEffect(req: TransplantRequest, user: _User = Depends(_getCurrentUser)):
+    """Graft the donor card's effect onto the target player card (same edition + position)."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.transplantEffect(session, user.id, req.donorCardId,
+                                               req.targetCardId, currentSeason, currentWeek)
+        # A transplant replaces the target's template with a new one (donor consumed),
+        # so the collection's unique-template set can change — keep Curator in sync.
+        from managers import achievementManager as _am
+        _am.syncCuratorProgress(session, user.id, currentSeason)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        isDbLocked = "database is locked" in str(e).lower()
+        if isDbLocked:
+            logger.warning(f"Card transplant blocked by DB lock for user {user.id}")
+            raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
+        logger.error(f"Card transplant failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to transplant effect")
+    finally:
+        session.close()
+
+
+@app.post("/api/cards/transplant/preview")
+def previewTransplant(req: TransplantRequest, user: _User = Depends(_getCurrentUser)):
+    """Preview a transplant: validate the pairing and return its Floobit cost."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.previewTransplant(session, user.id, req.donorCardId,
+                                               req.targetCardId, currentSeason, currentWeek)
+        return build_success_response(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
+
+
 class LevelUpRequest(BaseModel):
     offeringCardId: int
 
