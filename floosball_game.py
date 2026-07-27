@@ -11754,8 +11754,10 @@ class Play():
             self.inningTry = None
         # Frames: stamp the frame number + time remaining IN the frame (10-min frames don't
         # line up with 15-min quarters), so the play row shows "Frame 2 · 7:30" not a
-        # quarter. None off frames.
-        if getattr(game.format, 'key', '') == 'frames':
+        # quarter. None off frames — and None in OT, which is standard points-decided
+        # overtime, not a frame (elapsed caps at regulation there, so this would otherwise
+        # stamp every OT play as "Frame 6 · 10:00"). OT plays fall back to the quarter/OT row.
+        if getattr(game.format, 'key', '') == 'frames' and game.currentQuarter < 5:
             try:
                 fmt = game.format
                 n = fmt._frames(game)

@@ -1472,6 +1472,7 @@ class SeasonManager:
                     "awayTeam": {"name": g.awayTeam.name, "abbr": g.awayTeam.abbr},
                     "homeScore": g.homeScore,
                     "awayScore": g.awayScore,
+                    **self._frameAwareResultFields(g),
                 })
             weekEndEvent = SeasonEvent.weekEnd(
                 seasonNumber=self.currentSeason.seasonNumber,
@@ -2495,6 +2496,31 @@ class SeasonManager:
                 session.close()
         except ImportError as e:
             logger.warning(f"Card effect processing unavailable: {e}")
+
+    @staticmethod
+    def _frameAwareResultFields(g) -> dict:
+        """Extra fields for a week_end result entry so the floosbot reports frames matches by
+        FRAMES WON (not the point total), with the points-tiebreak note when a match finished
+        level on frames. Empty for standard games (homeScore/awayScore already ARE the
+        result). Mirrors the game_end event's frames handling in floosball_game.py."""
+        fmt = getattr(g, 'format', None)
+        if fmt is None or getattr(fmt, 'key', '') != 'frames':
+            return {}
+        try:
+            from game_formats import _cleanNum
+            dh, da = fmt.resultDisplay(g)
+            fields = {'displayScore': {'home': _cleanNum(dh), 'away': _cleanNum(da)},
+                      'scoreLabel': 'frames'}
+            fh = getattr(g, '_framesWonHome', 0.0)
+            fa = getattr(g, '_framesWonAway', 0.0)
+            if fh == fa and g.homeScore != g.awayScore:
+                wt = g.homeTeam if g.homeScore > g.awayScore else g.awayTeam
+                wn = getattr(wt, 'abbr', None) or getattr(wt, 'name', 'The winner')
+                hi, lo = max(g.homeScore, g.awayScore), min(g.homeScore, g.awayScore)
+                fields['tiebreakNote'] = f"{wn} win on points {_cleanNum(hi)}-{_cleanNum(lo)}"
+            return fields
+        except Exception:
+            return {}
 
     def _applyFormatStateToRow(self, dbRow, game) -> None:
         """Persist the format's display state (innings line score, frames results, ...) so
@@ -4472,6 +4498,7 @@ class SeasonManager:
                             "awayTeam": {"name": g.awayTeam.name, "abbr": g.awayTeam.abbr},
                             "homeScore": g.homeScore,
                             "awayScore": g.awayScore,
+                            **self._frameAwareResultFields(g),
                         })
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
@@ -4490,6 +4517,7 @@ class SeasonManager:
                             "awayTeam": {"name": g.awayTeam.name, "abbr": g.awayTeam.abbr},
                             "homeScore": g.homeScore,
                             "awayScore": g.awayScore,
+                            **self._frameAwareResultFields(g),
                         })
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
@@ -8201,21 +8229,25 @@ class SeasonManager:
         """Roll for Cultivation card growth. streak_count tracks growth level."""
         import random as _rand
         import json as _json
-        from managers.cardEffects import CULTIVATION_TRIGGER_POOL, _countCultivationTriggers
+        from managers.cardEffects import cultivationGrowthChance, _countCultivationTriggers
         primary = effectConfig.get("primary", {})
         baseFP = primary.get("baseFP", 4.0)
         growthFP = primary.get("growthFP", 2.0)
-        baseChance = primary.get("baseChance", 20)
-        chancePerTrigger = primary.get("chancePerTrigger", 5)
         triggerEvent = primary.get("triggerEvent", "pass_td")
-        triggerCount = _countCultivationTriggers(triggerEvent, calcCtx)
-        growthChance = min(90, baseChance + chancePerTrigger * triggerCount)
+        # Count triggers for the ON-CARD player and use the SHARED grow-odds, so the % the
+        # user watched climb on the meter/detail all week is the % actually rolled here.
+        # (Previously this rolled on stale baseChance/chancePerTrigger params Bonsai never
+        # sets, over a whole-roster trigger count — the shown odds were disconnected from
+        # the real roll.)
+        cardPlayerId = eq.user_card.card_template.player_id
+        growthLevel = max(0, (getattr(eq, 'streak_count', 1) or 1) - 1)
+        triggerCount = _countCultivationTriggers(triggerEvent, calcCtx, cardPlayerId)
+        growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel)
         roll = _rand.randint(1, 100)
         # Apply advantage (double roll) if ctx has it
         if calcCtx.hasAdvantage:
             roll2 = _rand.randint(1, 100)
             roll = min(roll, roll2)
-        growthLevel = max(0, (getattr(eq, 'streak_count', 1) or 1) - 1)
         currentFP = round(baseFP + growthFP * growthLevel, 1)
         grew = roll <= growthChance
         if grew:
@@ -8266,6 +8298,10 @@ class SeasonManager:
                         bd["totalFP"] = newFinal
 
                     bd["equation"] = resultEq + conductorSuffix
+                    # Sync the power-bar meter to the resolved roll: the final grow-odds as
+                    # the bar fill, and whether it actually grew (green = grew, amber = not).
+                    bd["chanceThreshold"] = round(growthChance / 100.0, 4)
+                    bd["chanceTriggered"] = grew
                 weekBonus.breakdowns_json = _json.dumps(stored)
             except Exception:
                 pass

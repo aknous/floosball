@@ -876,6 +876,12 @@ class FramesFormat(GameFormat):
         # Time remaining in the current 10-min frame (the mini-game clock).
         frameLen = self._regSeconds(game) / N if N else 0
         frameRem = max(0, int(round(frameLen - (self._elapsed(game) % frameLen)))) if frameLen else 0
+        # Frames + points BOTH tied at the end of regulation -> the match goes to standard,
+        # points-decided OVERTIME (checkEarlyEnd defers to OT; winnerSide breaks the still-
+        # level frames on points), NOT a 7th frame. Flag it so the UI shows the OT clock
+        # instead of a frozen "Frame N / 10:00" — in OT _elapsed caps at regulation, so the
+        # frame clock would otherwise read a full frame on every play.
+        overtime = game.currentQuarter >= 5
         # Frames-tie tiebreak: when the frames won are level, the match is decided by
         # TOTAL POINTS (winnerSide). Surface it so a 3-3 frames final doesn't look like a
         # silent tie — the UI can say "level on frames, decided by points". Live: shows the
@@ -894,6 +900,7 @@ class FramesFormat(GameFormat):
         return {'frames': {
             'tiebreak': tiebreak,
             'active': True,
+            'overtime': overtime,
             'framesPerGame': N,
             'currentFrame': min(N, idx + 1),
             'frameClock': game.formatTime(frameRem),

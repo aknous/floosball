@@ -684,7 +684,10 @@ def _computeCardPass(
     # the enhanced value as-is so the UI can show the "if it hits" upside.
     if (getattr(ctx, 'isProjection', False)
             and getattr(ctx, 'projectionVariant', 'expected') == 'expected'
-            and primary.chanceThreshold > 0):
+            and primary.chanceThreshold > 0
+            and not getattr(primary, 'chanceMetaGrowth', False)):
+        # chanceMetaGrowth (Bonsai): fpBonus is the guaranteed base and the odds gate
+        # future growth, so the projected value is the base as-is, not base × odds.
         threshold = primary.chanceThreshold
         primary.fpBonus *= threshold
         primary.floobits = int(primary.floobits * threshold)
