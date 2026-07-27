@@ -86,42 +86,58 @@ wcLoss = byEffect(calculateWeekCardBonuses([mkEq("winners_circle", "prismatic", 
 expect(f"winners_circle stays off when team didn't win  ('{wcLoss.equation}')", wcLoss.floobitsEarned == 0)
 
 
-# ── Scenario B: Captain (Diamond) overshoot amplifier + self-gate ──────────────
-print("\nB. Captain amplifier — self-gate + overshoot boost")
-def captainScenario(captainFP):
+# ── Scenario B: Captain (Diamond) overshoot amplifier — self-gate, scaling, cap, all outputs
+print("\nB. Captain amplifier — self-gate + overshoot scaling + 2x cap + FP/FPx/Floobits")
+
+# Score ONE boost card (at position `pos`, its player scoring `boostFP`), optionally with a
+# Diamond Captain fielded alongside it. Captain's own player scores captainFP.
+def boostedCard(effect, ed, pos, boostFP, captainFP=40.0, withCaptain=True):
     c = baseCtx()
-    c.rosterPlayerIds = {1, 2}; c.rosterPlayerPositions = {1: 1, 2: 3}
-    c.rosterPlayerTeamIds = {1: 10, 2: 10}; c.rosterPlayerRatings = {1: 92, 2: 88}
-    # Player 2 (the boosted freebie card) overshoots its WR bar (8) by a lot.
-    c.weekPlayerStats = {1: {"fantasyPoints": captainFP}, 2: {"fantasyPoints": 30.0,
-                         "receiving_stats": {"rcvYards": 40, "receptions": 3}}}
-    c.teamResults = {}
-    hand = [
-        mkEq("captain", "diamond", 1, 1, 92, 10, 1),   # QB captain
-        mkEq("freebie", "prismatic", 3, 2, 88, 10, 2),  # WR flat-FP card to be boosted
-    ]
-    return byEffect(calculateWeekCardBonuses(hand, c))
+    ids, positions, teams, ratings = {2}, {2: pos}, {2: 10}, {2: 88}
+    stats = {2: {"fantasyPoints": float(boostFP),
+                 "passing_stats": {"passYards": 300, "tds": 2},
+                 "receiving_stats": {"rcvYards": 60, "receptions": 4}}}
+    hand = [mkEq(effect, ed, pos, 2, 88, 10, 2)]
+    if withCaptain:
+        ids.add(1); positions[1] = 1; teams[1] = 10; ratings[1] = 92
+        stats[1] = {"fantasyPoints": float(captainFP)}
+        hand.insert(0, mkEq("captain", "diamond", 1, 1, 92, 10, 1))
+    c.rosterPlayerIds = ids; c.rosterPlayerPositions = positions
+    c.rosterPlayerTeamIds = teams; c.rosterPlayerRatings = ratings
+    c.weekPlayerStats = stats; c.teamResults = {10: True}
+    return byEffect(calculateWeekCardBonuses(hand, c))[effect]
 
-# B1: captain clears its QB bar (8) and the freebie's player overshoots -> boosted
-on = captainScenario(20.0)
-cap, fb = on["captain"], on["freebie"]
-print(f"    captain(clears): eq='{cap.equation}'   freebie fp={fb.totalFP}")
-baseFreebie = byEffect(calculateWeekCardBonuses(
-    [mkEq("freebie", "prismatic", 3, 2, 88, 10, 1)],
-    (lambda: (lambda c: (setattr(c, 'rosterPlayerIds', {2}), setattr(c, 'rosterPlayerPositions', {2: 3}),
-              setattr(c, 'rosterPlayerTeamIds', {2: 10}), setattr(c, 'rosterPlayerRatings', {2: 88}),
-              setattr(c, 'weekPlayerStats', {2: {"fantasyPoints": 30.0, "receiving_stats": {"rcvYards": 40, "receptions": 3}}}),
-              setattr(c, 'teamResults', {}), c)[-1])(baseCtx()))()
-))["freebie"]
-expect(f"Captain amplified the freebie ({baseFreebie.totalFP} -> {fb.totalFP})", fb.totalFP > baseFreebie.totalFP)
-expect("Captain reports it amplified a card", "amplified" in cap.equation)
+# B1: self-gate — Captain's own player must clear its bar (Diamond QB = 15) to amplify.
+base = boostedCard("freebie", "prismatic", 3, 30, withCaptain=False)
+sat = boostedCard("freebie", "prismatic", 3, 30, captainFP=3.0)   # captain under its own bar
+lifts = boostedCard("freebie", "prismatic", 3, 30, captainFP=40.0)  # captain clears
+print(f"    freebie base={base.totalFP}  captain-sat={sat.totalFP}  captain-clears={lifts.totalFP}")
+expect("Captain under its own bar gives NO boost", abs(sat.totalFP - base.totalFP) < 0.05)
+expect("Captain over its bar amplifies the card", lifts.totalFP > base.totalFP)
 
-# B2: captain's own player UNDER its bar (3 < 8) -> no boost
-off = captainScenario(3.0)
-capOff, fbOff = off["captain"], off["freebie"]
-print(f"    captain(under bar): eq='{capOff.equation}'   freebie fp={fbOff.totalFP}")
-expect("Captain gives NO boost when its own player is under the bar", "didn't clear" in capOff.equation)
-expect("the freebie is unboosted when Captain sat", abs(fbOff.totalFP - baseFreebie.totalFP) < 0.05)
+# B2: overshoot scaling — the further the boosted card's player clears ITS bar, the bigger the
+# lift. Both must clear the boosted card's own bar (prismatic WR = 12) so its effect fires.
+small = boostedCard("freebie", "prismatic", 3, 14)   # overshoot ~2
+big = boostedCard("freebie", "prismatic", 3, 45)     # overshoot ~33
+print(f"    overshoot small(14FP)={small.totalFP}  big(45FP)={big.totalFP}")
+expect("bigger overshoot -> bigger boost", big.totalFP > small.totalFP > base.totalFP - 0.01)
+
+# B3: 2x cap — a huge overshoot caps the lift at +100% (2x the base output).
+capped = boostedCard("freebie", "prismatic", 3, 400)
+print(f"    huge overshoot(400FP)={capped.totalFP}  (base {base.totalFP}, 2x = {round(base.totalFP*2,1)})")
+expect("boost caps at 2x the base output", abs(capped.totalFP - base.totalFP * 2) < 0.2)
+
+# B4: FPx output boosted — a multiplier card's delta grows under Captain.
+mBase = boostedCard("big_deal", "prismatic", 1, 30, withCaptain=False)
+mCapt = boostedCard("big_deal", "prismatic", 1, 400)
+print(f"    big_deal FPx base={mBase.primaryMult}  captain={mCapt.primaryMult}")
+expect("Captain boosts an FPx card's multiplier", mCapt.primaryMult > mBase.primaryMult > 1.0)
+
+# B5: Floobits output boosted — a floobits card pays more under Captain.
+fBase = boostedCard("allowance", "prismatic", 3, 30, withCaptain=False)
+fCapt = boostedCard("allowance", "prismatic", 3, 400)
+print(f"    allowance floobits base={fBase.floobitsEarned}  captain={fCapt.floobitsEarned}")
+expect("Captain boosts a Floobits card's payout", fCapt.floobitsEarned > fBase.floobitsEarned > 0)
 
 
 # ── Scenario C: reworked chance card through the full calculator ────────────────

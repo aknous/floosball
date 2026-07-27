@@ -1358,7 +1358,7 @@ def _applyCaptainBoost(breakdowns: List[CardBreakdown], equippedCards, ctx) -> N
         elif b.outputType == "floobits" and b.floobitsEarned > 0:
             b.floobitsEarned = int(round(b.floobitsEarned * (1.0 + factor)))
             boosted += 1
-        elif b.outputType == "fpx" and b.primaryMult > 1.0:
+        elif b.outputType == "mult" and b.primaryMult > 1.0:
             delta = b.primaryMult - 1.0
             b.primaryMult = round(1.0 + delta * (1.0 + factor), 3)
             boosted += 1
