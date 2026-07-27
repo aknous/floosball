@@ -85,6 +85,59 @@ expect(f"franchise stays off when not top scorer  ('{frMiss.equation}')", frMiss
 wcLoss = byEffect(calculateWeekCardBonuses([mkEq("winners_circle", "prismatic", 5, 2, 82, 11, 1)], ctx2))["winners_circle"]
 expect(f"winners_circle stays off when team didn't win  ('{wcLoss.equation}')", wcLoss.floobitsEarned == 0)
 
+print("\nA2. Deeper checks — magnitude, scaling, and edges on the value cards")
+
+# winners_circle: pays EXACTLY its frozen winFloobits on a win; nothing while the game is pending.
+wcWin = buildEffectConfig("prismatic", 82, 5, 10, forceEffect="winners_circle")["primary"]
+expect(f"winners_circle pays its winFloobits ({wcWin['winFloobits']}), not some other amount",
+       wc.floobitsEarned == wcWin["winFloobits"])
+ctxN = baseCtx(); ctxN.rosterPlayerIds = {2}; ctxN.rosterPlayerPositions = {2: 5}
+ctxN.rosterPlayerTeamIds = {2: 11}; ctxN.rosterPlayerRatings = {2: 82}
+ctxN.weekPlayerStats = {2: {"fantasyPoints": 8.0}}; ctxN.teamResults = {11: None}  # not final
+wcPend = byEffect(calculateWeekCardBonuses([mkEq("winners_circle", "prismatic", 5, 2, 82, 11, 1)], ctxN))["winners_circle"]
+expect("winners_circle pays nothing while the game is pending", wcPend.floobitsEarned == 0)
+
+# no_passengers: the FPx scales with the roster's LOWEST FP; a 0-floor (a benched player) pays nothing.
+def npMult(floorFP):
+    c = baseCtx(); c.rosterPlayerIds = {1, 2}; c.rosterPlayerPositions = {1: 1, 2: 3}
+    c.rosterPlayerTeamIds = {1: 10, 2: 10}; c.rosterPlayerRatings = {1: 85, 2: 85}
+    c.weekPlayerStats = {1: {"fantasyPoints": 40.0}, 2: {"fantasyPoints": float(floorFP)}}
+    c.teamResults = {}
+    return byEffect(calculateWeekCardBonuses([mkEq("no_passengers", "prismatic", 1, 1, 85, 10, 1)], c))["no_passengers"].primaryMult
+npLow, npHigh = npMult(5), npMult(25)
+print(f"    no_passengers floor 5 -> {npLow}x ; floor 25 -> {npHigh}x")
+expect("no_passengers FPx scales up with a higher roster floor", npHigh > npLow > 1.0)
+expect("no_passengers pays nothing when a roster player scored 0 (a passenger)", npMult(0) <= 1.0)
+
+# franchise: fires on >= the roster top (ties count), off below it, and never at 0 FP.
+def frMult(myFP, otherFP):
+    c = baseCtx(); c.rosterPlayerIds = {1, 2}; c.rosterPlayerPositions = {1: 2, 2: 3}
+    c.rosterPlayerTeamIds = {1: 10, 2: 11}; c.rosterPlayerRatings = {1: 85, 2: 85}
+    c.weekPlayerStats = {1: {"fantasyPoints": float(myFP)}, 2: {"fantasyPoints": float(otherFP)}}
+    c.teamResults = {}
+    return byEffect(calculateWeekCardBonuses([mkEq("franchise", "prismatic", 2, 1, 85, 10, 1)], c))["franchise"].primaryMult
+expect("franchise fires when tied for the roster top", frMult(20, 20) > 1.0)
+expect("franchise off when below the top", frMult(10, 20) <= 1.0)
+expect("franchise off at 0 FP even if nominally top", frMult(0, 0) <= 1.0)
+
+# metronome: FP grows with the streak count, and freezes (noReset) so a cold week never zeros it.
+from managers.cardEffects import STREAK_CONFIGS, checkStreakCondition
+def metFP(streak):
+    c = baseCtx(); c.rosterPlayerIds = {3}; c.rosterPlayerPositions = {3: 3}
+    c.rosterPlayerRatings = {3: 80}; c.rosterPlayerTeamIds = {3: 11}
+    c.weekPlayerStats = {3: {"fantasyPoints": 20.0}}; c.teamResults = {}
+    eq = mkEq("metronome", "prismatic", 3, 3, 80, 11, 4)
+    c.streakCounts = {eq.id: streak}
+    return byEffect(calculateWeekCardBonuses([eq], c))["metronome"].totalFP
+m0, m5 = metFP(0), metFP(5)
+print(f"    metronome streak 0 -> {m0} FP ; streak 5 -> {m5} FP")
+expect("metronome FP grows with the streak count", m5 > m0 > 0)
+expect("metronome freezes on cold weeks (noReset config)", STREAK_CONFIGS["metronome"].get("noReset") is True)
+mc = baseCtx(); mc.rosterPlayerPositions = {3: 3}; mc.weekPlayerStats = {3: {"fantasyPoints": 20.0}}
+expect("metronome streak advances when the player clears the bar", checkStreakCondition("metronome", mc, 3) is True)
+mc.weekPlayerStats = {3: {"fantasyPoints": 2.0}}
+expect("metronome streak does NOT advance on a cold week (it holds)", checkStreakCondition("metronome", mc, 3) is False)
+
 
 # ── Scenario B: Captain (Diamond) overshoot amplifier — self-gate, scaling, cap, all outputs
 print("\nB. Captain amplifier — self-gate + overshoot scaling + 2x cap + FP/FPx/Floobits")
