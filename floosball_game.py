@@ -2711,6 +2711,15 @@ class Game:
 
     def _fourthDownCaller(self, scoreDiff: int, coach, isHome: bool):
         """Handle 4th down play calling."""
+        # Frames: each frame is a mini-game you're trying to WIN, so every score-relative
+        # decision here (FG-vs-go, sideline targeting, desperation) reasons off the CURRENT
+        # FRAME's margin, not the running total. Total points only break a frames tie, so
+        # scoring still always helps — but settling for a FG that LOSES the frame when a TD
+        # would win it is the wrong call. _frameScoreDiff is None off frames, so this is a
+        # no-op in every other format.
+        _frameDiff = self._frameScoreDiff()
+        if _frameDiff is not None:
+            scoreDiff = _frameDiff
         # Set sideline targeting for any pass plays called in this method
         self.play.targetSideline = self._shouldTargetSideline(scoreDiff, coach)
 
@@ -2741,11 +2750,14 @@ class Game:
         # SUBSEQUENT possession to score the rest. No subsequent possession when: late in
         # regulation (game clock), the opponent is locked out (chess clock — they can't give
         # the ball back), OUR OWN budget is about to run out (chess clock — we won't get the
-        # ball again), OR it's our LAST scoring chance in a no-clock format (innings: the last
-        # try of the final at-bat — the game clock/lockout signals don't exist there). Down
-        # more than a FG in any of those → a futile 3, so go for the TD.
+        # ball again), the CURRENT FRAME is winding down (frames — the frame closes before we'd
+        # get the ball back, so a 3 that still loses the frame is futile), OR it's our LAST
+        # scoring chance in a no-clock format (innings: the last try of the final at-bat — the
+        # game clock/lockout signals don't exist there). Down more than a FG (of the FRAME, in
+        # frames) in any of those → a futile 3, so go for the TD.
         lateHopeless = ((self.currentQuarter >= 4 and self.gameClockSeconds <= 300)
                         or self._defenseLockedOut() or self._chessClockLow(120)
+                        or self._frameEndSoon()
                         or self.format.isLastScoringChance(self, self.offensiveTeam))
         fgHelps = scoreDiff >= -self._fgValue() or not lateHopeless
         inFieldGoalRange = ((chargedInRange and fgHelps)
@@ -11742,8 +11754,10 @@ class Play():
             self.inningTry = None
         # Frames: stamp the frame number + time remaining IN the frame (10-min frames don't
         # line up with 15-min quarters), so the play row shows "Frame 2 · 7:30" not a
-        # quarter. None off frames.
-        if getattr(game.format, 'key', '') == 'frames':
+        # quarter. None off frames — and None in OT, which is standard points-decided
+        # overtime, not a frame (elapsed caps at regulation there, so this would otherwise
+        # stamp every OT play as "Frame 6 · 10:00"). OT plays fall back to the quarter/OT row.
+        if getattr(game.format, 'key', '') == 'frames' and game.currentQuarter < 5:
             try:
                 fmt = game.format
                 n = fmt._frames(game)

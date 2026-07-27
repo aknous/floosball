@@ -213,5 +213,23 @@ expect("scrappy odds are the additive bar (QB 16FP full + 2 low-rated ~= 0.83)",
        0.75 <= (scr.chanceThreshold or 0) <= 0.90)
 expect("scrappy paid its floor or enhanced FP (base always pays)", scr.totalFP > 0)
 
+# ── Scenario D: Bonsai's growth trigger matches the card player's position ──────
+print("\nD. Bonsai — growth trigger is a stat the card player's position produces")
+from managers.cardEffects import _CULTIVATION_TRIGGERS_BY_POSITION
+POSN = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}
+bad = None
+for pos in (1, 2, 3, 4, 5):
+    for _ in range(50):
+        ev = buildEffectConfig('prismatic', 85, pos, 10, forceEffect='bonsai')['primary']['triggerEvent']
+        if ev not in _CULTIVATION_TRIGGERS_BY_POSITION[pos]:
+            bad = (POSN[pos], ev); break
+    if bad:
+        break
+expect(f"every position mints a trigger it produces ({bad or 'all valid'})", bad is None)
+# The reported bug: a WR bonsai keyed off rushing attempts (a stat a WR never posts).
+wrCarry = any(buildEffectConfig('prismatic', 85, 3, 10, forceEffect='bonsai')['primary']['triggerEvent'] == 'carry'
+              for _ in range(150))
+expect("a WR bonsai never keys off rushing attempts (carry)", not wrCarry)
+
 print("\n" + ("ALL PASS" if not failures else f"{len(failures)} FAILURE(S): " + "; ".join(failures)))
 sys.exit(1 if failures else 0)

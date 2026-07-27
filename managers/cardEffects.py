@@ -801,7 +801,7 @@ EFFECT_TOOLTIPS = {
     "winners_circle": "Back the winners. Floobits whenever this player's real team wins their game this week.",
     "no_passengers": "Depth pays. FPx that scales with your lowest-scoring roster player, so a lineup with no weak link earns more.",
     "franchise": "Build around your guy. FPx when this player is your single highest scorer this week.",
-    "metronome": "Reliability pays. FP that grows each week this player clears their power bar. A cold week holds the streak instead of resetting it, so the per-week step is modest.",
+    "metronome": "FP that grows each week this player clears their power bar. A cold week holds the streak rather than resetting it.",
     "double_down": "With the lemons. Multiplies your lowest-earning card's FP this week.",
     "last_resort": "When nothing else works. Guaranteed FP floor plus a chance at enhanced FP. The trigger bar fills from this player's own FP and from each of your other cards that fails to produce a bonus.",
     "high_roller": "Built for the gamble. FPx that scales with how many of your chance cards hit enhanced this week.",
@@ -1188,6 +1188,17 @@ CULTIVATION_TRIGGER_POOL = [
     {"event": "yac",          "label": "yards after catch",       "stepSize": 60, "statPaths": [("receiving_stats", "yac")]},
 ]
 
+# Bonsai counts the ON-CARD player's own trigger events, so the trigger must be a stat that
+# player actually posts. Restrict the mint-time pick to each position's real stats (1-based
+# QB..K) — otherwise e.g. a WR could roll the "rushing attempts" trigger and never grow.
+_CULTIVATION_TRIGGERS_BY_POSITION = {
+    1: {"pass_td"},                          # QB: passing TDs
+    2: {"carry", "rush_td", "reception"},    # RB: carries, rushing TDs, checkdown catches
+    3: {"reception", "yac", "pass_td"},      # WR: catches, YAC, receiving TDs
+    4: {"reception", "yac", "pass_td"},      # TE: catches, YAC, receiving TDs
+    5: {"fg_made"},                          # K: field goals
+}
+
 
 # ─── EffectResult ────────────────────────────────────────────────────────────
 
@@ -1202,6 +1213,9 @@ class EffectResult:
     chanceRoll: float = 0.0
     chanceThreshold: float = 0.0
     chanceTriggered: bool = False
+    # Cultivation (Bonsai): the odds gate FUTURE growth, and fpBonus is the guaranteed
+    # base — so the projection EV pass must NOT scale the payout down by chanceThreshold.
+    chanceMetaGrowth: bool = False
 
 
 def _chanceEq(baseChance, chanceBonus, totalChance, triggered, reward, context, ctx=None, base=None):
@@ -2073,6 +2087,16 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     if effectName == "all_in":
         # Bet Big: freeze the position-aware stud line the payout scales above.
         primary["studLine"] = _ALL_IN_STUD_LINE.get(position, 20)
+    if effectName == "bonsai":
+        # The builder picks the growth trigger position-blind; re-pick it from ONLY the stats
+        # the card player's position produces (a WR keys off receptions/YAC, a RB off carries,
+        # a K off FGs) so the card can actually grow. Frozen into the config at mint.
+        eligible = [t for t in CULTIVATION_TRIGGER_POOL
+                    if t["event"] in _CULTIVATION_TRIGGERS_BY_POSITION.get(position, set())]
+        if eligible:
+            t = random.choice(eligible)
+            primary["triggerEvent"] = t["event"]
+            primary["triggerLabel"] = t["label"]
 
     conditionals = POSITION_CONDITIONALS.get(position, [])
     # Copy and apply the Balatro FP dial so the stored config carries the
@@ -4538,6 +4562,21 @@ def _getCultivationStepSize(triggerEvent):
     return 3
 
 
+def cultivationGrowthChance(primary, triggerCount, growthLevel):
+    """Bonsai's grow odds (0-100), SHARED by the live display (_computeCultivation) and the
+    week-end roll (_rollCultivationGrowth) so the power-bar meter, the effect detail, and the
+    actual result always agree. The trigger step scales with the current level — a higher
+    level needs a bigger week to keep pushing the base upward. A dead week floors at 2%."""
+    stepSize = _getCultivationStepSize(primary.get("triggerEvent", "pass_td"))
+    required = stepSize * (growthLevel + 1)
+    if required <= 0:
+        return 2
+    if triggerCount >= required:
+        excess = triggerCount - required
+        return min(100, 90 + int((excess / stepSize) * 10))
+    return max(2, int((triggerCount / required) * 90))
+
+
 def _computeCultivation(primary, ctx, cardPlayerId, eqId):
     """Performance-driven growth — growth chance is earned by hitting trigger
     events, and the threshold scales with current growth level. Higher levels
@@ -4550,24 +4589,22 @@ def _computeCultivation(primary, ctx, cardPlayerId, eqId):
     triggerEvent = primary.get("triggerEvent", "pass_td")
     triggerLabel = primary.get("triggerLabel", "events")
     triggerCount = _countCultivationTriggers(triggerEvent, ctx, cardPlayerId)
-    # Step size: triggers required to fully earn a grow at level 0.
-    # Low-volume events (TDs, FGs) use small steps; high-volume (carries,
-    # receptions) scale up so grows still feel earned from big weeks.
-    stepSize = _getCultivationStepSize(triggerEvent)
-    # Threshold scales with level — level 10 needs ~11x the triggers of level 0
-    required = stepSize * (growthLevel + 1)
-    if triggerCount >= required:
-        excess = triggerCount - required
-        # Exceed the threshold for bonus chance (caps at 100%)
-        growthChance = min(100, 90 + int((excess / stepSize) * 10))
-    else:
-        # Ramp linearly up to 90% as roster approaches threshold. Floor at 2%
-        # so a bye-week roster isn't completely dead.
-        growthChance = max(2, int((triggerCount / required) * 90)) if required > 0 else 2
+    # Step size: triggers required to fully earn a grow at level 0. Threshold scales with
+    # level (level 10 needs ~11x the triggers of level 0). Shared with the week-end roll.
+    required = _getCultivationStepSize(triggerEvent) * (growthLevel + 1)
+    growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel)
     nextFP = round(currentFP + growthFP, 1)
     triggerNote = f" ({triggerCount}/{required} {triggerLabel})"
     eq = f"+{currentFP} FP. {growthChance}% chance{triggerNote} to grow to +{nextFP} FP"
-    return EffectResult(fpBonus=currentFP, equation=eq)
+    # The power-bar meter for a chance card reads chanceThreshold as its fill, so expose the
+    # grow-odds there to make the meter match the detail. chanceMetaGrowth flags that fpBonus
+    # is the GUARANTEED base (the odds gate FUTURE growth, not this week's payout) so the
+    # projection EV pass doesn't scale the floor down by the odds. chanceTriggered stays False
+    # here — the grow is resolved at week end by _rollCultivationGrowth, which patches the
+    # meter state (threshold + triggered) into the stored breakdown.
+    return EffectResult(fpBonus=currentFP, equation=eq,
+                        chanceThreshold=round(growthChance / 100.0, 4),
+                        chanceMetaGrowth=True)
 
 
 def _countCultivationTriggers(triggerEvent, ctx, cardPlayerId=0):
