@@ -112,10 +112,36 @@ expect(f"chance still tapers as the level climbs {chances}",
        all(chances[i] >= chances[i + 1] for i in range(len(chances) - 1)))
 
 
+print("\n8. Live path: Bonsai is NOT swept up by the weekly streak increment")
+# _evaluateLiveStreakConditions ticks every "equipped"-condition streak card each week, which
+# inflated Bonsai's LIVE growth level by +1 (its growth is the separate end-of-week roll), so
+# the in-progress meter read one level too high. Bonsai must be skipped there; a normal streak
+# card (snowball_fight / roster_td) must still tick. Called unbound (no self usage).
+from types import SimpleNamespace as _NS
+from managers.fantasyTracker import FantasyTracker
+
+def _eq(eqId, effectName, streakCount):
+    tmpl = _NS(effect_config={"effectName": effectName, "category": "streak"})
+    return _NS(id=eqId, streak_count=streakCount, user_card=_NS(card_template=tmpl))
+
+bonsaiEq = _eq(1, "bonsai", 4)          # true growth level 3
+controlEq = _eq(2, "snowball_fight", 2)  # a real streak card, condition roster_td
+streakCounts = {1: 4, 2: 2}
+FantasyTracker._evaluateLiveStreakConditions(
+    None, [bonsaiEq, controlEq], weekPlayerStats={}, rosterPlayerIds=[],
+    rosterTotalTds=1, weekRawFP=0, playerPositionMap={}, streakCounts=streakCounts,
+    teamResults={}, userFavoriteTeamId=None, favoriteTeamWonThisWeek=False,
+    favoriteTeamOpponentElo=0, favoriteTeamElo=0)
+expect(f"Bonsai live streak count NOT incremented (stays 4 -> level 3, matches the roll) "
+       f"got {streakCounts[1]}", streakCounts[1] == 4)
+expect(f"a normal streak card (roster_td, 1 TD) STILL increments (2 -> 3) got {streakCounts[2]}",
+       streakCounts[2] == 3)
+
+
 print()
 if failures:
     print(f">>> {len(failures)} FAILURE(S)")
     for f in failures:
         print("   -", f)
     sys.exit(1)
-print("PASS — Bonsai meter, detail, and roll all read the same grow-odds.")
+print("PASS — Bonsai meter, detail, roll, and live growth level all agree.")
