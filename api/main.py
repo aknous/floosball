@@ -3599,8 +3599,10 @@ def _recapStandingsByLeague(session, target):
         byLeague.setdefault((team.league_id, lname), []).append({
             "teamId": tid, "teamName": team.name, "teamAbbr": team.abbr, "teamColor": team.color,
             "wins": r["w"], "losses": r["l"], "ties": r["t"],
-            "pointsFor": r["pf"], "pointsAgainst": r["pa"], "winPct": round(winPct, 3),
-            "pointDiff": r["pf"] - r["pa"], "elo": int(elo) if elo is not None else None,
+            # Scores can be fractional (some formats), so round to 1 decimal to avoid
+            # float-accumulation junk like -67.20000000000005 in the recap standings.
+            "pointsFor": round(r["pf"], 1), "pointsAgainst": round(r["pa"], 1), "winPct": round(winPct, 3),
+            "pointDiff": round(r["pf"] - r["pa"], 1), "elo": int(elo) if elo is not None else None,
         })
     leagues = []
     for (lid, lname), teams in sorted(byLeague.items(), key=lambda kv: (kv[0][0] or 0)):
