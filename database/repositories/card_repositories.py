@@ -466,7 +466,7 @@ class PackTypeRepository:
         # too rare once the guarantees came off Grand/Exquisite. Non-base tiers
         # boosted slightly again (base 82→76, holo 28→32, pris 7→8, dia 1.5→2):
         # ~non-base 31%→36% of drops.
-        commonRarityWeights = {'base': 76, 'holographic': 32, 'prismatic': 8, 'diamond': 2}
+        commonRarityWeights = {'metallic': 76, 'holographic': 32, 'prismatic': 8, 'diamond': 2}
 
         defaults = [
             PackType(
@@ -649,7 +649,7 @@ class PackTypeRepository:
         if not eligibleTeamIds:
             return 0
 
-        themedRarityWeights = {'base': 70, 'holographic': 23, 'prismatic': 6, 'diamond': 2}
+        themedRarityWeights = {'metallic': 70, 'holographic': 23, 'prismatic': 6, 'diamond': 2}
         teamPackCost = 60  # match the other themed packs (themedCost above)
         added = 0
         for team in self.session.query(Team).filter(Team.id.in_(eligibleTeamIds)).all():

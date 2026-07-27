@@ -71,6 +71,9 @@ def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
         "passing_stats": {
             "passYards": (passingStats or {}).get("yards", 0),
             "tds": (passingStats or {}).get("tds", 0),
+            # Exposed for card gates (a QB card can gate on completions / attempts).
+            "comp": (passingStats or {}).get("comp", 0),
+            "att": (passingStats or {}).get("att", 0),
         },
         "rushing_stats": {
             "runYards": (rushingStats or {}).get("yards", 0),
@@ -279,6 +282,30 @@ class FantasyTracker:
     def _seasonManager(self):
         return self.serviceContainer.getService('season_manager')
 
+    @staticmethod
+    def _equippedRostersByWeek(session, seasonNum: int) -> dict:
+        """Fantasy/Cards fusion: the fantasy 'roster' IS the equipped cards, so a user's
+        lineup for a week is the set of players DEPICTED by their equipped cards that week.
+
+        Returns {(user_id, week): [(EquippedCard, depicted_player_id), ...]} across ALL
+        weeks of the season — the season leaderboard sums each week's actual lineup (there
+        is no season-long lock snapshot). EquippedCard rows persist per week, so a past
+        week's lineup is reconstructable exactly, pairing with that week's banked
+        WeeklyCardBonus. No live-lock / slot-eligibility filtering here — that only matters
+        for the CURRENT week's live scoring, applied separately by the caller."""
+        from database.models import EquippedCard, UserCard, CardTemplate
+        rows = (
+            session.query(EquippedCard, CardTemplate.player_id)
+            .join(UserCard, EquippedCard.user_card_id == UserCard.id)
+            .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+            .filter(EquippedCard.season == seasonNum)
+            .all()
+        )
+        byUserWeek: dict = {}
+        for eq, playerId in rows:
+            byUserWeek.setdefault((eq.user_id, eq.week), []).append((eq, playerId))
+        return byUserWeek
+
     _SNAPSHOT_TTL_SECONDS = 8.0  # leaderboard staleness budget (broadcast cadence is 10s)
 
     def invalidateSnapshotCache(self) -> None:
@@ -331,7 +358,7 @@ class FantasyTracker:
         """
         from database.connection import get_session
         from database.models import (
-            EquippedCard, FantasyRoster, FantasyRosterSwap, Game, GamePlayerStats,
+            EquippedCard, FantasyRoster, Game, GamePlayerStats,
             Player, User, UserCard, WeeklyCardBonus, WeeklyPlayerFP, WeeklyModifier
         )
         from database.repositories.card_repositories import EquippedCardRepository
@@ -393,11 +420,13 @@ class FantasyTracker:
                     "modifier": preLockModifier,
                 }
 
-            # ── 2. Collect all roster player IDs + batch-load roster users ──
-            allRosterPlayerIds = set()
-            for roster in rosters:
-                for rp in roster.players:
-                    allRosterPlayerIds.add(rp.player_id)
+            # ── 2. Fusion: the fantasy roster IS the equipped cards. Load every user's
+            # weekly lineup across ALL weeks (the season leaderboard sums each week's
+            # actual lineup — there is no season lock snapshot) + batch-load roster users.
+            equippedByUserWeek = self._equippedRostersByWeek(session, seasonNum)
+            allRosterPlayerIds = {
+                pid for lineup in equippedByUserWeek.values() for _eq, pid in lineup
+            }
             # One IN query instead of session.get(User) per roster (N+1) below.
             rosterUserIds = {r.user_id for r in rosters}
             usersById = {
@@ -428,12 +457,15 @@ class FantasyTracker:
             if isCurrentSeason:
                 equippedRepo = EquippedCardRepository(session)
                 allEquipped = equippedRepo.getAllForWeek(seasonNum, currentWeek)
-                # Pre-check which users have slot 6 cards so we can validate eligibility
-                slot6UserIds = {eq.user_id for eq in allEquipped if eq.slot_number == 6}
+                # Pre-check which users have a FLEX card (slot_number 7 — the
+                # powerup/MVP-gated extra slot) so we can validate eligibility.
+                # NOTE: slot_number 6 is the KICKER (QB1/RB2/WR1=3/WR2=4/TE5/K6/FLEX7);
+                # only FLEX is gated.
+                flexUserIds = {eq.user_id for eq in allEquipped if eq.slot_number == 7}
                 extraSlotUserIds = set()
-                if slot6UserIds:
+                if flexUserIds:
                     from database.models import ShopPurchase, CardTemplate as CT2
-                    # MVP cards among slot-6 users
+                    # MVP cards among FLEX users
                     mvpRows = (
                         session.query(EquippedCard.user_id)
                         .join(UserCard, EquippedCard.user_card_id == UserCard.id)
@@ -441,14 +473,14 @@ class FantasyTracker:
                         .filter(
                             EquippedCard.season == seasonNum,
                             EquippedCard.week == currentWeek,
-                            EquippedCard.user_id.in_(slot6UserIds),
+                            EquippedCard.user_id.in_(flexUserIds),
                             CT2.classification.isnot(None),
                             CT2.classification.contains("mvp"),
                         ).distinct().all()
                     )
                     extraSlotUserIds.update(r[0] for r in mvpRows)
                     # Active temp_card_slot powerup
-                    remaining = slot6UserIds - extraSlotUserIds
+                    remaining = flexUserIds - extraSlotUserIds
                     if remaining:
                         slotRows = (
                             session.query(ShopPurchase.user_id)
@@ -465,8 +497,8 @@ class FantasyTracker:
                     # During active games, only locked cards produce output
                     if gamesActive and not eq.locked:
                         continue
-                    # Skip stale slot 6 cards from expired powerups
-                    if eq.slot_number == 6 and eq.user_id not in extraSlotUserIds:
+                    # Skip a stale FLEX card (slot 7) from an expired powerup
+                    if eq.slot_number == 7 and eq.user_id not in extraSlotUserIds:
                         continue
                     equippedByUser.setdefault(eq.user_id, []).append(eq)
 
@@ -552,41 +584,59 @@ class FantasyTracker:
             for roster in rosters:
                 userId = roster.user_id
                 rosterUser = usersById.get(userId)
-                rosterPlayerIds = {rp.player_id for rp in roster.players}
+                # Fusion: this user's lineup each week = the players DEPICTED by their
+                # equipped cards that week. The CURRENT week uses the live-filtered set
+                # (locked-only during games / slot-eligible); past weeks use the persisted
+                # lineup. No season lock snapshot / offset — a week's FP is all post-lock
+                # (cards lock at game start).
+                if isCurrentSeason:
+                    currentDepicted = [
+                        (eq, eq.user_card.card_template.player_id)
+                        for eq in equippedByUser.get(userId, [])
+                    ]
+                else:
+                    currentDepicted = equippedByUserWeek.get((userId, currentWeek), [])
+                rosterPlayerIds = {pid for _eq, pid in currentDepicted}
 
-                # Per-player weekly FP (banked + live from _weekFP overlay)
-                perPlayerWeekFP = {}
-                for rp in roster.players:
-                    perPlayerWeekFP[rp.player_id] = dict(
-                        weekPlayerFPMap.get(rp.player_id, {})
-                    )
+                # Weeks this user equipped each player (for the per-player season earned).
+                playerEquippedWeeks = {}   # pid -> set(weeks)
+                for (uId, wk), lineup in equippedByUserWeek.items():
+                    if uId != userId:
+                        continue
+                    for _eq, pid in lineup:
+                        playerEquippedWeeks.setdefault(pid, set()).add(wk)
 
-                # Build player entries + season/week totals
-                rosterPlayers = []
+                # Season base FP = Σ over weeks of that week's lineup's per-player week FP.
                 seasonEarnedFP = 0.0
                 currentWeekPlayerFP = 0.0
-                playerLockOffsets = {}   # playerId -> FP offset for current week
-                for rp in roster.players:
-                    pObj = self._playerManager.getPlayerById(rp.player_id)
-                    playerWeeks = perPlayerWeekFP.get(rp.player_id, {})
-                    playerSeasonFP = sum(playerWeeks.values())
-                    playerWeekFP = playerWeeks.get(currentWeek, 0)
-                    # Only count FP earned after locking (offset by points_at_lock)
-                    playerEarnedFP = max(0, playerSeasonFP - rp.points_at_lock)
-                    seasonEarnedFP += playerEarnedFP
-                    # Adjust weekly FP for mid-week lock: subtract the portion
-                    # of points_at_lock that falls within the current week
-                    priorWeeksFP = sum(
-                        fp for w, fp in playerWeeks.items() if w < currentWeek
-                    )
-                    lockWeekOffset = max(0, rp.points_at_lock - priorWeeksFP)
-                    adjustedWeekFP = max(0, playerWeekFP - lockWeekOffset)
-                    currentWeekPlayerFP += adjustedWeekFP
-                    playerLockOffsets[rp.player_id] = lockWeekOffset
+                for wk in range(1, currentWeek + 1):
+                    if wk == currentWeek:
+                        wkPids = [pid for _eq, pid in currentDepicted]
+                    else:
+                        wkPids = [pid for _eq, pid in equippedByUserWeek.get((userId, wk), [])]
+                    wkBase = sum(weekPlayerFPMap.get(pid, {}).get(wk, 0) for pid in wkPids)
+                    seasonEarnedFP += wkBase
+                    if wk == currentWeek:
+                        currentWeekPlayerFP = wkBase
 
+                # Per-player breakdown for the CURRENT lineup (+ each player's season
+                # earned across the weeks THEY were equipped).
+                rosterPlayers = []
+                shownEarned = 0.0
+                for eq, pid in currentDepicted:
+                    pObj = self._playerManager.getPlayerById(pid)
+                    playerEarnedFP = sum(
+                        weekPlayerFPMap.get(pid, {}).get(w, 0)
+                        for w in playerEquippedWeeks.get(pid, set())
+                    )
+                    shownEarned += playerEarnedFP
+                    playerWeekFP = weekPlayerFPMap.get(pid, {}).get(currentWeek, 0)
                     rosterPlayers.append({
-                        "slot": rp.slot,
-                        "playerId": rp.player_id,
+                        "slot": getattr(eq, 'slot', None) or (
+                            pObj.position.name
+                            if pObj and hasattr(pObj.position, 'name') else ""
+                        ),
+                        "playerId": pid,
                         "playerName": pObj.name if pObj else "Unknown",
                         "position": (
                             pObj.position.name
@@ -604,34 +654,23 @@ class FantasyTracker:
                             else None
                         ),
                         "earnedPoints": round(playerEarnedFP, 1),
-                        "weekFP": round(adjustedWeekFP, 1),
+                        "weekFP": round(playerWeekFP, 1),
                     })
 
-                # ── Previous players (swapped out) ──
-                swaps = session.query(FantasyRosterSwap).filter_by(
-                    roster_id=roster.id
-                ).all()
-                previousPlayersFP = sum(s.banked_fp for s in swaps)
-                # Preserve old players' current-week FP so the leaderboard
-                # weekly total doesn't drop when a user swaps post-games-end.
-                # banked_week_fp is the snapshot of the old player's
-                # swap-week FP at the moment of the swap.
-                previousPlayersWeekFP = sum(
-                    (getattr(s, 'banked_week_fp', 0) or 0)
-                    for s in swaps if s.swap_week == currentWeek
-                )
-                currentWeekPlayerFP += previousPlayersWeekFP
-                if previousPlayersFP > 0:
-                    seasonEarnedFP += previousPlayersFP
+                # Prior-lineups remainder: season base earned in weeks whose lineup
+                # differed from the current one (players no longer equipped). Keeps the
+                # breakdown reconciling with seasonEarnedFP without a row per past player.
+                priorLineupsFP = round(seasonEarnedFP - shownEarned, 1)
+                if priorLineupsFP > 0.05:
                     rosterPlayers.append({
                         "slot": "PREV",
                         "playerId": 0,
-                        "playerName": "Previous Players",
+                        "playerName": "Prior Lineups",
                         "position": "",
                         "teamAbbr": "",
                         "teamId": None,
-                        "earnedPoints": round(previousPlayersFP, 1),
-                        "weekFP": round(previousPlayersWeekFP, 1),
+                        "earnedPoints": priorLineupsFP,
+                        "weekFP": 0.0,
                     })
 
                 # ── Favorite team data ──
@@ -680,12 +719,12 @@ class FantasyTracker:
                             "gameScore": gameScore,
                         }
 
-                # ── Player game stats for display ──
+                # ── Player game stats for display (current lineup) ──
                 playerGameStats = {}
-                for rp in roster.players:
-                    rawStats = allPlayerRawStats.get(rp.player_id)
+                for pid in rosterPlayerIds:
+                    rawStats = allPlayerRawStats.get(pid)
                     if rawStats:
-                        playerGameStats[rp.player_id] = rawStats
+                        playerGameStats[pid] = rawStats
 
                 # ── Card bonuses ──
                 userWeekBonuses = weekCardBonusMap.get(userId, {})
@@ -711,65 +750,28 @@ class FantasyTracker:
                     rosterTotalTds = 0
                     rosterPlayerRatings = {}
 
-                    if gamesActive:
-                        # Build from live game data
-                        for rp in roster.players:
-                            pObj = self._playerManager.getPlayerById(rp.player_id)
+                    # Fusion: the roster IS the equipped cards, so the base FP + card-calc
+                    # stats come from the DEPICTED players directly (no separate roster
+                    # loop, no lock offset — a week's FP is all post-lock).
+                    for eq, pid in currentDepicted:
+                        if gamesActive:
+                            pObj = self._playerManager.getPlayerById(pid)
                             if pObj:
                                 pTeamId = getattr(pObj.team, 'id', 0) if hasattr(pObj, 'team') else 0
                                 stats = _liveStatsToDbFormat(pObj.gameStatsDict, teamId=pTeamId)
-                                # Use post-lock FP (adjusted for lock offset)
-                                offset = playerLockOffsets.get(rp.player_id, 0)
-                                effectiveFP = perPlayerWeekFP.get(
-                                    rp.player_id, {}
-                                ).get(currentWeek, 0)
-                                adjustedFP = max(0, effectiveFP - offset)
-                                stats["fantasyPoints"] = adjustedFP
-                                cardCalcStats[rp.player_id] = stats
-                                weekRawFP += adjustedFP
+                                effectiveFP = weekPlayerFPMap.get(pid, {}).get(currentWeek, 0)
+                                stats["fantasyPoints"] = effectiveFP
+                                cardCalcStats[pid] = stats
+                                weekRawFP += effectiveFP
                                 rosterTotalTds += _countPlayerTds(stats)
-                                rosterPlayerRatings[rp.player_id] = (
-                                    getattr(pObj, 'playerRating', 60) or 60
-                                )
-                    else:
-                        # Build from DB (games ended, week not yet processed)
-                        for rp in roster.players:
-                            pStats = dbCurrentWeekFullStats.get(
-                                rp.player_id, {}
-                            )
+                                rosterPlayerRatings[pid] = getattr(pObj, 'playerRating', 60) or 60
+                        else:
+                            pStats = dbCurrentWeekFullStats.get(pid, {})
                             if pStats:
-                                # Adjust FP for lock offset
-                                offset = playerLockOffsets.get(rp.player_id, 0)
-                                pStats["fantasyPoints"] = max(
-                                    0, pStats.get("fantasyPoints", 0) - offset
-                                )
-                                cardCalcStats[rp.player_id] = pStats
+                                cardCalcStats[pid] = pStats
                                 weekRawFP += pStats.get("fantasyPoints", 0)
                                 rosterTotalTds += _countPlayerTds(pStats)
-                            rosterPlayerRatings[rp.player_id] = (
-                                playerRatingsMap.get(rp.player_id, 60)
-                            )
-
-                    # Add depicted player stats if not already in cardCalcStats
-                    for eq in userEquipped:
-                        cardPlayerId = eq.user_card.card_template.player_id
-                        if cardPlayerId not in cardCalcStats:
-                            if gamesActive:
-                                cardPlayerObj = self._playerManager.getPlayerById(
-                                    cardPlayerId
-                                )
-                                if cardPlayerObj:
-                                    cardCalcStats[cardPlayerId] = (
-                                        _liveStatsToDbFormat(
-                                            cardPlayerObj.gameStatsDict
-                                        )
-                                    )
-                            else:
-                                pStats = dbCurrentWeekFullStats.get(
-                                    cardPlayerId, {}
-                                )
-                                if pStats:
-                                    cardCalcStats[cardPlayerId] = pStats
+                            rosterPlayerRatings[pid] = playerRatingsMap.get(pid, 60)
 
                     calcCtx = self._buildCardCalcContext(
                         session, roster, rosterPlayerIds, userEquipped,
@@ -840,6 +842,11 @@ class FantasyTracker:
                         "match": {
                             "count": sum(1 for b in calcResult.cardBreakdowns if b.matchMultiplied),
                             "total": len(calcResult.cardBreakdowns),
+                        },
+                        "stack": {
+                            "size": calcResult.stackSize,
+                            "champions": calcResult.stackChampions,
+                            "bonus": round(calcResult.stackBonus, 2),
                         },
                     }
                     eqSummary = {
@@ -1020,7 +1027,7 @@ class FantasyTracker:
         gamesActive=False,
     ):
         """Build a CardCalcContext for card bonus computation."""
-        from database.models import FantasyRosterSwap, Game, User, UserCurrency
+        from database.models import Game, User, UserCurrency
         from managers.cardEffectCalculator import CardCalcContext
 
         sm = self._seasonManager
@@ -1159,14 +1166,10 @@ class FantasyTracker:
                         self._weekPerfRatingSnapshot[p.id] = perfRating
         playerPerfRatings = self._weekPerfRatingSnapshot
 
-        # Roster unchanged weeks
-        lastSwap = (
-            session.query(FantasyRosterSwap.swap_week)
-            .filter_by(roster_id=roster.id)
-            .order_by(FantasyRosterSwap.swap_week.desc())
-            .first()
-        )
-        rosterUnchangedWeeks = currentWeek if not lastSwap else max(0, currentWeek - lastSwap[0])
+        # Roster unchanged weeks — fusion: swaps are retired, so there's no swap
+        # history to measure against; the lineup is treated as unchanged this season.
+        # (A precise equip-change tracker is a Phase 9 refinement.)
+        rosterUnchangedWeeks = currentWeek
 
         # Weekly modifier
         activeModifier = ""
@@ -1306,10 +1309,9 @@ class FantasyTracker:
                     kStats = _jsonk.loads(kStats)
                 kickerSeasonFgMisses += kStats.get("fg_missed", 0)
 
-        # Season swaps used (for swap-based card effects)
-        seasonSwapsUsed = session.query(FantasyRosterSwap).filter_by(
-            roster_id=roster.id
-        ).count() if roster else 0
+        # Swaps are retired in the fusion — the swap-based effects (stockpiler/
+        # vagabond) are out of the mint pool and compute 0 off these zeros.
+        seasonSwapsUsed = 0
 
         # User Floobits balance (for balance-based card effects)
         userFloobitsBalance = 0
@@ -1440,13 +1442,12 @@ class FantasyTracker:
         from managers.cardEffectCalculator import computeEminenceData
         positionAvgFPs, playerSeasonFPPerGame, top10PerPosition, top1PerPosition = computeEminenceData(session, season, currentWeek)
 
-        # FLEX slot detection — Home Alone needs to know whether the user
-        # has a 7th roster slot in play (empty or filled) so an open FLEX
-        # counts as a vacancy. Active entitlement (champion card / temp_flex
-        # powerup) OR a FLEX row already on the roster both indicate the
-        # slot is in play — covers the entitlement-just-expired-but-roster-
-        # still-has-FLEX edge case.
-        hasFlexSlot = any(getattr(rp, 'slot', '') == 'FLEX' for rp in roster.players)
+        # FLEX slot detection — Home Alone needs to know whether the user has a
+        # 7th slot in play (empty or filled) so an open FLEX counts as a vacancy.
+        # Fusion: a card equipped in the FLEX slot means it's in play; the
+        # entitlement checks below (MVP card equipped OR Accession/temp_card_slot
+        # powerup) cover the unlocked-but-empty FLEX case.
+        hasFlexSlot = any(getattr(eq, 'slot', '') == 'FLEX' for eq in userEquipped)
         if not hasFlexSlot:
             try:
                 from database.models import ShopPurchase as _SP
@@ -1454,14 +1455,14 @@ class FantasyTracker:
                     uc = getattr(eq, 'user_card', None)
                     tmpl = getattr(uc, 'card_template', None) if uc else None
                     cls = getattr(tmpl, 'classification', None) or ''
-                    if 'champion' in cls:
+                    if 'mvp' in cls:
                         hasFlexSlot = True
                         break
                 if not hasFlexSlot:
                     activeFlex = session.query(_SP).filter(
                         _SP.user_id == userId,
                         _SP.season == season,
-                        _SP.item_slug == 'temp_flex',
+                        _SP.item_slug == 'temp_card_slot',
                         _SP.expires_at_week >= currentWeek,
                     ).first()
                     if activeFlex:
@@ -1515,7 +1516,7 @@ class FantasyTracker:
             priorSeasonMissedPlayoffTeamIds=priorSeasonMissedPlayoffTeamIds,
             currentTop6TeamIds=currentTop6TeamIds,
             activeModifier=activeModifier,
-            unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
+            unusedSwaps=0,
             seasonSwapsUsed=seasonSwapsUsed,
             hasFlexSlot=hasFlexSlot,
             userFloobitsBalance=userFloobitsBalance,
@@ -1593,6 +1594,13 @@ class FantasyTracker:
                     favoriteTeamWonThisWeek
                     and favoriteTeamOpponentElo > favoriteTeamElo
                 )
+            elif condition == "player_cleared_bar":
+                from constants import CARD_GATE_FP_THRESHOLDS
+                cardPlayerId = eq.user_card.card_template.player_id
+                pos = playerPositionMap.get(cardPlayerId, 0)
+                thr = CARD_GATE_FP_THRESHOLDS.get(pos, 0)
+                fp = weekPlayerStats.get(cardPlayerId, {}).get("fantasyPoints", 0) or 0
+                conditionMet = fp >= thr
 
             result[eq.id] = conditionMet
             if conditionMet:
@@ -1637,4 +1645,8 @@ class FantasyTracker:
             "chanceTriggered": b.chanceTriggered,
             "streakActive": b.streakActive,
             "streakCount": b.streakCount,
+            "gateActive": b.gateActive,
+            "gateThreshold": b.gateThreshold,
+            "gateInverse": b.gateInverse,
+            "gateAllPro": b.gateAllPro,
         }

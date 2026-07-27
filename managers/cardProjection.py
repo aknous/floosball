@@ -304,7 +304,7 @@ def _findUpcomingOpponent(session, favTeamId, season, week, teamManager) -> Tupl
 def buildProjectionContext(session, userId, season, week, seasonManager, playerManager) -> Optional[CardCalcContext]:
     from database.models import (
         FantasyRoster, PlayerSeasonStats,
-        User, UserCurrency, WeeklyModifier, FantasyRosterSwap,
+        User, UserCurrency, WeeklyModifier,
         EquippedCard,
     )
     from managers.cardEffectCalculator import computeEminenceData
@@ -312,7 +312,17 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     roster = session.query(FantasyRoster).filter_by(user_id=userId, season=season).first()
     if not roster:
         return None
-    rosterPlayerIds = {rp.player_id for rp in roster.players}
+    # Fusion: the roster IS the equipped cards, so the projected lineup = the
+    # players DEPICTED by the equipped cards for the week (not FantasyRosterPlayer
+    # rows). Keep a per-card list so a player depicted by two cards is counted
+    # per-card, matching the live/week-end paths.
+    equipped = (session.query(EquippedCard)
+                .filter(EquippedCard.user_id == userId,
+                        EquippedCard.season == season,
+                        EquippedCard.week == week)
+                .all())
+    depictedPairs = [(eq, eq.user_card.card_template.player_id) for eq in equipped]
+    rosterPlayerIds = {pid for _eq, pid in depictedPairs}
     if not rosterPlayerIds:
         return None
     # Loyalty snapshot — original roster from first save.
@@ -339,8 +349,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     rosterPlayerTeamIds = {}
     playerSeasonFPPerGame = {}
 
-    for rp in roster.players:
-        pid = rp.player_id
+    for _eq, pid in depictedPairs:
         dbPlayer = playerManager.getPlayerById(pid) if playerManager else None
         if dbPlayer:
             rosterPlayerNames[pid] = getattr(dbPlayer, 'name', '')
@@ -423,15 +432,11 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
 
     teamResults = {favTeamId: winProb > 0.5} if favTeamId else {}
 
-    equipped = (session.query(EquippedCard)
-                .filter(EquippedCard.user_id == userId,
-                        EquippedCard.season == season,
-                        EquippedCard.week == week)
-                .all())
-    # FLEX slot detection — mirrors the fantasyTracker logic. Either an
-    # active entitlement (champion card / temp_flex powerup) or a FLEX
-    # row already on the roster signals the slot is in play.
-    hasFlexSlot = any(getattr(rp, 'slot', '') == 'FLEX' for rp in roster.players)
+    # FLEX slot detection — mirrors the fantasyTracker logic. Fusion: a card
+    # equipped in the FLEX slot means the slot is in play; the entitlement checks
+    # below (MVP card OR Accession/temp_card_slot powerup) cover the
+    # unlocked-but-empty case.
+    hasFlexSlot = any(getattr(eq, 'slot', '') == 'FLEX' for eq in equipped)
     if not hasFlexSlot:
         try:
             from database.models import ShopPurchase as _SP
@@ -439,14 +444,14 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
                 uc = getattr(eq, 'user_card', None)
                 tmpl = getattr(uc, 'card_template', None) if uc else None
                 cls = getattr(tmpl, 'classification', None) or ''
-                if 'champion' in cls:
+                if 'mvp' in cls:
                     hasFlexSlot = True
                     break
             if not hasFlexSlot:
                 activeFlex = session.query(_SP).filter(
                     _SP.user_id == userId,
                     _SP.season == season,
-                    _SP.item_slug == 'temp_flex',
+                    _SP.item_slug == 'temp_card_slot',
                     _SP.expires_at_week >= week,
                 ).first()
                 if activeFlex:
@@ -557,11 +562,10 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     except Exception:
         pass
 
-    lastSwap = (session.query(FantasyRosterSwap.swap_week)
-                .filter_by(roster_id=roster.id)
-                .order_by(FantasyRosterSwap.swap_week.desc()).first())
-    rosterUnchangedWeeks = week if not lastSwap else max(0, week - lastSwap[0])
-    seasonSwapsUsed = session.query(FantasyRosterSwap).filter_by(roster_id=roster.id).count()
+    # Fusion: swaps are retired — treat the lineup as unchanged; swap-based effects
+    # (retired) project 0 off these zeros.
+    rosterUnchangedWeeks = week
+    seasonSwapsUsed = 0
 
     activeModifier = ""
     try:
@@ -604,6 +608,16 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
             kickerSeasonFgMisses += (fgAtt - fgs)
             break
 
+    # Per-week FP history for the expected-value gate: P(player clears the bar) is
+    # estimated from these completed weeks (weeks before the one being projected).
+    from database.models import WeeklyPlayerFP as _WPF
+    playerWeeklyFP: Dict[int, list] = {}
+    for _r in (session.query(_WPF)
+               .filter(_WPF.season == season, _WPF.week < week,
+                       _WPF.player_id.in_(rosterPlayerIds))
+               .all()):
+        playerWeeklyFP.setdefault(_r.player_id, []).append(_r.fantasy_points or 0)
+
     return CardCalcContext(
         isProjection=True,
         favoriteTeamWinProb=winProb,
@@ -614,6 +628,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         kickerSeasonFgMisses=kickerSeasonFgMisses,
         rosterPlayerIds=rosterPlayerIds,
         weekPlayerStats=weekPlayerStats,
+        playerWeeklyFP=playerWeeklyFP,
         weekRawFP=weekRawFP,
         rosterPlayerRatings=rosterPlayerRatings,
         rosterTotalTds=int(round(rosterTotalTds)),
@@ -661,7 +676,7 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         priorSeasonMissedPlayoffTeamIds=_lookupPriorSeasonMissedPlayoffTeams(session, season),
         currentTop6TeamIds=_lookupCurrentTop6Teams(session, season),
         activeModifier=activeModifier,
-        unusedSwaps=(roster.swaps_available or 0) + (roster.purchased_swaps or 0),
+        unusedSwaps=0,
         seasonSwapsUsed=seasonSwapsUsed,
         hasFlexSlot=hasFlexSlot,
         userFloobitsBalance=userFloobitsBalance,

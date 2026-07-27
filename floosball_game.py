@@ -7727,10 +7727,14 @@ class Game:
         # bucketing makes 'decisive moment' a natural function of when in
         # the game it happens — final 2 min and OT spike pressure hard, mid-
         # quarter plays don't.
-        secs = self.gameClockSeconds
-        if self.currentQuarter == 5:  # OT — every play decides
+        # Format-aware: clock-less formats (innings) never advance the real quarter/
+        # clock, so they map their own period counters onto an EFFECTIVE (quarter, secs)
+        # here — otherwise every play reads as Q1 and pressure never ramps. Standard
+        # (and the clock-driven formats) return the real values unchanged.
+        effQuarter, secs = self.format.pressureQuarterClock(self)
+        if effQuarter == 5:  # OT — every play decides
             pressure += 50
-        elif self.currentQuarter == 4:
+        elif effQuarter == 4:
             if secs <= 60:    # final minute
                 pressure += 55
             elif secs <= 120: # final 2 min — crunch time
@@ -7741,9 +7745,9 @@ class Game:
                 pressure += 18
             else:
                 pressure += 10
-        elif self.currentQuarter == 3:
+        elif effQuarter == 3:
             pressure += 15 if secs <= 60 else 10  # end-of-quarter bump
-        elif self.currentQuarter == 2:
+        elif effQuarter == 2:
             pressure += 15 if secs <= 60 else 5   # end-of-half bump
         else:
             pressure += 5
@@ -7763,7 +7767,7 @@ class Game:
 
         # Scale score pressure by quarter: Q1=25%, Q2=50%, Q3=75%, Q4/OT=100%
         quarterScale = {1: 0.25, 2: 0.5, 3: 0.75, 4: 1.0, 5: 1.0}
-        pressure += scorePressure * quarterScale.get(self.currentQuarter, 1.0)
+        pressure += scorePressure * quarterScale.get(effQuarter, 1.0)
 
         # Down and distance pressure (0-20)
         if self.down == self.gameRules.downsPerSeries:
@@ -7790,7 +7794,7 @@ class Game:
         # prevents high team modifiers (Floosbowl 2.5x) from inflating
         # routine early plays into clutch/choke territory
         earlyGameScale = {1: 0.3, 2: 0.5, 3: 0.7, 4: 1.0, 5: 1.0}
-        pressure *= earlyGameScale.get(self.currentQuarter, 1.0)
+        pressure *= earlyGameScale.get(effQuarter, 1.0)
 
         # Apply the team pressure modifier (playoff importance, Floosbowl,
         # prior-season expectations, in-season elimination state, etc.) with
@@ -10284,6 +10288,23 @@ class Game:
             pDef = min(0.85, pDef * CONTEST_CRITICALITY_DEFENSE_MULT)
         return _random.random() >= pDef
 
+    def _newBeatPlay(self):
+        """Create the next Play in a SCORING SEQUENCE (contest / conversion / kickoff),
+        inheriting the scoring play's at-bat context. A score is a "try", so the possession
+        change already advanced the innings counters — a fresh Play() would stamp the beat
+        with the NEXT at-bat (and, on the final inning, the WP graph would jump the point to
+        the far end). The beat belongs to the at-bat that scored, so carry that play's
+        inning/half/try onto it. No-op off innings (inning is None)."""
+        prevInning = self.play.inning
+        prevHalf = self.play.inningHalf
+        prevTry = self.play.inningTry
+        self.play = Play(self)
+        if prevInning is not None:
+            self.play.inning = prevInning
+            self.play.inningHalf = prevHalf
+            self.play.inningTry = prevTry
+        return self.play
+
     def _runContest(self, scorer, scoringPlay) -> bool:
         """Beat 2 of Contested Scoring: run the contest as its OWN play-feed entry (mirrors
         `_simulate2PointConversionPlay`'s separate-entry pattern). Rolls a contest type,
@@ -10301,7 +10322,7 @@ class Game:
         scoringType = scoringPlay.playType
 
         # Fresh Play for the contest beat (stable playNumber for React keys / REST).
-        self.play = Play(self)
+        self._newBeatPlay()
         self.totalPlays += 1
         self.play.playNumber = self.totalPlays
         self.play.playType = scoringType   # so _attributeWpa credits the scorer on a win
@@ -10464,7 +10485,7 @@ class Game:
         self.yardsToFirstDown = distance
         self._refreshYardLine()   # else Play() snapshots the touchdown's yard line
 
-        self.play = Play(self)
+        self._newBeatPlay()
         # Give the conversion its own play number so it has a stable identity
         # separate from the touchdown that preceded it (React keys + REST
         # serialization need a unique playNumber per feed entry).
@@ -10575,7 +10596,7 @@ class Game:
         self.yardsToFirstDown = 15
         self._refreshYardLine()   # else Play() snapshots the touchdown's yard line
 
-        self.play = Play(self)
+        self._newBeatPlay()
         # Stable identity separate from the touchdown — same reasoning as
         # the 2-pt path; React keys + REST serialization need a unique
         # playNumber per feed entry.
@@ -13757,6 +13778,17 @@ class Play():
                 self.receiver = selectedTarget['receiver']
                 self.passType = selectedTarget['route']
 
+                # Read-down flag: the QB targeted a receiver shallower than the called
+                # concept (e.g. a "deep shot" where the deep option was covered and the QB
+                # took the open checkdown). Surfaced in play insights so a low air-yards
+                # number next to a deep play call reads as intentional, not contradictory.
+                _tierDepth = {'short': 1, 'medium': 2, 'long': 3, 'deep': 4}
+                _calledTier = self.insights.get('playCall')
+                _actualDepth = _tierDepth.get(getattr(self.passType, 'name', ''))
+                if (_calledTier in _tierDepth and _actualDepth is not None
+                        and _actualDepth < _tierDepth[_calledTier]):
+                    self.insights['pass']['checkedDown'] = True
+
                 # QB discipline check: does the QB follow the sideline play call?
                 # Discipline range is 60-100
                 if self.targetSideline:
@@ -13996,9 +14028,11 @@ class Play():
                         if hasattr(self.interceptedBy, 'stat_tracker'):
                             self.interceptedBy.stat_tracker.add_defensive_int(self.game.isRegularSeasonGame)
                     self.playResult = PlayResult.Interception
+                    self.insights['pass']['outcome'] = 'int'
                 # Check for catch
                 elif outcomeRoll <= (catchProbs['intProb'] + catchProbs['catchProb']):
                     # COMPLETION!
+                    self.insights['pass']['outcome'] = 'catch'
                     # A grab off a lay-out on a contested ball gets the diving-catch tag.
                     if getattr(self, '_diveAttempt', False):
                         self._diveCatch = True
@@ -14263,13 +14297,15 @@ class Play():
                     self.defense.updateInGameConfidence(.005)
                     self.passIsDropped = True
                     self.yardage = 0
-                
+                    self.insights['pass']['outcome'] = 'drop'
+
                 else:
                     # INCOMPLETE (missed throw / coverage disruption)
                     self.passer.addMissedPass(self.game.isRegularSeasonGame)
                     self.defense.updateInGameConfidence(.003)
                     self.passer.updateInGameConfidence(-.003)
                     self.yardage = 0
+                    self.insights['pass']['outcome'] = 'incomplete'
                     # Credit covering defender with pass breakup
                     if coveringDefender and hasattr(coveringDefender, 'stat_tracker'):
                         coveringDefender.stat_tracker.add_pass_breakup(self.game.isRegularSeasonGame)

@@ -153,7 +153,7 @@ class Player(Base):
     preferred_number: Mapped[Optional[int]] = mapped_column(Integer)
     tier: Mapped[Optional[str]] = mapped_column(String(20))
     team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"))
-    position: Mapped[Optional[int]] = mapped_column(Integer)  # Enum: QB=0, RB=1, WR=2, TE=3, K=4
+    position: Mapped[Optional[int]] = mapped_column(Integer)  # Enum: QB=1, RB=2, WR=3, TE=4, K=5 (1-based, matches floosball_player.Position and CardTemplate.position)
     seasons_played: Mapped[int] = mapped_column(Integer, default=0)
     term: Mapped[Optional[int]] = mapped_column(Integer)
     term_remaining: Mapped[Optional[int]] = mapped_column(Integer)
@@ -1437,14 +1437,24 @@ class UserCard(Base):
 
 
 class EquippedCard(Base):
-    """Equipped card table - cards in play for a given week (max 5 per user)."""
+    """Equipped card table - cards in play for a given week.
+
+    Fantasy/Cards fusion: equipped cards ARE the fantasy roster, so slots are
+    POSITION-LOCKED. `slot` is the position slot the card fills — QB/RB/WR1/WR2/TE/K
+    (the six base slots, one per position, mirroring the old FantasyRosterPlayer.slot)
+    plus FLEX (the 7th, unlocked by an MVP card or the Accession powerup). A card's
+    depicted player's position must match its slot (FLEX accepts any). `slot_number`
+    is retained as a stable display/ordering ordinal (QB=1…K=6, FLEX=7)."""
     __tablename__ = "equipped_cards"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     season: Mapped[int] = mapped_column(Integer, nullable=False)
     week: Mapped[int] = mapped_column(Integer, nullable=False)
-    slot_number: Mapped[int] = mapped_column(Integer, nullable=False)  # 1–5
+    slot_number: Mapped[int] = mapped_column(Integer, nullable=False)  # display/order ordinal (QB=1…K=6, FLEX=7)
+    # Position slot: 'QB','RB','WR1','WR2','TE','K','FLEX'. Nullable so pre-fusion rows
+    # (which had only an ordinal slot_number) don't break; new equips always set it.
+    slot: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     user_card_id: Mapped[int] = mapped_column(Integer, ForeignKey("user_cards.id"), nullable=False)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     card_bonus_at_lock: Mapped[float] = mapped_column(Float, default=0.0)  # Card bonus snapshot at lock time
@@ -1465,11 +1475,14 @@ class EquippedCard(Base):
 
     __table_args__ = (
         UniqueConstraint("user_id", "season", "week", "slot_number", name="uq_equipped_card_slot"),
+        # Position-locked: one card per position slot per user/week (fusion). NULL slots
+        # (pre-fusion rows) are treated as distinct by SQLite, so they don't collide.
+        UniqueConstraint("user_id", "season", "week", "slot", name="uq_equipped_card_slot_pos"),
         Index("idx_equipped_cards_user_week", "user_id", "season", "week"),
     )
 
     def __repr__(self):
-        return f"<EquippedCard(user_id={self.user_id}, S{self.season}W{self.week}, slot={self.slot_number})>"
+        return f"<EquippedCard(user_id={self.user_id}, S{self.season}W{self.week}, slot={self.slot or self.slot_number})>"
 
 
 class ShowcaseSlot(Base):

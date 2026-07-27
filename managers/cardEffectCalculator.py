@@ -17,7 +17,6 @@ from typing import Dict, List, Optional, Set
 
 from managers.cardEffects import (
     computeEffect, checkStreakCondition, EffectResult,
-    POSITION_CONDITIONALS,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,8 +33,6 @@ CONDITIONAL_STAT_MAP = {
     "longFg":    ("kicking_stats", "longest"),
 }
 
-DEFAULT_MATCH_MULTIPLIER = 1.5
-
 
 @dataclass
 class CardCalcContext:
@@ -43,6 +40,10 @@ class CardCalcContext:
     # Core roster data
     rosterPlayerIds: Set[int] = field(default_factory=set)
     weekPlayerStats: Dict[int, dict] = field(default_factory=dict)
+    # Projection only: each depicted player's per-week FP history this season, so the
+    # expected-value projection can weight a gated card by P(player clears the bar) instead
+    # of hard-gating on the season average. Empty in the live/week-end paths.
+    playerWeeklyFP: Dict[int, list] = field(default_factory=dict)
     weekRawFP: float = 0.0
     rosterPlayerRatings: Dict[int, int] = field(default_factory=dict)
     rosterTotalTds: int = 0
@@ -218,9 +219,12 @@ class CardBreakdown:
     primaryFloobits: int = 0
     primaryMult: float = 0.0   # FPx factor (e.g. 1.3 means ×1.3)
 
-    # Match bonus
+    # Match bonus — RETIRED in the fantasy/cards fusion (every equipped card's
+    # player is trivially rostered, so the ×1.5/×2.5 multiplier was flat
+    # inflation). Fields kept for breakdowns_json / recap schema stability;
+    # matchMultiplied is always False and matchMultiplier always 1.0 now.
     matchMultiplied: bool = False
-    matchMultiplier: float = DEFAULT_MATCH_MULTIPLIER
+    matchMultiplier: float = 1.0
     preMatchFP: float = 0.0
     preMatchFloobits: int = 0
     preMatchMult: float = 0.0
@@ -254,6 +258,14 @@ class CardBreakdown:
     streakActive: Optional[bool] = None  # None = not a streak card, True/False = condition met this week
     streakCount: int = 0  # Current streak count
 
+    # FP power-bar gate: None = ungated (no-effect floor card), True = the depicted
+    # player cleared the bar this week (effect fired), False = bar not met (effect
+    # scored nothing). Drives the "gate not met" marker in the scoring breakdown.
+    gateActive: Optional[bool] = None
+    gateThreshold: float = 0.0  # the position FP threshold this card's bar needs
+    gateInverse: bool = False   # inverse gate — the effect is active WHILE under the threshold
+    gateAllPro: bool = False    # All-Pro card: its bar is lowered 30% (CARD_GATE_ALLPRO_MULT)
+
 
 @dataclass
 class CardBonusResult:
@@ -261,6 +273,12 @@ class CardBonusResult:
     multFactors: List[float] = field(default_factory=list)  # All FPx factors (each >1)
     floobitsEarned: int = 0
     cardBreakdowns: List[CardBreakdown] = field(default_factory=list)
+    # Team stacking: the size of the largest same-team group fielded, how many of those are
+    # Champion-classified (which amplifies the stack), and the lineup-wide FPx delta granted
+    # (0 below a 2-stack). For the hand-synergy display.
+    stackSize: int = 0
+    stackChampions: int = 0
+    stackBonus: float = 0.0
 
 
 # Effects that use the roster player's stats at the card's position
@@ -275,20 +293,31 @@ _ROSTER_POSITION_EFFECTS = {
 }
 
 
-def _buildPlayerStatLine(effectName: str, cardPlayerId: int, ctx) -> str:
-    """Build a short stat summary for roster-position-based effects.
+# Effects still scored against the roster slot rather than the card's own
+# player, so their stat line must keep the old position lookup or it would
+# advertise stats the card didn't actually score on. Everything else in
+# _ROSTER_POSITION_EFFECTS was re-based in Stage 1 of the on-card re-base
+# (docs/CARD_ONCARD_REBASE_PLAN.md) and reads the card player directly.
+_ROSTER_SCOPED_STAT_LINE = {"showoff", "double_trouble", "sniper"}
 
-    Looks up the roster player(s) at the card's position (ctx.cardPosition)
-    instead of the card player. For WR (pos 3), combines both WR1+WR2 stats.
+
+def _buildPlayerStatLine(effectName: str, cardPlayerId: int, ctx) -> str:
+    """Build a short stat summary for position-based effects.
+
+    Re-based effects report the CARD'S OWN player. The few still roster-scoped
+    (see _ROSTER_SCOPED_STAT_LINE) keep the old lookup of whoever occupies the
+    card's position, combining WR1+WR2 for pos 3.
     """
     if effectName not in _ROSTER_POSITION_EFFECTS:
         return ""
 
-    # Find roster player(s) at the card's position
-    rosterPids = [
-        pid for pid, pos in ctx.rosterPlayerPositions.items()
-        if pos == ctx.cardPosition and pid in ctx.rosterPlayerIds
-    ]
+    if effectName in _ROSTER_SCOPED_STAT_LINE:
+        rosterPids = [
+            pid for pid, pos in ctx.rosterPlayerPositions.items()
+            if pos == ctx.cardPosition and pid in ctx.rosterPlayerIds
+        ]
+    else:
+        rosterPids = [cardPlayerId] if cardPlayerId else []
     if not rosterPids:
         return ""
 
@@ -380,6 +409,11 @@ _SECOND_PASS_EFFECTS = frozenset({
     "high_roller",
     "fortitude",
     "charmed",  # FP per chance card trigger this week
+    # Full House (Diamond): fires only if EVERY first-pass card cleared its power
+    # bar this week, so it must run after every first-pass gate is resolved. It
+    # reads the snapshot taken right after the first pass (ctx._firstPassGatedCount
+    # / _firstPassGatedOn), not per-card breakdowns.
+    "full_roster",
 })
 
 # Tradeoff effects that modify the overall bonus aggregation
@@ -692,13 +726,11 @@ def _computeCardPass(
             ):
                 primary.equation = _rescaleEquationValue(primary.equation, m)
 
-    # 2. Apply match bonus and weekly modifier
-    isMatch = cardPlayerId in ctx.rosterPlayerIds
+    # 2. Weekly modifier. Fusion: the match multiplier (×1.5 / ×2.5) is REMOVED —
+    # every equipped card's player is trivially "on the roster," so a match bonus
+    # would be flat inflation. The Wildcard ("force all matched") and Overdrive
+    # ("×2.5 match") modifiers are retired alongside it, as is the position conditional.
     mod = ctx.activeModifier
-
-    # Wildcard modifier: force all cards to be matched
-    if mod == "wildcard":
-        isMatch = True
 
     preMatchFP = primary.fpBonus
     preMatchFloobits = primary.floobits
@@ -706,17 +738,6 @@ def _computeCardPass(
     matchedFP = primary.fpBonus
     matchedFloobits = primary.floobits
     matchedMult = primary.multBonus
-
-    # Overdrive: match multiplier is 2.5x instead of 1.5x
-    matchMult = 2.5 if mod == "overdrive" else DEFAULT_MATCH_MULTIPLIER
-
-    if isMatch:
-        matchedFP *= matchMult
-        matchedFloobits = int(matchedFloobits * matchMult)
-        # FPx match bonus: scale the bonus portion above 1
-        if matchedMult > 1:
-            bonusPortion = (matchedMult - 1) * matchMult
-            matchedMult = 1 + bonusPortion
 
     # Apply modifier effects to primary values
     if mod in ("amplify", "cascade"):
@@ -740,20 +761,15 @@ def _computeCardPass(
         matchedFloobits *= 2
         if matchedMult > 1:
             matchedMult = 1 + (matchedMult - 1) * 2
-    # 3. Check position conditional if matched. Skip pure-marker cards: they
-    #    produce no output of their own, so a conditional bonus would fabricate
-    #    a phantom FP row (and make them a Lemons/Conductor target).
+    # 3. Position conditional — RETIRED in the fusion cleanup (owner call 2026-07-25).
+    #    It was the last remnant of the match-bonus system (Phase 4 removed the ×1.5/×2.5
+    #    multiplier; this flat "player hit a stat milestone" bonus lingered). It fired on
+    #    EVERY card (isMatch is always true in fusion) — including no-effect floor cards —
+    #    and double-counted the player's performance, which their FP (the base) already
+    #    rewards. The card's gated effect is now the only value-add. Fields kept at 0/None
+    #    for breakdowns_json / recap schema stability.
     conditionalBonus = 0.0
     conditionalLabel = None
-    if isMatch and effectName not in _NO_OUTPUT_MARKERS:
-        conditionals = POSITION_CONDITIONALS.get(position, [])
-        cardPlayerStats = ctx.weekPlayerStats.get(cardPlayerId, {})
-        for cond in conditionals:
-            bonus, label = _checkConditional(cond, cardPlayerStats)
-            if bonus > 0:
-                conditionalBonus += bonus
-                conditionalLabel = label
-                break  # Only apply the first triggered conditional
 
     # 4. Secondary effects removed — edition determines effect tier only
     secondaryFP = 0.0
@@ -788,6 +804,18 @@ def _computeCardPass(
         elif category == "floobits" or any(k in configAndPrimary for k in _FLOOBITS_KEYS):
             outputType = "floobits"
 
+    # FP power-bar gate outcome for this card — computeEffect (above) stashed the
+    # on/off ratio on ctx._gateRatios[eq.id] for gated cards.
+    _gate = effectConfig.get("gate") or {}
+    _gateThreshold = _gate.get("threshold", 0) or 0
+    _gateInverse = bool(_gate.get("inverse"))
+    _gateAllPro = bool(_gate.get("allPro"))
+    _gateActive = None
+    if _gateThreshold:
+        _ratio = (getattr(ctx, "_gateRatios", None) or {}).get(eq.id)
+        if _ratio is not None:
+            _gateActive = _ratio >= 1.0
+
     return CardBreakdown(
         slotNumber=eq.slot_number,
         edition=cardEdition,
@@ -802,8 +830,8 @@ def _computeCardPass(
         primaryFP=round(matchedFP, 2),
         primaryFloobits=matchedFloobits,
         primaryMult=round(matchedMult, 2),
-        matchMultiplied=isMatch,
-        matchMultiplier=matchMult,
+        matchMultiplied=False,
+        matchMultiplier=1.0,
         preMatchFP=round(preMatchFP, 2),
         preMatchFloobits=preMatchFloobits,
         preMatchMult=round(preMatchMult, 2),
@@ -822,6 +850,10 @@ def _computeCardPass(
         chanceTriggered=primary.chanceTriggered,
         streakActive=ctx.liveStreakConditionsMet.get(eq.id) if category == "streak" and not (effectConfig.get("streakConfig") or {}).get("noReset") else None,
         streakCount=ctx.streakCounts.get(eq.id, 0) if category == "streak" and not (effectConfig.get("streakConfig") or {}).get("noReset") else 0,
+        gateActive=_gateActive,
+        gateThreshold=_gateThreshold,
+        gateInverse=_gateInverse,
+        gateAllPro=_gateAllPro,
     )
 
 
@@ -971,7 +1003,21 @@ def calculateWeekCardBonuses(
         scaled = tierScaledStrength(name, prim, CARD_TIER_MULT.get(tier, 1.0))
         return scaled.get(paramKey, prim.get(paramKey, baseMult))
 
-    if "surveyor" in equippedNames:
+    # An amplifier only fires if its OWN depicted player cleared their power bar this week
+    # (it has to show up to lead). Uses the card's frozen gate threshold (All-Pro-aware).
+    def _amplifierActive(name):
+        from constants import CARD_GATE_FP_THRESHOLDS
+        eq = next((e for e in firstPassCards
+                   if (e.user_card.card_template.effect_config or {}).get("effectName") == name), None)
+        if eq is None:
+            return False
+        tmpl = eq.user_card.card_template
+        ec = tmpl.effect_config or {}
+        thr = (ec.get("gate") or {}).get("threshold", CARD_GATE_FP_THRESHOLDS.get(tmpl.position, 0))
+        fp = ((ctx.weekPlayerStats or {}).get(tmpl.player_id, {}) or {}).get("fantasyPoints", 0) or 0
+        return fp >= thr
+
+    if "surveyor" in equippedNames and _amplifierActive("surveyor"):
         yardMult = _ampFactor("surveyor", 1.5, "yardMult")
         for ps in (ctx.weekPlayerStats or {}).values():
             for catKey, fields in [
@@ -987,7 +1033,7 @@ def calculateWeekCardBonuses(
                     if f in stats and isinstance(stats[f], (int, float)):
                         stats[f] = int(round(stats[f] * yardMult))
 
-    if "sharpshooter" in equippedNames:
+    if "sharpshooter" in equippedNames and _amplifierActive("sharpshooter"):
         fgMult = _ampFactor("sharpshooter", 2.0, "fgMult")
         for ps in (ctx.weekPlayerStats or {}).values():
             kStats = ps.get("kicking_stats")
@@ -997,7 +1043,7 @@ def calculateWeekCardBonuses(
                 if f in kStats and isinstance(kStats[f], (int, float)):
                     kStats[f] = int(round(kStats[f] * fgMult))
 
-    if "doubler" in equippedNames:
+    if "doubler" in equippedNames and _amplifierActive("doubler"):
         tdMult = _ampFactor("doubler", 2.0, "tdMult")
         ctx.rosterTotalTds = int(round((ctx.rosterTotalTds or 0) * tdMult))
         for ps in (ctx.weekPlayerStats or {}).values():
@@ -1037,6 +1083,24 @@ def calculateWeekCardBonuses(
     for eq in firstPassCards:
         breakdown = _computeCardPass(eq, ctx)
         firstPassBreakdowns.append(breakdown)
+
+    # Snapshot first-pass gate outcomes for Full House (full_roster). Its gate is
+    # applied per-card inside computeEffect, which stashes each first-pass card's
+    # ratio (1.0 on / 0.0 off) into ctx._gateRatios. Freeze the tally here, before
+    # any second-pass card computes and adds its own ratio, so Full House reads a
+    # clean, order-independent count of the first-pass value cards only. Cards with
+    # no gate (the no-effect floor cards) aren't in _gateRatios and so don't count.
+    _fpGate = getattr(ctx, "_gateRatios", None) or {}
+    ctx._firstPassGatedCount = len(_fpGate)
+    ctx._firstPassGatedOn = sum(1 for r in _fpGate.values() if r >= 1.0)
+    # Product of the first-pass gate ratios — Full House scales its reward by it. Live
+    # ratios are 1.0/0.0 so this is 1.0 iff every first-pass card cleared (else 0.0), an
+    # exact fire/no-fire. In the expected projection the ratios are fractional clear
+    # probabilities, so the product is the JOINT chance all of them clear (its true EV).
+    _prod = 1.0
+    for _r in _fpGate.values():
+        _prod *= _r
+    ctx._firstPassGateProduct = _prod
 
     # Pre-trigger pass: for each second-pass card, determine whether it would
     # produce non-zero output given only first-pass results. Stash on ctx so
@@ -1090,6 +1154,9 @@ def calculateWeekCardBonuses(
     # the Lemons/double_down marker pattern: Conductor's own breakdown carries
     # no FP, but its presence amplifies neighbors.
     _applyConductorBoost(allBreakdowns, equippedCards)
+    # Captain (Diamond): lift every other card's output by how far its player overshot
+    # its power bar. Runs BEFORE aggregation so boosted FPx factors get picked up below.
+    _applyCaptainBoost(allBreakdowns, equippedCards, ctx)
 
     # Aggregate totals from all breakdowns
     for breakdown in allBreakdowns:
@@ -1107,6 +1174,38 @@ def calculateWeekCardBonuses(
         if uniquePositions > 1:
             synergyMult = 1 + uniquePositions * 0.1
             result.multFactors.append(round(synergyMult, 2))
+
+    # Team stacking — fielding multiple cards whose depicted players share a real team grants
+    # a lineup-wide FPx that escalates with the largest same-team group. Champion cards in the
+    # stack AMPLIFY it (the reigning champs are one team, so a champ stack is the premium
+    # "Dynasty" stack). Pick the best-paying group so ties resolve toward the champion one.
+    from constants import CARD_TEAM_STACK_BONUS, CARD_CHAMPION_STACK_PREMIUM
+    if CARD_TEAM_STACK_BONUS:
+        byTeam = {}
+        for eq in equippedCards:
+            tmpl = eq.user_card.card_template
+            tid = getattr(tmpl, 'team_id', None)
+            if not tid:
+                continue
+            isChamp = 'champion' in (getattr(tmpl, 'classification', None) or '')
+            grp = byTeam.setdefault(tid, [0, 0])  # [size, champions]
+            grp[0] += 1
+            if isChamp:
+                grp[1] += 1
+        _maxKey = max(CARD_TEAM_STACK_BONUS)
+        best = None  # (delta, size, champions)
+        for size, champs in byTeam.values():
+            if size < 2:
+                continue
+            base = CARD_TEAM_STACK_BONUS.get(min(size, _maxKey), 0.0)
+            delta = base * (1.0 + (champs / size) * CARD_CHAMPION_STACK_PREMIUM)
+            if best is None or delta > best[0]:
+                best = (delta, size, champs)
+        if best and best[0] > 0:
+            result.multFactors.append(round(1.0 + best[0], 3))
+            result.stackSize = best[1]
+            result.stackChampions = best[2]
+            result.stackBonus = round(best[0], 3)
 
     result.totalBonusFP = round(result.totalBonusFP, 2)
     return result
@@ -1163,14 +1262,17 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
     Conductor's own breakdown produces no output. Reads boostPct from
     Conductor's effectConfig.primary so seeded variance is honored.
 
-    Match bonus: when Conductor's card-player is on the user's roster,
-    the boost percentage scales up by DEFAULT_MATCH_MULTIPLIER (e.g. +20%
-    becomes +30%). Mirrors how FPx match bonuses scale their bonus portion.
+    (The old match-bonus scale-up of the boost percentage is retired with the
+    match multiplier in the fantasy/cards fusion.)
     """
     conductorBreakdown = next(
         (b for b in breakdowns if b.effectName == "conductor"), None,
     )
     if conductorBreakdown is None:
+        return
+    # The Conductor has to show up to conduct — no boost if their own player was cold.
+    if conductorBreakdown.gateActive is False:
+        conductorBreakdown.equation = "Conductor didn't clear their bar"
         return
     boostPct = 20
     for eq in (equippedCards or []):
@@ -1184,9 +1286,6 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
             tier = getattr(eq.user_card, "tier", 1) or 1
             boostPct = tierScaledStrength("conductor", prim, CARD_TIER_MULT.get(tier, 1.0)).get("boostPct", boostPct)
             break
-    matched = bool(conductorBreakdown.matchMultiplied)
-    if matched:
-        boostPct = int(round(boostPct * DEFAULT_MATCH_MULTIPLIER))
     factor = 1.0 + (boostPct / 100.0)
     boosted = 0
     for b in breakdowns:
@@ -1205,9 +1304,65 @@ def _applyConductorBoost(breakdowns: List[CardBreakdown], equippedCards) -> None
         b.equation = f"{b.equation} +{boostPct}% (Conductor)"
         boosted += 1
     if boosted > 0:
-        matchTag = " (matched)" if matched else ""
-        conductorBreakdown.equation = f"+{boostPct}%{matchTag} on {boosted} flat-FP card{'s' if boosted != 1 else ''}"
+        # Match multiplier was removed in the fusion Phase 4 retune, so there's no
+        # "(matched)" tag any more (the old `matched` reference was left dangling and
+        # crashed any lineup with a Conductor + a flat-FP card).
+        conductorBreakdown.equation = f"+{boostPct}% on {boosted} flat-FP card{'s' if boosted != 1 else ''}"
     else:
         conductorBreakdown.equation = "No flat-FP cards to amplify"
+
+
+def _applyCaptainBoost(breakdowns: List[CardBreakdown], equippedCards, ctx) -> None:
+    """Captain diamond amplifier: each OTHER card's output is lifted by how far its
+    depicted player scored OVER its power bar this week — +perOvershootPct per FP of
+    overshoot, capped at +100% (2x). Captain's own breakdown produces nothing. Boosts
+    FP, Floobits, and FPx outputs alike (FPx by scaling the delta above 1.0)."""
+    captainBd = next((b for b in breakdowns if b.effectName == "captain"), None)
+    if captainBd is None:
+        return
+    # The Captain has to show up to lead — no boost if their own player was under the bar.
+    if captainBd.gateActive is False:
+        captainBd.equation = "Captain didn't clear their bar"
+        return
+    perPct = 0.0
+    for eq in (equippedCards or []):
+        ec = (eq.user_card.card_template.effect_config or {})
+        if ec.get("effectName") == "captain":
+            prim = ec.get("primary", {}) or {}
+            perPct = prim.get("perOvershootPct", 0.0)
+            from constants import CARD_TIER_MULT
+            from managers.cardEffects import tierScaledStrength
+            tier = getattr(eq.user_card, "tier", 1) or 1
+            perPct = tierScaledStrength("captain", prim, CARD_TIER_MULT.get(tier, 1.0)).get("perOvershootPct", perPct)
+            break
+    if perPct <= 0:
+        return
+    stats = getattr(ctx, "weekPlayerStats", None) or {}
+    boosted = 0
+    for b in breakdowns:
+        if b.effectName == "captain":
+            continue
+        thr = b.gateThreshold or 0
+        playerFP = (stats.get(b.playerId, {}) or {}).get("fantasyPoints", 0) or 0
+        overshoot = max(0.0, playerFP - thr)
+        if overshoot <= 0:
+            continue
+        factor = min(overshoot * perPct, 1.0)  # cap at +100% (2x)
+        if factor <= 0:
+            continue
+        if b.outputType == "fp" and b.primaryFP > 0:
+            bonus = round(b.primaryFP * factor, 1)
+            b.primaryFP = round(b.primaryFP + bonus, 1)
+            b.totalFP = round(b.totalFP + bonus, 1)
+            boosted += 1
+        elif b.outputType == "floobits" and b.floobitsEarned > 0:
+            b.floobitsEarned = int(round(b.floobitsEarned * (1.0 + factor)))
+            boosted += 1
+        elif b.outputType == "mult" and b.primaryMult > 1.0:
+            delta = b.primaryMult - 1.0
+            b.primaryMult = round(1.0 + delta * (1.0 + factor), 3)
+            boosted += 1
+    captainBd.equation = (f"amplified {boosted} card{'s' if boosted != 1 else ''} on overshoot"
+                          if boosted else "no card cleared its bar to amplify")
 
 

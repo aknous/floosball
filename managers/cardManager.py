@@ -3,23 +3,29 @@
 import random
 from typing import List, Dict, Any, Optional
 from logger_config import get_logger
-from managers.cardEffects import buildEffectConfig as _buildEffectConfig, getEffectOutputType
+from managers.cardEffects import buildEffectConfig as _buildEffectConfig, getEffectOutputType, effectValidPositions as _effectValidPositions
 
 logger = get_logger("floosball.cardManager")
 
 # ─── Edition Configuration ────────────────────────────────────────────────────
 
-# Rating thresholds for edition eligibility
+# Rating thresholds for edition eligibility.
+# 'base' is the sub-base, NO-EFFECT floor print (fusion): every player gets one,
+# it just fields the player for their FP. Kept OUT of paid pack pools (weight 0) — it's
+# distributed as the starter/floor lineup, not a pack drop.
 EDITION_THRESHOLDS = {
-    'base': 0,          # All players
+    'base': 0,      # All players (no-effect floor card)
+    'metallic': 0,          # All players
     'holographic': 75,  # Rating >= 75
     'prismatic': 80,    # Rating >= 80
     'diamond': 90,      # Rating >= 90
 }
 
-# Base rarity weights (before player-rating adjustment)
+# Base rarity weights (before player-rating adjustment). standard=0 keeps the floor
+# card out of every pack roll (see _weightedDraw's fallback).
 EDITION_BASE_WEIGHTS = {
-    'base': 100,
+    'base': 0,
+    'metallic': 100,
     'holographic': 25,
     'prismatic': 10,
     'diamond': 2,
@@ -27,7 +33,8 @@ EDITION_BASE_WEIGHTS = {
 
 # Sell values by edition (active season)
 EDITION_SELL_VALUES = {
-    'base': 5,
+    'base': 2,
+    'metallic': 5,
     'holographic': 30,
     'prismatic': 75,
     'diamond': 100,
@@ -37,14 +44,14 @@ EXPIRED_SELL_MULTIPLIER = 0.2  # Expired cards sell for 20%
 
 # ─── The Combine (Card Upgrade System) ───────────────────────────────────────
 
-EDITION_ORDER = ['base', 'holographic', 'prismatic', 'diamond']
+EDITION_ORDER = ['metallic', 'holographic', 'prismatic', 'diamond']
 
 # The Combine: total card value thresholds for resulting edition
 BLENDER_THRESHOLDS = [
     (300, 'diamond'),       # 300+ total value → diamond (e.g. 4 prismatics, or 10 holos)
     (175, 'prismatic'),     # 175-499 → prismatic (e.g. 6 holos, or 1 holo + many bases)
     (50, 'holographic'),    # 50-174 → holographic (e.g. 10 base cards)
-    (0, 'base'),            # 0-49 → base
+    (0, 'metallic'),            # 0-49 → base
 ]
 
 # Daily pack purchase limits — currently empty. After the unified-rotation
@@ -142,6 +149,48 @@ def getActivePackNames(shopDay: int) -> list:
 
 # Map position code → position int for theme filtering
 _POSITION_CODE_TO_INT = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
+
+# ── Fantasy/Cards fusion: position-locked equipped-card slots ──────────────────
+# Equipped cards ARE the fantasy roster, so each slot is tied to a position. Six base
+# slots (one per position, mirroring the old FantasyRosterPlayer.slot) + FLEX (7th).
+FUSION_BASE_SLOTS = ['QB', 'RB', 'WR1', 'WR2', 'TE', 'K']
+FLEX_SLOT = 'FLEX'
+FUSION_ALL_SLOTS = FUSION_BASE_SLOTS + [FLEX_SLOT]
+# slot → 1-based position (matches CardTemplate.position / the Position enum); FLEX = any.
+SLOT_TO_POSITION = {'QB': 1, 'RB': 2, 'WR1': 3, 'WR2': 3, 'TE': 4, 'K': 5, FLEX_SLOT: None}
+# slot → stable display/order ordinal (EquippedCard.slot_number).
+SLOT_TO_ORDINAL = {'QB': 1, 'RB': 2, 'WR1': 3, 'WR2': 4, 'TE': 5, 'K': 6, FLEX_SLOT: 7}
+
+
+def _deriveStarterSlotCounts():
+    """(position, count) pairs covering every base lineup slot, in slot order —
+    e.g. QB/RB/WR1/WR2/TE/K → [(1,1),(2,1),(3,2),(4,1),(5,1)] (two WR cards)."""
+    ordered: list = []
+    seen: dict = {}
+    for slot in FUSION_BASE_SLOTS:
+        pos = SLOT_TO_POSITION[slot]
+        if pos in seen:
+            seen[pos][1] += 1
+        else:
+            entry = [pos, 1]
+            seen[pos] = entry
+            ordered.append(entry)
+    return [(pos, count) for pos, count in ordered]
+
+
+# Ordered (position, count) the starter pack draws — one card per base slot,
+# so WR yields two (WR1 + WR2). Kept in sync with FUSION_BASE_SLOTS.
+_STARTER_SLOT_COUNTS = _deriveStarterSlotCounts()
+
+
+def cardFitsSlot(templatePosition, slot) -> bool:
+    """Whether a card whose depicted player sits at `templatePosition` (1-based, matching
+    CardTemplate.position / the Position enum) may fill `slot`. FLEX accepts any position;
+    a base slot requires an exact position match. Unknown slot → False."""
+    if slot == FLEX_SLOT:
+        return True
+    expected = SLOT_TO_POSITION.get(slot)
+    return expected is not None and int(templatePosition) == expected
 
 # Champion pack draws one card per player (dedup). After a title most of the winning
 # roster can retire (season 11: 5 of 6 winners retired), leaving too few with current
@@ -282,7 +331,7 @@ def _buildClassification(
     mvpPlayerId: Optional[int],
     championPlayerIds: set,
     allProPlayerIds: set,
-    edition: str = "base",
+    edition: str = "metallic",
 ) -> Optional[str]:
     """Build classification string for a player's card templates.
 
@@ -293,8 +342,9 @@ def _buildClassification(
     if isRookie:
         return "rookie"
 
-    # MVP, Champion, All-Pro only on holographic and above
-    if edition == "base":
+    # MVP, Champion, All-Pro only on holographic and above — the floor tiers
+    # ('base' no-effect + 'metallic') never carry a prestige classification.
+    if edition in ("base", "metallic"):
         return None
 
     tags = []
@@ -393,7 +443,9 @@ class CardManager:
                     edition=edition,
                 )
 
-                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId)
+                # Pass classification so a Champion card mints a lower (on-card) gate threshold.
+                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId,
+                                                  classification=classification)
                 rarityWeight = computeRarityWeight(edition, rating)
                 sellValue = getSellValue(edition, isActive=True)
 
@@ -587,7 +639,7 @@ class CardManager:
             baseDetail = effectConfig.get("detail") or ""
             if isStructural:
                 # No own output — show the flat per-tier dividend (edition-banded).
-                edition = template.edition or "base"
+                edition = template.edition or "metallic"
                 divFloob = CARD_TIER_DIVIDEND_FLOOBITS.get(edition, {}).get(tier, 0)
                 divFP = CARD_TIER_DIVIDEND_FP.get(edition, {}).get(tier, 0.0)
                 if outputType == "floobits" and divFloob:
@@ -705,6 +757,10 @@ class CardManager:
             "tagline": effectConfig.get("tagline"),
             "tooltip": effectConfig.get("tooltip"),
             "detail": effectConfig.get("detail"),
+            "gateText": effectConfig.get("gateText"),
+            # Positions this effect can validly land on via a transplant (shared effects
+            # span all five; position-specific ones only their own).
+            "validPositions": sorted(_effectValidPositions(effectName)),
             "sellValue": sellValue,
             "combineValue": getCardValue(userCard, currentSeason),
             "isActive": isActive,
@@ -870,7 +926,7 @@ class CardManager:
         totalValue = sum(getCardValue(card, currentSeason) for card in cards)
 
         # Determine result edition from thresholds
-        resultEdition = 'base'
+        resultEdition = 'metallic'
         for threshold, edition in BLENDER_THRESHOLDS:
             if totalValue >= threshold:
                 resultEdition = edition
@@ -974,7 +1030,7 @@ class CardManager:
 
         totalValue = sum(getCardValue(card, currentSeason) for card in cards)
 
-        resultEdition = 'base'
+        resultEdition = 'metallic'
         for threshold, edition in BLENDER_THRESHOLDS:
             if totalValue >= threshold:
                 resultEdition = edition
@@ -985,6 +1041,107 @@ class CardManager:
             "resultEdition": resultEdition,
             "cardCount": len(cards),
         }
+
+    def _validateTransplantPair(self, session, userId: int, donorCardId: int,
+                                targetCardId: int, currentSeason: int, currentWeek: int = 0):
+        """Validate a donor/target pair for a transplant. Returns (donor, target)
+        UserCards, or raises ValueError. Gate: same edition, both effect-bearing (not
+        the no-effect floor), not already the same effect, and — for a position-specific
+        donor effect — the target's position must be one the effect is valid for (shared
+        effects go on any same-edition card)."""
+        if donorCardId == targetCardId:
+            raise ValueError("Pick two different cards")
+        cards = self._validateUpgradeCards(session, userId, [donorCardId, targetCardId],
+                                           currentSeason, currentWeek)
+        byId = {c.id: c for c in cards}
+        donor, target = byId[donorCardId], byId[targetCardId]
+        dt, tt = donor.card_template, target.card_template
+        if dt.edition == 'base' or tt.edition == 'base':
+            raise ValueError("No-effect (Base) cards can't be transplanted")
+        donorEffect = self._effectName(donor)
+        if not donorEffect or donorEffect in ('none', ''):
+            raise ValueError("The donor card has no effect to transplant")
+        if dt.edition != tt.edition:
+            raise ValueError("Both cards must be the same edition")
+        # Position-specific effects can only land on a player whose position they're
+        # valid for; shared effects go on any same-edition card.
+        from managers.cardEffects import effectValidPositions
+        valid = effectValidPositions(donorEffect)
+        if valid and tt.position not in valid:
+            posName = {1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K'}.get(tt.position, 'that')
+            raise ValueError(f"{donorEffect} is position-specific and can't go on a {posName} card")
+        if donorEffect == self._effectName(target):
+            raise ValueError("Both cards already have that effect")
+        return donor, target
+
+    def previewTransplant(self, session, userId: int, donorCardId: int,
+                          targetCardId: int, currentSeason: int, currentWeek: int = 0) -> dict:
+        """Validate a transplant pairing and return its cost + summary (or raise)."""
+        from constants import TRANSPLANT_COST_BY_EDITION
+        donor, target = self._validateTransplantPair(session, userId, donorCardId,
+                                                     targetCardId, currentSeason, currentWeek)
+        edition = target.card_template.edition
+        return {
+            "cost": TRANSPLANT_COST_BY_EDITION.get(edition, 0),
+            "edition": edition,
+            "donorEffect": self._effectName(donor),
+            "targetEffect": self._effectName(target),
+            "donorPlayer": donor.card_template.player_name,
+            "targetPlayer": target.card_template.player_name,
+        }
+
+    def transplantEffect(self, session, userId: int, donorCardId: int,
+                         targetCardId: int, currentSeason: int, currentWeek: int = 0) -> dict:
+        """Graft the donor card's effect onto the target player card (same edition +
+        position). The target keeps its identity, upgrade tier and vault state and
+        takes on the donor's effect (re-scaled to the target's rating, so a high-rating
+        donor can't dump strong params on a weaker player); the donor is consumed.
+        Costs Floobits scaling with edition."""
+        from database.models import CardUpgradeLog
+        from database.repositories.card_repositories import (
+            UserCardRepository, CurrencyRepository,
+        )
+        from constants import TRANSPLANT_COST_BY_EDITION
+
+        donor, target = self._validateTransplantPair(session, userId, donorCardId,
+                                                     targetCardId, currentSeason, currentWeek)
+        tt = target.card_template
+        donorEffect = self._effectName(donor)
+        edition = tt.edition
+        cost = TRANSPLANT_COST_BY_EDITION.get(edition, 0)
+
+        if cost > 0:
+            currencyRepo = CurrencyRepository(session)
+            result = currencyRepo.spendFunds(
+                userId, cost,
+                transactionType="card_transplant",
+                description=f"Transplanted {donorEffect} onto {tt.player_name}",
+                season=currentSeason,
+            )
+            if result is None:
+                raise ValueError("Insufficient Floobits")
+
+        oldTemplateId = target.card_template_id
+        # Mint an upgraded template on the TARGET's identity/rating carrying the donor's
+        # effect. Classification follows the target player (baked into _createUpgradedTemplate).
+        newTemplate = self._createUpgradedTemplate(session, tt, edition,
+                                                   forceEffect=donorEffect,
+                                                   currentSeason=currentSeason)
+        # Assign the relationship (not just the FK) so the in-session view + serialized
+        # result reflect the new template immediately. Keeps tier + vault + identity.
+        target.card_template = newTemplate
+        UserCardRepository(session).deleteBatch([donor])
+        session.add(CardUpgradeLog(
+            user_id=userId,
+            upgrade_type="transplant",
+            subject_user_card_id=target.id,
+            offering_user_card_ids=[donor.id],
+            old_template_id=oldTemplateId,
+            new_template_id=newTemplate.id,
+            floobits_spent=cost,
+        ))
+        session.flush()
+        return self.serializeCard(target, currentSeason)
 
     # ─── Card Upgrade Tiers (Level Up) ────────────────────────────────────────
 
@@ -1346,6 +1503,14 @@ class CardManager:
         # Skip any templates with NULL team_id — defensive guard against legacy
         # prospect/rookie templates polluting fresh pack rolls.
         allTemplates = [t for t in allTemplates if t.team_id is not None]
+        # The no-effect FLOOR print (edition 'base') is the STARTER lineup ONLY: the starter
+        # pack draws exclusively from it, and every OTHER pack excludes it (packs deliver
+        # effect cards). Before the fusion edition rename this filter dropped 'standard';
+        # the floor is now 'base', so the starter must select it, not skip it.
+        if packType.name == 'starter':
+            allTemplates = [t for t in allTemplates if t.edition == 'base']
+        else:
+            allTemplates = [t for t in allTemplates if t.edition != 'base']
         if not allTemplates:
             raise ValueError("No card templates available for the current season")
 
@@ -1374,6 +1539,12 @@ class CardManager:
         # Starter pack: no duplicate effectNames so new users can equip
         # every starter card without hitting the no-duplicate-effects rule.
         dedupByEffect = (packType.name == 'starter')
+
+        # Starter pack: hand a full ONE-PER-POSITION lineup (QB/RB/WR/TE/K) with
+        # distinct players and effects, so a new user can equip the entire pack as a
+        # complete, legal lineup. Overrides the generic weighted draw below.
+        if packType.name == 'starter':
+            return self._drawStarterLineup(pool, packWeights)
 
         # ── Guaranteed-rarity slot ──
         # If the pack guarantees a minimum rarity, draw one slot constrained
@@ -1405,6 +1576,47 @@ class CardManager:
                 dedupByEffect=dedupByEffect,
             )
         return self._weightedDraw(pool, packWeights, count=count)
+
+    def _drawStarterLineup(self, pool: list, packWeights: dict) -> list:
+        """Draw a full starter lineup covering every lineup slot — QB/RB/WR/WR/TE/K
+        (two WR cards for the WR1 + WR2 slots) — with distinct players AND distinct
+        effects so the whole pack is equippable at once. Restricted to the editions
+        the pack allows (base-only for the starter)."""
+        allowed = {e for e, w in (packWeights or {}).items() if w > 0} or {'base'}
+        eligible = [t for t in pool if t.edition in allowed]
+
+        def effName(t):
+            e = (t.effect_config or {}).get('effectName') or ''
+            return e if e and e != 'none' else None
+
+        byPos: Dict[int, list] = {}
+        for t in eligible:
+            byPos.setdefault(t.position, []).append(t)
+
+        picked: list = []
+        usedPlayers: set = set()
+        usedEffects: set = set()
+        for pos, count in _STARTER_SLOT_COUNTS:  # (position, how many cards)
+            candidates = list(byPos.get(pos, []))
+            if not candidates:
+                logger.warning(f"Starter pack: no card for position {pos}")
+                continue
+            random.shuffle(candidates)
+            for _ in range(count):
+                chosen = next(
+                    (t for t in candidates
+                     if t.player_id not in usedPlayers
+                     and (effName(t) is None or effName(t) not in usedEffects)),
+                    None,
+                )
+                if chosen is None:  # every candidate collided — take any unused player
+                    chosen = next((t for t in candidates if t.player_id not in usedPlayers),
+                                  candidates[0])
+                picked.append(chosen)
+                usedPlayers.add(chosen.player_id)
+                if effName(chosen):
+                    usedEffects.add(effName(chosen))
+        return picked
 
     def _weightedDrawDedup(self, pool: list, packWeights: dict, count: int,
                            dedupByPlayer: bool = False,
@@ -1837,7 +2049,7 @@ class CardManager:
     FEATURED_CARD_COUNT = 5
     # Markup over sell value for shop singles
     SHOP_MARKUP = {
-        'base': 4.0,
+        'metallic': 4.0,
         'holographic': 2.7,
         'prismatic': 4.0,
         'diamond': 4.0,
@@ -1915,15 +2127,16 @@ class CardManager:
             templateRepo = CardTemplateRepository(session)
             allTemplates = templateRepo.getBySeason(currentSeason)
             # Skip NULL-team templates so legacy prospect/rookie pollution
-            # doesn't bleed into the shop's featured rotation.
-            allTemplates = [t for t in allTemplates if t.team_id is not None]
+            # doesn't bleed into the shop's featured rotation, and drop the no-effect
+            # floor print (edition 'base') — it's the starter lineup, not a shop single.
+            allTemplates = [t for t in allTemplates if t.team_id is not None and t.edition != 'base']
 
             if not allTemplates:
                 return []
 
             # Flattened shop weights — rarer editions less common but still appear
             SHOP_EDITION_WEIGHTS = {
-                'base': 50, 'holographic': 25, 'prismatic': 12, 'diamond': 5,
+                'metallic': 50, 'holographic': 25, 'prismatic': 12, 'diamond': 5,
             }
             weights = []
             for t in allTemplates:
