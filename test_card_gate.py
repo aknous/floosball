@@ -81,11 +81,18 @@ expect(f"QB {CARD_GATE_FP_THRESHOLDS[1]} / RB {CARD_GATE_FP_THRESHOLDS[2]} / "
        f"TE {CARD_GATE_FP_THRESHOLDS[4]} differ by position",
        len(set(CARD_GATE_FP_THRESHOLDS.values())) > 1)
 
+print("4b. Thresholds RISE with edition (higher rarity depicts a better player + higher ceiling)")
+wrThr = [buildGateSpec("freebie", WR, edition=e)["threshold"]
+         for e in ("metallic", "holographic", "prismatic", "diamond")]
+expect(f"WR bar climbs by edition: {wrThr}", wrThr == sorted(wrThr) and wrThr[0] < wrThr[-1])
+expect("no edition -> metallic base fallback",
+       buildGateSpec("freebie", WR)["threshold"] == buildGateSpec("freebie", WR, edition="metallic")["threshold"])
+
 print("5. Minted templates carry the gate + power-bar text")
-cfg = buildEffectConfig('base', 80, WR, forceEffect='freebie')
+cfg = buildEffectConfig('metallic', 80, WR, forceEffect='freebie')
 expect(f"minted card has a gate  {cfg.get('gate')}", cfg.get('gate', {}).get('threshold') == WR_THR)
 expect(f"and gateText  {cfg.get('gateText')}", 'Unlocks' in (cfg.get('gateText') or ''))
-floor = buildEffectConfig('standard', 80, WR)
+floor = buildEffectConfig('base', 80, WR)
 expect("the no-effect floor card has no gate", 'gate' not in floor)
 
 print()

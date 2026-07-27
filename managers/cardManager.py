@@ -10,12 +10,12 @@ logger = get_logger("floosball.cardManager")
 # ─── Edition Configuration ────────────────────────────────────────────────────
 
 # Rating thresholds for edition eligibility.
-# 'standard' is the sub-base, NO-EFFECT floor print (fusion): every player gets one,
+# 'base' is the sub-base, NO-EFFECT floor print (fusion): every player gets one,
 # it just fields the player for their FP. Kept OUT of paid pack pools (weight 0) — it's
 # distributed as the starter/floor lineup, not a pack drop.
 EDITION_THRESHOLDS = {
-    'standard': 0,      # All players (no-effect floor card)
-    'base': 0,          # All players
+    'base': 0,      # All players (no-effect floor card)
+    'metallic': 0,          # All players
     'holographic': 75,  # Rating >= 75
     'prismatic': 80,    # Rating >= 80
     'diamond': 90,      # Rating >= 90
@@ -24,8 +24,8 @@ EDITION_THRESHOLDS = {
 # Base rarity weights (before player-rating adjustment). standard=0 keeps the floor
 # card out of every pack roll (see _weightedDraw's fallback).
 EDITION_BASE_WEIGHTS = {
-    'standard': 0,
-    'base': 100,
+    'base': 0,
+    'metallic': 100,
     'holographic': 25,
     'prismatic': 10,
     'diamond': 2,
@@ -33,8 +33,8 @@ EDITION_BASE_WEIGHTS = {
 
 # Sell values by edition (active season)
 EDITION_SELL_VALUES = {
-    'standard': 2,
-    'base': 5,
+    'base': 2,
+    'metallic': 5,
     'holographic': 30,
     'prismatic': 75,
     'diamond': 100,
@@ -44,14 +44,14 @@ EXPIRED_SELL_MULTIPLIER = 0.2  # Expired cards sell for 20%
 
 # ─── The Combine (Card Upgrade System) ───────────────────────────────────────
 
-EDITION_ORDER = ['base', 'holographic', 'prismatic', 'diamond']
+EDITION_ORDER = ['metallic', 'holographic', 'prismatic', 'diamond']
 
 # The Combine: total card value thresholds for resulting edition
 BLENDER_THRESHOLDS = [
     (300, 'diamond'),       # 300+ total value → diamond (e.g. 4 prismatics, or 10 holos)
     (175, 'prismatic'),     # 175-499 → prismatic (e.g. 6 holos, or 1 holo + many bases)
     (50, 'holographic'),    # 50-174 → holographic (e.g. 10 base cards)
-    (0, 'base'),            # 0-49 → base
+    (0, 'metallic'),            # 0-49 → base
 ]
 
 # Daily pack purchase limits — currently empty. After the unified-rotation
@@ -331,7 +331,7 @@ def _buildClassification(
     mvpPlayerId: Optional[int],
     championPlayerIds: set,
     allProPlayerIds: set,
-    edition: str = "base",
+    edition: str = "metallic",
 ) -> Optional[str]:
     """Build classification string for a player's card templates.
 
@@ -343,8 +343,8 @@ def _buildClassification(
         return "rookie"
 
     # MVP, Champion, All-Pro only on holographic and above — the floor tiers
-    # ('standard' no-effect + 'base') never carry a prestige classification.
-    if edition in ("standard", "base"):
+    # ('base' no-effect + 'metallic') never carry a prestige classification.
+    if edition in ("base", "metallic"):
         return None
 
     tags = []
@@ -639,7 +639,7 @@ class CardManager:
             baseDetail = effectConfig.get("detail") or ""
             if isStructural:
                 # No own output — show the flat per-tier dividend (edition-banded).
-                edition = template.edition or "base"
+                edition = template.edition or "metallic"
                 divFloob = CARD_TIER_DIVIDEND_FLOOBITS.get(edition, {}).get(tier, 0)
                 divFP = CARD_TIER_DIVIDEND_FP.get(edition, {}).get(tier, 0.0)
                 if outputType == "floobits" and divFloob:
@@ -926,7 +926,7 @@ class CardManager:
         totalValue = sum(getCardValue(card, currentSeason) for card in cards)
 
         # Determine result edition from thresholds
-        resultEdition = 'base'
+        resultEdition = 'metallic'
         for threshold, edition in BLENDER_THRESHOLDS:
             if totalValue >= threshold:
                 resultEdition = edition
@@ -1030,7 +1030,7 @@ class CardManager:
 
         totalValue = sum(getCardValue(card, currentSeason) for card in cards)
 
-        resultEdition = 'base'
+        resultEdition = 'metallic'
         for threshold, edition in BLENDER_THRESHOLDS:
             if totalValue >= threshold:
                 resultEdition = edition
@@ -1056,7 +1056,7 @@ class CardManager:
         byId = {c.id: c for c in cards}
         donor, target = byId[donorCardId], byId[targetCardId]
         dt, tt = donor.card_template, target.card_template
-        if dt.edition == 'standard' or tt.edition == 'standard':
+        if dt.edition == 'base' or tt.edition == 'base':
             raise ValueError("No-effect (Base) cards can't be transplanted")
         donorEffect = self._effectName(donor)
         if not donorEffect or donorEffect in ('none', ''):
@@ -1501,11 +1501,16 @@ class CardManager:
         templateRepo = CardTemplateRepository(session)
         allTemplates = templateRepo.getBySeason(currentSeason)
         # Skip any templates with NULL team_id — defensive guard against legacy
-        # prospect/rookie templates polluting fresh pack rolls. Also drop 'standard'
-        # (the no-effect floor print): packs deliver effect cards only; standard is
-        # the starter/floor lineup, never a pack drop.
-        allTemplates = [t for t in allTemplates
-                        if t.team_id is not None and t.edition != 'standard']
+        # prospect/rookie templates polluting fresh pack rolls.
+        allTemplates = [t for t in allTemplates if t.team_id is not None]
+        # The no-effect FLOOR print (edition 'base') is the STARTER lineup ONLY: the starter
+        # pack draws exclusively from it, and every OTHER pack excludes it (packs deliver
+        # effect cards). Before the fusion edition rename this filter dropped 'standard';
+        # the floor is now 'base', so the starter must select it, not skip it.
+        if packType.name == 'starter':
+            allTemplates = [t for t in allTemplates if t.edition == 'base']
+        else:
+            allTemplates = [t for t in allTemplates if t.edition != 'base']
         if not allTemplates:
             raise ValueError("No card templates available for the current season")
 
@@ -2044,7 +2049,7 @@ class CardManager:
     FEATURED_CARD_COUNT = 5
     # Markup over sell value for shop singles
     SHOP_MARKUP = {
-        'base': 4.0,
+        'metallic': 4.0,
         'holographic': 2.7,
         'prismatic': 4.0,
         'diamond': 4.0,
@@ -2122,15 +2127,16 @@ class CardManager:
             templateRepo = CardTemplateRepository(session)
             allTemplates = templateRepo.getBySeason(currentSeason)
             # Skip NULL-team templates so legacy prospect/rookie pollution
-            # doesn't bleed into the shop's featured rotation.
-            allTemplates = [t for t in allTemplates if t.team_id is not None]
+            # doesn't bleed into the shop's featured rotation, and drop the no-effect
+            # floor print (edition 'base') — it's the starter lineup, not a shop single.
+            allTemplates = [t for t in allTemplates if t.team_id is not None and t.edition != 'base']
 
             if not allTemplates:
                 return []
 
             # Flattened shop weights — rarer editions less common but still appear
             SHOP_EDITION_WEIGHTS = {
-                'base': 50, 'holographic': 25, 'prismatic': 12, 'diamond': 5,
+                'metallic': 50, 'holographic': 25, 'prismatic': 12, 'diamond': 5,
             }
             weights = []
             for t in allTemplates:

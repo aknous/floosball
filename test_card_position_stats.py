@@ -36,7 +36,7 @@ random.seed(7)
 misplaced = set()
 for pos in (1, 2, 3, 4, 5):
     for _ in range(400):
-        en = buildEffectConfig('base', 80, pos)['effectName']
+        en = buildEffectConfig('metallic', 80, pos)['effectName']
         if en in POS_SPECIFIC and POS_SPECIFIC[en] != pos:
             misplaced.add((en, pos))
 expect(f"2000 random draws never cross positions  {misplaced or ''}", not misplaced)

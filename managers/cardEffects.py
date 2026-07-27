@@ -223,22 +223,22 @@ def tierScaledStrength(effectName: str, primary: dict, tierMult: float) -> dict:
 
 EFFECT_EDITION_TIER = {
     # ── BASE (29) — Simple, reliable, always produces value ──
-    "freebie": "base", "entourage": "base", "touchdown_pinata": "base",
-    "honor_roll": "base", "garbage_time": "base", "windfall": "base",
-    "resplendent": "base", "three_pointer": "base",
-    "big_deal": "base", "bandwagon": "base", "rng": "base",
-    "allowance": "base", "piggy_bank": "base", "buy_low": "base", "trust_fund": "base",
-    "showoff": "base",
-    "believe": "base", "reclamation": "base",
-    "gunslinger": "base", "workhorse": "base", "expedition": "base",
-    "possession": "base", "slippery": "base", "safety_blanket": "base",
-    "sniper": "base", "industrious": "base", "air_raid": "base",
-    "goal_line_vulture": "base",
-    "homer": "base",
+    "freebie": "metallic", "entourage": "metallic", "touchdown_pinata": "metallic",
+    "honor_roll": "metallic", "garbage_time": "metallic", "windfall": "metallic",
+    "resplendent": "metallic", "three_pointer": "metallic",
+    "big_deal": "metallic", "bandwagon": "metallic", "rng": "metallic",
+    "allowance": "metallic", "piggy_bank": "metallic", "buy_low": "metallic", "trust_fund": "metallic",
+    "showoff": "metallic",
+    "believe": "metallic", "reclamation": "metallic",
+    "gunslinger": "metallic", "workhorse": "metallic", "expedition": "metallic",
+    "possession": "metallic", "slippery": "metallic", "safety_blanket": "metallic",
+    "sniper": "metallic", "industrious": "metallic", "air_raid": "metallic",
+    "goal_line_vulture": "metallic",
+    "homer": "metallic",
     # Floobits utility demotions — modest payouts, no build-around character.
     # Belong with the rest of the base floobits utilities.
-    "consolation_prize": "base", "rock_bottom": "base",
-    "indemnity": "base", "gold_rush": "base",
+    "consolation_prize": "metallic", "rock_bottom": "metallic",
+    "indemnity": "metallic", "gold_rush": "metallic",
 
     # ── HOLOGRAPHIC (26) — Conditional, team-composition, position thresholds ──
     "gone_streaking": "holographic",
@@ -259,7 +259,7 @@ EFFECT_EDITION_TIER = {
     "fat_cat": "holographic", "surplus": "holographic", "hedge": "holographic",
 
     # fusion additions (2026-07): base=Winner's Circle, holo=No Passengers, prismatic=Franchise/Metronome
-    "winners_circle": "base", "no_passengers": "holographic", "franchise": "prismatic",
+    "winners_circle": "metallic", "no_passengers": "holographic", "franchise": "prismatic",
     "metronome": "prismatic",
     # ── PRISMATIC — Chance-based, streaks, game-outcome, build-around ──
     "home_alone": "prismatic", "dark_horse": "prismatic",
@@ -335,8 +335,8 @@ _BAL_FPX_MULT = 0.5    # scales FPx deltas (multiplier portions) added by the Ba
 # lineups): base 103% / holo 99% / prismatic 99% / diamond 109%, with variance rising
 # into diamond (p90 220%, median 80%). Baseline before the retune was 84/161/218/89%.
 EDITION_POWER_SCALE = {
-    'standard': 1.0,      # no-effect floor card — no params, scale is moot
-    'base': 1.10,         # 84% -> 103%: nudge the flat/reliable floor to parity
+    'base': 1.0,          # no-effect floor card — no params, scale is moot
+    'metallic': 1.10,     # 84% -> 103%: nudge the flat/reliable floor to parity
     'holographic': 0.47,  # 161% -> 99%
     'prismatic': 0.30,    # 218% -> 99% (FPx-heavy; compounds, so needs the deepest cut)
     'diamond': 1.0,       # ~100-109% mean; low median/high p90 is its by-design variance
@@ -952,7 +952,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "winners_circle": "{winFloobits} Floobits when this player's team wins this week",
     "no_passengers": "+{perFloorFP} FPx per FP scored by your lowest roster player (max +{maxDelta})",
     "franchise": "+{topScorerDelta} FPx when this player is your top scorer this week",
-    "metronome": "+{baseReward} FP, +{growthPerTick} per consecutive week this player clears their power bar. A cold week holds the streak (doesn't reset it).",
+    "metronome": "+{baseReward} FP, +{growthPerTick} per consecutive week this player clears their power bar. Streak does not reset on cold weeks.",
     "double_down": "Multiplies your lowest-earning card's FP by {rewardValue} this week",
     "last_resort": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. Trigger odds fill from this player's FP plus each of your other cards that produced no bonus.",
     "high_roller": "+{perCardMult} FPx per chance card that triggered enhanced bonuses this week",
@@ -1022,7 +1022,12 @@ SHARED_EFFECT_POOL = [
     # UNUSED roster swaps, and swaps are gone. Removed from the minting pool so no
     # new copies are created; the handler + display + payout reader are kept so any
     # existing owned copies still render (they compute 0 with no swaps).
-    "providence", "house_money", "rising_tide",
+    "providence", "rising_tide",
+    # NOTE: "house_money" retired in the fusion chance/favorite-team cleanup (owner call
+    # 2026-07-26) — it accumulated FP only on the favorite team's UPSET wins, which are rare,
+    # so it barely grew past its base. Same favorite-team-parasite class as underdog/martyr/
+    # rock_bottom. Removed from the minting pool; compute/templates/streak-config stay dormant
+    # so any card already carrying it still scores.
     # floobits effects
     "allowance", "cha_ching", "piggy_bank",
     "good_neighbor", "consolation_prize",
@@ -2001,10 +2006,10 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     not the card's position.
     forceEffect/forceCategory allow admin overrides.
 
-    The 'standard' sub-base edition (fusion) is the NO-EFFECT floor print: it carries
+    The 'base' edition (fusion) is the NO-EFFECT floor print: it carries
     no effect at all, so a card equipped from it just fields the player for their FP.
     """
-    if edition == 'standard' and not forceEffect:
+    if edition == 'base' and not forceEffect:
         return {
             "effectName": "none", "displayName": "", "tagline": "", "tooltip": "",
             "detail": "", "category": "none", "outputType": "",
@@ -2038,7 +2043,7 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
 
     # Dampen player rating scaling for rarer tiers — higher tiers have narrow
     # rating bands already, and the tier itself IS the power signal.
-    _RATING_DAMPENING = {"base": 1.0, "holographic": 0.5, "prismatic": 0.25, "diamond": 0.0}
+    _RATING_DAMPENING = {"metallic": 1.0, "holographic": 0.5, "prismatic": 0.25, "diamond": 0.0}
     dampening = _RATING_DAMPENING.get(edition, 1.0)
     dampenedRating = 60 + (playerRating - 60) * dampening
 
@@ -2160,7 +2165,7 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
         config["isChanceAmplifier"] = True
     # Card gate: freeze the depicted-player performance gate into the config so live
     # scoring and projection read the same spec (docs/CARD_ONCARD_REBASE_PLAN.md).
-    gate = buildGateSpec(effectName, position, classification)
+    gate = buildGateSpec(effectName, position, classification, edition)
     if gate:
         config["gate"] = gate
         # Surface the gate as its OWN field (frontend renders it on its own line, a
@@ -4827,7 +4832,8 @@ _CHANCE_EFFECTS = _CHANCE_FP_EFFECTS | _CHANCE_CONDITION_ONLY_EFFECTS
 _INVERSE_GATE_EFFECTS = frozenset()
 
 
-def buildGateSpec(effectName: str, position: int, classification: str = None) -> Optional[dict]:
+def buildGateSpec(effectName: str, position: int, classification: str = None,
+                  edition: str = None) -> Optional[dict]:
     """The FP power-bar gate frozen into a card's effect_config at mint, or None.
 
     Every effect-bearing card is gated on the depicted player's weekly FP against a
@@ -4841,7 +4847,8 @@ def buildGateSpec(effectName: str, position: int, classification: str = None) ->
     players deliver"). On-card only: baked into this card's frozen gate.threshold, never
     touches any other card. (Champion is a TEAM accolade → it amplifies a team STACK instead;
     see calculateWeekCardBonuses.)"""
-    from constants import CARD_GATE_ENABLED, CARD_GATE_FP_THRESHOLDS, CARD_GATE_ALLPRO_MULT
+    from constants import (CARD_GATE_ENABLED, CARD_GATE_FP_THRESHOLDS,
+                           CARD_GATE_FP_THRESHOLDS_BY_EDITION, CARD_GATE_ALLPRO_MULT)
     if not CARD_GATE_ENABLED:
         return None
     # No on/off bar for: the no-effect floor card; effects whose trigger IS low scoring
@@ -4850,7 +4857,10 @@ def buildGateSpec(effectName: str, position: int, classification: str = None) ->
     if (not effectName or effectName in ('none', '')
             or effectName in _UNGATED_EFFECTS or effectName in _CHANCE_EFFECTS):
         return None
-    threshold = CARD_GATE_FP_THRESHOLDS.get(position)
+    # Edition-scaled: higher rarity depicts a better player + has a higher ceiling, so it
+    # needs a higher bar. Fall back to the metallic base row for an unknown/missing edition.
+    threshold = (CARD_GATE_FP_THRESHOLDS_BY_EDITION.get(edition, {}).get(position)
+                 or CARD_GATE_FP_THRESHOLDS.get(position))
     if not threshold:
         return None
     allPro = bool(classification) and 'all_pro' in classification
@@ -4925,7 +4935,7 @@ def computeEffect(effectConfig: dict, ctx, cardPlayerId: int, equippedCardId: in
     first-pass cards so they can react to other cards' outputs.
     """
     effectName = effectConfig.get("effectName", "")
-    # No-effect floor cards (sub-base 'standard') carry effectName 'none' (or blank) —
+    # No-effect floor cards ('base') carry effectName 'none' (or blank) —
     # they produce nothing on purpose, so return an empty result WITHOUT the
     # unknown-effect warning below.
     if effectName in ("", "none"):

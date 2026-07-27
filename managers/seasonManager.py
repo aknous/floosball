@@ -1510,7 +1510,7 @@ class SeasonManager:
             return
 
         # Edition rarity order — keep the rarest in the duplicate group.
-        editionRank = {'diamond': 4, 'prismatic': 3, 'holographic': 2, 'base': 1}
+        editionRank = {'diamond': 4, 'prismatic': 3, 'holographic': 2, 'metallic': 1}
 
         session = get_session()
         try:

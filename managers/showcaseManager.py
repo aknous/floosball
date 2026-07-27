@@ -159,7 +159,7 @@ def _distRainbow(cards):
     byEd = {}
     for c in cards:
         byEd.setdefault(c.get("edition"), c)
-    present = [byEd[e] for e in ("base", "holographic", "prismatic", "diamond") if e in byEd]
+    present = [byEd[e] for e in ("metallic", "holographic", "prismatic", "diamond") if e in byEd]
     return max(0, 4 - len(present)), present
 
 

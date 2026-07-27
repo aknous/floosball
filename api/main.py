@@ -3298,7 +3298,7 @@ async def get_card_effects(response: Response):
             "effectName": key,
             "displayName": displayName,
             "tooltip": EFFECT_TOOLTIPS.get(key, ""),
-            "tier": EFFECT_EDITION_TIER.get(key, "base"),
+            "tier": EFFECT_EDITION_TIER.get(key, "metallic"),
         })
     return effects
 
@@ -5177,7 +5177,7 @@ def admin_card_options(_auth: None = Depends(_checkAdminAuth)):
         cat = EFFECT_CATEGORY.get(name, "flat_fp")
         if cat not in effects:
             effects[cat] = []
-        effects[cat].append({"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name), "edition": EFFECT_EDITION_TIER.get(name, "base")})
+        effects[cat].append({"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name), "edition": EFFECT_EDITION_TIER.get(name, "metallic")})
     classifications = ["rookie", "mvp", "champion", "all_pro",
                         "mvp_champion", "all_pro_champion", "mvp_all_pro_champion"]
     return build_success_response({
@@ -5223,7 +5223,7 @@ def admin_grant_card(payload: Dict[str, Any],
 
     email = payload.get("email", "").strip().lower()
     playerId = payload.get("playerId")
-    edition = payload.get("edition", "base")
+    edition = payload.get("edition", "metallic")
     effectName = payload.get("effectName")  # optional override
     categoryOverride = payload.get("category")  # optional category override
     classification = payload.get("classification")  # optional
@@ -8339,7 +8339,7 @@ def getCardCollection(
     cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
 
     # Rarity order for sorting (ascending index → descending value when reversed)
-    _EDITION_RANK = {"base": 0, "holographic": 1, "prismatic": 2, "diamond": 3}
+    _EDITION_RANK = {"metallic": 0, "holographic": 1, "prismatic": 2, "diamond": 3}
 
     session = get_session()
     try:

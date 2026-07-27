@@ -1187,9 +1187,25 @@ CONTEST_TYPE_LABELS = {t['key']: t['label'] for t in CONTEST_TYPES}
 #   * INVERSE / underdog cards (insurance, "reward a rough week") run the bar in REVERSE — it
 #     starts full and DEPLETES as the player scores; the effect is disabled once it empties.
 CARD_GATE_ENABLED = True
-# Per-position FP threshold (1-based QB=1…K=5). ~60-75% of each position's median weekly FP,
-# so a decent game fills a normal bar (~70% of weeks) / empties an inverse one.
-CARD_GATE_FP_THRESHOLDS = {1: 8, 2: 9, 3: 8, 4: 4, 5: 6}
+# Per-position FP threshold (1-based QB=1…K=5). This is the METALLIC (base effect tier) row —
+# ~0.6-0.75 of each position's median weekly FP, so a decent game fills the bar (~70% of weeks).
+# It is also the fallback used by gate-EXEMPT mechanics (chance FP-fill, metronome's grow check,
+# the amplifier fallback) that read a position bar without a frozen edition gate. Rebalanced
+# from the median-relative data: QB was the loosest (77% clear -> 8→9), RB the strictest
+# (60% -> 9→7); WR/TE/K were on target.
+CARD_GATE_FP_THRESHOLDS = {1: 9, 2: 7, 3: 8, 4: 4, 5: 6}
+# Higher editions only mint on higher-rated players (holo ≥75, prismatic ≥80, diamond ≥90), who
+# score ABOVE the position median — so a flat bar gets EASIER at higher rarity. To keep the gate
+# a real gamble (and offset the higher ceilings), the threshold RISES with edition. Calibrated
+# per (edition, position) from the FP distribution WITHIN each rarity's rating band, targeting a
+# clear rate that falls with rarity (~70% metallic → ~55% diamond). buildGateSpec picks the row
+# for the card's edition; frozen into gate.threshold at mint. The floor 'base' is gate-exempt.
+CARD_GATE_FP_THRESHOLDS_BY_EDITION = {
+    'metallic':    {1: 9,  2: 7,  3: 8,  4: 4, 5: 6},
+    'holographic': {1: 11, 2: 9,  3: 10, 4: 5, 5: 7},
+    'prismatic':   {1: 13, 2: 11, 3: 12, 4: 6, 5: 8},
+    'diamond':     {1: 15, 2: 13, 3: 14, 4: 7, 5: 9},
+}
 # All-Pro classification (prior-season All-Pro selections, holo+ only) lowers ITS OWN card's
 # gate threshold — an individual accolade, so it buys individual reliability ("the best
 # players deliver even on an off day"). On-card only (each card's gate.threshold is
@@ -1589,13 +1605,13 @@ CARD_TIER_MULT = {1: 1.0, 2: 1.15, 3: 1.32, 4: 1.5}
 # (a Diamond should pay Diamond-band FP, not a flat 55). FP for FP/FPx-side
 # cards, Floobits for floobit-output ones.
 CARD_TIER_DIVIDEND_FP = {
-    "base":        {1: 0, 2: 12, 3: 24, 4: 36},
+    "metallic":        {1: 0, 2: 12, 3: 24, 4: 36},
     "holographic": {1: 0, 2: 18, 3: 34, 4: 52},
     "prismatic":   {1: 0, 2: 26, 3: 48, 4: 72},
     "diamond":     {1: 0, 2: 34, 3: 60, 4: 90},
 }
 CARD_TIER_DIVIDEND_FLOOBITS = {
-    "base":        {1: 0, 2: 8,  3: 16, 4: 24},
+    "metallic":        {1: 0, 2: 8,  3: 16, 4: 24},
     "holographic": {1: 0, 2: 11, 3: 21, 4: 32},
     "prismatic":   {1: 0, 2: 14, 3: 27, 4: 40},
     "diamond":     {1: 0, 2: 18, 3: 34, 4: 50},
@@ -1607,7 +1623,7 @@ CARD_TIER_DIVIDEND_FLOOBITS = {
 # base×mult lands on a round 5 at every tier (e.g. Diamond: 80/240/560).
 CARD_TIER_UPGRADE_COST = {2: 50, 3: 150, 4: 350}
 CARD_TIER_EDITION_COST_MULT = {
-    "base": 1.0, "holographic": 1.2, "prismatic": 1.4, "diamond": 1.6,
+    "metallic": 1.0, "holographic": 1.2, "prismatic": 1.4, "diamond": 1.6,
 }
 
 # ─── Effect Transplant ("The Transplant") ────────────────────────────────────
@@ -1615,9 +1631,9 @@ CARD_TIER_EDITION_COST_MULT = {
 # SAME edition and SAME position; the target keeps its identity + upgrade tier and
 # takes on the donor's effect (re-scaled to the target's rating), the donor is
 # consumed. Cost scales with edition — the pricier the effect, the pricier the move.
-# ('base' slug = the "Metallic" display edition; 'standard'/no-effect can't transplant.)
+# ('metallic' slug = the Metallic display edition; the 'base' no-effect floor can't transplant.)
 TRANSPLANT_COST_BY_EDITION = {
-    "base": 40, "holographic": 70, "prismatic": 120, "diamond": 180,
+    "metallic": 40, "holographic": 70, "prismatic": 120, "diamond": 180,
 }
 
 # ─── Card Showcase (seasonal collection payout) ──────────────────────────────
@@ -1627,7 +1643,7 @@ TRANSPLANT_COST_BY_EDITION = {
 # below are owner-approved starting points; tune via /simcheck before balancing.
 SHOWCASE_SLOTS = 8
 # Per-card base = EDITION_POINTS × recency + Σ CLASSIFICATION_POINTS, ×tier mult.
-SHOWCASE_EDITION_POINTS = {"base": 1, "holographic": 4, "prismatic": 12, "diamond": 30}
+SHOWCASE_EDITION_POINTS = {"metallic": 1, "holographic": 4, "prismatic": 12, "diamond": 30}
 SHOWCASE_CLASSIFICATION_POINTS = {"rookie": 5, "all_pro": 10, "champion": 12, "mvp": 20}
 # Recency: newer cards pay more, keyed by card age (seasons old). Newest score full;
 # older cards taper but stay meaningfully valuable (the decline was too aggressive
