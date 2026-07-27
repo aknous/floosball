@@ -264,6 +264,7 @@ class CardBreakdown:
     gateActive: Optional[bool] = None
     gateThreshold: float = 0.0  # the position FP threshold this card's bar needs
     gateInverse: bool = False   # inverse gate — the effect is active WHILE under the threshold
+    gateAllPro: bool = False    # All-Pro card: its bar is lowered 30% (CARD_GATE_ALLPRO_MULT)
 
 
 @dataclass
@@ -808,6 +809,7 @@ def _computeCardPass(
     _gate = effectConfig.get("gate") or {}
     _gateThreshold = _gate.get("threshold", 0) or 0
     _gateInverse = bool(_gate.get("inverse"))
+    _gateAllPro = bool(_gate.get("allPro"))
     _gateActive = None
     if _gateThreshold:
         _ratio = (getattr(ctx, "_gateRatios", None) or {}).get(eq.id)
@@ -851,6 +853,7 @@ def _computeCardPass(
         gateActive=_gateActive,
         gateThreshold=_gateThreshold,
         gateInverse=_gateInverse,
+        gateAllPro=_gateAllPro,
     )
 
 

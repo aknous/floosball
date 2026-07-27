@@ -1648,4 +1648,5 @@ class FantasyTracker:
             "gateActive": b.gateActive,
             "gateThreshold": b.gateThreshold,
             "gateInverse": b.gateInverse,
+            "gateAllPro": b.gateAllPro,
         }
