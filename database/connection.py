@@ -1097,8 +1097,10 @@ def _runPendingMigrations():
                 "UPDATE pending_rewards SET slug = 'income_boost' "
                 "WHERE kind = 'powerup' AND slug = 'random' AND source = 'achievement:tycoon'"
             ))
+            # Veteran's powerup was extra_swap, retired in the fusion — map to income_boost
+            # so this legacy 'random' remap never resurrects the dead slug.
             conn.execute(text(
-                "UPDATE pending_rewards SET slug = 'extra_swap' "
+                "UPDATE pending_rewards SET slug = 'income_boost' "
                 "WHERE kind = 'powerup' AND slug = 'random' AND source = 'achievement:veteran'"
             ))
             # Any remaining 'random' (unknown source) default to income_boost.
@@ -2549,7 +2551,9 @@ def _seedAchievements():
              "reward_config": {"floobits": 150, "packs": [], "powerups": ["income_boost"], "deferred": False}},
             {"key": "veteran", "name": "Veteran", "category": "guidance", "scope": "per_season", "sort_order": 150, "target": 20,
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
-             "reward_config": {"floobits": 300, "packs": [], "powerups": ["extra_swap"], "deferred": False}},
+             # extra_swap retired in the fusion (swaps are gone); rolled its 50F shop value
+             # into floobits (300 -> 350).
+             "reward_config": {"floobits": 350, "packs": [], "powerups": [], "deferred": False}},
             # Banner Week tiers — FP earned in a single week.
             # Rescaled for the Balatro pullback (FP outputs roughly halved
             # via _BAL_FP_MULT = 0.5). Targets dropped ~50% so the tiers
