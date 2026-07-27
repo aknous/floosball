@@ -1472,6 +1472,7 @@ class SeasonManager:
                     "awayTeam": {"name": g.awayTeam.name, "abbr": g.awayTeam.abbr},
                     "homeScore": g.homeScore,
                     "awayScore": g.awayScore,
+                    **self._frameAwareResultFields(g),
                 })
             weekEndEvent = SeasonEvent.weekEnd(
                 seasonNumber=self.currentSeason.seasonNumber,
@@ -2495,6 +2496,31 @@ class SeasonManager:
                 session.close()
         except ImportError as e:
             logger.warning(f"Card effect processing unavailable: {e}")
+
+    @staticmethod
+    def _frameAwareResultFields(g) -> dict:
+        """Extra fields for a week_end result entry so the floosbot reports frames matches by
+        FRAMES WON (not the point total), with the points-tiebreak note when a match finished
+        level on frames. Empty for standard games (homeScore/awayScore already ARE the
+        result). Mirrors the game_end event's frames handling in floosball_game.py."""
+        fmt = getattr(g, 'format', None)
+        if fmt is None or getattr(fmt, 'key', '') != 'frames':
+            return {}
+        try:
+            from game_formats import _cleanNum
+            dh, da = fmt.resultDisplay(g)
+            fields = {'displayScore': {'home': _cleanNum(dh), 'away': _cleanNum(da)},
+                      'scoreLabel': 'frames'}
+            fh = getattr(g, '_framesWonHome', 0.0)
+            fa = getattr(g, '_framesWonAway', 0.0)
+            if fh == fa and g.homeScore != g.awayScore:
+                wt = g.homeTeam if g.homeScore > g.awayScore else g.awayTeam
+                wn = getattr(wt, 'abbr', None) or getattr(wt, 'name', 'The winner')
+                hi, lo = max(g.homeScore, g.awayScore), min(g.homeScore, g.awayScore)
+                fields['tiebreakNote'] = f"{wn} win on points {_cleanNum(hi)}-{_cleanNum(lo)}"
+            return fields
+        except Exception:
+            return {}
 
     def _applyFormatStateToRow(self, dbRow, game) -> None:
         """Persist the format's display state (innings line score, frames results, ...) so
@@ -4472,6 +4498,7 @@ class SeasonManager:
                             "awayTeam": {"name": g.awayTeam.name, "abbr": g.awayTeam.abbr},
                             "homeScore": g.homeScore,
                             "awayScore": g.awayScore,
+                            **self._frameAwareResultFields(g),
                         })
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
@@ -4490,6 +4517,7 @@ class SeasonManager:
                             "awayTeam": {"name": g.awayTeam.name, "abbr": g.awayTeam.abbr},
                             "homeScore": g.homeScore,
                             "awayScore": g.awayScore,
+                            **self._frameAwareResultFields(g),
                         })
                     weekEndEvent = SeasonEvent.weekEnd(
                         seasonNumber=self.currentSeason.seasonNumber,
