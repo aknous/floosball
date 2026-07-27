@@ -217,21 +217,21 @@ def _provisionStarterPack(session, user, currentSeason: Optional[int] = None):
         )
         session.add(tx)
 
-        # Fusion: the starter gives the no-effect FLOOR lineup — one 'standard' card
+        # Fusion: the starter gives the no-effect FLOOR lineup — one 'base' card
         # per lineup slot (QB/RB/WR/WR/TE/K — two WR cards for WR1 + WR2) — so every
         # user can field a legal lineup on day one and earns effect cards from
-        # packs/play. Fall back to base only if no standard templates exist yet
+        # packs/play. Fall back to metallic only if no floor templates exist yet
         # (partially-migrated DB).
         baseTemplates = (
             session.query(CardTemplate)
-            .filter_by(edition='standard')
+            .filter_by(edition='base')
             .order_by(CardTemplate.season_created.desc())
             .all()
         )
         if not baseTemplates:
             baseTemplates = (
                 session.query(CardTemplate)
-                .filter_by(edition='base')
+                .filter_by(edition='metallic')
                 .order_by(CardTemplate.season_created.desc())
                 .all()
             )

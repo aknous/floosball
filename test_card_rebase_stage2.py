@@ -32,7 +32,7 @@ def ctx(cardStats, otherStats=None):
     return c
 
 
-def run(effect, cardStats, otherStats=None, edition='base', position=3):
+def run(effect, cardStats, otherStats=None, edition='metallic', position=3):
     cfg = buildEffectConfig(edition, 80, position, forceEffect=effect)
     return computeEffect(cfg, ctx(cardStats, otherStats), CARD, 1)
 
@@ -77,17 +77,21 @@ good = run('hedge', {"fantasyPoints": 40})
 expect(f"a 2 FP game gets a hedge top-up  (+{bad.fpBonus} FP)", bad.fpBonus and bad.fpBonus > 0)
 expect(f"a 40 FP game needs no hedge  (+{good.fpBonus} FP)", not good.fpBonus)
 
-print("7. Re-based effects still read the card player; ALL cards get the FP power bar now")
-# The power-bar redesign gates every effect uniformly (owner call 2026-07-23), so the
-# re-bases are no longer exempt — they read 'this player' AND carry a bar.
-for e in ('closer', 'walk_off', 'odometer', 'honor_roll', 'piggy_bank',
-          'catalyst', 'hedge', 'bonsai', 'snake_eyes'):
-    cfg = buildEffectConfig('base', 80, 3, forceEffect=e)
+print("7. Ordinary re-based effects carry the FP power bar")
+# The power-bar redesign gates ordinary effects uniformly (owner call 2026-07-23).
+# EXCEPTIONS (added later): effects whose trigger IS low scoring are ungated, and chance
+# cards use a probability bar instead of the on/off gate (fusion chance rework 2026-07-26).
+for e in ('closer', 'walk_off', 'odometer', 'honor_roll', 'piggy_bank', 'catalyst'):
+    cfg = buildEffectConfig('metallic', 80, 3, forceEffect=e)
     expect(f"{e}: carries the FP power bar", cfg.get('gate', {}).get('threshold'))
 
-print("8. Over/under-performance effects were NOT re-based (still roster-scoped)")
-for e in ('rising_tide', 'buy_low', 'reclamation', 'babysitter', 'consolation_prize'):
-    expect(f"{e}: still carries a gate", buildGateSpec(e, 3) is not None)
+print("8. Low-scoring-trigger effects are ungated; chance cards use a probability bar")
+# Underperformance effects (trigger IS a bad game) get no on/off gate; rising_tide still does.
+expect("rising_tide: still carries a gate", buildGateSpec('rising_tide', 3) is not None)
+for e in ('buy_low', 'reclamation', 'hedge', 'snake_eyes'):
+    expect(f"{e}: ungated (its trigger IS low scoring)", buildGateSpec(e, 3) is None)
+for e in ('babysitter', 'consolation_prize', 'bonsai'):
+    expect(f"{e}: chance card, exempt from the on/off gate", buildGateSpec(e, 3) is None)
 
 print()
 if failures:

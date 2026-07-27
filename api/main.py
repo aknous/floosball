@@ -3298,7 +3298,7 @@ async def get_card_effects(response: Response):
             "effectName": key,
             "displayName": displayName,
             "tooltip": EFFECT_TOOLTIPS.get(key, ""),
-            "tier": EFFECT_EDITION_TIER.get(key, "base"),
+            "tier": EFFECT_EDITION_TIER.get(key, "metallic"),
         })
     return effects
 
@@ -5177,7 +5177,7 @@ def admin_card_options(_auth: None = Depends(_checkAdminAuth)):
         cat = EFFECT_CATEGORY.get(name, "flat_fp")
         if cat not in effects:
             effects[cat] = []
-        effects[cat].append({"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name), "edition": EFFECT_EDITION_TIER.get(name, "base")})
+        effects[cat].append({"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name), "edition": EFFECT_EDITION_TIER.get(name, "metallic")})
     classifications = ["rookie", "mvp", "champion", "all_pro",
                         "mvp_champion", "all_pro_champion", "mvp_all_pro_champion"]
     return build_success_response({
@@ -5223,7 +5223,7 @@ def admin_grant_card(payload: Dict[str, Any],
 
     email = payload.get("email", "").strip().lower()
     playerId = payload.get("playerId")
-    edition = payload.get("edition", "base")
+    edition = payload.get("edition", "metallic")
     effectName = payload.get("effectName")  # optional override
     categoryOverride = payload.get("category")  # optional category override
     classification = payload.get("classification")  # optional
@@ -8339,7 +8339,7 @@ def getCardCollection(
     cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
 
     # Rarity order for sorting (ascending index → descending value when reversed)
-    _EDITION_RANK = {"base": 0, "holographic": 1, "prismatic": 2, "diamond": 3}
+    _EDITION_RANK = {"metallic": 0, "holographic": 1, "prismatic": 2, "diamond": 3}
 
     session = get_session()
     try:
@@ -8537,6 +8537,69 @@ def previewBlend(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
     session = get_session()
     try:
         result = cardManager.previewBlend(session, user.id, req.offeringCardIds, currentSeason, currentWeek)
+        return build_success_response(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
+
+
+class TransplantRequest(BaseModel):
+    donorCardId: int
+    targetCardId: int
+
+
+@app.post("/api/cards/transplant")
+def transplantEffect(req: TransplantRequest, user: _User = Depends(_getCurrentUser)):
+    """Graft the donor card's effect onto the target player card (same edition + position)."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.transplantEffect(session, user.id, req.donorCardId,
+                                               req.targetCardId, currentSeason, currentWeek)
+        # A transplant replaces the target's template with a new one (donor consumed),
+        # so the collection's unique-template set can change — keep Curator in sync.
+        from managers import achievementManager as _am
+        _am.syncCuratorProgress(session, user.id, currentSeason)
+        session.commit()
+        return build_success_response(result)
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        isDbLocked = "database is locked" in str(e).lower()
+        if isDbLocked:
+            logger.warning(f"Card transplant blocked by DB lock for user {user.id}")
+            raise HTTPException(status_code=409, detail="Games are in progress — try again in a moment")
+        logger.error(f"Card transplant failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to transplant effect")
+    finally:
+        session.close()
+
+
+@app.post("/api/cards/transplant/preview")
+def previewTransplant(req: TransplantRequest, user: _User = Depends(_getCurrentUser)):
+    """Preview a transplant: validate the pairing and return its Floobit cost."""
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        result = cardManager.previewTransplant(session, user.id, req.donorCardId,
+                                               req.targetCardId, currentSeason, currentWeek)
         return build_success_response(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -44,9 +44,13 @@ expect(f"a value effect gets a bar at the WR threshold  {g}",
        g and g['threshold'] == WR_THR)
 expect("a cross / hand-modifier effect gets a bar too (uniform)",
        buildGateSpec("copycat", 1) is not None)
-expect("a re-based / on-card effect gets a bar too (no exemptions)",
+expect("a re-based / on-card effect gets a bar too",
        buildGateSpec("possession", WR) is not None and buildGateSpec("piggy_bank", WR) is not None)
 expect("the no-effect floor card gets no gate", buildGateSpec("none", WR) is None)
+# CHANCE cards are exempt from the on/off gate — their bar is a probability meter instead
+# (fill = trigger odds), so buildGateSpec returns None (fusion chance rework 2026-07-26).
+expect("a chance card (scrappy) is gate-exempt", buildGateSpec("scrappy", WR) is None)
+expect("a chance card (crescendo) is gate-exempt", buildGateSpec("crescendo", 1) is None)
 
 print("2. gateRatio — pure on/off, no scaling")
 gate = buildGateSpec("freebie", WR)
@@ -55,12 +59,13 @@ expect("0 FP -> 0", gateRatio(gate, ctxFP(1, 0), 1) == 0.0)
 expect(f"at {WR_THR} FP -> 1.0 (unlocked)", gateRatio(gate, ctxFP(1, WR_THR), 1) == 1.0)
 expect("well above -> still exactly 1.0 (no overflow)", gateRatio(gate, ctxFP(1, WR_THR * 5), 1) == 1.0)
 
-print("3. Inverse cards run the bar in reverse")
-inv = buildGateSpec("hedge", WR)
-expect("hedge is an inverse gate", inv.get("inverse") is True)
-expect(f"0 FP -> 1.0 (rough week, effect ON)", gateRatio(inv, ctxFP(1, 0), 1) == 1.0)
-expect(f"under {WR_THR} FP -> 1.0", gateRatio(inv, ctxFP(1, WR_THR - 1), 1) == 1.0)
-expect(f"at/over {WR_THR} FP -> 0.0 (bar emptied, effect OFF)", gateRatio(inv, ctxFP(1, WR_THR), 1) == 0.0)
+print("3. Underperformance effects are UNGATED (no bar); inverse gate retired")
+# Effects whose trigger IS low scoring get no power bar — gating them on the player
+# showing up would fight the effect (owner call 2026-07-25/26).
+expect("hedge is ungated (tops up the player's OWN low FP)", buildGateSpec("hedge", WR) is None)
+expect("snake_eyes is ungated (pays more the worse the game)", buildGateSpec("snake_eyes", WR) is None)
+expect("buy_low is ungated (rewards roster underperformance)", buildGateSpec("buy_low", WR) is None)
+# No effect runs the bar in reverse anymore; the inverse gate is retired.
 expect("a normal effect is NOT inverse", buildGateSpec("freebie", WR).get("inverse") is False)
 
 print("3b. _applyGateRatio — on/off only")
@@ -76,11 +81,18 @@ expect(f"QB {CARD_GATE_FP_THRESHOLDS[1]} / RB {CARD_GATE_FP_THRESHOLDS[2]} / "
        f"TE {CARD_GATE_FP_THRESHOLDS[4]} differ by position",
        len(set(CARD_GATE_FP_THRESHOLDS.values())) > 1)
 
+print("4b. Thresholds RISE with edition (higher rarity depicts a better player + higher ceiling)")
+wrThr = [buildGateSpec("freebie", WR, edition=e)["threshold"]
+         for e in ("metallic", "holographic", "prismatic", "diamond")]
+expect(f"WR bar climbs by edition: {wrThr}", wrThr == sorted(wrThr) and wrThr[0] < wrThr[-1])
+expect("no edition -> metallic base fallback",
+       buildGateSpec("freebie", WR)["threshold"] == buildGateSpec("freebie", WR, edition="metallic")["threshold"])
+
 print("5. Minted templates carry the gate + power-bar text")
-cfg = buildEffectConfig('base', 80, WR, forceEffect='freebie')
+cfg = buildEffectConfig('metallic', 80, WR, forceEffect='freebie')
 expect(f"minted card has a gate  {cfg.get('gate')}", cfg.get('gate', {}).get('threshold') == WR_THR)
 expect(f"and gateText  {cfg.get('gateText')}", 'Unlocks' in (cfg.get('gateText') or ''))
-floor = buildEffectConfig('standard', 80, WR)
+floor = buildEffectConfig('base', 80, WR)
 expect("the no-effect floor card has no gate", 'gate' not in floor)
 
 print()
