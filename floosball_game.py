@@ -9706,7 +9706,13 @@ class Game:
         if (self._isFgDrainMode() and hasattr(self, 'play') and self.play is not None
                 and getattr(self.play, 'playType', None) == PlayType.FieldGoal):
             target = 7
-            return ('setupFG', max(8, secs - target))
+            # Drain only to the deadline actually in play: the FRAME buzzer in frames, the
+            # game clock in standard, the possession budget in chess (_offenseEffectiveSecs
+            # abstracts all three). Using the raw game clock here drained the WHOLE game
+            # before a frame-ending FG, blowing past the frame boundary and committing the
+            # remaining frame(s) empty (prod game 5254). _isFgDrainMode already gates on
+            # _offenseEffectiveSecs <= 60, so this drain is bounded to the current deadline.
+            return ('setupFG', max(8, self._offenseEffectiveSecs() - target))
 
         # Target format: a score this possession WINS — push to finish (fast huddle)
         # instead of draining, UNLESS a conservative coach is protecting a comfortable
