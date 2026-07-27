@@ -45,6 +45,7 @@ MAX_SANE_DRAIN = 90
 
 nonClinchEmpty = 0
 bigJumpGames = 0
+spikeEndGames = 0
 worstJump = (0, None)
 
 for i in range(N):
@@ -86,12 +87,24 @@ for i in range(N):
         print(f"    game {i}: RUNAWAY DRAIN {g._maxConsume}s @ {g._maxCtx}")
     if g._maxConsume > worstJump[0]:
         worstJump = (g._maxConsume, g._maxCtx)
+    # A spike STOPS the clock to buy another snap; ending the game ON a spike means the spike
+    # forfeited the down and burned the last of the clock for nothing.
+    lastType = None
+    for entry in g.gameFeed:
+        if isinstance(entry, dict) and 'play' in entry and getattr(entry['play'], 'playResult', None) is not None:
+            lastType = getattr(getattr(entry['play'], 'playType', None), 'value', None)
+            break
+    if lastType == 'Spike':
+        spikeEndGames += 1
+        print(f"    game {i}: game ENDED ON A SPIKE (bought no follow-up play)")
 
 print(f"\n1. No frame ends early in a still-live match (across {N} games)")
 expect(f"no non-clinch empty frames (got {nonClinchEmpty})", nonClinchEmpty == 0)
 print("2. No single play drains an outsized slice of the clock")
 expect(f"no runaway clock drains (got {bigJumpGames}; worst {worstJump[0]}s @ {worstJump[1]})",
        bigJumpGames == 0)
+print("3. No game ends on a spike (a spike must buy a follow-up snap)")
+expect(f"no game ends on a wasted spike (got {spikeEndGames})", spikeEndGames == 0)
 
 print()
 if failures:

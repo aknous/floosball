@@ -4625,7 +4625,16 @@ class Game:
                                 and (self.currentQuarter == 2 or -self._fgValue() <= scoreDiff <= 0)
                                 and self.yardsToEndzone <= spikeKickerMax
                                 and secs <= 20)
-            spikeDownOK = self.down <= self.gameRules.downsPerSeries - 2 or spikeFgException
+            # A down-1/2 spike is only worth it if a productive snap can STILL FOLLOW it.
+            # Otherwise it just forfeits the down and burns the last of the clock, so the
+            # possession ends ON the spike and the frame/game closes with the spike having
+            # bought nothing (a team spiked with ~6s left and the game just ended).
+            # _estimateAvailablePlays is frame-aware (reserves a closing FG snap off the frame
+            # deadline in frames); >= 1 means room for the spike plus a real play. The
+            # deliberate 3rd-down FG-setup spike keeps its own gate.
+            spikeDownOK = ((self.down <= self.gameRules.downsPerSeries - 2
+                            and self._estimateAvailablePlays() >= 1)
+                           or spikeFgException)
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
                     and secs <= self.gameRules.spikeClockThreshold
