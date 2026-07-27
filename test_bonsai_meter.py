@@ -94,10 +94,22 @@ expect(f"fpBonus == guaranteed base {base} (odds gate FUTURE growth) -> {r.fpBon
 expect("chanceMetaGrowth flagged True", getattr(r, 'chanceMetaGrowth', False) is True)
 
 print("\n6. Higher growth level raises the bar (a bigger week needed to keep pushing)")
-# At level 3, required = stepSize x 4, so the same TD count yields lower odds than at level 0.
+# The gentle ramp still requires more each level, so the same TD count yields lower odds
+# at a higher level than at level 0.
 lo = cultivationGrowthChance(cfg['primary'], stepSize, 0)   # exactly the level-0 step
 hi = cultivationGrowthChance(cfg['primary'], stepSize, 3)   # same triggers, level 3
 expect(f"same triggers earn LESS at a higher level ({hi}% < {lo}%)", hi < lo)
+
+print("\n7. Gentler per-level ramp: a strong week still advances the card at higher levels")
+# The reported case: a level-3 YAC card (stepSize 60) after an 88-YAC week. The old linear
+# ramp needed 240 YAC at level 3 (88 -> 33%); the gentler ramp needs ~132 (88 -> ~60%), so a
+# great week keeps the card climbing instead of stalling far below its FP ceiling.
+yacPrim = {'triggerEvent': 'yac'}
+lvl3 = cultivationGrowthChance(yacPrim, 88, 3)
+expect(f"level-3 YAC card, 88 YAC -> healthy grow chance (got {lvl3}%, was 33%)", lvl3 >= 50)
+chances = [cultivationGrowthChance(yacPrim, 88, l) for l in range(0, 6)]
+expect(f"chance still tapers as the level climbs {chances}",
+       all(chances[i] >= chances[i + 1] for i in range(len(chances) - 1)))
 
 
 print()

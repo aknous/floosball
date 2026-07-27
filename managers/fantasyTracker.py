@@ -1555,6 +1555,14 @@ class FantasyTracker:
             category = ec.get("category", "")
             if category != "streak":
                 continue
+            # Bonsai (Cultivation) is a streak card, but its growth is a separate END-OF-WEEK
+            # roll (_rollCultivationGrowth), NOT a weekly condition tick. Skip it here: the
+            # generic "equipped" increment inflated its LIVE growth level by +1, so the live
+            # grow-odds meter read one level too high (understated the chance vs the actual
+            # roll). Leaving streakCounts at the persisted streak_count keeps the live meter
+            # in sync with the roll.
+            if effectName == "bonsai":
+                continue
             config = STREAK_CONFIGS.get(effectName, {})
             if config.get("isWeekly"):
                 continue
