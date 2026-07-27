@@ -7049,7 +7049,7 @@ class Game:
                     # Consume time for field goal (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.FieldGoal, False)
                     self.consumeGameTime(playDuration)
-                    self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                    self.play.stampClock()
                     self.checkTwoMinuteWarning()
 
                     if getattr(self.play, 'isFgBlocked', False):
@@ -7115,7 +7115,7 @@ class Game:
                         self.play.isPuntBlocked = True
                         playDuration = self.calculatePlayDuration(PlayType.Punt, False)
                         self.consumeGameTime(playDuration)
-                        self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                        self.play.stampClock()
                         self.checkTwoMinuteWarning()
                         self._resolveBlockedKick()
                         self._pendingPossessionChange = True
@@ -7137,7 +7137,7 @@ class Game:
                     # Consume time for punt (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.Punt, False)
                     self.consumeGameTime(playDuration)
-                    self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                    self.play.stampClock()
                     self.checkTwoMinuteWarning()
                     self.clockRunning = False  # Clock stops after punt
                     
@@ -7192,7 +7192,7 @@ class Game:
                     self.consumeGameTime(playDuration)
 
                 # Update play's timeRemaining to reflect post-play clock
-                self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                self.play.stampClock()
 
                 # Determine if clock should run after play
                 self.clockRunning = self.shouldClockRun()
@@ -11779,13 +11779,20 @@ class Play():
                 frameLen = fmt._regSeconds(game) / n if n else 0
                 elapsed = fmt._elapsed(game)
                 self.frame = min(n, int(elapsed / frameLen) + 1) if frameLen else 1
+                # Elapsed at which THIS frame ends — lets stampFrameClock recompute the time
+                # LEFT in the frame the play occurred in after the play burns the clock, so the
+                # feed's frame time is post-play like timeRemaining (a play that runs the frame
+                # out reads 0:00; the frame NUMBER stays the one the play happened in).
+                self._frameEndElapsed = self.frame * frameLen if frameLen else None
                 self.frameClock = game.formatTime(int(max(0, frameLen - (elapsed % frameLen)))) if frameLen else '0:00'
             except Exception:
                 self.frame = None
                 self.frameClock = None
+                self._frameEndElapsed = None
         else:
             self.frame = None
             self.frameClock = None
+            self._frameEndElapsed = None
         self.down = game.down
         self.timeRemaining = game.formatTime(game.gameClockSeconds)
         self.yardLine = game.yardLine
@@ -11882,6 +11889,24 @@ class Play():
         self.glitchLayer = None         # 'micro' (L1) / 'personality' (L2) / 'signature' (L3)
         self.glitchYardDelta = None     # L3 only: signed yards the glitch added (+) or cost (-)
         self.insights = {}              # Play insights dict — populated during execution
+
+    def stampFrameClock(self):
+        """Recompute the frame's time-left from the CURRENT (post-play) clock so the feed's
+        frame time is post-play like timeRemaining. The frame NUMBER stays the frame the play
+        occurred in; a play that runs the frame out reads 0:00. No-op off frames / in OT."""
+        if self.frame is None or getattr(self, '_frameEndElapsed', None) is None:
+            return
+        try:
+            left = self._frameEndElapsed - self.game.format._elapsed(self.game)
+            self.frameClock = self.game.formatTime(int(max(0, left)))
+        except Exception:
+            pass
+
+    def stampClock(self):
+        """Set the game-clock time AND the frame time-left from the CURRENT state. Called after
+        a play consumes the clock, so both read the time remaining AFTER the play completes."""
+        self.timeRemaining = self.game.formatTime(self.game.gameClockSeconds)
+        self.stampFrameClock()
 
     def _captureBlitzer(self, scheme, defGameplanObj):
         """If the defensive scheme called a blitz, stash the blitzer on the
