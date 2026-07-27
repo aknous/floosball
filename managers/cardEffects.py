@@ -1188,6 +1188,17 @@ CULTIVATION_TRIGGER_POOL = [
     {"event": "yac",          "label": "yards after catch",       "stepSize": 60, "statPaths": [("receiving_stats", "yac")]},
 ]
 
+# Bonsai counts the ON-CARD player's own trigger events, so the trigger must be a stat that
+# player actually posts. Restrict the mint-time pick to each position's real stats (1-based
+# QB..K) — otherwise e.g. a WR could roll the "rushing attempts" trigger and never grow.
+_CULTIVATION_TRIGGERS_BY_POSITION = {
+    1: {"pass_td"},                          # QB: passing TDs
+    2: {"carry", "rush_td", "reception"},    # RB: carries, rushing TDs, checkdown catches
+    3: {"reception", "yac", "pass_td"},      # WR: catches, YAC, receiving TDs
+    4: {"reception", "yac", "pass_td"},      # TE: catches, YAC, receiving TDs
+    5: {"fg_made"},                          # K: field goals
+}
+
 
 # ─── EffectResult ────────────────────────────────────────────────────────────
 
@@ -2073,6 +2084,16 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     if effectName == "all_in":
         # Bet Big: freeze the position-aware stud line the payout scales above.
         primary["studLine"] = _ALL_IN_STUD_LINE.get(position, 20)
+    if effectName == "bonsai":
+        # The builder picks the growth trigger position-blind; re-pick it from ONLY the stats
+        # the card player's position produces (a WR keys off receptions/YAC, a RB off carries,
+        # a K off FGs) so the card can actually grow. Frozen into the config at mint.
+        eligible = [t for t in CULTIVATION_TRIGGER_POOL
+                    if t["event"] in _CULTIVATION_TRIGGERS_BY_POSITION.get(position, set())]
+        if eligible:
+            t = random.choice(eligible)
+            primary["triggerEvent"] = t["event"]
+            primary["triggerLabel"] = t["label"]
 
     conditionals = POSITION_CONDITIONALS.get(position, [])
     # Copy and apply the Balatro FP dial so the stored config carries the
