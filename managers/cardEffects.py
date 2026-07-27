@@ -801,7 +801,7 @@ EFFECT_TOOLTIPS = {
     "winners_circle": "Back the winners. Floobits whenever this player's real team wins their game this week.",
     "no_passengers": "Depth pays. FPx that scales with your lowest-scoring roster player, so a lineup with no weak link earns more.",
     "franchise": "Build around your guy. FPx when this player is your single highest scorer this week.",
-    "metronome": "Reliability pays. FP that grows each week this player clears their power bar. A cold week holds the streak instead of resetting it, so the per-week step is modest.",
+    "metronome": "FP that grows each week this player clears their power bar. A cold week holds the streak rather than resetting it.",
     "double_down": "With the lemons. Multiplies your lowest-earning card's FP this week.",
     "last_resort": "When nothing else works. Guaranteed FP floor plus a chance at enhanced FP. The trigger bar fills from this player's own FP and from each of your other cards that fails to produce a bonus.",
     "high_roller": "Built for the gamble. FPx that scales with how many of your chance cards hit enhanced this week.",
