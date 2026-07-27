@@ -8201,21 +8201,25 @@ class SeasonManager:
         """Roll for Cultivation card growth. streak_count tracks growth level."""
         import random as _rand
         import json as _json
-        from managers.cardEffects import CULTIVATION_TRIGGER_POOL, _countCultivationTriggers
+        from managers.cardEffects import cultivationGrowthChance, _countCultivationTriggers
         primary = effectConfig.get("primary", {})
         baseFP = primary.get("baseFP", 4.0)
         growthFP = primary.get("growthFP", 2.0)
-        baseChance = primary.get("baseChance", 20)
-        chancePerTrigger = primary.get("chancePerTrigger", 5)
         triggerEvent = primary.get("triggerEvent", "pass_td")
-        triggerCount = _countCultivationTriggers(triggerEvent, calcCtx)
-        growthChance = min(90, baseChance + chancePerTrigger * triggerCount)
+        # Count triggers for the ON-CARD player and use the SHARED grow-odds, so the % the
+        # user watched climb on the meter/detail all week is the % actually rolled here.
+        # (Previously this rolled on stale baseChance/chancePerTrigger params Bonsai never
+        # sets, over a whole-roster trigger count — the shown odds were disconnected from
+        # the real roll.)
+        cardPlayerId = eq.user_card.card_template.player_id
+        growthLevel = max(0, (getattr(eq, 'streak_count', 1) or 1) - 1)
+        triggerCount = _countCultivationTriggers(triggerEvent, calcCtx, cardPlayerId)
+        growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel)
         roll = _rand.randint(1, 100)
         # Apply advantage (double roll) if ctx has it
         if calcCtx.hasAdvantage:
             roll2 = _rand.randint(1, 100)
             roll = min(roll, roll2)
-        growthLevel = max(0, (getattr(eq, 'streak_count', 1) or 1) - 1)
         currentFP = round(baseFP + growthFP * growthLevel, 1)
         grew = roll <= growthChance
         if grew:
@@ -8266,6 +8270,10 @@ class SeasonManager:
                         bd["totalFP"] = newFinal
 
                     bd["equation"] = resultEq + conductorSuffix
+                    # Sync the power-bar meter to the resolved roll: the final grow-odds as
+                    # the bar fill, and whether it actually grew (green = grew, amber = not).
+                    bd["chanceThreshold"] = round(growthChance / 100.0, 4)
+                    bd["chanceTriggered"] = grew
                 weekBonus.breakdowns_json = _json.dumps(stored)
             except Exception:
                 pass
