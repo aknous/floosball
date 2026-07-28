@@ -4578,20 +4578,29 @@ def _cultivationRequired(triggerEvent, growthLevel):
     return max(1, int(round(stepSize * (1 + growthLevel * CULTIVATION_LEVEL_RAMP))))
 
 
-def cultivationGrowthChance(primary, triggerCount, growthLevel):
+def cultivationGrowthChance(primary, triggerCount, growthLevel, chanceBonus=0.0):
     """Bonsai's grow odds (0-100), SHARED by the live display (_computeCultivation) and the
     week-end roll (_rollCultivationGrowth) so the power-bar meter, the effect detail, and the
     actual result always agree. The requirement scales with the current level (gentle ramp) —
-    a higher level needs a bigger week to keep pushing the base upward. A dead week floors 2%."""
+    a higher level needs a bigger week to keep pushing the base upward. A dead week floors 2%.
+
+    `chanceBonus` (0-1) is the same hand-synergy / powerup / weekly-modifier trigger lift
+    every other chance card gets (Fortunate modifier, Fortune's Favor, Providence, Catalyst,
+    innate chance synergy — summed onto ctx.chanceBonus). Bonsai is a chance card too, so the
+    boost raises its grow odds; without this it silently ignored those amplifiers."""
     triggerEvent = primary.get("triggerEvent", "pass_td")
     stepSize = _getCultivationStepSize(triggerEvent)
     required = _cultivationRequired(triggerEvent, growthLevel)
     if required <= 0:
-        return 2
-    if triggerCount >= required:
+        base = 2
+    elif triggerCount >= required:
         excess = triggerCount - required
-        return min(100, 90 + int((excess / stepSize) * 10))
-    return max(2, int((triggerCount / required) * 90))
+        base = min(100, 90 + int((excess / stepSize) * 10))
+    else:
+        base = max(2, int((triggerCount / required) * 90))
+    if chanceBonus:
+        base = min(100, base + int(round(chanceBonus * 100)))
+    return base
 
 
 def _computeCultivation(primary, ctx, cardPlayerId, eqId):
@@ -4609,7 +4618,10 @@ def _computeCultivation(primary, ctx, cardPlayerId, eqId):
     # Triggers needed to earn a grow at this level (gentle per-level ramp). Shared with the
     # chance calc and the week-end roll so the meter, the detail note, and the result agree.
     required = _cultivationRequired(triggerEvent, growthLevel)
-    growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel)
+    # Chance-card amplifiers (Fortunate modifier, Fortune's Favor, Providence, Catalyst,
+    # innate synergy) lift Bonsai's grow odds just like any other chance card.
+    growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel,
+                                           getattr(ctx, 'chanceBonus', 0.0))
     nextFP = round(currentFP + growthFP, 1)
     triggerNote = f" ({triggerCount}/{required} {triggerLabel})"
     eq = f"+{currentFP} FP. {growthChance}% chance{triggerNote} to grow to +{nextFP} FP"

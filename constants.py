@@ -1237,6 +1237,12 @@ CARD_TEAM_STACK_BONUS = {2: 0.05, 3: 0.12, 4: 0.22, 5: 0.35, 6: 0.50}
 # → a team-synergy perk. Per-champion (championFraction = champions in the stack / stack
 # size), so no cliff. e.g. 0.5 -> an all-champion stack pays 1.5× the base stack bonus.
 CARD_CHAMPION_STACK_PREMIUM = 0.5
+# The "Synergy" weekly modifier AMPLIFIES the team-stack bonus for that week (mirrors how
+# Amplify doubles FPx portions). It scales the applied stack delta by this factor, so a
+# stacked lineup is rewarded and a non-stacked one is unaffected (the old unique-position
+# formula was dead under fusion — every equipped card is a different slot). e.g. 2.0 -> a
+# 0.22 four-stack pays +0.44 FPx that week.
+SYNERGY_MODIFIER_STACK_MULT = 2.0
 
 # ── Drive Clock (dormant mechanic — docs/DRIVE_CLOCK_PLAN.md) ──
 # A shot-clock for possessions. Two mode knobs: unit ('seconds' of game clock vs
