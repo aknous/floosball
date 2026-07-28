@@ -143,6 +143,7 @@ class GameEvent:
             'finalScore': finalScore,
             'displayScore': ds,
             'scoreLabel': scoreLabel,
+            'tiebreakNote': tiebreakNote,
             'winner': winner,
             'homeWinProbability': homeWinProbability,
             'awayWinProbability': awayWinProbability,

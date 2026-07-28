@@ -112,6 +112,40 @@ def _areGamesCompleted() -> bool:
     return sm.currentSeason.completedWeekGames is not None
 
 
+def _framesFromFormatState(formatStateJson):
+    """Parse a persisted games.format_state and return the frames display block, or None.
+
+    format_state is whatever GameFormat.stateExtra() emitted at completion — for a frames
+    match that's {'frames': {...}} (frames won, tiebreak, per-frame line). Lets finished
+    games rebuilt from the DB (weekGames, team schedule) report the frames result instead
+    of the raw point total, without needing the live game object in memory."""
+    if not formatStateJson:
+        return None
+    try:
+        data = json.loads(formatStateJson)
+    except Exception:
+        return None
+    if isinstance(data, dict) and isinstance(data.get('frames'), dict):
+        return data['frames']
+    return None
+
+
+def _framesWinnerSide(frames, homePoints, awayPoints):
+    """Who won a frames match: 'home' | 'away' | 'tie'. Most frames won; a frames tie
+    falls to the total-points tiebreak (mirrors FramesFormat.winnerSide)."""
+    fh = frames.get('framesWonHome', 0) or 0
+    fa = frames.get('framesWonAway', 0) or 0
+    if fh > fa:
+        return 'home'
+    if fa > fh:
+        return 'away'
+    if homePoints > awayPoints:
+        return 'home'
+    if awayPoints > homePoints:
+        return 'away'
+    return 'tie'
+
+
 def _areGamesScheduled() -> bool:
     """True when games exist for the current week (Scheduled, Active, or Final).
 
@@ -675,7 +709,26 @@ async def get_team(team_id: int, response: Response):
                 roster[pos] = None
         team_dict['roster'] = roster
 
-        # Schedule (regular season games assigned to this team)
+        # Schedule (regular season games assigned to this team). Frames matches report
+        # FRAMES WON (points break a tie), so pre-load persisted format_state for the
+        # team's finished games — restart-safe and authoritative, no live game needed.
+        fmtStateById = {}
+        try:
+            from database.connection import get_session as _gsSched
+            from database.models import Game as _DBGameSched
+            _gameIds = [g.id for g in getattr(team, 'schedule', []) if hasattr(g, 'id')]
+            if _gameIds:
+                _sess = _gsSched()
+                try:
+                    for _gid, _fs in (_sess.query(_DBGameSched.id, _DBGameSched.format_state)
+                                      .filter(_DBGameSched.id.in_(_gameIds)).all()):
+                        if _fs:
+                            fmtStateById[_gid] = _fs
+                finally:
+                    _sess.close()
+        except Exception:
+            fmtStateById = {}
+
         teamSchedule = []
         for game in getattr(team, 'schedule', []):
             try:
@@ -686,8 +739,24 @@ async def get_team(team_id: int, response: Response):
                 teamScore = game.homeScore if isHome else game.awayScore
                 oppScore = game.awayScore if isHome else game.homeScore
                 status = game.status.name if hasattr(game.status, 'name') else str(game.status)
+                # Frames-aware display + result: the shown score becomes frames won and the
+                # W/L is decided by frames (points tiebreak), not the point total.
+                frames = _framesFromFormatState(fmtStateById.get(game.id))
+                displayTeamScore = teamScore
+                displayOppScore = oppScore
+                scoreLabel = None
                 result = None
-                if status == 'Final':
+                if frames:
+                    fh = frames.get('framesWonHome', 0) or 0
+                    fa = frames.get('framesWonAway', 0) or 0
+                    displayTeamScore = fh if isHome else fa
+                    displayOppScore = fa if isHome else fh
+                    scoreLabel = 'frames'
+                    if status == 'Final':
+                        _ws = _framesWinnerSide(frames, game.homeScore, game.awayScore)
+                        _teamSide = 'home' if isHome else 'away'
+                        result = 'T' if _ws == 'tie' else ('W' if _ws == _teamSide else 'L')
+                elif status == 'Final':
                     result = 'W' if teamScore > oppScore else 'L'
                 teamSchedule.append({
                     'gameId': game.id,
@@ -701,6 +770,11 @@ async def get_team(team_id: int, response: Response):
                     },
                     'teamScore': teamScore,
                     'oppScore': oppScore,
+                    # Format-aware result score (frames won for frames matches; falls back to
+                    # the point totals). scoreLabel tells the frontend which it is.
+                    'displayTeamScore': displayTeamScore,
+                    'displayOppScore': displayOppScore,
+                    'scoreLabel': scoreLabel,
                     'status': status,
                     'result': result,
                 })
@@ -2414,12 +2488,21 @@ async def get_week_games(week: int, response: Response):
 
         result = []
         for g in rows:
-            homeWon = g.home_score > g.away_score
-            awayWon = g.away_score > g.home_score
+            # Frames matches are decided by FRAMES WON (points only break a tie), so a
+            # finished frames game reports its frames block + a frames-based winner rather
+            # than the raw point total. Standard games have no format_state → point totals.
+            frames = _framesFromFormatState(g.format_state)
+            if frames:
+                _ws = _framesWinnerSide(frames, g.home_score, g.away_score)
+                homeWon = _ws == 'home'
+                awayWon = _ws == 'away'
+            else:
+                homeWon = g.home_score > g.away_score
+                awayWon = g.away_score > g.home_score
             homeTeam = _teamObj(g.home_team_id)
             awayTeam = _teamObj(g.away_team_id)
             winner = homeTeam['name'] if homeWon else (awayTeam['name'] if awayWon else None)
-            result.append({
+            entry = {
                 'id': str(g.id),
                 'seasonNumber': g.season,
                 'week': g.week,
@@ -2445,7 +2528,12 @@ async def get_week_games(week: int, response: Response):
                 'winningTeam': winner,
                 'isUpsetAlert': False,
                 'isFeatured': False,
-            })
+            }
+            # Frames block (frames won, tiebreak, per-frame line) so the card shows the
+            # match result, not the point total. GameCard keys off frames.active.
+            if frames:
+                entry['frames'] = frames
+            result.append(entry)
         # Stable order: featured/upset not relevant here, sort by game id (kickoff order)
         result.sort(key=lambda x: int(x['id']))
         return result
