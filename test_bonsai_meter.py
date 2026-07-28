@@ -112,6 +112,20 @@ expect(f"chance still tapers as the level climbs {chances}",
        all(chances[i] >= chances[i + 1] for i in range(len(chances) - 1)))
 
 
+print("\n7b. Chance amplifiers (Fortunate modifier / Fortune's Favor) raise the grow odds")
+# Owner-reported (2026-07-28): the Fortunate weekly modifier is meant to lift chance-card
+# trigger rates, but Bonsai's meter stayed at 6% — cultivationGrowthChance ignored
+# ctx.chanceBonus (every OTHER chance card adds it). It must now boost the grow odds like the
+# rest, additive on the probability (6% + 15% -> 21%), and the no-bonus path stays identical.
+base6 = cultivationGrowthChance({'triggerEvent': 'yac'}, 4, 0)          # ~6% with no amplifier
+boosted = cultivationGrowthChance({'triggerEvent': 'yac'}, 4, 0, 0.15)  # + Fortunate 15%
+expect(f"Fortunate lifts the grow odds (base {base6}% -> {boosted}%)", boosted == base6 + 15)
+expect("no amplifier leaves the odds untouched",
+       cultivationGrowthChance({'triggerEvent': 'yac'}, 4, 0, 0.0) == base6)
+expect("the boost caps at 100 (90% base + 15% -> 100, not 105)",
+       cultivationGrowthChance({'triggerEvent': 'yac'}, 60, 0, 0.15) == 100)
+
+
 print("\n8. Live path: Bonsai is NOT swept up by the weekly streak increment")
 # _evaluateLiveStreakConditions ticks every "equipped"-condition streak card each week, which
 # inflated Bonsai's LIVE growth level by +1 (its growth is the separate end-of-week roll), so

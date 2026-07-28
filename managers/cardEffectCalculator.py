@@ -279,6 +279,10 @@ class CardBonusResult:
     stackSize: int = 0
     stackChampions: int = 0
     stackBonus: float = 0.0
+    # The portion of stackBonus contributed by the Synergy weekly modifier's amplification
+    # (0 when Synergy isn't active). Excluded from the card-stacking achievement so a "free"
+    # modifier boost doesn't inflate it.
+    stackModifierBonus: float = 0.0
 
 
 # Effects that use the roster player's stats at the card's position
@@ -1171,18 +1175,15 @@ def calculateWeekCardBonuses(
         result.floobitsEarned += breakdown.floobitsEarned
         result.cardBreakdowns.append(breakdown)
 
-    # Synergy modifier: +0.1 FPx per unique position among equipped cards
-    if ctx.activeModifier == "synergy":
-        uniquePositions = len(set(ctx.equippedCardPositions))
-        if uniquePositions > 1:
-            synergyMult = 1 + uniquePositions * 0.1
-            result.multFactors.append(round(synergyMult, 2))
-
     # Team stacking — fielding multiple cards whose depicted players share a real team grants
     # a lineup-wide FPx that escalates with the largest same-team group. Champion cards in the
     # stack AMPLIFY it (the reigning champs are one team, so a champ stack is the premium
     # "Dynasty" stack). Pick the best-paying group so ties resolve toward the champion one.
-    from constants import CARD_TEAM_STACK_BONUS, CARD_CHAMPION_STACK_PREMIUM
+    # The "Synergy" weekly modifier DOUBLES the applied stack bonus this week (SYNERGY_MODIFIER
+    # _STACK_MULT) — the fusion-native repurpose of the old unique-position formula, which is
+    # dead now that every equipped card is a different slot. A non-stacked lineup is unaffected.
+    from constants import (CARD_TEAM_STACK_BONUS, CARD_CHAMPION_STACK_PREMIUM,
+                           SYNERGY_MODIFIER_STACK_MULT)
     if CARD_TEAM_STACK_BONUS:
         byTeam = {}
         for eq in equippedCards:
@@ -1205,10 +1206,15 @@ def calculateWeekCardBonuses(
             if best is None or delta > best[0]:
                 best = (delta, size, champs)
         if best and best[0] > 0:
-            result.multFactors.append(round(1.0 + best[0], 3))
+            baseDelta = best[0]
+            synergyMult = SYNERGY_MODIFIER_STACK_MULT if ctx.activeModifier == "synergy" else 1.0
+            appliedDelta = baseDelta * synergyMult
+            result.multFactors.append(round(1.0 + appliedDelta, 3))
             result.stackSize = best[1]
             result.stackChampions = best[2]
-            result.stackBonus = round(best[0], 3)
+            result.stackBonus = round(appliedDelta, 3)
+            # The modifier's extra (0 when Synergy inactive) — excluded from the achievement.
+            result.stackModifierBonus = round(appliedDelta - baseDelta, 3)
 
     result.totalBonusFP = round(result.totalBonusFP, 2)
     return result

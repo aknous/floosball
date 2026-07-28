@@ -2286,14 +2286,13 @@ class SeasonManager:
 
                     # Achievement hook — Compound tiers (single-week FPx from cards only)
                     # Exclude the synergy weekly modifier's contribution so the achievement
-                    # reflects card-driven multipliers, not a "free" modifier bonus.
+                    # reflects card-driven multipliers, not a "free" modifier bonus. Synergy
+                    # now DOUBLES the team-stack FPx; the baseline stack (card-driven) still
+                    # counts, only the modifier's extra is removed. multFactors aggregate
+                    # bonus-additively, so subtracting the extra delta is exact.
                     cardMultProduct = multProduct
-                    if userModifier == "synergy":
-                        uniquePositions = len(set(calcCtx.equippedCardPositions))
-                        if uniquePositions > 1:
-                            synergyMult = 1 + uniquePositions * 0.1
-                            if synergyMult > 0:
-                                cardMultProduct = multProduct / synergyMult
+                    if userModifier == "synergy" and result.stackModifierBonus > 0:
+                        cardMultProduct = max(1.0, multProduct - result.stackModifierBonus)
                     if cardMultProduct > 1.0:
                         try:
                             from managers import achievementManager as _amCompound
@@ -7876,7 +7875,7 @@ class SeasonManager:
         "grounded": "All FPx effects disabled",
         "longshot": "Conditional card rewards doubled",
         "frenzy": "+FP values are doubled",
-        "synergy": "Bonus FPx for each unique position in your card slots",
+        "synergy": "Same-team stack FPx is doubled this week",
         "steady": "No special effect — all normal rules apply",
         "fortunate": "Chance card trigger rates increased by 15%",
         # Legacy — retired modifiers, kept for historical row rendering.
@@ -8244,7 +8243,10 @@ class SeasonManager:
         cardPlayerId = eq.user_card.card_template.player_id
         growthLevel = max(0, (getattr(eq, 'streak_count', 1) or 1) - 1)
         triggerCount = _countCultivationTriggers(triggerEvent, calcCtx, cardPlayerId)
-        growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel)
+        # Same chance-card amplifier (Fortunate modifier / Fortune's Favor / Providence / ...)
+        # the live meter showed all week, so the odds watched are the odds rolled.
+        growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel,
+                                               getattr(calcCtx, 'chanceBonus', 0.0))
         roll = _rand.randint(1, 100)
         # Apply advantage (double roll) if ctx has it
         if calcCtx.hasAdvantage:
