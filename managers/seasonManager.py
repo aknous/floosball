@@ -632,12 +632,6 @@ class SeasonManager:
                 self.currentSeason.currentWeek = nextWeek
                 self.currentSeason.currentWeekText = nextWeekText
 
-            # Cores rule-change vote: at the START of a game day (weeks 1/8/15/22),
-            # roll the escalating chance a vote opens. Opening here (before the setup
-            # wait) gives fans the whole run-up to kickoff to vote; it resolves 15 min
-            # before the day's first game (below). Idempotent + never blocks the loop.
-            self._maybeOpenRuleVote(nextWeek, weekStartTime)
-
             await self.timingManager.waitForWeekSetup(weekSetupTime)
 
             # ── Official week transition ──
@@ -646,6 +640,14 @@ class SeasonManager:
             # empty week).  For week 1, this was already set above.
             self.currentSeason.currentWeek = nextWeek
             self.currentSeason.currentWeekText = nextWeekText
+
+            # Cores rule-change vote: open AT the week rollover (right after the setup wait),
+            # on the game-day-start weeks (1/8/15/22). Previously it opened BEFORE the wait —
+            # the moment the prior day's games ended — so the ballot flashed up the evening
+            # before. Opening here means it first appears when the week rolls over the following
+            # day, then stays open through the run-up to kickoff (resolved 15 min before the
+            # day's first game, below). Idempotent; never blocks the loop.
+            self._maybeOpenRuleVote(nextWeek, weekStartTime)
 
             # Recompute regular-season pressure blend: prior-season expectations
             # wane over the first ~14 weeks while inSeasonPressure (set by
