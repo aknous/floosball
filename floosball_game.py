@@ -4625,7 +4625,16 @@ class Game:
                                 and (self.currentQuarter == 2 or -self._fgValue() <= scoreDiff <= 0)
                                 and self.yardsToEndzone <= spikeKickerMax
                                 and secs <= 20)
-            spikeDownOK = self.down <= self.gameRules.downsPerSeries - 2 or spikeFgException
+            # A down-1/2 spike is only worth it if a productive snap can STILL FOLLOW it.
+            # Otherwise it just forfeits the down and burns the last of the clock, so the
+            # possession ends ON the spike and the frame/game closes with the spike having
+            # bought nothing (a team spiked with ~6s left and the game just ended).
+            # _estimateAvailablePlays is frame-aware (reserves a closing FG snap off the frame
+            # deadline in frames); >= 1 means room for the spike plus a real play. The
+            # deliberate 3rd-down FG-setup spike keeps its own gate.
+            spikeDownOK = ((self.down <= self.gameRules.downsPerSeries - 2
+                            and self._estimateAvailablePlays() >= 1)
+                           or spikeFgException)
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
                     and secs <= self.gameRules.spikeClockThreshold
@@ -7040,7 +7049,7 @@ class Game:
                     # Consume time for field goal (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.FieldGoal, False)
                     self.consumeGameTime(playDuration)
-                    self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                    self.play.stampClock()
                     self.checkTwoMinuteWarning()
 
                     if getattr(self.play, 'isFgBlocked', False):
@@ -7106,7 +7115,7 @@ class Game:
                         self.play.isPuntBlocked = True
                         playDuration = self.calculatePlayDuration(PlayType.Punt, False)
                         self.consumeGameTime(playDuration)
-                        self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                        self.play.stampClock()
                         self.checkTwoMinuteWarning()
                         self._resolveBlockedKick()
                         self._pendingPossessionChange = True
@@ -7128,7 +7137,7 @@ class Game:
                     # Consume time for punt (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.Punt, False)
                     self.consumeGameTime(playDuration)
-                    self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                    self.play.stampClock()
                     self.checkTwoMinuteWarning()
                     self.clockRunning = False  # Clock stops after punt
                     
@@ -7183,7 +7192,7 @@ class Game:
                     self.consumeGameTime(playDuration)
 
                 # Update play's timeRemaining to reflect post-play clock
-                self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                self.play.stampClock()
 
                 # Determine if clock should run after play
                 self.clockRunning = self.shouldClockRun()
@@ -9706,7 +9715,13 @@ class Game:
         if (self._isFgDrainMode() and hasattr(self, 'play') and self.play is not None
                 and getattr(self.play, 'playType', None) == PlayType.FieldGoal):
             target = 7
-            return ('setupFG', max(8, secs - target))
+            # Drain only to the deadline actually in play: the FRAME buzzer in frames, the
+            # game clock in standard, the possession budget in chess (_offenseEffectiveSecs
+            # abstracts all three). Using the raw game clock here drained the WHOLE game
+            # before a frame-ending FG, blowing past the frame boundary and committing the
+            # remaining frame(s) empty (prod game 5254). _isFgDrainMode already gates on
+            # _offenseEffectiveSecs <= 60, so this drain is bounded to the current deadline.
+            return ('setupFG', max(8, self._offenseEffectiveSecs() - target))
 
         # Target format: a score this possession WINS — push to finish (fast huddle)
         # instead of draining, UNLESS a conservative coach is protecting a comfortable
@@ -11764,13 +11779,20 @@ class Play():
                 frameLen = fmt._regSeconds(game) / n if n else 0
                 elapsed = fmt._elapsed(game)
                 self.frame = min(n, int(elapsed / frameLen) + 1) if frameLen else 1
+                # Elapsed at which THIS frame ends — lets stampFrameClock recompute the time
+                # LEFT in the frame the play occurred in after the play burns the clock, so the
+                # feed's frame time is post-play like timeRemaining (a play that runs the frame
+                # out reads 0:00; the frame NUMBER stays the one the play happened in).
+                self._frameEndElapsed = self.frame * frameLen if frameLen else None
                 self.frameClock = game.formatTime(int(max(0, frameLen - (elapsed % frameLen)))) if frameLen else '0:00'
             except Exception:
                 self.frame = None
                 self.frameClock = None
+                self._frameEndElapsed = None
         else:
             self.frame = None
             self.frameClock = None
+            self._frameEndElapsed = None
         self.down = game.down
         self.timeRemaining = game.formatTime(game.gameClockSeconds)
         self.yardLine = game.yardLine
@@ -11867,6 +11889,24 @@ class Play():
         self.glitchLayer = None         # 'micro' (L1) / 'personality' (L2) / 'signature' (L3)
         self.glitchYardDelta = None     # L3 only: signed yards the glitch added (+) or cost (-)
         self.insights = {}              # Play insights dict — populated during execution
+
+    def stampFrameClock(self):
+        """Recompute the frame's time-left from the CURRENT (post-play) clock so the feed's
+        frame time is post-play like timeRemaining. The frame NUMBER stays the frame the play
+        occurred in; a play that runs the frame out reads 0:00. No-op off frames / in OT."""
+        if self.frame is None or getattr(self, '_frameEndElapsed', None) is None:
+            return
+        try:
+            left = self._frameEndElapsed - self.game.format._elapsed(self.game)
+            self.frameClock = self.game.formatTime(int(max(0, left)))
+        except Exception:
+            pass
+
+    def stampClock(self):
+        """Set the game-clock time AND the frame time-left from the CURRENT state. Called after
+        a play consumes the clock, so both read the time remaining AFTER the play completes."""
+        self.timeRemaining = self.game.formatTime(self.game.gameClockSeconds)
+        self.stampFrameClock()
 
     def _captureBlitzer(self, scheme, defGameplanObj):
         """If the defensive scheme called a blitz, stash the blitzer on the

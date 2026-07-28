@@ -4562,13 +4562,30 @@ def _getCultivationStepSize(triggerEvent):
     return 3
 
 
+# Bonsai grow-requirement ramp per level. GENTLER than linear (was stepSize*(level+1), which
+# made a high-stepSize trigger like YAC (60) unreachable past level ~2 — a great week still
+# gave a poor grow-chance, and the card stalled far below its edition FP ceiling). At 0.4 the
+# requirement grows ~40% of a full step per level, so strong weeks keep advancing the card
+# while higher levels still demand more. Computed live (not frozen at mint), so it re-values
+# all Bonsai cards immediately.
+CULTIVATION_LEVEL_RAMP = 0.4
+
+
+def _cultivationRequired(triggerEvent, growthLevel):
+    """Trigger events needed for a near-certain grow at `growthLevel`. Shared by the chance
+    calc, the display note, and the week-end roll so all three agree."""
+    stepSize = _getCultivationStepSize(triggerEvent)
+    return max(1, int(round(stepSize * (1 + growthLevel * CULTIVATION_LEVEL_RAMP))))
+
+
 def cultivationGrowthChance(primary, triggerCount, growthLevel):
     """Bonsai's grow odds (0-100), SHARED by the live display (_computeCultivation) and the
     week-end roll (_rollCultivationGrowth) so the power-bar meter, the effect detail, and the
-    actual result always agree. The trigger step scales with the current level — a higher
-    level needs a bigger week to keep pushing the base upward. A dead week floors at 2%."""
-    stepSize = _getCultivationStepSize(primary.get("triggerEvent", "pass_td"))
-    required = stepSize * (growthLevel + 1)
+    actual result always agree. The requirement scales with the current level (gentle ramp) —
+    a higher level needs a bigger week to keep pushing the base upward. A dead week floors 2%."""
+    triggerEvent = primary.get("triggerEvent", "pass_td")
+    stepSize = _getCultivationStepSize(triggerEvent)
+    required = _cultivationRequired(triggerEvent, growthLevel)
     if required <= 0:
         return 2
     if triggerCount >= required:
@@ -4589,9 +4606,9 @@ def _computeCultivation(primary, ctx, cardPlayerId, eqId):
     triggerEvent = primary.get("triggerEvent", "pass_td")
     triggerLabel = primary.get("triggerLabel", "events")
     triggerCount = _countCultivationTriggers(triggerEvent, ctx, cardPlayerId)
-    # Step size: triggers required to fully earn a grow at level 0. Threshold scales with
-    # level (level 10 needs ~11x the triggers of level 0). Shared with the week-end roll.
-    required = _getCultivationStepSize(triggerEvent) * (growthLevel + 1)
+    # Triggers needed to earn a grow at this level (gentle per-level ramp). Shared with the
+    # chance calc and the week-end roll so the meter, the detail note, and the result agree.
+    required = _cultivationRequired(triggerEvent, growthLevel)
     growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel)
     nextFP = round(currentFP + growthFP, 1)
     triggerNote = f" ({triggerCount}/{required} {triggerLabel})"

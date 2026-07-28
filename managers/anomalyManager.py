@@ -2,8 +2,8 @@
 
 Responsibilities:
   * Recompute every player's attention score weekly from engagement
-    sources (equipped cards, fantasy rosters, follows, favorite-team
-    fan presence). Decay 10%/week absent fresh input.
+    sources (equipped cards — which ARE the fusion fantasy lineup — follows,
+    favorite-team fan presence). Decay 10%/week absent fresh input.
   * Soft-cap individual attention at 100; excess flows into a per-
     season league aggregate that drives the Criticality trigger.
   * Manage state-ladder transitions (stable → stirring → erratic →
@@ -35,8 +35,6 @@ from database.models import (
     AnomalyState,
     LeagueAnomalyState,
     EquippedCard,
-    FantasyRoster,
-    FantasyRosterPlayer,
     FollowedPlayer,
     User,
     Player,
@@ -113,8 +111,11 @@ def assignSignaturePower(session, player_id):
 _ANOMALY_FAST = os.environ.get('FLOOSBALL_ANOMALY_FAST', '').lower() in ('1', 'true', 'yes')
 
 # Attention contributions per source, applied each weekly tick.
-ATTENTION_PER_CARD_EQUIPPED = 40.0 if _ANOMALY_FAST else 10.0
-ATTENTION_PER_FANTASY_ROSTER = 32.0 if _ANOMALY_FAST else 8.0
+# Post-fusion the equipped card IS the fantasy roster slot (one fielded player), so this weight
+# FOLDS IN what a separate roster slot used to add (old 10 card + 8 roster = 18 / 40 + 32 = 72
+# in fast) — the standalone FantasyRoster source is retired below because fusion no longer
+# populates FantasyRosterPlayer rows, so it silently contributed nothing.
+ATTENTION_PER_CARD_EQUIPPED = 72.0 if _ANOMALY_FAST else 18.0
 ATTENTION_PER_FOLLOWER = 8.0 if _ANOMALY_FAST else 2.0
 ATTENTION_PER_FAVORITE_TEAM_FAN = 2.0 if _ANOMALY_FAST else 0.5
 
@@ -743,14 +744,9 @@ def _applyWeeklyContributions(session: Session, seasonNumber: int, week: int) ->
             continue
         deltas[playerId] = deltas.get(playerId, 0.0) + ATTENTION_PER_CARD_EQUIPPED
 
-    # ── Fantasy roster slots (locked rosters this season) ──
-    rosters = session.query(FantasyRoster).filter_by(
-        season=seasonNumber, is_locked=True,
-    ).all()
-    for r in rosters:
-        for rp in r.players:
-            if rp.player_id is not None:
-                deltas[rp.player_id] = deltas.get(rp.player_id, 0.0) + ATTENTION_PER_FANTASY_ROSTER
+    # (Fantasy roster slots are no longer a separate source: post-fusion the equipped cards ARE
+    # the fantasy lineup, so a fielded player is counted once, above, at the folded-in weight.
+    # The old FantasyRosterPlayer rows are never populated anymore.)
 
     # ── Followed players ──
     follows = session.query(FollowedPlayer).all()

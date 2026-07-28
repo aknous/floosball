@@ -94,10 +94,48 @@ expect(f"fpBonus == guaranteed base {base} (odds gate FUTURE growth) -> {r.fpBon
 expect("chanceMetaGrowth flagged True", getattr(r, 'chanceMetaGrowth', False) is True)
 
 print("\n6. Higher growth level raises the bar (a bigger week needed to keep pushing)")
-# At level 3, required = stepSize x 4, so the same TD count yields lower odds than at level 0.
+# The gentle ramp still requires more each level, so the same TD count yields lower odds
+# at a higher level than at level 0.
 lo = cultivationGrowthChance(cfg['primary'], stepSize, 0)   # exactly the level-0 step
 hi = cultivationGrowthChance(cfg['primary'], stepSize, 3)   # same triggers, level 3
 expect(f"same triggers earn LESS at a higher level ({hi}% < {lo}%)", hi < lo)
+
+print("\n7. Gentler per-level ramp: a strong week still advances the card at higher levels")
+# The reported case: a level-3 YAC card (stepSize 60) after an 88-YAC week. The old linear
+# ramp needed 240 YAC at level 3 (88 -> 33%); the gentler ramp needs ~132 (88 -> ~60%), so a
+# great week keeps the card climbing instead of stalling far below its FP ceiling.
+yacPrim = {'triggerEvent': 'yac'}
+lvl3 = cultivationGrowthChance(yacPrim, 88, 3)
+expect(f"level-3 YAC card, 88 YAC -> healthy grow chance (got {lvl3}%, was 33%)", lvl3 >= 50)
+chances = [cultivationGrowthChance(yacPrim, 88, l) for l in range(0, 6)]
+expect(f"chance still tapers as the level climbs {chances}",
+       all(chances[i] >= chances[i + 1] for i in range(len(chances) - 1)))
+
+
+print("\n8. Live path: Bonsai is NOT swept up by the weekly streak increment")
+# _evaluateLiveStreakConditions ticks every "equipped"-condition streak card each week, which
+# inflated Bonsai's LIVE growth level by +1 (its growth is the separate end-of-week roll), so
+# the in-progress meter read one level too high. Bonsai must be skipped there; a normal streak
+# card (snowball_fight / roster_td) must still tick. Called unbound (no self usage).
+from types import SimpleNamespace as _NS
+from managers.fantasyTracker import FantasyTracker
+
+def _eq(eqId, effectName, streakCount):
+    tmpl = _NS(effect_config={"effectName": effectName, "category": "streak"})
+    return _NS(id=eqId, streak_count=streakCount, user_card=_NS(card_template=tmpl))
+
+bonsaiEq = _eq(1, "bonsai", 4)          # true growth level 3
+controlEq = _eq(2, "snowball_fight", 2)  # a real streak card, condition roster_td
+streakCounts = {1: 4, 2: 2}
+FantasyTracker._evaluateLiveStreakConditions(
+    None, [bonsaiEq, controlEq], weekPlayerStats={}, rosterPlayerIds=[],
+    rosterTotalTds=1, weekRawFP=0, playerPositionMap={}, streakCounts=streakCounts,
+    teamResults={}, userFavoriteTeamId=None, favoriteTeamWonThisWeek=False,
+    favoriteTeamOpponentElo=0, favoriteTeamElo=0)
+expect(f"Bonsai live streak count NOT incremented (stays 4 -> level 3, matches the roll) "
+       f"got {streakCounts[1]}", streakCounts[1] == 4)
+expect(f"a normal streak card (roster_td, 1 TD) STILL increments (2 -> 3) got {streakCounts[2]}",
+       streakCounts[2] == 3)
 
 
 print()
@@ -106,4 +144,4 @@ if failures:
     for f in failures:
         print("   -", f)
     sys.exit(1)
-print("PASS — Bonsai meter, detail, and roll all read the same grow-odds.")
+print("PASS — Bonsai meter, detail, roll, and live growth level all agree.")
