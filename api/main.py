@@ -13222,6 +13222,23 @@ def get_pickem_leaderboard(season: Optional[int] = None):
         seasonRows = pickemRepo.getSeasonLeaderboard(seasonNum)
         weekRows = pickemRepo.getWeekLeaderboard(seasonNum, weeklyWeek)
 
+        # Prune clearly-inactive users from the LIVE (current-season) board: only users who
+        # logged in within the activity window (SUPPORTER_ACTIVITY_WINDOW_DAYS) appear, so
+        # long-departed accounts (incl. ones still accruing auto-picks before those were
+        # gated) don't clutter the standings. Past-season boards are left intact — historical
+        # standings shouldn't be rewritten by who happens to be active now.
+        if seasonNum == currentSeason.seasonNumber:
+            from datetime import datetime as _dt, timedelta as _td
+            from constants import SUPPORTER_ACTIVITY_WINDOW_DAYS
+            _cutoff = _dt.utcnow() - _td(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
+            _activeIds = {
+                r[0] for r in session.query(User.id).filter(
+                    User.last_login_at.isnot(None), User.last_login_at >= _cutoff
+                ).all()
+            }
+            seasonRows = [r for r in seasonRows if r[0] in _activeIds]
+            weekRows = [r for r in weekRows if r[0] in _activeIds]
+
         # Enrich season entries with Clairvoyant weeks
         seasonEntries = _buildEntries(seasonRows)
         for entry in seasonEntries:

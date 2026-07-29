@@ -9925,7 +9925,8 @@ class SeasonManager:
         - "random":    coin flip per game
         Uses 1.0x timing (pre-game) and ELO-based underdog multiplier."""
         import random as _random
-        from constants import calculateUnderdogMultiplier
+        from datetime import datetime as _dt, timedelta as _td
+        from constants import calculateUnderdogMultiplier, SUPPORTER_ACTIVITY_WINDOW_DAYS
         seasonNum = self.currentSeason.seasonNumber
         week = self._getPickemWeek()
         try:
@@ -9934,8 +9935,15 @@ class SeasonManager:
             from database.repositories.pickem_repository import PickEmRepository
             session = get_session()
             try:
+                # Only auto-pick for users active within the window — a departed account
+                # shouldn't keep silently accruing pick-em credit (and cluttering the board)
+                # long after its owner stopped showing up. Same activity definition the live
+                # leaderboard prunes on and the rest of the app uses.
+                _cutoff = _dt.utcnow() - _td(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
                 autoUsers = session.query(User).filter(
-                    User.auto_pick_mode.in_(("favorites", "underdogs", "random"))
+                    User.auto_pick_mode.in_(("favorites", "underdogs", "random")),
+                    User.last_login_at.isnot(None),
+                    User.last_login_at >= _cutoff,
                 ).all()
                 if not autoUsers:
                     return
