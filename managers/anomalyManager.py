@@ -728,21 +728,35 @@ def _applyWeeklyContributions(session: Session, seasonNumber: int, week: int) ->
     """
     deltas: Dict[int, float] = {}
 
-    # ── Equipped cards this week ──
-    # Scope to cards equipped for the current week. Each card targets
-    # one player via card_template.player_id; grant +10 attention.
-    equippedQuery = (
-        session.query(EquippedCard)
-        .filter_by(season=seasonNumber, week=week, locked=True)
+    # ── Equipped cards (the fantasy lineup) — PRIMARY attention source ──
+    # Post-fusion the equipped cards ARE the fantasy roster, so a fielded player is the main
+    # driver of attention. Count the latest equipped lineup that EXISTS at tick time (the max
+    # week <= this tick's week), each card granting ATTENTION_PER_CARD_EQUIPPED.
+    #
+    # NOT a `week=week, locked=True` snapshot: the tick runs at week-START, BEFORE the new
+    # week's cards are carried-forward or locked (see the seasonManager rollover), and a
+    # COMPLETED week's cards are UNLOCKED again. So the old filter matched ZERO rows every
+    # tick — equipped players contributed no attention all season (verified on prod: all
+    # attention came from fav-team fans / follows, capping ~40, so nobody reached the awaken
+    # bar of 90). Using the newest existing lineup counts each week's roster exactly once
+    # across successive ticks (carry-forward creates a week's rows during that week, and the
+    # next week's tick picks them up).
+    from sqlalchemy import func as _func
+    latestEquippedWeek = (
+        session.query(_func.max(EquippedCard.week))
+        .filter(EquippedCard.season == seasonNumber, EquippedCard.week <= week)
+        .scalar()
     )
-    for ec in equippedQuery.all():
-        try:
-            playerId = ec.user_card.card_template.player_id
-        except AttributeError:
-            continue
-        if playerId is None:
-            continue
-        deltas[playerId] = deltas.get(playerId, 0.0) + ATTENTION_PER_CARD_EQUIPPED
+    if latestEquippedWeek is not None:
+        for ec in (session.query(EquippedCard)
+                   .filter_by(season=seasonNumber, week=latestEquippedWeek).all()):
+            try:
+                playerId = ec.user_card.card_template.player_id
+            except AttributeError:
+                continue
+            if playerId is None:
+                continue
+            deltas[playerId] = deltas.get(playerId, 0.0) + ATTENTION_PER_CARD_EQUIPPED
 
     # (Fantasy roster slots are no longer a separate source: post-fusion the equipped cards ARE
     # the fantasy lineup, so a fielded player is counted once, above, at the folded-in weight.
