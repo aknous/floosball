@@ -157,7 +157,6 @@ class SeasonManager:
         # Populated when ballots are collected at rookie draft time; surfaced
         # via /api/offseason so the Front Office page can show the team's
         # tallied rookie rankings (parallel to FA fan vote tallies).
-        self._offseasonRookieBallotResults: dict = {}
 
         # Cached next-game-start timestamp (set once, survives page refreshes)
         self._cachedNextGameStart: Optional[datetime.datetime] = None
@@ -167,7 +166,6 @@ class SeasonManager:
         #     'post_bowl'   — Floos Bowl ended, waiting to open front office
         #     'frontoffice' — GM votes resolved, FA pool populated, waiting on
         #                     noon-ET kickoff for the rookie draft
-        #     'rookie_draft' — rookie picks streaming live (predraft + picks)
         #     'pre_fa'      — rookie draft done, waiting on top-of-hour for FA
         #     'fa_draft'    — FA picks streaming live
         #     'training'    — sequential silent calculations after FA
@@ -176,7 +174,7 @@ class SeasonManager:
         #     during wait gates (post_bowl/frontoffice/pre_fa) and cleared
         #     during active phases. Frontend renders a countdown when present.
         # NOTE: _offseasonPhase (separate attribute) tracks the OffseasonPanel
-        # sub-phase render state ('predraft', 'rookie_draft', 'free_agency')
+        # sub-phase render state ('predraft', 'free_agency')
         # and is owned by the draft generators, not this flow controller.
         self._offseasonFlowPhase: Optional[str] = None
         self._offseasonFlowTarget: Optional[datetime.datetime] = None
@@ -381,35 +379,10 @@ class SeasonManager:
         # they don't show a spurious development arc from the re-map's runway.
         self._maybeFreezeLegacyDevArc()
 
-        # Generate the season's rookie class UP FRONT so fans can scout and vote
-        # on picks all season long. Rookies sit as is_upcoming_rookie=True until
-        # the offseason draft consumes them. Only generates if none already exist
-        # for this season (idempotent across restarts).
-        # PART F: with the rookie draft off there is no rookie class at all —
-        # new players arrive only as the position-supply deficit fill (a trickle
-        # into the FA pool), so the pool can't inflate. Env override for sims.
-        from constants import ROOKIE_DRAFT_ENABLED as _ROOKIE_DRAFT_ON
-        rookieDraftOn = _ROOKIE_DRAFT_ON and not os.environ.get('NO_ROOKIE_DRAFT')
-        existingUpcoming = [p for p in self.playerManager.activePlayers if getattr(p, 'is_upcoming_rookie', False)]
-        if not rookieDraftOn:
-            if existingUpcoming:
-                logger.info(f"Rookie draft OFF — {len(existingUpcoming)} pre-existing upcoming "
-                            f"rookies left in place (they'll drain through the draft once)")
-            else:
-                logger.info("Rookie draft OFF — no rookie class generated; "
-                            "intake is the position-supply trickle only")
-        elif not existingUpcoming:
-            rookies = self.playerManager._generateRookieClass(seasonNumber)
-            for r in rookies:
-                r.is_upcoming_rookie = True
-                r.team = 'Upcoming Rookie'
-                if r not in self.playerManager.activePlayers:
-                    self.playerManager.activePlayers.append(r)
-                self.playerManager.addToPositionList(r)
-            self.playerManager.sortPlayersByPosition()
-            logger.info(f"Generated {len(rookies)} upcoming rookies for season {seasonNumber}")
-        else:
-            logger.info(f"Upcoming rookie class already exists ({len(existingUpcoming)} players) — reusing")
+        # There is no rookie class. New players arrive only as the
+        # position-supply deficit fill — a trickle straight into the FA pool,
+        # sized to what retirement actually took out, so the pool holds steady
+        # instead of inflating by a full class every season.
 
         # Persist season record early so startDate survives restarts
         self._saveSeasonToDatabase()
@@ -4718,18 +4691,6 @@ class SeasonManager:
         # Mark the season as in the offseason week.
         self.currentSeason.currentWeek = 0
         self.currentSeason.currentWeekText = 'Offseason'
-        # Restore the upcoming-rookie pool from DB-flagged players so the
-        # rookie_draft phase (if it hasn't completed) has its pool ready.
-        try:
-            self._pendingRookiePool = [
-                p for p in self.playerManager.activePlayers
-                if getattr(p, 'is_upcoming_rookie', False)
-            ]
-            logger.info(f"restoreForOffseasonResume: rebuilt rookie pool with "
-                        f"{len(self._pendingRookiePool)} players")
-        except Exception as e:
-            logger.warning(f"restoreForOffseasonResume: rookie pool rebuild failed: {e}")
-            self._pendingRookiePool = []
 
     # ── Mid-playoff resume (hotfix/playoff-resume) ──────────────────────────
     def _persistPlayoffState(self, completedRound: int, roundText: str, playoffTeams: dict) -> None:
@@ -4868,8 +4829,7 @@ class SeasonManager:
 
         Phase model (set on self._offseasonFlowPhase, target on self._offseasonFlowTarget):
           post_bowl   → set in _completeSeasonSimulation; waitPostChampionship runs here.
-          frontoffice → resolve GM votes + contracts + populate FA pool, then wait until next noon ET.
-          rookie_draft→ predraft setup + live rookie picks.
+          frontoffice → resolve contracts + populate FA pool, then wait for the FA draft.
           pre_fa      → wait until top of next hour.
           fa_draft    → live FA picks.
           training    → silent player development calculations.
@@ -4956,9 +4916,9 @@ class SeasonManager:
             self._processUserSeasonTransitions()
 
         # ── PHASE: frontoffice ─────────────────────────────────
-        # Front-office decisions all resolve here, then we wait until the
-        # rookie draft kickoff target (noon ET in SCHEDULED).
-        await self._setOffseasonFlow('frontoffice', self._computeRookieDraftTarget())
+        # Front-office decisions all resolve here, then we wait for the FA
+        # draft — the next live event now that the rookie draft is gone.
+        await self._setOffseasonFlow('frontoffice', self._computeFaDraftTarget())
 
         # All five front-office sub-steps are non-idempotent (FA-year increment,
         # GM-vote resolution, coach increments, contract decrements, cut votes
@@ -5135,201 +5095,27 @@ class SeasonManager:
         if faOrderForPredraft:
             await self._runPreDraftPass(faOrderForPredraft, gmResults)
 
-        # STEP 3.80: Harvest rookie pool + broadcast it BEFORE the noon-ET wait.
-        # This populates the right-panel rookie list during the wait so users can
-        # browse prospects in advance instead of seeing an empty board until picks
-        # start. (FA retirements already ran at week GM_ACTIVE_WEEK so the FA pool
-        # was finalized before ballots — see the week-22 hook.)
-        logger.info("Step 3.80: rookie pool preview broadcast")
-        seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 1
-
-        from constants import ROOKIE_DRAFT_ENABLED as _ROOKIE_DRAFT_ON
-        rookieDraftOn = _ROOKIE_DRAFT_ON and not os.environ.get('NO_ROOKIE_DRAFT')
-        rookies = [p for p in self.playerManager.activePlayers
-                   if getattr(p, 'is_upcoming_rookie', False)]
-        if not rookies and not rookieDraftOn:
-            # PART F: an empty rookie draft is the expected steady state, NOT a
-            # fault — do not fall back to generating a class, or the intake the
-            # flag is meant to stop comes straight back in through this door.
-            logger.info("Rookie draft OFF — empty draft pool (expected)")
-        elif not rookies:
-            logger.warning(f"No upcoming rookies found for season {seasonNum} — generating now as fallback")
-            rookies = self.playerManager._generateRookieClass(seasonNum)
-            for r in rookies:
-                if r not in self.playerManager.activePlayers:
-                    self.playerManager.activePlayers.append(r)
-                self.playerManager.addToPositionList(r)
-        # Stash so the rookie_draft phase block can reuse without re-harvesting.
-        self._pendingRookiePool = rookies
-
-        if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled():
-            try:
-                # Brief gap so the predraft_complete event (just fired inside
-                # _runPreDraftPass) lands on its own React render tick before
-                # rookie_draft_start arrives — without this the two events can
-                # coalesce and rookie_draft_start's rookies array gets dropped
-                # from state alongside predraft_complete's phase reset.
-                await asyncio.sleep(0.2)
-
-                rookiePool = [
-                    {
-                        'id': getattr(r, 'id', 0),
-                        'name': r.name,
-                        'position': r.position.name,
-                        'rating': round(getattr(r, 'playerRating', 0), 1),
-                        'tier': getattr(r, 'playerTier', None).name if getattr(r, 'playerTier', None) else 'TierC',
-                    }
-                    for r in rookies
-                ]
-                await broadcaster.broadcast_season_event({
-                    'event': 'rookie_draft_start',
-                    'season': seasonNum,
-                    'totalRookies': len(rookies),
-                    'rookies': rookiePool,
-                })
-                # Mark sub-phase as 'rookie_draft' here too so a refresh
-                # during the noon-ET wait restores the rookie tab — without
-                # this, _offseasonPhase stays None until picks start, and
-                # /api/offseason returns phase=None on refresh, leaving the
-                # right panel on the FA tab during the entire wait.
-                self._offseasonPhase = 'rookie_draft'
-            except Exception as e:
-                logger.warning(f"Could not broadcast rookie_draft_start preview: {e}")
-
         # ── End of front-office phase ────────────────────────
-        # Brief breather, then wait until the rookie-draft kickoff target
-        # (noon ET in SCHEDULED mode, configurable in test modes). UI shows
-        # "Rookie Draft in Xh Ym" sourced from _offseasonFlowTarget.
+        # The rookie draft used to sit here, between the front office and free
+        # agency. There is no rookie class to draft any more, so the offseason
+        # goes straight from front-office decisions to the FA draft.
         await self.timingManager.waitForOffseason()
-        await self.timingManager.waitUntilNoonEt()
-
-        # ── PHASE: rookie_draft ─────────────────────────────
-        # Snapshot is taken on phase entry. On a partial-draft resume, the
-        # pre-init restore in run_api.py rolls the DB back to that snapshot
-        # so picks re-run from scratch without leaving half-drafted rookies.
-        await self._setOffseasonFlow('rookie_draft', None)
-
-        # STEP 4: rookie draft picks (rookies + retirements were prepared at
-        # the end of the front-office phase so the pool was visible during
-        # the wait). Ballots are collected NOW so any edits made during the
-        # wait — fans were free to revise — get picked up.
-        if self._isOffseasonStepComplete('rookie_draft'):
-            logger.info("Step 4 skipped — rookie_draft already complete")
-            self._offseasonPhase = 'rookie_draft'
-            # Skip the pick streaming + post-pick pause; advance straight to
-            # the pre-FA integrity sweep + pre_fa wait below.
-            rookies = self._pendingRookiePool or []
-        else:
-            logger.info("Step 4: Rookie draft picks streaming")
-            rookies = self._pendingRookiePool or []
-            leagueHighlights = []
-            if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
-                leagueHighlights = self.currentSeason.leagueHighlights
-
-            fanPreferences = self._collectRookieDraftBallots(seasonNum)
-            self._offseasonRookieBallotResults = dict(fanPreferences)
-            freeAgencyOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) if self.currentSeason else []
-
-            # Live pick-by-pick rookie draft — drives the same WS events the FA
-            # draft uses, so the OffseasonPanel can render the rookie phase too.
-            # Phase is tagged 'rookie_draft' on each event so the UI can distinguish
-            # rookie draft from FA draft.
-            pickGen = self.playerManager.rookieDraftPickGenerator(
-                rookies, freeAgencyOrder, leagueHighlights, fanPreferences=fanPreferences,
-            )
-
-            self._offseasonPhase = 'rookie_draft'
-            # rookie_draft_start was broadcast above (during front-office phase
-            # end) to populate the rookie pool during the wait — don't re-fire
-            # it here, that would reset state on the panel.
-
-            draftSummary = None
-            try:
-                for entry in pickGen:
-                    kind = entry.get('type')
-                    if kind == 'on_clock':
-                        if BROADCASTING_AVAILABLE and broadcaster:
-                            await broadcaster.broadcast_season_event({
-                                'event': 'rookie_draft_on_clock',
-                                'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
-                            })
-                            await self.timingManager.waitBetweenOffseasonPicks()
-                    elif kind == 'pick':
-                        if BROADCASTING_AVAILABLE and broadcaster:
-                            await broadcaster.broadcast_season_event({
-                                'event': 'rookie_draft_pick',
-                                'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
-                                'playerId': entry.get('playerId'),
-                                'player': entry['playerName'], 'position': entry['position'],
-                                'rating': entry['rating'], 'tier': entry['tier'],
-                                'source': entry.get('source', 'ai_best'),
-                            })
-                        # Persist so /api/offseason can replay the pick on refresh.
-                        self._offseasonTransactions.append({
-                            'type': 'rookie_pick',
-                            'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
-                            'playerId': entry.get('playerId'),
-                            'player': entry['playerName'], 'position': entry['position'],
-                            'rating': entry['rating'], 'tier': entry['tier'],
-                        })
-                        self._recordOffseasonEvent(
-                            'rookie_pick', teamName=entry['teamName'], teamAbbr=entry['teamAbbr'],
-                            playerId=entry.get('playerId'), playerName=entry['playerName'],
-                            position=entry['position'], rating=entry['rating'], tier=entry['tier'])
-                    elif kind == 'skip':
-                        if BROADCASTING_AVAILABLE and broadcaster:
-                            await broadcaster.broadcast_season_event({
-                                'event': 'rookie_draft_skip',
-                                'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
-                                'reason': entry.get('reason'),
-                            })
-                        # Persist so refresh shows skipped teams too.
-                        reason = entry.get('reason')
-                        skipLabel = '(pipeline full — forfeited pick)' if reason == 'pipeline_full' else '(no eligible rookies)'
-                        self._offseasonTransactions.append({
-                            'type': 'rookie_skip',
-                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
-                            'player': skipLabel, 'position': '—',
-                            'rating': 0,
-                        })
-                    elif kind == 'complete':
-                        draftSummary = entry
-                        if BROADCASTING_AVAILABLE and broadcaster:
-                            await broadcaster.broadcast_season_event({
-                                'event': 'rookie_draft_complete',
-                                'totalPicks': len(entry.get('picks', [])),
-                                'undraftedCount': len(entry.get('undrafted', [])),
-                            })
-            except Exception as e:
-                logger.warning(f"Rookie draft broadcast error (draining generator): {e}")
-                # Drain the rest so mutations still complete
-                for _ in pickGen:
-                    pass
-
-            # Brief pause so the frontend can show the rookie draft's final state
-            # before the FA phase takes over and shifts the panel's content. Skip
-            # when broadcasting is off (no human watching) or during fast-catchup.
-            if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled() \
-                    and not getattr(self.timingManager, '_isFastCatchingUp', False):
-                await asyncio.sleep(3)
-
-            self._markOffseasonStepComplete('rookie_draft')
 
         # Pre-FA integrity sweep — the draft pool must not include players
-        # who are already on a roster (rookie draft just promoted some
-        # prospects, contract-expiration paths may have left stale refs, etc.).
+        # who are already on a roster (promotions just moved some prospects up,
+        # contract-expiration paths may have left stale refs, etc.).
         # Without this, the FA draft round-robin wastes rounds skipping
         # "already rostered" picks until every offender is weeded out.
         self._validateRosterIntegrity()
 
         # ── PHASE: pre_fa ────────────────────────────────────
-        # Two-stage wait: first leave the rookie-draft results on screen
-        # for a beat (post-rookie viewing), then fire the FA preview so
+        # Two-stage wait: first leave the front-office results on screen
+        # for a beat, then fire the FA preview so
         # the team board switches to tier groupings + the FA pool with a
         # half-hour to spare before the actual draft.
         await self._setOffseasonFlow('pre_fa', self._computeFaDraftTarget())
 
-        # Stage 1 — keep rookie results visible until 30 min before FA draft.
+        # Stage 1 — keep front-office results visible until 30 min before FA draft.
         # SCHEDULED: poll until (top-of-hour − 30 min). Test modes split the
         # configured fa_draft_wait in half (post-rookie / FA-preview).
         mode = self.timingManager.mode
@@ -5379,11 +5165,11 @@ class SeasonManager:
             # the post-rookie wait can revise ballots until this fires.
             logger.info("Step 5.5: Final FA ballot resolution + window close")
 
-            # STEP 5.75: Apply fan-voted prospect promotions. Driven by the
+            # STEP 5.75: Apply prospect promotions. Driven by the
             # *final* ballot directives (just resolved above), so any post-cuts
             # ballot revisions are honored. Runs before the round-robin so
             # promoted prospects fill their slots first.
-            logger.info("Step 5.75: Apply fan-voted prospect promotions")
+            logger.info("Step 5.75: Apply prospect promotions")
             await self._applyFanVotedPromotions()
 
             # STEP 5.9: Final supply guarantee — now that FA retirements, cuts,
@@ -6940,7 +6726,7 @@ class SeasonManager:
         connected client can update its countdown without re-fetching.
 
         Using this helper everywhere keeps WS state and REST state in sync —
-        without it, transitions like rookie_draft → pre_fa stay invisible
+        without it, transitions like frontoffice → pre_fa stay invisible
         until the user manually refreshes the page.
 
         Also persists phase + target to simulation_state and snapshots the DB
@@ -7139,28 +6925,6 @@ class SeasonManager:
         except Exception as e:
             logger.debug(f"Could not snapshot DB for phase {phase}: {e}")
 
-    def _computeRookieDraftTarget(self) -> Optional[datetime.datetime]:
-        """Compute the wall-clock target for when the rookie draft will begin.
-
-        Returns:
-            SCHEDULED → next noon ET (UTC datetime).
-            OFFSEASON_TEST / TEST_SCHEDULED → now + configured 'rookie_draft_wait'
-                + 'offseason' so the countdown reflects the test-mode pre-rookie pause.
-            All other modes → None (no countdown shown — they flow through instantly).
-        """
-        from managers.timingManager import TimingManager, TimingMode
-        mode = self.timingManager.mode
-        if self.timingManager._isFastCatchingUp:
-            return None
-        if mode == TimingMode.SCHEDULED:
-            return TimingManager._nextNoonEasternUtc()
-        if mode in (TimingMode.OFFSEASON_TEST, TimingMode.TEST_SCHEDULED):
-            seconds = (self.timingManager.delays.get('offseason', 0.0)
-                       + self.timingManager.delays.get('rookie_draft_wait', 0.0))
-            if seconds <= 0:
-                return None
-            return datetime.datetime.utcnow() + datetime.timedelta(seconds=seconds)
-        return None
 
     def _computeFaDraftTarget(self) -> Optional[datetime.datetime]:
         """Compute the wall-clock target for when the FA draft will begin.
@@ -9808,65 +9572,6 @@ class SeasonManager:
         except ImportError:
             pass
 
-    def _collectRookieDraftBallots(self, season: int) -> Dict[int, List[int]]:
-        """Tally per-team fan ballots on the upcoming rookie class via RCV.
-
-        Each fan with a favorite team submits a ranked list of rookie IDs they
-        want their team to draft. Ballots are stored as GmVote rows with
-        vote_type='draft_rookie' and a JSON-encoded rankings list in details.
-        Returns {team_id: [rookieId, ...]} ordered preference lists — consumed
-        by _conductRookieDraft.
-        """
-        try:
-            import json as _json
-            from database.connection import get_session
-            from database.models import GmVote, User
-        except Exception:
-            return {}
-        preferences: Dict[int, List[int]] = {}
-        session = get_session()
-        try:
-            # Fetch all draft_rookie votes for this season with their voter's favorite team
-            rows = session.query(GmVote, User).join(
-                User, User.id == GmVote.user_id
-            ).filter(
-                GmVote.season == season,
-                GmVote.vote_type == 'draft_rookie',
-                User.favorite_team_id.isnot(None),
-            ).all()
-
-            # Collect per-team ballots: {team_id: [[rookieIds...], [rookieIds...], ...]}
-            ballotsByTeam: Dict[int, List[List[int]]] = {}
-            for vote, user in rows:
-                teamId = user.favorite_team_id
-                try:
-                    rankings = _json.loads(vote.details) if vote.details else []
-                    if isinstance(rankings, list):
-                        rankings = [int(x) for x in rankings if isinstance(x, (int, str)) and str(x).lstrip('-').isdigit()]
-                        if rankings:
-                            ballotsByTeam.setdefault(teamId, []).append(rankings)
-                except Exception:
-                    continue
-
-            # Run simple borda-count (close enough to RCV for our purposes —
-            # candidates are scored by aggregated inverse rank across ballots).
-            for teamId, ballots in ballotsByTeam.items():
-                scores: Dict[int, int] = {}
-                for ranking in ballots:
-                    for idx, rookieId in enumerate(ranking):
-                        # Higher score for higher ranking; top pick gets len*10
-                        scores[rookieId] = scores.get(rookieId, 0) + (len(ranking) - idx) * 10
-                preferences[teamId] = [
-                    rookieId for rookieId, _score in
-                    sorted(scores.items(), key=lambda x: -x[1])
-                ]
-            if preferences:
-                logger.info(f"Rookie draft: collected fan ballots for {len(preferences)} teams")
-        except Exception as e:
-            logger.warning(f"Could not collect rookie draft ballots: {e}")
-        finally:
-            session.close()
-        return preferences
 
     def _processDeferredAchievements(self) -> None:
         """Grant any deferred achievement rewards owed to users (e.g. Veteran at new season)."""

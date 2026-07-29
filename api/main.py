@@ -3202,7 +3202,7 @@ async def get_season_info(response: Response):
             nextSeasonStartTime = nextSeasonStart.isoformat() + 'Z'
 
         # Phased offseason — current top-level flow phase + ISO target time
-        # for the next phase. Phases: post_bowl, frontoffice, rookie_draft,
+        # for the next phase. Phases: post_bowl, frontoffice,
         # pre_fa, fa_draft, training. Target is set during wait gates so the
         # UI can render "<NextPhase> in Xh Ym" countdowns. Cleared during
         # active phases. (Distinct from _offseasonPhase, which the draft
@@ -6212,6 +6212,9 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
                 "position": p.position.name,
                 "rating": round(p.playerRating, 1),
                 "tier": p.playerTier.name,
+                # New to the league: no pro season played. With the rookie draft
+                # gone this is the only way in, so it's worth calling out.
+                "isNewcomer": (getattr(p, 'seasonsPlayed', 0) or 0) == 0,
             }
             for p in sorted(pm.freeAgents, key=lambda p: -p.playerRating)
             if isinstance(getattr(p, 'team', None), str)
@@ -6250,7 +6253,8 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
     # Defensive: only include players whose .team is actually 'Free Agent' (not a team object)
     faPool = [
         {"id": p.id, "name": p.name, "position": p.position.name,
-         "rating": round(p.playerRating, 1), "tier": p.playerTier.name}
+         "rating": round(p.playerRating, 1), "tier": p.playerTier.name,
+         "isNewcomer": (getattr(p, 'seasonsPlayed', 0) or 0) == 0}
         for p in pm.freeAgents
         if isinstance(getattr(p, 'team', None), str)
     ] if isOffseason else []
@@ -6317,58 +6321,6 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
     # Per-team per-position fan vote rankings (after FA ballot resolution).
     faVoteResults = getattr(sm, '_offseasonFaVoteResults', {}) or {}
 
-    # Per-team aggregated fan rookie ballot rankings (Borda-count tally),
-    # keyed by team abbr → list of ranked players with id/name/position/rating
-    # and post-draft drafted-by team info. Mirrors faVoteResults so the FO
-    # page can render the same kind of resolved-rankings panel for rookies.
-    rookieBallotResultsRaw = getattr(sm, '_offseasonRookieBallotResults', {}) or {}
-    rookieBallotResults: Dict[str, List[Dict[str, Any]]] = {}
-    if rookieBallotResultsRaw:
-        playerLookup = {p.id: p for p in pm.activePlayers}
-        teamManager = floosball_app.teamManager if floosball_app else None
-        for teamId, rankedIds in rookieBallotResultsRaw.items():
-            t = teamManager.getTeamById(teamId) if teamManager else None
-            if not t:
-                continue
-            abbr = getattr(t, 'abbr', t.name[:3].upper())
-            ranked = []
-            for pid in rankedIds:
-                pp = playerLookup.get(pid)
-                if not pp:
-                    continue
-                draftingTeamId = getattr(pp, 'drafting_team_id', None)
-                draftingAbbr = None
-                if draftingTeamId and teamManager:
-                    dt = teamManager.getTeamById(draftingTeamId)
-                    if dt:
-                        draftingAbbr = getattr(dt, 'abbr', None)
-                ranked.append({
-                    "id": pp.id, "name": pp.name,
-                    "position": pp.position.name,
-                    "rating": round(getattr(pp, 'playerRating', 0), 1),
-                    "tier": getattr(pp, 'playerTier', None).name if getattr(pp, 'playerTier', None) else None,
-                    "draftedByTeamId": draftingTeamId,
-                    "draftedByTeamAbbr": draftingAbbr,
-                })
-            if ranked:
-                rookieBallotResults[abbr] = ranked
-
-    # Upcoming rookies that haven't yet been consumed by the draft. Surfacing
-    # these on /api/offseason means a mid-draft refresh restores the right-
-    # panel rookie list — without this, refreshing during the rookie draft
-    # leaves rookies=[] and the panel reads "All prospects drafted".
-    upcomingRookies = [
-        {
-            'id': getattr(r, 'id', 0),
-            'name': r.name,
-            'position': r.position.name,
-            'rating': round(getattr(r, 'playerRating', 0), 1),
-            'tier': getattr(r, 'playerTier', None).name if getattr(r, 'playerTier', None) else 'TierC',
-        }
-        for r in pm.activePlayers
-        if getattr(r, 'is_upcoming_rookie', False)
-    ]
-
     return {
         "isOffseason": isOffseason, "freeAgents": faList, "draftOrder": draftOrder,
         "transactions": transactions, "faWindowOpen": faWindowOpen,
@@ -6379,8 +6331,7 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         "gmResolutions": gmResolutions,
         "faVoteResults": faVoteResults,
         "faPositionPriority": getattr(sm, '_offseasonFaPositionPriority', {}) or {},
-        "rookieBallotResults": rookieBallotResults,
-        "rookies": upcomingRookies,
+        "rookies": [],   # no rookie draft; kept so older clients still parse
         "phase": phase,
         "draftComplete": draftComplete,
     }
@@ -10778,69 +10729,6 @@ class GmFaBallotRequest(BaseModel):
     positionPriority: Optional[List[int]] = None
 
 
-@app.get("/api/rookies/upcoming")
-def get_upcoming_rookies(user: Optional[_User] = Depends(_getOptionalUser)):
-    """The season's rookie class, with scouting-blurred potentials.
-
-    Generated at season start, visible all season. Potentials are revealed
-    according to the viewer's favorite team's effective scouting (coach
-    scouting + funding tier bonus). Unauthenticated visitors get the widest
-    blur band.
-    """
-    if floosball_app is None:
-        raise HTTPException(503, "Application not initialized")
-    from constants import GM_ACTIVE_WEEK
-    pm = floosball_app.playerManager
-    sm = floosball_app.seasonManager
-    tm = floosball_app.teamManager
-
-    upcoming = [p for p in pm.activePlayers if getattr(p, 'is_upcoming_rookie', False)]
-
-    # Determine viewer's effective scouting
-    effectiveScouting = 60  # default: worst-band blur
-    scoutTeam = None
-    if user and getattr(user, 'favorite_team_id', None):
-        scoutTeam = tm.getTeamById(user.favorite_team_id) if tm else None
-        if scoutTeam:
-            coachScouting = getattr(getattr(scoutTeam, 'coach', None), 'scouting', 80) or 80
-            # Scouting Department level (Markets→Facilities) replaces the old
-            # market-tier scouting bonus; migrated levels reproduce the tier perk.
-            tierBonus = scoutTeam.facilityEffect('scouting_bonus') if hasattr(scoutTeam, 'facilityEffect') else 0
-            effectiveScouting = max(0, min(100, coachScouting + tierBonus))
-
-    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
-    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-
-    rookies = [pm.scoutRookie(r, effectiveScouting) for r in upcoming]
-    rookies.sort(key=lambda r: (-r['rating'], r['position'], r['name']))
-
-    # Voting window matches the submit endpoint exactly:
-    #   Opens when Front Office opens (week >= GM_ACTIVE_WEEK) OR the season
-    #   is complete (covers the 15+ hour post_bowl + frontoffice gap when
-    #   currentWeek resets to 0 but the user can still legitimately vote).
-    #   Closes the moment the rookie draft phase actually begins.
-    # The previous gate of `currentWeek >= GM_ACTIVE_WEEK` alone silently
-    # closed the UI at offseason start (currentWeek=0) even though the
-    # backend submit would still accept ballots.
-    flowPhase = getattr(sm, '_offseasonFlowPhase', None)
-    seasonComplete = getattr(sm.currentSeason, 'isComplete', False) if sm and sm.currentSeason else False
-    weekOpen = isinstance(currentWeek, int) and currentWeek >= GM_ACTIVE_WEEK
-    draftStartedOrLater = flowPhase in ('rookie_draft', 'pre_fa', 'fa_draft', 'training')
-    votingOpen = (seasonComplete or weekOpen) and not draftStartedOrLater
-
-    return build_success_response({
-        "season": seasonNumber,
-        "currentWeek": currentWeek,
-        "votingOpensWeek": GM_ACTIVE_WEEK,
-        "votingOpen": votingOpen,
-        "effectiveScouting": effectiveScouting,
-        "scoutingTeamId": scoutTeam.id if scoutTeam else None,
-        "rookies": rookies,
-    })
-
-
-class RookieBallotRequest(BaseModel):
-    rankings: List[int]
 
 
 # ============================================================================

@@ -571,23 +571,31 @@ class PlayerManager:
         if prospectCount > 0:
             logger.info(f"Restored {prospectCount} prospects to team pipelines")
 
-        # Upcoming rookies are visible for scouting but not on any team — skip
-        # all rostering/FA logic for them. Their player.team stays 'Upcoming Rookie'.
+        # Upcoming rookies used to sit out here — visible for scouting, on no
+        # roster and deliberately kept OUT of the FA pool, because the rookie
+        # draft was the one thing that cleared the flag (drafted -> prospect,
+        # undrafted -> free agent). With the draft gone that door is closed, so
+        # a DB carrying a rookie class would strand those players forever:
+        # never rostered, never signable, invisible to the sim but still taking
+        # up space in the pool. Release them into free agency instead, which is
+        # exactly what the draft did with everyone it didn't take.
+        # Self-healing and idempotent — once drained the loop finds nobody.
         upcomingCount = 0
         for player in self.activePlayers:
             if getattr(player, 'is_upcoming_rookie', False):
-                player.team = 'Upcoming Rookie'
+                player.is_upcoming_rookie = False
+                player.is_undrafted = True
+                player.freeAgentYears = 0
+                player.team = None      # picked up as a free agent just below
                 upcomingCount += 1
         if upcomingCount > 0:
-            logger.info(f"Skipped {upcomingCount} upcoming rookies from roster/FA assignment")
+            logger.info(f"Released {upcomingCount} upcoming rookie(s) into the FA "
+                        f"pool — the rookie draft that used to place them is gone")
 
         faCount = 0
         for player in self.activePlayers:
             # Prospects are handled above; don't try to roster them
             if getattr(player, 'is_prospect', False):
-                continue
-            # Upcoming rookies are pre-draft — not rostered, not in FA pool
-            if getattr(player, 'is_upcoming_rookie', False):
                 continue
             if not hasattr(player, 'team') or player.team is None:
                 # Player has no team — mark as free agent
@@ -3092,7 +3100,10 @@ class PlayerManager:
         # Snapshot full pre-signing pool so REST endpoint can serve it during broadcast replay
         self._freeAgentSnapshot = sorted(
             [{"name": p.name, "position": p.position.name,
-              "rating": round(p.playerRating, 1), "tier": p.playerTier.name}
+              "rating": round(p.playerRating, 1), "tier": p.playerTier.name,
+              # Never played a pro game — the supply trickle that replaced the
+              # rookie draft, so fans can tell fresh blood from a journeyman.
+              "isNewcomer": (getattr(p, 'seasonsPlayed', 0) or 0) == 0}
              for p in self.freeAgents],
             key=lambda p: -p["rating"]
         )
@@ -3910,60 +3921,6 @@ class PlayerManager:
 
     # ── Prospect Pipeline: rookie class generation + draft ──────────────
 
-    def _generateRookieClass(self, currentSeason: int) -> List:
-        """Generate a fresh rookie class of ROOKIE_DRAFT_CLASS_SIZE players.
-
-        Returns the list of new rookies (not yet added to freeAgents or
-        activePlayers). Position distribution matches roster shape:
-        QB/RB/TE/K weighted 1x, WR weighted 2x (teams start 2 WRs).
-        Replaces the old _generateReplacementPlayers flow for the normal
-        rookie class — retirement-driven replacements are no longer needed
-        because 24 rookies > typical league-wide retirements.
-        """
-        import numpy as np
-        from random import randint
-        from constants import ROOKIE_DRAFT_CLASS_SIZE, GEN_TRUESKILL_MEAN, GEN_TRUESKILL_STD
-
-        numRookies = ROOKIE_DRAFT_CLASS_SIZE
-        # The generated seed is the rookie's TRUE SKILL (mature target); they
-        # debut below it via the entry discount below. Parity distribution.
-        meanSkill = GEN_TRUESKILL_MEAN
-        stdDev = GEN_TRUESKILL_STD
-        physicalSeeds = np.clip(np.random.normal(meanSkill, stdDev, numRookies), 60, 100).tolist()
-        mentalSeeds = np.clip(np.random.normal(meanSkill, stdDev, numRookies), 60, 100).tolist()
-
-        # Position weights match roster shape (WR x2 because teams start 2)
-        positionWeights = {
-            FloosPlayer.Position.QB: 1,
-            FloosPlayer.Position.RB: 1,
-            FloosPlayer.Position.WR: 2,
-            FloosPlayer.Position.TE: 1,
-            FloosPlayer.Position.K: 1,
-        }
-        weightedPosList = []
-        for pos, weight in positionWeights.items():
-            weightedPosList.extend([pos] * weight)
-
-        nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
-        rookies = []
-        for i in range(numRookies):
-            physicalSeed = int(physicalSeeds[i])
-            mentalSeed = int(mentalSeeds[i])
-            pos = weightedPosList[randint(0, len(weightedPosList) - 1)]
-            player = self.createPlayer(pos, physicalSeed, mentalSeed)
-            if not player:
-                continue
-            player.id = nextPlayerId
-            nextPlayerId += 1
-            # Rookie flags — not in FA pool yet; drafted into prospects or placed into FA below
-            player.seasonsPlayed = 0
-            player.team = 'Unsigned'
-            # Debut below true skill; the dev arc grows them into it.
-            from constants import PROSPECT_ENTRY_DISCOUNT
-            player.applyEntryDiscount(PROSPECT_ENTRY_DISCOUNT)
-            rookies.append(player)
-        logger.info(f"Generated rookie class of {len(rookies)} for season {currentSeason}")
-        return rookies
 
     def parityStarFraction(self) -> float:
         """Fraction of the non-retired pool at 4-5-star (rating >= 84). Used to
@@ -4085,180 +4042,7 @@ class PlayerManager:
         from constants import PROSPECT_SLOT_CAP_PER_POSITION
         return self.countTeamProspectsAtPosition(team, position) < PROSPECT_SLOT_CAP_PER_POSITION
 
-    def rookieDraftPickGenerator(self, rookies: List, draftOrder: List,
-                                 leagueHighlights: list = None,
-                                 fanPreferences: Optional[Dict[int, List[int]]] = None):
-        """Generator-based rookie draft — yields one event at a time for live
-        broadcasting, mirroring freeAgencyPickGenerator.
 
-        Yields dicts with 'type' key: 'on_clock', 'pick', 'skip', 'complete'.
-        Roster mutations happen in-place as each pick is yielded, so backend
-        state is always current. Seasonmanager drives this with per-pick
-        broadcasts + timing delays.
-        """
-        picks = []
-        available = list(rookies)
-        rookiesById = {r.id: r for r in rookies}
-        fanPreferences = fanPreferences or {}
-
-        for team in draftOrder:
-            teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
-            if not available:
-                break
-
-            openPositions = [
-                pos for pos in (FloosPlayer.Position.QB, FloosPlayer.Position.RB,
-                                FloosPlayer.Position.WR, FloosPlayer.Position.TE,
-                                FloosPlayer.Position.K)
-                if self.hasOpenProspectSlot(team, pos)
-            ]
-            if not openPositions:
-                logger.info(f"Rookie draft: {team.name} skipped (all prospect slots full)")
-                yield {'type': 'skip', 'team': team.name, 'teamAbbr': teamAbbr,
-                       'reason': 'pipeline_full'}
-                continue
-            eligibleSet = {r.id for r in available if r.position in openPositions}
-            if not eligibleSet:
-                logger.info(f"Rookie draft: {team.name} passed (no rookies at open positions)")
-                yield {'type': 'skip', 'team': team.name, 'teamAbbr': teamAbbr,
-                       'reason': 'no_eligible_rookies'}
-                continue
-
-            yield {'type': 'on_clock', 'team': team.name, 'teamAbbr': teamAbbr}
-
-            pick = None
-            pickSource = 'ai_best'
-            for rookieId in fanPreferences.get(team.id, []):
-                if rookieId in eligibleSet:
-                    pick = rookiesById.get(rookieId)
-                    if pick is not None:
-                        pickSource = 'fan_vote'
-                        break
-            if pick is None:
-                eligible = [r for r in available if r.id in eligibleSet]
-                def pickScore(rookie):
-                    prospectsHere = self.countTeamProspectsAtPosition(team, rookie.position)
-                    return (rookie.playerRating, -prospectsHere)
-                pick = max(eligible, key=pickScore)
-            available.remove(pick)
-
-            pick.is_prospect = True
-            pick.is_upcoming_rookie = False
-            pick.drafting_team_id = team.id
-            pick.prospect_seasons = 0
-            pick.team = 'Prospect'
-            team.prospects.append(pick)
-            if pick not in self.activePlayers:
-                self.activePlayers.append(pick)
-            self.addToPositionList(pick)
-            # Assign jersey number now so promoted prospects don't show #0.
-            team.assignPlayerNumber(pick)
-
-            pickRecord = {
-                "teamId": team.id, "teamName": team.name, "teamAbbr": teamAbbr,
-                "playerId": pick.id, "playerName": pick.name,
-                "position": pick.position.name,
-                "rating": round(pick.playerRating, 1),
-                "tier": pick.playerTier.name,
-                "source": pickSource,
-            }
-            picks.append(pickRecord)
-
-            if leagueHighlights is not None:
-                voteNote = ' by fan vote' if pickSource == 'fan_vote' else ''
-                leagueHighlights.insert(0, {
-                    'event': {'text': f"{team.name} drafted {pick.name} ({pick.position.name}, {pick.playerTier.name}){voteNote}"}
-                })
-
-            yield {'type': 'pick', **pickRecord}
-
-        # Anything left → FA pool as undrafted rookies
-        undrafted = []
-        for rookie in available:
-            rookie.is_upcoming_rookie = False
-            rookie.is_undrafted = True
-            rookie.team = 'Free Agent'
-            rookie.freeAgentYears = 0
-            if rookie not in self.freeAgents:
-                self.freeAgents.append(rookie)
-            if rookie not in self.activePlayers:
-                self.activePlayers.append(rookie)
-            self.addToPositionList(rookie)
-            undrafted.append(rookie.id)
-
-        self.sortPlayersByPosition()
-        voteDrafted = sum(1 for p in picks if p.get('source') == 'fan_vote')
-        logger.info(
-            f"Rookie draft complete: {len(picks)} drafted ({voteDrafted} via fan vote), "
-            f"{len(undrafted)} undrafted to FA"
-        )
-        yield {'type': 'complete', 'picks': picks, 'undrafted': undrafted}
-        return {"picks": picks, "undrafted": undrafted}
-
-    def scoutRookie(self, rookie, effectiveScouting: int) -> dict:
-        """Build the fan-facing scouting payload for a single upcoming rookie.
-
-        Current rating is always exact — it's what they are right now. Potential
-        attributes are blurred into ±range based on effective scouting (coach
-        scouting + funding tier bonus). Higher scouting = tighter range.
-
-        The range center is shifted by a deterministic-but-unguessable
-        per-attribute offset so the midpoint of [low, high] doesn't trivially
-        reveal the true potential. Offset is bounded to keep the true value
-        inside the displayed range.
-        """
-        from constants import SCOUTING_BANDS
-        import hashlib as _hashlib
-        # Pick the range size from the band table
-        rangeSize = 15
-        for threshold, size in SCOUTING_BANDS:
-            if effectiveScouting >= threshold:
-                rangeSize = size
-                break
-
-        def blur(exact: int, attrName: str) -> dict:
-            if exact is None:
-                return {"low": None, "high": None, "exact": None}
-            if rangeSize == 0:
-                return {"low": exact, "high": exact, "exact": exact}
-            # Deterministic per-(player, attribute) offset within ±rangeSize/2
-            # so the midpoint is shifted but the true value remains inside
-            # the range. Stable across refreshes — users can't average out
-            # the noise by polling.
-            seed = int(_hashlib.md5(
-                f"scout:{rookie.id}:{attrName}".encode()
-            ).hexdigest()[:8], 16)
-            half = rangeSize // 2
-            offset = (seed % (2 * half + 1)) - half if half > 0 else 0
-            center = exact + offset
-            low = max(60, center - rangeSize)
-            high = min(100, center + rangeSize)
-            return {"low": low, "high": high, "exact": None}
-
-        attrs = getattr(rookie, 'attributes', None)
-        # Headline projections are OVERALL ratings (not per-attribute): 'expected' =
-        # overall at trueSkill (natural development), 'ceiling' = overall at potential
-        # (perfect development). Each blurred by scouting confidence. These are the
-        # single source of truth shared with the profile's Expected/Ceiling markers.
-        expExact = ceilExact = None
-        try:
-            expExact = rookie.computeExpectedRating()
-            ceilExact = rookie.computeCeilingRating()
-        except Exception:
-            expExact = ceilExact = None
-
-        return {
-            "playerId": rookie.id,
-            "name": rookie.name,
-            "position": rookie.position.name,
-            "rating": round(rookie.playerRating, 1),
-            "tier": rookie.playerTier.name if hasattr(rookie, 'playerTier') else None,
-            "longevity": getattr(attrs, 'longevity', None) if attrs else None,
-            "projectedExpected": blur(expExact, 'overallExpected') if expExact else None,
-            "projectedCeiling": blur(ceilExact, 'overallCeiling') if ceilExact else None,
-            "scoutingAccuracy": effectiveScouting,
-            "scoutingRange": rangeSize,
-        }
 
 
     def snapshotRatingsForSeason(self, season: int) -> int:
