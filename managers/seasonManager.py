@@ -4916,9 +4916,10 @@ class SeasonManager:
             self._processUserSeasonTransitions()
 
         # ── PHASE: frontoffice ─────────────────────────────────
-        # Front-office decisions all resolve here, then we wait for the FA
-        # draft — the next live event now that the rookie draft is gone.
-        await self._setOffseasonFlow('frontoffice', self._computeFaDraftTarget())
+        # Front-office decisions all resolve here, then we hold until draft
+        # day — free agency is the next live event now that the rookie draft
+        # is gone, and it keeps the same next-day noon ET slot.
+        await self._setOffseasonFlow('frontoffice', self._computeDraftDayTarget())
 
         # All five front-office sub-steps are non-idempotent (FA-year increment,
         # GM-vote resolution, coach increments, contract decrements, cut votes
@@ -5098,8 +5099,12 @@ class SeasonManager:
         # ── End of front-office phase ────────────────────────
         # The rookie draft used to sit here, between the front office and free
         # agency. There is no rookie class to draft any more, so the offseason
-        # goes straight from front-office decisions to the FA draft.
+        # goes straight from front-office decisions to the FA draft — but it
+        # still HOLDS for draft day first. Dropping that hold with the phase
+        # would have pulled free agency to the next top of the hour, i.e. an
+        # hour after the Floos Bowl, overnight.
         await self.timingManager.waitForOffseason()
+        await self.timingManager.waitUntilNoonEt()
 
         # Pre-FA integrity sweep — the draft pool must not include players
         # who are already on a roster (promotions just moved some prospects up,
@@ -6925,6 +6930,34 @@ class SeasonManager:
         except Exception as e:
             logger.debug(f"Could not snapshot DB for phase {phase}: {e}")
 
+
+    def _computeDraftDayTarget(self) -> Optional[datetime.datetime]:
+        """Wall-clock target for draft day — noon ET the day after the Floos Bowl.
+
+        The offseason holds here so free agency runs at a predictable hour with
+        people watching. This used to anchor the rookie draft; with that gone
+        the FA draft inherits the slot. Without this the front office would run
+        straight into the next top of the hour and free agency would resolve an
+        hour after the final, overnight.
+
+        Returns:
+            SCHEDULED → next noon ET (UTC datetime).
+            OFFSEASON_TEST / TEST_SCHEDULED → now + 'offseason' + 'draft_day_wait'.
+            All other modes → None (no countdown — they flow through instantly).
+        """
+        from managers.timingManager import TimingManager, TimingMode
+        mode = self.timingManager.mode
+        if self.timingManager._isFastCatchingUp:
+            return None
+        if mode == TimingMode.SCHEDULED:
+            return TimingManager._nextNoonEasternUtc()
+        if mode in (TimingMode.OFFSEASON_TEST, TimingMode.TEST_SCHEDULED):
+            seconds = (self.timingManager.delays.get('offseason', 0.0)
+                       + self.timingManager.delays.get('draft_day_wait', 0.0))
+            if seconds <= 0:
+                return None
+            return datetime.datetime.utcnow() + datetime.timedelta(seconds=seconds)
+        return None
 
     def _computeFaDraftTarget(self) -> Optional[datetime.datetime]:
         """Compute the wall-clock target for when the FA draft will begin.
