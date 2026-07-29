@@ -958,7 +958,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "high_roller": "+{perCardMult} FPx per chance card that triggered enhanced bonuses this week",
     "fortitude": "+{perCardMult} FPx per active streak card in your hand",
     # ── Escalating / Pace Effects ──
-    "crescendo": "+{baseFP} FP guaranteed. {baseChance}% chance at {bonusFP} FP on this player's first TD, chance increases by +{chanceStep}% if bonus doesn't trigger.",
+    "crescendo": "+{baseFP} FP guaranteed. {baseChance}% chance at {bonusFP} FP on this player's first {scoreNoun}, chance increases by +{chanceStep}% if bonus doesn't trigger.",
     "eminence": "+{perPlayerMult} FPx per roster player ranked top-10 at their position. Max +{maxDelta} FPx. Active from week 3.",
     "traverse": "+{baseFP} FP floor + {bonusFP} FP jackpot. Jackpot chance starts at {baseChance}%, +{chancePerStep}% per {yardStep} {yardType} yards",
     # ── Chance Synergy Effects ──
@@ -2075,10 +2075,14 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     primary["posLabel"] = POSITION_LABELS.get(position, "??")
 
     # Position-specific param overrides for effects with per-position tuning
-    if effectName == "crescendo" and position in _CRESCENDO_POSITION_TUNING:
-        baseChance, chanceStep = _CRESCENDO_POSITION_TUNING[position]
-        primary["baseChance"] = baseChance
-        primary["chanceStep"] = chanceStep
+    if effectName == "crescendo":
+        if position in _CRESCENDO_POSITION_TUNING:
+            baseChance, chanceStep = _CRESCENDO_POSITION_TUNING[position]
+            primary["baseChance"] = baseChance
+            primary["chanceStep"] = chanceStep
+        # Kickers escalate on FIELD GOALS, not TDs (the compute path already does; the detail
+        # text must say so too, or a K-Crescendo card reads "first TD" and never fires on it).
+        primary["scoreNoun"] = "FG" if position == 5 else "TD"
     if effectName == "traverse" and position in _TRAVERSE_POSITION_TUNING:
         yardStep, chancePerStep, yardType = _TRAVERSE_POSITION_TUNING[position]
         primary["yardStep"] = yardStep
