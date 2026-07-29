@@ -867,6 +867,9 @@ class FantasyTracker:
                     # (fixes stale stored data from older computations)
                     from managers.cardEffects import _deriveOutputType as _reDeriveOT, EFFECT_CATEGORY as _EC
                     for bd in cardBreakdowns:
+                        # Banked bonus = the week is settled, so chance rolls are RESOLVED
+                        # (chanceTriggered now definitively means Triggered vs Missed).
+                        bd["chanceResolved"] = True
                         eName = bd.get("effectName", "")
                         if eName:
                             cat = bd.get("category") or _EC.get(eName, "flat_fp")
@@ -1651,6 +1654,11 @@ class FantasyTracker:
             "chanceRoll": b.chanceRoll,
             "chanceThreshold": b.chanceThreshold,
             "chanceTriggered": b.chanceTriggered,
+            # A freshly-computed breakdown is a LIVE view: the roll resolves at week end,
+            # so it's still PENDING (chanceTriggered=False here means "not yet rolled", NOT
+            # "missed"). The banked/stored path flips this True once the week is settled, so
+            # the UI can show pending vs Triggered/Missed instead of a premature "Missed".
+            "chanceResolved": False,
             "streakActive": b.streakActive,
             "streakCount": b.streakCount,
             "gateActive": b.gateActive,
