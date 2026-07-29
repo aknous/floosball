@@ -1388,6 +1388,7 @@ class TeamManager:
             dbCoach.player_development = team.coach.playerDevelopment
             dbCoach.scouting = getattr(team.coach, 'scouting', 80)
             dbCoach.attitude = getattr(team.coach, 'attitude', 80)
+            dbCoach.fan_trust = getattr(team.coach, 'fanTrust', 80)
             dbCoach.overall_rating = team.coach.overallRating
             if isNew:
                 targetSession.add(dbCoach)
@@ -1440,6 +1441,7 @@ class TeamManager:
             coach.playerDevelopment = dbCoach.player_development
             coach.scouting = getattr(dbCoach, 'scouting', 80) or 80
             coach.attitude = getattr(dbCoach, 'attitude', 80) or 80
+            coach.fanTrust = getattr(dbCoach, 'fan_trust', 80) or 80
             team.coach = coach
             # Remove coach name from the LIVE unused-names pool so no future
             # player gets it. Goes through _liveCoachPool to read whatever
@@ -1505,7 +1507,13 @@ class TeamManager:
             )
 
     def handleCoachRetirement(self, season: int) -> None:
-        """Increment seasonsCoached, then check each coach for retirement.
+        """Increment seasonsCoached, then resolve GM turnover for every team.
+
+        Three sim-decided exits (plan Part C): RETIRE (the tenure curve, and it
+        takes precedence), FIRED (poor record, softened by tenure grace and
+        locker-room goodwill), and LEFT (voluntary). Each rolls the same
+        replacement gamble. Fan sentiment feeds fire/leave once Part D lands;
+        until then those terms are neutral.
 
         On retirement, the old Coach DB row is deleted before the new
         coach is generated and saved. Without this, the retired coach's
@@ -1513,16 +1521,49 @@ class TeamManager:
         second row with the same team_id, and _loadCoachFromDatabase's
         .first() query can resurrect the retired coach on the next boot.
         """
+        from managers.gmTurnover import GmTurnover, EXIT_FIRED
+        turnover = GmTurnover()
+        exits = {'retired': 0, 'fired': 0, 'left': 0}
+
+        # GM heat comes from fans' like/dislike of the GM — one considered
+        # stance per fan, rather than the rate-limited post spam an earlier
+        # version read. Negative = hostile fanbase. Loaded once for the league.
+        gmHeat = {}
+        try:
+            if self.db_session is not None:
+                from database.repositories.sentiment_repository import CoachSentimentRepository
+                gmHeat = CoachSentimentRepository(self.db_session).getStandingMap()
+        except Exception as e:
+            self.logger.warning(f"GM turnover: fan standing unavailable, running neutral: {e}")
+        if gmHeat:
+            self.logger.info(f"GM turnover: fan heat on {len(gmHeat)} team(s)")
+
         for team in self.teams:
             if team.coach:
                 team.coach.seasonsCoached += 1
+
+            # Retirement takes precedence — a GM going out on their own terms
+            # isn't also fired. Then roll the sim-decided exits (plan Part C).
+            exitKind = None
             if team.coach and team.coach.shouldRetire():
+                exitKind = 'retired'
+            elif team.coach:
+                rolled = turnover.evaluateExit(
+                    team, team.coach,
+                    sentiment=gmHeat.get(getattr(team.coach, 'id', None), 0.0))
+                if rolled:
+                    exitKind = 'fired' if rolled == EXIT_FIRED else 'left'
+                    self.logger.info(turnover.describeExit(rolled, team.coach, team))
+
+            if exitKind:
+                exits[exitKind] += 1
                 retiringName = team.coach.name
                 retiringSeasons = team.coach.seasonsCoached
                 retiringId = getattr(team.coach, 'id', None)
-                self.logger.info(
-                    f"{retiringName} retires after {retiringSeasons} seasons with {team.name}"
-                )
+                if exitKind == 'retired':
+                    self.logger.info(
+                        f"{retiringName} retires after {retiringSeasons} seasons with {team.name}"
+                    )
                 # Drop the retired coach's DB row so it can't be re-linked
                 # via team_id and can't pollute the unassigned coach pool.
                 if (DATABASE_AVAILABLE and USE_DATABASE and self.db_session
@@ -1538,9 +1579,17 @@ class TeamManager:
                             f"handleCoachRetirement: failed to delete retired "
                             f"coach {retiringName} (id={retiringId}): {e}"
                         )
+                # The replacement gamble. Specialists (Part B) mean the new GM
+                # is better-or-worse PER DIMENSION, not simply up or down.
                 team.coach = self.generateCoach()
                 self._saveCoachToDatabase(team)
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")
+
+        total = sum(exits.values())
+        if total:
+            self.logger.info(
+                f"GM turnover: {total} change(s) — {exits['retired']} retired, "
+                f"{exits['fired']} fired, {exits['left']} stepped down")
 
     def generateCoachPool(self, count: int = 12) -> None:
         """Top up the unassigned coach pool to `count` entries.
@@ -1579,6 +1628,7 @@ class TeamManager:
                     player_development=coach.playerDevelopment,
                     scouting=getattr(coach, 'scouting', 80),
                     attitude=getattr(coach, 'attitude', 80),
+                    fan_trust=getattr(coach, 'fanTrust', 80),
                     overall_rating=coach.overallRating,
                 )
                 self.db_session.add(dbCoach)
@@ -1660,6 +1710,7 @@ class TeamManager:
                 player_development=coach.playerDevelopment,
                 scouting=getattr(coach, 'scouting', 80),
                 attitude=getattr(coach, 'attitude', 80),
+                fan_trust=getattr(coach, 'fanTrust', 80),
                 overall_rating=coach.overallRating,
             )
             targetSession.add(dbCoach)
@@ -1787,6 +1838,7 @@ class TeamManager:
         coach.playerDevelopment = dbCoach.player_development
         coach.scouting = getattr(dbCoach, 'scouting', 80) or 80
         coach.attitude = getattr(dbCoach, 'attitude', 80) or 80
+        coach.fanTrust = getattr(dbCoach, 'fan_trust', 80) or 80
         team.coach = coach
         # Single write — point the team at the new coach.
         dbTeam = targetSession.get(DBTeam, team.id)

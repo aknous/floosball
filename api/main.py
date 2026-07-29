@@ -463,19 +463,26 @@ def _buildCoachDict(team) -> Optional[dict]:
     coach = getattr(team, 'coach', None)
     if coach is None:
         return None
+    # Coach/GM RATING NUMBERS ARE NOT SURFACED (owner, plan Part B). A GM reads
+    # as archetypes: headline tags plus per-attribute qualitative bands, both
+    # derived server-side in `profile`. Do not re-add raw attribute values or
+    # `overallRating` — the aggregate is central-limit noise for specialists,
+    # and the individual numbers invite a stat-line reading of a character.
     return {
         'name': coach.name,
-        'overallRating': coach.overallRating,
-        'offensiveMind': coach.offensiveMind,
-        'defensiveMind': coach.defensiveMind,
-        'adaptability': coach.adaptability,
-        'aggressiveness': coach.aggressiveness,
-        'clockManagement': coach.clockManagement,
-        'playerDevelopment': coach.playerDevelopment,
-        'scouting': getattr(coach, 'scouting', 80),
-        'attitude': getattr(coach, 'attitude', 80),
+        'profile': coach.profile() if hasattr(coach, 'profile') else None,
         'seasonsCoached': coach.seasonsCoached,
     }
+
+
+def _coachProfileFromRow(row):
+    """Scouting report for a raw `coaches` DB row. Shares the derivation with
+    the live Coach object so the hire slate and the roster view can't drift."""
+    try:
+        from floosball_coach import profileFromDbRow
+        return profileFromDbRow(row)
+    except Exception:
+        return None
 
 
 @app.get("/api/teams", response_model=Dict[str, Any])
@@ -11095,15 +11102,9 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
             coachInfo = {
                 "id": getattr(c, 'id', None),
                 "name": c.name,
-                "overallRating": c.overallRating,
-                "offensiveMind": c.offensiveMind,
-                "defensiveMind": c.defensiveMind,
-                "adaptability": c.adaptability,
-                "aggressiveness": c.aggressiveness,
-                "clockManagement": c.clockManagement,
-                "playerDevelopment": c.playerDevelopment,
-                "scouting": getattr(c, 'scouting', 80),
-                "attitude": getattr(c, 'attitude', 80),
+                # Archetypes only — no rating numbers (plan Part B).
+                "profile": c.profile() if hasattr(c, 'profile') else None,
+                "seasonsCoached": getattr(c, 'seasonsCoached', 0),
             }
 
         # Per-team coach candidates (per-team hiring rework).
@@ -11156,15 +11157,9 @@ def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser))
                     "id": c.id,
                     "slot": cand.slot,
                     "name": c.name,
-                    "overallRating": c.overall_rating,
-                    "offensiveMind": c.offensive_mind,
-                    "defensiveMind": c.defensive_mind,
-                    "adaptability": c.adaptability,
-                    "aggressiveness": c.aggressiveness,
-                    "clockManagement": c.clock_management,
-                    "playerDevelopment": c.player_development,
-                    "scouting": getattr(c, 'scouting', 80),
-                    "attitude": getattr(c, 'attitude', 80),
+                    # Archetypes only — no rating numbers (plan Part B). Fans
+                    # pick a GM on character, not on a stat line.
+                    "profile": _coachProfileFromRow(c),
                 })
 
         # Rostered players (for cut votes — all players eligible)
@@ -12282,6 +12277,436 @@ def cast_mvp_vote(req: _MvpVoteRequest, user: _User = Depends(_getCurrentUser)):
             "season": season,
             "myVote": req.playerId,
             "tally": am.voteRepo.getTally(season, 'mvp'),
+        })
+    finally:
+        session.close()
+
+
+# ── Fan sentiment (AFO plan Part D) ───────────────────────────────────────────
+# Fans rate players 1-5. This binds NOTHING — it expresses how a fan feels, and
+# the sim's GM weighs it in proportion to their own fanTrust. Free to cast.
+
+
+class _SentimentRatingRequest(BaseModel):
+    rating: int   # 1..5
+
+
+def _sentimentRepo(session):
+    from database.repositories.sentiment_repository import SentimentRepository
+    return SentimentRepository(session)
+
+
+@app.post("/api/players/{playerId}/rating")
+def set_player_sentiment(playerId: int, req: _SentimentRatingRequest,
+                         user: _User = Depends(_getCurrentUser)):
+    """Cast or change this fan's standing 1-5 rating of a player.
+
+    Net one per fan per player — re-rating replaces, it does not stack.
+    """
+    from constants import SENTIMENT_ENABLED
+    if not SENTIMENT_ENABLED:
+        raise HTTPException(400, "Player ratings are not enabled")
+    from database.connection import get_session
+    session = get_session()
+    try:
+        _requireOwnClub(user, _playerTeamId(playerId))
+        repo = _sentimentRepo(session)
+        try:
+            repo.setRating(user.id, playerId, req.rating)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+        # Your rating shows up in the feed in your own voice. Display only —
+        # the rating already counts as sentiment, so the post never feeds the
+        # model again. Re-rating replaces the previous post.
+        try:
+            from constants import FEED_ENABLED
+            if FEED_ENABLED:
+                teamId = _playerTeamId(playerId)
+                if teamId:
+                    from database.repositories.feed_repository import FeedRepository
+                    FeedRepository(session).autoPostForRating(
+                        user.id, teamId, playerId, req.rating)
+        except Exception:
+            pass   # the feed echo must never fail the rating itself
+        session.commit()
+        average, raters = repo.getAggregate(playerId)
+        # The quorum scales with the engaged fanbase, so a busier league needs
+        # more turnout before a number is trustworthy. Below it the aggregate is
+        # withheld — showing it invites brigading a figure one or two people set.
+        need = repo.requiredRaters()
+        return build_success_response({
+            "playerId": playerId,
+            "myRating": req.rating,
+            "average": round(average, 2) if raters >= need else None,
+            "raters": raters,
+            "ratersNeeded": max(0, need - raters),
+            "ratersRequired": need,
+        })
+    finally:
+        session.close()
+
+
+@app.delete("/api/players/{playerId}/rating")
+def clear_player_sentiment(playerId: int, user: _User = Depends(_getCurrentUser)):
+    """Withdraw this fan's rating of a player."""
+    from database.connection import get_session
+    _requireOwnClub(user, _playerTeamId(playerId))
+    session = get_session()
+    try:
+        repo = _sentimentRepo(session)
+        removed = repo.clearRating(user.id, playerId)
+        session.commit()
+        average, raters = repo.getAggregate(playerId)
+        return build_success_response({
+            "playerId": playerId, "removed": removed, "raters": raters,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/players/{playerId}/rating")
+def get_player_sentiment(playerId: int, user: Optional[_User] = Depends(_getOptionalUser)):
+    """This player's fan standing, plus the viewer's own rating if signed in."""
+    from database.connection import get_session
+    session = get_session()
+    try:
+        repo = _sentimentRepo(session)
+        average, raters = repo.getAggregate(playerId)
+        need = repo.requiredRaters()
+        settled = raters >= need
+        return build_success_response({
+            "playerId": playerId,
+            "myRating": repo.getUserRating(user.id, playerId) if user else None,
+            "average": round(average, 2) if settled else None,
+            "raters": raters,
+            "ratersNeeded": max(0, need - raters),
+            "ratersRequired": need,
+            "sentiment": round(repo.getSentiment(playerId), 3) if settled else None,
+        })
+    finally:
+        session.close()
+
+
+def _requireOwnClub(user, teamId: int):
+    """Sentiment is only yours to give about YOUR club.
+
+    Enforced server-side, not just in the UI: these signals feed the autonomous
+    GM brain and GM fire/leave risk, so an open endpoint would let anyone
+    brigade a rival's roster decisions.
+    """
+    favorite = getattr(user, 'favorite_team_id', None)
+    if not favorite:
+        raise HTTPException(400, "Pick a favourite team before having your say")
+    if teamId is None or int(favorite) != int(teamId):
+        raise HTTPException(403, "You can only have your say about your own club")
+
+
+def _playerTeamId(playerId: int):
+    """Team a player is on, or None if unrostered (a free agent has no feed)."""
+    pm = floosball_app.playerManager if floosball_app else None
+    if pm is None:
+        return None
+    player = (pm.getPlayerById(playerId) if hasattr(pm, 'getPlayerById') else None)
+    if player is None:
+        player = next((p for p in pm.activePlayers if p.id == playerId), None)
+    return getattr(getattr(player, 'team', None), 'id', None)
+
+
+class _CoachRatingRequest(BaseModel):
+    rating: int   # 1-5, same scale as players
+
+
+def _coachSentimentRepo(session):
+    from database.repositories.sentiment_repository import CoachSentimentRepository
+    return CoachSentimentRepository(session)
+
+
+@app.post("/api/teams/{teamId}/gm-vote")
+def rate_gm(teamId: int, req: _CoachRatingRequest, user: _User = Depends(_getCurrentUser)):
+    """Rate a team's GM 1-5 — the same scale players are rated on."""
+    from database.connection import get_session
+    tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+    team = next((t for t in tm.teams if t.id == teamId), None) if tm else None
+    coach = getattr(team, 'coach', None)
+    if coach is None or getattr(coach, 'id', None) is None:
+        raise HTTPException(404, "That team has no GM right now")
+    _requireOwnClub(user, teamId)
+
+    session = get_session()
+    try:
+        repo = _coachSentimentRepo(session)
+        try:
+            repo.setRating(user.id, coach.id, req.rating)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        try:
+            from constants import FEED_ENABLED
+            if FEED_ENABLED:
+                from database.repositories.feed_repository import FeedRepository
+                FeedRepository(session).autoPostForCoachRating(user.id, teamId, req.rating)
+        except Exception:
+            pass
+        session.commit()
+        average, raters = repo.getAggregate(coach.id)
+        need = repo.requiredRaters()
+        return build_success_response({
+            "teamId": teamId, "coachId": coach.id,
+            "myRating": req.rating,
+            "average": round(average, 2) if raters >= need else None,
+            "raters": raters,
+            "ratersNeeded": max(0, need - raters),
+            "ratersRequired": need,
+        })
+    finally:
+        session.close()
+
+
+@app.delete("/api/teams/{teamId}/gm-vote")
+def clear_gm_rating(teamId: int, user: _User = Depends(_getCurrentUser)):
+    """Withdraw this fan's GM rating, and the post it generated."""
+    from database.connection import get_session
+    _requireOwnClub(user, teamId)
+    tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+    team = next((t for t in tm.teams if t.id == teamId), None) if tm else None
+    coach = getattr(team, 'coach', None)
+    if coach is None or getattr(coach, 'id', None) is None:
+        raise HTTPException(404, "That team has no GM right now")
+    session = get_session()
+    try:
+        repo = _coachSentimentRepo(session)
+        removed = repo.clearRating(user.id, coach.id)
+        try:
+            from database.repositories.feed_repository import FeedRepository
+            FeedRepository(session).autoPostForCoachRating(user.id, teamId, None)
+        except Exception:
+            pass
+        session.commit()
+        average, raters = repo.getAggregate(coach.id)
+        return build_success_response({
+            "teamId": teamId, "removed": removed, "raters": raters,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/teams/{teamId}/gm-vote")
+def get_gm_vote(teamId: int, user: Optional[_User] = Depends(_getOptionalUser)):
+    """A GM's standing with the fanbase, plus the viewer's own vote."""
+    from database.connection import get_session
+    tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+    team = next((t for t in tm.teams if t.id == teamId), None) if tm else None
+    coach = getattr(team, 'coach', None)
+    if coach is None or getattr(coach, 'id', None) is None:
+        return build_success_response({"teamId": teamId, "coachId": None,
+                                       "myRating": None, "average": None,
+                                       "raters": 0, "ratersNeeded": 0})
+    session = get_session()
+    try:
+        repo = _coachSentimentRepo(session)
+        average, raters = repo.getAggregate(coach.id)
+        need = repo.requiredRaters()
+        return build_success_response({
+            "teamId": teamId, "coachId": coach.id,
+            "myRating": repo.getUserRating(user.id, coach.id) if user else None,
+            "average": round(average, 2) if raters >= need else None,
+            "raters": raters,
+            "ratersNeeded": max(0, need - raters),
+            "ratersRequired": need,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/sentiment/boards")
+def get_sentiment_boards(limit: int = None, teamId: int = None):
+    """Fan Favorites and Most Hated — league-wide, or scoped to one team.
+
+    Rater-gated, so a board can't be topped by someone one person rated once.
+    """
+    from constants import SENTIMENT_BOARD_SIZE
+    from database.connection import get_session
+    session = get_session()
+    try:
+        repo = _sentimentRepo(session)
+        size = limit or SENTIMENT_BOARD_SIZE
+
+        # Team scope: restrict to that roster's player ids.
+        rosterIds = None
+        if teamId is not None:
+            tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+            team = next((t for t in tm.teams if t.id == teamId), None) if tm else None
+            rosterIds = [p.id for p in (team.rosterDict.values() if team else []) if p]
+            if not rosterIds:
+                return build_success_response({'favorites': [], 'villains': [],
+                                               'teamId': teamId})
+
+        loved = repo.getBoard(size, mostLoved=True, playerIds=rosterIds)
+        hated = repo.getBoard(size, mostLoved=False, playerIds=rosterIds)
+
+        pm = floosball_app.playerManager if floosball_app else None
+
+        def _lookup(pid):
+            if pm is None:
+                return None
+            if hasattr(pm, 'getPlayerById'):
+                found = pm.getPlayerById(pid)
+                if found is not None:
+                    return found
+            return next((p for p in pm.activePlayers if p.id == pid), None)
+
+        def _enrich(entries):
+            out = []
+            for e in entries:
+                pl = _lookup(e['playerId'])
+                # player.team is a Team OBJECT for rostered players (and a
+                # plain string like 'Free Agent' otherwise) — coerce to a name,
+                # or FastAPI tries to serialise the whole team and dies on its
+                # internal lock.
+                teamRef = getattr(pl, 'team', None)
+                teamName = getattr(teamRef, 'name', teamRef) if teamRef else None
+                out.append({**e,
+                            'name': getattr(pl, 'name', None),
+                            'position': getattr(getattr(pl, 'position', None), 'name', None),
+                            'team': teamName if isinstance(teamName, str) else None})
+            return out
+
+        # GM boards are league-wide regardless of team scope — there is only
+        # one GM per club, so a per-team GM board would be a list of one.
+        coachRepo = _coachSentimentRepo(session)
+        tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+        coachInfo = {}
+        for t in (tm.teams if tm else []):
+            c = getattr(t, 'coach', None)
+            if c is not None and getattr(c, 'id', None) is not None:
+                coachInfo[c.id] = {'name': c.name, 'team': t.name}
+
+        def _enrichCoach(entries):
+            return [{**e, **coachInfo.get(e['coachId'], {'name': None, 'team': None})}
+                    for e in entries]
+
+        return build_success_response({
+            "favorites": _enrich(loved),
+            "villains": _enrich(hated),
+            "gmsBacked": _enrichCoach(coachRepo.getBoard(size, mostLiked=True)),
+            "gmsUnderFire": _enrichCoach(coachRepo.getBoard(size, mostLiked=False)),
+            "teamId": teamId,
+        })
+    finally:
+        session.close()
+
+
+# ── Team social feed (AFO plan Part D, signal 2) ──────────────────────────────
+# Pre-made reactions only — no free text, so no moderation surface. Posts are
+# the emotional pulse: they age out and their influence decays with them.
+
+
+class _FeedPostRequest(BaseModel):
+    postKey: str
+    targetPlayerId: Optional[int] = None
+
+
+def _feedRepo(session):
+    from database.repositories.feed_repository import FeedRepository
+    return FeedRepository(session)
+
+
+@app.get("/api/feed/catalog")
+def get_feed_catalog():
+    """The pre-made posts a fan can choose from, grouped by target."""
+    from constants import FEED_POST_CATALOG, FEED_MAX_POSTS_PER_WINDOW, FEED_RATE_WINDOW_HOURS
+    grouped = {'player': [], 'gm': [], 'team': []}
+    for key, (text, target, valence) in FEED_POST_CATALOG.items():
+        grouped.setdefault(target, []).append(
+            {'key': key, 'text': text, 'valence': valence})
+    return build_success_response({
+        'catalog': grouped,
+        'rateLimit': {'perWindow': FEED_MAX_POSTS_PER_WINDOW,
+                      'windowHours': FEED_RATE_WINDOW_HOURS},
+    })
+
+
+@app.post("/api/teams/{teamId}/feed")
+def post_to_team_feed(teamId: int, req: _FeedPostRequest,
+                      user: _User = Depends(_getCurrentUser)):
+    """Post a pre-made reaction to a team's feed."""
+    from constants import FEED_ENABLED
+    if not FEED_ENABLED:
+        raise HTTPException(400, "The team feed is not enabled")
+    _requireOwnClub(user, teamId)
+    from database.connection import get_session
+    from database.repositories.feed_repository import FeedError
+    session = get_session()
+    try:
+        repo = _feedRepo(session)
+        try:
+            repo.addPost(user.id, teamId, req.postKey, req.targetPlayerId)
+        except FeedError as e:
+            raise HTTPException(400, str(e))
+        session.commit()
+        return build_success_response({
+            'teamId': teamId,
+            'postsRemaining': repo.remainingPosts(user.id),
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/teams/{teamId}/feed")
+def get_team_feed(teamId: int, limit: int = 50,
+                  user: Optional[_User] = Depends(_getOptionalUser)):
+    """A team's live feed, plus the mood and GM heat it adds up to."""
+    from database.connection import get_session
+    from database.repositories.feed_repository import renderPost, catalogEntry
+    session = get_session()
+    try:
+        repo = _feedRepo(session)
+        pm = floosball_app.playerManager if floosball_app else None
+
+        def _playerName(pid):
+            if pm is None or not pid:
+                return None
+            found = (pm.getPlayerById(pid) if hasattr(pm, 'getPlayerById') else None)
+            if found is None:
+                found = next((p for p in pm.activePlayers if p.id == pid), None)
+            return getattr(found, 'name', None)
+
+        coachName = None
+        tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+        if tm:
+            team = next((t for t in tm.teams if t.id == teamId), None)
+            coachName = getattr(getattr(team, 'coach', None), 'name', None)
+
+        posts = []
+        for post in repo.getFeed(teamId, limit):
+            # Only player and GM posts have a subject; a team post is
+            # addressed to nobody and must not borrow the coach's name.
+            if post.target_type == 'player':
+                targetName = _playerName(post.target_player_id)
+            elif post.target_type == 'gm':
+                targetName = coachName
+            else:
+                targetName = None
+            entry = catalogEntry(post.post_key)
+            posts.append({
+                'id': post.id,
+                'postKey': post.post_key,
+                'text': renderPost(post.post_key, targetName),
+                'targetType': post.target_type,
+                'targetPlayerId': post.target_player_id,
+                'targetName': targetName,
+                'valence': entry[2] if entry else 0,
+                'createdAt': post.created_at.isoformat() if post.created_at else None,
+                'mine': bool(user and post.user_id == user.id),
+                'isAuto': bool(getattr(post, 'is_auto', False)),
+            })
+
+        # No aggregate mood band: the feeling should come across by READING the
+        # feed, not from a computed label sitting above it.
+        return build_success_response({
+            'teamId': teamId,
+            'posts': posts,
+            'postsRemaining': repo.remainingPosts(user.id) if user else None,
         })
     finally:
         session.close()

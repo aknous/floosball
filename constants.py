@@ -878,6 +878,297 @@ RESIGN_ONCE_LIMIT = 1             # re-signs allowed with the SAME team before a
 RESIGN_LIMIT_ENABLED = True
 RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
 
+# ---- Fan sentiment (AFO plan Part D) ----
+# Fans rate players 1-5. This is the quiet, PERSISTENT signal the GM brain
+# reads — the valence axis, distinct from anomaly attention (magnitude).
+# Free to cast, net one per fan per player.
+SENTIMENT_ENABLED = True
+SENTIMENT_RATING_MIN = 1
+SENTIMENT_RATING_MAX = 5
+SENTIMENT_NEUTRAL = 3.0           # midpoint; maps to 0.0 sentiment
+
+# How many distinct raters a subject needs before their sentiment counts at all.
+# Below it the GM reads neutral and the average is withheld, so one loud fan
+# can't move a roster decision or manufacture a public number.
+#
+# SCALES WITH ENGAGEMENT, like the awards quorum: a bigger, busier league should
+# need more turnout before a number is trustworthy.
+#     required = max(SENTIMENT_MIN_RATERS, ceil(activeUsers x FRACTION))
+#
+# The fraction is far below the awards' 0.20 on purpose. An award is ONE
+# league-wide vote where all attention converges; ratings are spread across 144
+# players plus 24 GMs. At 0.20 with 140 active fans every player would need 28
+# raters — thousands of ratings league-wide — and nothing would ever unhide.
+# At 0.05: 140 fans -> 7 raters, 50 -> 3 (the floor).
+SENTIMENT_MIN_RATERS = 3
+SENTIMENT_QUORUM_ACTIVE_FRACTION = 0.05
+
+# How far sentiment can move a valuation, in perceivedValue points, at FULL
+# fan trust and maximum love/hate. Deliberately small: the plan says sentiment
+# TIPS CLOSE CALLS and must never force a clearly-bad move. A 5-star darling on
+# a maximally populist GM is worth this much extra; a hated player this much less.
+SENTIMENT_MAX_VALUE_SWING = 5.0
+
+# Boards: how many to surface per leaderboard.
+SENTIMENT_BOARD_SIZE = 10
+
+# ---- Social feed: fan posts (AFO plan Part D, signal 2) ----
+# The team page becomes a feed of PRE-MADE reactions. Pre-made is the whole
+# point: no free text means no moderation problem, and it keeps the register
+# consistent. Posts are the EMOTIONAL PULSE — fast, decaying, spammy-fun —
+# as opposed to the 1-5 ratings, which are the slow standing stance.
+FEED_ENABLED = True
+
+# Rate limit: posts should feel cheap and loud, but bounded.
+FEED_MAX_POSTS_PER_WINDOW = 10
+FEED_RATE_WINDOW_HOURS = 1
+
+# How long a post stays in the feed / counts toward the pulse. Ephemeral by
+# design — the pulse is "how the fanbase feels RIGHT NOW", not a permanent record.
+FEED_POST_TTL_HOURS = 72
+
+# Pulse saturation: how many net decayed posts it takes to reach full intensity.
+# Above this the pulse saturates rather than growing without bound, so a
+# brigade of one target can't dominate the whole model.
+FEED_PULSE_SATURATION = 12.0
+
+# How much the (fast, noisy) post pulse can move a player's sentiment relative
+# to their (slow, deliberate) star rating. Ratings lead; posts nudge.
+FEED_PULSE_SENTIMENT_WEIGHT = 0.35
+
+# Post catalog. Each entry: key -> (text, target, valence).
+#   target : 'player' | 'gm' | 'team'
+#   valence: +1 supportive, -1 angry, 0 neutral hype
+#
+# TWO kinds of entry, split by how they reach the feed:
+#   - target 'team'  -> what a fan can POST manually. General support and
+#     frustration only. Opinions about a specific player or the GM are not
+#     posted directly; they come from rating that player / voting on that GM.
+#   - target 'player' | 'gm' -> the AUTO-POST vocabulary. When you rate a player
+#     or vote on the GM, one of these is generated on your behalf so your
+#     opinion shows up in the feed. Never manually selectable.
+#
+# Naming: durable idiom, nothing that will read as dated. `{name}` is filled
+# with the target's name at render time.
+FEED_POST_CATALOG = {
+    # -- manually postable: general support
+    'our_season':    ('This is our season',           'team',    1),
+    'believe':       ('Believe',                      'team',    1),
+    'stand_by_them': ('We ride with this team',       'team',    1),
+    'best_days':     ('Best days are ahead',          'team',    1),
+    # -- manually postable: general frustration
+    'not_good':      ('Not good enough',              'team',   -1),
+    'same_old':      ('Same story every season',      'team',   -1),
+    'wasted_year':   ('Another year wasted',          'team',   -1),
+    'deserve_better':('This franchise deserves better', 'team',  -1),
+
+        # Vocabulary is limited to moves that EXIST in Floosball: cut, re-sign,
+    # sign a free agent, fire the GM. Nothing may imply a trade — there are
+    # none — so "Trade them" and "Untouchable" (i.e. trade-protected) are out.
+    # -- AUTO from a 4-5 star rating
+    'cornerstone':   ('Franchise cornerstone',        'player',  1),
+    'resign_them':   ('Re-sign them',                 'player',  1),
+    'worth_it':      ('Worth every Floobit',          'player',  1),
+    'carried_us':    ('Carried us all season',        'player',  1),
+    # -- AUTO from a 1-2 star rating
+    'cut_them':      ('Cut them',                     'player', -1),
+    'liability':     ('A liability out there',        'player', -1),
+    'move_on':       ('Time to move on',              'player', -1),
+    'not_the_slot':  ("Not worth the roster slot",    'player', -1),
+    # -- AUTO from a GM like
+    'in_trust':      ('In {name} we trust',           'gm',      1),
+    'has_a_plan':    ('The front office has a plan',  'gm',      1),
+    'best_hire':     ('Best hire we have made',       'gm',      1),
+    # -- AUTO from a GM dislike
+    'fire_the_gm':   ('Fire the GM',                  'gm',     -1),
+    'lost_the_room': ('{name} has lost the room',     'gm',     -1),
+    'enough':        ('Enough excuses',               'gm',     -1),
+}
+
+# Which star ratings generate a post, and of which flavour. A 3 says nothing —
+# a shrug isn't worth a post, and the feed stays signal.
+FEED_AUTOPOST_BY_RATING = {5: 1, 4: 1, 3: None, 2: -1, 1: -1}
+
+# GMs use the same scaled quorum as players — one rating model, one floor.
+# (Kept as its own name so a GM-specific floor stays possible later.)
+GM_SENTIMENT_MIN_VOTERS = 3
+
+# ---- GM turnover: fired / retire / leave (AFO plan Part C) ----
+# All three exits are sim decisions, each rolling the replacement gamble. Since
+# coaches are specialists, a replacement is better-or-worse PER DIMENSION, so
+# turnover is a real trade rather than a reroll on a quality number.
+# Target: a few GM changes league-wide per season, NOT a carousel.
+GM_TURNOVER_ENABLED = True
+
+# Fire pressure comes only from falling BELOW this win rate — at or above it a
+# GM is never rolled on, so competence is genuine job security.
+GM_FIRE_BASELINE_WINPCT = 0.45
+GM_FIRE_SENSITIVITY = 2.60    # fire chance per point of win-rate deficit.
+                              # Tuned over 2.5k simulated seasons against a
+                              # realistic 24-team record spread: yields ~2.9
+                              # fire+leave exits/season, landing 3-4 once
+                              # retirements are added (target 3-5).
+GM_FIRE_GRACE_SEASONS = 1     # a GM isn't fired on their first season's record —
+                              # they inherited the roster and haven't had an
+                              # offseason to shape it
+GM_FIRE_GOODWILL_MAX = 0.14   # max fire-chance reduction for a beloved leader.
+                              # Kept BELOW a typical fire chance on purpose: at
+                              # 0.18 goodwill could zero out the roll entirely,
+                              # making a well-liked GM unfireable rather than
+                              # merely harder to fire.
+                              # (coach `attitude` 100). This is the plan's
+                              # "threshold varies by GM", sourced from a visible
+                              # attribute rather than a hidden per-coach roll.
+GM_FIRE_MAX_CHANCE = 0.75     # even a catastrophe isn't a certainty
+
+# Voluntary departure — independent of record, so a hostile fanbase can drive out
+# a GM who is WINNING. Sentiment weights are dormant until plan Part D.
+GM_LEAVE_BASE_CHANCE = 0.03
+GM_LEAVE_SENTIMENT_WEIGHT = 0.35
+GM_FIRE_SENTIMENT_WEIGHT = 0.25
+
+# ---- Unrostered (free-agent) self-development ----
+# Development is coach-driven: devBias = round((coachDevRating - 60) / 10).
+# Free agents used to fall to a default coachDevRating of 50, i.e. devBias -1 —
+# WORSE than the worst possible coach (60 -> 0), so an unsigned player actively
+# DECAYED. That was a latent oddity while most players were rostered; it becomes
+# a real problem under AFO Part F, where every new player enters the FA pool and
+# would take the penalty until signed.
+#
+# Unrostered players now train off their OWN mental makeup instead — the player
+# who keeps themselves sharp without a staff. Never negative: sitting in the pool is
+# stagnation at worst, never punishment.
+FA_SELF_DEV_ATTRS = ('discipline', 'focus', 'resilience', 'selfBelief')
+FA_SELF_DEV_SCALE = 0.7       # damping vs a coached player — self-training is
+                              # real but less effective than actual coaching.
+                              # League mean self-drive ~74 => devBias ~+1, vs a
+                              # neutral coach's +2 and the worst coach's 0.
+FA_SELF_DEV_MIN = 0           # floor: unsigned never decays
+
+# ---- Coach generation: specialists, not uniformly good/bad (AFO plan Part B) ----
+# Coaches used to draw every attribute from normal(center, 10) around ONE
+# per-coach center, so a coach was uniformly strong or weak and the aggregate
+# actually meant something. GMs should instead be SPECIALISTS — great offensive
+# mind / weak defense / sharp scout / poor developer — so each attribute is drawn
+# largely independently, with only a SMALL shared component so a rare all-around
+# elite or bust still exists.
+#   attr = clip(center + shared + N(0, INDEP_SIGMA), 60, 100),  shared ~ N(0, SHARED_SIGMA)
+# SHARED_SIGMA << INDEP_SIGMA is the whole point: most coaches land near-average
+# overall while differing sharply attribute to attribute.
+COACH_ATTR_CENTER = 80
+COACH_ATTR_SHARED_SIGMA = 4.5     # all-around quality component (rare tails).
+                                  # Tuned over 4k draws: gives ~3.7% all-around
+                                  # elites / ~4.8% busts (target 3-5% each) while
+                                  # leaving the within-coach attribute spread at
+                                  # ~24 pts. Raising it past ~5.5 starts making
+                                  # coaches uniformly good/bad again.
+COACH_ATTR_INDEP_SIGMA = 9.0      # per-attribute spread (the specialist signal)
+
+# Scouting-report profile thresholds. A coach only earns a specialty/flaw tag
+# when the attribute is genuinely notable — otherwise they read as a generalist,
+# which is honest rather than forcing a label onto a flat spread.
+COACH_PROFILE_SPECIALTY_MIN = 88  # top attribute must clear this to be a specialty
+COACH_PROFILE_FLAW_MAX = 70       # bottom attribute must fall below this to be a flaw
+COACH_FANTRUST_POPULIST_MIN = 90  # listens to the fans to a fault
+COACH_FANTRUST_INDEPENDENT_MAX = 70   # ignores them entirely
+
+# ---- Player intake: rookie draft vs FA trickle (AFO plan Part F) ----
+# When False, no rookie class is generated and the rookie draft has nothing to
+# draft: new players enter ONLY via playerManager.ensurePositionSupply, which
+# generates the per-position DEFICIT into the free-agent pool. That deficit fill
+# is the whole intake model — it produces nothing while the pool is above target
+# (so an inflated pool drains), then replaces retirees one-for-one once at
+# target. ROSTER_SUPPLY_BUFFER_PER_POSITION sets the steady-state pool depth.
+ROOKIE_DRAFT_ENABLED = True
+
+# ---- Autonomous Front Office (docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md) ----
+# The sim's GM brain makes roster decisions; fans express sentiment that tips
+# close calls. Phase 1 = valuation + the re-sign decider. While this flag is
+# False the existing fan-vote path runs unchanged, so the two never both decide.
+# Flip to True only once the binding-vote machinery is removed (plan Part E).
+AUTONOMOUS_FO_ENABLED = False
+
+# Positional value multiplier. Every fill/upgrade/re-sign decision ranks by
+# perceivedValue = projectedRating x POSITION_VALUE, which is what stops
+# "best available" handing a team a great kicker while the QB slot rots.
+# Universal table for now; small per-GM biases are a later flavour option.
+POSITION_VALUE = {
+    'QB': 1.00,
+    'RB': 0.72,
+    'WR': 0.78,
+    'TE': 0.60,
+    'K':  0.35,
+}
+
+# Scouting -> career-arc vision. A GM's read of a player is a blend of the
+# CURRENT rating and the true FORWARD projection, mixed by how good a scout
+# they are: at FO_SCOUT_VISION_FLOOR scouting they see only today's number, at
+# FO_SCOUT_VISION_CEILING they see the arc almost perfectly. What's left of the
+# gap becomes random error, so a poor scout is genuinely WRONG (buys the fading
+# vet, passes on the ascender), not merely noisy.
+FO_SCOUT_VISION_FLOOR = 60        # scouting at/below this = current-number-only
+FO_SCOUT_VISION_CEILING = 100     # scouting at this = near-perfect arc vision
+FO_SCOUT_NOISE_MAX = 6.0          # rating points of error at zero vision (1 sigma)
+
+# Development-minded GMs credit part of a young player's CEILING (not just the
+# trueSkill they'd reach on their own) because they back themselves to develop them.
+FO_CEILING_CREDIT = 0.45          # fraction of the remaining (ceiling - current) gap a GM
+                                  # expects to realise at max playerDevelopment; 0 at the floor
+
+# Potential headroom required before a player reads as DEVELOPING rather than
+# PRIME. Nearly every player carries a point or two of slack, so without a
+# floor here 'developing' would describe the whole league.
+FO_DEVELOPING_HEADROOM = 2
+
+# Age decline. A player past their longevity clock is projected DOWN — this is
+# the "sell high before the cliff" read that separates a sharp GM from a poor one.
+FO_DECLINE_PER_YEAR_PAST = 0.06   # rating fraction shed per season past longevity
+FO_DECLINE_MAX = 0.40             # cap so an ancient vet never projects to nothing
+
+# Re-sign decision. A walk-year incumbent only takes one of the scarce re-sign
+# slots if their perceived value beats the replacement the team can REALISTICALLY sign
+# by this margin (in value points). Slots then go to the biggest surpluses
+# first, so a team spends them where the incumbent genuinely wins.
+FO_RESIGN_SURPLUS_MARGIN = 0.5
+
+# Cut-for-upgrade. A GM cuts a player under contract only when the replacement
+# it can REALISTICALLY sign beats them by this margin in value points. Bigger
+# than the re-sign margin on purpose: letting a walk-year player leave is free,
+# whereas cutting someone under contract opens a hole you may not fill.
+#
+# NOTE — the plan describes an upgrade threshold that scales with draft position
+# as "the aggression dial". That dial is ALREADY expressed by FO_FA_CONTENTION
+# below: an early picker is measured against the top of the board and a late
+# picker against thin leftovers, which is the same early-aggressive /
+# late-conservative behaviour. Scaling the threshold by pick slot TOO would
+# double-count it and, with a near-minimum pool, suppress cuts almost entirely.
+# So the threshold is flat and the dial lives in one place.
+FO_CUT_ENABLED = True
+FO_CUT_UPGRADE_MARGIN = 6.0   # value points the replacement must beat the
+                              # incumbent by. Raised from 4.0: at 4.0 a QB was
+                              # cut for a 4-rating-point upgrade, which isn't
+                              # worth the risk of a hole you may not refill.
+# Soft per-team cap. The plan left cuts uncapped and expected churn to
+# self-limit; a fresh-league sim produced 70 cuts in ONE offseason (half the
+# league), because a brand-new FA pool is fat and every roster has an upgrade
+# available. In an ongoing league cuts settle near zero, so this cap only ever
+# binds on that transient — but 70 would read as absurd, so it is bounded.
+# Mirrors the re-sign cap: a GM makes at most a couple of decisive moves a year.
+FO_CUT_MAX_PER_TEAM = 2
+
+# How deep into the FA pool a team should look when judging its own incumbent.
+# Benchmarking every team against the single league-best free agent is wrong:
+# all 24 teams would conclude their starter is replaceable, yet only one can
+# actually sign that player, so the whole league sheds its incumbents. Instead
+# each team looks at the free agent it can expect to still be there at ITS slot
+# in the worst-first FA order. Not every team ahead takes the same position, so
+# only this fraction of them is assumed to.
+#   effectiveDepth = floor(faOrderIndex x FO_FA_CONTENTION)
+# This is also the plan's aggression dial in its natural home: a bad team
+# picking early benchmarks against the best available and churns boldly, while
+# a good team picking late sees thin leftovers and holds onto its own.
+FO_FA_CONTENTION = 0.30
+
 # ---- Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ----
 # A Core-driven, user-voted live rule mutation. Each game day (weeks 1/8/15/22) there's
 # an escalating chance a vote fires: Aris opens a CHANGE vote, Pyre opens a REVERT vote.

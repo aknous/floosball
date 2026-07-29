@@ -4,6 +4,7 @@ Replaces the scattered player-related global variables and functions in floosbal
 """
 
 from typing import List, Optional, Dict, Any, Tuple
+import os
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
 from logger_config import get_logger
@@ -3852,6 +3853,21 @@ class PlayerManager:
             short = demand - supply[pos]
             if short > 0:
                 deficits[pos] = short
+
+        # SUPPLY_DEBUG: show what the floor actually sees. Set the env var to
+        # diagnose over-generation (the counted pool vs the real one).
+        if os.environ.get('SUPPLY_DEBUG'):
+            rostered = sum(1 for p in self.activePlayers if getattr(p, 'team', None)
+                           not in (None, '', 'Free Agent'))
+            retiring = sum(1 for p in self.activePlayers if getattr(p, 'willRetire', False))
+            logger.info(
+                f"  SUPPLY_DEBUG activePlayers={len(self.activePlayers)} "
+                f"freeAgentsList={len(getattr(self, 'freeAgents', []))} "
+                f"rosteredInActive={rostered} retiringFlagged={retiring}")
+            logger.info(
+                "  SUPPLY_DEBUG counted supply: "
+                + ", ".join(f"{p.name}={supply[p]}/{numTeams*slotsPerPosition[p]+buffer}"
+                            for p in slotsPerPosition))
 
         if not deficits:
             return {}

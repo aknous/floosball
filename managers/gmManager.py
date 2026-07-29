@@ -256,7 +256,13 @@ class GmManager:
                 winnerVotes = votesByTarget[winnerId]
                 reason = "vote_winner"
             else:
-                # Default: pick highest overall_rating among candidates
+                # Default: pick highest overall_rating among candidates.
+                # NOTE (plan Part B): the aggregate is central-limit noise for
+                # the seedless league population, but candidates are generated
+                # around COACH_CANDIDATE_SEEDS (90/80/72), so overall_rating
+                # still tracks the intended premium/mid/budget tier HERE and is
+                # a valid ranking for this fallback. Don't "fix" this to use the
+                # profile — it dies with the votes in Part E anyway.
                 rankedCands = sorted(
                     candidates,
                     key=lambda c: (-c.coach.overall_rating, c.coach_id),
