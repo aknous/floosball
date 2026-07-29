@@ -1,14 +1,21 @@
 # Autonomous Front Office + Fan Sentiment Redesign
 
 **Branch:** `next-season` (season-cutover feature)
-**Status:** Part A COMPLETE (valuation, re-sign, cut-for-upgrade, assessment
-sweep) plus steps 2 (coach specialist profiles) and 3 (GM turnover) — all BUILT
-+ sim-validated. Part F (remove rookie draft -> FA trickle)
-specced and prototyped behind `ROOKIE_DRAFT_ENABLED`; its free-agent
-development penalty is fixed. Steps 4-6 (sentiment), 7 (vote removal — the
-brain is LIVE, `AUTONOMOUS_FO_ENABLED=True`) and 8 (economy) are DONE.
-Remaining: finish Part F (the rookie draft is still only flag-gated), the
-PAUSED team-page redesign, and optional team mood (10).
+**Status:** Steps 1-9 and Parts A-E are BUILT + sim-validated. The brain is
+LIVE (`AUTONOMOUS_FO_ENABLED=True`), the binding-vote system is deleted, and
+Part F's draft removal is now CODE, not just a flag (wave 1, 2026-07-29).
+
+**Remaining — three items, none blocking a deploy:**
+1. **Part F wave 2** — the prospect half (`is_prospect`, `drafting_team_id`,
+   `prospect_seasons`, promotion, `_advanceProspectWindow`, `PROSPECT_*`).
+   Deliberately deferred: prospects are still draining on deployed DBs and
+   promotion is load-bearing until they hit zero (~3 seasons). Owner ruled the
+   COLUMNS stay permanently — code only, no table rebuild.
+2. **Team page redesign** — PAUSED by owner 2026-07-29.
+3. **Step 10** — team mood as a morale/atmosphere consumer. Optional, never
+   started. (An earlier revision claimed `teamMood` was "computed and surfaced
+   but wired to nothing" — that is WRONG: no such value exists anywhere.)
+
 See "Build status" at the bottom.
 **Ships:** next-season boundary
 **Related:** `docs/FANTASY_CARDS_FUSION_PLAN.md` (same "simplify / de-intimidate" thrust)
@@ -429,7 +436,7 @@ counts — once prospects are gone that exclusion simply stops mattering.
    worth considering whether entrants should arrive as an announced "intake"
    class to keep the beat.
 
-### Part F — LIVE (behaviour), code excision still pending
+### Part F — LIVE, wave 1 excised (2026-07-29)
 `ROOKIE_DRAFT_ENABLED = False`. No rookie class is generated, the draft has
 nothing to draft, and new players enter only as the position-supply deficit
 fill. Existing prospects drain through and are never replaced.
@@ -439,13 +446,38 @@ fill. Existing prospects drain through and are never replaced.
 prospects down to **0**, every roster full, top-ups sized to the retirement wave
 (+15 in the season the pool first needed it, nothing when it didn't).
 
-⚠️ **The behaviour is done; the CODE is not.** Still present and now dead or
-draining: the `rookie_draft` offseason phase (27 refs in `seasonManager`),
-`is_prospect` / `drafting_team_id` / `rookieDraftPickGenerator`, prospect
-promotion and `_advanceProspectWindow`, and `GET /api/rookies/upcoming` (which
-now has no subject). None of it runs, but it should be excised — that's pure
-cleanup across ~11 files and carries real regression risk, so it wants its own
-pass rather than being tacked onto the vote removal.
+**Wave 1 — DONE.** Removed: the `rookie_draft` offseason phase,
+`rookieDraftPickGenerator`, `_generateRookieClass`, the fan rookie ballot and
+its tally, `GET /api/rookies/upcoming`, `scoutRookie`, `RookiesSection.tsx`,
+and the panel's five `rookie_draft_*` handlers. The offseason now runs
+post_bowl -> frontoffice -> pre_fa -> fa_draft -> training.
+
+**Wave 2 — deferred, and it must stay deferred.** The prospect half is NOT
+dead code: promotion is what drains the prospects a deployed DB still owns.
+Delete it now and every team loses its prospects on deploy day. It comes out
+once prod prospects reach zero. The COLUMNS stay permanently (owner call) —
+dropping them means a SQLite table rebuild on a live DB for zero gain.
+
+⚠️ **Two stranding bugs the removal exposed** (both fixed, both the same shape:
+a flag whose ONLY clearing path was the code being deleted):
+- **Prospect promotion had no working path.** `_tryPromoteProspect` was never
+  called by anything; the live path, `_promoteFanVotedProspect`, read
+  `_gmFaDirectives` — populated only by the `sign_fa` ballot that step 7
+  deleted. Prospects would have sat out their window and washed out to free
+  agency, never promoted. Promotion now runs through the GM brain
+  (`_promoteProspectsAutonomously`, `FO_PROSPECT_PROMOTE_EDGE`).
+- **Upcoming rookies would have been stranded.** They are held out of BOTH
+  rosters and the FA pool, and the draft was the only thing that cleared the
+  flag. The dev DB's 24 would have become permanently inert rows. They are now
+  released into free agency on load — what the draft did with the undrafted.
+
+⚠️ **A third bug was in the removal itself:** dropping the phase also dropped
+its `waitUntilNoonEt()` hold, which was what pushed the offseason to the day
+AFTER the Floos Bowl. Free agency would have fired at the next top of the hour
+(+0.9h, overnight) instead of draft day (+20.9h). Free agency now inherits the
+slot (`_computeDraftDayTarget`, delay renamed `rookie_draft_wait` ->
+`draft_day_wait`). Only reproducible in SCHEDULED mode — every `fast` sim
+passed clean, which is why it survived the first round of validation.
 
 ### Starting condition: there is already a large FA backlog
 The 16-season sim ends with **94 free agents** for 144 roster spots — roughly
