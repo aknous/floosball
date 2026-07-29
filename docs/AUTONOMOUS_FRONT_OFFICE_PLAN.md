@@ -5,10 +5,10 @@
 sweep) plus steps 2 (coach specialist profiles) and 3 (GM turnover) — all BUILT
 + sim-validated. Part F (remove rookie draft -> FA trickle)
 specced and prototyped behind `ROOKIE_DRAFT_ENABLED`; its free-agent
-development penalty is fixed. Steps 4-6 (fan sentiment ratings, social feed,
-and sentiment wired into both the brain and GM turnover) are BUILT on the
-backend. Remaining: vote removal (7), economy (8), frontend (9) — the whole
-sentiment layer is currently unreachable by users — and optional team mood (10).
+development penalty is fixed. Steps 4-6 (sentiment), 7 (vote removal — the
+brain is LIVE, `AUTONOMOUS_FO_ENABLED=True`) and 8 (economy) are DONE.
+Remaining: finish Part F (the rookie draft is still only flag-gated), the
+PAUSED team-page redesign, and optional team mood (10).
 See "Build status" at the bottom.
 **Ships:** next-season boundary
 **Related:** `docs/FANTASY_CARDS_FUSION_PLAN.md` (same "simplify / de-intimidate" thrust)
@@ -428,6 +428,24 @@ counts — once prospects are gone that exclusion simply stops mattering.
    visible offseason event users follow. Injection is invisible by comparison —
    worth considering whether entrants should arrive as an announced "intake"
    class to keep the beat.
+
+### Part F — LIVE (behaviour), code excision still pending
+`ROOKIE_DRAFT_ENABLED = False`. No rookie class is generated, the draft has
+nothing to draft, and new players enter only as the position-supply deficit
+fill. Existing prospects drain through and are never replaced.
+
+**Verified** over a 5-season fresh sim with the GM brain also live: 0 errors,
+**active pool pinned at exactly 159** (144 rostered + the 15-player buffer),
+prospects down to **0**, every roster full, top-ups sized to the retirement wave
+(+15 in the season the pool first needed it, nothing when it didn't).
+
+⚠️ **The behaviour is done; the CODE is not.** Still present and now dead or
+draining: the `rookie_draft` offseason phase (27 refs in `seasonManager`),
+`is_prospect` / `drafting_team_id` / `rookieDraftPickGenerator`, prospect
+promotion and `_advanceProspectWindow`, and `GET /api/rookies/upcoming` (which
+now has no subject). None of it runs, but it should be excised — that's pure
+cleanup across ~11 files and carries real regression risk, so it wants its own
+pass rather than being tacked onto the vote removal.
 
 ### Starting condition: there is already a large FA backlog
 The 16-season sim ends with **94 free agents** for 144 roster spots — roughly
@@ -990,7 +1008,51 @@ not finished. Known-unresolved when it stopped:
   computed and surfaced but wired to nothing. Owner already ruled that funding
   stays purely fan-contributed, so this would be atmosphere/morale only.
 
-### Steps 5, 7-10 — not started
+### Step 7 — vote removal ✅ (done, sim-verified)
+Done in TWO stages deliberately: flip `AUTONOMOUS_FO_ENABLED` on and prove the
+brain can run a whole offseason FIRST, so the deletion was dead-code excision
+rather than a swap-and-hope.
+
+Removed: 10 `/api/gm/*` endpoints (1,264 lines); `managers/gmManager.py` in full
+(all 5 resolvers — nothing referenced it once the call sites went); the 4
+offseason wrappers (`_resolveGmFireCoachVotes`, `_resolveGmResignVotes`,
+`_resolveGmCutVotes`, `_runFaVotingWindow`) and their call sites; 9 frontend
+vote components plus the unrouted `FrontOfficePage`; `GM_VOTE_TYPES` (now an
+empty set so a stray reader degrades rather than raising); and the Scorched
+Earth grant, which could never fire again.
+
+⚠️ `OffseasonPanel` had a live "Submit Requisition" button posting to
+`/api/gm/fa-ballot`. Deleting the endpoint alone would have left a 404 button,
+so the modal, trigger, handler and state were unpicked too — it now builds to
+exactly its pre-step-7 warning baseline.
+
+**Deliberately NOT deleted**: the `GmVote` / `GmFaBallot` tables and models
+(account-deletion cleanup still references them, and dropping tables risks a
+prod migration for no gain), and the Tribune / Scorched Earth achievement
+templates — anyone who earned them keeps them; they're simply unobtainable now.
+
+**Verified**: fresh fast sim, 0 errors, rosters 144/144, every team staffed,
+turnover ~4 changes/season, 88 tests passing.
+
+### Step 8 — economy ✅ (measured; no backfill needed)
+Owner's call was to let the sink shrink. The data says that's comfortably right:
+
+| | |
+|---|---|
+| GM votes drained | **28,410 F over 16 seasons** (~1,775/season) |
+| Share of all spending | **1.1%** |
+| Shift in net flow | **0.92% of all income** |
+
+For scale, the sinks that remain are far larger: `season_end_tax` 904,672,
+`team_contribution` 438,671, `facility_contribution` 343,589, `card_purchase`
+258,365, `pack_purchase` 249,940. Removing ~1,800 F/season of drain is inside
+the noise — no replacement sink is warranted, and inventing one would add a
+cost to a layer that is deliberately free.
+
+### Steps 9-10 — remaining
+Step 9 frontend is largely built (rating control, feed, boards, GM rating, and
+the vote UI now deleted); the team page redesign is PAUSED (see above).
+Step 10 (team mood as a morale/atmosphere consumer) is optional and untouched.
 Coach specialist generation + dropping `overallRating`, GM turnover,
 sentiment data, social feed, sentiment->brain wiring, vote removal, economy,
 frontend. Cut-for-upgrade + the best-first assessment sweep (the rest of Part A)

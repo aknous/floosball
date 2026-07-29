@@ -4260,68 +4260,6 @@ class PlayerManager:
             "scoutingRange": rangeSize,
         }
 
-    def _tryPromoteProspect(self, team, freeAgencyDict: dict, leagueHighlights: list) -> Optional[dict]:
-        """Promote the best-qualifying prospect into an open roster slot.
-
-        Returns a dict describing the promotion on success, else None. A prospect
-        qualifies when their playerRating meets PROSPECT_PROMOTION_RATING_THRESHOLD
-        and the team has an open roster slot at that prospect's position. Picks
-        the highest-rated eligible prospect if multiple qualify.
-        """
-        from constants import PROSPECT_PROMOTION_RATING_THRESHOLD
-        prospects = getattr(team, 'prospects', [])
-        if not prospects:
-            return None
-
-        # Candidates must meet the rating floor AND have an open slot at their position
-        candidates = []
-        for p in prospects:
-            if getattr(p, 'playerRating', 0) < PROSPECT_PROMOTION_RATING_THRESHOLD:
-                continue
-            openSlot = self._findOpenSlotForPosition(team, p.position.value)
-            if openSlot:
-                candidates.append((p, openSlot))
-        if not candidates:
-            return None
-
-        best, slot = max(candidates, key=lambda c: c[0].playerRating)
-        # Flip flags + move onto roster. Promoted prospects enter their first
-        # pro season — reset seasonsPlayed + serviceTime so they show as a
-        # rookie in listings (not a veteran from their time in the pipeline).
-        best.is_prospect = False
-        best.prospect_seasons = 0
-        best.drafting_team_id = None
-        best.seasonsPlayed = 0
-        best.serviceTime = FloosPlayer.PlayerServiceTime.Rookie
-        best.previousTeam = getattr(best, 'previousTeam', None)
-        best.team = team  # Update runtime team ref so persistence saves team_id correctly
-        # Defensive: legacy prospects may have been created before number
-        # assignment was added — give them one now if missing.
-        if not getattr(best, 'currentNumber', 0):
-            team.assignPlayerNumber(best)
-        team.rosterDict[slot] = best
-        if best in team.prospects:
-            team.prospects.remove(best)
-        # Contract term for promoted prospect matches tier-based terms
-        try:
-            best.term = self._getPlayerTerm(best)
-            best.termRemaining = best.term
-        except Exception:
-            best.termRemaining = 1
-        freeAgencyDict.setdefault(team.name, []).append({
-            'action': 'promote', 'player': best.name,
-            'position': best.position.name, 'slot': slot,
-        })
-        leagueHighlights.insert(0, {
-            'event': {'text': f"{team.name} promoted prospect {best.name} ({best.position.name}) to starter"}
-        })
-        return {
-            'id': getattr(best, 'id', None),
-            'name': best.name, 'slot': slot,
-            'position': best.position.name,
-            'rating': round(best.playerRating, 1),
-            'tier': best.playerTier.name,
-        }
 
     def snapshotRatingsForSeason(self, season: int) -> int:
         """Record every player's current rating into player_rating_history.

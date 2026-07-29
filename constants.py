@@ -1079,14 +1079,20 @@ COACH_FANTRUST_INDEPENDENT_MAX = 70   # ignores them entirely
 # is the whole intake model — it produces nothing while the pool is above target
 # (so an inflated pool drains), then replaces retirees one-for-one once at
 # target. ROSTER_SUPPLY_BUFFER_PER_POSITION sets the steady-state pool depth.
-ROOKIE_DRAFT_ENABLED = True
+# OFF (plan Part F). No rookie class is generated and the draft has nothing to
+# draft: new players enter ONLY as the position-supply deficit fill — a trickle
+# into the FA pool that produces nothing while the pool is above target, so it
+# cannot inflate. Existing prospects drain through and are not replaced.
+ROOKIE_DRAFT_ENABLED = False
 
 # ---- Autonomous Front Office (docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md) ----
 # The sim's GM brain makes roster decisions; fans express sentiment that tips
 # close calls. Phase 1 = valuation + the re-sign decider. While this flag is
 # False the existing fan-vote path runs unchanged, so the two never both decide.
-# Flip to True only once the binding-vote machinery is removed (plan Part E).
-AUTONOMOUS_FO_ENABLED = False
+# Now ON (plan step 7). The brain decides; the binding-vote path is dead and
+# is being removed. Kept as a flag so a bad offseason can be rolled back to
+# fan votes without a revert.
+AUTONOMOUS_FO_ENABLED = True
 
 # Positional value multiplier. Every fill/upgrade/re-sign decision ranks by
 # perceivedValue = projectedRating x POSITION_VALUE, which is what stops
@@ -1168,6 +1174,15 @@ FO_CUT_MAX_PER_TEAM = 2
 # picking early benchmarks against the best available and churns boldly, while
 # a good team picking late sees thin leftovers and holds onto its own.
 FO_FA_CONTENTION = 0.30
+
+# Benefit of the doubt given to a prospect the team ALREADY owns when weighing
+# promotion against signing a free agent. Promotion costs the team nothing and
+# the prospect is under its own control, so a prospect within this fraction of
+# the free agent it could otherwise land gets the roster spot. Below 1.0 or a
+# prospect essentially never wins — a developing player's forward projection
+# sits under a proven veteran's almost by definition, and the whole pipeline
+# would wash out to free agency instead of ever reaching a roster.
+FO_PROSPECT_PROMOTE_EDGE = 0.88
 
 # ---- Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ----
 # A Core-driven, user-voted live rule mutation. Each game day (weeks 1/8/15/22) there's
@@ -1991,7 +2006,10 @@ DAILY_RESET_HOUR_UTC = 10
 
 # ─── GM Mode ────────────────────────────────────────────────────────────────────
 
-GM_VOTE_TYPES = {"fire_coach", "cut_player", "resign_player", "sign_fa", "hire_coach"}
+# RETIRED (plan step 7). The binding fan votes are gone — the GM brain decides
+# roster moves and gmTurnover decides coach changes. Kept as an empty set so any
+# stray reader degrades to "no vote types" rather than an AttributeError.
+GM_VOTE_TYPES: set = set()
 
 # Cost per vote (Floobits)
 # ── Discord name submissions (/name) ──────────────────────────────────────────

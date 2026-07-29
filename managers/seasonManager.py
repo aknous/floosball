@@ -4974,10 +4974,9 @@ class SeasonManager:
                 else:
                     player.freeAgentYears = 1
 
-            # STEP 2: Resolve GM votes (coach, re-sign, cut)
-            logger.info("Step 2: Resolve GM votes")
-            await self._resolveGmFireCoachVotes(gmResults)
-            await self._resolveGmResignVotes(gmResults)
+            # STEP 2: (was: resolve GM fire/re-sign votes). The binding votes
+            # are gone — coach turnover is decided in STEP 2.5 by gmTurnover,
+            # and re-signs by the GM brain in STEP 2.7.
 
             # Safety net: any team without a coach after fire/hire resolution
             # gets one auto-generated + persisted. Catches edge cases like a
@@ -5017,15 +5016,13 @@ class SeasonManager:
             logger.info("Step 3: Contract decrements and team retirements")
             await self._processRosteredPlayerContracts()
 
-            # STEP 3.5: Resolve Cut Player GM votes (releases players to FA pool)
-            logger.info("Step 3.5: Resolve GM cut player votes")
-            await self._resolveGmCutVotes(gmResults)
+            # STEP 3.5: (was: resolve cut votes). Cuts are now the GM brain's
+            # cut-for-upgrade call, made during the STEP 2.7 assessment sweep.
 
             # STEP 3.6: Award the "Scorched Earth" secret to fans who voted to
             # tear their team all the way down. Runs here, after cuts, while the
             # roster still reflects every removal and before the drafts refill it.
             logger.info("Step 3.6: Award clean-house achievements")
-            await self._awardCleanHouseAchievements(gmResults)
 
             self._markOffseasonStepComplete('frontoffice_decisions')
         else:
@@ -5126,7 +5123,6 @@ class SeasonManager:
         # still revise their ballots — the final resolution + close happens
         # right before the FA draft kicks off (see Step 5.5 below).
         logger.info("Step 3.70: FA ballot resolution (window stays open)")
-        await self._runFaVotingWindow(closeWindow=False)
 
         # STEP 3.75: Pre-draft team setup (resigns / cuts / prospect promotions).
         # Computed and persisted instantly here so the FA pool is fully
@@ -5382,7 +5378,6 @@ class SeasonManager:
             # exact moment, then officially closes the window. Users watching
             # the post-rookie wait can revise ballots until this fires.
             logger.info("Step 5.5: Final FA ballot resolution + window close")
-            await self._runFaVotingWindow(closeWindow=True)
 
             # STEP 5.75: Apply fan-voted prospect promotions. Driven by the
             # *final* ballot directives (just resolved above), so any post-cuts
@@ -5843,9 +5838,11 @@ class SeasonManager:
         then offseason_predraft_complete when done.
         """
         if not (BROADCASTING_AVAILABLE and broadcaster):
-            # Still run promotions even without broadcasting — they mutate state
+            # Still run promotions even without broadcasting — they mutate state.
+            # (This branch called a method that never existed, so every
+            # broadcast-off mode raised AttributeError here.)
             for team in teamsWorstFirst:
-                self._promoteAllQualifyingProspects(team)
+                self._promoteProspectsAutonomously(team)
             return
 
         # Index resign successes by team for O(1) lookup
@@ -5978,7 +5975,9 @@ class SeasonManager:
             return
 
         for team in faOrder:
-            promotions = self._promoteFanVotedProspect(team)
+            # The fan ballot that used to drive this is gone with the GM vote
+            # system; the front-office brain decides promotions now.
+            promotions = self._promoteProspectsAutonomously(team)
             for promo in promotions:
                 teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
                 entry = {
@@ -6012,63 +6011,103 @@ class SeasonManager:
                     except Exception as e:
                         logger.warning(f"Could not broadcast promotion for {team.name}: {e}")
 
-    def _promoteFanVotedProspect(self, team) -> list:
-        """Promote this team's prospect if fans ranked them #1 on the FA ballot.
+    def _foBrainForOffseason(self):
+        """Build (and cache for this offseason) the front-office decider.
 
-        Returns list of promotion dicts (empty if no fan-directed promotion).
-        Consumes the directive from _gmFaDirectives so the FA draft doesn't
-        try to re-promote the same player.
-
-        Falls back to empty — ballot-deferred and un-ranked prospects are
-        handled during the FA draft itself (see freeAgencyPickGenerator).
+        Cached because the sentiment map is a whole-league fetch and several
+        offseason steps want the same brain; rebuilt each offseason so a
+        season's worth of new fan ratings is picked up.
         """
-        directives = getattr(self.playerManager, '_gmFaDirectives', {}).get(
-            getattr(team, 'id', None), []
-        )
-        if not directives:
-            return []
-
-        firstTargetId = directives[0]
-        prospectTarget = next(
-            (p for p in getattr(team, 'prospects', []) if p.id == firstTargetId),
-            None,
-        )
-        if prospectTarget is None:
-            # Fan ranked an FA first — defer to FA draft.
-            return []
-
-        openSlot = self.playerManager._findOpenSlotForPosition(
-            team, prospectTarget.position.value,
-        )
-        if not openSlot:
-            return []
-
-        # Fan-directed promotion bypasses the auto-threshold — they voted for
-        # this specific prospect regardless of rating.
-        prospectTarget.is_prospect = False
-        prospectTarget.prospect_seasons = 0
-        prospectTarget.drafting_team_id = None
-        prospectTarget.team = team
-        team.rosterDict[openSlot] = prospectTarget
-        if prospectTarget in team.prospects:
-            team.prospects.remove(prospectTarget)
+        season = getattr(self.currentSeason, 'seasonNumber', None)
+        cached = getattr(self, '_foBrainCache', None)
+        if cached and cached[0] == season:
+            return cached[1]
+        from managers.frontOfficeBrain import FrontOfficeBrain
+        sentimentMap = {}
         try:
-            prospectTarget.term = self.playerManager._getPlayerTerm(prospectTarget)
-            prospectTarget.termRemaining = prospectTarget.term
-        except Exception:
-            prospectTarget.termRemaining = 1
+            from constants import SENTIMENT_ENABLED
+            if SENTIMENT_ENABLED:
+                from database.connection import get_session
+                from database.repositories.sentiment_repository import buildSentimentMap
+                sentimentMap = buildSentimentMap(get_session())
+        except Exception as e:
+            logger.warning(f"GM brain: sentiment unavailable, running neutral: {e}")
+        brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap)
+        self._foBrainCache = (season, brain)
+        return brain
 
-        # Consume the directive so FA draft moves on to #2
-        directives.pop(0)
+    def _promoteProspectsAutonomously(self, team) -> list:
+        """Promote this team's prospects when the GM rates them over the market.
 
-        return [{
-            'id': getattr(prospectTarget, 'id', None),
-            'name': prospectTarget.name,
-            'position': prospectTarget.position.name,
-            'rating': round(prospectTarget.playerRating, 1),
-            'tier': prospectTarget.playerTier.name,
-            'slot': openSlot,
-        }]
+        The prospect pipeline is CLOSED (ROOKIE_DRAFT_ENABLED False) but teams
+        deployed into that change still own prospects, and those have to keep
+        being able to make the roster — otherwise every one of them sits out its
+        development window and washes out to free agency, which reads to a fan
+        as the team losing its prospects the day the change landed.
+
+        Promotion used to be fan-directed off the GM sign_fa ballot. With the
+        autonomous front office there is no ballot, so the same decider that
+        handles re-signs and cuts values the prospect against the free agent
+        this team could realistically land at its own slot in the FA order.
+        Returns promotion dicts in the shape the broadcast/log path expects.
+        """
+        prospects = list(getattr(team, 'prospects', []) or [])
+        if not prospects:
+            return []
+        from constants import FO_PROSPECT_PROMOTE_EDGE
+        brain = self._foBrainForOffseason()
+        coach = getattr(team, 'coach', None)
+        faOrder = getattr(self.currentSeason, 'freeAgencyOrder', None) or None
+        pickDepth = brain.faPickDepth(team, faOrder)
+
+        promotions: list = []
+        # Loop: a promotion fills one slot, but a second prospect may fit a
+        # different one, so re-evaluate until nothing more clears the bar.
+        while True:
+            best, bestSlot, bestValue = None, None, 0.0
+            for prospect in prospects:
+                try:
+                    slot = self.playerManager._findOpenSlotForPosition(
+                        team, prospect.position.value)
+                except Exception:
+                    slot = None
+                if not slot:
+                    continue        # no hole at his position — nothing to win
+                value = brain.decisionValue(prospect, coach=coach)
+                replacement = brain.bestReplacementValue(
+                    prospect, coach=coach, pickDepth=pickDepth)
+                if value < replacement * FO_PROSPECT_PROMOTE_EDGE:
+                    continue        # free agency offers better — leave him down
+                if value > bestValue:
+                    best, bestSlot, bestValue = prospect, slot, value
+            if best is None:
+                break
+
+            best.is_prospect = False
+            best.prospect_seasons = 0
+            best.drafting_team_id = None
+            best.team = team
+            team.rosterDict[bestSlot] = best
+            if best in team.prospects:
+                team.prospects.remove(best)
+            prospects.remove(best)
+            try:
+                best.term = self.playerManager._getPlayerTerm(best)
+                best.termRemaining = best.term
+            except Exception:
+                best.termRemaining = 1
+            promotions.append({
+                'id': getattr(best, 'id', None),
+                'name': best.name,
+                'position': best.position.name,
+                'rating': round(best.playerRating, 1),
+                'tier': best.playerTier.name,
+                'slot': bestSlot,
+            })
+            logger.info(f"Promotion {team.name}: {best.name} "
+                        f"({best.position.name}) -> {bestSlot}")
+        return promotions
+
 
     async def _processFreeAgency(self) -> None:
         """Process free agency with live per-pick broadcasting.
@@ -6792,215 +6831,6 @@ class SeasonManager:
 
     # ── GM Mode offseason helpers ─────────────────────────────────────────
 
-    async def _resolveGmFireCoachVotes(self, gmResults: list) -> None:
-        """Resolve fire_coach and hire_coach GM votes for all teams."""
-        from database.connection import get_session
-        from managers.gmManager import GmManager
-
-        session = get_session()
-        try:
-            teamManager = self.serviceContainer.getService('team_manager')
-            if not teamManager:
-                return
-            season = self.currentSeason.seasonNumber if self.currentSeason else 0
-            gm = GmManager(session, lowQuorum=self._isTestMode)
-
-            # Phase 1: Resolve fire votes (fires coach but does not hire)
-            fireResults, firedTeamIds = gm.resolveFireCoachVotes(
-                teamManager.teams, season, teamManager
-            )
-            gmResults.extend(fireResults)
-            for r in fireResults:
-                logger.info(f"GM fire_coach result: {r['teamName']} → {r['outcome']}")
-                if r.get('outcome') == 'success':
-                    self._recordOffseasonEvent(
-                        'coach_fire', teamId=r.get('teamId'), teamName=r.get('teamName'),
-                        detail=r.get('oldCoachName') or r.get('coachName'))
-
-            # Persist the FIRES durably before attempting hires. If hire
-            # resolution then raises, the except below only rolls back the
-            # hire/clear work — the fires (and their recorded results) survive,
-            # and any team left coachless is backfilled by the safety-net hire
-            # on next load. Previously a single hire-path crash rolled back the
-            # ENTIRE transaction, so passing fire votes silently did nothing.
-            session.commit()
-
-            # Phase 2: Resolve hire votes for teams that fired their coach
-            if firedTeamIds:
-                hireResults = gm.resolveHireCoachVotes(
-                    teamManager.teams, season, teamManager, firedTeamIds
-                )
-                gmResults.extend(hireResults)
-                for r in hireResults:
-                    logger.info(f"GM hire_coach result: {r['teamName']} → {r['outcome']}")
-                    if r.get('outcome') in ('success', 'hired'):
-                        self._recordOffseasonEvent(
-                            'coach_hire', teamId=r.get('teamId'), teamName=r.get('teamName'),
-                            detail=r.get('coachName') or r.get('newCoachName') or r.get('hiredCoachName'))
-
-            # Phase 3: Wipe leftover candidates for teams whose fire vote
-            # FAILED. Their pre-generated slate is no longer needed and we
-            # want the names back in the pool for next season. Defer the
-            # per-team DB save — we issue one saveUnusedNames call after
-            # the outer commit so SQLite isn't running ~24 separate write
-            # transactions inside this one.
-            unfiredTeams = [t for t in teamManager.teams if t.id not in firedTeamIds]
-            for team in unfiredTeams:
-                teamManager.clearCoachCandidates(
-                    team.id, season, keepCoachId=None, session=session,
-                    deferNameSave=True,
-                )
-
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            logger.error(f"GM fire/hire coach resolution error: {e}")
-        finally:
-            session.close()
-
-        # Single name-pool flush AFTER the session closes. Per-team flushes
-        # inside the loop above would contend with the outer write lock and
-        # deadlock under fast-mode timing. By the time we get here the GM
-        # resolution transaction is fully released, so saveUnusedNames'
-        # own session can acquire the lock without contention.
-        try:
-            playerMgr = self.serviceContainer.getService('player_manager')
-            if playerMgr is not None and hasattr(playerMgr, 'saveUnusedNames'):
-                playerMgr.saveUnusedNames()
-        except Exception as e:
-            logger.warning(f"Name pool save after GM hire resolution failed: {e}")
-
-    async def _resolveGmResignVotes(self, gmResults: list) -> None:
-        """Resolve resign_player GM votes. Sets _gmResigned flag on players."""
-        from database.connection import get_session
-        from managers.gmManager import GmManager
-
-        session = get_session()
-        try:
-            teamManager = self.serviceContainer.getService('team_manager')
-            if not teamManager:
-                return
-            season = self.currentSeason.seasonNumber if self.currentSeason else 0
-            gm = GmManager(session, lowQuorum=self._isTestMode)
-            results = gm.resolveResignVotes(
-                teamManager.teams, season, self.playerManager
-            )
-            session.commit()
-            gmResults.extend(results)
-        except Exception as e:
-            session.rollback()
-            logger.error(f"GM re-sign resolution error: {e}")
-        finally:
-            session.close()
-
-    async def _resolveGmCutVotes(self, gmResults: list) -> None:
-        """Resolve cut_player GM votes. Cut players join the FA pool."""
-        from database.connection import get_session
-        from managers.gmManager import GmManager
-
-        session = get_session()
-        try:
-            teamManager = self.serviceContainer.getService('team_manager')
-            if not teamManager:
-                return
-            season = self.currentSeason.seasonNumber if self.currentSeason else 0
-            # Build position-keyed FA lists for releasePlayerToFreeAgency
-            freeAgentLists = {
-                'qb': [p for p in self.playerManager.freeAgents if p.position.value == 1],
-                'rb': [p for p in self.playerManager.freeAgents if p.position.value == 2],
-                'wr': [p for p in self.playerManager.freeAgents if p.position.value == 3],
-                'te': [p for p in self.playerManager.freeAgents if p.position.value == 4],
-                'k':  [p for p in self.playerManager.freeAgents if p.position.value == 5],
-            }
-            gm = GmManager(session, lowQuorum=self._isTestMode)
-            results = gm.resolveCutVotes(
-                teamManager.teams, season, self.playerManager,
-                freeAgentLists
-            )
-            session.commit()
-            gmResults.extend(results)
-            for r in results:
-                if r.get('voteType') == 'cut_player' and r.get('outcome') == 'success':
-                    self._recordOffseasonEvent(
-                        'cut', teamId=r.get('teamId'), teamName=r.get('teamName'),
-                        playerId=r.get('targetPlayerId'), playerName=r.get('targetPlayerName'),
-                        position=r.get('targetPosition'), rating=r.get('targetRating'),
-                        tier=r.get('targetTier'))
-        except Exception as e:
-            session.rollback()
-            logger.error(f"GM cut resolution error: {e}")
-        finally:
-            session.close()
-
-    async def _awardCleanHouseAchievements(self, gmResults: list) -> None:
-        """Grant the 'mutineer' secret (Scorched Earth) to fans who orchestrated
-        a total teardown of their favorite team this offseason.
-
-        Earned when, in one offseason, a fan votes to fire the coach AND to
-        remove players (cut or let walk), and the team actually ends up gutted:
-        the coach was fired and every roster slot is now empty. Must run right
-        after cut resolution — at that point the roster reflects every cut and
-        non-resign, and the rookie/FA drafts that refill it haven't fired yet.
-        The coach always gets backfilled in the fire/hire step, so the coach
-        side is gated on "fired this offseason" (a ratified fire vote in
-        gmResults), not an empty coach slot.
-        """
-        from database.connection import get_session
-        from database.models import GmVote
-        from managers import achievementManager as _am
-
-        # Teams whose coach was fired this offseason (ratified fire vote).
-        firedTeamIds = {
-            r["teamId"] for r in gmResults
-            if r.get("voteType") == "fire_coach" and r.get("outcome") == "success"
-        }
-        if not firedTeamIds:
-            return
-
-        teamManager = self.serviceContainer.getService('team_manager')
-        if not teamManager:
-            return
-
-        # Of the fired-coach teams, the ones whose entire roster is now empty —
-        # every starter cut or not re-signed. rosterDict slots go None when vacated.
-        clearedTeamIds = {
-            t.id for t in teamManager.teams
-            if t.id in firedTeamIds
-            and all(p is None for p in t.rosterDict.values())
-        }
-        if not clearedTeamIds:
-            return
-
-        season = self.currentSeason.seasonNumber if self.currentSeason else 0
-        session = get_session()
-        try:
-            for teamId in clearedTeamIds:
-                votes = session.query(GmVote).filter_by(
-                    team_id=teamId, season=season,
-                ).all()
-                # Fans who voted to fire the coach...
-                fireBackers = {
-                    v.user_id for v in votes
-                    if v.vote_type == "fire_coach" and (v.direction or "yea") != "nay"
-                }
-                # ...AND voted to remove at least one player (cut yea / re-sign nay).
-                playerPurgers = {
-                    v.user_id for v in votes
-                    if (v.vote_type == "cut_player" and (v.direction or "yea") != "nay")
-                    or (v.vote_type == "resign_player" and v.direction == "nay")
-                }
-                for uid in (fireBackers & playerPurgers):
-                    _am.unlockSecret(session, uid, "mutineer")
-                    logger.info(
-                        f"Scorched Earth (mutineer) unlocked for user {uid} "
-                        f"(team {teamId} torn down)"
-                    )
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Clean-house achievement award error: {e}")
-        finally:
-            session.close()
 
     async def _openFaVotingWindowMidSeason(self) -> None:
         """Open the FA voting window mid-season when the Front Office activates.
@@ -7352,165 +7182,6 @@ class SeasonManager:
                 return None
             return datetime.datetime.utcnow() + datetime.timedelta(seconds=seconds)
         return None
-
-    async def _runFaVotingWindow(self, closeWindow: bool = True) -> None:
-        """Resolve sign_fa votes via RCV and (optionally) close the window.
-
-        Historically this method always closed the window. With the phased
-        offseason, we resolve ballots TWICE:
-          1. During the front-office phase (closeWindow=False) so the predraft
-             pass has up-to-date directives for fan-voted prospect promotions.
-          2. Right before the FA draft (closeWindow=True) so any ballots cast
-             or revised during the rookie-draft / pre-FA wait window are
-             reflected in the final FA-draft directives.
-
-        Setting closeWindow=False keeps `_faWindowOpen=True` so the API
-        endpoint keeps accepting submissions until the second call.
-        """
-        # Ensure window is open — edge case: if currentWeek never passed
-        # GM_ACTIVE_WEEK (short test mode), open it briefly so any late ballots
-        # can still be resolved
-        if not getattr(self, '_faWindowOpen', False):
-            self._faWindowOpen = True
-        if closeWindow:
-            self._faWindowOpen = False
-            self._faWindowEnd = None
-
-            # Broadcast FA window close
-            if BROADCASTING_AVAILABLE and broadcaster:
-                try:
-                    from api.event_models import GmEvent
-                    await broadcaster.broadcast_season_event(
-                        GmEvent.faWindowClose(
-                            self.currentSeason.seasonNumber if self.currentSeason else 0,
-                        )
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not broadcast FA window close: {e}")
-
-        # Resolve sign_fa ballots via RCV and set directives on playerManager
-        from database.connection import get_session
-        from managers.gmManager import GmManager
-
-        session = get_session()
-        try:
-            teamManager = self.serviceContainer.getService('team_manager')
-            if not teamManager:
-                return
-            season = self.currentSeason.seasonNumber if self.currentSeason else 0
-
-            # Build open positions per team
-            teamOpenPositions = {}
-            for team in teamManager.teams:
-                openPositions = []
-                posMap = {'qb': 1, 'rb': 2, 'wr1': 3, 'wr2': 3, 'te': 4, 'k': 5}
-                for slot, posVal in posMap.items():
-                    if team.rosterDict.get(slot) is None:
-                        openPositions.append(posVal)
-                if openPositions:
-                    teamOpenPositions[team.id] = openPositions
-
-            freeAgentLists = {
-                'qb': [p for p in self.playerManager.freeAgents if p.position.value == 1],
-                'rb': [p for p in self.playerManager.freeAgents if p.position.value == 2],
-                'wr': [p for p in self.playerManager.freeAgents if p.position.value == 3],
-                'te': [p for p in self.playerManager.freeAgents if p.position.value == 4],
-                'k':  [p for p in self.playerManager.freeAgents if p.position.value == 5],
-            }
-
-            gm = GmManager(session, lowQuorum=self._isTestMode)
-            directives, overallRankings, positionPriorities = gm.resolveSignFaVotes(
-                teamManager.teams, season,
-                freeAgentLists, teamOpenPositions
-            )
-            session.commit()
-
-            # Feed the FA draft the FULL ranked list (not the slot-trimmed
-            # top-per-slot `directives`): when a fan's #1 at a position is signed
-            # by another team first, the draft now falls to the fans' #2/#3 at
-            # that position before dropping to best-available. The draft walk
-            # already guards every sign with an open-slot check, so a longer list
-            # can't over-sign — it just walks further down the ranking. (The
-            # trimmed `directives` stays the "FA TARGETS" headline display.)
-            self.playerManager._gmFaDirectives = overallRankings
-            # Fan-aggregated position fill order for the best-available fallback.
-            self.playerManager._gmFaPositionPriority = positionPriorities
-            if overallRankings:
-                logger.info(f"GM FA full ranked directives for {len(overallRankings)} team(s)")
-            if positionPriorities:
-                logger.info(f"GM FA position priorities for {len(positionPriorities)} team(s)")
-
-            # Build enriched per-team flat ranking. Each entry carries its
-            # own position name so the UI can render position chips on a
-            # single ordered list.
-            playerLookup = {p.id: p for p in self.playerManager.freeAgents}
-            for t in teamManager.teams:
-                for p in getattr(t, 'prospects', []):
-                    playerLookup[p.id] = p
-                for slot, p in t.rosterDict.items():
-                    if p is not None:
-                        playerLookup[p.id] = p
-            teamLookup = {t.id: t for t in teamManager.teams}
-            enrichedFaRankings: Dict[str, list] = {}
-            for tId, playerIds in overallRankings.items():
-                team = teamLookup.get(tId)
-                teamAbbr = getattr(team, 'abbr', None) if team else None
-                if not teamAbbr:
-                    continue
-                entries = []
-                for pid in playerIds:
-                    p = playerLookup.get(pid)
-                    if not p:
-                        continue
-                    entries.append({
-                        "id": p.id,
-                        "name": p.name,
-                        "position": p.position.name,
-                        "rating": round(getattr(p, 'playerRating', 0), 1),
-                        "isProspect": bool(getattr(p, 'is_prospect', False)),
-                    })
-                if entries:
-                    enrichedFaRankings[teamAbbr] = entries
-            self._offseasonFaVoteResults = enrichedFaRankings
-
-            # Resolved fan position fill-order per team (abbr-keyed), for the
-            # Front Office to show how the fallback will fill open slots.
-            posPriorityByAbbr: Dict[str, list] = {}
-            for tId, order in (positionPriorities or {}).items():
-                t = teamLookup.get(tId)
-                abbr = getattr(t, 'abbr', None) if t else None
-                if abbr and order:
-                    posPriorityByAbbr[abbr] = list(order)
-            self._offseasonFaPositionPriority = posPriorityByAbbr
-
-            # Broadcast directives to frontend with player details
-            if BROADCASTING_AVAILABLE and broadcaster and directives:
-                try:
-                    # Build player lookup from free agents
-                    faLookup = {p.id: p for p in self.playerManager.freeAgents}
-                    enriched = {}
-                    for tId, playerIds in directives.items():
-                        enriched[tId] = []
-                        for pid in playerIds:
-                            p = faLookup.get(pid)
-                            if p:
-                                enriched[tId].append({
-                                    "id": p.id,
-                                    "name": p.name,
-                                    "position": p.position.name,
-                                    "rating": round(p.playerRating, 1),
-                                })
-                    from api.event_models import GmEvent
-                    event = GmEvent.faDirectives(enriched)
-                    event['faRankings'] = enrichedFaRankings
-                    await broadcaster.broadcast_season_event(event)
-                except Exception as e:
-                    logger.warning(f"Could not broadcast FA directives: {e}")
-        except Exception as e:
-            session.rollback()
-            logger.error(f"GM FA vote resolution error: {e}")
-        finally:
-            session.close()
 
     # NOTE: This method is no longer used - free agent retirements are handled
     # by playerManager._processFreeAgentRetirements() within conductFreeAgencySimulation()
