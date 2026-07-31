@@ -22,11 +22,11 @@ converts to a consumable currency and nothing persists.
 
 ### New prognostication feature — Survivor
 A survivor-style contest layer on top of pick-em (last-one-standing elimination), part of the broader prognosticator progression direction.
-- **Plan:** ⚠️ `docs/PICKEM_DEPTH_PLAN.md` **does not exist** — never written or lost. This
-  paragraph is now the whole spec.
-- **Status:** designed only in outline, not built. The general progression layer it was
-  meant to plug into is now `docs/RENOWN_PROGRESSION_PLAN.md`; Survivor is explicitly out
-  of Renown v1.
+- **Plan:** `docs/PICKEM_DEPTH_PLAN.md` — **not on disk**; a revert deleted it along with
+  its code. Read it with `git show 2a37f2f:docs/PICKEM_DEPTH_PLAN.md`. Restore it to disk
+  if Survivor gets picked up.
+- **Status:** designed, not built. The general progression layer it was meant to plug into
+  is now `docs/RENOWN_PROGRESSION_PLAN.md`; Survivor is explicitly out of Renown v1.
 
 ### Idea (undefined) — Awakened / glitched player cards
 Tie the anomaly/awakening theme into the card system: when a player awakens (or during a Criticality), some special card variant of them exists. Not yet specced — what it is, how you get one, what it does, cosmetic vs mechanical. Flesh out before building.

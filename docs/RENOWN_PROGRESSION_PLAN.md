@@ -10,45 +10,41 @@ social-feed team page (`AUTONOMOUS_FRONT_OFFICE_PLAN.md` Part D), Survivor.
 layer and Survivor. **That file does not exist** — either never written or lost. Survivor
 survives only as the one-paragraph entry in `docs/NEXT_SEASON.md`.
 
-## ⚠️ UNRESOLVED CONFLICT with the 2026-06-16 progression decision
+## Supersedes the 2026-06-16 achievement-derived progression model
 
-**Read this before building anything below.**
+**Settled by owner 2026-07-31: Renown supersedes it.** Recorded here so the earlier
+decision doesn't get re-litigated, and so the salvage doesn't get lost.
 
-There is a prior, explicitly-reasoned owner decision that contradicts this plan's core
-mechanism. On 2026-06-16 the progression model was settled as: **no new XP/level system —
-the existing tiered achievement families ARE the ranks**, with a permanent overall level
-derived as a weighted sum over `UserAchievement` history. A parallel score system was
-"explicitly rejected" as redundant with achievements.
+The prior model was: no new score — the tiered achievement families *are* the ranks, with a
+permanent level derived as a weighted sum over `UserAchievement`. It was **built** and then
+pulled from the release for timing, not on design grounds:
 
-That model was **built** — backend `2a37f2f` (`managers/progressionManager.py`,
-`GET /api/profile/{userId?}`, 172 lines, no schema at all) and frontend `891517f`
-(`ProfilePage.tsx`, `useProfile.ts`, route + sidebar, 230 lines) — then **pulled from the
-release** (`54a6275` / `e55d084`) for timing, *not* on design grounds: "not ready to roll
-into next season". Both reverts are clean and cherry-pickable.
+| | |
+|---|---|
+| backend | `2a37f2f` — `managers/progressionManager.py` (172 lines), `GET /api/profile/{userId?}`, no schema |
+| frontend | `891517f` — `ProfilePage.tsx`, `useProfile.ts`, route + sidebar (230 lines) |
+| reverts | `54a6275` / `e55d084` — clean, cherry-pickable |
 
-The reverts also took `docs/PROGRESSION_PLAN.md` and `docs/PICKEM_DEPTH_PLAN.md` with them,
-which is why every pointer to those files 404s. They are recoverable:
-`git show 2a37f2f:docs/PROGRESSION_PLAN.md`.
+**Why it's superseded:** deriving the score from achievement completions makes progression
+design a hostage to achievement design — the spine can only measure what achievements
+happen to cover, and any coverage gap becomes a hole in the career track that can only be
+fixed by writing more achievements. Renown measures production directly, so the sources are
+chosen for what they say about a player rather than for what a quest happens to track.
+Achievements stay in the model as one of the five sources (`goals`) and as renown-granting
+quests, which is where the original insight — that what achievements *pay* is the
+high-leverage lever — survives intact.
 
-**The two models:**
+**Still worth salvaging from that build:**
+- `ProfilePage.tsx` / `useProfile.ts` are a ready-made home for the rank badge and career
+  standing. v1 needs a surface to render ranks on; this is most of one.
+- The trophy-case query (capstone completions across all seasons, off existing
+  `UserAchievement` rows) is orthogonal to scoring and works under either model.
+- The category/tier point weighting is a reasonable starting shape for the `goals` source.
 
-| | Achievement-derived (2026-06-16, built) | Renown ledger (this doc) |
-|---|---|---|
-| New tables | none | `renown_events` + read cache |
-| Where score comes from | weighted sum over `UserAchievement` | direct production in 5 systems |
-| Backfill | free — history already exists | a real job (but doubles as the tuning harness) |
-| Tuning | edit one weight map | retune + replay the ledger |
-| Coverage | only what achievements happen to measure | whatever is measured directly |
-| Risk | progression design becomes achievement design | a second scoring system to keep honest |
-
-They are closer than they look: this plan already says achievements become renown-granting
-quests, and the prior plan's "overall level = lifetime achievement score" is the same career
-spine with a cheaper implementation. The real divergence is **whether the score reads raw
-per-system production or only achievement completions.**
-
-**This is an owner call and it is not made.** Everything below specs the ledger model; if
-the achievement-derived model wins, the retention findings, the ladder shape, the weekly
-cadence and the auto-pick exclusion all still apply — only the source layer changes.
+**Also recovered:** the reverts deleted `docs/PROGRESSION_PLAN.md` and
+`docs/PICKEM_DEPTH_PLAN.md` along with the code, which is why every pointer to those paths
+404s. Read them with `git show 2a37f2f:docs/PROGRESSION_PLAN.md`. `PICKEM_DEPTH_PLAN.md` is
+the only real spec for **Survivor** that exists.
 
 ## The problem
 
