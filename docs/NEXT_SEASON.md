@@ -46,8 +46,20 @@ Three separable tracks; each needs a design pass. Grounding + open decisions cap
 
 - **Remove prospect/rookie draft → periodic FA-pool injection** — ✅ **SETTLED 2026-07-27 (owner): do it.** Specced as **Part F of `docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md`**, not as a standalone track. The collision below is resolved: the autonomous FO's aggression dial reads the worst-first **FA** order (`FO_FA_CONTENTION`), never the rookie draft, so the already-built GM brain needs no rework; and `playerManager.ensurePositionSupply` already guarantees the per-position roster floor, so it gets promoted from safety net to primary intake. The three-tier prospect true-skill model is recommended to SURVIVE (it's an entry-independent parity lever the GM brain's arc reading depends on). Original note follows. ⚠️ **Collided with in-flight work**: (a) the just-shipped **parity prospect true-skill model** (three-tier `current < trueSkill < potential`, rookies debut low and grow in — itself a skill-creep/parity lever, `docs/PARITY_PROSPECT_PLAN.md`); (b) the **autonomous Front Office plan** is built on the draft — "draft-position → aggression dial", worst-first rookie/FA drafts, cut-for-upgrade thresholds scaled by draft slot (`docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md:91`). Woven through the offseason flow (`rookie_draft` phase, `playerManager.rookieDraftPickGenerator`, rookie ballots, prospect promotions, Rookie Pack `is_rookie`). OPEN: does injection **replace** the debut-low-grow-in model or do entrants still arrive underdeveloped just via FA; what replaces "draft position" as the FO aggression signal (worst-first **FA priority order**?); injection cadence. **Settle this before building the autonomous FO** — it's the track that most affects other plans.
 
+### The Deeper Game — fans vs the Cores (owner framing, 2026-07-31)
+The anomaly/Criticality layer reframed: **football is the scenery, the real contest is fans
+against the five Cores.** Vigils as a deliberate attention lever, a trailing-baseline bar a
+coordinated surge can actually cross, contested firing (the Cores spend finite patches) instead
+of a dice roll, Cores with alignments — Aris leaks, Pyre contains, Cassian is distractible so
+dramatic weeks are cover — and the **498b → 498c** letter-burn from `data/lore.md` as the
+long-game scoreboard.
+- **Plan:** `docs/CRITICALITY_METAGAME_PLAN.md` — specced, nothing built.
+- **Why it's a prerequisite:** `SIM_EVOLUTION.md` Stage 2 (fan-voted rule mutation) is the
+  Criticality *aftermath*, so it can't land until the trigger is a contest rather than weather.
+
 ## Bugs / smaller fixes
-- **Criticality threshold is outrun by the season** ⚠️ OPEN, needs a design call — the bar
+- **Criticality threshold is outrun by the season** ⚠️ OPEN — folded into the Deeper Game plan
+  above (the trailing baseline). Needs a design call — the bar
   sits at 0.92× the expected resting level (permanently crossed by construction) AND is
   estimated once at week 6 from an estimator that assumes constant input, so it under-reads
   a growing league ~3×. Result: the crossing carries no information and the 30% dice roll is
