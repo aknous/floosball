@@ -2,14 +2,31 @@
 
 > Living list of features targeted for the next season cutover. **Keep this updated as features land** — move items to "Shipped" with the commit/version, and link each in-flight item to its design doc. Owner-curated.
 
-_Last updated: 2026-07-20_
+_Last updated: 2026-07-31_
+
+> ⚠️ This file went 11 days stale and said nothing about the Autonomous Front Office, which
+> was the only thing being built. **The AFO is the live tracker for that work**
+> (`docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md`) — Parts A–E and Part F wave 1 are shipped.
 
 ## Planned
 
+### User progression — Renown ⬅ next big thing (owner, 2026-07-31)
+Account-level standing every system feeds; the fix for a terminal loop where all effort
+converts to a consumable currency and nothing persists.
+- **Plan:** `docs/RENOWN_PROGRESSION_PLAN.md` — **specced against 15 seasons of real data
+  2026-07-31**, zero code.
+- **Scope decided:** retention-led, v1 = ledger + source formula + backfill + career ranks +
+  one cosmetic surface. Ships the cutover **after** next.
+- **Why it moved up:** engaged users fell 28 → 14 over 15 seasons, and median career length
+  is **2 seasons** (63% gone by season 3). The churn window is seasons 1–3, not 15.
+
 ### New prognostication feature — Survivor
 A survivor-style contest layer on top of pick-em (last-one-standing elimination), part of the broader prognosticator progression direction.
-- **Plan:** `docs/PICKEM_DEPTH_PLAN.md` (survivor contest section)
-- **Status:** designed, not built. Build the engagement/progression layer GENERAL (reusable rank/XP hook), not a pick-em silo.
+- **Plan:** ⚠️ `docs/PICKEM_DEPTH_PLAN.md` **does not exist** — never written or lost. This
+  paragraph is now the whole spec.
+- **Status:** designed only in outline, not built. The general progression layer it was
+  meant to plug into is now `docs/RENOWN_PROGRESSION_PLAN.md`; Survivor is explicitly out
+  of Renown v1.
 
 ### Idea (undefined) — Awakened / glitched player cards
 Tie the anomaly/awakening theme into the card system: when a player awakens (or during a Criticality), some special card variant of them exists. Not yet specced — what it is, how you get one, what it does, cosmetic vs mechanical. Flesh out before building.

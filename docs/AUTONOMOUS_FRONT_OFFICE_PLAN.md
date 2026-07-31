@@ -11,7 +11,8 @@ Part F's draft removal is now CODE, not just a flag (wave 1, 2026-07-29).
    Deliberately deferred: prospects are still draining on deployed DBs and
    promotion is load-bearing until they hit zero (~3 seasons). Owner ruled the
    COLUMNS stay permanently — code only, no table rebuild.
-2. **Team page redesign** — PAUSED by owner 2026-07-29.
+2. ~~**Team page redesign** — PAUSED by owner 2026-07-29.~~ ✅ **DONE 2026-07-31**
+   (frontend `088daca`).
 3. **Step 10** — team mood as a morale/atmosphere consumer. Optional, never
    started. (An earlier revision claimed `teamMood` was "computed and surfaced
    but wired to nothing" — that is WRONG: no such value exists anywhere.)
@@ -1018,27 +1019,36 @@ here. The read paths, aggregation, and every backend rule are covered by the
   enforces it. Language is gender-neutral and American football, not English
   football ("The Bleachers", team/franchise, fan — not terraces/club/supporter).
 
-### Team page redesign — PAUSED (owner, 2026-07-29)
-The page was rewritten from scratch (`TeamPage.tsx`, old version in git): roster
-as player cards grouped in a 2x3 grid, masthead with scoreboard figures, a
-sideline rail for coach + feed + boards, `/front-office` merged in and
-redirected, reference tables behind one disclosure.
+### Team page redesign ✅ (done 2026-07-31, frontend `088daca`)
+Paused on 2026-07-29 at "still feels messy and incohesive", then rebuilt from a
+design handoff spec and iterated to done. The page is now one continuous read:
+hero band → trophy case → five-cell facts row (ratings / coach / locker room /
+stadium / next up) → roster beside The Bleachers → season history + schedule →
+`FrontOfficeBand`. `SectionRail` adds right-edge section nav plus proximity
+scroll-snap. `/front-office` still redirects here.
 
-**Owner's verdict: "still feels messy and incohesive."** Parked mid-iteration,
-not finished. Known-unresolved when it stopped:
-- The sideline rail and the "Your Team" section still use old components and
-  haven't been designed to match the cards.
-- Compact rating controls show no explanation below quorum (the hint line is
-  suppressed to save space), so an unrated player reads as broken.
-- Card/grid proportions went through several rounds and never settled.
+All three known-unresolved items from the pause are closed: the fan controls
+were redesigned into the page rather than left in old components; gauges follow
+the house 0–100 style used on the player page; the compact rating control now
+fills from the fanbase average with the hint line restored, so an unrated player
+no longer reads as broken.
+
+Two things found and fixed along the way that were real bugs, not styling:
+locker-room gauge domains were read off `computeLockerRoom`'s docstring, which
+describes a roster average rather than the league spread (a third of the league
+pegged full); and 10 of 24 team colours failed 4.5:1 as text on the dark page
+(Detroit's navy at 1.41:1), now lifted by `readableOnDark()`.
 
 ### Still open in the sentiment layer
-- **Frontend (step 9) — DELETION half still pending**: the vote/ballot UI
-  (`VoteControls`, `FaBallotModal`, `CutPlayerCard`, `ResignPlayerCard`,
-  `FireCoachCard`, `HireCoachCard`, …) is untouched and comes out with step 7.
-- **Team mood as a second consumer** (step 10, optional) — `teamMood` is
-  computed and surfaced but wired to nothing. Owner already ruled that funding
-  stays purely fan-contributed, so this would be atmosphere/morale only.
+- **Team mood as a second consumer** (step 10, optional) — never started. NOTE:
+  an earlier revision of this section claimed `teamMood` is "computed and
+  surfaced but wired to nothing"; that is wrong, no such value exists anywhere.
+  Owner already ruled funding stays purely fan-contributed, so this would be
+  atmosphere/morale only.
+
+_(The step-9 deletion half — `VoteControls`, `FaBallotModal`, `CutPlayerCard`,
+`ResignPlayerCard`, `FireCoachCard`, `HireCoachCard` — was listed here as
+pending long after step 7 removed all nine components. Closed.)_
 
 ### Step 7 — vote removal ✅ (done, sim-verified)
 Done in TWO stages deliberately: flip `AUTONOMOUS_FO_ENABLED` on and prove the
