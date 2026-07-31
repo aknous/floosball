@@ -47,6 +47,17 @@ Three separable tracks; each needs a design pass. Grounding + open decisions cap
 - **Remove prospect/rookie draft → periodic FA-pool injection** — ✅ **SETTLED 2026-07-27 (owner): do it.** Specced as **Part F of `docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md`**, not as a standalone track. The collision below is resolved: the autonomous FO's aggression dial reads the worst-first **FA** order (`FO_FA_CONTENTION`), never the rookie draft, so the already-built GM brain needs no rework; and `playerManager.ensurePositionSupply` already guarantees the per-position roster floor, so it gets promoted from safety net to primary intake. The three-tier prospect true-skill model is recommended to SURVIVE (it's an entry-independent parity lever the GM brain's arc reading depends on). Original note follows. ⚠️ **Collided with in-flight work**: (a) the just-shipped **parity prospect true-skill model** (three-tier `current < trueSkill < potential`, rookies debut low and grow in — itself a skill-creep/parity lever, `docs/PARITY_PROSPECT_PLAN.md`); (b) the **autonomous Front Office plan** is built on the draft — "draft-position → aggression dial", worst-first rookie/FA drafts, cut-for-upgrade thresholds scaled by draft slot (`docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md:91`). Woven through the offseason flow (`rookie_draft` phase, `playerManager.rookieDraftPickGenerator`, rookie ballots, prospect promotions, Rookie Pack `is_rookie`). OPEN: does injection **replace** the debut-low-grow-in model or do entrants still arrive underdeveloped just via FA; what replaces "draft position" as the FO aggression signal (worst-first **FA priority order**?); injection cadence. **Settle this before building the autonomous FO** — it's the track that most affects other plans.
 
 ## Bugs / smaller fixes
+- **Criticality threshold is outrun by the season** ⚠️ OPEN, needs a design call — the bar
+  sits at 0.92× the expected resting level (permanently crossed by construction) AND is
+  estimated once at week 6 from an estimator that assumes constant input, so it under-reads
+  a growing league ~3×. Result: the crossing carries no information and the 30% dice roll is
+  the whole trigger, so Criticality **is** random. A fixed bar can't work (the aggregate
+  grows 2-3× a season); it needs a trailing baseline. Can't be validated by `simcheck` —
+  FAST mode bypasses the adaptive threshold entirely. Full audit in
+  `docs/AWAKENED_POWERS_PLAN.md` "Known defects".
+- **Awakening has no deliberate lever** — design work, not a bug; same audit, last section.
+- **`PURGE_MAX_CHANCE` (0.45) wants an owner balance pass** — the purge curve was fixed from
+  a 10% ceiling to a real one, but the prod-mode value is reasoned, not sim-measured.
 - **Showcase dividend rate balance pass** — `SHOWCASE_DIVIDEND_RATE` (0.13) was a calibrated starting point (sustained S ≈ the old ~3000 lump/season, top end uncapped); still wants an owner balance pass.
 
 ## Shipped (this cycle)

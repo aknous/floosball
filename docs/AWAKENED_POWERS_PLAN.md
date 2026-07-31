@@ -254,3 +254,97 @@ Awakened players are reliably game-swinging every week → they accelerate the
 league aggregate (more attention/awakening) → Criticality → **Reset purges the
 awakened**. Rostering an awakened star = a Faustian deal: huge upside now, the
 cull later.
+
+---
+
+# Known defects (audited 2026-07-31)
+
+Owner report: "Criticality feels random, sometimes the status says critical but it
+never fires"; and "no real levers to nudge an awakening". Audited against 15
+seasons of real state in the prod-derived dev DB. Three defects; two fixed, one
+deferred because it needs a design call.
+
+## 1. Warning spam ✅ FIXED
+
+`_maybeFireWarning` appended its audit entry with **no `week` key**, while the
+once-per-cycle dedup filtered on `entry.get('week', 0) < cycleStart`. Every past
+warning therefore read as week 0 and, once `last_reset_week` was set, sorted as
+pre-cycle and got skipped — so the milestone re-fired on **every tick**.
+
+Measured S15: 16 warnings, 12 of them `warning_high`, most narrating a threshold
+that had been crossed for weeks. The Cores cried wolf all season.
+
+Fixed by writing `week` on the entry (plus a `None`-safe read). Post-fix, over
+two full sim seasons on a prod copy: **~10 warnings/season across ~9 cycles**,
+running `warning_low → warning_high → event → re-arm`, which is the documented
+behavior. (A "cycle" ends at a suppression OR a reset — `_suppressCriticality`
+sets `last_reset_week` deliberately, so ~9 cycle-enders a season is expected.)
+
+## 2. The purge was nearly toothless ✅ FIXED
+
+`rawProb = (attention - AWAKEN_THRESHOLD) / 100` predates `ATTENTION_SOFT_CAP`.
+Its docstring imagined players "at 200+" being overwhelmingly likely to be
+cleansed, but the cap pins attention at 100 and awakening starts at 90, so the
+numerator can only reach **10** — a **10% ceiling**, halved to 5% for an aware
+personality. Awakening carried no real risk, which removes the Faustian deal the
+"Self-balancing loop" section above is built on.
+
+Now `min(1, excess / PURGE_RISK_SPAN) × PURGE_MAX_CHANCE`, where
+`PURGE_RISK_SPAN = ATTENTION_SOFT_CAP - AWAKEN_THRESHOLD` — the reachable
+headroom, so it adapts to FAST mode's own thresholds too — and `PURGE_MAX_CHANCE`
+(0.45) is an explicit tunable rather than an accident of the divisor.
+
+⚠️ **The prod-mode effect of this is reasoned, not sim-measured.** FAST mode sets
+`AWAKEN_THRESHOLD = 50`, so the span is 50 and the old formula already topped out
+near 50% — the bug simply does not manifest in a fast sim. Measured fast-mode
+purge rate went 37% → 22-27% (slightly gentler); the prod change is 10% → 45%
+ceiling. `PURGE_MAX_CHANCE` wants an owner balance pass.
+
+## 3. The threshold is outrun by the season ⚠️ NOT FIXED — needs a design call
+
+**This is the one causing "feels random".** Two compounding causes:
+
+- `THRESHOLD_PLATEAU_MULT = 0.92` sets the bar **below** the estimated resting
+  level. Even with a perfect estimate the aggregate settles at the plateau, so the
+  ratio rests at 1/0.92 ≈ 1.09 — **permanently over the bar by construction.**
+- The plateau estimator assumes constant weekly input and samples once at week 6.
+  Real attention grows all season, so it under-reads badly. S15 seeded ≈176 and
+  finished at an aggregate of 509, roughly 3× the bar it was measured against.
+
+Every S15 event ratio: `0.79 1.31 0.43 1.20 1.55 0.64 1.13 0.41 0.99 1.63 1.13
+1.36 0.45 0.85 1.23 0.86 1.28`. Being over the bar is the steady state.
+
+Consequences: the crossing carries no information, so the only thing deciding
+whether an event happens is the 30% dice roll — **the event genuinely is random**,
+not just perceived that way. And `getCriticalityStatus` reads `critical` at
+ratio ≥ 1.0, which is most weeks, while firing is additionally gated by
+suppression windows and unresolved-Criticality windows. "Critical but nothing
+happens" is the expected output.
+
+The containment bumps (suppression ×1.10, fire ×1.25) chase but never catch: S15
+ratcheted the bar to 498 against an aggregate of 625.
+
+**Why it wasn't just fixed:** a *fixed* bar cannot work here. The aggregate grows
+~2-3× across a season, so any constant threshold is either never crossed (set
+high) or permanently crossed (set low). Making the crossing rare again means the
+bar has to be **relative to the league's own recent baseline** — a trailing
+average with enough lag that a genuine surge crosses it before the baseline
+catches up. That is a design change to the event's character, not a defect fix,
+and it is exactly the design conversation the owner deferred.
+
+**It also cannot be validated by `simcheck`.** `_maybeSeedAdaptiveThreshold`
+returns immediately in FAST mode and `_seedThreshold` hands back a random low
+band instead, so no fast sim exercises the adaptive path at all. Validating a
+change here needs either a non-fast run with real attention or a synthetic
+attention-replay harness.
+
+## Adjacent, not a defect — the lever problem
+
+Attention decays 0.9/week, so equilibrium is 10× weekly contribution; awakening
+is 90 and the cap is 100. One equipped card held all season awakens a player in
+~22 weeks; **two cards does it in six**. Of the four sources (card 10, fantasy
+slot 8, follow 2, favorite-team fan 0.5×fans) only **follow** is a deliberate act,
+and it is the weakest by 5×. Past the cap all surplus overflows into the league
+aggregate — invisible to the player, and nothing further can be pushed on for
+that player. There is no strategy to express, which is the "no meta-game" half of
+the owner's report. Design work, not a bug.
