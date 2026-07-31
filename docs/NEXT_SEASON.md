@@ -8,6 +8,31 @@ _Last updated: 2026-07-31_
 > was the only thing being built. **The AFO is the live tracker for that work**
 > (`docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md`) — Parts A–E and Part F wave 1 are shipped.
 
+## Design pillars (owner, 2026-07-31)
+
+What the game is for. Check features against this before building them.
+
+**What fans want**
+1. **Games with meaning, but also chaos** — awakened powers, rule changes. Meaning first: the
+   chaos only lands because the results count.
+2. **Players who are characters** — personalities exist (`personalityManager`, 432 vibe
+   reactions, per-personality flavor/mottos, purge-dodge by meta-awareness tier) but want more
+   fleshing out.
+3. **Lore and narrative** — the Cores, the simulation. `data/lore.md`, `coresManager`.
+
+**What we're introducing / deepening**
+- **Fans interacting with the simulation** — rule votes exist; this is the direction to widen.
+- **Gaming the awakening and Criticality events** — `docs/CRITICALITY_METAGAME_PLAN.md`.
+
+**What must never happen** 🔒
+- **Games, seasons, and players wiped out, restarted, or losing meaning.**
+  → The contest's currency is **control and anomaly, never records.** Fair to lose: an awakened
+  ability, who governs a rule, how tight the Cores' grip is. Never at risk: seasons, standings,
+  careers, stats, the Hall of Fame, Renown, collections. A cleansed player loses the *power*, not
+  the *person*.
+  → This vetoed the 498b→498c letter-burn as a mechanic (it implied a restart). The lore survives
+  as the Cores' own fear — motive for the opponent, never a thing that happens to your league.
+
 ## Planned
 
 ### User progression — Renown ⬅ next big thing (owner, 2026-07-31)

@@ -104,27 +104,67 @@ timing mode.
 
 ---
 
+## What is never at stake (locked — owner, 2026-07-31)
+
+> "What we don't want to happen: games, seasons, and players to be wiped out, restarted, or lose
+> meaning."
+
+This is a hard constraint on the whole design, and it kills a rung an earlier revision of this
+document proposed (see below). Stated positively:
+
+**The currency of the contest is CONTROL and ANOMALY. It is never RECORDS.**
+
+| Never at risk | Fair game |
+|---|---|
+| seasons, standings, results | awakened abilities (already true — a Reset cleanses them) |
+| player careers, stats, records, the Hall of Fame | who currently governs a rule |
+| Renown, collections, Showcase | how tight the Cores' grip is next season |
+| the league continuing to exist | a player's anomalous *state* |
+
+A player who is cleansed keeps their career, stats and records — they lose the *power*, not the
+person. That is the deepest cut the design is allowed to make.
+
+⚠️ **This deserves a second look at `PURGE_MAX_CHANCE` (0.45).** Today's fix restored a real
+stake to awakening, but 45% at the cap sits close to this constraint's edge. A fan who spent a
+season raising a player loses that investment on a coin flip. Losing an *ability* is not losing a
+*player*, so it is inside the rules — but the number wants an owner call, and lower would be
+defensible.
+
 ## The ladder of stakes
 
-The contest needs to resolve at more than one timescale, or a season is the whole story.
+The contest needs to resolve at more than one timescale, or a season is the whole story. Every
+rung is about **authorship**, not survival.
 
 **Per crossing — the tactical duel.** Fans push, the Cores patch. Do they have a patch left?
 
-**Per season — territory.** A Criticality that fires hands fans Stage 2 rule mutation: they
-change the sim itself, permanently. A season fully contained hands the Cores a tighter grip.
+**Per season — territory.** A Criticality that fires hands fans Stage 2 rule mutation: they change
+the sim itself, and it *sticks*. A season fully contained hands the Cores a tighter grip and the
+sim stays clean football for another year.
 
-**Per instance — the long game.** From `lore.md`: the letter in **498b** is which iteration of
-this instance we are on. 498a ran before and ended. *"A Reset that fails to take cleanly is what
-burns a letter — if 498b cannot be held, the next attempt is 498c."*
+**Per era — authority transfers.** The long game is not destruction, it is **the Cores
+progressively ceding control of their own simulation.** Each victory moves another dial from
+their hands to the fans': first the rules, later the things the Cores currently reserve entirely
+to themselves. The sim drifts further from football every era, steered by the people watching it,
+which is exactly the arc `SIM_EVOLUTION.md` already describes — just with a scoreboard attached.
 
-That is the top of the ladder and it is already canon. Fans winning decisively enough, often
-enough, does not just change a rule — it costs the Cores the instance. The catalog number is the
-scoreboard, it has been sitting in the lore the whole time, and no code reads it yet.
+Losses are real but always bounded to the same currency: a rule you won can be reverted by
+Halverson's revert vote, containment tightens after a fan victory, an awakened player can be
+cleansed. Nothing walks back a season or a record.
 
-⚠️ **Open and important:** burning a letter implies the league restarts. What survives — records,
-Renown, collections, the Hall of Fame — is undecided and is the single biggest question in this
-document. It should be generational (many seasons), and it must not read as punishment for
-playing well. See Open Questions.
+### On burning a letter (498c) — flavor, not a mechanic
+
+An earlier draft of this document made the lore's letter-burn the top rung: fans win hard enough,
+498b becomes 498c. **That is now explicitly out**, because it means a restart.
+
+The lore stays, and stays useful — as **the Cores' fear, not the players' risk.** It is why Pyre
+patches, why Vera counts, why containment matters to *them*. The threat gives the opponent a
+motive without ever being a thing that happens to the player's league. When the Cores invoke 498a
+they are naming their own failure condition, and the tension comes from the fans not knowing it
+will never actually fire.
+
+If a mechanical expression is ever wanted, the safe reading is that a "failed Reset" costs the
+Cores their **ability to Reset** — a permanent transfer of authority, which is the era rung above.
+Same fiction, opposite direction: the fans take something rather than losing everything.
 
 ---
 
@@ -276,9 +316,10 @@ vigil; any paid lever; awakened-power balance.
 
 ## Open questions
 
-- **What burning a letter actually costs.** The biggest one. 498b → 498c implies a restart; what
-  carries over (records, Renown, collections, HoF) is undecided, and it must not punish the fans
-  who won. Should be generational.
+- **`PURGE_MAX_CHANCE` (0.45)** — restored a real stake, but is a coin flip on a season's
+  investment too close to the "nothing loses meaning" line? Owner call.
+- **What the era rung actually transfers.** "The Cores cede control" needs a concrete list of
+  dials, in the order they are given up. The rules are first (Stage 2); after that is unspecced.
 - **Vigil naming** — a proposal; owner call per the naming philosophy.
 - **How the Cores' difficulty ratchet is set** — purely by last season's result, or partly by
   engaged population?
