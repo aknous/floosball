@@ -2206,7 +2206,7 @@ class CardManager:
             t = row.card_template
             buyPrice = self._featuredBuyPrice(t)
             effName = (t.effect_config or {}).get("effectName") or ""
-            result.append({
+            card = {
                 "templateId": t.id,
                 "playerId": t.player_id,
                 "playerName": t.player_name,
@@ -2222,7 +2222,16 @@ class CardManager:
                 "buyPrice": buyPrice,
                 "ownedEffectCount": ownedCounts.get(effName, 0),
                 "isActive": True,
-            })
+            }
+            # Attach the player's season stat line so the shop card back matches the
+            # collection view (which builds playerStats the same way).
+            if t.player_id:
+                stats = self.buildPlayerSeasonStats(
+                    session, t.player_id, t.season_created, t.position,
+                )
+                if stats:
+                    card["playerStats"] = stats
+            result.append(card)
 
         return result
 

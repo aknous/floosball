@@ -16,7 +16,8 @@ from types import SimpleNamespace
 from managers.cardEffects import buildEffectConfig
 from managers.cardEffectCalculator import CardCalcContext, calculateWeekCardBonuses, aggregateMultFactors
 from constants import (CARD_TEAM_STACK_BONUS, CARD_CHAMPION_STACK_PREMIUM,
-                       CARD_GATE_FP_THRESHOLDS, CARD_GATE_ALLPRO_MULT)
+                       CARD_GATE_FP_THRESHOLDS, CARD_GATE_ALLPRO_MULT,
+                       SYNERGY_MODIFIER_STACK_MULT)
 
 failures = []
 def expect(desc, cond):
@@ -35,8 +36,9 @@ def mk(eqId, pid, teamId, classification=None):
     return SimpleNamespace(id=eqId, user_card=uc, slot_number=eqId, slot=None, peak_output=0.0, weeks_since_break=0)
 
 
-def runStack(cards):
+def runStack(cards, activeModifier=""):
     c = CardCalcContext(); c.gamesActive = False
+    c.activeModifier = activeModifier
     pids = {eq.user_card.card_template.player_id for eq in cards}
     c.rosterPlayerIds = pids
     c.rosterPlayerPositions = {p: WR for p in pids}
@@ -91,6 +93,26 @@ print(f"     base bar={base}  all_pro bar={ap['gate']['threshold']}  champion ba
 expect(f"All-Pro card has the lowered bar ({ap['gate']['threshold']})",
        ap['gate']['threshold'] == max(1, round(base * CARD_GATE_ALLPRO_MULT)))
 expect("Champion card has the NORMAL bar (no cut)", ch['gate']['threshold'] == base)
+
+print("\n7. Synergy weekly modifier DOUBLES the team-stack FPx (repurposed from unique-positions)")
+# Owner-reported (2026-07-28): the old Synergy modifier keyed off unique equipped positions,
+# which fusion pins constant (every card is a different slot). Repurposed to amplify the
+# fusion-native team-stack axis: a stacked lineup pays 2x stack FPx on a Synergy week.
+threeStack = [mk(1, 1, 7), mk(2, 2, 7), mk(3, 3, 7), mk(4, 4, 11), mk(5, 5, 12), mk(6, 6, 13)]
+plain = runStack(threeStack)
+syn = runStack(threeStack, activeModifier="synergy")
+print(f"     plain 3-stack=+{plain.stackBonus}  synergy 3-stack=+{syn.stackBonus} (extra {syn.stackModifierBonus})")
+expect(f"synergy doubles the stack bonus ({plain.stackBonus} -> {round(plain.stackBonus * SYNERGY_MODIFIER_STACK_MULT,3)})",
+       abs(syn.stackBonus - plain.stackBonus * SYNERGY_MODIFIER_STACK_MULT) < 0.002)
+expect("the modifier's extra is tracked for the achievement exclusion",
+       abs(syn.stackModifierBonus - plain.stackBonus * (SYNERGY_MODIFIER_STACK_MULT - 1)) < 0.002)
+
+print("\n8. Synergy does NOTHING for a non-stacked lineup (all different teams)")
+noStack = [mk(i, i, 10 + i) for i in range(1, 7)]
+synNone = runStack(noStack, activeModifier="synergy")
+expect(f"no stack -> synergy grants nothing (bonus={synNone.stackBonus}, extra={synNone.stackModifierBonus})",
+       synNone.stackBonus == 0.0 and synNone.stackModifierBonus == 0.0)
+
 
 print("\n" + ("ALL PASS" if not failures else f"{len(failures)} FAILED: {failures}"))
 sys.exit(1 if failures else 0)

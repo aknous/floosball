@@ -1551,8 +1551,9 @@ class Game:
             return False
         isHome = (self.offensiveTeam is self.homeTeam)
         scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
-        # Frames: it's the FRAME you're trying to win, so drain/kick off the frame margin.
-        _fd = self._frameScoreDiff()
+        # Frames: it's the FRAME you're trying to win, so drain/kick off the frame margin —
+        # except the final frame's points tiebreak (see _frameDecisionDiff).
+        _fd = self._frameDecisionDiff()
         if _fd is not None:
             scoreDiff = _fd
         if not (-self._fgValue() <= scoreDiff <= 0):
@@ -2505,6 +2506,44 @@ class Game:
         fa = self.awayScore - getattr(self, '_frameStartAway', 0)
         return (fh - fa) if self.offensiveTeam is self.homeTeam else (fa - fh)
 
+    def _frameDecisionDiff(self):
+        """The margin the OFFENSE should base END-GAME clock/score decisions on (frames only,
+        else None). Normally the CURRENT frame's margin — win the mini-game. BUT in the FINAL
+        frame, if the frame's current lean leaves the frames-won LEVEL, the match falls to the
+        TOTAL-POINTS tiebreak — so a team UP in the frame yet BEHIND on aggregate is really
+        TRAILING and must keep scoring (go for it / drive for a FG), not burn the clock and
+        punt on a frame lead that only ties the match. Mirrors _chooseFramesConversion's
+        final-frame reasoning. Fixes a team that led the last frame, sat on it, and lost the
+        match on points."""
+        frameDiff = self._frameScoreDiff()
+        if frameDiff is None:
+            return None
+        try:
+            n = self.format._frames(self)
+        except Exception:
+            return frameDiff
+        # Only the LAST frame can fall to the points tiebreak — earlier frames still have
+        # frames left to bank, and a decided match ends early (checkEarlyEnd).
+        if int(getattr(self, '_frameIndex', 0)) < n - 1:
+            return frameDiff
+        # Project the frames-won with the current frame's lean (mirrors awardFrames).
+        fh = float(getattr(self, '_framesWonHome', 0.0))
+        fa = float(getattr(self, '_framesWonAway', 0.0))
+        curH = self.homeScore - getattr(self, '_frameStartHome', 0)
+        curA = self.awayScore - getattr(self, '_frameStartAway', 0)
+        if curH > curA:
+            fh += 1
+        elif curA > curH:
+            fa += 1
+        else:
+            fh += 0.5
+            fa += 0.5
+        if fh != fa:
+            return frameDiff       # frames still decide the match — win the frame
+        # Frames finish LEVEL → total points break the tie: reason off the aggregate margin.
+        isHome = self.offensiveTeam is self.homeTeam
+        return (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+
     def _framesLeadingNow(self):
         """Frames only (else None): would the OFFENSE win if the match ended right now?
         Frames is decided by FRAMES WON — total points only break a frames tie — so a team
@@ -2716,8 +2755,10 @@ class Game:
         # FRAME's margin, not the running total. Total points only break a frames tie, so
         # scoring still always helps — but settling for a FG that LOSES the frame when a TD
         # would win it is the wrong call. _frameScoreDiff is None off frames, so this is a
-        # no-op in every other format.
-        _frameDiff = self._frameScoreDiff()
+        # no-op in every other format. In the FINAL frame, a lead that only TIES the frames
+        # falls to the points tiebreak, so a team up in the frame but down on aggregate is
+        # treated as TRAILING here (drive for a FG/TD instead of punting) — _frameDecisionDiff.
+        _frameDiff = self._frameDecisionDiff()
         if _frameDiff is not None:
             scoreDiff = _frameDiff
         # Set sideline targeting for any pass plays called in this method
@@ -3886,8 +3927,9 @@ class Game:
         if self._chessClockLow(100):
             return True
         # Frames: the current frame (mini-game) is ending and we're NOT ahead in it — push
-        # to win/tie the frame before the break, like a 2-minute drill.
-        _fd = self._frameScoreDiff()
+        # to win/tie the frame before the break, like a 2-minute drill. In the final frame a
+        # frame lead that only ties the match reads as behind (points tiebreak) → still push.
+        _fd = self._frameDecisionDiff()
         if _fd is not None and _fd <= 0 and self._frameEndSoon(120) and not self._isGarbageTime(_fd):
             return True
         # Target format: a score this possession ends the game in our favor — push
@@ -4341,7 +4383,8 @@ class Game:
             # for the timeouts/spikes needed to stop the clock between snaps).
             # Frames: it's the FRAME you're trying to win, so this block reasons off the
             # frame margin + the frame's clock, and a frame ending is its own entry trigger.
-            _fgDiff = self._frameScoreDiff()
+            # (Final frame: a frame lead that only ties the match defers to points tiebreak.)
+            _fgDiff = self._frameDecisionDiff()
             _fgDiff = _fgDiff if _fgDiff is not None else scoreDiff
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5 or self._chessClockLow(60) or self._frameEndSoon(60))
                     and -self._fgValue() <= _fgDiff < 0 and self._offenseEffectiveSecs() <= 45):
@@ -4625,7 +4668,16 @@ class Game:
                                 and (self.currentQuarter == 2 or -self._fgValue() <= scoreDiff <= 0)
                                 and self.yardsToEndzone <= spikeKickerMax
                                 and secs <= 20)
-            spikeDownOK = self.down <= self.gameRules.downsPerSeries - 2 or spikeFgException
+            # A down-1/2 spike is only worth it if a productive snap can STILL FOLLOW it.
+            # Otherwise it just forfeits the down and burns the last of the clock, so the
+            # possession ends ON the spike and the frame/game closes with the spike having
+            # bought nothing (a team spiked with ~6s left and the game just ended).
+            # _estimateAvailablePlays is frame-aware (reserves a closing FG snap off the frame
+            # deadline in frames); >= 1 means room for the spike plus a real play. The
+            # deliberate 3rd-down FG-setup spike keeps its own gate.
+            spikeDownOK = ((self.down <= self.gameRules.downsPerSeries - 2
+                            and self._estimateAvailablePlays() >= 1)
+                           or spikeFgException)
             if ((self.currentQuarter in (2, 4) or self.currentQuarter >= 5)
                     and self.clockRunning
                     and secs <= self.gameRules.spikeClockThreshold
@@ -7040,7 +7092,7 @@ class Game:
                     # Consume time for field goal (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.FieldGoal, False)
                     self.consumeGameTime(playDuration)
-                    self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                    self.play.stampClock()
                     self.checkTwoMinuteWarning()
 
                     if getattr(self.play, 'isFgBlocked', False):
@@ -7106,7 +7158,7 @@ class Game:
                         self.play.isPuntBlocked = True
                         playDuration = self.calculatePlayDuration(PlayType.Punt, False)
                         self.consumeGameTime(playDuration)
-                        self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                        self.play.stampClock()
                         self.checkTwoMinuteWarning()
                         self._resolveBlockedKick()
                         self._pendingPossessionChange = True
@@ -7128,7 +7180,7 @@ class Game:
                     # Consume time for punt (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.Punt, False)
                     self.consumeGameTime(playDuration)
-                    self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                    self.play.stampClock()
                     self.checkTwoMinuteWarning()
                     self.clockRunning = False  # Clock stops after punt
                     
@@ -7183,7 +7235,7 @@ class Game:
                     self.consumeGameTime(playDuration)
 
                 # Update play's timeRemaining to reflect post-play clock
-                self.play.timeRemaining = self.formatTime(self.gameClockSeconds)
+                self.play.stampClock()
 
                 # Determine if clock should run after play
                 self.clockRunning = self.shouldClockRun()
@@ -9706,7 +9758,13 @@ class Game:
         if (self._isFgDrainMode() and hasattr(self, 'play') and self.play is not None
                 and getattr(self.play, 'playType', None) == PlayType.FieldGoal):
             target = 7
-            return ('setupFG', max(8, secs - target))
+            # Drain only to the deadline actually in play: the FRAME buzzer in frames, the
+            # game clock in standard, the possession budget in chess (_offenseEffectiveSecs
+            # abstracts all three). Using the raw game clock here drained the WHOLE game
+            # before a frame-ending FG, blowing past the frame boundary and committing the
+            # remaining frame(s) empty (prod game 5254). _isFgDrainMode already gates on
+            # _offenseEffectiveSecs <= 60, so this drain is bounded to the current deadline.
+            return ('setupFG', max(8, self._offenseEffectiveSecs() - target))
 
         # Target format: a score this possession WINS — push to finish (fast huddle)
         # instead of draining, UNLESS a conservative coach is protecting a comfortable
@@ -9749,9 +9807,12 @@ class Game:
             return ('neutral', CHESS_CLOCK_RELAXED_HUDDLE)
 
         # Frames: the current frame (a mini-game) is winding down — hurry when NOT ahead in
-        # it (win/tie the frame before the break), drain when ahead (secure the +1). Keys
-        # off the FRAME margin, not the running total. Garbage-time (frame) falls through.
-        _fdiff = self._frameScoreDiff()
+        # it (win/tie the frame before the break), drain when ahead (secure the +1). Keys off
+        # the FRAME margin — except the FINAL frame, where a frame lead that only ties the
+        # match falls to the points tiebreak, so a team behind on aggregate HURRIES rather
+        # than burning the clock on a lead that loses (see _frameDecisionDiff). Garbage-time
+        # (frame) falls through.
+        _fdiff = self._frameDecisionDiff()
         if _fdiff is not None and self._frameEndSoon(120):
             if _fdiff > 0:
                 return ('burnClock', 40)              # ahead in the frame → run the frame out
@@ -11764,13 +11825,20 @@ class Play():
                 frameLen = fmt._regSeconds(game) / n if n else 0
                 elapsed = fmt._elapsed(game)
                 self.frame = min(n, int(elapsed / frameLen) + 1) if frameLen else 1
+                # Elapsed at which THIS frame ends — lets stampFrameClock recompute the time
+                # LEFT in the frame the play occurred in after the play burns the clock, so the
+                # feed's frame time is post-play like timeRemaining (a play that runs the frame
+                # out reads 0:00; the frame NUMBER stays the one the play happened in).
+                self._frameEndElapsed = self.frame * frameLen if frameLen else None
                 self.frameClock = game.formatTime(int(max(0, frameLen - (elapsed % frameLen)))) if frameLen else '0:00'
             except Exception:
                 self.frame = None
                 self.frameClock = None
+                self._frameEndElapsed = None
         else:
             self.frame = None
             self.frameClock = None
+            self._frameEndElapsed = None
         self.down = game.down
         self.timeRemaining = game.formatTime(game.gameClockSeconds)
         self.yardLine = game.yardLine
@@ -11867,6 +11935,24 @@ class Play():
         self.glitchLayer = None         # 'micro' (L1) / 'personality' (L2) / 'signature' (L3)
         self.glitchYardDelta = None     # L3 only: signed yards the glitch added (+) or cost (-)
         self.insights = {}              # Play insights dict — populated during execution
+
+    def stampFrameClock(self):
+        """Recompute the frame's time-left from the CURRENT (post-play) clock so the feed's
+        frame time is post-play like timeRemaining. The frame NUMBER stays the frame the play
+        occurred in; a play that runs the frame out reads 0:00. No-op off frames / in OT."""
+        if self.frame is None or getattr(self, '_frameEndElapsed', None) is None:
+            return
+        try:
+            left = self._frameEndElapsed - self.game.format._elapsed(self.game)
+            self.frameClock = self.game.formatTime(int(max(0, left)))
+        except Exception:
+            pass
+
+    def stampClock(self):
+        """Set the game-clock time AND the frame time-left from the CURRENT state. Called after
+        a play consumes the clock, so both read the time remaining AFTER the play completes."""
+        self.timeRemaining = self.game.formatTime(self.game.gameClockSeconds)
+        self.stampFrameClock()
 
     def _captureBlitzer(self, scheme, defGameplanObj):
         """If the defensive scheme called a blitz, stash the blitzer on the

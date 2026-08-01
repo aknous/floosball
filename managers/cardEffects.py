@@ -958,7 +958,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "high_roller": "+{perCardMult} FPx per chance card that triggered enhanced bonuses this week",
     "fortitude": "+{perCardMult} FPx per active streak card in your hand",
     # ── Escalating / Pace Effects ──
-    "crescendo": "+{baseFP} FP guaranteed. {baseChance}% chance at {bonusFP} FP on this player's first TD, chance increases by +{chanceStep}% if bonus doesn't trigger.",
+    "crescendo": "+{baseFP} FP guaranteed. {baseChance}% chance at {bonusFP} FP on this player's first {scoreNoun}, chance increases by +{chanceStep}% if bonus doesn't trigger.",
     "eminence": "+{perPlayerMult} FPx per roster player ranked top-10 at their position. Max +{maxDelta} FPx. Active from week 3.",
     "traverse": "+{baseFP} FP floor + {bonusFP} FP jackpot. Jackpot chance starts at {baseChance}%, +{chancePerStep}% per {yardStep} {yardType} yards",
     # ── Chance Synergy Effects ──
@@ -2075,10 +2075,14 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     primary["posLabel"] = POSITION_LABELS.get(position, "??")
 
     # Position-specific param overrides for effects with per-position tuning
-    if effectName == "crescendo" and position in _CRESCENDO_POSITION_TUNING:
-        baseChance, chanceStep = _CRESCENDO_POSITION_TUNING[position]
-        primary["baseChance"] = baseChance
-        primary["chanceStep"] = chanceStep
+    if effectName == "crescendo":
+        if position in _CRESCENDO_POSITION_TUNING:
+            baseChance, chanceStep = _CRESCENDO_POSITION_TUNING[position]
+            primary["baseChance"] = baseChance
+            primary["chanceStep"] = chanceStep
+        # Kickers escalate on FIELD GOALS, not TDs (the compute path already does; the detail
+        # text must say so too, or a K-Crescendo card reads "first TD" and never fires on it).
+        primary["scoreNoun"] = "FG" if position == 5 else "TD"
     if effectName == "traverse" and position in _TRAVERSE_POSITION_TUNING:
         yardStep, chancePerStep, yardType = _TRAVERSE_POSITION_TUNING[position]
         primary["yardStep"] = yardStep
@@ -4562,19 +4566,45 @@ def _getCultivationStepSize(triggerEvent):
     return 3
 
 
-def cultivationGrowthChance(primary, triggerCount, growthLevel):
+# Bonsai grow-requirement ramp per level. GENTLER than linear (was stepSize*(level+1), which
+# made a high-stepSize trigger like YAC (60) unreachable past level ~2 — a great week still
+# gave a poor grow-chance, and the card stalled far below its edition FP ceiling). At 0.4 the
+# requirement grows ~40% of a full step per level, so strong weeks keep advancing the card
+# while higher levels still demand more. Computed live (not frozen at mint), so it re-values
+# all Bonsai cards immediately.
+CULTIVATION_LEVEL_RAMP = 0.4
+
+
+def _cultivationRequired(triggerEvent, growthLevel):
+    """Trigger events needed for a near-certain grow at `growthLevel`. Shared by the chance
+    calc, the display note, and the week-end roll so all three agree."""
+    stepSize = _getCultivationStepSize(triggerEvent)
+    return max(1, int(round(stepSize * (1 + growthLevel * CULTIVATION_LEVEL_RAMP))))
+
+
+def cultivationGrowthChance(primary, triggerCount, growthLevel, chanceBonus=0.0):
     """Bonsai's grow odds (0-100), SHARED by the live display (_computeCultivation) and the
     week-end roll (_rollCultivationGrowth) so the power-bar meter, the effect detail, and the
-    actual result always agree. The trigger step scales with the current level — a higher
-    level needs a bigger week to keep pushing the base upward. A dead week floors at 2%."""
-    stepSize = _getCultivationStepSize(primary.get("triggerEvent", "pass_td"))
-    required = stepSize * (growthLevel + 1)
+    actual result always agree. The requirement scales with the current level (gentle ramp) —
+    a higher level needs a bigger week to keep pushing the base upward. A dead week floors 2%.
+
+    `chanceBonus` (0-1) is the same hand-synergy / powerup / weekly-modifier trigger lift
+    every other chance card gets (Fortunate modifier, Fortune's Favor, Providence, Catalyst,
+    innate chance synergy — summed onto ctx.chanceBonus). Bonsai is a chance card too, so the
+    boost raises its grow odds; without this it silently ignored those amplifiers."""
+    triggerEvent = primary.get("triggerEvent", "pass_td")
+    stepSize = _getCultivationStepSize(triggerEvent)
+    required = _cultivationRequired(triggerEvent, growthLevel)
     if required <= 0:
-        return 2
-    if triggerCount >= required:
+        base = 2
+    elif triggerCount >= required:
         excess = triggerCount - required
-        return min(100, 90 + int((excess / stepSize) * 10))
-    return max(2, int((triggerCount / required) * 90))
+        base = min(100, 90 + int((excess / stepSize) * 10))
+    else:
+        base = max(2, int((triggerCount / required) * 90))
+    if chanceBonus:
+        base = min(100, base + int(round(chanceBonus * 100)))
+    return base
 
 
 def _computeCultivation(primary, ctx, cardPlayerId, eqId):
@@ -4589,10 +4619,13 @@ def _computeCultivation(primary, ctx, cardPlayerId, eqId):
     triggerEvent = primary.get("triggerEvent", "pass_td")
     triggerLabel = primary.get("triggerLabel", "events")
     triggerCount = _countCultivationTriggers(triggerEvent, ctx, cardPlayerId)
-    # Step size: triggers required to fully earn a grow at level 0. Threshold scales with
-    # level (level 10 needs ~11x the triggers of level 0). Shared with the week-end roll.
-    required = _getCultivationStepSize(triggerEvent) * (growthLevel + 1)
-    growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel)
+    # Triggers needed to earn a grow at this level (gentle per-level ramp). Shared with the
+    # chance calc and the week-end roll so the meter, the detail note, and the result agree.
+    required = _cultivationRequired(triggerEvent, growthLevel)
+    # Chance-card amplifiers (Fortunate modifier, Fortune's Favor, Providence, Catalyst,
+    # innate synergy) lift Bonsai's grow odds just like any other chance card.
+    growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel,
+                                           getattr(ctx, 'chanceBonus', 0.0))
     nextFP = round(currentFP + growthFP, 1)
     triggerNote = f" ({triggerCount}/{required} {triggerLabel})"
     eq = f"+{currentFP} FP. {growthChance}% chance{triggerNote} to grow to +{nextFP} FP"

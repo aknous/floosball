@@ -617,12 +617,6 @@ class SeasonManager:
                 self.currentSeason.currentWeek = nextWeek
                 self.currentSeason.currentWeekText = nextWeekText
 
-            # Cores rule-change vote: at the START of a game day (weeks 1/8/15/22),
-            # roll the escalating chance a vote opens. Opening here (before the setup
-            # wait) gives fans the whole run-up to kickoff to vote; it resolves 15 min
-            # before the day's first game (below). Idempotent + never blocks the loop.
-            self._maybeOpenRuleVote(nextWeek, weekStartTime)
-
             await self.timingManager.waitForWeekSetup(weekSetupTime)
 
             # ── Official week transition ──
@@ -631,6 +625,14 @@ class SeasonManager:
             # empty week).  For week 1, this was already set above.
             self.currentSeason.currentWeek = nextWeek
             self.currentSeason.currentWeekText = nextWeekText
+
+            # Cores rule-change vote: open AT the week rollover (right after the setup wait),
+            # on the game-day-start weeks (1/8/15/22). Previously it opened BEFORE the wait —
+            # the moment the prior day's games ended — so the ballot flashed up the evening
+            # before. Opening here means it first appears when the week rolls over the following
+            # day, then stays open through the run-up to kickoff (resolved 15 min before the
+            # day's first game, below). Idempotent; never blocks the loop.
+            self._maybeOpenRuleVote(nextWeek, weekStartTime)
 
             # Recompute regular-season pressure blend: prior-season expectations
             # wane over the first ~14 weeks while inSeasonPressure (set by
@@ -2269,14 +2271,13 @@ class SeasonManager:
 
                     # Achievement hook — Compound tiers (single-week FPx from cards only)
                     # Exclude the synergy weekly modifier's contribution so the achievement
-                    # reflects card-driven multipliers, not a "free" modifier bonus.
+                    # reflects card-driven multipliers, not a "free" modifier bonus. Synergy
+                    # now DOUBLES the team-stack FPx; the baseline stack (card-driven) still
+                    # counts, only the modifier's extra is removed. multFactors aggregate
+                    # bonus-additively, so subtracting the extra delta is exact.
                     cardMultProduct = multProduct
-                    if userModifier == "synergy":
-                        uniquePositions = len(set(calcCtx.equippedCardPositions))
-                        if uniquePositions > 1:
-                            synergyMult = 1 + uniquePositions * 0.1
-                            if synergyMult > 0:
-                                cardMultProduct = multProduct / synergyMult
+                    if userModifier == "synergy" and result.stackModifierBonus > 0:
+                        cardMultProduct = max(1.0, multProduct - result.stackModifierBonus)
                     if cardMultProduct > 1.0:
                         try:
                             from managers import achievementManager as _amCompound
@@ -7472,7 +7473,7 @@ class SeasonManager:
         "grounded": "All FPx effects disabled",
         "longshot": "Conditional card rewards doubled",
         "frenzy": "+FP values are doubled",
-        "synergy": "Bonus FPx for each unique position in your card slots",
+        "synergy": "Same-team stack FPx is doubled this week",
         "steady": "No special effect — all normal rules apply",
         "fortunate": "Chance card trigger rates increased by 15%",
         # Legacy — retired modifiers, kept for historical row rendering.
@@ -7840,7 +7841,10 @@ class SeasonManager:
         cardPlayerId = eq.user_card.card_template.player_id
         growthLevel = max(0, (getattr(eq, 'streak_count', 1) or 1) - 1)
         triggerCount = _countCultivationTriggers(triggerEvent, calcCtx, cardPlayerId)
-        growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel)
+        # Same chance-card amplifier (Fortunate modifier / Fortune's Favor / Providence / ...)
+        # the live meter showed all week, so the odds watched are the odds rolled.
+        growthChance = cultivationGrowthChance(primary, triggerCount, growthLevel,
+                                               getattr(calcCtx, 'chanceBonus', 0.0))
         roll = _rand.randint(1, 100)
         # Apply advantage (double roll) if ctx has it
         if calcCtx.hasAdvantage:
@@ -9519,7 +9523,8 @@ class SeasonManager:
         - "random":    coin flip per game
         Uses 1.0x timing (pre-game) and ELO-based underdog multiplier."""
         import random as _random
-        from constants import calculateUnderdogMultiplier
+        from datetime import datetime as _dt, timedelta as _td
+        from constants import calculateUnderdogMultiplier, SUPPORTER_ACTIVITY_WINDOW_DAYS
         seasonNum = self.currentSeason.seasonNumber
         week = self._getPickemWeek()
         try:
@@ -9528,8 +9533,15 @@ class SeasonManager:
             from database.repositories.pickem_repository import PickEmRepository
             session = get_session()
             try:
+                # Only auto-pick for users active within the window — a departed account
+                # shouldn't keep silently accruing pick-em credit (and cluttering the board)
+                # long after its owner stopped showing up. Same activity definition the live
+                # leaderboard prunes on and the rest of the app uses.
+                _cutoff = _dt.utcnow() - _td(days=SUPPORTER_ACTIVITY_WINDOW_DAYS)
                 autoUsers = session.query(User).filter(
-                    User.auto_pick_mode.in_(("favorites", "underdogs", "random"))
+                    User.auto_pick_mode.in_(("favorites", "underdogs", "random")),
+                    User.last_login_at.isnot(None),
+                    User.last_login_at >= _cutoff,
                 ).all()
                 if not autoUsers:
                     return

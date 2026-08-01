@@ -23,6 +23,15 @@ changes and `standard` is a pure pass-through — OFF stays byte-identical.
 """
 from typing import Optional, Tuple
 
+# Innings WP: points of scoring spread per √(remaining inning). Bigger = a lead is softer /
+# more answerable. Tuned so a one-score lead reads ~60-75% with an at-bat or two left, not the
+# ~90-100% the football score-logistic gave (which assumed a clock running the lead out).
+INNINGS_WP_SPREAD = 6.5
+# Peak weight of the ELO prior (at first pitch); fades to 0 as the at-bats run out, leaving a
+# late innings game almost purely run-driven. A light blend — the run model already carries the
+# softness, so this only nudges toward the stronger team.
+INNINGS_WP_ELO_PRIOR = 0.35
+
 
 def _cleanNum(v):
     """Round a possibly-fractional score for UI display, dropping float-accumulation
@@ -692,6 +701,34 @@ class InningsFormat(GameFormat):
         tryFrac = (getattr(game, '_inningsTries', 0) / self._tries(game)) * 0.5
         done = (inning - 1) + halfFrac + tryFrac
         return max(gameProgress, min(1.0, done / total))
+
+    def adjustWinProbability(self, game, homeWp, awayWp, expectedPoints):
+        """Innings WP: a run-differential model, not the football score-logistic. The standard
+        model's steepness ramps with game progress because a clock is running out — so a single
+        mid-game score spiked WP toward 100%. But innings gives the trailing team a GUARANTEED
+        at-bat to answer, so a lead is worth less the more at-bats remain and only firms up as
+        the innings run out. Replaces the passed WP entirely (that model overstates a lead here);
+        the game-over 100/0 is still forced upstream by the isGameOver clamp."""
+        import math
+        N = max(1, self._innings(game))
+        inning = getattr(game, '_inningsNumber', 1)
+        halfFrac = 0.5 if getattr(game, '_inningsHalf', 'top') == 'bottom' else 0.0
+        tryFrac = (getattr(game, '_inningsTries', 0) / max(1, self._tries(game))) * 0.5
+        done = min(float(N), (inning - 1) + halfFrac + tryFrac)
+        remaining = max(0.25, N - done)   # at-bats still to play (in inning units)
+        scoreDiff = game.homeScore - game.awayScore
+        # The scoring still to come spreads ~ sqrt(remaining), so early a lead is soft and it
+        # hardens as the at-bats disappear (INNINGS_WP_SPREAD ~ points of scoring per √inning).
+        z = scoreDiff / (INNINGS_WP_SPREAD * math.sqrt(remaining))
+        inningsWp = 100.0 / (1.0 + math.exp(-max(-8.0, min(8.0, z))))
+        # The run model already softens an early lead (via the √remaining spread), so the ELO
+        # prior is just a light blend that fades as the at-bats run out — NOT the standard
+        # model's progress-weighting, which would double-flatten early scores toward 50%.
+        eloDiff = (getattr(game, 'homeTeamElo', None) or 1500) - (getattr(game, 'awayTeamElo', None) or 1500)
+        eloWp = 100.0 / (1.0 + 10 ** (-eloDiff / 400.0))
+        priorWeight = INNINGS_WP_ELO_PRIOR * (remaining / N)
+        home = priorWeight * eloWp + (1.0 - priorWeight) * inningsWp
+        return home, 100.0 - home
 
     def stateExtra(self, game) -> dict:
         ls = getattr(game, '_inningsLineScore', None) or {'home': {}, 'away': {}}
