@@ -12,6 +12,7 @@
 > | awakened powers come from the L4 catalog | **powers are chrome too** — fans gift them |
 > | locked drawback #4: burnout / shortened careers | **retired.** Failure is reversible — the augment detaches, the attribute returns to baseline |
 > | locked drawback #3: double-edged, near-zero net | **chrome genuinely juices players and may decide games.** The drawbacks are impermanence and cyberpsychosis |
+> | chrome is bought with Floobits (a new sink) | **chrome is EARNED through play** — achievements, fantasy, pick-em. Not a sink; supply becomes the master tuning dial |
 >
 > New mechanics specced in "The contagion model" and "The Reclamation" below: awakening spreads
 > like a virus through teammates and on-field contact, cleansed players spread the inverse, and
@@ -552,12 +553,101 @@ league-wide campaign — and under contagion, everything that player had infecte
 has awakened, the augment that got them there must be irrelevant to that state.** The open
 question above is now effectively closed by this decision.
 
-**3. It sharpens the economy.**
+**3. It sharpens the cost of overreach.**
 
-Whole-augment loss means Floobits are genuinely destroyed rather than parked in a player. That
-makes chrome a real sink — arguably the strongest in the game once it exists, given the escalating
-per-level curve and the recurring decay. Worth watching against the existing sinks rather than
-assuming; `season_end_tax` and the contribution lines are the only ones at comparable scale today.
+~~Whole-augment loss destroys Floobits rather than parking them, making chrome the game's strongest
+sink.~~ **Superseded the same day** — chrome is earned, not bought (see below), so it is not a
+Floobit sink at all. What overshoot destroys is *earned components*: a season's worth of
+achievement, fantasy and pick-em results, gone in one level. That is a sharper loss than currency,
+because the fanbase cannot simply grind more Floobits to replace it — they have to go and earn it
+again through play.
+
+## Chrome is EARNED, not bought (owner, 2026-07-31)
+
+> "Maybe we should make chrome something fans earn through the season instead of buy. Rewards from
+> achievements, prognostications, fantasy, or some other way besides just buying it straight up."
+
+Chrome components become **items you earn by playing**, not a Floobit purchase. This supersedes the
+"users spend Floobits (a new sink)" model in the 2026-06-23 section above, and it retires the
+"chrome is the strongest sink in the game" note from the whole-augment-failure section — chrome
+stops being a sink at all.
+
+### Why this is the right call
+
+**It gates the meta-game behind engagement rather than wallet.** This is already a locked principle
+one document over: Renown's *"earned, never bought — buyable prestige is worthless prestige."* The
+same logic applies harder here, because chrome is not prestige, it is *power*. A purchasable lever
+on league chaos would make the fans-vs-Cores contest a spending contest.
+
+**It makes the deeper game a reward for playing the shallow one.** This is the cleanest possible
+expression of "the football is secondary". You play fantasy, you call games, you chase
+achievements — and what that *buys* you is ammunition against the Cores. The surface game stops
+being a parallel silo and becomes the supply line.
+
+**It answers the silo problem from the other end.** Renown's audit found five systems that all dead-
+end into a consumable currency. Renown fixes that by giving them a shared permanent output; chrome
+now gives them a shared *consumable* output pointed at the meta-game. Different natures, same
+unification.
+
+### The unexpected benefit: supply becomes the master dial
+
+This is the strongest argument and it is not the fairness one.
+
+Under a purchase model, the amount of chrome entering the league is emergent — Floobit income ×
+price curve × how many fans feel like spending. That is three interacting systems deciding the pace
+of the meta-game, and **R₀ would be downstream of all of them.**
+
+Under an earned model, **we set the faucet directly.** Chrome entering the league per week is a
+number we choose. R₀ — the one load-bearing number in the contagion design — becomes tunable at
+source instead of emergent from the economy. That turns the hardest calibration problem in this
+document into a supply schedule.
+
+### Shape
+
+**Discrete items, not a currency.** The owner's phrasing is already right: fans *feed a player an
+item* to level an augment. That matches how the game grants things today — `PendingReward` already
+queues packs and powerups from achievements, claimable later, so the plumbing exists.
+
+Sources, roughly in order of how well they fit:
+
+| Source | Fit |
+|---|---|
+| **Achievements** | strongest — already a reward system with tiers, and `reward_config` already carries packs/powerups |
+| **Fantasy** | weekly/season finishes; rewards sustained play |
+| **Pick-em / prognostication** | accuracy and streaks; rewards a different skill |
+| **Cards / Showcase** | collection milestones |
+| **Team / supporter** | contribution milestones |
+
+**Rarity tiers do useful work.** Common components nudge an augment; rare ones jump it. Because the
+level curve escalates, the high levels — the ones near a player's tolerance, where the interesting
+decisions live — should require the scarce stuff. That means **nobody casually reaches the danger
+zone**, which protects the push-your-luck from becoming routine.
+
+### What this changes elsewhere
+
+- **Floobits lose a planned sink.** Not a real loss: the existing sinks (`season_end_tax` ~905k,
+  team and facility contributions, card and pack purchases) are far larger than anything chrome
+  would have added, and the earlier economy audit found removing a ~1,800/season drain was inside
+  the noise.
+- **Sim outcomes become downstream of fan skill.** Worth stating plainly: if fantasy finishes and
+  pick-em accuracy grant chrome, and chrome can decide games, then being good at the fan layer
+  feeds back into the sim layer. Under the Monstars frame that reads as correct — you earn the
+  right to reshape the league — but it is a real shift and should be a conscious one.
+- **Renown and chrome must stay legibly different.** Same activities, two outputs. Renown is
+  permanent standing (who you are); chrome is consumable agency (what you can do). That distinction
+  is clean in design but needs to be obvious in the UI, or it reads as two progress bars for one
+  action.
+
+### Open on this piece
+
+- **Grant rate per source** — the supply schedule, i.e. the R₀ dial. Needs the replay harness.
+- **Do components have classes** (awakening / power / enhancement), or does one generic component
+  feed any augment? Classed components make *what you earn* shape *what you can do*, which is
+  richer; generic is simpler and more liquid.
+- **Are components tradeable or giftable between fans?** Tradeable creates a player economy and a
+  coordination tool; it also creates hoarding and makes supply harder to control.
+- **Do unspent components carry across seasons?** Carrying breaks the supply dial over time;
+  expiring is harsher but keeps the faucet honest.
 
 ## Still open structurally
 
