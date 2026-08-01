@@ -414,8 +414,10 @@ call, improvising. That is expressible in systems that already exist: the gamepl
 decides what a player is *supposed* to do, so cyberpsychosis is deviation from it. Cheaper and far
 more characterful than inventing a new failure system.
 
-**Proposed: the mental attributes decide who can carry chrome.** A player with high `selfBelief`,
-`pressureHandling` and `focus` holds together under heavy chrome; a fragile one comes apart. This
+**Confirmed by owner 2026-07-31, and widened: the mental attributes govern awakening and cleansing
+too, not just chrome tolerance.** See "Chrome is fed, not installed" below for the full mapping —
+the short version is that a player's mind decides what can be done to them, and the unique
+per-player breaking point the owner described *is* that mental profile. This
 is worth doing for three reasons beyond flavour:
 
 - It makes fans **choose targets**, which is real strategy rather than "chrome the best player".
@@ -429,6 +431,91 @@ That is exactly the right place for the cost to land given the football is secon
 
 Open: is cyberpsychosis a state on the existing ladder, a parallel meter, or a per-play roll whose
 odds scale with chrome load? And does it decay as chrome does — i.e. does a player come back?
+
+## Chrome is fed, not installed (owner, 2026-07-31)
+
+> "Does one fan giving an augmentation just fully give it to that player? Or is it stronger the
+> more fans give it… fans feed the player some kind of item and level up the selected
+> augmentation, each level more expensive than the previous. Then there's a point where the
+> augmentation goes from useful and powerful to too powerful and likely to fail, but that point
+> is unique to each player."
+
+Chrome is a **level, not a switch.** Any player can receive any augment type; fans feed it and it
+climbs. Each level costs more than the last.
+
+This is a much better shape than binary install, for four reasons:
+
+- **It composes across fans.** One fan makes a dent, a fanbase makes a monster. Awakening becomes
+  something a *crowd* does, which is the collective act the whole fans-vs-Cores frame needs.
+- **Escalating cost is a self-limiting sink** — no arbitrary cap required, the price curve is the cap.
+- **It gives partial investment a purpose.** A fan with a few Floobits can still contribute to
+  something that matters, rather than being priced out of a whole augment.
+- **It creates a decision that repeats every week**, instead of one purchase and done.
+
+### The breaking point is the player's mental profile
+
+The owner's two notes this round — *mental attributes should govern awakening and cleansing*, and
+*the failure point is unique to each player* — are the same mechanic. **The unique breaking point
+IS the mental profile.**
+
+That unification is the most valuable thing in this revision, because it makes character
+mechanically central rather than decorative. A player's mind decides what can be done to them.
+
+Each existing mental attribute gets a distinct job (names verified against `floosball_player.py`):
+
+| Transition | Governed by | Reading |
+|---|---|---|
+| **Awakening** — noticing the seams | `instinct`, `creativity` | who *perceives* the simulation. Squares with the lore's meta-awareness tiers, where prophet/mystic already hear through the wall |
+| **Chrome tolerance** — the breaking point | `selfBelief`, `pressureHandling`, `focus`, `discipline` | who can *carry* load without coming apart |
+| **Cleansing resistance** | `resilience` + the existing `_purgeDodgeFor` personality dodge | who *survives* the Cores' purge |
+
+Note the cleansing half already exists in code — `_purgeDodgeFor` gives aware-tier personalities a
+0.5 multiplier — so this extends a precedent rather than inventing one.
+
+Because the three are independent, players fall into genuinely different archetypes, and **scouting
+becomes a real activity**:
+
+- high perception, low tolerance → **awakens fast, comes apart fast.** The spectacular flameout.
+- low perception, high tolerance → **hard to wake, unstoppable once woken.** The one you want.
+- high both → the prize everyone competes to feed.
+- low both → ordinary, and ordinary now means something.
+
+### Collective push-your-luck
+
+Below tolerance an augment is powerful and stable. Above it, each further level raises the chance
+of **failure** — and failure is the reversible kind already established: the augment detaches, the
+attribute returns to baseline, the player is unharmed. What is lost is the fanbase's accumulated
+investment, not the person.
+
+The dynamic this produces is the good part. **Many fans feed one augment, so no single fan decides
+when to stop.** Every individual wants one more level; collectively they overshoot. It is a
+tragedy of the commons focused on a single player — a neat echo of the league-level commons
+already in this document, one scale down.
+
+### The tell: strain is visible in character, not in numbers
+
+The tolerance number stays **hidden**. What fans get instead is **symptoms** — as a player nears
+their limit, their quotes, mood and sideline reactions shift. `personalityManager` already runs
+YAML-templated pools keyed by personality, so this is a new pool plus a load check.
+
+This is worth building deliberately, because it is the strongest available answer to the
+players-as-characters pillar: **character becomes the readable signal for a mechanical decision.**
+A fan who actually pays attention to who a player *is* — reads their lines, knows they are a
+`paranoid` who has started saying stranger things — has a genuine edge over one who only reads
+stats. That is exactly the ARG texture wanted, and it makes the flavour system load-bearing rather
+than ornamental.
+
+### Open on this piece
+
+- **Does tolerance vary by augment class?** A neural implant plausibly taxes `focus` where a limb
+  augment taxes nothing mental. Per-class tolerance is richer but multiplies the tuning surface.
+- **Does failure drop one level or the whole augment?** Whole-augment is the cleaner stake and
+  makes the overshoot genuinely painful; per-level is gentler and may be better for a first pass.
+- **Does a failed awakening-chrome reduce an already-awakened player's state?** Probably not —
+  awakening and the augment that caused it should decouple once it has happened, or a single
+  failure undoes a whole season's collective work.
+- **Can fans see the current level?** Almost certainly yes (it is the thing they are feeding); it
+  is only the *tolerance* that stays hidden.
 
 ## Still open structurally
 
