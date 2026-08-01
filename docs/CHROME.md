@@ -8,8 +8,10 @@
 > | 2026-06-23 | 2026-07-31 |
 > |---|---|
 > | chrome *accelerates* a player up the attention ladder | **chrome IS how players awaken.** A specific augment drives it; attention no longer does |
-> | **favorite-team-only** (chosen to close the sabotage vector) | **any fan may chrome any player** — the sabotage vector is deliberately reopened |
+> | **favorite-team-only** (chosen to close the sabotage vector) | **any fan may chrome any player** — and under the Monstars frame this is not sabotage at all, it's recruitment |
 > | awakened powers come from the L4 catalog | **powers are chrome too** — fans gift them |
+> | locked drawback #4: burnout / shortened careers | **retired.** Failure is reversible — the augment detaches, the attribute returns to baseline |
+> | locked drawback #3: double-edged, near-zero net | **chrome genuinely juices players and may decide games.** The drawbacks are impermanence and cyberpsychosis |
 >
 > New mechanics specced in "The contagion model" and "The Reclamation" below: awakening spreads
 > like a virus through teammates and on-field contact, cleansed players spread the inverse, and
@@ -343,55 +345,101 @@ Design notes:
 - **Name is a placeholder.** "The Reclamation" is one option; Cassian would plausibly name it
   something earnest and football-shaped instead. Owner's call.
 
-## Tensions to settle before this is buildable
+## The Monstars frame (owner, 2026-07-31) — and what it resolves
 
-Four, and the first two are load-bearing.
+> "The football is secondary to beating the Cores at their own game. I'm thinking like Space Jam,
+> Looney Tunes vs Monstars. You want to power up these players, get them awakened, awaken as much
+> of the league as possible. Chrome is how you do that."
 
-### 1. Does chrome change who wins? (competitive integrity)
+This settles the two tensions the previous revision left open, and it settles one of them by
+**dissolving it** rather than deciding it.
 
-Enhancement chrome buffs attributes, so fan spending starts deciding games. That runs straight at
-pillar 1 — *games that have meaning* — and at the league-parity package, which was a large
-investment specifically to stop one team running away with it.
+### Chrome decides games, and that is intended
 
-Options, roughly increasing risk:
-- **Cosmetic + anomaly only.** Chrome drives awakening and looks incredible, but never touches base
-  attributes. Zero balance risk; loses "stronger throwing arm", which is the most intuitive pitch.
-- **Double-edged only** (the existing locked drawback #3). Chrome adds a ceiling *and* a failure
-  mode, netting near zero in expectation but raising variance. Preserves parity in aggregate while
-  still feeling like a real upgrade.
-- **Straight buffs.** Best fantasy, worst integrity.
+The earlier draft recommended double-edged-only chrome to protect competitive parity. **Overridden:
+chrome juices players and is allowed to change outcomes.** The football result is the secondary
+layer; the primary game is awakening the league.
 
-Recommendation: the middle. It is already the locked drawback, it keeps the cyberpunk fantasy, and
-variance is the thing chaos is *supposed* to add.
+The parity collision is smaller than it first looks, because **any fan can chrome any player**.
+Chrome concentrates on *popular* players rather than on one team's roster, so the distortion is
+spread across the league instead of handing one fanbase a dynasty. Worth measuring once it exists,
+but it is not the structural threat it would be under favorite-team-only gifting.
 
-### 2. Any fan may chrome any player — sabotage is now live
+### Sabotage dissolves
 
-The 2026-06-23 favorite-team restriction existed specifically to close this. Reopening it is a real
-choice with real consequences, because chrome carries locked drawback #4: **burnout shortens
-careers.** So chroming a rival's star is a way to burn their career down, and "gift" becomes an
-attack.
+Under the Monstars frame, chroming a rival's player is not an attack — **it is recruitment.** The
+collective goal is to awaken as much of the league as possible, so every augment installed anywhere
+serves it. The only cost is that you have made someone on another team better at football, which is
+the layer that matters least.
 
-That may well be what you want — it is genuinely adversarial, it fits cyberpunk, and it makes the
-contagion strategic (infect *their* locker room). But it needs a decision, because:
+So there is no griefing vector to close, and no need for the burnout carve-out the previous revision
+proposed. Everyone chroming everyone **is the intended steady state.**
 
-- **It brushes the no-wipe constraint.** Ending someone's career early is close to "players losing
-  meaning", especially when a rival fanbase did it on purpose.
-- It wants a **visibility rule**: is chrome attributed publicly? Anonymous sabotage is more
-  paranoid and more in-genre; attributed sabotage creates rivalries and is more fun to talk about.
+### Locked drawback #4 (burnout / shortened careers) is RETIRED
 
-Suggested resolution: keep any-player gifting, but let **burnout apply only to chrome the player's
-own fanbase installed** — a team can burn out its own hero, but an outsider cannot euthanise a
-rival. Sabotage then means *destabilising* someone (awakening them into chaos they can't control),
-not killing them. Same adversarial texture, no career-assassination.
+> "Chrome can fail spectacularly, but I don't think it should be the equivalent of strapping a bomb
+> to a player. The chrome fails, the player loses the augmentation and that stat just goes back to
+> normal."
 
-### 3. What is attention still for?
+Failure is **reversible**. A failed augment detaches and the attribute returns to baseline. Nothing
+about the player is permanently damaged, which keeps chrome comfortably inside the locked no-wipe
+constraint and removes the career-assassination problem entirely.
+
+## The two real drawbacks
+
+### 1. Chrome is not forever
+
+Augments degrade and fall off. This is the load-bearing economic and pacing mechanism:
+
+- **It is the sink.** Fans must keep re-chroming, so chrome is an ongoing commitment rather than a
+  one-time purchase.
+- **It stops the ratchet.** Without decay the league accumulates augments forever and everything
+  saturates.
+- **It feeds the epidemic model.** Decay is a second recovery pathway alongside the Cores'
+  cleansing, which is what keeps the SIR waves oscillating instead of settling.
+
+Open: does chrome expire on a timer, on a usage/wear basis (a cannon arm degrades with throws), or
+by failure roll? Wear-based is the most characterful and the most cyberpunk.
+
+### 2. Cyberpsychosis — too much chrome makes a player wild
+
+> "If a player has too much chrome they can start to get wild and unpredictable, like going
+> cyberpsycho in Cyberpunk 2077."
+
+This is the elegant part: **the drawback is also the cap.** No arbitrary limit on stacking is
+needed, because stacking is self-limiting. Greed produces chaos rather than a blocked action.
+
+Mechanically it wants to mean **the player stops taking direction** — freelancing, ignoring the play
+call, improvising. That is expressible in systems that already exist: the gameplan layer already
+decides what a player is *supposed* to do, so cyberpsychosis is deviation from it. Cheaper and far
+more characterful than inventing a new failure system.
+
+**Proposed: the mental attributes decide who can carry chrome.** A player with high `selfBelief`,
+`pressureHandling` and `focus` holds together under heavy chrome; a fragile one comes apart. This
+is worth doing for three reasons beyond flavour:
+
+- It makes fans **choose targets**, which is real strategy rather than "chrome the best player".
+- It gives the existing mental model a visible, high-stakes job.
+- It serves pillar 2 — **players as characters** — by making *who someone is* determine what they
+  can become. The quiet veteran and the volatile rookie respond differently to the same augment.
+
+Crucially, the cost lands on the **football** layer, not the meta layer: a cyberpsycho player is
+still chromed, still awakened, still contagious. They have just stopped being reliable at the game.
+That is exactly the right place for the cost to land given the football is secondary.
+
+Open: is cyberpsychosis a state on the existing ladder, a parallel meter, or a per-play roll whose
+odds scale with chrome load? And does it decay as chrome does — i.e. does a player come back?
+
+## Still open structurally
+
+### What is attention still for?
 
 If chrome drives awakening, attention loses its primary job. It should probably survive as the
 **league aggregate** feed — the thing that builds toward Criticality — so passive fan behaviour
 still generates pressure while chrome supplies deliberate, targeted pressure. Otherwise the
 attention system, the ladder, the decay and the cap all retire, which is a much bigger excision.
 
-### 4. Where does the ladder go?
+### Where does the ladder go?
 
 `stirring → erratic → rampant → awakened → cleansed` is currently driven by attention thresholds.
 Under a probability model the intermediate rungs need a new meaning — most likely they become
@@ -403,7 +451,11 @@ existing badges and transition lines working.
 - **R₀ target** and how it's tuned — this is the load-bearing number and the replay harness from
   `CRITICALITY_METAGAME_PLAN.md` is the place to find it.
 - **Chrome cost + sink shape.** Floobits is the obvious currency; is cost flat, escalating per
-  player, or per augment class?
+  player, or per augment class? Note chrome decay makes this a *recurring* sink, which is a
+  bigger economic lever than a one-time purchase — worth measuring against the existing sinks
+  (`season_end_tax` and team/facility contributions dwarf everything else today).
+- **Does chrome decay rate scale with load?** A heavily chromed player shedding augments faster
+  would make cyberpsychosis self-correcting, which may be too forgiving.
 - **Does the Chrome facility survive?** It was the tier gate under the favorite-team model; with
   any-player gifting, a per-team facility gating what outsiders can install is incoherent.
 - **Can chrome be removed?** By the player's fanbase, by the Cores, at all?
