@@ -509,13 +509,55 @@ than ornamental.
 
 - **Does tolerance vary by augment class?** A neural implant plausibly taxes `focus` where a limb
   augment taxes nothing mental. Per-class tolerance is richer but multiplies the tuning surface.
-- **Does failure drop one level or the whole augment?** Whole-augment is the cleaner stake and
-  makes the overshoot genuinely painful; per-level is gentler and may be better for a first pass.
+- ~~Does failure drop one level or the whole augment?~~ **DECIDED (owner, 2026-07-31): the whole
+  augment fails.** Every level of it, gone; the attribute returns to baseline. See "What
+  whole-augment failure changes" below.
 - **Does a failed awakening-chrome reduce an already-awakened player's state?** Probably not —
   awakening and the augment that caused it should decouple once it has happened, or a single
   failure undoes a whole season's collective work.
 - **Can fans see the current level?** Almost certainly yes (it is the thing they are feeding); it
   is only the *tolerance* that stays hidden.
+
+## What whole-augment failure changes (owner decision, 2026-07-31)
+
+Overshoot destroys the entire augment — every level the fanbase fed into it — and the attribute
+returns to baseline. The player is unharmed; the investment is not.
+
+This is the right call and it makes the push-your-luck real. Three consequences worth being
+explicit about:
+
+**1. It re-opens sabotage, in a subtler form than before.**
+
+Two revisions ago sabotage "dissolved": under the Monstars frame chroming a rival is recruitment,
+so there was no way to hurt anyone by feeding them chrome. Whole-augment failure changes that.
+**Feeding an augment past its hidden tolerance is now an attack** — and because tolerance is
+hidden, it is an attack with total deniability. A rival fan can add the level that blows up a
+fanbase's whole season of investment and simply look like an enthusiast.
+
+Recommendation: **keep it.** It is genuinely good — deniable social sabotage is exactly the ARG
+texture this design has been reaching for, it produces stories, and it costs the saboteur real
+Floobits to pull off. It also has a natural defence rather than needing a rule: **the symptoms
+system.** Fans who actually read a player's strain can tell when to stop, and can tell when
+someone else is pushing too hard. Paying attention to character becomes protective, which is
+exactly the behaviour we want to reward.
+
+If it ever needs a brake, the least intrusive one is a **contribution cooldown per fan per
+augment**, so blowing something up takes sustained, visible effort rather than one anonymous
+click.
+
+**2. The awakening decoupling stops being optional.**
+
+If an awakening-chrome failure could un-awaken a player, a single overshoot would erase a whole
+league-wide campaign — and under contagion, everything that player had infected. **Once a player
+has awakened, the augment that got them there must be irrelevant to that state.** The open
+question above is now effectively closed by this decision.
+
+**3. It sharpens the economy.**
+
+Whole-augment loss means Floobits are genuinely destroyed rather than parked in a player. That
+makes chrome a real sink — arguably the strongest in the game once it exists, given the escalating
+per-level curve and the recurring decay. Worth watching against the existing sinks rather than
+assuming; `season_end_tax` and the contribution lines are the only ones at comparable scale today.
 
 ## Still open structurally
 
