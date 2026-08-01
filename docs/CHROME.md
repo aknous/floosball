@@ -610,13 +610,69 @@ queues packs and powerups from achievements, claimable later, so the plumbing ex
 
 Sources, roughly in order of how well they fit:
 
-| Source | Fit |
-|---|---|
-| **Achievements** | strongest — already a reward system with tiers, and `reward_config` already carries packs/powerups |
-| **Fantasy** | weekly/season finishes; rewards sustained play |
-| **Pick-em / prognostication** | accuracy and streaks; rewards a different skill |
-| **Cards / Showcase** | collection milestones |
-| **Team / supporter** | contribution milestones |
+**Checkpoints, never placement (owner, 2026-07-31).**
+
+> "I want to make sure we don't gate it behind placing on the leaderboard or anything that only a
+> small amount of fans will achieve. Maybe something like checkpoints. Once you earn X fantasy
+> points you get a chrome component, and then each checkpoint becomes harder. Can also be tied to
+> Renown in that way, but just want to make sure it's accessible to all and not just the best."
+
+This rules out an earlier draft of this section, which listed "weekly/season finishes" and
+"leaderboard placement" as sources. Those are exactly the wrong shape: they are **zero-sum**, so
+the supply of chrome would be fixed no matter how many people played, and the same handful of fans
+would take it every week.
+
+Cumulative thresholds are the right shape, and **they already exist in the codebase.** The tiered
+achievement families are precisely this: escalating cumulative targets, per-season, with
+`reward_config` already granting things.
+
+| Family | Tracks | Targets |
+|---|---|---|
+| `dynamo_i..iv` | season fantasy points | 2,500 / 7,000 / 15,000 / 30,000 |
+| `oracle_i..iv` | season pick-em points | 300 / 700 / 1,200 / 1,800 |
+| `banner_week_i..iv` | best single week | 300 / 1,000 / 2,500 / 5,000 |
+| `benefactor_i..iv` | contributions | 250 / 500 / 1,500 / 5,000 |
+| plus `artificer`, `bracketeer`, `archivist`, `compound`, … | cards, bracket, collection | |
+
+**So chrome needs no new earning system at all** — it is a new key in `reward_config` on families
+that already exist, already track progress, and already grant rewards through `PendingReward`.
+
+### The accessibility target, measured
+
+Completion counts across all seasons in the prod-derived DB (152 users have completed any
+achievement):
+
+| Family | Tier I | Tier II | Tier III | Tier IV |
+|---|---|---|---|---|
+| `dynamo` | 56 | 48 | 34 | **20** |
+| `oracle` | 41 | 41 | 39 | **31** |
+| `banner_week` | 54 | 45 | 32 | **28** |
+| `benefactor` | 32 | 30 | 25 | **15** |
+
+That is a healthy gradient: **40–75% of the fans who reach tier I also reach tier IV.** Everyone who
+engages with a system gets several components; the committed get more. Leaderboard gating would
+put that final column at 1–3 users — an order of magnitude worse, and serving nobody but the people
+who need help least.
+
+**The anti-pattern is in the same data.** `archivist_iii` (target 150) has been completed by
+**zero users, ever**. A checkpoint nobody reaches is a dead reward — it looks like content and
+functions as nothing. Any new chrome tier should be checked against real completion data before it
+ships, not reasoned about on paper.
+
+**Per-season scope helps twice.** These families reset annually, so a fan arriving in season 12 is
+not behind a veteran on the checkpoint ladder — they start the year level. Given the retention
+finding that the median career is two seasons and the leak is at seasons 1–3, that matters more
+than it looks.
+
+### Renown milestones as a parallel track
+
+Renown is already designed as absolute production scored against fixed targets — deliberately
+**not** percentile, because the measurement showed percentile scoring collapsed the median as the
+population grew. Same philosophy, so the two compose cleanly: **rank thresholds on the career
+ladder can grant components too**, giving a slower, career-long track alongside the per-season one.
+
+That also gives the early Renown ranks — the ones doing the retention work — something tangible
+attached, rather than only a badge.
 
 **Rarity tiers do useful work.** Common components nudge an augment; rare ones jump it. Because the
 level curve escalates, the high levels — the ones near a player's tolerance, where the interesting
