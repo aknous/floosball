@@ -1,5 +1,25 @@
 # Chrome — cybernetic enhancement & the boredom of gods
 
+> ## ⚠️ 2026-07-31 revision — read this first
+>
+> Owner leaned the whole game cyberpunk and promoted chrome from a Stage-3 flourish to **the
+> input layer of the anomaly system**. Three decisions from 2026-06-23 below are **superseded**:
+>
+> | 2026-06-23 | 2026-07-31 |
+> |---|---|
+> | chrome *accelerates* a player up the attention ladder | **chrome IS how players awaken.** A specific augment drives it; attention no longer does |
+> | **favorite-team-only** (chosen to close the sabotage vector) | **any fan may chrome any player** — the sabotage vector is deliberately reopened |
+> | awakened powers come from the L4 catalog | **powers are chrome too** — fans gift them |
+>
+> New mechanics specced in "The contagion model" and "The Reclamation" below: awakening spreads
+> like a virus through teammates and on-field contact, cleansed players spread the inverse, and
+> Cassian stages a post-Bowl exhibition of the cleansed against the champions.
+>
+> **This also supersedes the Vigil** from `docs/CRITICALITY_METAGAME_PLAN.md`. Vigils were an
+> invented verb to give fans a deliberate lever; chrome is the same function with far better
+> fiction, already half-designed, and already cyberpunk. Everything else in that plan (trailing
+> baseline, contested firing, Cores alignments, the locked no-wipe constraint) still stands.
+
 Status: **DESIGN CAPTURE / BRAINSTORM 2026-06-23** (owner ideas, not yet specced or built).
 **Sim-evolution STAGE 3** — parked until Stage 1 (L4 powers + Criticality) and Stage 2 (rule changes)
 ship; see the staging note in `docs/SIM_EVOLUTION.md`. Sibling to `docs/AWAKENED_POWERS_PLAN.md` (the
@@ -223,3 +243,169 @@ Floosball is already a Matrix-style simulation run by bored gods, with players w
 reality. Chrome doesn't add cyberpunk — it **names** the cyberpunk that's been latent and gives the
 Cores a reason to push it: not a malfunction this time, but a choice. The anomalies were the sim
 failing. Chrome is the sim's authors getting bored enough to start cheating.
+
+---
+
+# The 2026-07-31 direction — chrome as the anomaly engine
+
+Owner's notes, worked through. This section supersedes the fork in "How chrome relates to
+glitching" (option #1, chrome-accelerates-the-ladder, is retired — chrome *is* the ladder now).
+
+## Three classes of chrome
+
+| Class | What it does | Who wants it |
+|---|---|---|
+| **Awakening chrome** | raises a player's chance to awaken; the more fans install it, the higher the chance | anyone who wants that player to break loose — or who wants the contagion started |
+| **Power chrome** | the signature ability itself (the L4 catalog, now gifted rather than assigned) | fans choosing *what kind* of monster a player becomes |
+| **Enhancement chrome** | plain augments — cannon arm, kicking leg, agility module, optics | fans who just want their player better at football |
+
+The three-way split is what makes chrome a system rather than a shop. Enhancement chrome is the
+approachable on-ramp (I want my QB to throw harder). Awakening chrome is the deliberate act of
+destabilisation. Power chrome is the payoff, and it's a *choice*, which is new — today the
+signature ability is rolled by `assignSignaturePower`.
+
+**Awakening becomes a probability fans raise, not a threshold they fill.** That is a better shape
+than the current attention cap: no ceiling to saturate against, contributions from many fans
+compose naturally, and it never reads as "this bar is stuck".
+
+## The contagion model — awakening as an epidemic
+
+Owner's core new idea: **an awakened player is a virus.**
+
+- Every player on an awakened player's **team** gains awakening pressure each week.
+- Any player who makes **on-field contact** with an awakened player gains pressure — the example
+  given is a tackle, in either direction.
+- **Cleansed players are the inverse.** They *lower* awakening chance around them by the same two
+  routes, and can **un-awaken** an awakened player — dropping them back down the ladder, but never
+  cleansing them.
+
+This is the strongest idea in the batch, for a reason worth naming: **it makes the football the
+transmission vector.** Awakening stops being something that happens to players fans stare at and
+becomes something that spreads through the act of playing the game. A tackle is now an infection
+event. That is precisely the "football is scenery, but load-bearing scenery" shape the fans-vs-Cores
+framing wanted, and it arrives without any new fan-facing verb.
+
+**It is also, formally, an SIR epidemic model** — susceptible → infected (awakened) → recovered
+(cleansed), where the recovered are immune *and immunising*. That is good news: SIR models are
+well understood and produce **natural waves** rather than needing hand-tuned pacing. Outbreak,
+spread, Cores response, immunity build-up, burnout, susceptibility slowly returning as cleansed
+players retire. The season paces itself.
+
+It also means the design has an **R₀** — the average number of new awakenings each awakened player
+causes. That is the single number to tune, and it decides everything:
+
+| R₀ | Result |
+|---|---|
+| < 1 | outbreaks fizzle; chrome feels inert |
+| ≈ 1–1.5 | slow-building waves the Cores can *just* contain — the target |
+| > 2 | the league saturates; awakening stops being special |
+
+`play.tackledBy` is already a player reference on every run and completed pass, so contact data
+exists today and needs no new plumbing.
+
+### Feasibility notes
+- Team exposure is a weekly tick — cheap, one query.
+- Contact exposure wants a per-play hook alongside the existing tackler credit.
+- The un-awakening rule needs a floor so a heavily-cleansed league can't hold everyone down
+  permanently; otherwise the Cores win once and the system dies.
+
+## Awakened voice lines
+
+Awakened players get idle lines that reference their state. `personalityManager` already runs
+YAML-templated pools (`vibe_reactions.yaml`, 432 entries) keyed by personality, so this is a new
+pool plus a state check, not new machinery.
+
+The obvious depth: **cross the state with meta-awareness tier** (`lore.md`). An awakened `prophet`
+who already hears the Cores through the wall should not sound like an awakened `oaf` who has no
+idea what is happening to them. Same event, five registers — dread, ecstasy, confusion, denial.
+
+## The Reclamation — Cassian's post-Bowl exhibition
+
+After the Floos Bowl, Cassian assembles the best **cleansed** players and plays them against the
+**champions**. Cleansed players have no powers; champions may. A player can appear on both sides —
+Cassian just prints a copy.
+
+This is excellent and it solves a problem nobody had flagged: **it gives cleansed players
+somewhere to go.** Being cleansed is currently a dead end — you lose the power and that's the end
+of the story. Now it's a qualification. That sits exactly right with the locked constraint that
+nothing should lose meaning: the cleansed aren't diminished, they're *drafted*.
+
+The character material writes itself. Cassian is the distracted superfan who wanted one more good
+game and built it. Halverson is appalled — these are people, and one of them is now two people.
+Vera catalogues both copies without comment. Pyre asks who is cleaning it up afterwards.
+
+Design notes:
+- **It must not touch records.** An exhibition, outside the season, no standings impact. That is
+  what makes it free under the no-wipe constraint — purely additive spectacle.
+- **The clone wants to be a shadow entity**, not a duplicated `Player` row — no stat attribution,
+  no career, existing only for the fixture. A real duplicate would corrupt records, which is
+  exactly what we're not allowed to do.
+- **Name is a placeholder.** "The Reclamation" is one option; Cassian would plausibly name it
+  something earnest and football-shaped instead. Owner's call.
+
+## Tensions to settle before this is buildable
+
+Four, and the first two are load-bearing.
+
+### 1. Does chrome change who wins? (competitive integrity)
+
+Enhancement chrome buffs attributes, so fan spending starts deciding games. That runs straight at
+pillar 1 — *games that have meaning* — and at the league-parity package, which was a large
+investment specifically to stop one team running away with it.
+
+Options, roughly increasing risk:
+- **Cosmetic + anomaly only.** Chrome drives awakening and looks incredible, but never touches base
+  attributes. Zero balance risk; loses "stronger throwing arm", which is the most intuitive pitch.
+- **Double-edged only** (the existing locked drawback #3). Chrome adds a ceiling *and* a failure
+  mode, netting near zero in expectation but raising variance. Preserves parity in aggregate while
+  still feeling like a real upgrade.
+- **Straight buffs.** Best fantasy, worst integrity.
+
+Recommendation: the middle. It is already the locked drawback, it keeps the cyberpunk fantasy, and
+variance is the thing chaos is *supposed* to add.
+
+### 2. Any fan may chrome any player — sabotage is now live
+
+The 2026-06-23 favorite-team restriction existed specifically to close this. Reopening it is a real
+choice with real consequences, because chrome carries locked drawback #4: **burnout shortens
+careers.** So chroming a rival's star is a way to burn their career down, and "gift" becomes an
+attack.
+
+That may well be what you want — it is genuinely adversarial, it fits cyberpunk, and it makes the
+contagion strategic (infect *their* locker room). But it needs a decision, because:
+
+- **It brushes the no-wipe constraint.** Ending someone's career early is close to "players losing
+  meaning", especially when a rival fanbase did it on purpose.
+- It wants a **visibility rule**: is chrome attributed publicly? Anonymous sabotage is more
+  paranoid and more in-genre; attributed sabotage creates rivalries and is more fun to talk about.
+
+Suggested resolution: keep any-player gifting, but let **burnout apply only to chrome the player's
+own fanbase installed** — a team can burn out its own hero, but an outsider cannot euthanise a
+rival. Sabotage then means *destabilising* someone (awakening them into chaos they can't control),
+not killing them. Same adversarial texture, no career-assassination.
+
+### 3. What is attention still for?
+
+If chrome drives awakening, attention loses its primary job. It should probably survive as the
+**league aggregate** feed — the thing that builds toward Criticality — so passive fan behaviour
+still generates pressure while chrome supplies deliberate, targeted pressure. Otherwise the
+attention system, the ladder, the decay and the cap all retire, which is a much bigger excision.
+
+### 4. Where does the ladder go?
+
+`stirring → erratic → rampant → awakened → cleansed` is currently driven by attention thresholds.
+Under a probability model the intermediate rungs need a new meaning — most likely they become
+**infection stages** (exposed but not yet awakened), which fits the epidemic frame and keeps the
+existing badges and transition lines working.
+
+## Open questions
+
+- **R₀ target** and how it's tuned — this is the load-bearing number and the replay harness from
+  `CRITICALITY_METAGAME_PLAN.md` is the place to find it.
+- **Chrome cost + sink shape.** Floobits is the obvious currency; is cost flat, escalating per
+  player, or per augment class?
+- **Does the Chrome facility survive?** It was the tier gate under the favorite-team model; with
+  any-player gifting, a per-team facility gating what outsiders can install is incoherent.
+- **Can chrome be removed?** By the player's fanbase, by the Cores, at all?
+- **Do cleansed players stay cleansed forever**, or does immunity wane so they become susceptible
+  again after N seasons? Waning immunity is what stops the league trending permanently immune.
