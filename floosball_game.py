@@ -11994,6 +11994,7 @@ class Play():
         self.isSack = False
         self.isScramble = False          # QB ran instead of passing
         self.scrambleReason = 'pressure' # 'pressure' (escaped a sack) | 'coverage' (no one open)
+        self.preSnapRead = None          # the defense's run/pass commit, if the layer is on
         self.sneakConverted = None       # True/False on a QB sneak, None otherwise
         self.isSneakLook = False         # showed the sneak and did something else
         self.sneakLookKind = None        # 'pitch' | 'pass'
@@ -12589,6 +12590,9 @@ class Play():
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         self._captureBlitzer(scheme, defGameplan if GAMEPLAN_AVAILABLE else None)
+        # The defense's pre-snap run/pass commit, applied before anything reads
+        # the multiplier. Mutates `scheme` in place.
+        self._applyPreSnapRead(scheme, isRun=True)
         effectiveRunDef = self.defense.defenseRunCoverageRating * scheme['runDefMult']
 
         # --- Run CONCEPT: deception vs the defense's commitment, gated by execution ---
@@ -12998,6 +13002,81 @@ class Play():
                     tackler = d
                     break
         return tackler
+
+    def _preSnapLeverage(self) -> float:
+        """How ambiguous this down and distance is, 0-1.
+
+        A read is only worth something where the call could genuinely go either
+        way. Everyone in the building knows 3rd-and-15 is a pass, so being right
+        there isn't recognition — and getDefensiveScheme already applies a
+        situational multiplier in exactly those spots. Scaling by leverage is
+        what keeps this layer from double-counting with that one."""
+        from constants import (PRESNAP_LEVERAGE_FLOOR, PRESNAP_OBVIOUS_SHORT,
+                               PRESNAP_OBVIOUS_LONG)
+        ytg = self.game.yardsToFirstDown
+        if ytg <= PRESNAP_OBVIOUS_SHORT or ytg >= PRESNAP_OBVIOUS_LONG:
+            return PRESNAP_LEVERAGE_FLOOR
+        # Most ambiguous in the middle of the range, tapering to the floor at
+        # either obvious end.
+        span = (PRESNAP_OBVIOUS_LONG - PRESNAP_OBVIOUS_SHORT) / 2.0
+        mid = PRESNAP_OBVIOUS_SHORT + span
+        closeness = 1.0 - abs(ytg - mid) / span
+        return PRESNAP_LEVERAGE_FLOOR + (1.0 - PRESNAP_LEVERAGE_FLOOR) * max(0.0, closeness)
+
+    def _applyPreSnapRead(self, scheme: dict, isRun: bool) -> None:
+        """The defense commits to run or pass, and is right or wrong about it.
+
+        Mutates `scheme` in place. A correct read strengthens the multiplier for
+        the play that actually came; a wrong read weakens it by the same amount,
+        so an average defense nets zero over a season and only the sharp ones
+        gain. Disguised plays (PA / RPO / sneak-look / trick) cut the accuracy —
+        which is the first time in this sim a fake beats a DECISION rather than a
+        standing tendency."""
+        from constants import (PRESNAP_READ_ENABLED, PRESNAP_READ_BASE,
+                               PRESNAP_READ_SKILL, PRESNAP_READ_EDGE,
+                               PRESNAP_DISGUISE)
+        if not PRESNAP_READ_ENABLED:
+            return
+        game = self.game
+        defTeam = self.defense
+        coach = getattr(defTeam, 'coach', None)
+        # 0-1 skill: the coach's defensive mind plus the on-field reader (the
+        # opposite number's LB/S — this team's RB and QB playing defense).
+        defMind = getattr(coach, 'defensiveMind', 80) if coach else 80
+        readers = [defTeam.rosterDict.get('rb'), defTeam.rosterDict.get('qb')]
+        vals = []
+        for r in readers:
+            if r is None:
+                continue
+            a = getattr(r, 'gameAttributes', None) or r.attributes
+            vals.append(getattr(a, 'instinct', 80) * 0.6 + getattr(a, 'focus', 80) * 0.4)
+        readerQ = (sum(vals) / len(vals)) if vals else 80.0
+        skill = ((defMind - 80) / 20.0) * 0.6 + ((readerQ - 80) / 20.0) * 0.4   # ~-1..+1
+        accuracy = PRESNAP_READ_BASE + PRESNAP_READ_SKILL * max(-1.0, min(1.0, skill))
+
+        # Disguise — a fake is supposed to beat recognition.
+        disguise = 0.0
+        if getattr(self, 'isRpo', False):
+            disguise = max(disguise, PRESNAP_DISGUISE['rpo'])
+        if getattr(self, 'playAction', False):
+            disguise = max(disguise, PRESNAP_DISGUISE['playAction'])
+        if getattr(self, 'isSneakLook', False):
+            disguise = max(disguise, PRESNAP_DISGUISE['sneakLook'])
+        if getattr(self, 'trickPlay', None):
+            disguise = max(disguise, PRESNAP_DISGUISE['trick'])
+        accuracy = max(0.05, min(0.95, accuracy - disguise))
+
+        correct = _random.random() < accuracy
+        leverage = self._preSnapLeverage()
+        swing = PRESNAP_READ_EDGE * leverage
+        key = 'runDefMult' if isRun else 'passDefMult'
+        scheme[key] = scheme.get(key, 1.0) * ((1 + swing) if correct else (1 - swing))
+
+        self.preSnapRead = {'predicted': ('run' if (correct == isRun) else 'pass'),
+                            'correct': correct,
+                            'leverage': round(leverage, 2),
+                            'accuracy': round(accuracy, 2)}
+        self.insights['preSnapRead'] = self.preSnapRead
 
     def _resolveQbScramble(self, tackler, reason='pressure') -> None:
         """The QB runs instead of passing. Resolves as a run with the QB as
@@ -13698,6 +13777,9 @@ class Play():
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
+        # The defense's pre-snap run/pass commit, applied before coverage reads
+        # the multiplier. Mutates `scheme` in place.
+        self._applyPreSnapRead(scheme, isRun=False)
         # Individual pass rush: DE's passRush vs TE blocking (when TE blocks)
         defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
         self._captureBlitzer(scheme, defGameplanObj)

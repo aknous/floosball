@@ -365,6 +365,42 @@ RUN_CONCEPTS = {
 }
 
 # ---------------------------------------------------------------------------
+# Pre-snap recognition (the defense's read)
+# ---------------------------------------------------------------------------
+# Everything else in the playbook resolves deception as an OFFENSIVE execution
+# roll against the defense's standing gameplan numbers — `conceptTelegraphed` is
+# the runner executing badly, play-action bites according to a pre-set
+# runStopFocus, tricks pay off against a tendency. The defense never made a
+# per-play decision it could be right or wrong about, which is also why
+# `defensiveMind` did no per-play work at all.
+#
+# This is the mirror of the RPO read: before the play resolves, the defense
+# commits to run or pass.
+PRESNAP_READ_ENABLED = True
+# Base accuracy for a league-average defense. 0.50 is deliberate: at the average
+# the layer nets ZERO (right and wrong are equally likely, and the payoffs are
+# equal and opposite), so it REDISTRIBUTES between sharp and poor defenses
+# rather than taxing offense league-wide. League scoring should not move.
+PRESNAP_READ_BASE = 0.50
+PRESNAP_READ_SKILL = 0.26         # swing from coach defensiveMind + the reader's instinct/focus
+PRESNAP_READ_EDGE = 0.09          # defensive multiplier swing on a correct vs wrong read
+# Disguise — how much each fake degrades recognition. This is the whole point of
+# a fake, and until now they had nothing to beat but a static tendency.
+PRESNAP_DISGUISE = {
+    'playAction': 0.22,
+    'rpo':        0.30,           # genuinely both plays until the QB decides
+    'sneakLook':  0.28,
+    'trick':      0.32,
+}
+# Leverage — the read only pays where the situation is genuinely ambiguous. On
+# 3rd-and-15 both sides know it's a pass, so guessing right isn't skill; those
+# spots are already handled by the situational branch in getDefensiveScheme.
+# Scaling by leverage is also what stops this layer double-counting with it.
+PRESNAP_LEVERAGE_FLOOR = 0.20     # obvious situations still leave a sliver
+PRESNAP_OBVIOUS_SHORT = 2         # ytg at or under this reads run to everyone
+PRESNAP_OBVIOUS_LONG = 12         # ytg at or over this reads pass to everyone
+
+# ---------------------------------------------------------------------------
 # QB sneak (short-yardage concept — see RUN_CONCEPTS['sneak'])
 # ---------------------------------------------------------------------------
 # The QB follows the interior surge for the yard. Mechanically unlike a tailback
