@@ -48,7 +48,7 @@ converts to a consumable currency and nothing persists.
 ### Smaller next-season items (owner, 2026-08-01)
 Four unrelated asks, each checked against the code so scoping starts from facts.
 
-**QB sneaks + sneak-look trick plays.** 3rd/4th-and-short and goal-line: the QB sneaks for the
+**QB sneaks + sneak-look trick plays.** ✅ **SHIPPED 2026-08-01** (`b0407c8`, defensive response `2fb0d1b`; regression `test_qb_sneak.py`). Original note follows. 3rd/4th-and-short and goal-line: the QB sneaks for the
 yard, defense stacks to stop it. Plus a fake — show the sneak, then a quick pass or a pitch to the
 RB around the end.
 - Doesn't exist. `grep sneak` finds only PBP text for an end run and a Cores line.
@@ -134,7 +134,22 @@ long-game scoreboard.
 - **Why it's a prerequisite:** `SIM_EVOLUTION.md` Stage 2 (fan-voted rule mutation) is the
   Criticality *aftermath*, so it can't land until the trigger is a contest rather than weather.
 
+**Ball-carrier moves + pre-snap recognition.** ✅ **SHIPPED 2026-08-01** — not on the original
+four-item list; came out of the same thread. Stiff arm / spin / hurdle keyed off a shared `_flair`
+(creativity + xFactor) and the new determination state, retro-fitted to the stretch and diving
+catch so those attributes matter everywhere (`c2ef406`, `db7b522`). Plus a pre-snap run/pass read
+that gives `defensiveMind` its first per-play job and gives the fakes something real to fool
+(`4515ce9`, `b041642`). Regressions `test_runner_moves.py` / `test_presnap_read.py`.
+
 ## Bugs / smaller fixes
+- **League scoring sits ~27.5 in a fresh sim vs the ~36 documented in CLAUDE.md** ⚠️ OPEN — measured
+  repeatedly on 2026-08-01 and unchanged by any of that day's work. Either the parity package's
+  lower generation seed showing up in a season-1 league, or real drift. ⚠️ **Note for whoever picks
+  this up:** paired fresh sims CANNOT resolve small effects here — each regenerates the whole player
+  pool and the run-to-run spread was 27.4–31.1 pts/g across four runs. Measure mechanics directly.
+- **Docs describe a stale attention model** — `docs/CHROME.md` and `docs/CRITICALITY_METAGAME_PLAN.md`
+  still say four attention sources with cards at 10/wk. Development's `5dcc8dd`/`1078e7f` cut it to
+  three with cards at 18, and equipped cards were contributing NOTHING on prod before that fix.
 - **Criticality threshold is outrun by the season** ⚠️ OPEN — folded into the Deeper Game plan
   above (the trailing baseline). Needs a design call — the bar
   sits at 0.92× the expected resting level (permanently crossed by construction) AND is
