@@ -184,3 +184,72 @@ def testEveryMoveIsConfiguredCoherently():
         assert 0 < lo < hi <= 8, f'{name} gain band {spec["gain"]} is out of range'
         assert spec['risk'] > 0
         assert abs(sum(spec['attrs'].values()) - 1.0) < 1e-9, f'{name} attrs must sum to 1'
+
+
+# ── The defender gets a say ─────────────────────────────────────────────────
+
+def _tackler(tackling=80, discipline=80):
+    a = SimpleNamespace(tackling=tackling, discipline=discipline)
+    t = SimpleNamespace(name='T', position=2, gameAttributes=a)
+    t.attributes = SimpleNamespace(
+        discipline=discipline,
+        getDefensiveAttributes=lambda pos: {'tackling': tackling})
+    return t
+
+
+def _hitRate(p, carrier, tackler, n=5000):
+    made = tried = 0
+    for _ in range(n):
+        _, name, _ = p._runnerMove(carrier, tackler)
+        if name:
+            tried += 1
+            made += 0 if name.endswith('_miss') else 1
+    return made / max(1, tried)
+
+
+def testDisciplinedDefenderNullifiesFlairMoves():
+    """The owner's ask: a well-disciplined defender should take these away."""
+    p = _play()
+    c = _carrier(creativity=100, xFactor=100, power=90, agility=90, speed=90)
+    loose = _hitRate(p, c, _tackler(tackling=80, discipline=60))
+    square = _hitRate(p, c, _tackler(tackling=80, discipline=100))
+    assert loose - square > 0.15, f'discipline barely mattered ({loose:.3f} vs {square:.3f})'
+
+
+def testSkilledTacklerAlsoResists():
+    p = _play()
+    c = _carrier(creativity=100, xFactor=100, power=90, agility=90, speed=90)
+    weak = _hitRate(p, c, _tackler(tackling=60, discipline=80))
+    strong = _hitRate(p, c, _tackler(tackling=100, discipline=80))
+    assert weak - strong > 0.15
+
+
+def testDisciplineBitesHardestOnTheRiskiestMove():
+    """A hurdle against a squared-up defender should be a worse idea than a
+    stiff arm against the same defender."""
+    p = _play()
+    hurdler = _carrier(creativity=100, xFactor=100, agility=100, speed=100, power=50)
+    armer = _carrier(creativity=100, xFactor=100, power=100, agility=50, speed=50)
+    square, loose = _tackler(discipline=100), _tackler(discipline=60)
+    hurdleDrop = _hitRate(p, hurdler, loose) - _hitRate(p, hurdler, square)
+    armDrop = _hitRate(p, armer, loose) - _hitRate(p, armer, square)
+    assert hurdleDrop > armDrop, f'hurdle {hurdleDrop:.3f} should fall further than stiff arm {armDrop:.3f}'
+
+
+# ── Contact gate ────────────────────────────────────────────────────────────
+
+def testNoMoveOnceIntoOpenField():
+    """You cannot stiff-arm someone on a 40-yard housecall — nobody is there."""
+    from constants import RUNNER_MOVE_MAX_CONTACT_YARDS
+    p = _play()
+    p.yardage = RUNNER_MOVE_MAX_CONTACT_YARDS + 1
+    c = _carrier(creativity=100, xFactor=100)
+    assert all(p._runnerMove(c, None)[1] is None for _ in range(300))
+
+
+def testMovesStillFireAtThePointOfContact():
+    from constants import RUNNER_MOVE_MAX_CONTACT_YARDS
+    p = _play()
+    p.yardage = RUNNER_MOVE_MAX_CONTACT_YARDS
+    c = _carrier(creativity=100, xFactor=100)
+    assert any(p._runnerMove(c, None)[1] is not None for _ in range(300))

@@ -395,6 +395,23 @@ RUNNER_MOVE_BASE_SUCCESS = 42.0   # % before the attribute-vs-tackler term
 RUNNER_MOVE_SWING = 1.15          # % per point of (carrier attribute - tackler defense)
 RUNNER_MOVE_SUCCESS_MIN = 12.0
 RUNNER_MOVE_SUCCESS_MAX = 88.0
+# The defender's resistance blends SKILL and DISCIPLINE. Tackling is whether they
+# can bring the carrier down; discipline is whether they stay square and refuse to
+# bite on the move in the first place — which is what actually beats flair. A
+# disciplined defender resists the high-risk moves hardest (`disciplineRiskK`
+# scales by the move's own risk), so a hurdle against a squared-up veteran is a
+# bad idea and a hurdle against a lunger is not.
+RUNNER_MOVE_DEF_TACKLING_W = 0.6
+RUNNER_MOVE_DEF_DISCIPLINE_W = 0.4
+RUNNER_MOVE_DISCIPLINE_RISK_K = 6.0   # extra % resistance per unit risk from a disciplined defender
+# Contact gate — a move only happens at the point of contact. Beyond this many
+# yards the carrier is into open field with nobody to beat, and a stiff-arm on a
+# 40-yard housecall reads as nonsense.
+RUNNER_MOVE_MAX_CONTACT_YARDS = 12
+# Beating a man is a confidence event for both players. Small, and it uses the
+# same in-game confidence channel everything else does.
+RUNNER_MOVE_CONF_CARRIER = 0.04
+RUNNER_MOVE_CONF_DEFENSE = -0.02
 
 # Flair — the shared "does this player try audacious things" term, 0..1, built
 # from creativity + xFactor around the 80 house-neutral pivot.

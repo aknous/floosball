@@ -12805,6 +12805,24 @@ class Play():
                 self.awakenedFire = self.game._lastAwakenedFire
                 self._awakenedDefender = _dfn
 
+        # Identify the primary tackler BEFORE the move — you cannot beat a man the
+        # sim hasn't chosen yet. This block used to sit below the fumble check,
+        # which meant _runnerMove was handed None and fell back to the team run
+        # rating, so no individual defender ever resisted a move.
+        defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
+        coverageAssignments = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
+        passRusherRun = getattr(defGameplanObj, 'passRusher', None) if defGameplanObj else None
+        lbPlayer = coverageAssignments.get('te')  # LB = defense team's RB, assigned to cover TE
+        if gapType in ('A-gap', 'B-gap'):
+            self.tackledBy = lbPlayer  # Inside runs: LB is primary tackler
+        else:
+            self.tackledBy = passRusherRun  # Edge runs: DE is primary tackler
+        # Derived here rather than read from _defFire, which is assigned further
+        # down (below the fumble check) — this block moved above it.
+        _defFireEarly = bool(self.awakenedFire and self.awakenedFire.get('situation') == 'strip')
+        if _defFireEarly and self._awakenedDefender:
+            self.tackledBy = self._awakenedDefender  # the awakened defender made the play
+
         # Beat the tackler first (stiff arm / spin / hurdle), THEN reach for the
         # marker — that's the real sequence, and it means a move can carry a
         # carrier into stretch range who wasn't there before.
@@ -12871,17 +12889,7 @@ class Play():
                 self.isFumbleLost = True
                 self.playResult = PlayResult.Fumble
 
-        # Identify primary tackler from defensive gameplan
-        defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
-        coverageAssignments = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
-        passRusherRun = getattr(defGameplanObj, 'passRusher', None) if defGameplanObj else None
-        lbPlayer = coverageAssignments.get('te')  # LB = defense team's RB, assigned to cover TE
-        if gapType in ('A-gap', 'B-gap'):
-            self.tackledBy = lbPlayer  # Inside runs: LB is primary tackler
-        else:
-            self.tackledBy = passRusherRun  # Edge runs: DE is primary tackler
-        if _defFire and self._awakenedDefender:
-            self.tackledBy = self._awakenedDefender  # the awakened defender made the play
+        # (Primary tackler was identified above, before the move — see there.)
         if self.isFumble and self.isFumbleLost:
             self.forcedFumbleBy = self._awakenedDefender if _defFire else self.tackledBy
 
@@ -13305,8 +13313,16 @@ class Play():
                                RUNNER_MOVE_FLAIR_K, RUNNER_MOVE_STATE_K,
                                RUNNER_MOVES, RUNNER_MOVE_BASE_SUCCESS,
                                RUNNER_MOVE_SWING, RUNNER_MOVE_SUCCESS_MIN,
-                               RUNNER_MOVE_SUCCESS_MAX)
+                               RUNNER_MOVE_SUCCESS_MAX, RUNNER_MOVE_DEF_TACKLING_W,
+                               RUNNER_MOVE_DEF_DISCIPLINE_W,
+                               RUNNER_MOVE_DISCIPLINE_RISK_K,
+                               RUNNER_MOVE_MAX_CONTACT_YARDS,
+                               RUNNER_MOVE_CONF_CARRIER, RUNNER_MOVE_CONF_DEFENSE)
         if not RUNNER_MOVE_ENABLED or carrier is None or getattr(self, 'isTd', False):
+            return (0, None, 0)
+        # Contact gate: a move happens where someone is there to beat. Past this
+        # the carrier is into open field and there is nobody to stiff-arm.
+        if self.yardage > RUNNER_MOVE_MAX_CONTACT_YARDS:
             return (0, None, 0)
         flair = self._flair(carrier)
         state = (self._confidenceState(carrier) + self._determinationState(carrier)) / 2.0
@@ -13326,14 +13342,28 @@ class Play():
                 best, bestVal = name, val
         spec = RUNNER_MOVES[best]
 
+        # Defender resistance: SKILL (can they bring him down) blended with
+        # DISCIPLINE (do they stay square instead of biting on the move). A
+        # disciplined defender is what actually nullifies flair, so discipline
+        # additionally resists in proportion to how audacious the move is — a
+        # hurdle against a squared-up veteran is a bad idea; against a lunger
+        # it isn't.
         defRating = self.defense.defenseRunCoverageRating
+        defDiscipline = 80.0
         if tackler is not None:
             try:
                 dAttrs = tackler.attributes.getDefensiveAttributes(tackler.position)
-                defRating = dAttrs.get('tackling', defRating)
+                tackling = dAttrs.get('tackling', defRating)
             except Exception:
-                pass
-        chanceHit = RUNNER_MOVE_BASE_SUCCESS + (bestVal - defRating) * RUNNER_MOVE_SWING
+                tackling = defRating
+            tAttrs = getattr(tackler, 'gameAttributes', None) or tackler.attributes
+            defDiscipline = getattr(tAttrs, 'discipline', 80.0)
+            defRating = (tackling * RUNNER_MOVE_DEF_TACKLING_W
+                         + defDiscipline * RUNNER_MOVE_DEF_DISCIPLINE_W)
+        disciplineResist = ((defDiscipline - 80.0) / 20.0) * RUNNER_MOVE_DISCIPLINE_RISK_K * spec['risk']
+        chanceHit = (RUNNER_MOVE_BASE_SUCCESS
+                     + (bestVal - defRating) * RUNNER_MOVE_SWING
+                     - disciplineResist)
         chanceHit = max(RUNNER_MOVE_SUCCESS_MIN, min(RUNNER_MOVE_SUCCESS_MAX, chanceHit))
         # Exposure is taken on for ATTEMPTING it, made or missed — that's the cost
         # of reaching for the extra yard rather than going down clean.
@@ -13342,6 +13372,14 @@ class Play():
             return (0, f'{best}_miss', fumbleBump)
         lo, hi = spec['gain']
         gain = batched_randint(lo, hi)
+        # Beating a man is a confidence event on both sides. There is no
+        # missed-tackle stat in the tracker to credit (adding one is a schema
+        # change), so this plus the yards and the PBP clause is the consequence.
+        try:
+            carrier.updateInGameConfidence(RUNNER_MOVE_CONF_CARRIER)
+            self.defense.updateInGameConfidence(RUNNER_MOVE_CONF_DEFENSE)
+        except Exception:
+            pass
         return (gain, best, fumbleBump)
 
     def _undiscipline(self, player):
