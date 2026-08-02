@@ -5896,6 +5896,25 @@ class Game:
                 and not getattr(self.play, 'checkdownReason', None)):
             text += ', a diving grab!'
 
+        # Surface a ball-carrier move (see _runnerMove). Sits BEFORE the stretch
+        # clause because that's the order it happened in: beat the tackler, then
+        # reach for the marker. Skipped on a fumble — the move popped it loose and
+        # the fumble text carries that.
+        _mv = getattr(self.play, 'runnerMove', None)
+        if _mv and not self.play.isFumble:
+            _made = not _mv.endswith('_miss')
+            _name = _mv[:-5] if not _made else _mv
+            _mvText = {
+                ('stiff arm', True):  ', stiff-arms the tackler away',
+                ('stiff arm', False): ', tries the stiff arm and gets wrapped up',
+                ('spin', True):       ', spins out of the tackle',
+                ('spin', False):      ', spins and is dragged down anyway',
+                ('hurdle', True):     ', hurdles the defender',
+                ('hurdle', False):    ', goes airborne and is met in mid-air',
+            }.get((_name, _made))
+            if _mvText:
+                text += _mvText
+
         # Surface the stretch-for-the-marker decision (see _stretchForFirst). Skip on
         # a fumble (the reach popped it loose — the fumble text already tells that story).
         _stNote = getattr(self.play, '_stretchNote', None)
@@ -11995,6 +12014,7 @@ class Play():
         self.isScramble = False          # QB ran instead of passing
         self.scrambleReason = 'pressure' # 'pressure' (escaped a sack) | 'coverage' (no one open)
         self.preSnapRead = None          # the defense's run/pass commit, if the layer is on
+        self.runnerMove = None           # 'stiff arm' | 'spin' | 'hurdle' | '<move>_miss'
         self.sneakConverted = None       # True/False on a QB sneak, None otherwise
         self.isSneakLook = False         # showed the sneak and did something else
         self.sneakLookKind = None        # 'pitch' | 'pass'
@@ -12785,11 +12805,20 @@ class Play():
                 self.awakenedFire = self.game._lastAwakenedFire
                 self._awakenedDefender = _dfn
 
+        # Beat the tackler first (stiff arm / spin / hurdle), THEN reach for the
+        # marker — that's the real sequence, and it means a move can carry a
+        # carrier into stretch range who wasn't there before.
+        _moveBonus, self.runnerMove, _moveFumbleBump = self._runnerMove(self.runner, self.tackledBy)
+        if _moveBonus:
+            self.yardage = min(self.yardage + _moveBonus, self.yardsToEndzone)
+            self.insights['runnerMove'] = self.runnerMove
+
         # Stretch for the first down / goal line — a confident back reaches it out
         # to convert; the reach can expose the ball (fumble bump, resolved below).
         _stretchBonus, self._stretchNote, _stretchFumbleBump = self._stretchForFirst(self.runner)
         if _stretchBonus:
             self.yardage = min(self.yardage + _stretchBonus, self.yardsToEndzone)
+        _stretchFumbleBump += _moveFumbleBump
 
         baseYards = self.yardage
 
@@ -13234,6 +13263,87 @@ class Play():
             return 0.0
         return max(-1.0, min(1.0, c / 5.0))
 
+    def _determinationState(self, player):
+        """Normalized determination in [-1, +1]. The drive-to-win axis, sibling to
+        `_confidenceState` — belief says "I can", determination says "I will"."""
+        try:
+            d = player.gameAttributes.determinationModifier
+        except Exception:
+            return 0.0
+        return max(-1.0, min(1.0, d / 5.0))
+
+    def _flair(self, player):
+        """0..1 — how likely this player is to TRY something audacious.
+
+        Built from creativity + xFactor, which were nearly inert in play
+        resolution before this (xFactor appeared in one QB-mobility calculation;
+        creativity in two concept exec weights). Flair never decides whether a
+        move WORKS — that's the physical attribute — only whether it's attempted."""
+        from constants import (FLAIR_PIVOT, FLAIR_RANGE, FLAIR_CREATIVITY_W,
+                               FLAIR_XFACTOR_W)
+        if player is None:
+            return 0.0
+        a = getattr(player, 'gameAttributes', None) or getattr(player, 'attributes', None)
+        if a is None:
+            return 0.0
+        cre = (getattr(a, 'creativity', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
+        xf = (getattr(a, 'xFactor', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
+        raw = cre * FLAIR_CREATIVITY_W + xf * FLAIR_XFACTOR_W    # ~-1..+1
+        return max(0.0, min(1.0, 0.5 + raw / 2.0))               # 0..1, 0.5 at neutral
+
+    def _runnerMove(self, carrier, tackler):
+        """A carrier about to be brought down tries to beat the tackler.
+
+        Returns (bonusYards, moveName, fumbleBump) — the same shape
+        `_stretchForFirst` returns, and applied in the same place.
+
+        Flair and mental state decide whether it's ATTEMPTED; the move's own
+        physical attribute decides whether it WORKS; discipline decides what it
+        costs when the ball is exposed. A flashy back tries things a plodder
+        never would, and occasionally wears it."""
+        from constants import (RUNNER_MOVE_ENABLED, RUNNER_MOVE_BASE_CHANCE,
+                               RUNNER_MOVE_FLAIR_K, RUNNER_MOVE_STATE_K,
+                               RUNNER_MOVES, RUNNER_MOVE_BASE_SUCCESS,
+                               RUNNER_MOVE_SWING, RUNNER_MOVE_SUCCESS_MIN,
+                               RUNNER_MOVE_SUCCESS_MAX)
+        if not RUNNER_MOVE_ENABLED or carrier is None or getattr(self, 'isTd', False):
+            return (0, None, 0)
+        flair = self._flair(carrier)
+        state = (self._confidenceState(carrier) + self._determinationState(carrier)) / 2.0
+        chance = (RUNNER_MOVE_BASE_CHANCE
+                  + RUNNER_MOVE_FLAIR_K * flair
+                  + RUNNER_MOVE_STATE_K * max(-1.0, min(1.0, state)))
+        if _random.random() >= max(0.0, chance):
+            return (0, None, 0)
+
+        a = carrier.gameAttributes
+        # Pick the move this carrier is actually built for — a powerful back
+        # stiff-arms, a shifty one spins, a leaper hurdles.
+        best, bestVal = None, -1e9
+        for name, spec in RUNNER_MOVES.items():
+            val = sum(getattr(a, attr, 80) * w for attr, w in spec['attrs'].items())
+            if val > bestVal:
+                best, bestVal = name, val
+        spec = RUNNER_MOVES[best]
+
+        defRating = self.defense.defenseRunCoverageRating
+        if tackler is not None:
+            try:
+                dAttrs = tackler.attributes.getDefensiveAttributes(tackler.position)
+                defRating = dAttrs.get('tackling', defRating)
+            except Exception:
+                pass
+        chanceHit = RUNNER_MOVE_BASE_SUCCESS + (bestVal - defRating) * RUNNER_MOVE_SWING
+        chanceHit = max(RUNNER_MOVE_SUCCESS_MIN, min(RUNNER_MOVE_SUCCESS_MAX, chanceHit))
+        # Exposure is taken on for ATTEMPTING it, made or missed — that's the cost
+        # of reaching for the extra yard rather than going down clean.
+        fumbleBump = int(round(self._undiscipline(carrier) * 3 * spec['risk']))
+        if batched_randint(1, 100) > chanceHit:
+            return (0, f'{best}_miss', fumbleBump)
+        lo, hi = spec['gain']
+        gain = batched_randint(lo, hi)
+        return (gain, best, fumbleBump)
+
     def _undiscipline(self, player):
         """How undisciplined a player is: 0 (controlled) .. 1 (gunslinger). The
         gate that turns confidence into either production or chaos."""
@@ -13316,11 +13426,16 @@ class Play():
         C = self._confidenceState(carrier)
         if C <= 0:
             return (0, None, 0)              # not confident enough to lunge for it
-        # Confidence drives the WILLINGNESS to reach; POWER drives the physical
-        # extension through contact (a strong back/big TE gets it there, a slight
-        # receiver doesn't). Discipline (below) drives the fumble risk on the reach.
+        # Confidence and DETERMINATION drive the WILLINGNESS to reach; FLAIR
+        # (creativity + xFactor) is what makes a player go for it at all rather
+        # than take the spot; POWER drives the physical extension through contact
+        # (a strong back/big TE gets it there, a slight receiver doesn't).
+        # Discipline (below) drives the fumble risk on the reach.
+        from constants import STRETCH_FLAIR_K, STRETCH_DETERMINATION_K
         powerNorm = max(-1.0, min(1.0, (getattr(carrier.gameAttributes, 'power', 80) - 80) / 20.0))
-        successChance = int(45 + 25 * C + 15 * powerNorm)   # ~5..85
+        flairTerm = STRETCH_FLAIR_K * (self._flair(carrier) - 0.5) * 2.0        # ±K
+        detTerm = STRETCH_DETERMINATION_K * self._determinationState(carrier)   # ±K
+        successChance = int(45 + 25 * C + 15 * powerNorm + flairTerm + detTerm)
         if batched_randint(1, 100) > successChance:
             return (0, 'stretch_short', 0)   # overreaches, comes up just short
         note = 'stretch_goal' if target == self.yardsToEndzone else 'stretch_first'
@@ -14306,7 +14421,16 @@ class Play():
                 _screenOrDump = (getattr(self, 'passConcept', 'standard') == 'screen'
                                  or getattr(self, 'isCheckdown', False))
                 if _diveC > 0 and 15 <= catchProbs['catchProb'] <= 60 and not _screenOrDump:
-                    catchProbs['catchProb'] = min(85, catchProbs['catchProb'] + _diveC * MENTAL_DIVE_K)
+                    # Confidence gets them off their feet; FLAIR (creativity +
+                    # xFactor) and DETERMINATION decide how much a lay-out is
+                    # really worth — the same three-part model the stretch and the
+                    # runner moves use, so those attributes matter everywhere a
+                    # player chooses to do something audacious.
+                    from constants import DIVE_FLAIR_K, DIVE_DETERMINATION_K
+                    _diveBonus = (_diveC * MENTAL_DIVE_K
+                                  + DIVE_FLAIR_K * (self._flair(self.receiver) - 0.5) * 2.0
+                                  + DIVE_DETERMINATION_K * self._determinationState(self.receiver))
+                    catchProbs['catchProb'] = min(85, catchProbs['catchProb'] + max(0.0, _diveBonus))
                     self._diveAttempt = True
                 else:
                     self._diveAttempt = False
@@ -14543,8 +14667,24 @@ class Play():
                     # (mechanics + narration) when it was a diving catch.
                     self._stretchNote = None
                     _stFumbleBump = 0
+                    # A receiver with the ball in space is a ball carrier — same
+                    # moves available. Not after a diving catch: you can't spin
+                    # out of a tackle from the ground.
+                    if not getattr(self, '_diveCatch', False):
+                        # No tackler argument: `tackledBy` isn't resolved until
+                        # further down this branch, so the move falls back to the
+                        # team's run-coverage rating rather than an individual's.
+                        _mvBonus, self.runnerMove, _mvFumbleBump = self._runnerMove(
+                            self.receiver, None)
+                        if _mvBonus:
+                            self.yardage = min(self.yardage + _mvBonus, self.yardsToEndzone)
+                            self.insights['runnerMove'] = self.runnerMove
+                    else:
+                        _mvFumbleBump = 0
                     if not getattr(self, '_diveCatch', False):
                         _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.receiver)
+                        # Added AFTER the stretch call, which reassigns _stFumbleBump.
+                        _stFumbleBump += _mvFumbleBump
                         if _stBonus:
                             # Cap at the goal line, NOT one short — a 'stretch_goal' reach
                             # (target == yardsToEndzone) must be allowed to cross for the TD

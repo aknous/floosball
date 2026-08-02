@@ -365,6 +365,51 @@ RUN_CONCEPTS = {
 }
 
 # ---------------------------------------------------------------------------
+# Ball-carrier moves — stiff arm / spin / hurdle
+# ---------------------------------------------------------------------------
+# A carrier about to be brought down tries to beat the tackler for extra yards.
+# Slots into the same place `_stretchForFirst` does (the shared run tail, used by
+# both runs and receptions) and returns the same shape.
+#
+# The three-part model these all follow, and which the stretch and the diving
+# catch now follow too:
+#   WILLINGNESS to try it   <- flair (creativity + xFactor) and mental state
+#                              (confidence + determination)
+#   ABILITY to pull it off  <- the physical attribute the move actually uses
+#   RISK taken on           <- discipline (exposure -> fumble bump)
+# That split is what gives `creativity` and `xFactor` real work: before this they
+# were almost inert in play resolution (xFactor appeared in one QB-mobility
+# calculation, creativity in two concept exec weights and otherwise nothing).
+RUNNER_MOVE_ENABLED = True
+RUNNER_MOVE_BASE_CHANCE = 0.05    # attempt rate for a neutral-flair, neutral-state carrier
+RUNNER_MOVE_FLAIR_K = 0.18        # how much full flair raises the attempt rate
+RUNNER_MOVE_STATE_K = 0.06        # how much confidence+determination raise it
+# Per move: the attribute(s) that decide success, the yardage band on a make, and
+# `risk` scaling the fumble bump on the attempt. Bigger swings cost more.
+RUNNER_MOVES = {
+    'stiff arm': {'attrs': {'power': 1.0},                  'gain': (1, 3), 'risk': 0.6},
+    'spin':      {'attrs': {'agility': 1.0},                'gain': (1, 4), 'risk': 0.9},
+    'hurdle':    {'attrs': {'agility': 0.6, 'speed': 0.4},  'gain': (2, 5), 'risk': 1.5},
+}
+RUNNER_MOVE_BASE_SUCCESS = 42.0   # % before the attribute-vs-tackler term
+RUNNER_MOVE_SWING = 1.15          # % per point of (carrier attribute - tackler defense)
+RUNNER_MOVE_SUCCESS_MIN = 12.0
+RUNNER_MOVE_SUCCESS_MAX = 88.0
+
+# Flair — the shared "does this player try audacious things" term, 0..1, built
+# from creativity + xFactor around the 80 house-neutral pivot.
+FLAIR_PIVOT = 80.0
+FLAIR_RANGE = 20.0
+FLAIR_CREATIVITY_W = 0.5
+FLAIR_XFACTOR_W = 0.5
+# How much flair and determination feed the EXISTING audacious plays, so the same
+# attributes matter there too rather than only on the new moves.
+STRETCH_FLAIR_K = 12.0            # success-chance points at full flair on a stretch
+STRETCH_DETERMINATION_K = 8.0     # success-chance points at full determination
+DIVE_FLAIR_K = 4.0                # catch-prob points at full flair on a lay-out
+DIVE_DETERMINATION_K = 3.0        # catch-prob points at full determination
+
+# ---------------------------------------------------------------------------
 # Pre-snap recognition (the defense's read)
 # ---------------------------------------------------------------------------
 # Everything else in the playbook resolves deception as an OFFENSIVE execution
