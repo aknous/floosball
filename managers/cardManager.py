@@ -227,6 +227,10 @@ def _applyThemeFilter(templates: list, themeType: str, themeValue: str,
         return [t for t in templates if t.team_id == teamIdInt]
     if themeType == 'output':
         return [t for t in templates if getattr(t, 'output_type', None) == themeValue]
+    if themeType == 'legacy':
+        # The pool handed in IS already the legacy set (openPack swaps the source
+        # for this theme), so there is nothing further to filter on.
+        return list(templates)
     if themeType == 'rookie':
         # This season's rookie class. `templates` is already scoped to the
         # current season (getBySeason), and each season's veteran templates are
@@ -1353,7 +1357,6 @@ class CardManager:
         """Permanently move a card into the user's Vault. IRREVERSIBLE — vaulted
         cards can no longer be equipped, sold, or Combined; they persist forever
         and drive collection achievements. Can't vault an equipped card."""
-        from datetime import datetime
         from database.repositories.card_repositories import UserCardRepository, EquippedCardRepository
         cardRepo = UserCardRepository(session)
         cards = cardRepo.getByIds([cardId], userId)
@@ -1499,7 +1502,6 @@ class CardManager:
         if not skipCurrency:
             dailyLimit = DAILY_PACK_LIMITS.get(packType.name)
             if dailyLimit is not None:
-                from datetime import datetime
                 from database.models import PackOpening
                 now = datetime.utcnow()
                 dayStart = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1571,10 +1573,16 @@ class CardManager:
         """
         from database.repositories.card_repositories import CardTemplateRepository
         templateRepo = CardTemplateRepository(session)
-        allTemplates = templateRepo.getBySeason(currentSeason)
-        # Skip any templates with NULL team_id — defensive guard against legacy
-        # prospect/rookie templates polluting fresh pack rolls.
-        allTemplates = [t for t in allTemplates if t.team_id is not None]
+        # LEGACY packs draw from PAST seasons, so they bypass the current-season
+        # pool entirely — the only pack type that does. Everything downstream
+        # (weights, guarantee, dedup) works unchanged on this pool.
+        if getattr(packType, 'theme_type', None) == 'legacy':
+            allTemplates = getLegacyCollectionTemplates(session, currentSeason)
+        else:
+            allTemplates = templateRepo.getBySeason(currentSeason)
+            # Skip any templates with NULL team_id — defensive guard against legacy
+            # prospect/rookie templates polluting fresh pack rolls.
+            allTemplates = [t for t in allTemplates if t.team_id is not None]
         # The no-effect FLOOR print (edition 'base') is the STARTER lineup ONLY: the starter
         # pack draws exclusively from it, and every OTHER pack excludes it (packs deliver
         # effect cards). Before the fusion edition rename this filter dropped 'standard';
@@ -1761,7 +1769,6 @@ class CardManager:
         from database.repositories.card_repositories import (
             PackTypeRepository, CurrencyRepository,
         )
-        from datetime import datetime
 
         packRepo = PackTypeRepository(session)
         currencyRepo = CurrencyRepository(session)
@@ -2055,7 +2062,6 @@ class CardManager:
         # Build a transient stub UserCard so we can reuse serializeCard's
         # effect-rebuilding / sellValue / combineValue logic intact.
         from database.models import UserCard
-        from datetime import datetime
         from sqlalchemy.orm.attributes import set_committed_value
         stub = UserCard(
             user_id=0,
@@ -2211,19 +2217,9 @@ class CardManager:
             # doesn't bleed into the shop's featured rotation, and drop the no-effect
             # floor print (edition 'base') — it's the starter lineup, not a shop single.
             allTemplates = [t for t in allTemplates if t.team_id is not None and t.edition != 'base']
-            # The COLLECTION pool, added back explicitly — getBySeason only
-            # returns the current season, so none of this appears otherwise.
-            #   * showpieces: purpose-built collectibles, excluded from packs.
-            #   * legacy prints: past-season MVP/Champion/All-Pro cards of Hall
-            #     of Fame players, carrying the team and rating they actually had
-            #     that season. The shop is the only way to obtain either.
-            collection = [
-                t for t in session.query(CardTemplate)
-                .filter(CardTemplate.is_showpiece == True)          # noqa: E712
-                .filter(CardTemplate.is_upgraded == False).all()    # noqa: E712
-            ]
-            collection += getLegacyCollectionTemplates(session, currentSeason)
-            allTemplates = allTemplates + collection
+            # Collection cards are deliberately NOT in the shop rotation — they
+            # come from the Legacy Pack only (owner, 2026-08-02). The single-card
+            # shop sells current-season fantasy singles.
 
             if not allTemplates:
                 return []
@@ -2456,7 +2452,6 @@ class CardManager:
         Skipped if a category's underlying template pool is empty for the
         current season — keeps unwinnable packs from being featured."""
         from database.models import FeaturedPackRotation, PackType, CardTemplate
-        from datetime import datetime
 
         allPacks = session.query(PackType).all()
         if not allPacks:

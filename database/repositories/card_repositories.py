@@ -622,6 +622,26 @@ class PackTypeRepository:
             theme_value=None,
         ))
 
+        # LEGACY PACK — the only source of collection cards.
+        #
+        # Guarantees prismatic-or-better, which is far more generous than any
+        # fantasy pack. That is safe precisely BECAUSE these cards can never be
+        # equipped: there is no power creep to worry about, so the pack can
+        # promise something worth opening every time. Its value is Showcase
+        # scoring and the collection itself.
+        defaults.append(PackType(
+            name='themed_legacy',
+            display_name='Legacy Pack',
+            cost=90,
+            cards_per_pack=5,
+            cards_kept=3,
+            guaranteed_rarity='prismatic',
+            rarity_weights={'holographic': 45, 'prismatic': 35, 'diamond': 20},
+            description='Reveal 5, keep 3. Hall of Fame players, from the seasons they earned it.',
+            theme_type='legacy',
+            theme_value=None,
+        ))
+
         # Team-themed packs are seeded lazily once teams exist (see
         # _seedTeamThemedPacks below) — they depend on the teams table
         # being populated and on each team having enough card templates
