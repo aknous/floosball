@@ -2146,7 +2146,24 @@ SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
 # score = Σ cardPoints × (1 + Σ bonuses), with the sum capped here so stacked sets
 # can't run away. Card quality is already priced into cardPoints (edition/recency/
 # tier), so a completed set pays its full bonus regardless of the editions in it.
-SHOWCASE_MAX_SET_BONUS = 1.5
+# Cap on stacked set bonuses. Lowered 1.5 -> 1.10 (owner, 2026-08-02) so no build
+# holds S into a second season. At 1.5 the best real showcase (base 363) scored
+# 908 fresh and 817 a week later, both S; at 1.10 it scores 762 then 686, so S
+# lasts exactly one season and staying there means adding cards.
+#
+# 1.20 was tried first and is NOT enough — it still lands 719 at age 1, above the
+# 700 S line. The curve is steep here, hence the precise value.
+#
+# Recency was deliberately NOT touched: the Collection Pack exists for collectors,
+# and cutting old-card value would work against it. This dial does the job on its
+# own without devaluing anything anyone owns.
+#
+# Trade-off, stated plainly: a typical 3-set stack is +105%, just under this cap,
+# so a 4th set now adds almost nothing. Diminishing returns is the intent of
+# having a cap at all, but if the 4-set diamond route should feel meaningfully
+# better than three sets, the individual bonuses want scaling down rather than
+# the cap coming further in.
+SHOWCASE_MAX_SET_BONUS = 1.10
 # Rookie legacy premium — a rookie card is worth what the player BECAME.
 #
 # Real card collecting works this way round: a rookie card of a future great is
