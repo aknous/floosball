@@ -352,7 +352,57 @@ RUN_CONCEPTS = {
     'sweep':   {'base': 0.22, 'deception': 0.40, 'exec': {'speed': 0.4, 'agility': 0.3, 'blocking': 0.3},
                 'edge': {'blitz': 0.05, 'runFocus': 0.35, 'aggr': -0.45},
                 'gaps': {'A-gap': 0.05, 'B-gap': 0.25, 'C-gap': 0.70}},
+    # QB SNEAK — situational only. `base` 0 because it is never part of the normal
+    # weighting: _selectRunConcept skips it and injects its weight explicitly when
+    # the down/distance qualifies. Nothing deceptive (deception 0) — everyone in
+    # the stadium knows it's coming; it wins on leverage, not surprise. Punished
+    # hard by a run-committed box (runFocus -0.55, steeper than power) because
+    # stacking the A-gap is exactly the answer to it, and helped slightly by a
+    # blitz (rushers moving upfield vacate the interior surge).
+    'sneak':   {'base': 0.00, 'deception': 0.00, 'exec': {'power': 0.7, 'discipline': 0.3},
+                'edge': {'blitz': 0.15, 'runFocus': -0.55, 'aggr': 0.00},
+                'gaps': {'A-gap': 1.00}},
 }
+
+# ---------------------------------------------------------------------------
+# QB sneak (short-yardage concept — see RUN_CONCEPTS['sneak'])
+# ---------------------------------------------------------------------------
+# The QB follows the interior surge for the yard. Mechanically unlike a tailback
+# run: it is a leverage play with a HIGH floor and almost no ceiling, so it does
+# NOT run the three-gate model (no second level, no breakaway — a sneak never
+# goes 40 yards). It resolves on one push and rejoins the shared run tail, so
+# stats/WPA/fumbles/PBP all flow through the existing paths.
+QB_SNEAK_ENABLED = True           # flip off to remove sneaks entirely
+QB_SNEAK_MAX_YTG = 2              # only with this many yards or fewer to go
+QB_SNEAK_GOAL_LINE_YTE = 2        # ...or this close to the goal line (any down)
+QB_SNEAK_MIN_DOWN = 3             # 3rd/4th down, unless it's goal-line
+QB_SNEAK_WEIGHT = 1.30            # call propensity against power in sneak range
+# Conversion odds. The pivot compares the QB's push (power/discipline, the same
+# attributes as the concept's exec roll) against the defense's effective run
+# defense. Real short-yardage sneaks convert at a very high rate, which is the
+# point of the play — hence a high base and a generous ceiling.
+QB_SNEAK_BASE_SUCCESS = 76.0      # % before the matchup term
+QB_SNEAK_SUCCESS_SWING = 0.85     # % per point of (QB push - effective run D)
+QB_SNEAK_SUCCESS_MIN = 42.0
+QB_SNEAK_SUCCESS_MAX = 93.0
+QB_SNEAK_GAIN_MEAN = 1.6          # yards when the push gets there
+QB_SNEAK_GAIN_MAX = 4             # a sneak that "breaks" still only falls forward
+QB_SNEAK_STUFF_MEAN = 0.2         # yards when stuffed (rarely a loss — it's a pile)
+
+# ---------------------------------------------------------------------------
+# Sneak-look trick (the fake off the sneak)
+# ---------------------------------------------------------------------------
+# Show the sneak, then don't run it. Only worth calling when the defense has
+# actually committed to stopping the sneak — a stacked box vacates the edge and
+# the flat, which is what the fake attacks. Same design rule as the other trick
+# plays: match the gadget to the tendency, never gadget for its own sake.
+SNEAK_LOOK_ENABLED = True
+SNEAK_LOOK_BASE = 0.16            # chance in a qualifying spot, before gating
+SNEAK_LOOK_MIN_RUNFOCUS = 0.52    # D must be leaning run for the fake to pay
+SNEAK_LOOK_AGGR_PIVOT = 78        # coach aggressiveness where the call unlocks
+SNEAK_LOOK_PITCH_SHARE = 0.55     # split between pitch-to-the-RB and quick pass
+SNEAK_LOOK_PITCH_EDGE = 0.55      # run-def relief on the pitch (interior crashed down)
+SNEAK_LOOK_PASS_OPENNESS = 26     # receiver openness on the quick throw off the fake
 
 # Defensive counter-adaptation (Phase 1b): the D-coach reads the offense's run-
 # concept tendencies during the game and adjusts to take them away — lean on

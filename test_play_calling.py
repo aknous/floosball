@@ -117,6 +117,19 @@ def makeGame(down=1, ytg=10, quarter=1, clock=600, homeScore=0, awayScore=0,
     g.isRegularSeasonGame = False
     g.isTwoPtConv      = False
     g.play             = None
+    # Set in Game.__init__, which this harness bypasses. The awakened layer reads
+    # these unconditionally from both the weight pipeline and playCaller, so
+    # without them every test in this file raises. Empty = nobody awakened, which
+    # is the right baseline for play-calling tests.
+    g._awakenedCharge   = {}
+    g._awakenedReady    = {}
+    g._awakenedFills    = {}
+    g._awakenedPower    = {}
+    g._awakenedSlot     = {}
+    g._awakenedPoweringUp = {}
+    # The timeout path broadcasts, and the broadcast reads live win probability.
+    g.homeTeamWinProbability = 50.0
+    g.awayTeamWinProbability = 50.0
     return g
 
 

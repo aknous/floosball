@@ -3717,6 +3717,15 @@ class Game:
         if playCall == 'run':
             self.play.runConcept = self._selectRunConcept()
             self.play.insights['runConcept'] = self.play.runConcept
+            if self.play.runConcept == 'sneak':
+                # Show the sneak, then don't run it — but only when the defense has
+                # committed to stopping it. Returns None in every other case.
+                look = self._selectSneakLook()
+                if look:
+                    self._executeSneakLook(look)
+                    return
+                # The QB carries it. Same hook the reverse uses to hand off a WR.
+                self.play._forcedRunner = self.offensiveTeam.rosterDict.get('qb')
             self.play.runPlay()
         else:
             self.play.targetSideline = targetSideline
@@ -3974,6 +3983,8 @@ class Game:
         hurry = self._isHurryUp()
         weights = {}
         for name, c in RUN_CONCEPTS.items():
+            if name == 'sneak':
+                continue        # situational only — injected below, never in the normal mix
             w = c['base']
             if shortYardage:
                 w *= 2.4 if name == 'power' else 0.35   # power territory
@@ -3988,8 +3999,36 @@ class Game:
                 expEdge = _runConceptEdge(name, None, defGameplan) + c['edge']['blitz'] * bf
                 w *= 1 + scoutRead * max(-0.6, min(0.8, expEdge)) * 0.9
             weights[name] = max(0.01, w)
+        # The sneak only exists in its own situation. Weighted against the rest of
+        # the short-yardage mix rather than pre-empting it, so a coach with a
+        # bruising back still hands it off sometimes.
+        if self._isSneakSituation():
+            from constants import QB_SNEAK_WEIGHT
+            qb = self.offensiveTeam.rosterDict.get('qb')
+            w = QB_SNEAK_WEIGHT
+            if qb is not None:
+                w *= 0.55 + _runConceptExecQ(qb, 'sneak')   # a QB who can actually push
+            weights['sneak'] = max(0.01, w)
         names = list(weights)
         return _random.choices(names, weights=[weights[n] for n in names], k=1)[0]
+
+    def _isSneakSituation(self) -> bool:
+        """Short-yardage or goal-line, with a QB to run it.
+
+        Two ways in: 3rd/4th-and-short anywhere, or inside the goal-line band on
+        ANY down (1st-and-goal from the 1 is a sneak spot too). Suppressed in
+        hurry-up — a sneak burns clock and stays in bounds, which is the opposite
+        of what a two-minute drill wants."""
+        from constants import (QB_SNEAK_ENABLED, QB_SNEAK_MAX_YTG,
+                               QB_SNEAK_GOAL_LINE_YTE, QB_SNEAK_MIN_DOWN)
+        if not QB_SNEAK_ENABLED or self._isHurryUp():
+            return False
+        if self.offensiveTeam.rosterDict.get('qb') is None:
+            return False
+        goalLine = self.yardsToEndzone <= QB_SNEAK_GOAL_LINE_YTE
+        shortDown = (self.down >= QB_SNEAK_MIN_DOWN
+                     and self.yardsToFirstDown <= QB_SNEAK_MAX_YTG)
+        return goalLine or shortDown
 
     def _selectPlayAction(self, tier: str) -> bool:
         """Decide whether this pass is play-action. The coach calls it to exploit a
@@ -4085,6 +4124,68 @@ class Game:
             if correct:
                 self.play._rpoRunRelief = RPO_BONUS          # ball into a light box
             self.play.runPlay()
+
+    def _selectSneakLook(self):
+        """Show the sneak, then throw it or pitch it. Returns 'pitch' | 'pass' | None.
+
+        Only worth it against a defense that has actually committed to stopping
+        the sneak — a stacked box empties the edge and the flat, which is what the
+        fake attacks. Same rule as the other trick plays: match the gadget to the
+        tendency, never gadget for its own sake. Bold coaches only, and never with
+        the game on the line late (a called shot, not a desperation heave)."""
+        from constants import (SNEAK_LOOK_ENABLED, SNEAK_LOOK_BASE,
+                               SNEAK_LOOK_MIN_RUNFOCUS, SNEAK_LOOK_AGGR_PIVOT,
+                               SNEAK_LOOK_PITCH_SHARE)
+        if not SNEAK_LOOK_ENABLED:
+            return None
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
+        aggrLean = max(0.0, (aggr - SNEAK_LOOK_AGGR_PIVOT) / (100.0 - SNEAK_LOOK_AGGR_PIVOT))
+        if aggrLean <= 0:
+            return None
+        isHome = self.offensiveTeam is self.homeTeam
+        defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
+        runFocus = getattr(defGp, 'runStopFocus', 0.5) if defGp is not None else 0.5
+        if runFocus < SNEAK_LOOK_MIN_RUNFOCUS:
+            return None      # the box isn't sold on the sneak — nothing to exploit
+        # 4th down is the wrong time to get cute: a stuffed fake ends the drive.
+        if self.down >= 4:
+            return None
+        commit = (runFocus - SNEAK_LOOK_MIN_RUNFOCUS) / max(0.01, 0.80 - SNEAK_LOOK_MIN_RUNFOCUS)
+        scouting = getattr(coach, 'scouting', 80) if coach else 80
+        scoutRead = max(0.0, (scouting - 60) / 40.0)
+        chance = SNEAK_LOOK_BASE * aggrLean * (0.4 + 0.6 * min(1.0, commit)) * (0.5 + 0.5 * scoutRead)
+        if _random.random() >= chance:
+            return None
+        # A pitch needs an RB to pitch to; fall back to the throw if there isn't one.
+        if self.offensiveTeam.rosterDict.get('rb') is None:
+            return 'pass'
+        return 'pitch' if _random.random() < SNEAK_LOOK_PITCH_SHARE else 'pass'
+
+    def _executeSneakLook(self, kind: str) -> None:
+        """Run the fake. `pitch` = the RB takes it around the vacated edge;
+        `pass` = a quick throw into the space the linebackers left.
+
+        Both reuse existing machinery rather than inventing a resolution: the
+        pitch is a sweep with the interior-crash relief applied, the throw is a
+        short pass with an openness bonus, exactly like play-action."""
+        from constants import SNEAK_LOOK_PITCH_EDGE, SNEAK_LOOK_PASS_OPENNESS
+        self.play.isSneakLook = True
+        self.play.sneakLookKind = kind
+        self.play.insights['sneakLook'] = kind
+        if kind == 'pitch':
+            self.play.runConcept = 'sweep'
+            self.play._forcedGap = {'C-gap': 1.0}      # outside, away from the crash
+            # Reuses the trick-play relief channel rather than adding a parallel
+            # one — this IS a trick play, and that path already handles a payoff
+            # scaled to the defense's commitment.
+            self.play._trickRunRelief = SNEAK_LOOK_PITCH_EDGE
+            self.play.runPlay()
+        else:
+            self.play.playAction = False               # the sneak look IS the fake
+            self.play.passConcept = 'standard'
+            self.play._rpoOpennessBonus = SNEAK_LOOK_PASS_OPENNESS
+            self.play.passPlay(self._selectPassPlay('short'))
 
     def _selectTrickPlay(self):
         """A bold coach's called shot. Returns a trick name or None. Gated by the
@@ -5407,6 +5508,38 @@ class Game:
                     '{} sails it wide of the {} {} goal, incomplete'.format(qbName, side, hoopName),
                     '{} just misses the {} {} goal'.format(qbName, side, hoopName),
                 ])
+        elif getattr(self.play, 'sneakConverted', None) is not None:
+            # QB SNEAK. Narrated by whether the surge got there, not by yardage —
+            # a sneak that gains 1 to convert is a success and a sneak that gains
+            # 1 when it needed 2 is not, and the phrasing has to reflect that.
+            yds = self.play.yardage
+            name = self.play.runner.name
+            if self.play.sneakConverted:
+                text = choice([
+                    '{} sneaks it behind the surge for {} yards'.format(name, max(1, yds)),
+                    '{} pushes the pile forward for {} yards'.format(name, max(1, yds)),
+                    '{} follows the interior push, {} yards'.format(name, max(1, yds)),
+                    '{} wedges ahead for {} yards'.format(name, max(1, yds)),
+                ])
+            elif yds > 0:
+                text = choice([
+                    '{} sneaks into a wall of bodies, barely a yard'.format(name),
+                    '{} gets nothing but a scrum, one yard'.format(name),
+                ])
+            elif yds == 0:
+                text = choice([
+                    '{} sneaks it and the pile does not move'.format(name),
+                    '{} is stood straight up at the line'.format(name),
+                    '{} gets nowhere, the front stacked it'.format(name),
+                ])
+            else:
+                text = '{} is driven back on the sneak'.format(name)
+            if self.play.isFumble:
+                forcedBy = self.play.forcedFumbleBy
+                if self.play.isFumbleLost:
+                    text += ', ball comes loose in the pile, {} recover'.format(self.play.defense.abbr)
+                else:
+                    text += ', ball squirts free but {} fall on it'.format(self.play.offense.abbr)
         elif getattr(self.play, 'isScramble', False):
             # QB ran instead of passing (resolves as a run, narrated as a scramble).
             # Phrasing matches the trigger: 'pressure' = escaped a would-be sack,
@@ -11861,6 +11994,9 @@ class Play():
         self.isSack = False
         self.isScramble = False          # QB ran instead of passing
         self.scrambleReason = 'pressure' # 'pressure' (escaped a sack) | 'coverage' (no one open)
+        self.sneakConverted = None       # True/False on a QB sneak, None otherwise
+        self.isSneakLook = False         # showed the sneak and did something else
+        self.sneakLookKind = None        # 'pitch' | 'pass'
         self.isFumble = False
         self.isFumbleLost = False
         self.isFumbleRecovered = False
@@ -12583,7 +12719,31 @@ class Play():
         openFieldDef = self.defense.defensePassCoverageRating * 0.95
         gate3Chance = max(8, min(55, 22 + (openField - openFieldDef) * 1.2))
 
-        if batched_randint(1, 100) > gate1Chance:
+        if getattr(self, 'runConcept', None) == 'sneak':
+            # QB SNEAK — one push, resolved here instead of through the three gates.
+            # A sneak has a high floor and effectively no ceiling: it either gets
+            # the surge or it doesn't, and it never breaks to the second level, so
+            # running it through gates 2/3 would occasionally spring a 40-yard QB
+            # run out of a pile at the goal line. Rejoins the shared tail below
+            # (awakened fire, stretch, fumble, crediting) like every other run.
+            from constants import (QB_SNEAK_BASE_SUCCESS, QB_SNEAK_SUCCESS_SWING,
+                                   QB_SNEAK_SUCCESS_MIN, QB_SNEAK_SUCCESS_MAX,
+                                   QB_SNEAK_GAIN_MEAN, QB_SNEAK_GAIN_MAX,
+                                   QB_SNEAK_STUFF_MEAN)
+            _qa = self.runner.gameAttributes
+            push = _qa.power * 0.7 + _qa.discipline * 0.3
+            chance = QB_SNEAK_BASE_SUCCESS + (push - effectiveRunDef) * QB_SNEAK_SUCCESS_SWING
+            chance = max(QB_SNEAK_SUCCESS_MIN, min(QB_SNEAK_SUCCESS_MAX, chance))
+            self.sneakConverted = batched_randint(1, 100) <= chance
+            if self.sneakConverted:
+                self.yardage = max(1, min(QB_SNEAK_GAIN_MAX,
+                                          int(round(np.random.normal(QB_SNEAK_GAIN_MEAN, 0.8)))))
+            else:
+                # Stuffed in the pile. Rarely a loss — bodies stop it where it started.
+                self.yardage = max(-1, min(1, int(round(np.random.normal(QB_SNEAK_STUFF_MEAN, 0.7)))))
+            self.insights['sneak'] = {'converted': self.sneakConverted,
+                                      'chance': round(chance, 1)}
+        elif batched_randint(1, 100) > gate1Chance:
             # Stuffed at the line — -2 to 2 yards
             self.yardage = max(-3, min(3, int(np.random.normal(0.5, 1.3))))
         else:
