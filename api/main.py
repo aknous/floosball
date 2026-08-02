@@ -9928,12 +9928,16 @@ def selectPack(req: SelectPackRequest, user: _User = Depends(_getCurrentUser)):
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
     cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
 
     session = get_session()
     try:
+        # currentWeek decides vault routing on the kept cards (a card bought once
+        # the regular season is over can never be fielded, so it vaults).
         result = cardManager.selectPackKeeps(
             session, user.id, req.pendingId, req.keptIndices, currentSeason,
+            currentWeek=currentWeek,
         )
         # Achievement hooks fire on the kept cards (matches old single-step behavior)
         from managers import achievementManager as _am

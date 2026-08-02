@@ -1973,7 +1973,7 @@ class CardManager:
         }
 
     def selectPackKeeps(self, session, userId: int, pendingId: int,
-                        keptIndices: list, currentSeason: int) -> dict:
+                        keptIndices: list, currentSeason: int, currentWeek: int = 0) -> dict:
         """Commit the user's selection from a pending pack reveal.
 
         keptIndices: list of integer indices into the pendingPack.revealed_template_ids
@@ -2079,7 +2079,8 @@ class CardManager:
         session.flush()
         return result
 
-    def cleanupStalePendingPacks(self, session, ageHours: int = 24) -> int:
+    def cleanupStalePendingPacks(self, session, ageHours: int = 24,
+                                 currentWeek: int = 0) -> int:
         """Auto-resolve pending pack reveals older than ageHours by random
         keep-selection. Run on app startup so users never lose paid packs to
         crashes / abandoned sessions.
@@ -2105,8 +2106,13 @@ class CardManager:
                 keepCount = packType.cards_kept or packType.cards_per_pack
                 keepCount = min(keepCount, len(revealedIds))
                 indices = _random.sample(range(len(revealedIds)), keepCount)
+                # currentWeek defaults to 0 here (startup sweep has no live week).
+                # Past-season cards still vault on the season comparison; only the
+                # "current season, but the season is over" case is missed, which
+                # is acceptable for abandoned reveals.
                 self.selectPackKeeps(
                     session, pending.user_id, pending.id, indices, pending.season,
+                    currentWeek=currentWeek,
                 )
             except Exception:
                 # Don't let one bad row block the sweep; just orphan it.
