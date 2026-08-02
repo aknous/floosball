@@ -979,8 +979,8 @@ class Game:
 
         # Run-concept usage per offense (cumulative) — the defense reads these
         # tendencies and counters them (Phase 1b, see adjustDefensiveGameplan).
-        self.homeConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0}
-        self.awayConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0}
+        self.homeConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0, 'sneak': 0}
+        self.awayConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0, 'sneak': 0}
 
         # First-half tracking for halftime gameplan adjustments
         self.homeHalfRunPlays = 0
