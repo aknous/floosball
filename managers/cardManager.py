@@ -359,67 +359,72 @@ def _buildClassification(
     return "_".join(tags) if tags else None
 
 
-def generateHallOfFameShowpieces(session, seasonNumber: int) -> int:
-    """Mint Hall of Fame showpieces for every enshrined player who lacks one.
+LEGACY_CLASSIFICATIONS = ("mvp", "champion", "all_pro")
 
-    HoF players are RETIRED, so they never appear in the normal per-season
-    template sweep (which walks the active league). These are showpieces: they
-    depict a real player but can never be fielded, and they land in the Vault on
-    acquisition. Idempotent — one card per player per edition, ever, so a rerun
-    or a later induction class only adds what is missing.
+
+def getLegacyCollectionTemplates(session, currentSeason: int) -> list:
+    """Past-season prestige prints of Hall of Fame players — the legacy pool.
+
+    Replaces an earlier attempt that minted NEW Hall of Fame cards. That ran into
+    the questions the owner raised: what team does an enshrined player belong to,
+    and what rating do they carry, when most inductees are years past their peak?
+    Reprinting their actual historical cards answers both — the card already
+    carries the team they played for and the rating they had THAT season.
+
+    Nothing new has to be stored. Templates are minted per season with
+    `season_created`, `player_rating`, `team_id` and `classification`, and are
+    never pruned (the only delete is clear_db), so a player's MVP season is still
+    a row. Measured on the dev DB: all 21 inductees had prestige prints, 141 in
+    total.
+
+    Available the season AFTER induction, so a career closes before it is
+    collectible. Past-season templates are already unequippable (equip rejects
+    anything whose season_created != currentSeason), so these need no flag to
+    behave as collection-only.
     """
     from database.models import Player, CardTemplate
-    from constants import SHOWPIECE_EDITIONS
+    from sqlalchemy import or_
 
-    inducted = session.query(Player).filter(Player.is_hof == True).all()   # noqa: E712
+    inducted = (
+        session.query(Player)
+        .filter(Player.is_hof == True)                                    # noqa: E712
+        .filter(or_(Player.hof_season == None, Player.hof_season < currentSeason))  # noqa: E711
+        .all()
+    )
     if not inducted:
-        return 0
-    existing = {
-        (t.player_id, t.edition)
-        for t in session.query(CardTemplate).filter(CardTemplate.is_showpiece == True).all()  # noqa: E712
-    }
-    made = 0
-    for p in inducted:
-        rating = getattr(p, 'player_rating', None) or 80
-        posValue = p.position.value if hasattr(p.position, 'value') else int(p.position or 1)
-        for edition in SHOWPIECE_EDITIONS:
-            if (p.id, edition) in existing:
-                continue
-            session.add(CardTemplate(
-                player_id=p.id,
-                edition=edition,
-                season_created=seasonNumber,
-                is_rookie=False,
-                is_showpiece=True,
-                # `enshrined`, not `hall_of_fame` — the Showcase already has a SET
-                # by that name meaning something else entirely.
-                classification='enshrined',
-                player_name=p.name,
-                team_id=None,          # they belong to the league now, not a club
-                player_rating=rating,
-                position=posValue,
-                # No effect: a showpiece is never fielded, so it never scores.
-                effect_config={'effectName': 'none'},
-                rarity_weight=1,
-                sell_value=0,          # not sellable for value; it's a keepsake
-                output_type=None,
-            ))
-            made += 1
-    if made:
-        session.commit()
-    return made
+        return []
+    ids = [p.id for p in inducted]
+    clsFilter = or_(*[CardTemplate.classification.contains(c) for c in LEGACY_CLASSIFICATIONS])
+    return (
+        session.query(CardTemplate)
+        .filter(CardTemplate.player_id.in_(ids))
+        .filter(CardTemplate.season_created < currentSeason)
+        .filter(CardTemplate.classification.isnot(None))
+        .filter(clsFilter)
+        .filter(CardTemplate.is_upgraded == False)                        # noqa: E712
+        .all()
+    )
 
 
-def _vaultOnAcquire(template) -> bool:
-    """Showpieces land straight in the Vault on acquisition.
+def _vaultOnAcquire(template, currentSeason: int = None) -> bool:
+    """Should this card land straight in the Vault?
 
-    The Vault is already the permanent-collection surface, and it carries exactly
-    the two properties a collection-only card needs, for free: vaulted cards
-    CANNOT be equipped (api/main.py rejects them at equip) and ONLY vaulted cards
-    can be featured in the Showcase. So routing showpieces there is the mechanism,
-    not just the presentation.
+    Two kinds of card belong there. SHOWPIECES are purpose-built collectibles.
+    LEGACY PRINTS are past-season templates, which can never be equipped anyway
+    (equip rejects season_created != currentSeason) and would otherwise sit dead
+    in the active collection.
+
+    The Vault is the mechanism rather than the presentation: vaulted cards are
+    rejected at equip, and ONLY vaulted cards can be featured in the Showcase.
     """
-    return bool(getattr(template, "is_showpiece", False))
+    if template is None:
+        return False
+    if bool(getattr(template, "is_showpiece", False)):
+        return True
+    season = getattr(template, "season_created", None)
+    if currentSeason is None or season is None:
+        return False
+    return season < currentSeason
 
 
 class CardManager:
@@ -1523,7 +1528,7 @@ class CardManager:
         newCards: List[UserCard] = []
         acquiredVia = f"pack_{packType.name}"
         for template in drawnTemplates:
-            _vault = _vaultOnAcquire(template)
+            _vault = _vaultOnAcquire(template, currentSeason)
             card = UserCard(
                 user_id=userId,
                 card_template_id=template.id,
@@ -1944,7 +1949,7 @@ class CardManager:
             .filter(CardTemplate.id.in_(list(keptTemplateIds))).all()
         } if keptTemplateIds else {}
         for tid in keptTemplateIds:
-            _vault = _vaultOnAcquire(_keptTemplates.get(tid))
+            _vault = _vaultOnAcquire(_keptTemplates.get(tid), currentSeason)
             newCards.append(UserCard(
                 user_id=userId,
                 card_template_id=tid,
@@ -2206,17 +2211,19 @@ class CardManager:
             # doesn't bleed into the shop's featured rotation, and drop the no-effect
             # floor print (edition 'base') — it's the starter lineup, not a shop single.
             allTemplates = [t for t in allTemplates if t.team_id is not None and t.edition != 'base']
-            # Showpieces are added back explicitly. They are excluded from
-            # getBySeason (they'd be bricks in a fantasy pack) AND they carry
-            # team_id=None by design — an enshrined player belongs to the league,
-            # not a club — so the filter above would drop them twice over. The
-            # shop is the ONLY way to obtain one.
-            showpieces = [
+            # The COLLECTION pool, added back explicitly — getBySeason only
+            # returns the current season, so none of this appears otherwise.
+            #   * showpieces: purpose-built collectibles, excluded from packs.
+            #   * legacy prints: past-season MVP/Champion/All-Pro cards of Hall
+            #     of Fame players, carrying the team and rating they actually had
+            #     that season. The shop is the only way to obtain either.
+            collection = [
                 t for t in session.query(CardTemplate)
                 .filter(CardTemplate.is_showpiece == True)          # noqa: E712
                 .filter(CardTemplate.is_upgraded == False).all()    # noqa: E712
             ]
-            allTemplates = allTemplates + showpieces
+            collection += getLegacyCollectionTemplates(session, currentSeason)
+            allTemplates = allTemplates + collection
 
             if not allTemplates:
                 return []
@@ -2639,8 +2646,16 @@ class CardManager:
         template = templateRepo.getById(templateId)
         if not template:
             raise ValueError("Card template not found")
-        if showpieceOnly and not bool(getattr(template, 'is_showpiece', False)):
-            raise ValueError("Only collection cards are available outside the regular season")
+        # Outside the regular season only COLLECTION cards sell: purpose-built
+        # showpieces, or legacy prints (past-season templates, which can never be
+        # equipped anyway). Selling a current-season fantasy card here would be
+        # selling a brick — fantasy is over.
+        if showpieceOnly:
+            _isCollection = (bool(getattr(template, 'is_showpiece', False))
+                             or (template.season_created or 0) < currentSeason)
+            if not _isCollection:
+                raise ValueError(
+                    "Only collection cards are available outside the regular season")
 
         buyPrice = self._featuredBuyPrice(template)
 
@@ -2656,7 +2671,7 @@ class CardManager:
         # Mark as purchased
         featuredRow.purchased = True
 
-        _vault = _vaultOnAcquire(template)
+        _vault = _vaultOnAcquire(template, currentSeason)
         card = UserCard(
             user_id=userId,
             card_template_id=template.id,

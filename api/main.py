@@ -9648,15 +9648,6 @@ def _requireShopOpen():
     return True
 
 
-def _requirePurchasable(template) -> None:
-    """Reject a non-showpiece purchase outside the regular season."""
-    if _showpieceOnly() and not bool(getattr(template, 'is_showpiece', False)):
-        raise HTTPException(
-            status_code=403,
-            detail="Only collection cards are available outside the regular season",
-        )
-
-
 @app.get("/api/packs/types")
 def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptionalUser)):
     """Get available pack types with costs and daily purchase limits.
