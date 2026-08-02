@@ -9640,12 +9640,33 @@ def _showpieceOnly() -> bool:
 
 
 def _requireShopOpen():
-    """Guard for purchase endpoints.
+    """Guard on every purchase endpoint (packs, singles, rerolls).
 
-    Previously defined and NEVER CALLED — the closure was frontend-only, so the
-    backend happily sold cards while the UI said the shop was shut. Now that the
-    shop is always open this is the hook that enforces the showpiece-only rule."""
+    The shop no longer CLOSES — it is open all year (owner, 2026-08-02) — so this
+    no longer raises on its own. What changes outside the regular season is WHAT
+    can be bought; see `_requireCollectionOnly`, which the pack and single-card
+    paths call with the thing being purchased.
+
+    Kept as a call site rather than deleted: it is the documented choke point for
+    purchase gating, and five endpoints already route through it."""
     return True
+
+
+def _requireCollectionOnly(packType=None) -> None:
+    """Outside the regular season, only COLLECTION products are purchasable.
+
+    A fantasy pack bought after week 28 yields cards that can never be equipped —
+    fantasy is over and the cards are season-scoped. The Legacy Pack loses
+    nothing, because its cards are never equipped anyway and keep earning through
+    the Showcase."""
+    if not _showpieceOnly():
+        return
+    if packType is not None and getattr(packType, 'theme_type', None) == 'legacy':
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Only the Legacy Pack is available outside the regular season",
+    )
 
 
 @app.get("/api/packs/types")
@@ -9747,16 +9768,22 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
 
         cyclePacksOpened = _countPacksThisCycle(session, user.id, currentSeason, currentWeek) if user else 0
         cycleRemaining = max(0, MAX_PACKS_PER_SHOP_CYCLE - cyclePacksOpened)
+        # The Legacy Pack never rotates. It is the ONLY product on sale outside
+        # the regular season, so it has to be visible every day of the year;
+        # dropping it into the rotating themed pool would hide it exactly when
+        # it's the only thing to buy.
+        legacyPack = next((p for p in packs if p.name == 'themed_legacy'), None)
         return build_success_response({
             "packs": [_packDict(p) for p in rotated],
             "themedPacks": [_packDict(p) for p in themedPacks],
+            "legacyPack": _packDict(legacyPack) if legacyPack else None,
             "starter": ({
                 **_packDict(starterPack),
                 "claimedThisSeason": starterClaimed,
             } if starterPack else None),
             "shopDay": shopDay,
             "shopOpen": _isShopOpen(),
-            "showpieceOnly": _showpieceOnly(),
+            "collectionOnly": _showpieceOnly(),
             "cycleLimit": MAX_PACKS_PER_SHOP_CYCLE,
             "cyclePacksOpened": cyclePacksOpened,
             "cycleRemaining": cycleRemaining,
@@ -9851,6 +9878,10 @@ def revealPack(req: RevealPackRequest, user: _User = Depends(_getCurrentUser)):
 
     session = get_session()
     try:
+        # Outside the regular season only the Legacy Pack sells — a fantasy pack
+        # bought now would yield cards that can never be equipped.
+        from database.models import PackType as _PTGate
+        _requireCollectionOnly(session.get(_PTGate, req.packTypeId))
         result = cardManager.revealPack(session, user.id, req.packTypeId, currentSeason, shopDay=shopDay, currentWeek=currentWeek)
         # Secret — Lightning Strike: a Diamond pulled out of a Humble pack
         try:
@@ -9997,7 +10028,7 @@ def getShopFeatured(user: _User = Depends(_getCurrentUser)):
         )
         session.commit()
         return build_success_response({"cards": featured, "currentSeason": currentSeason,
-                                      "shopOpen": _isShopOpen(), "showpieceOnly": _showpieceOnly()})
+                                      "shopOpen": _isShopOpen(), "collectionOnly": _showpieceOnly()})
     except Exception:
         session.rollback()
         raise
