@@ -8,6 +8,11 @@ _Last updated: 2026-07-31_
 > was the only thing being built. **The AFO is the live tracker for that work**
 > (`docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md`) — Parts A–E and Part F wave 1 are shipped.
 
+> ⏱ **A season is ONE REAL WEEK.** Mon–Thu = the 28 regular-season weeks, Friday =
+> playoffs, Saturday = offseason. So "next season" is next Monday, a 2-season median
+> career is two weeks, and the postseason/offseason window that the Collection Pack
+> covers is Friday–Sunday — recurring every single week, not once a year.
+
 ## Design pillars (owner, 2026-07-31)
 
 What the game is for. Check features against this before building them.

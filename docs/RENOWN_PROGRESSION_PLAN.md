@@ -46,6 +46,27 @@ high-leverage lever — survives intact.
 404s. Read them with `git show 2a37f2f:docs/PROGRESSION_PLAN.md`. `PICKEM_DEPTH_PLAN.md` is
 the only real spec for **Survivor** that exists.
 
+## ⏱ A season is ONE REAL WEEK — read every number below in that unit
+
+Mon–Thu are the 28 regular-season weeks (4 game days × 7 rounds), Friday is the
+playoffs, Saturday the offseason drafts. So:
+
+| in seasons | in real time |
+|---|---|
+| median career = **2 seasons** | **~2 weeks** |
+| 63% gone by season 3 | gone inside **three weeks** |
+| engaged users 28 → 14 over 15 seasons | over **~3.5 months** |
+| the career ladder's top rank (~10 seasons of play) | a few **months**, not years |
+
+This makes the retention finding sharper, not softer: people are churning within a
+fortnight. But it also means the *career* track is a months-long arc rather than a
+years-long one, so rank thresholds should be read as "a few weeks of play" and the
+seasonal reset happens every Monday.
+
+⚠️ An earlier revision of this plan reasoned as though seasons were long. The
+figures were always stated in seasons and are correct as written — but anywhere
+the *prose* implies years ("no career in it for a year"), read weeks.
+
 ## The problem
 
 Floosball is a set of good-but-parallel systems — pick-em, fantasy, cards/showcase,
