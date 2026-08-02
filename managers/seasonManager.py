@@ -6396,10 +6396,21 @@ class SeasonManager:
         return flagged
 
     def _seedHofBallot(self) -> None:
-        """Seed the rolling Hall of Fame ballot with this season's just-flagged
-        retirees (the willRetire rostered set), pre-filtered by HoF points. Opens
-        HoF voting for the wk22 -> offseason-induction window. Best-effort: a
-        failure here must never block the week-22 transition."""
+        """Seed the rolling Hall of Fame ballot with this season's retirees,
+        pre-filtered by HoF points. Opens HoF voting for the wk22 -> offseason-
+        induction window. Best-effort: a failure here must never block the week-22
+        transition.
+
+        Covers BOTH retirement paths. Rostered players are flagged `willRetire`;
+        FREE AGENTS retire on a separate path (`_processFreeAgentRetirements`)
+        that removes them rather than flagging them, so a roster-only sweep could
+        never see them. That gap meant a free agent could not be voted on at all —
+        while still being eligible for the points safety net, so for three seasons
+        running the only players actually inducted were ones nobody could vote for
+        (Billy Bloom S14, Shaggy Porcelain S15, Tennis O'Diaz S16, all with
+        free_agent_years=2 and no ballot entry). The points pre-filter still
+        applies, so this widens WHO is eligible, not how many get through.
+        """
         try:
             from database.connection import get_session
             from managers.awardsManager import AwardsManager
@@ -6409,6 +6420,13 @@ class SeasonManager:
             retirees = [p for team in teamManager.teams
                         for p in team.rosterDict.values()
                         if p is not None and getattr(p, 'willRetire', False)]
+            # Free agents retiring this cycle — the half the roster sweep misses.
+            try:
+                freeAgents = getattr(self.playerManager, 'freeAgents', None) or []
+                retirees += [p for p in freeAgents
+                             if p is not None and getattr(p, 'willRetire', False)]
+            except Exception as _faErr:
+                logger.warning(f"HoF ballot: free-agent sweep failed: {_faErr}")
             if not retirees:
                 return
             season = self.currentSeason.seasonNumber if self.currentSeason else 0

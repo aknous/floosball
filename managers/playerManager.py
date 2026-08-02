@@ -2144,7 +2144,14 @@ class PlayerManager:
     HOF_POINTS_GAME_RECORD = 2
     HOF_POINTS_LONG_CAREER = 4       # 10+ seasons
     HOF_POINTS_IRON_MAN = 4          # 14+ seasons (cumulative on top of LONG_CAREER)
-    HOF_INDUCT_THRESHOLD = 22
+    # Safety-net induction bar. Raised 22 -> 40 (owner, 2026-08-02): 22 let in
+    # players who were merely durable. Tennis O'Diaz scored 30 on 14 seasons (+8),
+    # one All-Pro (+4) and a single career record (+18) with zero MVPs and zero
+    # rings, and was inducted in S16 having never appeared on a ballot or received
+    # a vote. 40 is the same bar the below-quorum path already calls a slam dunk,
+    # so the two paths now share one definition of undeniable. Across every
+    # retiree in the prod database only 6 clear it, all of them already inducted.
+    HOF_INDUCT_THRESHOLD = 40
 
     # Positive record keys per category — negative-stat records like
     # 'ints' / 'fumbles' shouldn't earn HoF credit.

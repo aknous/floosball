@@ -2309,7 +2309,11 @@ AWARD_HOF_QUORUM = 3                # FLOOR for distinct voters before fan induc
 # this fraction)), where active users = the recent-login + engaged base the
 # anomaly threshold uses (anomalyManager._countActiveUsers).
 AWARD_QUORUM_ACTIVE_FRACTION = 0.20
-AWARD_HOF_BALLOT_PREFILTER = 10     # _computeHofPoints needed to make the ballot (looser than the 22 auto-induct)
+# Points needed to make the BALLOT. Lowered 10 -> 6 (owner, 2026-08-02): being on
+# the ballot only means fans get to consider you, and the approval floor is the
+# real filter. A tight pre-filter just shrinks the electorate's choices, which is
+# the opposite of what a fan vote wants.
+AWARD_HOF_BALLOT_PREFILTER = 6
 AWARD_HOF_CLASS_CAP = 5             # max inductions per season
 AWARD_HOF_BALLOT_TENURE = 5         # seasons a candidate stays on the ballot before being dropped
 AWARD_HOF_APPROVAL_FRACTION = 0.5   # fraction of HoF voters who must approve to be induct-eligible
