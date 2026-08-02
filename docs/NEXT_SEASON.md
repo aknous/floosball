@@ -45,6 +45,58 @@ converts to a consumable currency and nothing persists.
 - **Why it moved up:** engaged users fell 28 → 14 over 15 seasons, and median career length
   is **2 seasons** (63% gone by season 3). The churn window is seasons 1–3, not 15.
 
+### Smaller next-season items (owner, 2026-08-01)
+Four unrelated asks, each checked against the code so scoping starts from facts.
+
+**QB sneaks + sneak-look trick plays.** 3rd/4th-and-short and goal-line: the QB sneaks for the
+yard, defense stacks to stop it. Plus a fake — show the sneak, then a quick pass or a pitch to the
+RB around the end.
+- Doesn't exist. `grep sneak` finds only PBP text for an end run and a Cores line.
+- **Foundations are unusually good.** `docs/PLAYBOOK_PLAN.md` shipped run concepts with deception
+  + execution rolls and defensive counter-adaptation, plus trick plays (flea flicker / statue /
+  reverse) as rare called shots — a sneak is a new short-yardage concept in that frame, and the
+  sneak-look fake is exactly the existing trick-play pattern. `_fourthDownCaller` already owns the
+  4th-and-short decision, and QB-as-runner plumbing exists from QB scrambles (`_resolveQbScramble`
+  flips `playType=Run`, `runner=passer` and reuses the run-crediting tail).
+- `test_play_calling.py:171` already has a case labelled *"3rd & 2 (QB sneak range)"* — the
+  concept was anticipated and never built.
+
+**Penalties, driven by low `discipline`.** Owner has held off because penalties feel unfun; the
+condition is that they stay rare and land well.
+- **The box score is already built for it and hardcoded to zero**: `floosball_game.py:1152-1153`
+  carries `'penalties': 0, # TODO: Track penalties` and `'penaltyYards': 0`.
+- `discipline` is a live attribute (0-100) already doing real work — it feeds the mental model
+  (`MENTAL_FROZEN_K`, `MENTAL_GUNSLINGER_K`) and playbook concept execution
+  (`'exec': {'power': 0.6, 'discipline': 0.4}`). So the driver exists and is already balanced
+  against.
+- Design risk to respect: frequency and *timing*. A penalty that erases a good play is the unfun
+  part, not the penalty itself.
+
+**Weather + stadium-specific environment.** Long-held; partially built and never finished.
+- **`feature/stadium-quirks` exists with 596 lines** across 4 commits: `data/templates/
+  stadium_quirks.yaml` (443 lines — named quirks, taglines, flavor lines, venue-style stadium
+  names with a Cores-reconstruction framing) and `managers/stadiumQuirkManager.py` (153 lines —
+  loader, per-team effect lookup, flavor-line picker, API serializer).
+- Ten effect keys are defined: `passAccuracy`, `runYardage`, `fgAccuracy`, `fumbleRate`,
+  `sackRate`, `deepPassChance`, `paceMod`, `roadDiscipline`, `homeBoost`, `clutchVariance`.
+- ⚠️ **It is a scaffold only — nothing is wired into the sim.** No file outside the manager
+  references it. Finishing it is the wiring, not the data.
+- Two connections worth noting: **`roadDiscipline` is already a quirk effect**, so a hostile venue
+  raising road-team penalties links this to the penalties item; and the branch **names every
+  stadium**, which un-mocks the team page's stadium cell (built 2026-07-31 against a placeholder,
+  with `stadium_name` listed as a needed backend field).
+
+**Postseason shop access + collection-only cards.**
+- `_isShopOpen()` closes the shop the moment week 28's games finish, through playoffs and offseason.
+- ⚠️ **The backend gate is not enforced.** `_requireShopOpen()` is defined at `api/main.py:9620`
+  and **never called** — no endpoint uses it. Enforcement is frontend-only (`CardShop.tsx` disables
+  the buttons off the `shopOpen` flag). So opening the postseason shop is largely a frontend +
+  policy change, and the latent inconsistency should be resolved either way.
+- **Collection-only cards** (not for fantasy) have partial precedent: the `standard` edition is
+  already a no-effect floor print (`effectName:'none'`). But `CardTemplate.player_id` is
+  `nullable=False`, so every card is currently a player card — a true non-fantasy collectible
+  needs that relaxed or a different notion of what a card can depict.
+
 ### New prognostication feature — Survivor
 A survivor-style contest layer on top of pick-em (last-one-standing elimination), part of the broader prognosticator progression direction.
 - **Plan:** `docs/PICKEM_DEPTH_PLAN.md` — **not on disk**; a revert deleted it along with
