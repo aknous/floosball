@@ -137,6 +137,18 @@ def shopDayOfSeason(currentWeek: int) -> int:
     return min(4, (week - 1) // SWAP_CYCLE_WEEKS + 1)
 
 
+def isAlwaysAvailablePack(packType) -> bool:
+    """Packs exempt from the daily rotation entirely.
+
+    The Collection Pack never rotates: it is the only product on sale outside the
+    regular season, so gating it on a rotation slot would make it unbuyable on
+    most days and completely unbuyable in the postseason — exactly when it is the
+    only thing to buy. The shop surfaces it outside the rotation, so the purchase
+    path has to agree.
+    """
+    return getattr(packType, 'theme_type', None) == 'collection'
+
+
 def getActivePackNames(shopDay: int) -> list:
     """Standard pack tiers always visible in the shop, regardless of shop_day.
 
@@ -1806,7 +1818,7 @@ class CardManager:
             # rotation rework, only humble is "always available"; grand,
             # exquisite, and themed packs must be present in this user's
             # rotation. Crafted calls otherwise let a user buy any pack.
-            if shopDay is not None:
+            if shopDay is not None and not isAlwaysAvailablePack(packType):
                 activeNames = set(getActivePackNames(shopDay))
                 if packType.name in activeNames:
                     pass  # always-available standard tier (humble)
@@ -1888,6 +1900,7 @@ class CardManager:
         cameFromRotation = (
             not skipCurrency
             and shopDay is not None
+            and not isAlwaysAvailablePack(packType)
             and packType.name not in set(getActivePackNames(shopDay))
         )
         if cameFromRotation:
