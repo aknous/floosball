@@ -2147,6 +2147,22 @@ SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
 # can't run away. Card quality is already priced into cardPoints (edition/recency/
 # tier), so a completed set pays its full bonus regardless of the editions in it.
 SHOWCASE_MAX_SET_BONUS = 1.5
+# Rookie legacy premium — a rookie card is worth what the player BECAME.
+#
+# Real card collecting works this way round: a rookie card of a future great is
+# the prize, precisely because nobody knew at the time. The scoring model had the
+# opposite instinct (rookie = 5 points, the lowest classification, then decaying
+# with age), so rookie cards meant nothing. This is applied ONLY to rookie cards —
+# MVP / Champion / All-Pro keep exactly the values they already had.
+#
+# Counted from the player's career AFTER that rookie season, so the premium is
+# genuinely "what they went on to do".
+SHOWCASE_ROOKIE_LEGACY = {
+    "hof": 30,        # inducted — the terminal accolade
+    "mvp": 12,        # per MVP
+    "all_pro": 5,     # per All-Pro season
+}
+SHOWCASE_ROOKIE_LEGACY_CAP = 60   # a rookie card can't outrun a full diamond MVP by much
 # Score → grade (first threshold the score meets, scanning high to low).
 # Calibrated against target card-quality profiles + the real season-9 showcases.
 # The top grades demand QUALITY (fresh, high-edition, decorated cards), not

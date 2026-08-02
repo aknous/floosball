@@ -3813,7 +3813,8 @@ def _recapShowcaseLeaderboard(session, target):
             infos = showcaseManager.loadShowcaseCardInfos(session, uid, target)
             if not infos:
                 continue
-            ev = showcaseManager.evaluate(infos, target)
+            ev = showcaseManager.evaluate(infos, target,
+                                          showcaseManager.buildLegacyLookup(session, infos))
         except Exception:
             continue
         u = session.get(DBUser, uid)
@@ -8868,7 +8869,8 @@ def _buildShowcasePayload(session, cardManager, userId, currentSeason):
                 infos.append(showcaseManager.cardInfo(uc))
         slots.append({"slotNumber": slotNum, "card": cardData})
 
-    score = showcaseManager.evaluate(infos, currentSeason)
+    score = showcaseManager.evaluate(infos, currentSeason,
+                                     showcaseManager.buildLegacyLookup(session, infos))
     # Attach each card's scoring breakdown to its slot (keyed by userCardId).
     byCardId = {b["userCardId"]: b for b in score["cardBreakdown"]}
     for s in slots:
@@ -8940,7 +8942,8 @@ def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
             infos = showcaseManager.loadShowcaseCardInfos(session, uid, currentSeason)
             if not infos:
                 continue
-            ev = showcaseManager.evaluate(infos, currentSeason)
+            ev = showcaseManager.evaluate(infos, currentSeason,
+                                          showcaseManager.buildLegacyLookup(session, infos))
             u = session.get(_UserModel, uid)
             rows.append({
                 "userId": uid,

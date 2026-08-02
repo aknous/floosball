@@ -226,13 +226,16 @@ def testSkilledTacklerAlsoResists():
 
 def testDisciplineBitesHardestOnTheRiskiestMove():
     """A hurdle against a squared-up defender should be a worse idea than a
+
+    Compares two DIFFERENCES of sampled rates, so it needs a big n - at
+    n=5000 it failed about one run in five on sampling noise alone.
     stiff arm against the same defender."""
     p = _play()
     hurdler = _carrier(creativity=100, xFactor=100, agility=100, speed=100, power=50)
     armer = _carrier(creativity=100, xFactor=100, power=100, agility=50, speed=50)
     square, loose = _tackler(discipline=100), _tackler(discipline=60)
-    hurdleDrop = _hitRate(p, hurdler, loose) - _hitRate(p, hurdler, square)
-    armDrop = _hitRate(p, armer, loose) - _hitRate(p, armer, square)
+    hurdleDrop = _hitRate(p, hurdler, loose, 30000) - _hitRate(p, hurdler, square, 30000)
+    armDrop = _hitRate(p, armer, loose, 30000) - _hitRate(p, armer, square, 30000)
     assert hurdleDrop > armDrop, f'hurdle {hurdleDrop:.3f} should fall further than stiff arm {armDrop:.3f}'
 
 
