@@ -2121,7 +2121,19 @@ TRANSPLANT_COST_BY_EDITION = {
 SHOWCASE_SLOTS = 8
 # Per-card base = EDITION_POINTS × recency + Σ CLASSIFICATION_POINTS, ×tier mult.
 SHOWCASE_EDITION_POINTS = {"metallic": 1, "holographic": 4, "prismatic": 12, "diamond": 30}
-SHOWCASE_CLASSIFICATION_POINTS = {"rookie": 5, "all_pro": 10, "champion": 12, "mvp": 20}
+# `enshrined` = a Hall of Fame showpiece. Highest classification points because
+# induction is the terminal accolade and the card can never be fielded — the
+# Showcase is the only place it earns anything.
+# NOTE: the showcase SET named "Hall of Fame" (8 MVP/Champion/All-Pro cards)
+# predates this and is a DIFFERENT thing. Key deliberately `enshrined` rather
+# than `hall_of_fame` so the two never collide in code; the set's display name
+# is the collision that remains and wants an owner call.
+# Editions a Hall of Fame showpiece is minted in. Deliberately the top tiers
+# only — an enshrined player does not get a common print.
+SHOWPIECE_EDITIONS = ("prismatic", "diamond")
+
+SHOWCASE_CLASSIFICATION_POINTS = {"rookie": 5, "all_pro": 10, "champion": 12, "mvp": 20,
+                                  "enshrined": 26}
 # Recency: newer cards pay more, keyed by card age (seasons old). Newest score full;
 # older cards taper but stay meaningfully valuable (the decline was too aggressive
 # before — old cards fell off a cliff). Ages past the table use the floor. Non-linear

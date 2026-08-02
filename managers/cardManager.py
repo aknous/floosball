@@ -1,6 +1,7 @@
 """Card Manager - handles card template generation and card operations."""
 
 import random
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from logger_config import get_logger
 from managers.cardEffects import buildEffectConfig as _buildEffectConfig, getEffectOutputType, effectValidPositions as _effectValidPositions
@@ -356,6 +357,69 @@ def _buildClassification(
         tags.append("champion")
 
     return "_".join(tags) if tags else None
+
+
+def generateHallOfFameShowpieces(session, seasonNumber: int) -> int:
+    """Mint Hall of Fame showpieces for every enshrined player who lacks one.
+
+    HoF players are RETIRED, so they never appear in the normal per-season
+    template sweep (which walks the active league). These are showpieces: they
+    depict a real player but can never be fielded, and they land in the Vault on
+    acquisition. Idempotent — one card per player per edition, ever, so a rerun
+    or a later induction class only adds what is missing.
+    """
+    from database.models import Player, CardTemplate
+    from constants import SHOWPIECE_EDITIONS
+
+    inducted = session.query(Player).filter(Player.is_hof == True).all()   # noqa: E712
+    if not inducted:
+        return 0
+    existing = {
+        (t.player_id, t.edition)
+        for t in session.query(CardTemplate).filter(CardTemplate.is_showpiece == True).all()  # noqa: E712
+    }
+    made = 0
+    for p in inducted:
+        rating = getattr(p, 'player_rating', None) or 80
+        posValue = p.position.value if hasattr(p.position, 'value') else int(p.position or 1)
+        for edition in SHOWPIECE_EDITIONS:
+            if (p.id, edition) in existing:
+                continue
+            session.add(CardTemplate(
+                player_id=p.id,
+                edition=edition,
+                season_created=seasonNumber,
+                is_rookie=False,
+                is_showpiece=True,
+                # `enshrined`, not `hall_of_fame` — the Showcase already has a SET
+                # by that name meaning something else entirely.
+                classification='enshrined',
+                player_name=p.name,
+                team_id=None,          # they belong to the league now, not a club
+                player_rating=rating,
+                position=posValue,
+                # No effect: a showpiece is never fielded, so it never scores.
+                effect_config={'effectName': 'none'},
+                rarity_weight=1,
+                sell_value=0,          # not sellable for value; it's a keepsake
+                output_type=None,
+            ))
+            made += 1
+    if made:
+        session.commit()
+    return made
+
+
+def _vaultOnAcquire(template) -> bool:
+    """Showpieces land straight in the Vault on acquisition.
+
+    The Vault is already the permanent-collection surface, and it carries exactly
+    the two properties a collection-only card needs, for free: vaulted cards
+    CANNOT be equipped (api/main.py rejects them at equip) and ONLY vaulted cards
+    can be featured in the Showcase. So routing showpieces there is the mechanism,
+    not just the presentation.
+    """
+    return bool(getattr(template, "is_showpiece", False))
 
 
 class CardManager:
@@ -1459,10 +1523,13 @@ class CardManager:
         newCards: List[UserCard] = []
         acquiredVia = f"pack_{packType.name}"
         for template in drawnTemplates:
+            _vault = _vaultOnAcquire(template)
             card = UserCard(
                 user_id=userId,
                 card_template_id=template.id,
                 acquired_via=acquiredVia,
+                vaulted=_vault,
+                vaulted_at=datetime.utcnow() if _vault else None,
             )
             newCards.append(card)
 
@@ -1870,11 +1937,20 @@ class CardManager:
 
         newCards: List[UserCard] = []
         acquiredVia = f"pack_{packType.name}"
+        # Showpieces go straight to the Vault, so the kept templates have to be
+        # loaded here — this path only carries ids.
+        _keptTemplates = {
+            t.id: t for t in session.query(CardTemplate)
+            .filter(CardTemplate.id.in_(list(keptTemplateIds))).all()
+        } if keptTemplateIds else {}
         for tid in keptTemplateIds:
+            _vault = _vaultOnAcquire(_keptTemplates.get(tid))
             newCards.append(UserCard(
                 user_id=userId,
                 card_template_id=tid,
                 acquired_via=acquiredVia,
+                vaulted=_vault,
+                vaulted_at=datetime.utcnow() if _vault else None,
             ))
         cardRepo.saveBatch(newCards)
 
@@ -2072,7 +2148,7 @@ class CardManager:
         On first call per user per season, generates a random selection and
         persists it.  Subsequent calls return the same set (minus purchased).
         """
-        from database.models import FeaturedShopCard
+        from database.models import FeaturedShopCard, CardTemplate
         from database.repositories.card_repositories import CardTemplateRepository
         from datetime import datetime, date, timedelta
         from constants import SWAP_CYCLE_WEEKS, DAILY_RESET_HOUR_UTC
@@ -2130,6 +2206,17 @@ class CardManager:
             # doesn't bleed into the shop's featured rotation, and drop the no-effect
             # floor print (edition 'base') — it's the starter lineup, not a shop single.
             allTemplates = [t for t in allTemplates if t.team_id is not None and t.edition != 'base']
+            # Showpieces are added back explicitly. They are excluded from
+            # getBySeason (they'd be bricks in a fantasy pack) AND they carry
+            # team_id=None by design — an enshrined player belongs to the league,
+            # not a club — so the filter above would drop them twice over. The
+            # shop is the ONLY way to obtain one.
+            showpieces = [
+                t for t in session.query(CardTemplate)
+                .filter(CardTemplate.is_showpiece == True)          # noqa: E712
+                .filter(CardTemplate.is_upgraded == False).all()    # noqa: E712
+            ]
+            allTemplates = allTemplates + showpieces
 
             if not allTemplates:
                 return []
@@ -2519,11 +2606,16 @@ class CardManager:
         session.flush()
         return rows
 
-    def buyFeaturedCard(self, session, userId: int, templateId: int, currentSeason: int) -> dict:
+    def buyFeaturedCard(self, session, userId: int, templateId: int, currentSeason: int,
+                        showpieceOnly: bool = False) -> dict:
         """Buy a single card from the featured shop.
 
         Returns the serialized new card.
         Raises ValueError on invalid template, wrong season, or insufficient funds.
+
+        `showpieceOnly` is set by the API outside the regular season: a fantasy
+        card bought then could never be equipped, so only showpieces are sold.
+        Enforced HERE rather than at the endpoint so every caller inherits it.
         """
         from database.models import CardTemplate, UserCard, FeaturedShopCard
         from database.repositories.card_repositories import (
@@ -2547,6 +2639,8 @@ class CardManager:
         template = templateRepo.getById(templateId)
         if not template:
             raise ValueError("Card template not found")
+        if showpieceOnly and not bool(getattr(template, 'is_showpiece', False)):
+            raise ValueError("Only collection cards are available outside the regular season")
 
         buyPrice = self._featuredBuyPrice(template)
 
@@ -2562,10 +2656,13 @@ class CardManager:
         # Mark as purchased
         featuredRow.purchased = True
 
+        _vault = _vaultOnAcquire(template)
         card = UserCard(
             user_id=userId,
             card_template_id=template.id,
             acquired_via='shop',
+            vaulted=_vault,
+            vaulted_at=datetime.utcnow() if _vault else None,
         )
         cardRepo.save(card)
         session.refresh(card)

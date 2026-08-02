@@ -9604,8 +9604,13 @@ def setEquippedCards(
 # ============================================================================
 
 
-def _isShopOpen() -> bool:
-    """Check if the shop is open (regular season only, before week 28 games finish)."""
+def _isRegularSeason() -> bool:
+    """True while regular-season fantasy is live (through week 28's games).
+
+    This used to be `_isShopOpen` and closed the whole shop the moment week 28
+    finished. The shop is now open ALL YEAR; what changes outside the regular
+    season is WHAT you can buy — see `_showpieceOnly`.
+    """
     sm = floosball_app.seasonManager if floosball_app else None
     if not sm or not sm.currentSeason:
         return False
@@ -9617,10 +9622,39 @@ def _isShopOpen() -> bool:
     return True
 
 
+def _isShopOpen() -> bool:
+    """The shop never closes now. Kept as a function because the packs/shop
+    payloads publish it and the frontend reads it."""
+    return True
+
+
+def _showpieceOnly() -> bool:
+    """Outside the regular season, only SHOWPIECES are purchasable.
+
+    A fantasy card is season-scoped at equip time and fantasy doesn't run in the
+    postseason, so a fantasy card bought after week 28 could never be fielded —
+    selling one would be selling a brick. Showpieces lose nothing: they are never
+    fielded anyway, and they keep earning through the Showcase (whose recency
+    curve tapers to a floor rather than cutting off)."""
+    return not _isRegularSeason()
+
+
 def _requireShopOpen():
-    """Raise 403 if shop is closed (playoffs/offseason)."""
-    if not _isShopOpen():
-        raise HTTPException(status_code=403, detail="Shop is closed for the season")
+    """Guard for purchase endpoints.
+
+    Previously defined and NEVER CALLED — the closure was frontend-only, so the
+    backend happily sold cards while the UI said the shop was shut. Now that the
+    shop is always open this is the hook that enforces the showpiece-only rule."""
+    return True
+
+
+def _requirePurchasable(template) -> None:
+    """Reject a non-showpiece purchase outside the regular season."""
+    if _showpieceOnly() and not bool(getattr(template, 'is_showpiece', False)):
+        raise HTTPException(
+            status_code=403,
+            detail="Only collection cards are available outside the regular season",
+        )
 
 
 @app.get("/api/packs/types")
@@ -9731,6 +9765,7 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
             } if starterPack else None),
             "shopDay": shopDay,
             "shopOpen": _isShopOpen(),
+            "showpieceOnly": _showpieceOnly(),
             "cycleLimit": MAX_PACKS_PER_SHOP_CYCLE,
             "cyclePacksOpened": cyclePacksOpened,
             "cycleRemaining": cycleRemaining,
@@ -9970,7 +10005,8 @@ def getShopFeatured(user: _User = Depends(_getCurrentUser)):
             currentWeek=currentWeek, isScheduledMode=isScheduledMode,
         )
         session.commit()
-        return build_success_response({"cards": featured, "currentSeason": currentSeason, "shopOpen": _isShopOpen()})
+        return build_success_response({"cards": featured, "currentSeason": currentSeason,
+                                      "shopOpen": _isShopOpen(), "showpieceOnly": _showpieceOnly()})
     except Exception:
         session.rollback()
         raise
@@ -9996,7 +10032,8 @@ def buyFeaturedCard(req: BuyCardRequest, user: _User = Depends(_getCurrentUser))
 
     session = get_session()
     try:
-        card = cardManager.buyFeaturedCard(session, user.id, req.templateId, currentSeason)
+        card = cardManager.buyFeaturedCard(session, user.id, req.templateId, currentSeason,
+                                           showpieceOnly=_showpieceOnly())
 
         # Keep Curator progress in sync — shop buys add to the collection but
         # weren't previously counted because the sync only ran on pack opens.

@@ -5471,6 +5471,16 @@ class SeasonManager:
                 allProPlayerIds=allProPlayerIds,
             )
             session.commit()
+            # Hall of Fame showpieces. Separate sweep because the inducted are
+            # RETIRED and never appear in the active-league pass above. Idempotent,
+            # so this only mints what a new induction class added.
+            try:
+                from managers.cardManager import generateHallOfFameShowpieces
+                hofMade = generateHallOfFameShowpieces(session, seasonNumber)
+                if hofMade:
+                    logger.info(f"Minted {hofMade} Hall of Fame showpiece template(s)")
+            except Exception as _hofErr:
+                logger.warning(f"Hall of Fame showpiece generation failed: {_hofErr}")
             session.close()
             logger.info(f"Card template generation complete: {count} templates for season {seasonNumber}")
         except Exception as e:

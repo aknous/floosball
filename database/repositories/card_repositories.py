@@ -40,19 +40,30 @@ class CardTemplateRepository:
     def getById(self, templateId: int) -> Optional[CardTemplate]:
         return self.session.query(CardTemplate).filter_by(id=templateId).first()
 
-    def getBySeason(self, season: int, includeUpgraded: bool = False) -> List[CardTemplate]:
+    def getBySeason(self, season: int, includeUpgraded: bool = False,
+                    includeShowpieces: bool = False) -> List[CardTemplate]:
+        """Season pool. EXCLUDES showpieces by default.
+
+        This feeds the pack pools and the shop rotation, and a showpiece landing
+        in a fantasy pack would be a brick — it can never be equipped. Callers
+        that genuinely want them (the collection shop) pass includeShowpieces."""
         query = self.session.query(CardTemplate).filter_by(season_created=season)
         if not includeUpgraded:
             query = query.filter(CardTemplate.is_upgraded == False)
+        if not includeShowpieces:
+            query = query.filter(CardTemplate.is_showpiece == False)
         return query.all()
 
-    def getBySeasonAndEdition(self, season: int, edition: str, includeUpgraded: bool = False) -> List[CardTemplate]:
+    def getBySeasonAndEdition(self, season: int, edition: str, includeUpgraded: bool = False,
+                              includeShowpieces: bool = False) -> List[CardTemplate]:
         query = (
             self.session.query(CardTemplate)
             .filter_by(season_created=season, edition=edition)
         )
         if not includeUpgraded:
             query = query.filter(CardTemplate.is_upgraded == False)
+        if not includeShowpieces:
+            query = query.filter(CardTemplate.is_showpiece == False)
         return query.all()
 
     def getByPlayer(self, playerId: int, season: Optional[int] = None) -> List[CardTemplate]:

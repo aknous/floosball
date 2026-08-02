@@ -1313,6 +1313,15 @@ def _runPendingMigrations():
             logger.info("  Migration: added card_templates.output_type")
         except Exception:
             conn.rollback()
+        # Showpiece: collected, never fielded. Default 0 so every existing card
+        # stays a normal fantasy card.
+        try:
+            conn.execute(text(
+                "ALTER TABLE card_templates ADD COLUMN is_showpiece BOOLEAN DEFAULT 0 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added card_templates.is_showpiece")
+        except Exception:
+            conn.rollback()
         # Per-user themed pack rotation: rotation flipped from global to
         # per-user once we added reroll. Old rows have no user_id so they're
         # unusable — drop them rather than backfill.

@@ -1375,6 +1375,13 @@ class CardTemplate(Base):
     edition: Mapped[str] = mapped_column(String(20), nullable=False)  # base, holographic, prismatic, diamond
     season_created: Mapped[int] = mapped_column(Integer, nullable=False)
     is_rookie: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Showpiece: a prestige print that is COLLECTED, not fielded. Depicts a real
+    # player (so player_id stays non-null) but can never be equipped — the equip
+    # endpoint rejects it. Scores in the Showcase unchanged, because showcase
+    # scoring reads edition/classification/tier/season and never the player.
+    # This is what makes an all-year shop coherent: fantasy cards bought outside
+    # the regular season could never be equipped, showpieces lose nothing.
+    is_showpiece: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     classification: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # rookie, mvp, champion, all_pro, or compound e.g. mvp_champion
 
     # Snapshot of player at creation time

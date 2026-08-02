@@ -46,7 +46,8 @@ def _recency(seasonCreated: int, currentSeason: int) -> float:
     return SHOWCASE_RECENCY_BY_AGE.get(seasonsOld, SHOWCASE_RECENCY_FLOOR)
 
 
-_CLASSIFICATION_LABELS = {"rookie": "Rookie", "all_pro": "All-Pro", "champion": "Champion", "mvp": "MVP"}
+_CLASSIFICATION_LABELS = {"rookie": "Rookie", "all_pro": "All-Pro", "champion": "Champion",
+                          "mvp": "MVP", "enshrined": "Hall of Fame"}
 
 
 def _classificationPoints(classification) -> int:
