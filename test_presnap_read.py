@@ -23,7 +23,7 @@ from types import SimpleNamespace    # noqa: E402
 from constants import (              # noqa: E402
     PRESNAP_READ_BASE, PRESNAP_READ_SKILL, PRESNAP_READ_EDGE,
     PRESNAP_LEVERAGE_FLOOR, PRESNAP_OBVIOUS_SHORT, PRESNAP_OBVIOUS_LONG,
-    PRESNAP_DISGUISE,
+    PRESNAP_DISGUISE, PRESNAP_CONCEPT_DISGUISE,
 )
 
 
@@ -40,6 +40,14 @@ def _defTeam(defMind=80, instinct=80, focus=80):
     )
 
 
+def _runner(**kw):
+    base = dict(power=80, discipline=80, speed=80, agility=80, vision=80,
+                creativity=80, focus=80, blocking=80)
+    base.update(kw)
+    a = SimpleNamespace(**base)
+    return SimpleNamespace(name='RB', attributes=a, gameAttributes=a)
+
+
 def _play(ytg=7, defMind=80, instinct=80, focus=80, **flags):
     """A Play stubbed down to exactly what _applyPreSnapRead touches."""
     p = object.__new__(FloosGame.Play)
@@ -50,6 +58,8 @@ def _play(ytg=7, defMind=80, instinct=80, focus=80, **flags):
     for k in ('isRpo', 'playAction', 'isSneakLook'):
         setattr(p, k, flags.get(k, False))
     p.trickPlay = flags.get('trickPlay', None)
+    p.runConcept = flags.get('runConcept', None)
+    p.runner = flags.get('runner', _runner())
     return p
 
 
@@ -156,3 +166,40 @@ def testPassPlayOnlyMovesPassDefMult():
     p._applyPreSnapRead(scheme, isRun=False)
     assert scheme['runDefMult'] == 1.0
     assert scheme['passDefMult'] != 1.0
+
+
+# ── Run-concept disguise (draw only, by design) ─────────────────────────────
+
+def testDrawDisguisesTheRunPassRead():
+    """A draw is a run that looks like a pass — play-action pointed the other
+    way — so it must beat the same read play-action beats."""
+    plain = _accuracyOf(_play(defMind=100, instinct=100, focus=100, runConcept='power'))
+    draw = _accuracyOf(_play(defMind=100, instinct=100, focus=100, runConcept='draw'))
+    assert plain - draw > PRESNAP_CONCEPT_DISGUISE['draw'] * 0.4, \
+        f'draw barely degraded the read ({plain:.3f} -> {draw:.3f})'
+
+
+def testDirectionalConceptsDoNotDisguise():
+    """Counter and sweep deceive about DIRECTION. This layer only asks run-or-
+    pass, so there is nothing for them to fool and paying them would reward
+    beating a read that never happened."""
+    plain = _accuracyOf(_play(defMind=100, instinct=100, focus=100, runConcept='power'))
+    for concept in ('counter', 'sweep'):
+        acc = _accuracyOf(_play(defMind=100, instinct=100, focus=100, runConcept=concept))
+        assert abs(plain - acc) < 0.03, f'{concept} should not disguise (got {acc:.3f} vs {plain:.3f})'
+
+
+def testABackWhoCannotSellItGetsLessOfTheDisguise():
+    shifty = _accuracyOf(_play(defMind=100, instinct=100, focus=100, runConcept='draw',
+                               runner=_runner(creativity=100, focus=100, vision=100)))
+    plodder = _accuracyOf(_play(defMind=100, instinct=100, focus=100, runConcept='draw',
+                                runner=_runner(creativity=60, focus=60, vision=60)))
+    assert plodder > shifty, 'a plodder should telegraph the draw more than a shifty back'
+
+
+def testDrawOnlyDisguisesOnRunPlays():
+    """The concept is irrelevant to a pass; nothing should leak across."""
+    p = _play(defMind=100, instinct=100, focus=100, runConcept='draw')
+    passAcc = _accuracyOf(p, isRun=False)
+    plainPass = _accuracyOf(_play(defMind=100, instinct=100, focus=100), isRun=False)
+    assert abs(passAcc - plainPass) < 0.03

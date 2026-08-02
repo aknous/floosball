@@ -392,6 +392,23 @@ PRESNAP_DISGUISE = {
     'sneakLook':  0.28,
     'trick':      0.32,
 }
+# Run concepts that disguise against a RUN/PASS read specifically.
+#
+# Deliberately not "every concept, scaled by its `deception` value". What a
+# concept deceives ABOUT decides whether it belongs here:
+#   * draw    — a RUN that looks like a PASS. The exact mirror of play-action,
+#               and it attacks precisely the question this layer asks. Belongs.
+#   * counter — deceives about DIRECTION (misdirection vs over-pursuit).
+#   * sweep   — deceives about direction/edge speed.
+# The read only commits to run-or-pass, so counter and sweep have nothing here
+# to fool; paying them would be rewarding them for beating a read that never
+# happened. They already get their payoff in the concept-edge channel. If the
+# layer ever grows a directional commit, this is where they'd earn one.
+PRESNAP_CONCEPT_DISGUISE = {'draw': 0.24}
+# Scaled by how well this back sells it (_runConceptExecQ, deterministic from
+# attributes): a shifty, cerebral back disguises a draw; a plodder telegraphs it.
+# Range is this floor to 1.0 of the nominal value above.
+PRESNAP_CONCEPT_DISGUISE_FLOOR = 0.5
 # Leverage — the read only pays where the situation is genuinely ambiguous. On
 # 3rd-and-15 both sides know it's a pass, so guessing right isn't skill; those
 # spots are already handled by the situational branch in getDefensiveScheme.

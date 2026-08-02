@@ -13064,6 +13064,17 @@ class Play():
             disguise = max(disguise, PRESNAP_DISGUISE['sneakLook'])
         if getattr(self, 'trickPlay', None):
             disguise = max(disguise, PRESNAP_DISGUISE['trick'])
+        # A run concept that disguises the RUN/PASS question itself — in practice
+        # the draw, which is play-action pointed the other way. Scaled by how well
+        # this back sells it, so a plodder telegraphs what a shifty back hides.
+        if isRun:
+            from constants import (PRESNAP_CONCEPT_DISGUISE,
+                                   PRESNAP_CONCEPT_DISGUISE_FLOOR)
+            _cd = PRESNAP_CONCEPT_DISGUISE.get(getattr(self, 'runConcept', None))
+            if _cd:
+                _sell = _runConceptExecQ(self.runner, self.runConcept) if self.runner else 0.5
+                floor = PRESNAP_CONCEPT_DISGUISE_FLOOR
+                disguise = max(disguise, _cd * (floor + (1 - floor) * _sell))
         accuracy = max(0.05, min(0.95, accuracy - disguise))
 
         correct = _random.random() < accuracy
