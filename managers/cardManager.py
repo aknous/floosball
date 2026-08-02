@@ -366,7 +366,16 @@ def _buildClassification(
 COLLECTION_CLASSIFICATIONS = ("mvp", "champion", "all_pro")
 
 
-def getCollectionTemplates(session, currentSeason: int) -> list:
+REGULAR_SEASON_WEEKS = 28
+
+
+def regularSeasonOver(currentWeek: int) -> bool:
+    """True once the regular season's games are done (playoffs / offseason)."""
+    return bool(currentWeek and currentWeek > REGULAR_SEASON_WEEKS)
+
+
+def getCollectionTemplates(session, currentSeason: int,
+                           includeCurrentSeason: bool = False) -> list:
     """The collection pool: PAST-SEASON prestige prints — MVP, Champion, All-Pro.
 
     One pool, one pack (owner, 2026-08-02). An earlier revision had a separate
@@ -393,9 +402,20 @@ def getCollectionTemplates(session, currentSeason: int) -> list:
 
     clsFilter = or_(*[CardTemplate.classification.contains(c)
                       for c in COLLECTION_CLASSIFICATIONS])
+    # `includeCurrentSeason` opens the just-finished season once the regular
+    # season is over. Without it there is a dead window: from the end of week 28
+    # until the season number rolls, this season's cards are neither purchasable
+    # (the shop sells collection only) nor in the collection pool (they aren't a
+    # PAST season yet), so they'd be unobtainable for the whole postseason and
+    # offseason. They are already unequippable by then — fantasy is done, and
+    # next season needs next season's cards — so they are collectibles in every
+    # sense that matters.
+    seasonFilter = (CardTemplate.season_created <= currentSeason
+                    if includeCurrentSeason
+                    else CardTemplate.season_created < currentSeason)
     return (
         session.query(CardTemplate)
-        .filter(CardTemplate.season_created < currentSeason)
+        .filter(seasonFilter)
         .filter(CardTemplate.classification.isnot(None))
         .filter(clsFilter)
         .filter(CardTemplate.is_upgraded == False)                        # noqa: E712
@@ -403,7 +423,7 @@ def getCollectionTemplates(session, currentSeason: int) -> list:
     )
 
 
-def _vaultOnAcquire(template, currentSeason: int = None) -> bool:
+def _vaultOnAcquire(template, currentSeason: int = None, currentWeek: int = 0) -> bool:
     """Should this card land straight in the Vault?
 
     Two kinds of card belong there. SHOWPIECES are purpose-built collectibles.
@@ -421,7 +441,11 @@ def _vaultOnAcquire(template, currentSeason: int = None) -> bool:
     season = getattr(template, "season_created", None)
     if currentSeason is None or season is None:
         return False
-    return season < currentSeason
+    if season < currentSeason:
+        return True
+    # This season's cards, bought after the regular season ended: fantasy is over
+    # and next season needs next season's cards, so they can never be fielded.
+    return season == currentSeason and regularSeasonOver(currentWeek)
 
 
 class CardManager:
@@ -1464,7 +1488,8 @@ class CardManager:
     # ─── Pack Opening ─────────────────────────────────────────────────────────
 
     def openPack(self, session, userId: int, packTypeId: int, currentSeason: int,
-                 skipCurrency: bool = False, source: str = "purchase") -> dict:
+                 skipCurrency: bool = False, source: str = "purchase",
+                 currentWeek: int = 0) -> dict:
         """Buy and open a card pack — IMMEDIATE-grant flow (no selection).
 
         Used for achievement rewards / starter grants / any path where the
@@ -1517,13 +1542,13 @@ class CardManager:
             if result is None:
                 raise ValueError("Insufficient Floobits")
 
-        drawnTemplates = self._drawPackCards(session, packType, currentSeason)
+        drawnTemplates = self._drawPackCards(session, packType, currentSeason, currentWeek)
 
         # Create UserCard instances
         newCards: List[UserCard] = []
         acquiredVia = f"pack_{packType.name}"
         for template in drawnTemplates:
-            _vault = _vaultOnAcquire(template, currentSeason)
+            _vault = _vaultOnAcquire(template, currentSeason, currentWeek)
             card = UserCard(
                 user_id=userId,
                 card_template_id=template.id,
@@ -1554,7 +1579,8 @@ class CardManager:
             "cards": serialized,
         }
 
-    def _drawPackCards(self, session, packType, currentSeason: int) -> list:
+    def _drawPackCards(self, session, packType, currentSeason: int,
+                       currentWeek: int = 0) -> list:
         """Shared draw routine: returns N templates per packType.cards_per_pack.
 
         Two extensions for the themed-pack rework:
@@ -1570,7 +1596,10 @@ class CardManager:
         # pool entirely — the only pack type that does. Everything downstream
         # (weights, guarantee, dedup) works unchanged on this pool.
         if getattr(packType, 'theme_type', None) == 'collection':
-            allTemplates = getCollectionTemplates(session, currentSeason)
+            allTemplates = getCollectionTemplates(
+                session, currentSeason,
+                includeCurrentSeason=regularSeasonOver(currentWeek),
+            )
         else:
             allTemplates = templateRepo.getBySeason(currentSeason)
             # Skip any templates with NULL team_id — defensive guard against legacy
@@ -1839,7 +1868,7 @@ class CardManager:
             if result is None:
                 raise ValueError("Insufficient Floobits")
 
-        drawnTemplates = self._drawPackCards(session, packType, currentSeason)
+        drawnTemplates = self._drawPackCards(session, packType, currentSeason, currentWeek)
 
         pending = PendingPackOpening(
             user_id=userId,
@@ -1949,7 +1978,7 @@ class CardManager:
             .filter(CardTemplate.id.in_(list(keptTemplateIds))).all()
         } if keptTemplateIds else {}
         for tid in keptTemplateIds:
-            _vault = _vaultOnAcquire(_keptTemplates.get(tid), currentSeason)
+            _vault = _vaultOnAcquire(_keptTemplates.get(tid), currentSeason, currentWeek)
             newCards.append(UserCard(
                 user_id=userId,
                 card_template_id=tid,
