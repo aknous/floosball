@@ -1942,7 +1942,7 @@ class CardManager:
             ).update({FeaturedPackRotation.purchased: True})
             session.flush()
 
-        revealed = [self._serializeTemplate(t, currentSeason) for t in drawnTemplates]
+        revealed = [self._serializeTemplate(t, currentSeason, currentWeek) for t in drawnTemplates]
 
         # Annotate each revealed card with how many of that EFFECT the user
         # already owns — current-season, non-vaulted only. Expired (past-season)
@@ -2116,7 +2116,7 @@ class CardManager:
         session.commit()
         return len(stale)
 
-    def _serializeTemplate(self, template, currentSeason: int) -> dict:
+    def _serializeTemplate(self, template, currentSeason: int, currentWeek: int = 0) -> dict:
         """Template-only serialization for reveal payloads. Mirrors the
         rich shape of serializeCard so the reveal UI can render cards
         identically to a UserCard view, but without an `id` (no UserCard
@@ -2131,6 +2131,13 @@ class CardManager:
             card_template_id=template.id,
             acquired_via='pack_reveal',
             acquired_at=datetime.utcnow(),
+            # Mark the stub with the vault state this card WILL have once kept.
+            # Without it a collection card previews as an ordinary expired card:
+            # the UI hides effects and the "Expired" badge on vaulted cards, and
+            # a past-season template is neither active nor (without this) vaulted,
+            # so it advertised an effect it can never use and called itself
+            # expired when it is simply a collectible.
+            vaulted=_vaultOnAcquire(template, currentSeason, currentWeek),
         )
         # Wire the relationship without triggering back-population —
         # a plain `stub.card_template = template` would append `stub`
