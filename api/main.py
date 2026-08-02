@@ -9661,11 +9661,11 @@ def _requireCollectionOnly(packType=None) -> None:
     the Showcase."""
     if not _showpieceOnly():
         return
-    if packType is not None and getattr(packType, 'theme_type', None) == 'legacy':
+    if packType is not None and getattr(packType, 'theme_type', None) == 'collection':
         return
     raise HTTPException(
         status_code=403,
-        detail="Only the Legacy Pack is available outside the regular season",
+        detail="Only the Collection Pack is available outside the regular season",
     )
 
 
@@ -9768,15 +9768,15 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
 
         cyclePacksOpened = _countPacksThisCycle(session, user.id, currentSeason, currentWeek) if user else 0
         cycleRemaining = max(0, MAX_PACKS_PER_SHOP_CYCLE - cyclePacksOpened)
-        # The Legacy Pack never rotates. It is the ONLY product on sale outside
-        # the regular season, so it has to be visible every day of the year;
-        # dropping it into the rotating themed pool would hide it exactly when
-        # it's the only thing to buy.
-        legacyPack = next((p for p in packs if p.name == 'themed_legacy'), None)
+        # The Collection Pack never rotates. It is the ONLY product on sale
+        # outside the regular season, so it has to be visible every day of the
+        # year; dropping it into the rotating themed pool would hide it exactly
+        # when it's the only thing to buy.
+        collectionPack = next((p for p in packs if p.name == 'themed_collection'), None)
         return build_success_response({
             "packs": [_packDict(p) for p in rotated],
             "themedPacks": [_packDict(p) for p in themedPacks],
-            "legacyPack": _packDict(legacyPack) if legacyPack else None,
+            "collectionPack": _packDict(collectionPack) if collectionPack else None,
             "starter": ({
                 **_packDict(starterPack),
                 "claimedThisSeason": starterClaimed,

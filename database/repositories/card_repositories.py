@@ -622,23 +622,28 @@ class PackTypeRepository:
             theme_value=None,
         ))
 
-        # LEGACY PACK — the only source of collection cards.
+        # COLLECTION PACK — the only source of collection cards, and the only
+        # pack on sale outside the regular season.
         #
-        # Guarantees prismatic-or-better, which is far more generous than any
-        # fantasy pack. That is safe precisely BECAUSE these cards can never be
-        # equipped: there is no power creep to worry about, so the pack can
-        # promise something worth opening every time. Its value is Showcase
-        # scoring and the collection itself.
+        # ONE pack, not a legacy pack plus a current-season one: the pool is every
+        # past-season MVP / Champion / All-Pro print, so Hall of Fame players show
+        # up in it naturally (43% of the pool on the dev DB) as the chase rather
+        # than needing a pack of their own.
+        #
+        # Guarantees prismatic-or-better and drops nothing below holographic —
+        # far more generous than any fantasy pack. That is safe precisely BECAUSE
+        # these cards can never be equipped: there is no power creep to protect
+        # against, so the pack can promise something worth opening every time.
         defaults.append(PackType(
-            name='themed_legacy',
-            display_name='Legacy Pack',
+            name='themed_collection',
+            display_name='Collection Pack',
             cost=90,
             cards_per_pack=5,
             cards_kept=3,
             guaranteed_rarity='prismatic',
             rarity_weights={'holographic': 45, 'prismatic': 35, 'diamond': 20},
-            description='Reveal 5, keep 3. Hall of Fame players, from the seasons they earned it.',
-            theme_type='legacy',
+            description='Reveal 5, keep 3. Past-season greats, from the seasons they earned it.',
+            theme_type='collection',
             theme_value=None,
         ))
 

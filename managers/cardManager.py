@@ -227,9 +227,9 @@ def _applyThemeFilter(templates: list, themeType: str, themeValue: str,
         return [t for t in templates if t.team_id == teamIdInt]
     if themeType == 'output':
         return [t for t in templates if getattr(t, 'output_type', None) == themeValue]
-    if themeType == 'legacy':
-        # The pool handed in IS already the legacy set (openPack swaps the source
-        # for this theme), so there is nothing further to filter on.
+    if themeType == 'collection':
+        # The pool handed in IS already the collection set (openPack swaps the
+        # source for this theme), so there is nothing further to filter on.
         return list(templates)
     if themeType == 'rookie':
         # This season's rookie class. `templates` is already scoped to the
@@ -363,45 +363,38 @@ def _buildClassification(
     return "_".join(tags) if tags else None
 
 
-LEGACY_CLASSIFICATIONS = ("mvp", "champion", "all_pro")
+COLLECTION_CLASSIFICATIONS = ("mvp", "champion", "all_pro")
 
 
-def getLegacyCollectionTemplates(session, currentSeason: int) -> list:
-    """Past-season prestige prints of Hall of Fame players — the legacy pool.
+def getCollectionTemplates(session, currentSeason: int) -> list:
+    """The collection pool: PAST-SEASON prestige prints — MVP, Champion, All-Pro.
 
-    Replaces an earlier attempt that minted NEW Hall of Fame cards. That ran into
-    the questions the owner raised: what team does an enshrined player belong to,
-    and what rating do they carry, when most inductees are years past their peak?
-    Reprinting their actual historical cards answers both — the card already
-    carries the team they played for and the rating they had THAT season.
+    One pool, one pack (owner, 2026-08-02). An earlier revision had a separate
+    Hall-of-Fame-only pack; that was both thinner and a second thing to explain.
+    Hall of Fame players appear in this pool naturally — measured on the dev DB
+    they are 140 of 328 prints, 43% — so the enshrined are the chase inside the
+    collection pack rather than a pack of their own.
 
-    Nothing new has to be stored. Templates are minted per season with
-    `season_created`, `player_rating`, `team_id` and `classification`, and are
-    never pruned (the only delete is clear_db), so a player's MVP season is still
-    a row. Measured on the dev DB: all 21 inductees had prestige prints, 141 in
-    total.
+    Why past seasons only:
+      * The card already carries the team the player was on and the rating they
+        had THAT season, which is what makes a legacy print worth collecting —
+        a card minted today would show an inductee years past their peak on no
+        team at all.
+      * A past-season template is ALREADY unequippable (equip rejects
+        season_created != currentSeason), so the pool is collection-only by
+        construction rather than by a flag.
 
-    Available the season AFTER induction, so a career closes before it is
-    collectible. Past-season templates are already unequippable (equip rejects
-    anything whose season_created != currentSeason), so these need no flag to
-    behave as collection-only.
+    Nothing extra is stored to support this. Templates are minted per season
+    carrying season_created / player_rating / team_id / classification, and are
+    never pruned — the only delete is clear_db.
     """
-    from database.models import Player, CardTemplate
+    from database.models import CardTemplate
     from sqlalchemy import or_
 
-    inducted = (
-        session.query(Player)
-        .filter(Player.is_hof == True)                                    # noqa: E712
-        .filter(or_(Player.hof_season == None, Player.hof_season < currentSeason))  # noqa: E711
-        .all()
-    )
-    if not inducted:
-        return []
-    ids = [p.id for p in inducted]
-    clsFilter = or_(*[CardTemplate.classification.contains(c) for c in LEGACY_CLASSIFICATIONS])
+    clsFilter = or_(*[CardTemplate.classification.contains(c)
+                      for c in COLLECTION_CLASSIFICATIONS])
     return (
         session.query(CardTemplate)
-        .filter(CardTemplate.player_id.in_(ids))
         .filter(CardTemplate.season_created < currentSeason)
         .filter(CardTemplate.classification.isnot(None))
         .filter(clsFilter)
@@ -1576,8 +1569,8 @@ class CardManager:
         # LEGACY packs draw from PAST seasons, so they bypass the current-season
         # pool entirely — the only pack type that does. Everything downstream
         # (weights, guarantee, dedup) works unchanged on this pool.
-        if getattr(packType, 'theme_type', None) == 'legacy':
-            allTemplates = getLegacyCollectionTemplates(session, currentSeason)
+        if getattr(packType, 'theme_type', None) == 'collection':
+            allTemplates = getCollectionTemplates(session, currentSeason)
         else:
             allTemplates = templateRepo.getBySeason(currentSeason)
             # Skip any templates with NULL team_id — defensive guard against legacy
