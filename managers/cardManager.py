@@ -59,13 +59,30 @@ BLENDER_THRESHOLDS = [
 # rework, grand and exquisite are no longer guaranteed daily fixtures, so
 # capping them at 1/day created the bad UX of a user rerolling into 3 packs
 # they already bought today. Per-pack daily caps removed for all tiers.
-DAILY_PACK_LIMITS: Dict[str, int] = {}
+# Per-pack daily caps, keyed by pack name. The window is a real UTC calendar day.
+DAILY_PACK_LIMITS: Dict[str, int] = {
+    # One Collection Pack a day (owner, 2026-08-02). It sits outside the cycle cap
+    # below, so this is the only thing pacing it — and a daily cadence suits a
+    # collection: something to come back for, rather than something to bulk-buy.
+    'themed_collection': 1,
+}
 
 # Total purchased packs (any tier) a user can open in one 7-week shop cycle.
 # Stops whales from buying dozens of packs and feeding the Combine to fabricate
 # rare cards in bulk. Free / achievement-granted packs (skipCurrency=True) and
 # the starter pack do NOT count toward this cap.
+#
+# The Collection Pack is ALSO exempt (see _countsTowardCycleCap). The cap exists
+# to stop pack-churning into Combine fuel, and collection cards land vaulted —
+# vaulted cards can't be combined — so the rationale doesn't apply. It also can't
+# be allowed to consume the cycle allowance during the postseason, when it is the
+# only pack on sale.
 MAX_PACKS_PER_SHOP_CYCLE: int = 5
+
+
+def _countsTowardCycleCap(packType) -> bool:
+    """Whether a pack consumes the per-cycle allowance."""
+    return not isAlwaysAvailablePack(packType)
 
 
 def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
@@ -104,22 +121,33 @@ def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
 def _countPacksThisCycle(session, userId: int, currentSeason: int, currentWeek: int) -> int:
     """Count packs the user has *purchased* (cost > 0) in the current shop
     cycle. Counts both committed PackOpening rows and in-flight
-    PendingPackOpening rows so a user mid-reveal can't open another."""
-    from database.models import PackOpening, PendingPackOpening
+    PendingPackOpening rows so a user mid-reveal can't open another.
+
+    EXCLUDES always-available packs (the Collection Pack). Exempting it from the
+    cap check alone would not be enough — if its opens still counted here, buying
+    five of them would silently exhaust the allowance for every other pack, which
+    is the opposite of exempt.
+    """
+    from database.models import PackOpening, PendingPackOpening, PackType
     cycleStart = _shopCycleStartDate(session, currentSeason, currentWeek)
     if cycleStart is None:
         return 0
+    exemptIds = [pt.id for pt in session.query(PackType).all()
+                 if isAlwaysAvailablePack(pt)]
     committed = session.query(PackOpening).filter(
         PackOpening.user_id == userId,
         PackOpening.opened_at >= cycleStart,
         PackOpening.cost > 0,
-    ).count()
+    )
     pending = session.query(PendingPackOpening).filter(
         PendingPackOpening.user_id == userId,
         PendingPackOpening.opened_at >= cycleStart,
         PendingPackOpening.cost_paid > 0,
-    ).count()
-    return committed + pending
+    )
+    if exemptIds:
+        committed = committed.filter(~PackOpening.pack_type_id.in_(exemptIds))
+        pending = pending.filter(~PendingPackOpening.pack_type_id.in_(exemptIds))
+    return committed.count() + pending.count()
 
 # Shop rotation: 4 "shop days" map to 7-week segments of the season,
 # matching the existing featured-shop SWAP_CYCLE_WEEKS cycle.
@@ -1863,7 +1891,7 @@ class CardManager:
             packsThisCycle = _countPacksThisCycle(
                 session, userId, currentSeason, currentWeek or 1
             )
-            if packsThisCycle >= MAX_PACKS_PER_SHOP_CYCLE:
+            if _countsTowardCycleCap(packType) and packsThisCycle >= MAX_PACKS_PER_SHOP_CYCLE:
                 raise ValueError(
                     f"Shop cycle pack limit reached "
                     f"({MAX_PACKS_PER_SHOP_CYCLE} packs per 7-week cycle). "
