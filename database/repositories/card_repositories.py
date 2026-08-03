@@ -641,7 +641,13 @@ class PackTypeRepository:
             cards_per_pack=5,
             cards_kept=3,
             guaranteed_rarity='prismatic',
-            rarity_weights={'holographic': 45, 'prismatic': 35, 'diamond': 20},
+            # Weights are for the FOUR unguaranteed slots, not the output. The
+            # guaranteed-prismatic slot only ever draws prismatic or diamond, so
+            # it adds ~13pp of prismatic on its own; naive 45/35/20 weights came
+            # out 35/40/24 with prismatic MORE common than holographic, which
+            # inverts the intended order. These are set so the pack actually
+            # lands near holo 50 / prismatic 33 / diamond 17.
+            rarity_weights={'holographic': 62, 'prismatic': 25, 'diamond': 13},
             description='Reveal 5, keep 3. Past-season greats, from the seasons they earned it.',
             theme_type='collection',
             theme_value=None,
