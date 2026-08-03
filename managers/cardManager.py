@@ -2184,6 +2184,18 @@ class CardManager:
             )
             if stats:
                 result["playerStats"] = stats
+        # Showcase value, on any card headed for the Vault. For a collection
+        # card this is the only number that says what it's worth: it can't be
+        # equipped, so the projection and the effect a fantasy card is judged on
+        # don't apply to it. Same shape /api/cards attaches under `showcase`, so
+        # the shop, the reveal and the Showcase picker all render it the same.
+        #
+        # No legacy lookup needed here: that premium is rookie-cards-only and
+        # the collection pool is MVP / champion / all-pro prints, so it is
+        # always zero on this path.
+        if result.get('vaulted'):
+            from managers.showcaseManager import _cardBreakdown
+            result["showcase"] = _cardBreakdown(result, currentSeason)
         # Strip the fake id — the card doesn't exist yet
         result.pop('id', None)
         return result

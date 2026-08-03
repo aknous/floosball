@@ -9690,6 +9690,7 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
     from managers.cardManager import (
         DAILY_PACK_LIMITS, MAX_PACKS_PER_SHOP_CYCLE,
         getActivePackNames, shopDayOfSeason, _countPacksThisCycle,
+        _countsTowardCycleCap,
     )
     from datetime import datetime
 
@@ -9771,6 +9772,13 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
                 "guaranteedRarity": p.guaranteed_rarity,
                 "dailyLimit": dailyLimit,
                 "remainingToday": max(0, (dailyLimit or 99) - todayCounts.get(p.id, 0)) if (user and dailyLimit is not None) else None,
+                # Whether the 5-per-cycle cap applies to this pack. Published
+                # rather than left to the client to infer: the purchase path
+                # already exempts always-available packs, and a client that
+                # re-derives the rule drifts from it. That is exactly what
+                # happened here — the API would sell the Collection Pack at 5/5
+                # and the shop greyed the button out with "Cycle full".
+                "countsTowardCycle": _countsTowardCycleCap(p),
             }
             if p.theme_type:
                 base["themeType"] = p.theme_type
