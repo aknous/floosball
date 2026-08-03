@@ -77,6 +77,11 @@ logs/floosball.log
 *.db-shm
 *.db-wal
 data/backups/
+# Suffixed copies: the API's own rolling .bak-<timestamp>, .devbak, and any
+# hand-named snapshot (a pulled prod copy). `*.db` does NOT match these, which
+# is how a dozen 160MB backups once made it into a commit and got the push
+# rejected by GitHub's 100MB file limit.
+data/floosball.db.*
 
 # macOS
 .DS_Store

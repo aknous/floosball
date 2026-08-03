@@ -5388,6 +5388,53 @@ class Game:
         if pb is not None:
             self.play.insights['playbook'] = pb
 
+    def _tackleClause(self):
+        """The ', tackled by X' clause, with any ball-carrier move folded in.
+
+        A move happens AT the tackle, so appending it after the tackle clause
+        told the story backwards and left a run-on with no subject: '... for 9
+        yards, tackled by Belcher, spins and is dragged down anyway'. Merging
+        the two puts them in the order they happened and names the defender
+        once.
+
+        Sets `_moveClauseUsed` so the standalone move text further down doesn't
+        tell it a second time."""
+        tackler = self.play.tackledBy
+        if not tackler:
+            return ''
+        name = tackler.name
+        mv = getattr(self.play, 'runnerMove', None)
+        if not mv or self.play.isFumble:
+            return ', tackled by {}'.format(name)
+
+        made = not mv.endswith('_miss')
+        base = mv if made else mv[:-5]
+        if made:
+            # He beat THIS man and took the bonus yards for it, so the clause
+            # can't also credit him with the tackle. Whoever finally got him
+            # isn't tracked, so nobody else is named either.
+            merged = {
+                'stiff arm': ', stiff-arms {} away',
+                'spin':      ', spins past {}',
+                'hurdle':    ', hurdles {}',
+            }.get(base)
+            if merged:
+                merged += ' ' + choice([
+                    'before being hauled down',
+                    'before the pursuit closes in',
+                    'and is dragged down a few yards on',
+                ])
+        else:
+            merged = {
+                'stiff arm': ', tries the stiff arm and is wrapped up by {}',
+                'spin':      ', spins but is dragged down by {}',
+                'hurdle':    ', tries to hurdle {} and is met in mid-air',
+            }.get(base)
+        if not merged:
+            return ', tackled by {}'.format(name)
+        self.play._moveClauseUsed = True
+        return merged.format(name)
+
     def formatPlayText(self):
         self._buildPlaybookInsight()
         self._evaluateClutchChoke()
@@ -5568,7 +5615,7 @@ class Game:
                 else:
                     text += ', fumbles but recovers it'
             elif self.play.tackledBy and not self.play.isTd:
-                text += ', tackled by {}'.format(self.play.tackledBy.name)
+                text += self._tackleClause()
         elif self.play.playType is PlayType.Run:
             # Select description list based on gap type
             runGap = self.play.insights.get('run', {}).get('selectedGap', 'B-gap')
@@ -5593,23 +5640,27 @@ class Game:
                     tackler = self.play.tackledBy
                     if tackler:
                         text = choice(lossRunDefenderList).format(self.play.runner.name, tackler.name, self.play.yardage)
+                        # These phrases name the tackler inside the sentence, so
+                        # there's no clause to fold a move into and no room to
+                        # add one without naming him twice.
+                        self.play._moveClauseUsed = True
                     else:
                         text = '{} {} for {} yards'.format(self.play.runner.name, choice(lossRunList), self.play.yardage)
                 elif self.play.yardage > 0 and self.play.yardage <= 3:
                     runList = shortRunOutsideList if isOutside else shortRunInsideList
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
                     if self.play.tackledBy and not self.play.isTd:
-                        text += ', tackled by {}'.format(self.play.tackledBy.name)
+                        text += self._tackleClause()
                 elif self.play.yardage > 3 and self.play.yardage <= 9:
                     runList = midRunOutsideList if isOutside else midRunInsideList
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
                     if self.play.tackledBy and not self.play.isTd:
-                        text += ', tackled by {}'.format(self.play.tackledBy.name)
+                        text += self._tackleClause()
                 elif self.play.yardage >= 10:
                     runList = longRunOutsideList if isOutside else longRunInsideList
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
                     if self.play.tackledBy and not self.play.isTd:
-                        text += ', tackled by {}'.format(self.play.tackledBy.name)
+                        text += self._tackleClause()
         elif self.play.playType is PlayType.Pass:
             if self.play.isSack:
                 sacker = self.play.sackedBy
@@ -5677,7 +5728,7 @@ class Game:
                     else:
                         text += ', fumbles, {} recovers'.format(self.play.receiver.name)
                 elif self.play.tackledBy and not self.play.isTd and self.play.isInBounds:
-                    text += ', tackled by {}'.format(self.play.tackledBy.name)
+                    text += self._tackleClause()
             elif self.play.playResult is PlayResult.Interception:
                 interceptor = self.play.interceptedBy
                 interceptorName = interceptor.name if interceptor else self.play.defense.abbr
@@ -5896,21 +5947,27 @@ class Game:
                 and not getattr(self.play, 'checkdownReason', None)):
             text += ', a diving grab!'
 
-        # Surface a ball-carrier move (see _runnerMove). Sits BEFORE the stretch
-        # clause because that's the order it happened in: beat the tackler, then
-        # reach for the marker. Skipped on a fumble — the move popped it loose and
-        # the fumble text carries that.
+        # Surface a ball-carrier move (see _runnerMove). This is the fallback
+        # for plays with no tackle clause to fold it into — out of bounds, or a
+        # tackler the tracker never identified. When there IS one, _tackleClause
+        # has already merged the move into it and set _moveClauseUsed.
+        #
+        # Sits BEFORE the stretch clause because that's the order it happened
+        # in: beat the tackler, then reach for the marker. Skipped on a fumble —
+        # the move popped it loose and the fumble text carries that.
         _mv = getattr(self.play, 'runnerMove', None)
-        if _mv and not self.play.isFumble:
+        if _mv and not self.play.isFumble and not getattr(self.play, '_moveClauseUsed', False):
             _made = not _mv.endswith('_miss')
             _name = _mv[:-5] if not _made else _mv
+            # No defender is named here, because this branch only runs when the
+            # play never identified one.
             _mvText = {
-                ('stiff arm', True):  ', stiff-arms the tackler away',
+                ('stiff arm', True):  ', stiff-arming the first man away',
                 ('stiff arm', False): ', tries the stiff arm and gets wrapped up',
-                ('spin', True):       ', spins out of the tackle',
-                ('spin', False):      ', spins and is dragged down anyway',
-                ('hurdle', True):     ', hurdles the defender',
-                ('hurdle', False):    ', goes airborne and is met in mid-air',
+                ('spin', True):       ', spinning past the first man',
+                ('spin', False):      ', spins but gets dragged down anyway',
+                ('hurdle', True):     ', hurdling the first defender',
+                ('hurdle', False):    ', tries to hurdle a defender and is met in mid-air',
             }.get((_name, _made))
             if _mvText:
                 text += _mvText
@@ -12015,6 +12072,7 @@ class Play():
         self.scrambleReason = 'pressure' # 'pressure' (escaped a sack) | 'coverage' (no one open)
         self.preSnapRead = None          # the defense's run/pass commit, if the layer is on
         self.runnerMove = None           # 'stiff arm' | 'spin' | 'hurdle' | '<move>_miss'
+        self._moveClauseUsed = False     # the move is already in the tackle clause
         self.sneakConverted = None       # True/False on a QB sneak, None otherwise
         self.isSneakLook = False         # showed the sneak and did something else
         self.sneakLookKind = None        # 'pitch' | 'pass'
