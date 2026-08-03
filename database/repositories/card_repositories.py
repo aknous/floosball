@@ -641,13 +641,21 @@ class PackTypeRepository:
             cards_per_pack=5,
             cards_kept=3,
             guaranteed_rarity='prismatic',
-            # Weights are for the FOUR unguaranteed slots, not the output. The
-            # guaranteed-prismatic slot only ever draws prismatic or diamond, so
-            # it adds ~13pp of prismatic on its own; naive 45/35/20 weights came
-            # out 35/40/24 with prismatic MORE common than holographic, which
-            # inverts the intended order. These are set so the pack actually
-            # lands near holo 50 / prismatic 33 / diamond 17.
-            rarity_weights={'holographic': 62, 'prismatic': 25, 'diamond': 13},
+            # ONE hit per pack, like a real card pack: the guaranteed slot IS the
+            # valuable card and the rest are ordinary.
+            #
+            # This pool has no commons to lean on — prestige classifications only
+            # stamp on holographic and above, so every card in it is nominally a
+            # hit and holographic has to play the role of the common. Hence the
+            # lopsided weights: the four unguaranteed slots are overwhelmingly
+            # holographic, and prismatic/diamond arrive mainly through the
+            # guarantee. Within that guaranteed slot the 9:3 split makes diamond
+            # the rarer pull.
+            #
+            # Weights govern the four UNGUARANTEED slots, not the output — the
+            # guarantee shifts the final mix on top of them, which is what made
+            # earlier 45/35/20 weights come out prismatic-led.
+            rarity_weights={'holographic': 95, 'prismatic': 4, 'diamond': 1},
             description='Reveal 5, keep 3. Past-season greats, from the seasons they earned it.',
             theme_type='collection',
             theme_value=None,

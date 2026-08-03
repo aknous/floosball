@@ -9730,7 +9730,15 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
         starterClaimed = False
         if user:
             dayStart = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            for p in list(rotated) + list(themedPacks):
+            # The collection pack is surfaced OUTSIDE both lists (it never
+            # rotates), so it has to be added explicitly or it never gets a
+            # todayCounts entry — remainingToday then reads as full forever and
+            # the pack never leaves the shelf after being opened.
+            _collectionPt = next((p for p in packs if p.name == 'themed_collection'), None)
+            _countable = list(rotated) + list(themedPacks)
+            if _collectionPt is not None and _collectionPt not in _countable:
+                _countable.append(_collectionPt)
+            for p in _countable:
                 # Only paid openings count toward the daily shop limit.
                 # Free grants (achievement rewards, starter packs) have
                 # cost=0 and must not consume the shop allowance.
