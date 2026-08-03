@@ -4331,31 +4331,73 @@ class PlayerManager:
         # the fans for a single slot.
         prospects = getattr(team, 'prospects', []) or []
 
-        def _gather(applyReleaseBlock):
+        # This team's own board, built pre-draft (see _buildFaDraftBoards):
+        # {playerId: perceivedValue}, containing only free agents who would sign
+        # here. Absent (no autonomous FO, or the build failed) = fall back to
+        # true-rating order, which is the pre-existing behaviour.
+        board = getattr(self, '_faDraftBoards', {}).get(getattr(team, 'id', None))
+
+        def _bestFaFor(faList, applyReleaseBlock, applyBoard):
+            """The free agent this team most wants at a position.
+
+            With a board, "most wants" is that GM's own valuation over the
+            players willing to come, so two teams reach for different men. The
+            board is a filter as well as an order: a player who isn't on it
+            won't sign here and is skipped."""
+            eligible = faList
+            if applyReleaseBlock:
+                eligible = [p for p in eligible
+                            if not self._leftThisTeamThisOffseason(p, team)]
+            if applyBoard and board:
+                onBoard = [p for p in eligible if getattr(p, 'id', None) in board]
+                if onBoard:
+                    return max(onBoard, key=lambda p: board.get(p.id, 0.0))
+                return None
+            return eligible[0] if eligible else None
+
+        def _gather(applyReleaseBlock, applyBoard=True):
             cands = []  # (slot, player, kind) where kind ∈ {'fa', 'prospect'}
             for posVal, slot in firstOpenSlotByPos.items():
                 faList = POS_TO_FALIST.get(posVal, [])
-                if applyReleaseBlock:
-                    bestFa = next(
-                        (p for p in faList if not self._leftThisTeamThisOffseason(p, team)),
-                        None,
-                    )
-                else:
-                    bestFa = faList[0] if faList else None
+                bestFa = _bestFaFor(faList, applyReleaseBlock, applyBoard)
                 if bestFa is not None:
                     cands.append((slot, bestFa, 'fa'))
                 posProspects = [p for p in prospects if p.position.value == posVal]
                 if posProspects:
-                    best = max(posProspects, key=lambda p: getattr(p, 'playerRating', 0))
+                    # Prospects are priced onto the same board (see
+                    # buildDraftBoard's alsoValue), so ranking them by the
+                    # board keeps one currency across the whole comparison.
+                    if board:
+                        best = max(posProspects,
+                                   key=lambda p: board.get(getattr(p, 'id', None),
+                                                           getattr(p, 'playerRating', 0)))
+                    else:
+                        best = max(posProspects, key=lambda p: getattr(p, 'playerRating', 0))
                     cands.append((slot, best, 'prospect'))
             return cands
 
-        candidates = _gather(applyReleaseBlock=True) or _gather(applyReleaseBlock=False)
+        # Widen the search one rule at a time rather than leaving a slot empty:
+        # this team's board, then the board without the release block, then the
+        # raw pool. The last tier is what stops destination preference from ever
+        # costing a roster its player — if nobody who'd sign here is left, the
+        # club signs whoever remains.
+        candidates = (_gather(applyReleaseBlock=True)
+                      or _gather(applyReleaseBlock=False)
+                      or _gather(applyReleaseBlock=True, applyBoard=False)
+                      or _gather(applyReleaseBlock=False, applyBoard=False))
         if not candidates:
             return False  # open slots exist but no FAs or prospects to fill them
 
         def _rating(c):
-            return getattr(c[1], 'playerRating', getattr(c[1].attributes, 'skillRating', 0))
+            """Ranking score across positions. With a board that's this GM's own
+            valuation, for free agents AND prospects alike, so the comparison
+            stays in one currency. Off-board fallbacks use the true rating."""
+            player = c[1]
+            if board:
+                pid = getattr(player, 'id', None)
+                if pid in board:
+                    return board[pid]
+            return getattr(player, 'playerRating', getattr(player.attributes, 'skillRating', 0))
 
         # Fan position priority (set by the FA ballot's "fill order"): when present,
         # fill the highest-priority OPEN position first — best player there —

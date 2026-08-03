@@ -4895,6 +4895,7 @@ class SeasonManager:
             self._offseasonFaPositionPriority = {}
             self.playerManager._gmFaDirectives = {}
             self.playerManager._gmFaPositionPriority = {}
+            self.playerManager._faDraftBoards = {}
         # Reset freeAgencyComplete on every team — last season's FA draft
         # left it True, which would make this season's panel boot with every
         # team showing DONE + "FREE AGENCY COMPLETE" until the draft starts.
@@ -5183,6 +5184,13 @@ class SeasonManager:
             # still short of filling every roster slot. Catches FA retirements
             # decided after the week-22 check. Idempotent with that earlier pass.
             self._ensurePositionSupply(reason='pre-FA-draft guarantee')
+
+            # STEP 5.95: Every team builds its own board off the FINAL pool.
+            # Two things are settled here and never revisited mid-draft: which
+            # free agents would sign for this club, and what this GM thinks
+            # each of them is worth. See _buildFaDraftBoards.
+            logger.info("Step 5.95: Build per-team FA draft boards")
+            self._buildFaDraftBoards()
 
             # STEP 6: FA Draft
             logger.info("Step 6: Free agency draft")
@@ -5830,6 +5838,56 @@ class SeasonManager:
         brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap)
         self._foBrainCache = (season, brain)
         return brain
+
+    def _buildFaDraftBoards(self) -> None:
+        """Give every team its own ranking of the free agents who'd sign there.
+
+        Two teams do NOT see the same board. The order is each GM's
+        `decisionValue`, which is scouting-gated (and now sharpened by the
+        Scouting Department), so one club's top target is another's fifth
+        choice. Players who wouldn't sign for a club are simply absent from its
+        board.
+
+        Built ONCE, here, before a pick is made:
+          - the scouting error is drawn once, so a team's board can't reshuffle
+            underneath it between rounds
+          - destination preference is settled before any GM plans around it
+        """
+        from constants import AUTONOMOUS_FO_ENABLED
+        boards = {}
+        if not AUTONOMOUS_FO_ENABLED:
+            self.playerManager._faDraftBoards = boards
+            return
+        teamManager = self.serviceContainer.getService('team_manager')
+        teams = teamManager.teams if teamManager else []
+        pool = list(getattr(self.playerManager, 'freeAgents', None) or [])
+        if not teams or not pool:
+            self.playerManager._faDraftBoards = boards
+            return
+        brain = self._foBrainForOffseason()
+        for team in teams:
+            try:
+                boards[team.id] = brain.buildDraftBoard(
+                    team, pool, coach=getattr(team, 'coach', None),
+                    alsoValue=list(getattr(team, 'prospects', None) or []),
+                )
+            except Exception as e:
+                # A team with no board falls back to true-rating order, which is
+                # the pre-existing behaviour — never a missing pick.
+                logger.warning(f"FA board build failed for {getattr(team, 'name', '?')}: {e}")
+        self.playerManager._faDraftBoards = boards
+
+        # One line per draft so a surprising pick can be traced back to the
+        # board that produced it.
+        try:
+            sizes = [len(b) for b in boards.values()]
+            if sizes:
+                logger.info(
+                    f"FA boards: {len(boards)} teams, pool {len(pool)}, "
+                    f"signable per team min {min(sizes)} / avg {sum(sizes)//len(sizes)} / max {max(sizes)}"
+                )
+        except Exception:
+            pass
 
     def _promoteProspectsAutonomously(self, team) -> list:
         """Promote this team's prospects when the GM rates them over the market.
