@@ -10034,7 +10034,16 @@ def getShopFeatured(user: _User = Depends(_getCurrentUser)):
             currentWeek=currentWeek, isScheduledMode=isScheduledMode,
         )
         session.commit()
-        return build_success_response({"cards": featured, "currentSeason": currentSeason,
+        # Collection singles — the Collection tab's daily shelf. Generated
+        # separately from the fantasy selection (different pool, different rules)
+        # but sold through the same buy endpoint.
+        collectionCards = cardManager.getFeaturedCollectionCards(
+            session, user.id, currentSeason, currentWeek=currentWeek,
+        )
+        session.commit()
+        return build_success_response({"cards": featured,
+                                      "collectionCards": collectionCards,
+                                      "currentSeason": currentSeason,
                                       "shopOpen": _isShopOpen(), "collectionOnly": _showpieceOnly()})
     except Exception:
         session.rollback()

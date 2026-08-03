@@ -1313,6 +1313,15 @@ def _runPendingMigrations():
             logger.info("  Migration: added card_templates.output_type")
         except Exception:
             conn.rollback()
+        # Featured-shop rows gain a kind so the fantasy daily selection and the
+        # collection selection can share one table without mixing.
+        try:
+            conn.execute(text(
+                "ALTER TABLE featured_shop_cards ADD COLUMN kind VARCHAR(20) DEFAULT 'fantasy' NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added featured_shop_cards.kind")
+        except Exception:
+            conn.rollback()
         # Showpiece: collected, never fielded. Default 0 so every existing card
         # stays a normal fantasy card.
         try:

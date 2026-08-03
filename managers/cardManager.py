@@ -2225,6 +2225,93 @@ class CardManager:
         markup = self.SHOP_MARKUP.get(template.edition, 2.7)
         return max(10, int(round(template.sell_value * markup / 5.0)) * 5)
 
+    COLLECTION_CARD_COUNT = 4
+
+    def getFeaturedCollectionCards(self, session, userId: int, currentSeason: int,
+                                   currentWeek: int = 0) -> List[dict]:
+        """The Collection tab's daily singles — individual past-season cards.
+
+        Deliberately simpler than getFeaturedCards. That one dedupes by EFFECT and
+        weights for lineup-building, neither of which means anything here: these
+        cards can never be equipped, so there is no effect to collide and no
+        lineup to build. What matters is edition spread and not repeating a
+        player, so that is all this does.
+
+        Shares the FeaturedShopCard table via `kind`, so purchase, the
+        purchased flag and the daily refresh all reuse the existing plumbing.
+        """
+        from database.models import FeaturedShopCard
+        from datetime import datetime, timedelta
+        from constants import DAILY_RESET_HOUR_UTC
+
+        rows = (
+            session.query(FeaturedShopCard)
+            .filter_by(user_id=userId, season=currentSeason, purchased=False,
+                       kind='collection')
+            .all()
+        )
+
+        # Daily refresh, anchored to the same reset hour the fantasy shop uses.
+        now = datetime.utcnow()
+        resetToday = now.replace(hour=DAILY_RESET_HOUR_UTC, minute=0, second=0, microsecond=0)
+        lastReset = resetToday if now >= resetToday else resetToday - timedelta(days=1)
+        stale = any((r.generated_at or datetime.min) < lastReset for r in rows)
+
+        if not rows or stale:
+            session.query(FeaturedShopCard).filter_by(
+                user_id=userId, season=currentSeason, kind='collection',
+                purchased=False,
+            ).delete()
+            pool = getCollectionTemplates(
+                session, currentSeason,
+                includeCurrentSeason=regularSeasonOver(currentWeek),
+            )
+            if not pool:
+                session.flush()
+                return []
+            weights = {'holographic': 45, 'prismatic': 35, 'diamond': 20, 'metallic': 10}
+            picked, seenPlayers = [], set()
+            # Weighted sampling WITHOUT replacement (Efraimidis-Spirakis): key each
+            # candidate as random() ** (1/weight) and take the largest. A naive
+            # `weight * random()` sort is not this — it hands the heaviest edition
+            # almost every slot, which produced four holographics out of four.
+            poolCopy = sorted(
+                pool,
+                key=lambda t: random.random() ** (1.0 / max(1, weights.get(t.edition, 5))),
+                reverse=True,
+            )
+            for t in poolCopy:
+                if len(picked) >= self.COLLECTION_CARD_COUNT:
+                    break
+                if t.player_id in seenPlayers:
+                    continue          # one card per player, so the shelf reads varied
+                seenPlayers.add(t.player_id)
+                picked.append(t)
+            for t in picked:
+                session.add(FeaturedShopCard(
+                    user_id=userId, season=currentSeason, card_template_id=t.id,
+                    kind='collection', purchased=False,
+                    generated_at=now, generated_at_week=currentWeek,
+                ))
+            session.flush()
+            rows = (
+                session.query(FeaturedShopCard)
+                .filter_by(user_id=userId, season=currentSeason, purchased=False,
+                           kind='collection')
+                .all()
+            )
+
+        out = []
+        for r in rows:
+            t = r.card_template
+            if not t:
+                continue
+            d = self._serializeTemplate(t, currentSeason, currentWeek)
+            d['templateId'] = t.id
+            d['buyPrice'] = self._featuredBuyPrice(t)
+            out.append(d)
+        return out
+
     def getFeaturedCards(self, session, userId: int, currentSeason: int,
                          currentWeek: int = 0, isScheduledMode: bool = False,
                          forceRegenerate: bool = False) -> List[dict]:
@@ -2243,7 +2330,7 @@ class CardManager:
         # Check for existing selection
         existing = (
             session.query(FeaturedShopCard)
-            .filter_by(user_id=userId, season=currentSeason, purchased=False)
+            .filter_by(user_id=userId, season=currentSeason, purchased=False, kind='fantasy')
             .all()
         )
 
@@ -2338,6 +2425,7 @@ class CardManager:
                     user_id=userId,
                     season=currentSeason,
                     card_template_id=t.id,
+                    kind='fantasy',
                     purchased=False,
                     generated_at=now,
                     generated_at_week=currentWeek,
@@ -2347,7 +2435,7 @@ class CardManager:
 
             existing = (
                 session.query(FeaturedShopCard)
-                .filter_by(user_id=userId, season=currentSeason, purchased=False)
+                .filter_by(user_id=userId, season=currentSeason, purchased=False, kind='fantasy')
                 .all()
             )
 

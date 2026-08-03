@@ -1768,6 +1768,10 @@ class FeaturedShopCard(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     season: Mapped[int] = mapped_column(Integer, nullable=False)
     card_template_id: Mapped[int] = mapped_column(Integer, ForeignKey("card_templates.id"), nullable=False)
+    # Which shop tab this row belongs to. 'fantasy' = the current-season daily
+    # selection; 'collection' = past-season collectibles. Without this the two
+    # rotations share a table and would contaminate each other's queries.
+    kind: Mapped[str] = mapped_column(String(20), default='fantasy', nullable=False)
     purchased: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Relationships
