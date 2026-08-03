@@ -355,7 +355,7 @@ class Player:
         self.gameAttributes.confidenceModifier = round(self.gameAttributes.confidenceModifier + value, 3)
         self.updateInGameRating()
 
-    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
+    def offseasonTraining(self, coachDevRating: int = None, fundingDevBonus: int = 0):
         pass
 
     def applyEntryDiscount(self, discount: int):
@@ -1085,7 +1085,7 @@ class PlayerQB(Player, CachedRatingMixin):
             self.gameAttributes.overallRating = 100
 
 
-    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
+    def offseasonTraining(self, coachDevRating: int = None, fundingDevBonus: int = 0):
         PlayerDevelopment.apply_offseason_training(self, "QB", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)
         self.updateRating()
 
@@ -1130,7 +1130,7 @@ class PlayerRB(Player):
         self.playerRating = round((self.offensiveRating + self.defensiveRating) / 2)
 
 
-    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
+    def offseasonTraining(self, coachDevRating: int = None, fundingDevBonus: int = 0):
         PlayerDevelopment.apply_offseason_training(self, "RB", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)
         self.updateRating()
 
@@ -1175,7 +1175,7 @@ class PlayerWR(Player):
         self.playerRating = round((self.offensiveRating + self.defensiveRating) / 2)
 
 
-    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
+    def offseasonTraining(self, coachDevRating: int = None, fundingDevBonus: int = 0):
         PlayerDevelopment.apply_offseason_training(self, "WR", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)
         self.updateRating()
 
@@ -1220,7 +1220,7 @@ class PlayerTE(Player):
         self.playerRating = round((self.offensiveRating + self.defensiveRating) / 2)
 
 
-    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
+    def offseasonTraining(self, coachDevRating: int = None, fundingDevBonus: int = 0):
         PlayerDevelopment.apply_offseason_training(self, "TE", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)
         self.updateRating()
 
@@ -1271,6 +1271,6 @@ class PlayerK(Player):
         self.maxFgDistance = round(50 + (self.attributes.legStrength - 60) * 0.4)
 
 
-    def offseasonTraining(self, coachDevRating: int = 50, fundingDevBonus: int = 0):
+    def offseasonTraining(self, coachDevRating: int = None, fundingDevBonus: int = 0):
         PlayerDevelopment.apply_offseason_training(self, "K", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)
         self.updateRating()

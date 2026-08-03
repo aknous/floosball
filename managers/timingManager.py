@@ -171,7 +171,7 @@ class TimingManager:
         return {
             'post_championship': 60.0, # Stand-in for the real 1h post-bowl quiet
             'offseason': 30.0,         # Pause after front-office decisions
-            'rookie_draft_wait': 60.0, # Stand-in for "wait until next noon ET"
+            'draft_day_wait': 60.0,    # Stand-in for "wait until next noon ET"
             'fa_draft_wait': 60.0,     # Stand-in for "wait until top of next hour"
             'offseason_pick': 5.0,     # Visible per-pick pacing
             'season_transition': 10.0,
@@ -370,11 +370,15 @@ class TimingManager:
             await asyncio.sleep(self.delays['offseason'] / 2)
 
     async def waitUntilNoonEt(self) -> None:
-        """Wait until the next noon Eastern. Used to schedule the rookie draft
-        for the day after the Floos Bowl so users have a predictable kickoff.
+        """Wait until the next noon Eastern — draft day.
+
+        Holds the offseason so free agency lands the day AFTER the Floos Bowl
+        at a predictable hour, rather than firing an hour after the final while
+        nobody is watching. The rookie draft used to be what this anchored;
+        with it gone the FA draft inherits the slot.
 
         SCHEDULED mode polls until the wall-clock target. OFFSEASON_TEST mimics
-        the phased flow with a short fixed delay (set via 'rookie_draft_wait'
+        the phased flow with a short fixed delay (set via 'draft_day_wait'
         in delays). All other modes flow through instantly — they don't have
         the real-time pacing this gate is designed for.
         """
@@ -383,15 +387,15 @@ class TimingManager:
         if self.mode == TimingMode.SCHEDULED:
             target = self._nextNoonEasternUtc()
             pollInterval = self.delays.get('daily_check', 30.0)
-            logger.info(f"SCHEDULED mode: waiting for rookie draft kickoff at {target.isoformat()} ET-noon (polling every {pollInterval}s)")
+            logger.info(f"SCHEDULED mode: waiting for draft day at {target.isoformat()} ET-noon (polling every {pollInterval}s)")
             while datetime.datetime.utcnow() < target:
                 await asyncio.sleep(pollInterval)
         elif self.mode == TimingMode.OFFSEASON_TEST:
-            delay = self.delays.get('rookie_draft_wait', 30.0)
-            logger.info(f"{self.mode.value} mode: rookie-draft pre-wait {delay}s")
+            delay = self.delays.get('draft_day_wait', 30.0)
+            logger.info(f"{self.mode.value} mode: draft-day pre-wait {delay}s")
             await asyncio.sleep(delay)
         elif self.mode == TimingMode.TEST_SCHEDULED:
-            delay = self.delays.get('rookie_draft_wait', 15.0)
+            delay = self.delays.get('draft_day_wait', 15.0)
             await asyncio.sleep(delay)
 
     async def waitUntilTopOfHour(self) -> None:

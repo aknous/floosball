@@ -268,6 +268,21 @@ SUPPRESSION_THRESHOLD_BUMP = 1.10    # each patch reinforces containment: thresh
 # Reset purge dodge multipliers, keyed by personality meta-awareness tier.
 # Aware-tier players resist purges better — they perceive the Cores'
 # intervention coming and adapt. Unaware-tier players roll full odds.
+# Purge risk on a Reset scales with how far past AWAKEN_THRESHOLD a player was
+# pushed. The original formula divided that excess by 100, which was written when
+# attention was unbounded — its docstring imagined players "at 200+" being
+# overwhelmingly likely to be cleansed. ATTENTION_SOFT_CAP pins score at 100, so
+# the excess can only ever reach 10 and the divisor made the maximum purge chance
+# 10% (5% for an aware personality). Measured over two seasons: 0-3 players
+# cleansed per Reset out of 14-22 awakened, i.e. awakening carried no real risk.
+#
+# The span is now the reachable headroom, so the curve spans the range that can
+# actually occur, and the ceiling is an explicit tunable rather than an accident
+# of the divisor. A player parked at the cap is a coin-flip; one who just crossed
+# the line is safe, which is what the original docstring described.
+PURGE_RISK_SPAN = ATTENTION_SOFT_CAP - AWAKEN_THRESHOLD   # 10 — cap headroom above awakening
+PURGE_MAX_CHANCE = 0.45                                   # pinned at the cap, before dodge
+
 PURGE_DODGE_FULLY_AWARE = 0.5      # prophet / alien / android / ghost / fossil
 PURGE_DODGE_PARTIALLY_AWARE = 0.75 # paranoid / mystic
 PURGE_DODGE_UNAWARE = 1.0          # everyone else
@@ -1207,7 +1222,7 @@ def _maybeFireWarning(state: LeagueAnomalyState,
     for entry in (state.cores_patches_applied or []):
         if entry.get('event') != 'cores_warning':
             continue
-        if entry.get('week', 0) < cycleStart:
+        if (entry.get('week') or 0) < cycleStart:
             continue
         if entry.get('milestone') == milestone:
             alreadyFired = True
@@ -1235,6 +1250,12 @@ def _maybeFireWarning(state: LeagueAnomalyState,
     patches.append({
         'event': 'cores_warning',
         'milestone': milestone,
+        # 'week' is what the once-per-cycle dedup above filters on. Omitting it
+        # made every past warning read as week 0, so once last_reset_week was set
+        # they all sorted as pre-cycle and got skipped — the milestone then
+        # re-fired EVERY tick. Measured 12 warning_high in one season, most of
+        # them narrating a threshold that had been crossed for weeks.
+        'week': int(week or 0),
         'aggregate_at_warning': float(state.aggregate_score),
         'ratio': float(ratio),
         'fired_at': datetime.utcnow().isoformat() + 'Z',
@@ -1280,10 +1301,11 @@ def _fireReset(session: Session, state: LeagueAnomalyState, week: int) -> None:
     """Roll purges for every Awakened player, apply aftermath suppression.
 
     Per-player purge probability:
-        (attention - AWAKEN_THRESHOLD) / 100 × personalityDodge
-    Awakened players at exactly 90 attention have 0% purge chance even
-    without dodge. Players who climbed to 200+ before the Reset are
-    overwhelmingly likely to be cleansed.
+        (attention - AWAKEN_THRESHOLD) / PURGE_RISK_SPAN × PURGE_MAX_CHANCE × personalityDodge
+    Awakened players at exactly AWAKEN_THRESHOLD have 0% purge chance even
+    without dodge; one parked at ATTENTION_SOFT_CAP runs the full
+    PURGE_MAX_CHANCE. (The span used to be a flat 100, which predated the soft
+    cap and left the real ceiling at 10% — see PURGE_RISK_SPAN.)
     """
     awakeneds = (
         session.query(AnomalyState)
@@ -1316,7 +1338,8 @@ def _fireReset(session: Session, state: LeagueAnomalyState, week: int) -> None:
         personality = _getPlayerPersonality(session, st.player_id)
         dodge = _purgeDodgeFor(personality)
 
-        rawProb = max(0.0, (attention - AWAKEN_THRESHOLD) / 100.0)
+        excess = max(0.0, attention - AWAKEN_THRESHOLD)
+        rawProb = min(1.0, excess / max(1.0, PURGE_RISK_SPAN)) * PURGE_MAX_CHANCE
         purgeProb = min(1.0, rawProb * dodge)
 
         if random.random() < purgeProb:

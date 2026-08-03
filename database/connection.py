@@ -751,6 +751,104 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Player sentiment ratings (AFO plan Part D) — the 1-5 standing stance
+        # that nudges the autonomous GM brain.
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS player_sentiment_ratings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    player_id INTEGER NOT NULL,
+                    rating INTEGER NOT NULL,
+                    created_at DATETIME,
+                    updated_at DATETIME,
+                    UNIQUE (user_id, player_id)
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_sentiment_player "
+                              "ON player_sentiment_ratings (player_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_sentiment_user "
+                              "ON player_sentiment_ratings (user_id)"))
+            conn.commit()
+            logger.info("  Migration: player_sentiment_ratings ensured")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration: player_sentiment_ratings skipped: {e}")
+
+        # Coach 1-5 ratings (AFO plan Part D) — drives GM fire/leave heat.
+        # The table briefly held a binary ±1 `value`; it never shipped, so the
+        # old shape is dropped outright rather than migrated.
+        try:
+            cols = [r[1] for r in conn.execute(text(
+                "PRAGMA table_info(coach_sentiment_votes)")).fetchall()]
+            if cols and 'value' in cols and 'rating' not in cols:
+                conn.execute(text("DROP TABLE coach_sentiment_votes"))
+                conn.commit()
+                logger.info("  Migration: dropped pre-release coach vote table (±1 -> 1-5)")
+        except Exception:
+            conn.rollback()
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS coach_sentiment_votes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    coach_id INTEGER NOT NULL,
+                    rating INTEGER NOT NULL,
+                    created_at DATETIME,
+                    updated_at DATETIME,
+                    UNIQUE (user_id, coach_id)
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_coach_sentiment_coach "
+                              "ON coach_sentiment_votes (coach_id)"))
+            conn.commit()
+            logger.info("  Migration: coach_sentiment_votes ensured")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration: coach_sentiment_votes skipped: {e}")
+
+        # Auto-generated feed posts carry a marker so re-rating can replace the
+        # previous one instead of stacking contradictory opinions.
+        try:
+            conn.execute(text("ALTER TABLE team_feed_posts ADD COLUMN is_auto BOOLEAN DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added team_feed_posts.is_auto")
+        except Exception:
+            conn.rollback()
+
+        # Team feed posts (AFO plan Part D) — the ephemeral, loud half of fan
+        # sentiment. Text is never user-supplied (post_key indexes the catalog).
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS team_feed_posts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    team_id INTEGER NOT NULL,
+                    post_key VARCHAR(32) NOT NULL,
+                    target_type VARCHAR(8) NOT NULL,
+                    target_player_id INTEGER,
+                    created_at DATETIME
+                )
+            """))
+            for idx, cols in (("idx_feed_team_created", "team_id, created_at"),
+                              ("idx_feed_target_player", "target_player_id"),
+                              ("idx_feed_user_created", "user_id, created_at")):
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx} "
+                                  f"ON team_feed_posts ({cols})"))
+            conn.commit()
+            logger.info("  Migration: team_feed_posts ensured")
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"  Migration: team_feed_posts skipped: {e}")
+
+        # Coach fanTrust (how much fan sentiment moves the GM's roster calls)
+        try:
+            conn.execute(text("ALTER TABLE coaches ADD COLUMN fan_trust INTEGER DEFAULT 80"))
+            conn.commit()
+            logger.info("  Migration: added coaches.fan_trust")
+        except Exception:
+            conn.rollback()
+
         # Coach attitude (locker-room presence: toxic ↔ leader spectrum)
         try:
             conn.execute(text("ALTER TABLE coaches ADD COLUMN attitude INTEGER DEFAULT 80"))
@@ -1215,6 +1313,24 @@ def _runPendingMigrations():
             logger.info("  Migration: added card_templates.output_type")
         except Exception:
             conn.rollback()
+        # Featured-shop rows gain a kind so the fantasy daily selection and the
+        # collection selection can share one table without mixing.
+        try:
+            conn.execute(text(
+                "ALTER TABLE featured_shop_cards ADD COLUMN kind VARCHAR(20) DEFAULT 'fantasy' NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added featured_shop_cards.kind")
+        except Exception:
+            conn.rollback()
+        # Showpiece: collected, never fielded. Default 0 so every existing card
+        # stays a normal fantasy card.
+        try:
+            conn.execute(text(
+                "ALTER TABLE card_templates ADD COLUMN is_showpiece BOOLEAN DEFAULT 0 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added card_templates.is_showpiece")
+        except Exception:
+            conn.rollback()
         # Per-user themed pack rotation: rotation flipped from global to
         # per-user once we added reroll. Old rows have no user_id so they're
         # unusable — drop them rather than backfill.
@@ -1305,6 +1421,7 @@ def _runPendingMigrations():
     # card generation so newly-generated Champion cards are correct.
     _backfillChampionRosterSnapshots()
     _backfillTeamPeakStreaks()
+    _backfillCoachFanTrust()
     _migrateEditionRename()          # rename slugs BEFORE any edition-keyed backfill
     _backfillCardTemplateOutputType()
     _backfillFloorTemplates()
@@ -1657,6 +1774,47 @@ def _refreshCardEffectText():
     except Exception as e:
         conn.rollback()
         logger.warning(f"  Migration: failed to refresh card effect text: {e}")
+    finally:
+        conn.close()
+
+
+def _backfillCoachFanTrust():
+    """Spread existing coaches across the fanTrust axis.
+
+    The ALTER lands every pre-existing coach on the neutral default (80), which
+    would make the whole axis inert until the league happened to turn its
+    coaches over. Draw the same independent distribution `generateAttributes`
+    uses so current GMs differ from each other immediately.
+
+    Runs ONCE, gated on an app_settings marker. Keying off "value == 80"
+    instead would re-roll every coach who legitimately drew 80 on each boot,
+    quietly changing a GM's personality on restart.
+    See docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md Part B.
+    """
+    from sqlalchemy import text
+    from datetime import datetime as _dt
+    import numpy as np
+    conn = engine.connect()
+    try:
+        done = conn.execute(text(
+            "SELECT value FROM app_settings WHERE key = 'coach_fan_trust_backfilled_v1'"
+        )).fetchone()
+        if done:
+            return
+        rows = conn.execute(text("SELECT id FROM coaches")).fetchall()
+        for (coachId,) in rows:
+            value = int(np.clip(np.random.normal(80, 10), 60, 100))
+            conn.execute(text("UPDATE coaches SET fan_trust = :v WHERE id = :i"),
+                         {"v": value, "i": coachId})
+        conn.execute(text(
+            "INSERT OR REPLACE INTO app_settings (key, value, updated_at) "
+            "VALUES ('coach_fan_trust_backfilled_v1', '1', :ts)"),
+            {"ts": _dt.utcnow()})
+        conn.commit()
+        logger.info(f"  Backfill: spread fan_trust across {len(rows)} coaches")
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"  Backfill: coach fan_trust skipped: {e}")
     finally:
         conn.close()
 

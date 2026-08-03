@@ -2,14 +2,113 @@
 
 > Living list of features targeted for the next season cutover. **Keep this updated as features land** — move items to "Shipped" with the commit/version, and link each in-flight item to its design doc. Owner-curated.
 
-_Last updated: 2026-07-20_
+_Last updated: 2026-07-31_
+
+> ⚠️ This file went 11 days stale and said nothing about the Autonomous Front Office, which
+> was the only thing being built. **The AFO is the live tracker for that work**
+> (`docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md`) — Parts A–E and Part F wave 1 are shipped.
+
+> ⏱ **A season is ONE REAL WEEK.** Mon–Thu = the 28 regular-season weeks, Friday =
+> playoffs, Saturday = offseason. So "next season" is next Monday, a 2-season median
+> career is two weeks, and the postseason/offseason window that the Collection Pack
+> covers is Friday–Sunday — recurring every single week, not once a year.
+
+## Design pillars (owner, 2026-07-31)
+
+What the game is for. Check features against this before building them.
+
+**What fans want**
+1. **Games with meaning, but also chaos** — awakened powers, rule changes. Meaning first: the
+   chaos only lands because the results count.
+2. **Players who are characters** — personalities exist (`personalityManager`, 432 vibe
+   reactions, per-personality flavor/mottos, purge-dodge by meta-awareness tier) but want more
+   fleshing out.
+3. **Lore and narrative** — the Cores, the simulation. `data/lore.md`, `coresManager`.
+
+**What we're introducing / deepening**
+- **Fans interacting with the simulation** — rule votes exist; this is the direction to widen.
+- **Gaming the awakening and Criticality events** — `docs/CRITICALITY_METAGAME_PLAN.md`.
+
+**What must never happen** 🔒
+- **Games, seasons, and players wiped out, restarted, or losing meaning.**
+  → The contest's currency is **control and anomaly, never records.** Fair to lose: an awakened
+  ability, who governs a rule, how tight the Cores' grip is. Never at risk: seasons, standings,
+  careers, stats, the Hall of Fame, Renown, collections. A cleansed player loses the *power*, not
+  the *person*.
+  → This vetoed the 498b→498c letter-burn as a mechanic (it implied a restart). The lore survives
+  as the Cores' own fear — motive for the opponent, never a thing that happens to your league.
 
 ## Planned
 
+### User progression — Renown ⬅ next big thing (owner, 2026-07-31)
+Account-level standing every system feeds; the fix for a terminal loop where all effort
+converts to a consumable currency and nothing persists.
+- **Plan:** `docs/RENOWN_PROGRESSION_PLAN.md` — **specced against 15 seasons of real data
+  2026-07-31**, zero code.
+- **Scope decided:** retention-led, v1 = ledger + source formula + backfill + career ranks +
+  one cosmetic surface. Ships the cutover **after** next.
+- **Why it moved up:** engaged users fell 28 → 14 over 15 seasons, and median career length
+  is **2 seasons** (63% gone by season 3). The churn window is seasons 1–3, not 15.
+
+### Smaller next-season items (owner, 2026-08-01)
+Four unrelated asks, each checked against the code so scoping starts from facts.
+
+**QB sneaks + sneak-look trick plays.** ✅ **SHIPPED 2026-08-01** (`b0407c8`, defensive response `2fb0d1b`; regression `test_qb_sneak.py`). Original note follows. 3rd/4th-and-short and goal-line: the QB sneaks for the
+yard, defense stacks to stop it. Plus a fake — show the sneak, then a quick pass or a pitch to the
+RB around the end.
+- Doesn't exist. `grep sneak` finds only PBP text for an end run and a Cores line.
+- **Foundations are unusually good.** `docs/PLAYBOOK_PLAN.md` shipped run concepts with deception
+  + execution rolls and defensive counter-adaptation, plus trick plays (flea flicker / statue /
+  reverse) as rare called shots — a sneak is a new short-yardage concept in that frame, and the
+  sneak-look fake is exactly the existing trick-play pattern. `_fourthDownCaller` already owns the
+  4th-and-short decision, and QB-as-runner plumbing exists from QB scrambles (`_resolveQbScramble`
+  flips `playType=Run`, `runner=passer` and reuses the run-crediting tail).
+- `test_play_calling.py:171` already has a case labelled *"3rd & 2 (QB sneak range)"* — the
+  concept was anticipated and never built.
+
+**Penalties, driven by low `discipline`.** Owner has held off because penalties feel unfun; the
+condition is that they stay rare and land well.
+- **The box score is already built for it and hardcoded to zero**: `floosball_game.py:1152-1153`
+  carries `'penalties': 0, # TODO: Track penalties` and `'penaltyYards': 0`.
+- `discipline` is a live attribute (0-100) already doing real work — it feeds the mental model
+  (`MENTAL_FROZEN_K`, `MENTAL_GUNSLINGER_K`) and playbook concept execution
+  (`'exec': {'power': 0.6, 'discipline': 0.4}`). So the driver exists and is already balanced
+  against.
+- Design risk to respect: frequency and *timing*. A penalty that erases a good play is the unfun
+  part, not the penalty itself.
+
+**Weather + stadium-specific environment.** Long-held; partially built and never finished.
+- **`feature/stadium-quirks` exists with 596 lines** across 4 commits: `data/templates/
+  stadium_quirks.yaml` (443 lines — named quirks, taglines, flavor lines, venue-style stadium
+  names with a Cores-reconstruction framing) and `managers/stadiumQuirkManager.py` (153 lines —
+  loader, per-team effect lookup, flavor-line picker, API serializer).
+- Ten effect keys are defined: `passAccuracy`, `runYardage`, `fgAccuracy`, `fumbleRate`,
+  `sackRate`, `deepPassChance`, `paceMod`, `roadDiscipline`, `homeBoost`, `clutchVariance`.
+- ⚠️ **It is a scaffold only — nothing is wired into the sim.** No file outside the manager
+  references it. Finishing it is the wiring, not the data.
+- Two connections worth noting: **`roadDiscipline` is already a quirk effect**, so a hostile venue
+  raising road-team penalties links this to the penalties item; and the branch **names every
+  stadium**, which un-mocks the team page's stadium cell (built 2026-07-31 against a placeholder,
+  with `stadium_name` listed as a needed backend field).
+
+**Postseason shop access + collection-only cards.**
+- `_isShopOpen()` closes the shop the moment week 28's games finish, through playoffs and offseason.
+- ⚠️ **The backend gate is not enforced.** `_requireShopOpen()` is defined at `api/main.py:9620`
+  and **never called** — no endpoint uses it. Enforcement is frontend-only (`CardShop.tsx` disables
+  the buttons off the `shopOpen` flag). So opening the postseason shop is largely a frontend +
+  policy change, and the latent inconsistency should be resolved either way.
+- **Collection-only cards** (not for fantasy) have partial precedent: the `standard` edition is
+  already a no-effect floor print (`effectName:'none'`). But `CardTemplate.player_id` is
+  `nullable=False`, so every card is currently a player card — a true non-fantasy collectible
+  needs that relaxed or a different notion of what a card can depict.
+
 ### New prognostication feature — Survivor
 A survivor-style contest layer on top of pick-em (last-one-standing elimination), part of the broader prognosticator progression direction.
-- **Plan:** `docs/PICKEM_DEPTH_PLAN.md` (survivor contest section)
-- **Status:** designed, not built. Build the engagement/progression layer GENERAL (reusable rank/XP hook), not a pick-em silo.
+- **Plan:** `docs/PICKEM_DEPTH_PLAN.md` — **not on disk**; a revert deleted it along with
+  its code. Read it with `git show 2a37f2f:docs/PICKEM_DEPTH_PLAN.md`. Restore it to disk
+  if Survivor gets picked up.
+- **Status:** designed, not built. The general progression layer it was meant to plug into
+  is now `docs/RENOWN_PROGRESSION_PLAN.md`; Survivor is explicitly out of Renown v1.
 
 ### Idea (undefined) — Awakened / glitched player cards
 Tie the anomaly/awakening theme into the card system: when a player awakens (or during a Criticality), some special card variant of them exists. Not yet specced — what it is, how you get one, what it does, cosmetic vs mechanical. Flesh out before building.
@@ -27,9 +126,47 @@ Three separable tracks; each needs a design pass. Grounding + open decisions cap
 
 - **League restructure — 2 divisions of 6 per league, new 28-game schedule** — each league (12) splits into 2 divisions of 6. Schedule (still 28 games, math exact): **10** intra-division (play each of your 5 division rivals ×2) + **6** other-division-same-league (×1) + **12** other league (all 12 ×1) = 28. Notes: (1) **divisions don't exist structurally yet** — zero `division` refs in `leagueManager.py` (the CLAUDE.md mention is stale); introduces a division layer (assignment + standings). (2) Rewrites schedule gen — `seasonManager._generateSchedule` (`:3733`) currently = intra-league round-robin (22) + inter-league (6); new mix roughly halves intra-league and **doubles inter-league 6→12** (big flavor shift — leagues become far more intertwined). OPEN: **playoffs** — division-winner auto-berths / division-based seeding vs. keep "top 6 by record per league"; **realignment** — does `leagueManager.realignByRecentPerformance` now also seed the 4 divisions, or do divisions stay fixed while leagues rebalance; division tiebreakers.
 
-- **Remove prospect/rookie draft → periodic FA-pool injection** — revert to the original model where new players enter the **free-agent pool periodically** (keeps the FA pool low, curbs skill creep). ⚠️ **Collides with in-flight work**: (a) the just-shipped **parity prospect true-skill model** (three-tier `current < trueSkill < potential`, rookies debut low and grow in — itself a skill-creep/parity lever, `docs/PARITY_PROSPECT_PLAN.md`); (b) the **autonomous Front Office plan** is built on the draft — "draft-position → aggression dial", worst-first rookie/FA drafts, cut-for-upgrade thresholds scaled by draft slot (`docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md:91`). Woven through the offseason flow (`rookie_draft` phase, `playerManager.rookieDraftPickGenerator`, rookie ballots, prospect promotions, Rookie Pack `is_rookie`). OPEN: does injection **replace** the debut-low-grow-in model or do entrants still arrive underdeveloped just via FA; what replaces "draft position" as the FO aggression signal (worst-first **FA priority order**?); injection cadence. **Settle this before building the autonomous FO** — it's the track that most affects other plans.
+- **Remove prospect/rookie draft → periodic FA-pool injection** — ✅ **SETTLED 2026-07-27 (owner): do it.** Specced as **Part F of `docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md`**, not as a standalone track. The collision below is resolved: the autonomous FO's aggression dial reads the worst-first **FA** order (`FO_FA_CONTENTION`), never the rookie draft, so the already-built GM brain needs no rework; and `playerManager.ensurePositionSupply` already guarantees the per-position roster floor, so it gets promoted from safety net to primary intake. The three-tier prospect true-skill model is recommended to SURVIVE (it's an entry-independent parity lever the GM brain's arc reading depends on). Original note follows. ⚠️ **Collided with in-flight work**: (a) the just-shipped **parity prospect true-skill model** (three-tier `current < trueSkill < potential`, rookies debut low and grow in — itself a skill-creep/parity lever, `docs/PARITY_PROSPECT_PLAN.md`); (b) the **autonomous Front Office plan** is built on the draft — "draft-position → aggression dial", worst-first rookie/FA drafts, cut-for-upgrade thresholds scaled by draft slot (`docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md:91`). Woven through the offseason flow (`rookie_draft` phase, `playerManager.rookieDraftPickGenerator`, rookie ballots, prospect promotions, Rookie Pack `is_rookie`). OPEN: does injection **replace** the debut-low-grow-in model or do entrants still arrive underdeveloped just via FA; what replaces "draft position" as the FO aggression signal (worst-first **FA priority order**?); injection cadence. **Settle this before building the autonomous FO** — it's the track that most affects other plans.
+
+### The Deeper Game — fans vs the Cores (owner framing, 2026-07-31)
+The anomaly/Criticality layer reframed: **football is the scenery, the real contest is fans
+against the five Cores.** Vigils as a deliberate attention lever, a trailing-baseline bar a
+coordinated surge can actually cross, contested firing (the Cores spend finite patches) instead
+of a dice roll, Cores with alignments — Aris leaks, Pyre contains, Cassian is distractible so
+dramatic weeks are cover — and the **498b → 498c** letter-burn from `data/lore.md` as the
+long-game scoreboard.
+- **Plan:** `docs/CRITICALITY_METAGAME_PLAN.md` — specced, nothing built.
+- **Why it's a prerequisite:** `SIM_EVOLUTION.md` Stage 2 (fan-voted rule mutation) is the
+  Criticality *aftermath*, so it can't land until the trigger is a contest rather than weather.
+
+**Ball-carrier moves + pre-snap recognition.** ✅ **SHIPPED 2026-08-01** — not on the original
+four-item list; came out of the same thread. Stiff arm / spin / hurdle keyed off a shared `_flair`
+(creativity + xFactor) and the new determination state, retro-fitted to the stretch and diving
+catch so those attributes matter everywhere (`c2ef406`, `db7b522`). Plus a pre-snap run/pass read
+that gives `defensiveMind` its first per-play job and gives the fakes something real to fool
+(`4515ce9`, `b041642`). Regressions `test_runner_moves.py` / `test_presnap_read.py`.
 
 ## Bugs / smaller fixes
+- **League scoring sits ~27.5 in a fresh sim vs the ~36 documented in CLAUDE.md** ⚠️ OPEN — measured
+  repeatedly on 2026-08-01 and unchanged by any of that day's work. Either the parity package's
+  lower generation seed showing up in a season-1 league, or real drift. ⚠️ **Note for whoever picks
+  this up:** paired fresh sims CANNOT resolve small effects here — each regenerates the whole player
+  pool and the run-to-run spread was 27.4–31.1 pts/g across four runs. Measure mechanics directly.
+- **Docs describe a stale attention model** — `docs/CHROME.md` and `docs/CRITICALITY_METAGAME_PLAN.md`
+  still say four attention sources with cards at 10/wk. Development's `5dcc8dd`/`1078e7f` cut it to
+  three with cards at 18, and equipped cards were contributing NOTHING on prod before that fix.
+- **Criticality threshold is outrun by the season** ⚠️ OPEN — folded into the Deeper Game plan
+  above (the trailing baseline). Needs a design call — the bar
+  sits at 0.92× the expected resting level (permanently crossed by construction) AND is
+  estimated once at week 6 from an estimator that assumes constant input, so it under-reads
+  a growing league ~3×. Result: the crossing carries no information and the 30% dice roll is
+  the whole trigger, so Criticality **is** random. A fixed bar can't work (the aggregate
+  grows 2-3× a season); it needs a trailing baseline. Can't be validated by `simcheck` —
+  FAST mode bypasses the adaptive threshold entirely. Full audit in
+  `docs/AWAKENED_POWERS_PLAN.md` "Known defects".
+- **Awakening has no deliberate lever** — design work, not a bug; same audit, last section.
+- **`PURGE_MAX_CHANCE` (0.45) wants an owner balance pass** — the purge curve was fixed from
+  a 10% ceiling to a real one, but the prod-mode value is reasoned, not sim-measured.
 - **Showcase dividend rate balance pass** — `SHOWCASE_DIVIDEND_RATE` (0.13) was a calibrated starting point (sustained S ≈ the old ~3000 lump/season, top end uncapped); still wants an owner balance pass.
 
 ## Shipped (this cycle)

@@ -497,19 +497,26 @@ def _buildCoachDict(team) -> Optional[dict]:
     coach = getattr(team, 'coach', None)
     if coach is None:
         return None
+    # Coach/GM RATING NUMBERS ARE NOT SURFACED (owner, plan Part B). A GM reads
+    # as archetypes: headline tags plus per-attribute qualitative bands, both
+    # derived server-side in `profile`. Do not re-add raw attribute values or
+    # `overallRating` — the aggregate is central-limit noise for specialists,
+    # and the individual numbers invite a stat-line reading of a character.
     return {
         'name': coach.name,
-        'overallRating': coach.overallRating,
-        'offensiveMind': coach.offensiveMind,
-        'defensiveMind': coach.defensiveMind,
-        'adaptability': coach.adaptability,
-        'aggressiveness': coach.aggressiveness,
-        'clockManagement': coach.clockManagement,
-        'playerDevelopment': coach.playerDevelopment,
-        'scouting': getattr(coach, 'scouting', 80),
-        'attitude': getattr(coach, 'attitude', 80),
+        'profile': coach.profile() if hasattr(coach, 'profile') else None,
         'seasonsCoached': coach.seasonsCoached,
     }
+
+
+def _coachProfileFromRow(row):
+    """Scouting report for a raw `coaches` DB row. Shares the derivation with
+    the live Coach object so the hire slate and the roster view can't drift."""
+    try:
+        from floosball_coach import profileFromDbRow
+        return profileFromDbRow(row)
+    except Exception:
+        return None
 
 
 @app.get("/api/teams", response_model=Dict[str, Any])
@@ -3283,7 +3290,7 @@ async def get_season_info(response: Response):
             nextSeasonStartTime = nextSeasonStart.isoformat() + 'Z'
 
         # Phased offseason — current top-level flow phase + ISO target time
-        # for the next phase. Phases: post_bowl, frontoffice, rookie_draft,
+        # for the next phase. Phases: post_bowl, frontoffice,
         # pre_fa, fa_draft, training. Target is set during wait gates so the
         # UI can render "<NextPhase> in Xh Ym" countdowns. Cleared during
         # active phases. (Distinct from _offseasonPhase, which the draft
@@ -3806,7 +3813,8 @@ def _recapShowcaseLeaderboard(session, target):
             infos = showcaseManager.loadShowcaseCardInfos(session, uid, target)
             if not infos:
                 continue
-            ev = showcaseManager.evaluate(infos, target)
+            ev = showcaseManager.evaluate(infos, target,
+                                          showcaseManager.buildLegacyLookup(session, infos))
         except Exception:
             continue
         u = session.get(DBUser, uid)
@@ -6293,6 +6301,9 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
                 "position": p.position.name,
                 "rating": round(p.playerRating, 1),
                 "tier": p.playerTier.name,
+                # New to the league: no pro season played. With the rookie draft
+                # gone this is the only way in, so it's worth calling out.
+                "isNewcomer": (getattr(p, 'seasonsPlayed', 0) or 0) == 0,
             }
             for p in sorted(pm.freeAgents, key=lambda p: -p.playerRating)
             if isinstance(getattr(p, 'team', None), str)
@@ -6331,14 +6342,14 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
     # Defensive: only include players whose .team is actually 'Free Agent' (not a team object)
     faPool = [
         {"id": p.id, "name": p.name, "position": p.position.name,
-         "rating": round(p.playerRating, 1), "tier": p.playerTier.name}
+         "rating": round(p.playerRating, 1), "tier": p.playerTier.name,
+         "isNewcomer": (getattr(p, 'seasonsPlayed', 0) or 0) == 0}
         for p in pm.freeAgents
         if isinstance(getattr(p, 'team', None), str)
     ] if isOffseason else []
 
     # Include user's existing ballot if logged in. FA ballots can be submitted
     # year-round from the Front Office tab (not just during the offseason
-    # window), so return the latest saved ballot whenever a user is
     # authenticated and has a favorite team set.
     existingBallot = None
     existingPositionPriority = None
@@ -6399,58 +6410,6 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
     # Per-team per-position fan vote rankings (after FA ballot resolution).
     faVoteResults = getattr(sm, '_offseasonFaVoteResults', {}) or {}
 
-    # Per-team aggregated fan rookie ballot rankings (Borda-count tally),
-    # keyed by team abbr → list of ranked players with id/name/position/rating
-    # and post-draft drafted-by team info. Mirrors faVoteResults so the FO
-    # page can render the same kind of resolved-rankings panel for rookies.
-    rookieBallotResultsRaw = getattr(sm, '_offseasonRookieBallotResults', {}) or {}
-    rookieBallotResults: Dict[str, List[Dict[str, Any]]] = {}
-    if rookieBallotResultsRaw:
-        playerLookup = {p.id: p for p in pm.activePlayers}
-        teamManager = floosball_app.teamManager if floosball_app else None
-        for teamId, rankedIds in rookieBallotResultsRaw.items():
-            t = teamManager.getTeamById(teamId) if teamManager else None
-            if not t:
-                continue
-            abbr = getattr(t, 'abbr', t.name[:3].upper())
-            ranked = []
-            for pid in rankedIds:
-                pp = playerLookup.get(pid)
-                if not pp:
-                    continue
-                draftingTeamId = getattr(pp, 'drafting_team_id', None)
-                draftingAbbr = None
-                if draftingTeamId and teamManager:
-                    dt = teamManager.getTeamById(draftingTeamId)
-                    if dt:
-                        draftingAbbr = getattr(dt, 'abbr', None)
-                ranked.append({
-                    "id": pp.id, "name": pp.name,
-                    "position": pp.position.name,
-                    "rating": round(getattr(pp, 'playerRating', 0), 1),
-                    "tier": getattr(pp, 'playerTier', None).name if getattr(pp, 'playerTier', None) else None,
-                    "draftedByTeamId": draftingTeamId,
-                    "draftedByTeamAbbr": draftingAbbr,
-                })
-            if ranked:
-                rookieBallotResults[abbr] = ranked
-
-    # Upcoming rookies that haven't yet been consumed by the draft. Surfacing
-    # these on /api/offseason means a mid-draft refresh restores the right-
-    # panel rookie list — without this, refreshing during the rookie draft
-    # leaves rookies=[] and the panel reads "All prospects drafted".
-    upcomingRookies = [
-        {
-            'id': getattr(r, 'id', 0),
-            'name': r.name,
-            'position': r.position.name,
-            'rating': round(getattr(r, 'playerRating', 0), 1),
-            'tier': getattr(r, 'playerTier', None).name if getattr(r, 'playerTier', None) else 'TierC',
-        }
-        for r in pm.activePlayers
-        if getattr(r, 'is_upcoming_rookie', False)
-    ]
-
     return {
         "isOffseason": isOffseason, "freeAgents": faList, "draftOrder": draftOrder,
         "transactions": transactions, "faWindowOpen": faWindowOpen,
@@ -6461,8 +6420,7 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         "gmResolutions": gmResolutions,
         "faVoteResults": faVoteResults,
         "faPositionPriority": getattr(sm, '_offseasonFaPositionPriority', {}) or {},
-        "rookieBallotResults": rookieBallotResults,
-        "rookies": upcomingRookies,
+        "rookies": [],   # no rookie draft; kept so older clients still parse
         "phase": phase,
         "draftComplete": draftComplete,
     }
@@ -8911,7 +8869,8 @@ def _buildShowcasePayload(session, cardManager, userId, currentSeason):
                 infos.append(showcaseManager.cardInfo(uc))
         slots.append({"slotNumber": slotNum, "card": cardData})
 
-    score = showcaseManager.evaluate(infos, currentSeason)
+    score = showcaseManager.evaluate(infos, currentSeason,
+                                     showcaseManager.buildLegacyLookup(session, infos))
     # Attach each card's scoring breakdown to its slot (keyed by userCardId).
     byCardId = {b["userCardId"]: b for b in score["cardBreakdown"]}
     for s in slots:
@@ -8983,7 +8942,8 @@ def showcaseLeaderboard(user: _User = Depends(_getCurrentUser)):
             infos = showcaseManager.loadShowcaseCardInfos(session, uid, currentSeason)
             if not infos:
                 continue
-            ev = showcaseManager.evaluate(infos, currentSeason)
+            ev = showcaseManager.evaluate(infos, currentSeason,
+                                          showcaseManager.buildLegacyLookup(session, infos))
             u = session.get(_UserModel, uid)
             rows.append({
                 "userId": uid,
@@ -9647,8 +9607,13 @@ def setEquippedCards(
 # ============================================================================
 
 
-def _isShopOpen() -> bool:
-    """Check if the shop is open (regular season only, before week 28 games finish)."""
+def _isRegularSeason() -> bool:
+    """True while regular-season fantasy is live (through week 28's games).
+
+    This used to be `_isShopOpen` and closed the whole shop the moment week 28
+    finished. The shop is now open ALL YEAR; what changes outside the regular
+    season is WHAT you can buy — see `_showpieceOnly`.
+    """
     sm = floosball_app.seasonManager if floosball_app else None
     if not sm or not sm.currentSeason:
         return False
@@ -9660,10 +9625,51 @@ def _isShopOpen() -> bool:
     return True
 
 
+def _isShopOpen() -> bool:
+    """The shop never closes now. Kept as a function because the packs/shop
+    payloads publish it and the frontend reads it."""
+    return True
+
+
+def _showpieceOnly() -> bool:
+    """Outside the regular season, only SHOWPIECES are purchasable.
+
+    A fantasy card is season-scoped at equip time and fantasy doesn't run in the
+    postseason, so a fantasy card bought after week 28 could never be fielded —
+    selling one would be selling a brick. Showpieces lose nothing: they are never
+    fielded anyway, and they keep earning through the Showcase (whose recency
+    curve tapers to a floor rather than cutting off)."""
+    return not _isRegularSeason()
+
+
 def _requireShopOpen():
-    """Raise 403 if shop is closed (playoffs/offseason)."""
-    if not _isShopOpen():
-        raise HTTPException(status_code=403, detail="Shop is closed for the season")
+    """Guard on every purchase endpoint (packs, singles, rerolls).
+
+    The shop no longer CLOSES — it is open all year (owner, 2026-08-02) — so this
+    no longer raises on its own. What changes outside the regular season is WHAT
+    can be bought; see `_requireCollectionOnly`, which the pack and single-card
+    paths call with the thing being purchased.
+
+    Kept as a call site rather than deleted: it is the documented choke point for
+    purchase gating, and five endpoints already route through it."""
+    return True
+
+
+def _requireCollectionOnly(packType=None) -> None:
+    """Outside the regular season, only COLLECTION products are purchasable.
+
+    A fantasy pack bought after week 28 yields cards that can never be equipped —
+    fantasy is over and the cards are season-scoped. The Legacy Pack loses
+    nothing, because its cards are never equipped anyway and keep earning through
+    the Showcase."""
+    if not _showpieceOnly():
+        return
+    if packType is not None and getattr(packType, 'theme_type', None) == 'collection':
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Only the Collection Pack is available outside the regular season",
+    )
 
 
 @app.get("/api/packs/types")
@@ -9724,7 +9730,15 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
         starterClaimed = False
         if user:
             dayStart = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            for p in list(rotated) + list(themedPacks):
+            # The collection pack is surfaced OUTSIDE both lists (it never
+            # rotates), so it has to be added explicitly or it never gets a
+            # todayCounts entry — remainingToday then reads as full forever and
+            # the pack never leaves the shelf after being opened.
+            _collectionPt = next((p for p in packs if p.name == 'themed_collection'), None)
+            _countable = list(rotated) + list(themedPacks)
+            if _collectionPt is not None and _collectionPt not in _countable:
+                _countable.append(_collectionPt)
+            for p in _countable:
                 # Only paid openings count toward the daily shop limit.
                 # Free grants (achievement rewards, starter packs) have
                 # cost=0 and must not consume the shop allowance.
@@ -9765,15 +9779,22 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
 
         cyclePacksOpened = _countPacksThisCycle(session, user.id, currentSeason, currentWeek) if user else 0
         cycleRemaining = max(0, MAX_PACKS_PER_SHOP_CYCLE - cyclePacksOpened)
+        # The Collection Pack never rotates. It is the ONLY product on sale
+        # outside the regular season, so it has to be visible every day of the
+        # year; dropping it into the rotating themed pool would hide it exactly
+        # when it's the only thing to buy.
+        collectionPack = next((p for p in packs if p.name == 'themed_collection'), None)
         return build_success_response({
             "packs": [_packDict(p) for p in rotated],
             "themedPacks": [_packDict(p) for p in themedPacks],
+            "collectionPack": _packDict(collectionPack) if collectionPack else None,
             "starter": ({
                 **_packDict(starterPack),
                 "claimedThisSeason": starterClaimed,
             } if starterPack else None),
             "shopDay": shopDay,
             "shopOpen": _isShopOpen(),
+            "collectionOnly": _showpieceOnly(),
             "cycleLimit": MAX_PACKS_PER_SHOP_CYCLE,
             "cyclePacksOpened": cyclePacksOpened,
             "cycleRemaining": cycleRemaining,
@@ -9817,6 +9838,7 @@ def getPendingPack(user: _User = Depends(_getCurrentUser)):
 
         sm = floosball_app.seasonManager if floosball_app else None
         currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else pending.season
+        currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
         cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
 
         # Re-serialize the templates the same way revealPack did originally.
@@ -9829,7 +9851,10 @@ def getPendingPack(user: _User = Depends(_getCurrentUser)):
         # arbitrarily; we want indices to match what selectPackKeeps expects.
         byId = {t.id: t for t in templates}
         ordered = [byId[tid] for tid in revealedIds if tid in byId]
-        revealed = [cardManager._serializeTemplate(t, currentSeason) for t in ordered]
+        # session so the card backs carry season stats, and currentWeek so the
+        # vault state matches what selection will actually produce.
+        revealed = [cardManager._serializeTemplate(t, currentSeason, currentWeek, session=session)
+                    for t in ordered]
 
         packType = pending.pack_type
         return build_success_response({
@@ -9868,6 +9893,10 @@ def revealPack(req: RevealPackRequest, user: _User = Depends(_getCurrentUser)):
 
     session = get_session()
     try:
+        # Outside the regular season only the Legacy Pack sells — a fantasy pack
+        # bought now would yield cards that can never be equipped.
+        from database.models import PackType as _PTGate
+        _requireCollectionOnly(session.get(_PTGate, req.packTypeId))
         result = cardManager.revealPack(session, user.id, req.packTypeId, currentSeason, shopDay=shopDay, currentWeek=currentWeek)
         # Secret — Lightning Strike: a Diamond pulled out of a Humble pack
         try:
@@ -9911,12 +9940,16 @@ def selectPack(req: SelectPackRequest, user: _User = Depends(_getCurrentUser)):
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
     cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
 
     session = get_session()
     try:
+        # currentWeek decides vault routing on the kept cards (a card bought once
+        # the regular season is over can never be fielded, so it vaults).
         result = cardManager.selectPackKeeps(
             session, user.id, req.pendingId, req.keptIndices, currentSeason,
+            currentWeek=currentWeek,
         )
         # Achievement hooks fire on the kept cards (matches old single-step behavior)
         from managers import achievementManager as _am
@@ -10013,7 +10046,17 @@ def getShopFeatured(user: _User = Depends(_getCurrentUser)):
             currentWeek=currentWeek, isScheduledMode=isScheduledMode,
         )
         session.commit()
-        return build_success_response({"cards": featured, "currentSeason": currentSeason, "shopOpen": _isShopOpen()})
+        # Collection singles — the Collection tab's daily shelf. Generated
+        # separately from the fantasy selection (different pool, different rules)
+        # but sold through the same buy endpoint.
+        collectionCards = cardManager.getFeaturedCollectionCards(
+            session, user.id, currentSeason, currentWeek=currentWeek,
+        )
+        session.commit()
+        return build_success_response({"cards": featured,
+                                      "collectionCards": collectionCards,
+                                      "currentSeason": currentSeason,
+                                      "shopOpen": _isShopOpen(), "collectionOnly": _showpieceOnly()})
     except Exception:
         session.rollback()
         raise
@@ -10039,7 +10082,8 @@ def buyFeaturedCard(req: BuyCardRequest, user: _User = Depends(_getCurrentUser))
 
     session = get_session()
     try:
-        card = cardManager.buyFeaturedCard(session, user.id, req.templateId, currentSeason)
+        card = cardManager.buyFeaturedCard(session, user.id, req.templateId, currentSeason,
+                                           showpieceOnly=_showpieceOnly())
 
         # Keep Curator progress in sync — shop buys add to the collection but
         # weren't previously counted because the sync only ran on pack opens.
@@ -10860,1344 +10904,6 @@ class GmFaBallotRequest(BaseModel):
     positionPriority: Optional[List[int]] = None
 
 
-@app.post("/api/gm/vote")
-def cast_gm_vote(req: GmVoteRequest, user: _User = Depends(_getCurrentUser)):
-    """Cast a GM Mode vote for user's favorite team."""
-    from database.connection import get_session
-    from database.repositories.gm_repository import GmVoteRepository
-    from database.repositories.card_repositories import CurrencyRepository
-    from database.models import User, Player, Coach
-    from constants import GM_VOTE_TYPES, GM_VOTE_COST, GM_TRIBUNE_VOTE_THRESHOLD
-    from managers.gmManager import GmManager
-
-    if req.voteType not in GM_VOTE_TYPES:
-        raise HTTPException(400, f"Invalid vote type: {req.voteType}")
-
-    if req.voteType == "sign_fa":
-        raise HTTPException(400, "Use POST /api/gm/fa-ballot for free agent votes")
-
-    # Yea/nay only applies to the binary threshold directives; hire_coach is a
-    # selection (oppose by backing someone else) and ranked ballots are support.
-    direction = "nay" if req.direction == "nay" else "yea"
-    if direction == "nay" and req.voteType not in ("fire_coach", "resign_player", "cut_player"):
-        raise HTTPException(400, "Only fire, cut, and re-sign votes can be opposed")
-
-    # Block votes during offseason
-    sm = floosball_app.seasonManager if floosball_app else None
-    if sm and sm.currentSeason and sm.currentSeason.currentWeek == 'Offseason':
-        raise HTTPException(400, "The Board has adjourned for the offseason")
-
-    session = get_session()
-    try:
-        dbUser = session.query(User).filter_by(id=user.id).first()
-        if not dbUser or not dbUser.favorite_team_id:
-            raise HTTPException(400, "You must have a favorite team to vote")
-
-        teamId = dbUser.favorite_team_id
-
-        # Validate target
-        if req.voteType in ("cut_player", "resign_player"):
-            if not req.targetPlayerId:
-                raise HTTPException(400, "targetPlayerId required for this vote type")
-            player = session.query(Player).filter_by(id=req.targetPlayerId).first()
-            if not player or player.team_id != teamId:
-                raise HTTPException(400, "Target player not on your favorite team")
-            if req.voteType == "resign_player" and player.term_remaining != 1:
-                raise HTTPException(400, "Player does not have an expiring contract")
-            if req.voteType == "resign_player" and getattr(player, 'will_retire', False):
-                raise HTTPException(400, "Player has announced retirement and cannot be re-signed")
-            if req.voteType == "resign_player":
-                from constants import RESIGN_ONCE_ENABLED, RESIGN_ONCE_LIMIT
-                if RESIGN_ONCE_ENABLED and int(getattr(player, 'team_resign_count', 0) or 0) >= RESIGN_ONCE_LIMIT:
-                    raise HTTPException(400, "Player has reached the re-sign limit and must enter free agency")
-        elif req.voteType == "hire_coach":
-            if not req.targetPlayerId:
-                raise HTTPException(400, "targetPlayerId (coach ID) required for hire_coach")
-            coach = session.query(Coach).filter_by(id=req.targetPlayerId).first()
-            if not coach:
-                raise HTTPException(400, "Coach not available in the hiring pool")
-            # Coach is "available" if no team has them as coach_id.
-            from database.models import Team as DBTeam
-            assignedAt = session.query(DBTeam).filter_by(coach_id=coach.id).first()
-            if assignedAt is not None:
-                raise HTTPException(400, "Coach not available in the hiring pool")
-
-        voteRepo = GmVoteRepository(session)
-        sm = floosball_app.seasonManager if floosball_app else None
-        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-
-        # One vote per fan per target. To change your mind (or switch sides),
-        # withdraw first — no stacking, so the cost is flat (no escalation).
-        existingDir = voteRepo.getUserDirectionOnTarget(
-            user.id, teamId, currentSeason, req.voteType, req.targetPlayerId
-        )
-        if existingDir:
-            raise HTTPException(
-                400,
-                "You've already voted on this. Withdraw your vote to change it.",
-            )
-
-        cost = GM_VOTE_COST[req.voteType]
-        currencyRepo = CurrencyRepository(session)
-        result = currencyRepo.spendFunds(
-            user.id, cost, "gm_vote",
-            f"GM vote: {req.voteType}", currentSeason,
-        )
-        if result is None:
-            raise HTTPException(400, "Insufficient Floobits")
-
-        # Cast vote
-        vote = voteRepo.castVote(
-            userId=user.id, teamId=teamId, season=currentSeason,
-            voteType=req.voteType, costPaid=cost,
-            targetPlayerId=req.targetPlayerId, direction=direction,
-        )
-
-        # Tribune — cast GM_TRIBUNE_VOTE_THRESHOLD votes in a season (any mix of
-        # targets). The other GM secret, Scorched Earth (key "mutineer"), now
-        # fires at offseason resolution on a full team teardown — see
-        # seasonManager._awardCleanHouseAchievements — not on vote cast.
-        try:
-            updatedCounts = voteRepo.getUserVoteCounts(user.id, currentSeason)
-            if updatedCounts.get("total", 0) >= GM_TRIBUNE_VOTE_THRESHOLD:
-                from managers import achievementManager as _am
-                _am.unlockSecret(session, user.id, "tribune")
-        except Exception as _e:
-            logger.warning(f"Tribune hook failed: {_e}")
-
-        session.commit()
-
-        # Get current tally for response (use per-team engaged fan count)
-        engagedFans = voteRepo.getEngagedVoterCount(teamId, currentSeason)
-        tallies = voteRepo.getVoteTallies(teamId, currentSeason)
-        targetTally = next(
-            (t for t in tallies
-             if t["voteType"] == req.voteType
-             and t["targetPlayerId"] == req.targetPlayerId),
-            {"votes": 0, "votesFor": 0, "votesAgainst": 0}
-        )
-        gm = GmManager(session)
-        if req.voteType == "hire_coach":
-            hireVoteCounts = [
-                t["votes"] for t in tallies
-                if t["voteType"] == "hire_coach" and t.get("targetPlayerId")
-            ]
-            hireLeaderVotes = max(hireVoteCounts) if hireVoteCounts else 0
-            hireLeaderCount = (
-                sum(1 for v in hireVoteCounts if v == hireLeaderVotes)
-                if hireLeaderVotes > 0 else 0
-            )
-            threshold, probability = gm.hireCoachDisplay(
-                targetTally["votes"], hireLeaderVotes, hireLeaderCount
-            )
-        elif req.voteType == "sign_fa":
-            threshold = gm.calculateBallotThreshold(engagedFans)
-            probability = gm.calculateProbability(targetTally["votes"], threshold)
-        else:
-            teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
-            threshold = gm.calculateThreshold(teamFanCount)
-            probability = gm.calculateProbability(targetTally["votes"], threshold)
-
-        return build_success_response({
-            "voteId": vote.id,
-            "voteType": req.voteType,
-            "direction": direction,
-            "targetPlayerId": req.targetPlayerId,
-            "costPaid": cost,
-            "currentVotes": targetTally["votes"],
-            "votesFor": targetTally.get("votesFor", 0),
-            "votesAgainst": targetTally.get("votesAgainst", 0),
-            "threshold": threshold,
-            "probability": round(probability, 3),
-            "remainingBalance": result.balance,
-        })
-    except HTTPException:
-        raise
-    except Exception as e:
-        session.rollback()
-        logger.error(f"GM vote error: {e}")
-        raise HTTPException(500, "Failed to cast vote")
-    finally:
-        session.close()
-
-
-@app.post("/api/gm/vote/undo")
-def undo_gm_vote(req: GmVoteUndoRequest, user: _User = Depends(_getCurrentUser)):
-    """Withdraw the user's most-recent vote on a target and refund its cost.
-
-    Lets a fan flip sides (withdraw, then cast the other way) or simply take
-    back a misclick — the affordance the UI already exposed but had no backend
-    for. Refund reverses the spend cleanly (no lifetime-earned inflation)."""
-    from database.connection import get_session
-    from database.repositories.gm_repository import GmVoteRepository
-    from database.repositories.card_repositories import CurrencyRepository
-    from database.models import User
-    from managers.gmManager import GmManager
-
-    sm = floosball_app.seasonManager if floosball_app else None
-    if sm and sm.currentSeason and sm.currentSeason.currentWeek == 'Offseason':
-        raise HTTPException(400, "The Board has adjourned for the offseason")
-
-    session = get_session()
-    try:
-        dbUser = session.query(User).filter_by(id=user.id).first()
-        if not dbUser or not dbUser.favorite_team_id:
-            raise HTTPException(400, "You must have a favorite team to vote")
-        teamId = dbUser.favorite_team_id
-        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-
-        voteRepo = GmVoteRepository(session)
-        vote = voteRepo.withdrawMostRecentVote(
-            user.id, teamId, currentSeason, req.voteType, req.targetPlayerId
-        )
-        if vote is None:
-            raise HTTPException(400, "You have no vote to withdraw on this")
-        refund = vote.cost_paid  # read before commit — the row is now deleted
-
-        currencyRepo = CurrencyRepository(session)
-        currency = currencyRepo.refundFunds(
-            user.id, refund, "gm_vote_refund",
-            f"GM vote withdrawn: {req.voteType}", currentSeason,
-        )
-        session.commit()
-
-        # Updated net tally for the response. The frontend also refetches the
-        # team summary, which carries the authoritative per-type thresholds.
-        tallies = voteRepo.getVoteTallies(teamId, currentSeason)
-        targetTally = next(
-            (t for t in tallies
-             if t["voteType"] == req.voteType
-             and t["targetPlayerId"] == req.targetPlayerId),
-            {"votes": 0, "votesFor": 0, "votesAgainst": 0}
-        )
-        gm = GmManager(session)
-        teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
-        threshold = gm.calculateThreshold(teamFanCount)
-        probability = gm.calculateProbability(targetTally["votes"], threshold)
-
-        return build_success_response({
-            "voteType": req.voteType,
-            "targetPlayerId": req.targetPlayerId,
-            "refunded": refund,
-            "currentVotes": targetTally["votes"],
-            "votesFor": targetTally.get("votesFor", 0),
-            "votesAgainst": targetTally.get("votesAgainst", 0),
-            "threshold": threshold,
-            "probability": round(probability, 3),
-            "remainingBalance": currency.balance,
-        })
-    except HTTPException:
-        raise
-    except Exception as e:
-        session.rollback()
-        logger.error(f"GM vote undo error: {e}")
-        raise HTTPException(500, "Failed to withdraw vote")
-    finally:
-        session.close()
-
-
-@app.get("/api/gm/team/{teamId}/summary")
-def get_gm_team_summary(teamId: int, user: _User = Depends(_getCurrentUser)):
-    """Get aggregated GM vote tallies for a team this season."""
-    from database.connection import get_session
-    from database.repositories.gm_repository import GmVoteRepository
-    from managers.gmManager import GmManager
-
-    session = get_session()
-    try:
-        sm = floosball_app.seasonManager if floosball_app else None
-        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-        voteRepo = GmVoteRepository(session)
-        tallies = voteRepo.getVoteTallies(teamId, currentSeason)
-
-        engagedFans = voteRepo.getEngagedVoterCount(teamId, currentSeason)
-
-        # Enrich with threshold/probability
-        gm = GmManager(session)
-        # Hire-coach is plurality-wins. Display threshold + probability so
-        # the meter shows: sole leader at 100% ("Will pass"), tied leaders
-        # at <100% (no "Will pass" until tie breaks), trailing at fraction
-        # of leader. Tie detection lives in hireCoachDisplay.
-        hireVoteCounts = [
-            t["votes"] for t in tallies
-            if t["voteType"] == "hire_coach" and t.get("targetPlayerId")
-        ]
-        hireLeaderVotes = max(hireVoteCounts) if hireVoteCounts else 0
-        hireLeaderCount = (
-            sum(1 for v in hireVoteCounts if v == hireLeaderVotes)
-            if hireLeaderVotes > 0 else 0
-        )
-        # Threshold for fire/resign/cut: votes must meet or exceed the
-        # team's active fan count (favorite_team_id == teamId AND logged
-        # in this season).
-        teamFanCount = voteRepo.getTeamFanCount(teamId, season=currentSeason)
-        majorityThreshold = gm.calculateThreshold(teamFanCount)
-        enriched = []
-        for t in tallies:
-            if t["voteType"] == "hire_coach":
-                threshold, probability = gm.hireCoachDisplay(
-                    t["votes"], hireLeaderVotes, hireLeaderCount
-                )
-            elif t["voteType"] == "sign_fa":
-                threshold = gm.calculateBallotThreshold(engagedFans)
-                probability = gm.calculateProbability(t["votes"], threshold)
-            else:
-                threshold = majorityThreshold
-                probability = gm.calculateProbability(t["votes"], threshold)
-            enriched.append({
-                **t,
-                "threshold": threshold,
-                "probability": round(probability, 3),
-            })
-
-        return build_success_response({
-            "teamId": teamId,
-            "season": currentSeason,
-            "tallies": enriched,
-        })
-    finally:
-        session.close()
-
-
-@app.get("/api/gm/team/{teamId}/eligible")
-def get_gm_eligible_targets(teamId: int, user: _User = Depends(_getCurrentUser)):
-    """Get eligible targets per vote type for a team."""
-    from database.connection import get_session
-    from database.models import Player, Coach
-
-    session = get_session()
-    try:
-        # Coach info
-        sm = floosball_app.seasonManager if floosball_app else None
-        teamManager = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
-        team = None
-        if teamManager:
-            for t in teamManager.teams:
-                if t.id == teamId:
-                    team = t
-                    break
-
-        coachInfo = None
-        if team and team.coach:
-            c = team.coach
-            coachInfo = {
-                "id": getattr(c, 'id', None),
-                "name": c.name,
-                "overallRating": c.overallRating,
-                "offensiveMind": c.offensiveMind,
-                "defensiveMind": c.defensiveMind,
-                "adaptability": c.adaptability,
-                "aggressiveness": c.aggressiveness,
-                "clockManagement": c.clockManagement,
-                "playerDevelopment": c.playerDevelopment,
-                "scouting": getattr(c, 'scouting', 80),
-                "attitude": getattr(c, 'attitude', 80),
-            }
-
-        # Per-team coach candidates (per-team hiring rework).
-        # Candidates are pre-generated for every team at FA window open so
-        # users can vote on them during the same window as the fire vote.
-        # If FA hasn't opened yet (pre-week-22), the read returns whatever
-        # exists — typically empty until the front office opens.
-        from database.models import CoachCandidate
-        coachCandidates = []
-        if team and teamManager is not None and sm and sm.currentSeason:
-            try:
-                cands = (
-                    session.query(CoachCandidate)
-                    .filter(
-                        CoachCandidate.team_id == team.id,
-                        CoachCandidate.season == sm.currentSeason.seasonNumber,
-                    )
-                    .order_by(CoachCandidate.slot.asc())
-                    .all()
-                )
-            except Exception as e:
-                logger.warning(f"Coach candidate fetch failed for team {teamId}: {e}")
-                cands = []
-            # Backstop: if the slate is missing while the front office is open
-            # (week >= GM_ACTIVE_WEEK), generate it on demand. Covers a sim that
-            # advanced past week 22 without hitting the generation tick (resume /
-            # fast-catchup / deploy past 22) so the Hire Coach card isn't empty.
-            # Idempotent — only fills the gap, never reshuffles an existing slate.
-            if not cands:
-                try:
-                    from constants import GM_ACTIVE_WEEK
-                    if (sm.currentSeason.currentWeek or 0) >= GM_ACTIVE_WEEK:
-                        sm._generateCoachCandidatesForFA()
-                        cands = (
-                            session.query(CoachCandidate)
-                            .filter(
-                                CoachCandidate.team_id == team.id,
-                                CoachCandidate.season == sm.currentSeason.seasonNumber,
-                            )
-                            .order_by(CoachCandidate.slot.asc())
-                            .all()
-                        )
-                except Exception as e:
-                    logger.warning(f"Lazy coach candidate generation failed for team {teamId}: {e}")
-            for cand in cands:
-                c = cand.coach
-                if c is None:
-                    continue
-                coachCandidates.append({
-                    "id": c.id,
-                    "slot": cand.slot,
-                    "name": c.name,
-                    "overallRating": c.overall_rating,
-                    "offensiveMind": c.offensive_mind,
-                    "defensiveMind": c.defensive_mind,
-                    "adaptability": c.adaptability,
-                    "aggressiveness": c.aggressiveness,
-                    "clockManagement": c.clock_management,
-                    "playerDevelopment": c.player_development,
-                    "scouting": getattr(c, 'scouting', 80),
-                    "attitude": getattr(c, 'attitude', 80),
-                })
-
-        # Rostered players (for cut votes — all players eligible)
-        from floosball_player import Position as _Pos
-        from constants import RESIGN_ONCE_LIMIT, RESIGN_LIMIT_PER_OFFSEASON
-        rosteredPlayers = []
-        players = session.query(Player).filter_by(team_id=teamId).all()
-        for p in players:
-            try:
-                posLabel = _Pos(p.position).name
-            except (ValueError, KeyError):
-                posLabel = str(p.position)
-            rosteredPlayers.append({
-                "id": p.id,
-                "name": p.name,
-                "position": posLabel,
-                "rating": p.player_rating,
-                "tier": p.tier,
-                "termRemaining": p.term_remaining,
-                "willRetire": bool(getattr(p, 'will_retire', False)),
-                "resignCount": int(getattr(p, 'team_resign_count', 0) or 0),
-            })
-
-        # Expiring, non-retiring players split by re-sign eligibility. A player who
-        # has already been re-signed the limit number of times must walk to free
-        # agency and cannot be voted on — those go in a separate read-only list.
-        expiring = [
-            p for p in rosteredPlayers
-            if p["termRemaining"] == 1 and not p["willRetire"]
-        ]
-        expiringPlayers = [p for p in expiring if p["resignCount"] < RESIGN_ONCE_LIMIT]
-        resignIneligiblePlayers = [p for p in expiring if p["resignCount"] >= RESIGN_ONCE_LIMIT]
-        retiringPlayers = [p for p in rosteredPlayers if p["willRetire"]]
-
-        return build_success_response({
-            "teamId": teamId,
-            "coach": coachInfo,
-            "coachCandidates": coachCandidates,
-            "rosteredPlayers": rosteredPlayers,
-            "expiringPlayers": expiringPlayers,
-            "resignIneligiblePlayers": resignIneligiblePlayers,
-            "retiringPlayers": retiringPlayers,
-            "resignOnceLimit": RESIGN_ONCE_LIMIT,
-            "resignPerOffseasonLimit": RESIGN_LIMIT_PER_OFFSEASON,
-        })
-    finally:
-        session.close()
-
-
-@app.get("/api/gm/fa-scouting")
-def get_fa_scouting(user: _User = Depends(_getCurrentUser)):
-    """Get FA pool with scouting data (stats, over/underperformance) and user's team open positions."""
-    from database.connection import get_session
-    from database.models import PlayerSeasonStats, User
-
-    if floosball_app is None:
-        raise HTTPException(503, "Application not initialized")
-
-    sm = floosball_app.seasonManager
-    pm = floosball_app.playerManager
-
-    session = get_session()
-    try:
-        dbUser = session.query(User).filter_by(id=user.id).first()
-        if not dbUser or not dbUser.favorite_team_id:
-            raise HTTPException(400, "You must have a favorite team")
-
-        # Find user's favorite team and its open roster slots
-        teamManager = floosball_app.serviceContainer.getService('team_manager')
-        favTeam = None
-        for t in teamManager.teams:
-            if t.id == dbUser.favorite_team_id:
-                favTeam = t
-                break
-
-        # Build GM vote tallies so we can factor cut/resign sentiment into the
-        # "projected open slots" and "projected FA pool" calculations. A player
-        # with enough cut_player votes to meet quorum is likely leaving even
-        # if not in their walk year. A walk-year player with enough
-        # resign_player votes to meet quorum is likely staying.
-        from database.models import GmVote
-        from sqlalchemy import func as _func
-        from managers.gmManager import GmManager as _GmManager
-        _gm = _GmManager(session)
-
-        seasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
-
-        # Vote tallies per (team_id, vote_type, target_player_id), split by
-        # direction. The projection must mirror the resolver's net-vote math
-        # (gmManager.resolveCutVotes / resolveResignVotes): a slot only opens
-        # when NET votes (yea - nay) clear the team's fan-count threshold.
-        # Counting raw rows (yea + nay lumped together) wrongly treats a "keep"
-        # (nay) vote as support, inverting which positions appear open.
-        voteRows = session.query(
-            GmVote.team_id, GmVote.vote_type, GmVote.target_player_id,
-            GmVote.direction,
-            _func.count(GmVote.id).label('n'),
-        ).filter(
-            GmVote.season == seasonNum,
-            GmVote.vote_type.in_(['cut_player', 'resign_player']),
-        ).group_by(
-            GmVote.team_id, GmVote.vote_type, GmVote.target_player_id,
-            GmVote.direction,
-        ).all()
-
-        # {(teamId, voteType, targetPlayerId): netVotes (yea - nay)}
-        netTally: Dict[tuple, int] = {}
-        for r in voteRows:
-            key = (r.team_id, r.vote_type, r.target_player_id)
-            isNay = (r.direction or 'yea') == 'nay'
-            netTally[key] = netTally.get(key, 0) + (-r.n if isNay else r.n)
-
-        # Threshold = team fan count, the same source the resolver uses
-        # (frozen front-office snapshot), so the ballot projection can't drift
-        # from the actual resolution. Memoized per team.
-        _thresholdCache: Dict[int, int] = {}
-        def _threshold(teamId: int) -> int:
-            if teamId not in _thresholdCache:
-                _thresholdCache[teamId] = _gm.calculateThreshold(
-                    _gm.voteRepo.getTeamFanCount(teamId, season=seasonNum)
-                )
-            return _thresholdCache[teamId]
-
-        def likelyCut(teamId: int, playerId: int) -> bool:
-            net = netTally.get((teamId, 'cut_player', playerId), 0)
-            if net <= 0: return False
-            return net >= _threshold(teamId)
-
-        def likelyResigned(teamId: int, playerId: int) -> bool:
-            net = netTally.get((teamId, 'resign_player', playerId), 0)
-            if net <= 0: return False
-            return net >= _threshold(teamId)
-
-        openSlots = []
-        slotPosMap = {'qb': 'QB', 'rb': 'RB', 'wr1': 'WR', 'wr2': 'WR', 'te': 'TE', 'k': 'K'}
-        if favTeam:
-            for slot, posName in slotPosMap.items():
-                rosterPlayer = favTeam.rosterDict.get(slot)
-                if rosterPlayer is None:
-                    # Slot is actually open right now
-                    openSlots.append({"slot": slot, "position": posName, "projected": False, "reason": "vacant"})
-                    continue
-
-                termRem = getattr(rosterPlayer, 'termRemaining', 99)
-                cutLikely = likelyCut(favTeam.id, rosterPlayer.id)
-                resignLikely = likelyResigned(favTeam.id, rosterPlayer.id)
-                # Retirement risk — an aging veteran projected to retire at
-                # season end creates an opening even with multi-year contract.
-                retireRisk = pm.computeRetirementRisk(rosterPlayer)
-                retireLikely = retireRisk in ('retiring', 'very_likely', 'likely')
-
-                # Slot opens if ANY of: cut-vote at quorum, walk-year without
-                # resign backing, or high retirement risk.
-                if cutLikely:
-                    openSlots.append({
-                        "slot": slot, "position": posName, "projected": True,
-                        "reason": "cut_vote_likely",
-                        "incumbent": {
-                            "id": rosterPlayer.id, "name": rosterPlayer.name,
-                            "rating": round(rosterPlayer.playerRating, 1),
-                            "termRemaining": termRem,
-                        },
-                    })
-                elif termRem <= 1 and not resignLikely:
-                    openSlots.append({
-                        "slot": slot, "position": posName, "projected": True,
-                        "reason": "walk_year",
-                        "incumbent": {
-                            "id": rosterPlayer.id, "name": rosterPlayer.name,
-                            "rating": round(rosterPlayer.playerRating, 1),
-                            "termRemaining": termRem,
-                        },
-                    })
-                elif retireLikely:
-                    openSlots.append({
-                        "slot": slot, "position": posName, "projected": True,
-                        "reason": "retirement_risk",
-                        "incumbent": {
-                            "id": rosterPlayer.id, "name": rosterPlayer.name,
-                            "rating": round(rosterPlayer.playerRating, 1),
-                            "termRemaining": termRem,
-                            "retirementRisk": retireRisk,
-                        },
-                    })
-                # else: slot stays filled — safe contract, no cut/retire pressure
-
-        # seasonNum was computed above alongside the vote tallies
-
-        # Build stats lookup for all FA player IDs
-        faPlayerIds = [p.id for p in pm.freeAgents]
-        statsRows = {}
-        rookieIds = set()
-        if faPlayerIds:
-            rows = session.query(PlayerSeasonStats).filter(
-                PlayerSeasonStats.player_id.in_(faPlayerIds),
-                PlayerSeasonStats.season == seasonNum,
-            ).all()
-            for r in rows:
-                statsRows[r.player_id] = r
-            # Players with zero season stats rows across all seasons are rookies
-            playersWithStats = set(
-                r[0] for r in session.query(PlayerSeasonStats.player_id).filter(
-                    PlayerSeasonStats.player_id.in_(faPlayerIds)
-                ).distinct().all()
-            )
-            rookieIds = set(faPlayerIds) - playersWithStats
-
-        def formatStats(row, posName):
-            # Rows with zero games played = player was on the books but never
-            # saw the field (FA who sat out, injured, buried on depth chart).
-            # Treat these as no-stats so the UI falls through to the
-            # "No stats this season" label instead of rendering a line of 0s.
-            if not row or (getattr(row, 'games_played', 0) or 0) == 0:
-                return None
-            base = {"gamesPlayed": row.games_played, "fantasyPoints": row.fantasy_points}
-            if posName == 'QB':
-                base.update({"passingYards": row.passing_yards, "passingTds": row.passing_tds, "passingInts": row.passing_ints})
-            elif posName == 'RB':
-                base.update({"rushingYards": row.rushing_yards, "rushingTds": row.rushing_tds})
-            elif posName in ('WR', 'TE'):
-                base.update({"receivingYards": row.receiving_yards, "receivingTds": row.receiving_tds, "receptions": row.receptions})
-            elif posName == 'K':
-                ks = row.kicking_stats or {}
-                base.update({"fgMade": ks.get('fgs', 0), "fgAttempted": ks.get('fgAtt', 0), "fgPct": round(ks.get('fgPerc', 0), 1)})
-            return base
-
-        # Mental snapshot helper — attitude + mood + key intangibles for
-        # the ballot row. Users care about toxicity (attitude) and
-        # current state (mood) when deciding who to sign; resilience and
-        # pressure-handling matter on the margin. Skips missing fields
-        # so generated rookies/prospects without personalities don't break.
-        # Two-way archetype (sword/shield icons) — identical logic to the player
-        # hover card, so the ballot only shows the icons for 4+ star offense/
-        # defense players (and never kickers), not for everyone.
-        def _archetype(pl):
-            return PlayerResponseBuilder.classifyArchetype(
-                PlayerResponseBuilder.calculateStarRating(getattr(pl, 'offensiveRating', 0) or 0),
-                PlayerResponseBuilder.calculateStarRating(getattr(pl, 'defensiveRating', 0) or 0),
-                getattr(pl, 'defensivePosition', None) is not None,
-            )
-
-        def _mental(pl):
-            attrs = getattr(pl, 'attributes', None)
-            if attrs is None:
-                return {}
-            out = {}
-            att = getattr(attrs, 'attitude', None)
-            if att is not None:
-                out['attitude'] = int(att)
-            personality = getattr(attrs, 'personality', None)
-            if personality and hasattr(attrs, 'getMood'):
-                try:
-                    moodLabel, moodTier = attrs.getMood()
-                    out['mood'] = moodLabel
-                    out['moodTier'] = moodTier
-                except Exception:
-                    pass
-            res = getattr(attrs, 'resilience', None)
-            if res is not None:
-                out['resilience'] = int(res)
-            ph = getattr(attrs, 'pressureHandling', None)
-            if ph is not None:
-                out['pressureHandling'] = int(ph)
-            return out
-
-        players = []
-        # Track emitted player IDs so the same player doesn't appear in
-        # multiple categories (FA + projected FA, or rostered + prospects)
-        # if underlying state is inconsistent. Frontend dedups too but we
-        # want a clean feed regardless.
-        seenPlayerIds: set = set()
-        for p in pm.freeAgents:
-            # A retiring player isn't a signable free agent (defensive — they
-            # should already be off the FA list once retirement processes).
-            if getattr(p, 'willRetire', False):
-                continue
-            if p.id in seenPlayerIds:
-                continue
-            seenPlayerIds.add(p.id)
-            posName = p.position.name
-            row = statsRows.get(p.id)
-            perfRating = getattr(p, 'seasonPerformanceRating', 0) or 0
-            overallRating = round(p.playerRating)
-            players.append({
-                "id": p.id,
-                "name": p.name,
-                "position": posName,
-                "rating": round(p.playerRating, 1),
-                "offensiveRating": round(getattr(p, 'offensiveRating', 0) or 0, 1),
-                "defensiveRating": round(getattr(p, 'defensiveRating', 0) or 0, 1),
-                "tier": p.playerTier.name,
-                "performanceRating": perfRating,
-                "ratingDelta": perfRating - overallRating,
-                "stats": formatStats(row, posName),
-                "isRookie": p.id in rookieIds,
-                "isProspect": False,
-                "isProjected": False,
-                # Career-arc stage (developing → prime → aging → near_retirement)
-                # so fans can weigh runway, not just rating — and avoid stacking
-                # an already-old roster with another vet near the end. Age-based
-                # (an FA gets a fresh term on signing), anchored to the sim's
-                # real peakSeason.
-                "careerStage": pm.computeCareerStage(p),
-                "archetype": _archetype(p),
-                **_mental(p),
-            })
-
-        # Projected FAs: rostered players on OTHER teams whose contracts are
-        # ending OR who have enough cut votes to likely be cut. Walk-year
-        # players whose board is likely to re-sign them are excluded — they
-        # probably won't hit FA.
-        def isProjectedFa(teamId: int, rp) -> tuple:
-            """Returns (include, reason) — include=True means put them in the pool.
-            reason is 'walk_year' or 'cut_vote' for UI context.
-            """
-            termRem = getattr(rp, 'termRemaining', 99)
-            pid = rp.id
-            # Retiring players leave the league entirely — they never reach the
-            # FA pool, so they must not be projected as signable free agents
-            # (retirement overrides a walk year or a cut vote).
-            if getattr(rp, 'willRetire', False):
-                return (False, None)
-            if likelyCut(teamId, pid):
-                return (True, 'cut_vote')
-            if termRem <= 1 and not likelyResigned(teamId, pid):
-                return (True, 'walk_year')
-            return (False, None)
-
-        if teamManager:
-            # Pre-collect eligible projected IDs so we can batch-fetch stats
-            projectedEntries = []  # (team, rp, reason)
-            for team in teamManager.teams:
-                if favTeam and team.id == favTeam.id:
-                    continue  # Fans can't draft their own roster
-                for pos, rp in team.rosterDict.items():
-                    if rp is None:
-                        continue
-                    include, reason = isProjectedFa(team.id, rp)
-                    if include:
-                        projectedEntries.append((team, rp, reason))
-
-            projStatsRows = {}
-            if projectedEntries:
-                projIds = [rp.id for _t, rp, _r in projectedEntries]
-                rows = session.query(PlayerSeasonStats).filter(
-                    PlayerSeasonStats.player_id.in_(projIds),
-                    PlayerSeasonStats.season == seasonNum,
-                ).all()
-                for r in rows:
-                    projStatsRows[r.player_id] = r
-
-            for team, rp, reason in projectedEntries:
-                if rp.id in seenPlayerIds:
-                    continue
-                seenPlayerIds.add(rp.id)
-                posName = rp.position.name
-                perfRating = getattr(rp, 'seasonPerformanceRating', 0) or 0
-                overallRating = round(rp.playerRating)
-                players.append({
-                    "id": rp.id,
-                    "name": rp.name,
-                    "position": posName,
-                    "rating": round(rp.playerRating, 1),
-                    "offensiveRating": round(getattr(rp, 'offensiveRating', 0) or 0, 1),
-                    "defensiveRating": round(getattr(rp, 'defensiveRating', 0) or 0, 1),
-                    "tier": rp.playerTier.name,
-                    "performanceRating": perfRating,
-                    "ratingDelta": perfRating - overallRating,
-                    "stats": formatStats(projStatsRows.get(rp.id), posName),
-                    "isRookie": False,
-                    "isProspect": False,
-                    "isProjected": True,
-                    "projectedReason": reason,  # 'walk_year' or 'cut_vote'
-                    "currentTeam": team.abbr,
-                    "careerStage": pm.computeCareerStage(rp),
-                    "archetype": _archetype(rp),
-                    **_mental(rp),
-                })
-
-        # Include the favorite team's prospects as ballot candidates too, so fans
-        # can rank "promote this prospect" alongside "sign this FA" in a single
-        # ranked vote. Resolution treats prospect IDs as promote directives, FA
-        # IDs as sign directives. Both share the same ranked-choice space.
-        if favTeam:
-            for p in getattr(favTeam, 'prospects', []):
-                if p.id in seenPlayerIds:
-                    continue
-                seenPlayerIds.add(p.id)
-                posName = p.position.name
-                perfRating = getattr(p, 'seasonPerformanceRating', 0) or 0
-                overallRating = round(p.playerRating)
-                players.append({
-                    "id": p.id,
-                    "name": p.name,
-                    "position": posName,
-                    "rating": round(p.playerRating, 1),
-                    "offensiveRating": round(getattr(p, 'offensiveRating', 0) or 0, 1),
-                    "defensiveRating": round(getattr(p, 'defensiveRating', 0) or 0, 1),
-                    "tier": p.playerTier.name,
-                    "performanceRating": perfRating,
-                    "ratingDelta": perfRating - overallRating,
-                    "stats": None,  # prospects haven't played — no season stats
-                    "isRookie": False,
-                    "isProspect": True,
-                    "careerStage": pm.computeCareerStage(p),  # ~always 'developing'
-                    "archetype": _archetype(p),
-                    **_mental(p),
-                })
-
-        # Live ballot tally — runs the same instant-runoff (IRV) tally the
-        # offseason resolver uses, so the order shown matches the order the
-        # FA draft would actually pull. With one ballot, IRV produces that
-        # ballot's exact ranking. With multiple, it resolves through
-        # elimination rounds — a candidate who's nobody's #1 still climbs
-        # if they're consistently ranked high.
-        from database.repositories.gm_repository import GmFaBallotRepository
-        from managers.gmManager import GmManager
-        ballotRepo = GmFaBallotRepository(session)
-        ballots = ballotRepo.getRankingsForTeam(favTeam.id, seasonNum) if favTeam else []
-
-        mentionCount: Dict[int, int] = {}
-        firstChoiceCount: Dict[int, int] = {}
-        for ballot in ballots:
-            for rank, pid in enumerate(ballot):
-                mentionCount[pid] = mentionCount.get(pid, 0) + 1
-                if rank == 0:
-                    firstChoiceCount[pid] = firstChoiceCount.get(pid, 0) + 1
-
-        # Build candidate lookup. Ballots can rank:
-        #   - current FAs (pm.freeAgents)
-        #   - fan team's prospects (pipeline promotions)
-        #   - projected FAs from OTHER teams (walk-year / cut-vote candidates
-        #     who are still rostered). Must sweep every team's roster +
-        #     prospect pool so these IDs resolve, otherwise whole positions
-        #     silently drop out of the tally.
-        playerLookup = {p.id: p for p in pm.freeAgents}
-        if teamManager:
-            for t in teamManager.teams:
-                for p in getattr(t, 'prospects', []):
-                    playerLookup[p.id] = p
-                for _slot, p in t.rosterDict.items():
-                    if p is not None:
-                        playerLookup[p.id] = p
-
-        # Eligible candidates for the IRV: every player at an open position
-        # (open right now OR projected to open). Mirrors the resolver's
-        # eligibility logic so the live tally matches what would resolve.
-        POS_NAME_TO_VAL = {'QB': 1, 'RB': 2, 'WR': 3, 'TE': 4, 'K': 5}
-        openPosVals = {POS_NAME_TO_VAL[s['position']] for s in openSlots
-                       if s.get('position') in POS_NAME_TO_VAL}
-        eligibleCandidates: set = set()
-        for pid, p in playerLookup.items():
-            posVal = getattr(getattr(p, 'position', None), 'value', None)
-            if posVal in openPosVals:
-                eligibleCandidates.add(pid)
-
-        gmTally = GmManager(session)
-        rankedIds = gmTally._tallyFullRankingOverall(ballots, eligibleCandidates)
-
-        ballotTally: List[Dict] = []
-        for pid in rankedIds:
-            p = playerLookup.get(pid)
-            if not p:
-                continue
-            ballotTally.append({
-                "id": p.id,
-                "name": p.name,
-                "position": p.position.name,
-                "rating": round(getattr(p, 'playerRating', 0), 1),
-                "votes": mentionCount.get(pid, 0),
-                "firstChoice": firstChoiceCount.get(pid, 0),
-                "isProspect": bool(getattr(p, 'is_prospect', False)),
-            })
-
-        return build_success_response({
-            "openSlots": openSlots,
-            "players": players,
-            "ballotTally": ballotTally,
-            "totalBallots": len(ballots),
-        })
-    finally:
-        session.close()
-
-
-@app.post("/api/gm/fa-ballot")
-def submit_fa_ballot(req: GmFaBallotRequest, user: _User = Depends(_getCurrentUser)):
-    """Submit or update a ranked FA ballot during the voting window."""
-    from database.connection import get_session
-    from database.repositories.gm_repository import GmFaBallotRepository
-    from database.repositories.card_repositories import CurrencyRepository
-    from database.models import User
-    from constants import GM_FA_BALLOT_COST, GM_FA_BALLOT_MAX_RANKINGS
-
-    if not req.rankings or len(req.rankings) > GM_FA_BALLOT_MAX_RANKINGS:
-        raise HTTPException(400, f"Provide 1-{GM_FA_BALLOT_MAX_RANKINGS} ranked player IDs")
-
-    # Validate the optional position-priority order: distinct position values 1-5.
-    positionPriority = req.positionPriority
-    if positionPriority is not None:
-        if (len(positionPriority) != len(set(positionPriority))
-                or any(p not in (1, 2, 3, 4, 5) for p in positionPriority)):
-            raise HTTPException(400, "positionPriority must be distinct position values 1-5")
-
-    session = get_session()
-    try:
-        dbUser = session.query(User).filter_by(id=user.id).first()
-        if not dbUser or not dbUser.favorite_team_id:
-            raise HTTPException(400, "You must have a favorite team to vote")
-
-        teamId = dbUser.favorite_team_id
-        sm = floosball_app.seasonManager if floosball_app else None
-        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-
-        # Accept ballots whenever the Board is convened: week 22+, the offseason
-        # FA window, or any point during the offseason itself. Fans can draft
-        # and revise a ranked list well before the offseason opens.
-        from constants import GM_ACTIVE_WEEK
-        faWindowOpen = getattr(sm, '_faWindowOpen', False) if sm else False
-        currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
-        isOffseason = (sm.currentSeason.currentWeekText == 'Offseason') if sm and sm.currentSeason else False
-        boardActive = currentWeek >= GM_ACTIVE_WEEK or isOffseason or faWindowOpen
-        if not boardActive:
-            raise HTTPException(400, f"FA requisitions open in Week {GM_ACTIVE_WEEK}")
-
-        # Sanity-check: every ranked player ID must resolve to a known
-        # candidate (FA, prospect, or rostered player). The frontend modal
-        # already restricts the picker to candidates at open positions, so
-        # this is mainly to keep stale or malformed submissions from
-        # filling the ballot with unresolvable IDs that would silently
-        # drop out at resolution time.
-        pm = floosball_app.playerManager if floosball_app else None
-        teamManager = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
-        knownIds: set = set()
-        if pm:
-            knownIds.update(p.id for p in pm.freeAgents)
-        if teamManager:
-            for t in teamManager.teams:
-                for p in getattr(t, 'prospects', []):
-                    knownIds.add(p.id)
-                for _slot, p in t.rosterDict.items():
-                    if p is not None:
-                        knownIds.add(p.id)
-        cleanedRankings = [pid for pid in req.rankings if pid in knownIds]
-        if not cleanedRankings:
-            raise HTTPException(400, "No valid candidates in ballot")
-
-        ballotRepo = GmFaBallotRepository(session)
-        existing = ballotRepo.getUserBallot(user.id, teamId, currentSeason)
-
-        costPaid = 0
-        if not existing:
-            # First submission — charge ballot cost
-            currencyRepo = CurrencyRepository(session)
-            result = currencyRepo.spendFunds(
-                user.id, GM_FA_BALLOT_COST, "gm_fa_ballot",
-                "GM FA ballot submission", currentSeason,
-            )
-            if result is None:
-                raise HTTPException(400, "Insufficient Floobits")
-            costPaid = GM_FA_BALLOT_COST
-
-        ballot = ballotRepo.submitBallot(
-            userId=user.id, teamId=teamId, season=currentSeason,
-            rankings=cleanedRankings, costPaid=costPaid,
-            positionPriority=positionPriority,
-        )
-        session.commit()
-
-        return build_success_response({
-            "ballotId": ballot.id,
-            "rankings": cleanedRankings,
-            "positionPriority": positionPriority,
-            "costPaid": costPaid,
-            "isUpdate": existing is not None,
-        })
-    except HTTPException:
-        raise
-    except Exception as e:
-        session.rollback()
-        logger.error(f"FA ballot error: {e}")
-        raise HTTPException(500, "Failed to submit ballot")
-    finally:
-        session.close()
-
-
-@app.get("/api/rookies/upcoming")
-def get_upcoming_rookies(user: Optional[_User] = Depends(_getOptionalUser)):
-    """The season's rookie class, with scouting-blurred potentials.
-
-    Generated at season start, visible all season. Potentials are revealed
-    according to the viewer's favorite team's effective scouting (coach
-    scouting + funding tier bonus). Unauthenticated visitors get the widest
-    blur band.
-    """
-    if floosball_app is None:
-        raise HTTPException(503, "Application not initialized")
-    from constants import GM_ACTIVE_WEEK
-    pm = floosball_app.playerManager
-    sm = floosball_app.seasonManager
-    tm = floosball_app.teamManager
-
-    upcoming = [p for p in pm.activePlayers if getattr(p, 'is_upcoming_rookie', False)]
-
-    # Determine viewer's effective scouting
-    effectiveScouting = 60  # default: worst-band blur
-    scoutTeam = None
-    if user and getattr(user, 'favorite_team_id', None):
-        scoutTeam = tm.getTeamById(user.favorite_team_id) if tm else None
-        if scoutTeam:
-            coachScouting = getattr(getattr(scoutTeam, 'coach', None), 'scouting', 80) or 80
-            # Scouting Department level (Markets→Facilities) replaces the old
-            # market-tier scouting bonus; migrated levels reproduce the tier perk.
-            tierBonus = scoutTeam.facilityEffect('scouting_bonus') if hasattr(scoutTeam, 'facilityEffect') else 0
-            effectiveScouting = max(0, min(100, coachScouting + tierBonus))
-
-    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
-    seasonNumber = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-
-    rookies = [pm.scoutRookie(r, effectiveScouting) for r in upcoming]
-    rookies.sort(key=lambda r: (-r['rating'], r['position'], r['name']))
-
-    # Voting window matches the submit endpoint exactly:
-    #   Opens when Front Office opens (week >= GM_ACTIVE_WEEK) OR the season
-    #   is complete (covers the 15+ hour post_bowl + frontoffice gap when
-    #   currentWeek resets to 0 but the user can still legitimately vote).
-    #   Closes the moment the rookie draft phase actually begins.
-    # The previous gate of `currentWeek >= GM_ACTIVE_WEEK` alone silently
-    # closed the UI at offseason start (currentWeek=0) even though the
-    # backend submit would still accept ballots.
-    flowPhase = getattr(sm, '_offseasonFlowPhase', None)
-    seasonComplete = getattr(sm.currentSeason, 'isComplete', False) if sm and sm.currentSeason else False
-    weekOpen = isinstance(currentWeek, int) and currentWeek >= GM_ACTIVE_WEEK
-    draftStartedOrLater = flowPhase in ('rookie_draft', 'pre_fa', 'fa_draft', 'training')
-    votingOpen = (seasonComplete or weekOpen) and not draftStartedOrLater
-
-    return build_success_response({
-        "season": seasonNumber,
-        "currentWeek": currentWeek,
-        "votingOpensWeek": GM_ACTIVE_WEEK,
-        "votingOpen": votingOpen,
-        "effectiveScouting": effectiveScouting,
-        "scoutingTeamId": scoutTeam.id if scoutTeam else None,
-        "rookies": rookies,
-    })
-
-
-class RookieBallotRequest(BaseModel):
-    rankings: List[int]
-
-
-@app.post("/api/gm/rookie-ballot")
-def submit_rookie_ballot(req: RookieBallotRequest, user: _User = Depends(_getCurrentUser)):
-    """Submit or update a ranked rookie-draft ballot.
-
-    Window: opens when the Front Office opens (week >= GM_ACTIVE_WEEK) and
-    closes when the regular season ends (start of offseason). Flat
-    GM_ROOKIE_BALLOT_COST — first submission charges once; updates are free.
-    """
-    import json as _json
-    from database.connection import get_session
-    from database.models import User, GmVote
-    from database.repositories.card_repositories import CurrencyRepository
-    from constants import GM_ROOKIE_BALLOT_COST, GM_ROOKIE_DRAFT_MAX_RANKINGS, GM_ACTIVE_WEEK
-
-    if floosball_app is None:
-        raise HTTPException(503, "Application not initialized")
-    sm = floosball_app.seasonManager
-
-    if not req.rankings:
-        raise HTTPException(400, "Provide at least one ranked rookie ID")
-    if len(req.rankings) > GM_ROOKIE_DRAFT_MAX_RANKINGS:
-        raise HTTPException(400, f"Max {GM_ROOKIE_DRAFT_MAX_RANKINGS} rookies per ballot")
-
-    # Gate: Front Office opens at GM_ACTIVE_WEEK. Voting stays open through
-    # playoffs, the post-bowl quiet, the front-office phase, AND the long
-    # noon-ET wait — fans can revise their ballots up until the moment the
-    # rookie draft actually kicks off. The flow phase is the canonical signal:
-    # closed once we hit rookie_draft or any later phase (pre_fa, fa_draft,
-    # training). Pre-flow weeks (regular season Week 22+) are still gated by
-    # week number alone since the flow phase isn't set yet.
-    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
-    flowPhase = getattr(sm, '_offseasonFlowPhase', None)
-    seasonComplete = getattr(sm.currentSeason, 'isComplete', False) if sm and sm.currentSeason else False
-    # Pre-offseason gate: must be ≥ Week 22 unless we're already past playoffs
-    if not seasonComplete and (not isinstance(currentWeek, int) or currentWeek < GM_ACTIVE_WEEK):
-        raise HTTPException(400, f"Rookie draft voting opens in Week {GM_ACTIVE_WEEK}")
-    if flowPhase in ('rookie_draft', 'pre_fa', 'fa_draft', 'training'):
-        raise HTTPException(400, "Rookie draft voting is closed; the draft is underway")
-
-    session = get_session()
-    try:
-        dbUser = session.query(User).filter_by(id=user.id).first()
-        if not dbUser or not dbUser.favorite_team_id:
-            raise HTTPException(400, "You must have a favorite team to vote")
-
-        teamId = dbUser.favorite_team_id
-        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-
-        # Validate that every ID in rankings is an actual upcoming rookie
-        pm = floosball_app.playerManager
-        upcomingIds = {p.id for p in pm.activePlayers if getattr(p, 'is_upcoming_rookie', False)}
-        rankings = [int(r) for r in req.rankings if int(r) in upcomingIds]
-        if not rankings:
-            raise HTTPException(400, "None of the submitted IDs are upcoming rookies")
-
-        # Upsert: one draft_rookie vote per user per season
-        existing = session.query(GmVote).filter_by(
-            user_id=user.id, team_id=teamId, season=currentSeason,
-            vote_type='draft_rookie',
-        ).first()
-
-        costPaid = 0
-        if existing is None:
-            currencyRepo = CurrencyRepository(session)
-            result = currencyRepo.spendFunds(
-                user.id, GM_ROOKIE_BALLOT_COST, "gm_rookie_ballot",
-                "Rookie draft ballot", currentSeason,
-            )
-            if result is None:
-                raise HTTPException(400, "Insufficient Floobits")
-            costPaid = GM_ROOKIE_BALLOT_COST
-            vote = GmVote(
-                user_id=user.id, team_id=teamId, season=currentSeason,
-                vote_type='draft_rookie', cost_paid=costPaid,
-                details=_json.dumps(rankings),
-            )
-            session.add(vote)
-        else:
-            existing.details = _json.dumps(rankings)
-        session.commit()
-
-        return build_success_response({
-            "rankings": rankings,
-            "costPaid": costPaid,
-            "isUpdate": existing is not None,
-        })
-    except HTTPException:
-        raise
-    except Exception as e:
-        session.rollback()
-        logger.error(f"Rookie ballot error: {e}")
-        raise HTTPException(500, "Failed to submit rookie ballot")
-    finally:
-        session.close()
-
-
-@app.get("/api/gm/rookie-ballot")
-def get_my_rookie_ballot(user: _User = Depends(_getCurrentUser)):
-    """Return the user's current rookie-draft ballot for this season.
-
-    Includes enriched ranked-player info (name, position, rating, draftedBy)
-    so the Front Office page can show how each ballot pick resolved without
-    extra client-side lookups. After the rookie draft has happened, ranked
-    players have an `is_prospect=True` flag and a `drafting_team_id` —
-    those drive the `draftedByTeamAbbr` field below.
-    """
-    import json as _json
-    from database.connection import get_session
-    from database.models import User, GmVote
-
-    if floosball_app is None:
-        raise HTTPException(503, "Application not initialized")
-    sm = floosball_app.seasonManager
-    pm = floosball_app.playerManager
-    tm = floosball_app.teamManager
-
-    session = get_session()
-    try:
-        dbUser = session.query(User).filter_by(id=user.id).first()
-        teamId = dbUser.favorite_team_id if dbUser else None
-        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-        if not teamId:
-            return build_success_response({"rankings": [], "hasBallot": False, "rankedPlayers": []})
-
-        existing = session.query(GmVote).filter_by(
-            user_id=user.id, team_id=teamId, season=currentSeason,
-            vote_type='draft_rookie',
-        ).first()
-
-        rankings: List[int] = []
-        if existing and existing.details:
-            try:
-                parsed = _json.loads(existing.details)
-                if isinstance(parsed, list):
-                    rankings = [int(x) for x in parsed if isinstance(x, (int, str)) and str(x).lstrip('-').isdigit()]
-            except Exception:
-                pass
-
-        # Enrich each ranked player with current state (drafted by which team,
-        # rating, position). Pre-draft they're still upcoming rookies; post-
-        # draft they've been promoted to prospects on a team's pipeline.
-        rankedPlayers = []
-        playerLookup = {p.id: p for p in pm.activePlayers}
-        for pid in rankings:
-            p = playerLookup.get(pid)
-            if not p:
-                continue
-            draftingTeamId = getattr(p, 'drafting_team_id', None)
-            draftingAbbr = None
-            if draftingTeamId and tm:
-                t = tm.getTeamById(draftingTeamId)
-                if t:
-                    draftingAbbr = getattr(t, 'abbr', None)
-            rankedPlayers.append({
-                "id": p.id,
-                "name": p.name,
-                "position": p.position.name,
-                "rating": round(getattr(p, 'playerRating', 0), 1),
-                "tier": getattr(p, 'playerTier', None).name if getattr(p, 'playerTier', None) else None,
-                "draftedByTeamId": draftingTeamId,
-                "draftedByTeamAbbr": draftingAbbr,
-                "isStillUpcoming": bool(getattr(p, 'is_upcoming_rookie', False)),
-            })
-
-        return build_success_response({
-            "rankings": rankings,
-            "hasBallot": existing is not None,
-            "rankedPlayers": rankedPlayers,
-        })
-    finally:
-        session.close()
-
-
-@app.get("/api/gm/votes")
-def get_my_gm_votes(user: _User = Depends(_getCurrentUser)):
-    """Get current user's GM votes this season."""
-    from database.connection import get_session
-    from database.repositories.gm_repository import GmVoteRepository
-
-    session = get_session()
-    try:
-        sm = floosball_app.seasonManager if floosball_app else None
-        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-        voteRepo = GmVoteRepository(session)
-        votes = voteRepo.getUserVotes(user.id, currentSeason)
-        counts = voteRepo.getUserVoteCounts(user.id, currentSeason)
-
-        return build_success_response({
-            "season": currentSeason,
-            "votes": [
-                {
-                    "id": v.id,
-                    "voteType": v.vote_type,
-                    "targetPlayerId": v.target_player_id,
-                    "direction": getattr(v, 'direction', 'yea') or 'yea',
-                    "costPaid": v.cost_paid,
-                    "createdAt": v.created_at.isoformat() + 'Z' if v.created_at else None,
-                }
-                for v in votes
-            ],
-            "counts": counts,
-        })
-    finally:
-        session.close()
-
-
-@app.get("/api/gm/results")
-def get_gm_results(user: _User = Depends(_getCurrentUser)):
-    """Get GM vote resolution results for user's favorite team."""
-    import json as _json
-    from database.connection import get_session
-    from database.repositories.gm_repository import GmVoteRepository
-    from database.models import User, Player, Coach
-
-    session = get_session()
-    try:
-        dbUser = session.query(User).filter_by(id=user.id).first()
-        if not dbUser or not dbUser.favorite_team_id:
-            return build_success_response({"results": []})
-
-        sm = floosball_app.seasonManager if floosball_app else None
-        currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
-        voteRepo = GmVoteRepository(session)
-        results = voteRepo.getResults(dbUser.favorite_team_id, currentSeason)
-
-        # Collect referenced player / coach IDs so we can resolve display names in two batched queries.
-        # target_player_id stores a Player.id for cut_player/resign_player and a Coach.id for hire_coach.
-        # sign_fa rows have no target_player_id but stash a list of player IDs in details.directives.
-        playerIds: set[int] = set()
-        coachIds: set[int] = set()
-        for r in results:
-            if r.vote_type == "hire_coach" and r.target_player_id:
-                coachIds.add(r.target_player_id)
-            elif r.target_player_id:
-                playerIds.add(r.target_player_id)
-            if r.vote_type == "sign_fa" and r.details:
-                try:
-                    d = _json.loads(r.details)
-                    for pid in d.get("directives") or []:
-                        if isinstance(pid, int):
-                            playerIds.add(pid)
-                except Exception:
-                    pass
-
-        playerNames: Dict[int, str] = {}
-        if playerIds:
-            for p in session.query(Player.id, Player.name).filter(Player.id.in_(playerIds)).all():
-                playerNames[p.id] = p.name
-        coachNames: Dict[int, str] = {}
-        if coachIds:
-            for c in session.query(Coach.id, Coach.name).filter(Coach.id.in_(coachIds)).all():
-                coachNames[c.id] = c.name
-
-        payload = []
-        for r in results:
-            # Resolve the primary target name based on vote type.
-            targetName: Optional[str] = None
-            if r.vote_type == "hire_coach" and r.target_player_id:
-                targetName = coachNames.get(r.target_player_id)
-            elif r.target_player_id:
-                targetName = playerNames.get(r.target_player_id)
-
-            # sign_fa: expand directives (ordered list of player IDs) into ordered names.
-            directiveNames: List[str] = []
-            if r.vote_type == "sign_fa" and r.details:
-                try:
-                    d = _json.loads(r.details)
-                    for pid in d.get("directives") or []:
-                        nm = playerNames.get(pid)
-                        if nm:
-                            directiveNames.append(nm)
-                except Exception:
-                    pass
-
-            payload.append({
-                "id": r.id,
-                "voteType": r.vote_type,
-                "targetPlayerId": r.target_player_id,
-                "targetName": targetName,
-                "directiveNames": directiveNames,
-                "totalVotes": r.total_votes,
-                "threshold": r.threshold,
-                "probability": r.success_probability,
-                "outcome": r.outcome,
-                "details": r.details,
-                "resolvedAt": r.resolved_at.isoformat() + 'Z' if r.resolved_at else None,
-            })
-
-        return build_success_response({
-            "teamId": dbUser.favorite_team_id,
-            "season": currentSeason,
-            "results": payload,
-        })
-    finally:
-        session.close()
 
 
 # ============================================================================
@@ -12370,6 +11076,436 @@ def cast_mvp_vote(req: _MvpVoteRequest, user: _User = Depends(_getCurrentUser)):
             "season": season,
             "myVote": req.playerId,
             "tally": am.voteRepo.getTally(season, 'mvp'),
+        })
+    finally:
+        session.close()
+
+
+# ── Fan sentiment (AFO plan Part D) ───────────────────────────────────────────
+# Fans rate players 1-5. This binds NOTHING — it expresses how a fan feels, and
+# the sim's GM weighs it in proportion to their own fanTrust. Free to cast.
+
+
+class _SentimentRatingRequest(BaseModel):
+    rating: int   # 1..5
+
+
+def _sentimentRepo(session):
+    from database.repositories.sentiment_repository import SentimentRepository
+    return SentimentRepository(session)
+
+
+@app.post("/api/players/{playerId}/rating")
+def set_player_sentiment(playerId: int, req: _SentimentRatingRequest,
+                         user: _User = Depends(_getCurrentUser)):
+    """Cast or change this fan's standing 1-5 rating of a player.
+
+    Net one per fan per player — re-rating replaces, it does not stack.
+    """
+    from constants import SENTIMENT_ENABLED
+    if not SENTIMENT_ENABLED:
+        raise HTTPException(400, "Player ratings are not enabled")
+    from database.connection import get_session
+    session = get_session()
+    try:
+        _requireOwnClub(user, _playerTeamId(playerId))
+        repo = _sentimentRepo(session)
+        try:
+            repo.setRating(user.id, playerId, req.rating)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+        # Your rating shows up in the feed in your own voice. Display only —
+        # the rating already counts as sentiment, so the post never feeds the
+        # model again. Re-rating replaces the previous post.
+        try:
+            from constants import FEED_ENABLED
+            if FEED_ENABLED:
+                teamId = _playerTeamId(playerId)
+                if teamId:
+                    from database.repositories.feed_repository import FeedRepository
+                    FeedRepository(session).autoPostForRating(
+                        user.id, teamId, playerId, req.rating)
+        except Exception:
+            pass   # the feed echo must never fail the rating itself
+        session.commit()
+        average, raters = repo.getAggregate(playerId)
+        # The quorum scales with the engaged fanbase, so a busier league needs
+        # more turnout before a number is trustworthy. Below it the aggregate is
+        # withheld — showing it invites brigading a figure one or two people set.
+        need = repo.requiredRaters()
+        return build_success_response({
+            "playerId": playerId,
+            "myRating": req.rating,
+            "average": round(average, 2) if raters >= need else None,
+            "raters": raters,
+            "ratersNeeded": max(0, need - raters),
+            "ratersRequired": need,
+        })
+    finally:
+        session.close()
+
+
+@app.delete("/api/players/{playerId}/rating")
+def clear_player_sentiment(playerId: int, user: _User = Depends(_getCurrentUser)):
+    """Withdraw this fan's rating of a player."""
+    from database.connection import get_session
+    _requireOwnClub(user, _playerTeamId(playerId))
+    session = get_session()
+    try:
+        repo = _sentimentRepo(session)
+        removed = repo.clearRating(user.id, playerId)
+        session.commit()
+        average, raters = repo.getAggregate(playerId)
+        return build_success_response({
+            "playerId": playerId, "removed": removed, "raters": raters,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/players/{playerId}/rating")
+def get_player_sentiment(playerId: int, user: Optional[_User] = Depends(_getOptionalUser)):
+    """This player's fan standing, plus the viewer's own rating if signed in."""
+    from database.connection import get_session
+    session = get_session()
+    try:
+        repo = _sentimentRepo(session)
+        average, raters = repo.getAggregate(playerId)
+        need = repo.requiredRaters()
+        settled = raters >= need
+        return build_success_response({
+            "playerId": playerId,
+            "myRating": repo.getUserRating(user.id, playerId) if user else None,
+            "average": round(average, 2) if settled else None,
+            "raters": raters,
+            "ratersNeeded": max(0, need - raters),
+            "ratersRequired": need,
+            "sentiment": round(repo.getSentiment(playerId), 3) if settled else None,
+        })
+    finally:
+        session.close()
+
+
+def _requireOwnClub(user, teamId: int):
+    """Sentiment is only yours to give about YOUR club.
+
+    Enforced server-side, not just in the UI: these signals feed the autonomous
+    GM brain and GM fire/leave risk, so an open endpoint would let anyone
+    brigade a rival's roster decisions.
+    """
+    favorite = getattr(user, 'favorite_team_id', None)
+    if not favorite:
+        raise HTTPException(400, "Pick a favourite team before having your say")
+    if teamId is None or int(favorite) != int(teamId):
+        raise HTTPException(403, "You can only have your say about your own club")
+
+
+def _playerTeamId(playerId: int):
+    """Team a player is on, or None if unrostered (a free agent has no feed)."""
+    pm = floosball_app.playerManager if floosball_app else None
+    if pm is None:
+        return None
+    player = (pm.getPlayerById(playerId) if hasattr(pm, 'getPlayerById') else None)
+    if player is None:
+        player = next((p for p in pm.activePlayers if p.id == playerId), None)
+    return getattr(getattr(player, 'team', None), 'id', None)
+
+
+class _CoachRatingRequest(BaseModel):
+    rating: int   # 1-5, same scale as players
+
+
+def _coachSentimentRepo(session):
+    from database.repositories.sentiment_repository import CoachSentimentRepository
+    return CoachSentimentRepository(session)
+
+
+@app.post("/api/teams/{teamId}/gm-vote")
+def rate_gm(teamId: int, req: _CoachRatingRequest, user: _User = Depends(_getCurrentUser)):
+    """Rate a team's GM 1-5 — the same scale players are rated on."""
+    from database.connection import get_session
+    tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+    team = next((t for t in tm.teams if t.id == teamId), None) if tm else None
+    coach = getattr(team, 'coach', None)
+    if coach is None or getattr(coach, 'id', None) is None:
+        raise HTTPException(404, "That team has no GM right now")
+    _requireOwnClub(user, teamId)
+
+    session = get_session()
+    try:
+        repo = _coachSentimentRepo(session)
+        try:
+            repo.setRating(user.id, coach.id, req.rating)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        try:
+            from constants import FEED_ENABLED
+            if FEED_ENABLED:
+                from database.repositories.feed_repository import FeedRepository
+                FeedRepository(session).autoPostForCoachRating(user.id, teamId, req.rating)
+        except Exception:
+            pass
+        session.commit()
+        average, raters = repo.getAggregate(coach.id)
+        need = repo.requiredRaters()
+        return build_success_response({
+            "teamId": teamId, "coachId": coach.id,
+            "myRating": req.rating,
+            "average": round(average, 2) if raters >= need else None,
+            "raters": raters,
+            "ratersNeeded": max(0, need - raters),
+            "ratersRequired": need,
+        })
+    finally:
+        session.close()
+
+
+@app.delete("/api/teams/{teamId}/gm-vote")
+def clear_gm_rating(teamId: int, user: _User = Depends(_getCurrentUser)):
+    """Withdraw this fan's GM rating, and the post it generated."""
+    from database.connection import get_session
+    _requireOwnClub(user, teamId)
+    tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+    team = next((t for t in tm.teams if t.id == teamId), None) if tm else None
+    coach = getattr(team, 'coach', None)
+    if coach is None or getattr(coach, 'id', None) is None:
+        raise HTTPException(404, "That team has no GM right now")
+    session = get_session()
+    try:
+        repo = _coachSentimentRepo(session)
+        removed = repo.clearRating(user.id, coach.id)
+        try:
+            from database.repositories.feed_repository import FeedRepository
+            FeedRepository(session).autoPostForCoachRating(user.id, teamId, None)
+        except Exception:
+            pass
+        session.commit()
+        average, raters = repo.getAggregate(coach.id)
+        return build_success_response({
+            "teamId": teamId, "removed": removed, "raters": raters,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/teams/{teamId}/gm-vote")
+def get_gm_vote(teamId: int, user: Optional[_User] = Depends(_getOptionalUser)):
+    """A GM's standing with the fanbase, plus the viewer's own vote."""
+    from database.connection import get_session
+    tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+    team = next((t for t in tm.teams if t.id == teamId), None) if tm else None
+    coach = getattr(team, 'coach', None)
+    if coach is None or getattr(coach, 'id', None) is None:
+        return build_success_response({"teamId": teamId, "coachId": None,
+                                       "myRating": None, "average": None,
+                                       "raters": 0, "ratersNeeded": 0})
+    session = get_session()
+    try:
+        repo = _coachSentimentRepo(session)
+        average, raters = repo.getAggregate(coach.id)
+        need = repo.requiredRaters()
+        return build_success_response({
+            "teamId": teamId, "coachId": coach.id,
+            "myRating": repo.getUserRating(user.id, coach.id) if user else None,
+            "average": round(average, 2) if raters >= need else None,
+            "raters": raters,
+            "ratersNeeded": max(0, need - raters),
+            "ratersRequired": need,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/sentiment/boards")
+def get_sentiment_boards(limit: int = None, teamId: int = None):
+    """Fan Favorites and Most Hated — league-wide, or scoped to one team.
+
+    Rater-gated, so a board can't be topped by someone one person rated once.
+    """
+    from constants import SENTIMENT_BOARD_SIZE
+    from database.connection import get_session
+    session = get_session()
+    try:
+        repo = _sentimentRepo(session)
+        size = limit or SENTIMENT_BOARD_SIZE
+
+        # Team scope: restrict to that roster's player ids.
+        rosterIds = None
+        if teamId is not None:
+            tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+            team = next((t for t in tm.teams if t.id == teamId), None) if tm else None
+            rosterIds = [p.id for p in (team.rosterDict.values() if team else []) if p]
+            if not rosterIds:
+                return build_success_response({'favorites': [], 'villains': [],
+                                               'teamId': teamId})
+
+        loved = repo.getBoard(size, mostLoved=True, playerIds=rosterIds)
+        hated = repo.getBoard(size, mostLoved=False, playerIds=rosterIds)
+
+        pm = floosball_app.playerManager if floosball_app else None
+
+        def _lookup(pid):
+            if pm is None:
+                return None
+            if hasattr(pm, 'getPlayerById'):
+                found = pm.getPlayerById(pid)
+                if found is not None:
+                    return found
+            return next((p for p in pm.activePlayers if p.id == pid), None)
+
+        def _enrich(entries):
+            out = []
+            for e in entries:
+                pl = _lookup(e['playerId'])
+                # player.team is a Team OBJECT for rostered players (and a
+                # plain string like 'Free Agent' otherwise) — coerce to a name,
+                # or FastAPI tries to serialise the whole team and dies on its
+                # internal lock.
+                teamRef = getattr(pl, 'team', None)
+                teamName = getattr(teamRef, 'name', teamRef) if teamRef else None
+                out.append({**e,
+                            'name': getattr(pl, 'name', None),
+                            'position': getattr(getattr(pl, 'position', None), 'name', None),
+                            'team': teamName if isinstance(teamName, str) else None})
+            return out
+
+        # GM boards are league-wide regardless of team scope — there is only
+        # one GM per club, so a per-team GM board would be a list of one.
+        coachRepo = _coachSentimentRepo(session)
+        tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+        coachInfo = {}
+        for t in (tm.teams if tm else []):
+            c = getattr(t, 'coach', None)
+            if c is not None and getattr(c, 'id', None) is not None:
+                coachInfo[c.id] = {'name': c.name, 'team': t.name}
+
+        def _enrichCoach(entries):
+            return [{**e, **coachInfo.get(e['coachId'], {'name': None, 'team': None})}
+                    for e in entries]
+
+        return build_success_response({
+            "favorites": _enrich(loved),
+            "villains": _enrich(hated),
+            "gmsBacked": _enrichCoach(coachRepo.getBoard(size, mostLiked=True)),
+            "gmsUnderFire": _enrichCoach(coachRepo.getBoard(size, mostLiked=False)),
+            "teamId": teamId,
+        })
+    finally:
+        session.close()
+
+
+# ── Team social feed (AFO plan Part D, signal 2) ──────────────────────────────
+# Pre-made reactions only — no free text, so no moderation surface. Posts are
+# the emotional pulse: they age out and their influence decays with them.
+
+
+class _FeedPostRequest(BaseModel):
+    postKey: str
+    targetPlayerId: Optional[int] = None
+
+
+def _feedRepo(session):
+    from database.repositories.feed_repository import FeedRepository
+    return FeedRepository(session)
+
+
+@app.get("/api/feed/catalog")
+def get_feed_catalog():
+    """The pre-made posts a fan can choose from, grouped by target."""
+    from constants import FEED_POST_CATALOG, FEED_MAX_POSTS_PER_WINDOW, FEED_RATE_WINDOW_HOURS
+    grouped = {'player': [], 'gm': [], 'team': []}
+    for key, (text, target, valence) in FEED_POST_CATALOG.items():
+        grouped.setdefault(target, []).append(
+            {'key': key, 'text': text, 'valence': valence})
+    return build_success_response({
+        'catalog': grouped,
+        'rateLimit': {'perWindow': FEED_MAX_POSTS_PER_WINDOW,
+                      'windowHours': FEED_RATE_WINDOW_HOURS},
+    })
+
+
+@app.post("/api/teams/{teamId}/feed")
+def post_to_team_feed(teamId: int, req: _FeedPostRequest,
+                      user: _User = Depends(_getCurrentUser)):
+    """Post a pre-made reaction to a team's feed."""
+    from constants import FEED_ENABLED
+    if not FEED_ENABLED:
+        raise HTTPException(400, "The team feed is not enabled")
+    _requireOwnClub(user, teamId)
+    from database.connection import get_session
+    from database.repositories.feed_repository import FeedError
+    session = get_session()
+    try:
+        repo = _feedRepo(session)
+        try:
+            repo.addPost(user.id, teamId, req.postKey, req.targetPlayerId)
+        except FeedError as e:
+            raise HTTPException(400, str(e))
+        session.commit()
+        return build_success_response({
+            'teamId': teamId,
+            'postsRemaining': repo.remainingPosts(user.id),
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/teams/{teamId}/feed")
+def get_team_feed(teamId: int, limit: int = 50,
+                  user: Optional[_User] = Depends(_getOptionalUser)):
+    """A team's live feed, plus the mood and GM heat it adds up to."""
+    from database.connection import get_session
+    from database.repositories.feed_repository import renderPost, catalogEntry
+    session = get_session()
+    try:
+        repo = _feedRepo(session)
+        pm = floosball_app.playerManager if floosball_app else None
+
+        def _playerName(pid):
+            if pm is None or not pid:
+                return None
+            found = (pm.getPlayerById(pid) if hasattr(pm, 'getPlayerById') else None)
+            if found is None:
+                found = next((p for p in pm.activePlayers if p.id == pid), None)
+            return getattr(found, 'name', None)
+
+        coachName = None
+        tm = floosball_app.serviceContainer.getService('team_manager') if floosball_app else None
+        if tm:
+            team = next((t for t in tm.teams if t.id == teamId), None)
+            coachName = getattr(getattr(team, 'coach', None), 'name', None)
+
+        posts = []
+        for post in repo.getFeed(teamId, limit):
+            # Only player and GM posts have a subject; a team post is
+            # addressed to nobody and must not borrow the coach's name.
+            if post.target_type == 'player':
+                targetName = _playerName(post.target_player_id)
+            elif post.target_type == 'gm':
+                targetName = coachName
+            else:
+                targetName = None
+            entry = catalogEntry(post.post_key)
+            posts.append({
+                'id': post.id,
+                'postKey': post.post_key,
+                'text': renderPost(post.post_key, targetName),
+                'targetType': post.target_type,
+                'targetPlayerId': post.target_player_id,
+                'targetName': targetName,
+                'valence': entry[2] if entry else 0,
+                'createdAt': post.created_at.isoformat() if post.created_at else None,
+                'mine': bool(user and post.user_id == user.id),
+                'isAuto': bool(getattr(post, 'is_auto', False)),
+            })
+
+        # No aggregate mood band: the feeling should come across by READING the
+        # feed, not from a computed label sitting above it.
+        return build_success_response({
+            'teamId': teamId,
+            'posts': posts,
+            'postsRemaining': repo.remainingPosts(user.id) if user else None,
         })
     finally:
         session.close()

@@ -384,8 +384,14 @@ def getDefensiveScheme(defGameplan, down: int, yardsToGo: int, fieldPos: int,
         passDefMult += 0.15
         runDefMult -= 0.10
         passRushMult -= 0.10
-    elif down in (1, 2) and yardsToGo <= 3:
-        runDefMult += 0.25
+    elif yardsToGo <= 3:
+        # Short yardage — stack the box. This used to read `down in (1, 2)`,
+        # which left 3rd- and 4th-and-short matching NO branch at all: the
+        # defense stacked on 1st-and-2 but played neutral on 4th-and-1, the
+        # single most run-committed situation in football. Late downs now get
+        # the stack, and get MORE of it, because a stop there ends the drive.
+        _lateDownStack = 1.0 if down <= 2 else 1.35
+        runDefMult += 0.25 * _lateDownStack
         passDefMult -= 0.15
         passRushMult += 0.10
     elif fieldPos >= 80:
@@ -525,9 +531,18 @@ def adjustDefensiveGameplan(plan: DefensiveGameplan, coach, oppOffStats: dict, c
             fcounter = oppConcepts.get('counter', 0) / _total
             fsweep = oppConcepts.get('sweep', 0) / _total
             fpower = oppConcepts.get('power', 0) / _total
+            # A team that keeps sneaking gets the box stacked on it. Weighted
+            # ABOVE power because the sneak is the most interior run there is —
+            # there is nowhere else to look — and because the sneak concept is
+            # punished hardest by exactly this (edge.runFocus -0.55). Without
+            # this the D-coach never learned the tendency: sneaks weren't in
+            # the counter terms at all, so a team could sneak every short down
+            # unopposed.
+            fsneak = oppConcepts.get('sneak', 0) / _total
             a = adaptFactor * confidence * DEF_COUNTER_STRENGTH
             plan.blitzFrequency = float(np.clip(plan.blitzFrequency - a * fdraw * 0.9, 0.05, 0.50))
-            plan.runStopFocus = float(np.clip(plan.runStopFocus + a * (fpower + fdraw * 0.5) * 0.7, 0.20, 0.80))
+            plan.runStopFocus = float(np.clip(
+                plan.runStopFocus + a * (fpower + fsneak * 1.3 + fdraw * 0.5) * 0.7, 0.20, 0.80))
             plan.aggressiveness = float(np.clip(plan.aggressiveness + a * (fsweep - fcounter) * 0.8, 0.0, 1.0))
 
     oppYPC = oppOffStats['runYards'] / max(1, oppOffStats['runPlays'])

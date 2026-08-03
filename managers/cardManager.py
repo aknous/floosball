@@ -1,6 +1,7 @@
 """Card Manager - handles card template generation and card operations."""
 
 import random
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from logger_config import get_logger
 from managers.cardEffects import buildEffectConfig as _buildEffectConfig, getEffectOutputType, effectValidPositions as _effectValidPositions
@@ -58,13 +59,30 @@ BLENDER_THRESHOLDS = [
 # rework, grand and exquisite are no longer guaranteed daily fixtures, so
 # capping them at 1/day created the bad UX of a user rerolling into 3 packs
 # they already bought today. Per-pack daily caps removed for all tiers.
-DAILY_PACK_LIMITS: Dict[str, int] = {}
+# Per-pack daily caps, keyed by pack name. The window is a real UTC calendar day.
+DAILY_PACK_LIMITS: Dict[str, int] = {
+    # One Collection Pack a day (owner, 2026-08-02). It sits outside the cycle cap
+    # below, so this is the only thing pacing it — and a daily cadence suits a
+    # collection: something to come back for, rather than something to bulk-buy.
+    'themed_collection': 1,
+}
 
 # Total purchased packs (any tier) a user can open in one 7-week shop cycle.
 # Stops whales from buying dozens of packs and feeding the Combine to fabricate
 # rare cards in bulk. Free / achievement-granted packs (skipCurrency=True) and
 # the starter pack do NOT count toward this cap.
+#
+# The Collection Pack is ALSO exempt (see _countsTowardCycleCap). The cap exists
+# to stop pack-churning into Combine fuel, and collection cards land vaulted —
+# vaulted cards can't be combined — so the rationale doesn't apply. It also can't
+# be allowed to consume the cycle allowance during the postseason, when it is the
+# only pack on sale.
 MAX_PACKS_PER_SHOP_CYCLE: int = 5
+
+
+def _countsTowardCycleCap(packType) -> bool:
+    """Whether a pack consumes the per-cycle allowance."""
+    return not isAlwaysAvailablePack(packType)
 
 
 def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
@@ -103,22 +121,33 @@ def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
 def _countPacksThisCycle(session, userId: int, currentSeason: int, currentWeek: int) -> int:
     """Count packs the user has *purchased* (cost > 0) in the current shop
     cycle. Counts both committed PackOpening rows and in-flight
-    PendingPackOpening rows so a user mid-reveal can't open another."""
-    from database.models import PackOpening, PendingPackOpening
+    PendingPackOpening rows so a user mid-reveal can't open another.
+
+    EXCLUDES always-available packs (the Collection Pack). Exempting it from the
+    cap check alone would not be enough — if its opens still counted here, buying
+    five of them would silently exhaust the allowance for every other pack, which
+    is the opposite of exempt.
+    """
+    from database.models import PackOpening, PendingPackOpening, PackType
     cycleStart = _shopCycleStartDate(session, currentSeason, currentWeek)
     if cycleStart is None:
         return 0
+    exemptIds = [pt.id for pt in session.query(PackType).all()
+                 if isAlwaysAvailablePack(pt)]
     committed = session.query(PackOpening).filter(
         PackOpening.user_id == userId,
         PackOpening.opened_at >= cycleStart,
         PackOpening.cost > 0,
-    ).count()
+    )
     pending = session.query(PendingPackOpening).filter(
         PendingPackOpening.user_id == userId,
         PendingPackOpening.opened_at >= cycleStart,
         PendingPackOpening.cost_paid > 0,
-    ).count()
-    return committed + pending
+    )
+    if exemptIds:
+        committed = committed.filter(~PackOpening.pack_type_id.in_(exemptIds))
+        pending = pending.filter(~PendingPackOpening.pack_type_id.in_(exemptIds))
+    return committed.count() + pending.count()
 
 # Shop rotation: 4 "shop days" map to 7-week segments of the season,
 # matching the existing featured-shop SWAP_CYCLE_WEEKS cycle.
@@ -134,6 +163,18 @@ def shopDayOfSeason(currentWeek: int) -> int:
     from constants import SWAP_CYCLE_WEEKS
     week = max(1, currentWeek or 1)
     return min(4, (week - 1) // SWAP_CYCLE_WEEKS + 1)
+
+
+def isAlwaysAvailablePack(packType) -> bool:
+    """Packs exempt from the daily rotation entirely.
+
+    The Collection Pack never rotates: it is the only product on sale outside the
+    regular season, so gating it on a rotation slot would make it unbuyable on
+    most days and completely unbuyable in the postseason — exactly when it is the
+    only thing to buy. The shop surfaces it outside the rotation, so the purchase
+    path has to agree.
+    """
+    return getattr(packType, 'theme_type', None) == 'collection'
 
 
 def getActivePackNames(shopDay: int) -> list:
@@ -226,6 +267,10 @@ def _applyThemeFilter(templates: list, themeType: str, themeValue: str,
         return [t for t in templates if t.team_id == teamIdInt]
     if themeType == 'output':
         return [t for t in templates if getattr(t, 'output_type', None) == themeValue]
+    if themeType == 'collection':
+        # The pool handed in IS already the collection set (openPack swaps the
+        # source for this theme), so there is nothing further to filter on.
+        return list(templates)
     if themeType == 'rookie':
         # This season's rookie class. `templates` is already scoped to the
         # current season (getBySeason), and each season's veteran templates are
@@ -356,6 +401,108 @@ def _buildClassification(
         tags.append("champion")
 
     return "_".join(tags) if tags else None
+
+
+COLLECTION_CLASSIFICATIONS = ("mvp", "champion", "all_pro")
+
+
+REGULAR_SEASON_WEEKS = 28
+
+
+def regularSeasonOver(currentWeek: int) -> bool:
+    """True once the regular season's games are done (playoffs / offseason)."""
+    return bool(currentWeek and currentWeek > REGULAR_SEASON_WEEKS)
+
+
+def getCollectionTemplates(session, currentSeason: int,
+                           includeCurrentSeason: bool = False) -> list:
+    """The collection pool: PAST-SEASON prestige prints — MVP, Champion, All-Pro.
+
+    One pool, one pack (owner, 2026-08-02). An earlier revision had a separate
+    Hall-of-Fame-only pack; that was both thinner and a second thing to explain.
+    Hall of Fame players appear in this pool naturally — measured on the dev DB
+    they are 140 of 328 prints, 43% — so the enshrined are the chase inside the
+    collection pack rather than a pack of their own.
+
+    Why past seasons only:
+      * The card already carries the team the player was on and the rating they
+        had THAT season, which is what makes a legacy print worth collecting —
+        a card minted today would show an inductee years past their peak on no
+        team at all.
+      * A past-season template is ALREADY unequippable (equip rejects
+        season_created != currentSeason), so the pool is collection-only by
+        construction rather than by a flag.
+
+    Nothing extra is stored to support this. Templates are minted per season
+    carrying season_created / player_rating / team_id / classification, and are
+    never pruned — the only delete is clear_db.
+    """
+    from database.models import CardTemplate
+    from sqlalchemy import or_
+
+    clsFilter = or_(*[CardTemplate.classification.contains(c)
+                      for c in COLLECTION_CLASSIFICATIONS])
+    # `includeCurrentSeason` opens the just-finished season once the regular
+    # season is over. Without it there is a dead window: from the end of week 28
+    # until the season number rolls, this season's cards are neither purchasable
+    # (the shop sells collection only) nor in the collection pool (they aren't a
+    # PAST season yet), so they'd be unobtainable for the whole postseason and
+    # offseason. They are already unequippable by then — fantasy is done, and
+    # next season needs next season's cards — so they are collectibles in every
+    # sense that matters.
+    seasonFilter = (CardTemplate.season_created <= currentSeason
+                    if includeCurrentSeason
+                    else CardTemplate.season_created < currentSeason)
+    return (
+        session.query(CardTemplate)
+        .filter(seasonFilter)
+        .filter(CardTemplate.classification.isnot(None))
+        .filter(clsFilter)
+        .filter(CardTemplate.is_upgraded == False)                        # noqa: E712
+        .all()
+    )
+
+
+def classificationDrawWeight(classification) -> int:
+    """Relative draw weight for a card's accolade combination (100 = undecorated).
+
+    Multiplies the existing within-edition rating weight, so a triple-crown card
+    becomes genuinely hard to pull rather than merely uncommon because few
+    players earned it. Unknown or absent classifications return 100, which leaves
+    rookie/base cards and every non-prestige pack exactly as they were.
+    """
+    from constants import CLASSIFICATION_DRAW_WEIGHTS, CLASSIFICATION_TAGS
+    if not classification:
+        return 100
+    tags = frozenset(t for t in CLASSIFICATION_TAGS if t in classification)
+    if not tags:
+        return 100
+    return CLASSIFICATION_DRAW_WEIGHTS.get(tags, 100)
+
+
+def _vaultOnAcquire(template, currentSeason: int = None, currentWeek: int = 0) -> bool:
+    """Should this card land straight in the Vault?
+
+    Two kinds of card belong there. SHOWPIECES are purpose-built collectibles.
+    LEGACY PRINTS are past-season templates, which can never be equipped anyway
+    (equip rejects season_created != currentSeason) and would otherwise sit dead
+    in the active collection.
+
+    The Vault is the mechanism rather than the presentation: vaulted cards are
+    rejected at equip, and ONLY vaulted cards can be featured in the Showcase.
+    """
+    if template is None:
+        return False
+    if bool(getattr(template, "is_showpiece", False)):
+        return True
+    season = getattr(template, "season_created", None)
+    if currentSeason is None or season is None:
+        return False
+    if season < currentSeason:
+        return True
+    # This season's cards, bought after the regular season ended: fantasy is over
+    # and next season needs next season's cards, so they can never be fielded.
+    return season == currentSeason and regularSeasonOver(currentWeek)
 
 
 class CardManager:
@@ -1284,7 +1431,6 @@ class CardManager:
         """Permanently move a card into the user's Vault. IRREVERSIBLE — vaulted
         cards can no longer be equipped, sold, or Combined; they persist forever
         and drive collection achievements. Can't vault an equipped card."""
-        from datetime import datetime
         from database.repositories.card_repositories import UserCardRepository, EquippedCardRepository
         cardRepo = UserCardRepository(session)
         cards = cardRepo.getByIds([cardId], userId)
@@ -1399,7 +1545,8 @@ class CardManager:
     # ─── Pack Opening ─────────────────────────────────────────────────────────
 
     def openPack(self, session, userId: int, packTypeId: int, currentSeason: int,
-                 skipCurrency: bool = False, source: str = "purchase") -> dict:
+                 skipCurrency: bool = False, source: str = "purchase",
+                 currentWeek: int = 0) -> dict:
         """Buy and open a card pack — IMMEDIATE-grant flow (no selection).
 
         Used for achievement rewards / starter grants / any path where the
@@ -1430,7 +1577,6 @@ class CardManager:
         if not skipCurrency:
             dailyLimit = DAILY_PACK_LIMITS.get(packType.name)
             if dailyLimit is not None:
-                from datetime import datetime
                 from database.models import PackOpening
                 now = datetime.utcnow()
                 dayStart = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1453,16 +1599,19 @@ class CardManager:
             if result is None:
                 raise ValueError("Insufficient Floobits")
 
-        drawnTemplates = self._drawPackCards(session, packType, currentSeason)
+        drawnTemplates = self._drawPackCards(session, packType, currentSeason, currentWeek)
 
         # Create UserCard instances
         newCards: List[UserCard] = []
         acquiredVia = f"pack_{packType.name}"
         for template in drawnTemplates:
+            _vault = _vaultOnAcquire(template, currentSeason, currentWeek)
             card = UserCard(
                 user_id=userId,
                 card_template_id=template.id,
                 acquired_via=acquiredVia,
+                vaulted=_vault,
+                vaulted_at=datetime.utcnow() if _vault else None,
             )
             newCards.append(card)
 
@@ -1487,7 +1636,8 @@ class CardManager:
             "cards": serialized,
         }
 
-    def _drawPackCards(self, session, packType, currentSeason: int) -> list:
+    def _drawPackCards(self, session, packType, currentSeason: int,
+                       currentWeek: int = 0) -> list:
         """Shared draw routine: returns N templates per packType.cards_per_pack.
 
         Two extensions for the themed-pack rework:
@@ -1499,10 +1649,19 @@ class CardManager:
         """
         from database.repositories.card_repositories import CardTemplateRepository
         templateRepo = CardTemplateRepository(session)
-        allTemplates = templateRepo.getBySeason(currentSeason)
-        # Skip any templates with NULL team_id — defensive guard against legacy
-        # prospect/rookie templates polluting fresh pack rolls.
-        allTemplates = [t for t in allTemplates if t.team_id is not None]
+        # LEGACY packs draw from PAST seasons, so they bypass the current-season
+        # pool entirely — the only pack type that does. Everything downstream
+        # (weights, guarantee, dedup) works unchanged on this pool.
+        if getattr(packType, 'theme_type', None) == 'collection':
+            allTemplates = getCollectionTemplates(
+                session, currentSeason,
+                includeCurrentSeason=regularSeasonOver(currentWeek),
+            )
+        else:
+            allTemplates = templateRepo.getBySeason(currentSeason)
+            # Skip any templates with NULL team_id — defensive guard against legacy
+            # prospect/rookie templates polluting fresh pack rolls.
+            allTemplates = [t for t in allTemplates if t.team_id is not None]
         # The no-effect FLOOR print (edition 'base') is the STARTER lineup ONLY: the starter
         # pack draws exclusively from it, and every OTHER pack excludes it (packs deliver
         # effect cards). Before the fusion edition rename this filter dropped 'standard';
@@ -1689,7 +1848,6 @@ class CardManager:
         from database.repositories.card_repositories import (
             PackTypeRepository, CurrencyRepository,
         )
-        from datetime import datetime
 
         packRepo = PackTypeRepository(session)
         currencyRepo = CurrencyRepository(session)
@@ -1705,7 +1863,7 @@ class CardManager:
             # rotation rework, only humble is "always available"; grand,
             # exquisite, and themed packs must be present in this user's
             # rotation. Crafted calls otherwise let a user buy any pack.
-            if shopDay is not None:
+            if shopDay is not None and not isAlwaysAvailablePack(packType):
                 activeNames = set(getActivePackNames(shopDay))
                 if packType.name in activeNames:
                     pass  # always-available standard tier (humble)
@@ -1750,7 +1908,7 @@ class CardManager:
             packsThisCycle = _countPacksThisCycle(
                 session, userId, currentSeason, currentWeek or 1
             )
-            if packsThisCycle >= MAX_PACKS_PER_SHOP_CYCLE:
+            if _countsTowardCycleCap(packType) and packsThisCycle >= MAX_PACKS_PER_SHOP_CYCLE:
                 raise ValueError(
                     f"Shop cycle pack limit reached "
                     f"({MAX_PACKS_PER_SHOP_CYCLE} packs per 7-week cycle). "
@@ -1767,7 +1925,7 @@ class CardManager:
             if result is None:
                 raise ValueError("Insufficient Floobits")
 
-        drawnTemplates = self._drawPackCards(session, packType, currentSeason)
+        drawnTemplates = self._drawPackCards(session, packType, currentSeason, currentWeek)
 
         pending = PendingPackOpening(
             user_id=userId,
@@ -1787,6 +1945,7 @@ class CardManager:
         cameFromRotation = (
             not skipCurrency
             and shopDay is not None
+            and not isAlwaysAvailablePack(packType)
             and packType.name not in set(getActivePackNames(shopDay))
         )
         if cameFromRotation:
@@ -1800,7 +1959,8 @@ class CardManager:
             ).update({FeaturedPackRotation.purchased: True})
             session.flush()
 
-        revealed = [self._serializeTemplate(t, currentSeason) for t in drawnTemplates]
+        revealed = [self._serializeTemplate(t, currentSeason, currentWeek, session=session)
+                    for t in drawnTemplates]
 
         # Annotate each revealed card with how many of that EFFECT the user
         # already owns — current-season, non-vaulted only. Expired (past-season)
@@ -1831,7 +1991,7 @@ class CardManager:
         }
 
     def selectPackKeeps(self, session, userId: int, pendingId: int,
-                        keptIndices: list, currentSeason: int) -> dict:
+                        keptIndices: list, currentSeason: int, currentWeek: int = 0) -> dict:
         """Commit the user's selection from a pending pack reveal.
 
         keptIndices: list of integer indices into the pendingPack.revealed_template_ids
@@ -1870,11 +2030,20 @@ class CardManager:
 
         newCards: List[UserCard] = []
         acquiredVia = f"pack_{packType.name}"
+        # Showpieces go straight to the Vault, so the kept templates have to be
+        # loaded here — this path only carries ids.
+        _keptTemplates = {
+            t.id: t for t in session.query(CardTemplate)
+            .filter(CardTemplate.id.in_(list(keptTemplateIds))).all()
+        } if keptTemplateIds else {}
         for tid in keptTemplateIds:
+            _vault = _vaultOnAcquire(_keptTemplates.get(tid), currentSeason, currentWeek)
             newCards.append(UserCard(
                 user_id=userId,
                 card_template_id=tid,
                 acquired_via=acquiredVia,
+                vaulted=_vault,
+                vaulted_at=datetime.utcnow() if _vault else None,
             ))
         cardRepo.saveBatch(newCards)
 
@@ -1928,7 +2097,8 @@ class CardManager:
         session.flush()
         return result
 
-    def cleanupStalePendingPacks(self, session, ageHours: int = 24) -> int:
+    def cleanupStalePendingPacks(self, session, ageHours: int = 24,
+                                 currentWeek: int = 0) -> int:
         """Auto-resolve pending pack reveals older than ageHours by random
         keep-selection. Run on app startup so users never lose paid packs to
         crashes / abandoned sessions.
@@ -1954,8 +2124,13 @@ class CardManager:
                 keepCount = packType.cards_kept or packType.cards_per_pack
                 keepCount = min(keepCount, len(revealedIds))
                 indices = _random.sample(range(len(revealedIds)), keepCount)
+                # currentWeek defaults to 0 here (startup sweep has no live week).
+                # Past-season cards still vault on the season comparison; only the
+                # "current season, but the season is over" case is missed, which
+                # is acceptable for abandoned reveals.
                 self.selectPackKeeps(
                     session, pending.user_id, pending.id, indices, pending.season,
+                    currentWeek=currentWeek,
                 )
             except Exception:
                 # Don't let one bad row block the sweep; just orphan it.
@@ -1965,7 +2140,8 @@ class CardManager:
         session.commit()
         return len(stale)
 
-    def _serializeTemplate(self, template, currentSeason: int) -> dict:
+    def _serializeTemplate(self, template, currentSeason: int, currentWeek: int = 0,
+                           session=None) -> dict:
         """Template-only serialization for reveal payloads. Mirrors the
         rich shape of serializeCard so the reveal UI can render cards
         identically to a UserCard view, but without an `id` (no UserCard
@@ -1974,13 +2150,19 @@ class CardManager:
         # Build a transient stub UserCard so we can reuse serializeCard's
         # effect-rebuilding / sellValue / combineValue logic intact.
         from database.models import UserCard
-        from datetime import datetime
         from sqlalchemy.orm.attributes import set_committed_value
         stub = UserCard(
             user_id=0,
             card_template_id=template.id,
             acquired_via='pack_reveal',
             acquired_at=datetime.utcnow(),
+            # Mark the stub with the vault state this card WILL have once kept.
+            # Without it a collection card previews as an ordinary expired card:
+            # the UI hides effects and the "Expired" badge on vaulted cards, and
+            # a past-season template is neither active nor (without this) vaulted,
+            # so it advertised an effect it can never use and called itself
+            # expired when it is simply a collectible.
+            vaulted=_vaultOnAcquire(template, currentSeason, currentWeek),
         )
         # Wire the relationship without triggering back-population —
         # a plain `stub.card_template = template` would append `stub`
@@ -1991,6 +2173,17 @@ class CardManager:
         # the relationship event machinery doesn't fire.
         set_committed_value(stub, 'card_template', template)
         result = self.serializeCard(stub, currentSeason)
+        # Attach the player's season stat line, same as the collection view and
+        # the fantasy shop do. Without it every card rendered through this path —
+        # pack reveals and the collection singles shelf — showed "No stats
+        # recorded" on its back, which is especially wrong for a collection card
+        # whose whole point is the season it came from.
+        if session is not None and template.player_id:
+            stats = self.buildPlayerSeasonStats(
+                session, template.player_id, template.season_created, template.position,
+            )
+            if stats:
+                result["playerStats"] = stats
         # Strip the fake id — the card doesn't exist yet
         result.pop('id', None)
         return result
@@ -2040,7 +2233,13 @@ class CardManager:
         for _ in range(count):
             edition = random.choices(editions, weights=editionWeights, k=1)[0]
             candidates = byEdition[edition]
-            ratingWeights = [max(1, 120 - t.player_rating) for t in candidates]
+            # Rating rarity x accolade rarity. /100 keeps undecorated cards at
+            # their previous weight so nothing outside the prestige ladder moves.
+            ratingWeights = [
+                max(1, int((120 - t.player_rating)
+                           * classificationDrawWeight(t.classification) / 100))
+                for t in candidates
+            ]
             drawn.extend(random.choices(candidates, weights=ratingWeights, k=1))
         return drawn
 
@@ -2062,6 +2261,99 @@ class CardManager:
         markup = self.SHOP_MARKUP.get(template.edition, 2.7)
         return max(10, int(round(template.sell_value * markup / 5.0)) * 5)
 
+    COLLECTION_CARD_COUNT = 4
+
+    def getFeaturedCollectionCards(self, session, userId: int, currentSeason: int,
+                                   currentWeek: int = 0) -> List[dict]:
+        """The Collection tab's daily singles — individual past-season cards.
+
+        Deliberately simpler than getFeaturedCards. That one dedupes by EFFECT and
+        weights for lineup-building, neither of which means anything here: these
+        cards can never be equipped, so there is no effect to collide and no
+        lineup to build. What matters is edition spread and not repeating a
+        player, so that is all this does.
+
+        Shares the FeaturedShopCard table via `kind`, so purchase, the
+        purchased flag and the daily refresh all reuse the existing plumbing.
+        """
+        from database.models import FeaturedShopCard
+        from datetime import datetime, timedelta
+        from constants import DAILY_RESET_HOUR_UTC
+
+        rows = (
+            session.query(FeaturedShopCard)
+            .filter_by(user_id=userId, season=currentSeason, purchased=False,
+                       kind='collection')
+            .all()
+        )
+
+        # Daily refresh, anchored to the same reset hour the fantasy shop uses.
+        now = datetime.utcnow()
+        resetToday = now.replace(hour=DAILY_RESET_HOUR_UTC, minute=0, second=0, microsecond=0)
+        lastReset = resetToday if now >= resetToday else resetToday - timedelta(days=1)
+        stale = any((r.generated_at or datetime.min) < lastReset for r in rows)
+
+        if not rows or stale:
+            session.query(FeaturedShopCard).filter_by(
+                user_id=userId, season=currentSeason, kind='collection',
+                purchased=False,
+            ).delete()
+            pool = getCollectionTemplates(
+                session, currentSeason,
+                includeCurrentSeason=regularSeasonOver(currentWeek),
+            )
+            if not pool:
+                session.flush()
+                return []
+            weights = {'holographic': 45, 'prismatic': 35, 'diamond': 20, 'metallic': 10}
+            picked, seenPlayers = [], set()
+            # Weighted sampling WITHOUT replacement (Efraimidis-Spirakis): key each
+            # candidate as random() ** (1/weight) and take the largest. A naive
+            # `weight * random()` sort is not this — it hands the heaviest edition
+            # almost every slot, which produced four holographics out of four.
+            poolCopy = sorted(
+                pool,
+                # Edition weight x accolade weight, so the classification ladder
+                # applies to the singles shelf exactly as it does to packs. This
+                # sampler is separate from _weightedDraw, so wiring the ladder
+                # there alone left the shelf handing out triple-crowns freely.
+                key=lambda t: random.random() ** (
+                    1.0 / max(1, weights.get(t.edition, 5)
+                              * classificationDrawWeight(t.classification) / 100)),
+                reverse=True,
+            )
+            for t in poolCopy:
+                if len(picked) >= self.COLLECTION_CARD_COUNT:
+                    break
+                if t.player_id in seenPlayers:
+                    continue          # one card per player, so the shelf reads varied
+                seenPlayers.add(t.player_id)
+                picked.append(t)
+            for t in picked:
+                session.add(FeaturedShopCard(
+                    user_id=userId, season=currentSeason, card_template_id=t.id,
+                    kind='collection', purchased=False,
+                    generated_at=now, generated_at_week=currentWeek,
+                ))
+            session.flush()
+            rows = (
+                session.query(FeaturedShopCard)
+                .filter_by(user_id=userId, season=currentSeason, purchased=False,
+                           kind='collection')
+                .all()
+            )
+
+        out = []
+        for r in rows:
+            t = r.card_template
+            if not t:
+                continue
+            d = self._serializeTemplate(t, currentSeason, currentWeek, session=session)
+            d['templateId'] = t.id
+            d['buyPrice'] = self._featuredBuyPrice(t)
+            out.append(d)
+        return out
+
     def getFeaturedCards(self, session, userId: int, currentSeason: int,
                          currentWeek: int = 0, isScheduledMode: bool = False,
                          forceRegenerate: bool = False) -> List[dict]:
@@ -2072,7 +2364,7 @@ class CardManager:
         On first call per user per season, generates a random selection and
         persists it.  Subsequent calls return the same set (minus purchased).
         """
-        from database.models import FeaturedShopCard
+        from database.models import FeaturedShopCard, CardTemplate
         from database.repositories.card_repositories import CardTemplateRepository
         from datetime import datetime, date, timedelta
         from constants import SWAP_CYCLE_WEEKS, DAILY_RESET_HOUR_UTC
@@ -2080,7 +2372,7 @@ class CardManager:
         # Check for existing selection
         existing = (
             session.query(FeaturedShopCard)
-            .filter_by(user_id=userId, season=currentSeason, purchased=False)
+            .filter_by(user_id=userId, season=currentSeason, purchased=False, kind='fantasy')
             .all()
         )
 
@@ -2130,6 +2422,9 @@ class CardManager:
             # doesn't bleed into the shop's featured rotation, and drop the no-effect
             # floor print (edition 'base') — it's the starter lineup, not a shop single.
             allTemplates = [t for t in allTemplates if t.team_id is not None and t.edition != 'base']
+            # Collection cards are deliberately NOT in the shop rotation — they
+            # come from the Legacy Pack only (owner, 2026-08-02). The single-card
+            # shop sells current-season fantasy singles.
 
             if not allTemplates:
                 return []
@@ -2140,7 +2435,12 @@ class CardManager:
             }
             weights = []
             for t in allTemplates:
-                weights.append(SHOP_EDITION_WEIGHTS.get(t.edition, 50))
+                # Accolade rarity rides on top of edition rarity here as well, so
+                # a decorated single is as hard to see in the shop as it is to
+                # pull from a pack. Undecorated cards multiply by 1.0.
+                weights.append(max(1, int(
+                    SHOP_EDITION_WEIGHTS.get(t.edition, 50)
+                    * classificationDrawWeight(t.classification) / 100)))
 
             count = min(self.FEATURED_CARD_COUNT, len(allTemplates))
             picked = []
@@ -2172,6 +2472,7 @@ class CardManager:
                     user_id=userId,
                     season=currentSeason,
                     card_template_id=t.id,
+                    kind='fantasy',
                     purchased=False,
                     generated_at=now,
                     generated_at_week=currentWeek,
@@ -2181,7 +2482,7 @@ class CardManager:
 
             existing = (
                 session.query(FeaturedShopCard)
-                .filter_by(user_id=userId, season=currentSeason, purchased=False)
+                .filter_by(user_id=userId, season=currentSeason, purchased=False, kind='fantasy')
                 .all()
             )
 
@@ -2362,7 +2663,6 @@ class CardManager:
         Skipped if a category's underlying template pool is empty for the
         current season — keeps unwinnable packs from being featured."""
         from database.models import FeaturedPackRotation, PackType, CardTemplate
-        from datetime import datetime
 
         allPacks = session.query(PackType).all()
         if not allPacks:
@@ -2519,11 +2819,16 @@ class CardManager:
         session.flush()
         return rows
 
-    def buyFeaturedCard(self, session, userId: int, templateId: int, currentSeason: int) -> dict:
+    def buyFeaturedCard(self, session, userId: int, templateId: int, currentSeason: int,
+                        showpieceOnly: bool = False) -> dict:
         """Buy a single card from the featured shop.
 
         Returns the serialized new card.
         Raises ValueError on invalid template, wrong season, or insufficient funds.
+
+        `showpieceOnly` is set by the API outside the regular season: a fantasy
+        card bought then could never be equipped, so only showpieces are sold.
+        Enforced HERE rather than at the endpoint so every caller inherits it.
         """
         from database.models import CardTemplate, UserCard, FeaturedShopCard
         from database.repositories.card_repositories import (
@@ -2547,6 +2852,16 @@ class CardManager:
         template = templateRepo.getById(templateId)
         if not template:
             raise ValueError("Card template not found")
+        # Outside the regular season only COLLECTION cards sell: purpose-built
+        # showpieces, or legacy prints (past-season templates, which can never be
+        # equipped anyway). Selling a current-season fantasy card here would be
+        # selling a brick — fantasy is over.
+        if showpieceOnly:
+            _isCollection = (bool(getattr(template, 'is_showpiece', False))
+                             or (template.season_created or 0) < currentSeason)
+            if not _isCollection:
+                raise ValueError(
+                    "Only collection cards are available outside the regular season")
 
         buyPrice = self._featuredBuyPrice(template)
 
@@ -2562,10 +2877,13 @@ class CardManager:
         # Mark as purchased
         featuredRow.purchased = True
 
+        _vault = _vaultOnAcquire(template, currentSeason)
         card = UserCard(
             user_id=userId,
             card_template_id=template.id,
             acquired_via='shop',
+            vaulted=_vault,
+            vaulted_at=datetime.utcnow() if _vault else None,
         )
         cardRepo.save(card)
         session.refresh(card)

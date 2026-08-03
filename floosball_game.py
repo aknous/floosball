@@ -979,8 +979,8 @@ class Game:
 
         # Run-concept usage per offense (cumulative) — the defense reads these
         # tendencies and counters them (Phase 1b, see adjustDefensiveGameplan).
-        self.homeConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0}
-        self.awayConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0}
+        self.homeConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0, 'sneak': 0}
+        self.awayConceptCounts = {'power': 0, 'draw': 0, 'counter': 0, 'sweep': 0, 'sneak': 0}
 
         # First-half tracking for halftime gameplan adjustments
         self.homeHalfRunPlays = 0
@@ -3717,6 +3717,15 @@ class Game:
         if playCall == 'run':
             self.play.runConcept = self._selectRunConcept()
             self.play.insights['runConcept'] = self.play.runConcept
+            if self.play.runConcept == 'sneak':
+                # Show the sneak, then don't run it — but only when the defense has
+                # committed to stopping it. Returns None in every other case.
+                look = self._selectSneakLook()
+                if look:
+                    self._executeSneakLook(look)
+                    return
+                # The QB carries it. Same hook the reverse uses to hand off a WR.
+                self.play._forcedRunner = self.offensiveTeam.rosterDict.get('qb')
             self.play.runPlay()
         else:
             self.play.targetSideline = targetSideline
@@ -3974,6 +3983,8 @@ class Game:
         hurry = self._isHurryUp()
         weights = {}
         for name, c in RUN_CONCEPTS.items():
+            if name == 'sneak':
+                continue        # situational only — injected below, never in the normal mix
             w = c['base']
             if shortYardage:
                 w *= 2.4 if name == 'power' else 0.35   # power territory
@@ -3988,8 +3999,36 @@ class Game:
                 expEdge = _runConceptEdge(name, None, defGameplan) + c['edge']['blitz'] * bf
                 w *= 1 + scoutRead * max(-0.6, min(0.8, expEdge)) * 0.9
             weights[name] = max(0.01, w)
+        # The sneak only exists in its own situation. Weighted against the rest of
+        # the short-yardage mix rather than pre-empting it, so a coach with a
+        # bruising back still hands it off sometimes.
+        if self._isSneakSituation():
+            from constants import QB_SNEAK_WEIGHT
+            qb = self.offensiveTeam.rosterDict.get('qb')
+            w = QB_SNEAK_WEIGHT
+            if qb is not None:
+                w *= 0.55 + _runConceptExecQ(qb, 'sneak')   # a QB who can actually push
+            weights['sneak'] = max(0.01, w)
         names = list(weights)
         return _random.choices(names, weights=[weights[n] for n in names], k=1)[0]
+
+    def _isSneakSituation(self) -> bool:
+        """Short-yardage or goal-line, with a QB to run it.
+
+        Two ways in: 3rd/4th-and-short anywhere, or inside the goal-line band on
+        ANY down (1st-and-goal from the 1 is a sneak spot too). Suppressed in
+        hurry-up — a sneak burns clock and stays in bounds, which is the opposite
+        of what a two-minute drill wants."""
+        from constants import (QB_SNEAK_ENABLED, QB_SNEAK_MAX_YTG,
+                               QB_SNEAK_GOAL_LINE_YTE, QB_SNEAK_MIN_DOWN)
+        if not QB_SNEAK_ENABLED or self._isHurryUp():
+            return False
+        if self.offensiveTeam.rosterDict.get('qb') is None:
+            return False
+        goalLine = self.yardsToEndzone <= QB_SNEAK_GOAL_LINE_YTE
+        shortDown = (self.down >= QB_SNEAK_MIN_DOWN
+                     and self.yardsToFirstDown <= QB_SNEAK_MAX_YTG)
+        return goalLine or shortDown
 
     def _selectPlayAction(self, tier: str) -> bool:
         """Decide whether this pass is play-action. The coach calls it to exploit a
@@ -4085,6 +4124,68 @@ class Game:
             if correct:
                 self.play._rpoRunRelief = RPO_BONUS          # ball into a light box
             self.play.runPlay()
+
+    def _selectSneakLook(self):
+        """Show the sneak, then throw it or pitch it. Returns 'pitch' | 'pass' | None.
+
+        Only worth it against a defense that has actually committed to stopping
+        the sneak — a stacked box empties the edge and the flat, which is what the
+        fake attacks. Same rule as the other trick plays: match the gadget to the
+        tendency, never gadget for its own sake. Bold coaches only, and never with
+        the game on the line late (a called shot, not a desperation heave)."""
+        from constants import (SNEAK_LOOK_ENABLED, SNEAK_LOOK_BASE,
+                               SNEAK_LOOK_MIN_RUNFOCUS, SNEAK_LOOK_AGGR_PIVOT,
+                               SNEAK_LOOK_PITCH_SHARE)
+        if not SNEAK_LOOK_ENABLED:
+            return None
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
+        aggrLean = max(0.0, (aggr - SNEAK_LOOK_AGGR_PIVOT) / (100.0 - SNEAK_LOOK_AGGR_PIVOT))
+        if aggrLean <= 0:
+            return None
+        isHome = self.offensiveTeam is self.homeTeam
+        defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
+        runFocus = getattr(defGp, 'runStopFocus', 0.5) if defGp is not None else 0.5
+        if runFocus < SNEAK_LOOK_MIN_RUNFOCUS:
+            return None      # the box isn't sold on the sneak — nothing to exploit
+        # 4th down is the wrong time to get cute: a stuffed fake ends the drive.
+        if self.down >= 4:
+            return None
+        commit = (runFocus - SNEAK_LOOK_MIN_RUNFOCUS) / max(0.01, 0.80 - SNEAK_LOOK_MIN_RUNFOCUS)
+        scouting = getattr(coach, 'scouting', 80) if coach else 80
+        scoutRead = max(0.0, (scouting - 60) / 40.0)
+        chance = SNEAK_LOOK_BASE * aggrLean * (0.4 + 0.6 * min(1.0, commit)) * (0.5 + 0.5 * scoutRead)
+        if _random.random() >= chance:
+            return None
+        # A pitch needs an RB to pitch to; fall back to the throw if there isn't one.
+        if self.offensiveTeam.rosterDict.get('rb') is None:
+            return 'pass'
+        return 'pitch' if _random.random() < SNEAK_LOOK_PITCH_SHARE else 'pass'
+
+    def _executeSneakLook(self, kind: str) -> None:
+        """Run the fake. `pitch` = the RB takes it around the vacated edge;
+        `pass` = a quick throw into the space the linebackers left.
+
+        Both reuse existing machinery rather than inventing a resolution: the
+        pitch is a sweep with the interior-crash relief applied, the throw is a
+        short pass with an openness bonus, exactly like play-action."""
+        from constants import SNEAK_LOOK_PITCH_EDGE, SNEAK_LOOK_PASS_OPENNESS
+        self.play.isSneakLook = True
+        self.play.sneakLookKind = kind
+        self.play.insights['sneakLook'] = kind
+        if kind == 'pitch':
+            self.play.runConcept = 'sweep'
+            self.play._forcedGap = {'C-gap': 1.0}      # outside, away from the crash
+            # Reuses the trick-play relief channel rather than adding a parallel
+            # one — this IS a trick play, and that path already handles a payoff
+            # scaled to the defense's commitment.
+            self.play._trickRunRelief = SNEAK_LOOK_PITCH_EDGE
+            self.play.runPlay()
+        else:
+            self.play.playAction = False               # the sneak look IS the fake
+            self.play.passConcept = 'standard'
+            self.play._rpoOpennessBonus = SNEAK_LOOK_PASS_OPENNESS
+            self.play.passPlay(self._selectPassPlay('short'))
 
     def _selectTrickPlay(self):
         """A bold coach's called shot. Returns a trick name or None. Gated by the
@@ -5287,6 +5388,53 @@ class Game:
         if pb is not None:
             self.play.insights['playbook'] = pb
 
+    def _tackleClause(self):
+        """The ', tackled by X' clause, with any ball-carrier move folded in.
+
+        A move happens AT the tackle, so appending it after the tackle clause
+        told the story backwards and left a run-on with no subject: '... for 9
+        yards, tackled by Belcher, spins and is dragged down anyway'. Merging
+        the two puts them in the order they happened and names the defender
+        once.
+
+        Sets `_moveClauseUsed` so the standalone move text further down doesn't
+        tell it a second time."""
+        tackler = self.play.tackledBy
+        if not tackler:
+            return ''
+        name = tackler.name
+        mv = getattr(self.play, 'runnerMove', None)
+        if not mv or self.play.isFumble:
+            return ', tackled by {}'.format(name)
+
+        made = not mv.endswith('_miss')
+        base = mv if made else mv[:-5]
+        if made:
+            # He beat THIS man and took the bonus yards for it, so the clause
+            # can't also credit him with the tackle. Whoever finally got him
+            # isn't tracked, so nobody else is named either.
+            merged = {
+                'stiff arm': ', stiff-arms {} away',
+                'spin':      ', spins past {}',
+                'hurdle':    ', hurdles {}',
+            }.get(base)
+            if merged:
+                merged += ' ' + choice([
+                    'before being hauled down',
+                    'before the pursuit closes in',
+                    'and is dragged down a few yards on',
+                ])
+        else:
+            merged = {
+                'stiff arm': ', tries the stiff arm and is wrapped up by {}',
+                'spin':      ', spins but is dragged down by {}',
+                'hurdle':    ', tries to hurdle {} and is met in mid-air',
+            }.get(base)
+        if not merged:
+            return ', tackled by {}'.format(name)
+        self.play._moveClauseUsed = True
+        return merged.format(name)
+
     def formatPlayText(self):
         self._buildPlaybookInsight()
         self._evaluateClutchChoke()
@@ -5407,6 +5555,38 @@ class Game:
                     '{} sails it wide of the {} {} goal, incomplete'.format(qbName, side, hoopName),
                     '{} just misses the {} {} goal'.format(qbName, side, hoopName),
                 ])
+        elif getattr(self.play, 'sneakConverted', None) is not None:
+            # QB SNEAK. Narrated by whether the surge got there, not by yardage —
+            # a sneak that gains 1 to convert is a success and a sneak that gains
+            # 1 when it needed 2 is not, and the phrasing has to reflect that.
+            yds = self.play.yardage
+            name = self.play.runner.name
+            if self.play.sneakConverted:
+                text = choice([
+                    '{} sneaks it behind the surge for {} yards'.format(name, max(1, yds)),
+                    '{} pushes the pile forward for {} yards'.format(name, max(1, yds)),
+                    '{} follows the interior push, {} yards'.format(name, max(1, yds)),
+                    '{} wedges ahead for {} yards'.format(name, max(1, yds)),
+                ])
+            elif yds > 0:
+                text = choice([
+                    '{} sneaks into a wall of bodies, barely a yard'.format(name),
+                    '{} gets nothing but a scrum, one yard'.format(name),
+                ])
+            elif yds == 0:
+                text = choice([
+                    '{} sneaks it and the pile does not move'.format(name),
+                    '{} is stood straight up at the line'.format(name),
+                    '{} gets nowhere, the front stacked it'.format(name),
+                ])
+            else:
+                text = '{} is driven back on the sneak'.format(name)
+            if self.play.isFumble:
+                forcedBy = self.play.forcedFumbleBy
+                if self.play.isFumbleLost:
+                    text += ', ball comes loose in the pile, {} recover'.format(self.play.defense.abbr)
+                else:
+                    text += ', ball squirts free but {} fall on it'.format(self.play.offense.abbr)
         elif getattr(self.play, 'isScramble', False):
             # QB ran instead of passing (resolves as a run, narrated as a scramble).
             # Phrasing matches the trigger: 'pressure' = escaped a would-be sack,
@@ -5435,7 +5615,7 @@ class Game:
                 else:
                     text += ', fumbles but recovers it'
             elif self.play.tackledBy and not self.play.isTd:
-                text += ', tackled by {}'.format(self.play.tackledBy.name)
+                text += self._tackleClause()
         elif self.play.playType is PlayType.Run:
             # Select description list based on gap type
             runGap = self.play.insights.get('run', {}).get('selectedGap', 'B-gap')
@@ -5460,23 +5640,27 @@ class Game:
                     tackler = self.play.tackledBy
                     if tackler:
                         text = choice(lossRunDefenderList).format(self.play.runner.name, tackler.name, self.play.yardage)
+                        # These phrases name the tackler inside the sentence, so
+                        # there's no clause to fold a move into and no room to
+                        # add one without naming him twice.
+                        self.play._moveClauseUsed = True
                     else:
                         text = '{} {} for {} yards'.format(self.play.runner.name, choice(lossRunList), self.play.yardage)
                 elif self.play.yardage > 0 and self.play.yardage <= 3:
                     runList = shortRunOutsideList if isOutside else shortRunInsideList
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
                     if self.play.tackledBy and not self.play.isTd:
-                        text += ', tackled by {}'.format(self.play.tackledBy.name)
+                        text += self._tackleClause()
                 elif self.play.yardage > 3 and self.play.yardage <= 9:
                     runList = midRunOutsideList if isOutside else midRunInsideList
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
                     if self.play.tackledBy and not self.play.isTd:
-                        text += ', tackled by {}'.format(self.play.tackledBy.name)
+                        text += self._tackleClause()
                 elif self.play.yardage >= 10:
                     runList = longRunOutsideList if isOutside else longRunInsideList
                     text = '{} {} {} yards'.format(self.play.runner.name, choice(runList), self.play.yardage)
                     if self.play.tackledBy and not self.play.isTd:
-                        text += ', tackled by {}'.format(self.play.tackledBy.name)
+                        text += self._tackleClause()
         elif self.play.playType is PlayType.Pass:
             if self.play.isSack:
                 sacker = self.play.sackedBy
@@ -5544,7 +5728,7 @@ class Game:
                     else:
                         text += ', fumbles, {} recovers'.format(self.play.receiver.name)
                 elif self.play.tackledBy and not self.play.isTd and self.play.isInBounds:
-                    text += ', tackled by {}'.format(self.play.tackledBy.name)
+                    text += self._tackleClause()
             elif self.play.playResult is PlayResult.Interception:
                 interceptor = self.play.interceptedBy
                 interceptorName = interceptor.name if interceptor else self.play.defense.abbr
@@ -5762,6 +5946,31 @@ class Game:
                 and getattr(self.play, 'passConcept', 'standard') != 'screen'
                 and not getattr(self.play, 'checkdownReason', None)):
             text += ', a diving grab!'
+
+        # Surface a ball-carrier move (see _runnerMove). This is the fallback
+        # for plays with no tackle clause to fold it into — out of bounds, or a
+        # tackler the tracker never identified. When there IS one, _tackleClause
+        # has already merged the move into it and set _moveClauseUsed.
+        #
+        # Sits BEFORE the stretch clause because that's the order it happened
+        # in: beat the tackler, then reach for the marker. Skipped on a fumble —
+        # the move popped it loose and the fumble text carries that.
+        _mv = getattr(self.play, 'runnerMove', None)
+        if _mv and not self.play.isFumble and not getattr(self.play, '_moveClauseUsed', False):
+            _made = not _mv.endswith('_miss')
+            _name = _mv[:-5] if not _made else _mv
+            # No defender is named here, because this branch only runs when the
+            # play never identified one.
+            _mvText = {
+                ('stiff arm', True):  ', stiff-arming the first man away',
+                ('stiff arm', False): ', tries the stiff arm and gets wrapped up',
+                ('spin', True):       ', spinning past the first man',
+                ('spin', False):      ', spins but gets dragged down anyway',
+                ('hurdle', True):     ', hurdling the first defender',
+                ('hurdle', False):    ', tries to hurdle a defender and is met in mid-air',
+            }.get((_name, _made))
+            if _mvText:
+                text += _mvText
 
         # Surface the stretch-for-the-marker decision (see _stretchForFirst). Skip on
         # a fumble (the reach popped it loose — the fumble text already tells that story).
@@ -11861,6 +12070,12 @@ class Play():
         self.isSack = False
         self.isScramble = False          # QB ran instead of passing
         self.scrambleReason = 'pressure' # 'pressure' (escaped a sack) | 'coverage' (no one open)
+        self.preSnapRead = None          # the defense's run/pass commit, if the layer is on
+        self.runnerMove = None           # 'stiff arm' | 'spin' | 'hurdle' | '<move>_miss'
+        self._moveClauseUsed = False     # the move is already in the tackle clause
+        self.sneakConverted = None       # True/False on a QB sneak, None otherwise
+        self.isSneakLook = False         # showed the sneak and did something else
+        self.sneakLookKind = None        # 'pitch' | 'pass'
         self.isFumble = False
         self.isFumbleLost = False
         self.isFumbleRecovered = False
@@ -12453,6 +12668,9 @@ class Play():
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
         self._captureBlitzer(scheme, defGameplan if GAMEPLAN_AVAILABLE else None)
+        # The defense's pre-snap run/pass commit, applied before anything reads
+        # the multiplier. Mutates `scheme` in place.
+        self._applyPreSnapRead(scheme, isRun=True)
         effectiveRunDef = self.defense.defenseRunCoverageRating * scheme['runDefMult']
 
         # --- Run CONCEPT: deception vs the defense's commitment, gated by execution ---
@@ -12583,7 +12801,31 @@ class Play():
         openFieldDef = self.defense.defensePassCoverageRating * 0.95
         gate3Chance = max(8, min(55, 22 + (openField - openFieldDef) * 1.2))
 
-        if batched_randint(1, 100) > gate1Chance:
+        if getattr(self, 'runConcept', None) == 'sneak':
+            # QB SNEAK — one push, resolved here instead of through the three gates.
+            # A sneak has a high floor and effectively no ceiling: it either gets
+            # the surge or it doesn't, and it never breaks to the second level, so
+            # running it through gates 2/3 would occasionally spring a 40-yard QB
+            # run out of a pile at the goal line. Rejoins the shared tail below
+            # (awakened fire, stretch, fumble, crediting) like every other run.
+            from constants import (QB_SNEAK_BASE_SUCCESS, QB_SNEAK_SUCCESS_SWING,
+                                   QB_SNEAK_SUCCESS_MIN, QB_SNEAK_SUCCESS_MAX,
+                                   QB_SNEAK_GAIN_MEAN, QB_SNEAK_GAIN_MAX,
+                                   QB_SNEAK_STUFF_MEAN)
+            _qa = self.runner.gameAttributes
+            push = _qa.power * 0.7 + _qa.discipline * 0.3
+            chance = QB_SNEAK_BASE_SUCCESS + (push - effectiveRunDef) * QB_SNEAK_SUCCESS_SWING
+            chance = max(QB_SNEAK_SUCCESS_MIN, min(QB_SNEAK_SUCCESS_MAX, chance))
+            self.sneakConverted = batched_randint(1, 100) <= chance
+            if self.sneakConverted:
+                self.yardage = max(1, min(QB_SNEAK_GAIN_MAX,
+                                          int(round(np.random.normal(QB_SNEAK_GAIN_MEAN, 0.8)))))
+            else:
+                # Stuffed in the pile. Rarely a loss — bodies stop it where it started.
+                self.yardage = max(-1, min(1, int(round(np.random.normal(QB_SNEAK_STUFF_MEAN, 0.7)))))
+            self.insights['sneak'] = {'converted': self.sneakConverted,
+                                      'chance': round(chance, 1)}
+        elif batched_randint(1, 100) > gate1Chance:
             # Stuffed at the line — -2 to 2 yards
             self.yardage = max(-3, min(3, int(np.random.normal(0.5, 1.3))))
         else:
@@ -12621,11 +12863,38 @@ class Play():
                 self.awakenedFire = self.game._lastAwakenedFire
                 self._awakenedDefender = _dfn
 
+        # Identify the primary tackler BEFORE the move — you cannot beat a man the
+        # sim hasn't chosen yet. This block used to sit below the fumble check,
+        # which meant _runnerMove was handed None and fell back to the team run
+        # rating, so no individual defender ever resisted a move.
+        defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
+        coverageAssignments = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
+        passRusherRun = getattr(defGameplanObj, 'passRusher', None) if defGameplanObj else None
+        lbPlayer = coverageAssignments.get('te')  # LB = defense team's RB, assigned to cover TE
+        if gapType in ('A-gap', 'B-gap'):
+            self.tackledBy = lbPlayer  # Inside runs: LB is primary tackler
+        else:
+            self.tackledBy = passRusherRun  # Edge runs: DE is primary tackler
+        # Derived here rather than read from _defFire, which is assigned further
+        # down (below the fumble check) — this block moved above it.
+        _defFireEarly = bool(self.awakenedFire and self.awakenedFire.get('situation') == 'strip')
+        if _defFireEarly and self._awakenedDefender:
+            self.tackledBy = self._awakenedDefender  # the awakened defender made the play
+
+        # Beat the tackler first (stiff arm / spin / hurdle), THEN reach for the
+        # marker — that's the real sequence, and it means a move can carry a
+        # carrier into stretch range who wasn't there before.
+        _moveBonus, self.runnerMove, _moveFumbleBump = self._runnerMove(self.runner, self.tackledBy)
+        if _moveBonus:
+            self.yardage = min(self.yardage + _moveBonus, self.yardsToEndzone)
+            self.insights['runnerMove'] = self.runnerMove
+
         # Stretch for the first down / goal line — a confident back reaches it out
         # to convert; the reach can expose the ball (fumble bump, resolved below).
         _stretchBonus, self._stretchNote, _stretchFumbleBump = self._stretchForFirst(self.runner)
         if _stretchBonus:
             self.yardage = min(self.yardage + _stretchBonus, self.yardsToEndzone)
+        _stretchFumbleBump += _moveFumbleBump
 
         baseYards = self.yardage
 
@@ -12678,17 +12947,7 @@ class Play():
                 self.isFumbleLost = True
                 self.playResult = PlayResult.Fumble
 
-        # Identify primary tackler from defensive gameplan
-        defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
-        coverageAssignments = getattr(defGameplanObj, 'coverageAssignments', {}) if defGameplanObj else {}
-        passRusherRun = getattr(defGameplanObj, 'passRusher', None) if defGameplanObj else None
-        lbPlayer = coverageAssignments.get('te')  # LB = defense team's RB, assigned to cover TE
-        if gapType in ('A-gap', 'B-gap'):
-            self.tackledBy = lbPlayer  # Inside runs: LB is primary tackler
-        else:
-            self.tackledBy = passRusherRun  # Edge runs: DE is primary tackler
-        if _defFire and self._awakenedDefender:
-            self.tackledBy = self._awakenedDefender  # the awakened defender made the play
+        # (Primary tackler was identified above, before the move — see there.)
         if self.isFumble and self.isFumbleLost:
             self.forcedFumbleBy = self._awakenedDefender if _defFire else self.tackledBy
 
@@ -12839,6 +13098,92 @@ class Play():
                     break
         return tackler
 
+    def _preSnapLeverage(self) -> float:
+        """How ambiguous this down and distance is, 0-1.
+
+        A read is only worth something where the call could genuinely go either
+        way. Everyone in the building knows 3rd-and-15 is a pass, so being right
+        there isn't recognition — and getDefensiveScheme already applies a
+        situational multiplier in exactly those spots. Scaling by leverage is
+        what keeps this layer from double-counting with that one."""
+        from constants import (PRESNAP_LEVERAGE_FLOOR, PRESNAP_OBVIOUS_SHORT,
+                               PRESNAP_OBVIOUS_LONG)
+        ytg = self.game.yardsToFirstDown
+        if ytg <= PRESNAP_OBVIOUS_SHORT or ytg >= PRESNAP_OBVIOUS_LONG:
+            return PRESNAP_LEVERAGE_FLOOR
+        # Most ambiguous in the middle of the range, tapering to the floor at
+        # either obvious end.
+        span = (PRESNAP_OBVIOUS_LONG - PRESNAP_OBVIOUS_SHORT) / 2.0
+        mid = PRESNAP_OBVIOUS_SHORT + span
+        closeness = 1.0 - abs(ytg - mid) / span
+        return PRESNAP_LEVERAGE_FLOOR + (1.0 - PRESNAP_LEVERAGE_FLOOR) * max(0.0, closeness)
+
+    def _applyPreSnapRead(self, scheme: dict, isRun: bool) -> None:
+        """The defense commits to run or pass, and is right or wrong about it.
+
+        Mutates `scheme` in place. A correct read strengthens the multiplier for
+        the play that actually came; a wrong read weakens it by the same amount,
+        so an average defense nets zero over a season and only the sharp ones
+        gain. Disguised plays (PA / RPO / sneak-look / trick) cut the accuracy —
+        which is the first time in this sim a fake beats a DECISION rather than a
+        standing tendency."""
+        from constants import (PRESNAP_READ_ENABLED, PRESNAP_READ_BASE,
+                               PRESNAP_READ_SKILL, PRESNAP_READ_EDGE,
+                               PRESNAP_DISGUISE)
+        if not PRESNAP_READ_ENABLED:
+            return
+        game = self.game
+        defTeam = self.defense
+        coach = getattr(defTeam, 'coach', None)
+        # 0-1 skill: the coach's defensive mind plus the on-field reader (the
+        # opposite number's LB/S — this team's RB and QB playing defense).
+        defMind = getattr(coach, 'defensiveMind', 80) if coach else 80
+        readers = [defTeam.rosterDict.get('rb'), defTeam.rosterDict.get('qb')]
+        vals = []
+        for r in readers:
+            if r is None:
+                continue
+            a = getattr(r, 'gameAttributes', None) or r.attributes
+            vals.append(getattr(a, 'instinct', 80) * 0.6 + getattr(a, 'focus', 80) * 0.4)
+        readerQ = (sum(vals) / len(vals)) if vals else 80.0
+        skill = ((defMind - 80) / 20.0) * 0.6 + ((readerQ - 80) / 20.0) * 0.4   # ~-1..+1
+        accuracy = PRESNAP_READ_BASE + PRESNAP_READ_SKILL * max(-1.0, min(1.0, skill))
+
+        # Disguise — a fake is supposed to beat recognition.
+        disguise = 0.0
+        if getattr(self, 'isRpo', False):
+            disguise = max(disguise, PRESNAP_DISGUISE['rpo'])
+        if getattr(self, 'playAction', False):
+            disguise = max(disguise, PRESNAP_DISGUISE['playAction'])
+        if getattr(self, 'isSneakLook', False):
+            disguise = max(disguise, PRESNAP_DISGUISE['sneakLook'])
+        if getattr(self, 'trickPlay', None):
+            disguise = max(disguise, PRESNAP_DISGUISE['trick'])
+        # A run concept that disguises the RUN/PASS question itself — in practice
+        # the draw, which is play-action pointed the other way. Scaled by how well
+        # this back sells it, so a plodder telegraphs what a shifty back hides.
+        if isRun:
+            from constants import (PRESNAP_CONCEPT_DISGUISE,
+                                   PRESNAP_CONCEPT_DISGUISE_FLOOR)
+            _cd = PRESNAP_CONCEPT_DISGUISE.get(getattr(self, 'runConcept', None))
+            if _cd:
+                _sell = _runConceptExecQ(self.runner, self.runConcept) if self.runner else 0.5
+                floor = PRESNAP_CONCEPT_DISGUISE_FLOOR
+                disguise = max(disguise, _cd * (floor + (1 - floor) * _sell))
+        accuracy = max(0.05, min(0.95, accuracy - disguise))
+
+        correct = _random.random() < accuracy
+        leverage = self._preSnapLeverage()
+        swing = PRESNAP_READ_EDGE * leverage
+        key = 'runDefMult' if isRun else 'passDefMult'
+        scheme[key] = scheme.get(key, 1.0) * ((1 + swing) if correct else (1 - swing))
+
+        self.preSnapRead = {'predicted': ('run' if (correct == isRun) else 'pass'),
+                            'correct': correct,
+                            'leverage': round(leverage, 2),
+                            'accuracy': round(accuracy, 2)}
+        self.insights['preSnapRead'] = self.preSnapRead
+
     def _resolveQbScramble(self, tackler, reason='pressure') -> None:
         """The QB runs instead of passing. Resolves as a run with the QB as
         the carrier, so clock / TD / WPA / box-score / fantasy all flow through
@@ -12984,6 +13329,117 @@ class Play():
             return 0.0
         return max(-1.0, min(1.0, c / 5.0))
 
+    def _determinationState(self, player):
+        """Normalized determination in [-1, +1]. The drive-to-win axis, sibling to
+        `_confidenceState` — belief says "I can", determination says "I will"."""
+        try:
+            d = player.gameAttributes.determinationModifier
+        except Exception:
+            return 0.0
+        return max(-1.0, min(1.0, d / 5.0))
+
+    def _flair(self, player):
+        """0..1 — how likely this player is to TRY something audacious.
+
+        Built from creativity + xFactor, which were nearly inert in play
+        resolution before this (xFactor appeared in one QB-mobility calculation;
+        creativity in two concept exec weights). Flair never decides whether a
+        move WORKS — that's the physical attribute — only whether it's attempted."""
+        from constants import (FLAIR_PIVOT, FLAIR_RANGE, FLAIR_CREATIVITY_W,
+                               FLAIR_XFACTOR_W)
+        if player is None:
+            return 0.0
+        a = getattr(player, 'gameAttributes', None) or getattr(player, 'attributes', None)
+        if a is None:
+            return 0.0
+        cre = (getattr(a, 'creativity', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
+        xf = (getattr(a, 'xFactor', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
+        raw = cre * FLAIR_CREATIVITY_W + xf * FLAIR_XFACTOR_W    # ~-1..+1
+        return max(0.0, min(1.0, 0.5 + raw / 2.0))               # 0..1, 0.5 at neutral
+
+    def _runnerMove(self, carrier, tackler):
+        """A carrier about to be brought down tries to beat the tackler.
+
+        Returns (bonusYards, moveName, fumbleBump) — the same shape
+        `_stretchForFirst` returns, and applied in the same place.
+
+        Flair and mental state decide whether it's ATTEMPTED; the move's own
+        physical attribute decides whether it WORKS; discipline decides what it
+        costs when the ball is exposed. A flashy back tries things a plodder
+        never would, and occasionally wears it."""
+        from constants import (RUNNER_MOVE_ENABLED, RUNNER_MOVE_BASE_CHANCE,
+                               RUNNER_MOVE_FLAIR_K, RUNNER_MOVE_STATE_K,
+                               RUNNER_MOVES, RUNNER_MOVE_BASE_SUCCESS,
+                               RUNNER_MOVE_SWING, RUNNER_MOVE_SUCCESS_MIN,
+                               RUNNER_MOVE_SUCCESS_MAX, RUNNER_MOVE_DEF_TACKLING_W,
+                               RUNNER_MOVE_DEF_DISCIPLINE_W,
+                               RUNNER_MOVE_DISCIPLINE_RISK_K,
+                               RUNNER_MOVE_MAX_CONTACT_YARDS,
+                               RUNNER_MOVE_CONF_CARRIER, RUNNER_MOVE_CONF_DEFENSE)
+        if not RUNNER_MOVE_ENABLED or carrier is None or getattr(self, 'isTd', False):
+            return (0, None, 0)
+        # Contact gate: a move happens where someone is there to beat. Past this
+        # the carrier is into open field and there is nobody to stiff-arm.
+        if self.yardage > RUNNER_MOVE_MAX_CONTACT_YARDS:
+            return (0, None, 0)
+        flair = self._flair(carrier)
+        state = (self._confidenceState(carrier) + self._determinationState(carrier)) / 2.0
+        chance = (RUNNER_MOVE_BASE_CHANCE
+                  + RUNNER_MOVE_FLAIR_K * flair
+                  + RUNNER_MOVE_STATE_K * max(-1.0, min(1.0, state)))
+        if _random.random() >= max(0.0, chance):
+            return (0, None, 0)
+
+        a = carrier.gameAttributes
+        # Pick the move this carrier is actually built for — a powerful back
+        # stiff-arms, a shifty one spins, a leaper hurdles.
+        best, bestVal = None, -1e9
+        for name, spec in RUNNER_MOVES.items():
+            val = sum(getattr(a, attr, 80) * w for attr, w in spec['attrs'].items())
+            if val > bestVal:
+                best, bestVal = name, val
+        spec = RUNNER_MOVES[best]
+
+        # Defender resistance: SKILL (can they bring him down) blended with
+        # DISCIPLINE (do they stay square instead of biting on the move). A
+        # disciplined defender is what actually nullifies flair, so discipline
+        # additionally resists in proportion to how audacious the move is — a
+        # hurdle against a squared-up veteran is a bad idea; against a lunger
+        # it isn't.
+        defRating = self.defense.defenseRunCoverageRating
+        defDiscipline = 80.0
+        if tackler is not None:
+            try:
+                dAttrs = tackler.attributes.getDefensiveAttributes(tackler.position)
+                tackling = dAttrs.get('tackling', defRating)
+            except Exception:
+                tackling = defRating
+            tAttrs = getattr(tackler, 'gameAttributes', None) or tackler.attributes
+            defDiscipline = getattr(tAttrs, 'discipline', 80.0)
+            defRating = (tackling * RUNNER_MOVE_DEF_TACKLING_W
+                         + defDiscipline * RUNNER_MOVE_DEF_DISCIPLINE_W)
+        disciplineResist = ((defDiscipline - 80.0) / 20.0) * RUNNER_MOVE_DISCIPLINE_RISK_K * spec['risk']
+        chanceHit = (RUNNER_MOVE_BASE_SUCCESS
+                     + (bestVal - defRating) * RUNNER_MOVE_SWING
+                     - disciplineResist)
+        chanceHit = max(RUNNER_MOVE_SUCCESS_MIN, min(RUNNER_MOVE_SUCCESS_MAX, chanceHit))
+        # Exposure is taken on for ATTEMPTING it, made or missed — that's the cost
+        # of reaching for the extra yard rather than going down clean.
+        fumbleBump = int(round(self._undiscipline(carrier) * 3 * spec['risk']))
+        if batched_randint(1, 100) > chanceHit:
+            return (0, f'{best}_miss', fumbleBump)
+        lo, hi = spec['gain']
+        gain = batched_randint(lo, hi)
+        # Beating a man is a confidence event on both sides. There is no
+        # missed-tackle stat in the tracker to credit (adding one is a schema
+        # change), so this plus the yards and the PBP clause is the consequence.
+        try:
+            carrier.updateInGameConfidence(RUNNER_MOVE_CONF_CARRIER)
+            self.defense.updateInGameConfidence(RUNNER_MOVE_CONF_DEFENSE)
+        except Exception:
+            pass
+        return (gain, best, fumbleBump)
+
     def _undiscipline(self, player):
         """How undisciplined a player is: 0 (controlled) .. 1 (gunslinger). The
         gate that turns confidence into either production or chaos."""
@@ -13066,11 +13522,16 @@ class Play():
         C = self._confidenceState(carrier)
         if C <= 0:
             return (0, None, 0)              # not confident enough to lunge for it
-        # Confidence drives the WILLINGNESS to reach; POWER drives the physical
-        # extension through contact (a strong back/big TE gets it there, a slight
-        # receiver doesn't). Discipline (below) drives the fumble risk on the reach.
+        # Confidence and DETERMINATION drive the WILLINGNESS to reach; FLAIR
+        # (creativity + xFactor) is what makes a player go for it at all rather
+        # than take the spot; POWER drives the physical extension through contact
+        # (a strong back/big TE gets it there, a slight receiver doesn't).
+        # Discipline (below) drives the fumble risk on the reach.
+        from constants import STRETCH_FLAIR_K, STRETCH_DETERMINATION_K
         powerNorm = max(-1.0, min(1.0, (getattr(carrier.gameAttributes, 'power', 80) - 80) / 20.0))
-        successChance = int(45 + 25 * C + 15 * powerNorm)   # ~5..85
+        flairTerm = STRETCH_FLAIR_K * (self._flair(carrier) - 0.5) * 2.0        # ±K
+        detTerm = STRETCH_DETERMINATION_K * self._determinationState(carrier)   # ±K
+        successChance = int(45 + 25 * C + 15 * powerNorm + flairTerm + detTerm)
         if batched_randint(1, 100) > successChance:
             return (0, 'stretch_short', 0)   # overreaches, comes up just short
         note = 'stretch_goal' if target == self.yardsToEndzone else 'stretch_first'
@@ -13538,6 +13999,9 @@ class Play():
             )
         else:
             scheme = {'runDefMult': 1.0, 'passDefMult': 1.0, 'passRushMult': 1.0}
+        # The defense's pre-snap run/pass commit, applied before coverage reads
+        # the multiplier. Mutates `scheme` in place.
+        self._applyPreSnapRead(scheme, isRun=False)
         # Individual pass rush: DE's passRush vs TE blocking (when TE blocks)
         defGameplanObj = defGameplan if GAMEPLAN_AVAILABLE else None
         self._captureBlitzer(scheme, defGameplanObj)
@@ -14053,7 +14517,16 @@ class Play():
                 _screenOrDump = (getattr(self, 'passConcept', 'standard') == 'screen'
                                  or getattr(self, 'isCheckdown', False))
                 if _diveC > 0 and 15 <= catchProbs['catchProb'] <= 60 and not _screenOrDump:
-                    catchProbs['catchProb'] = min(85, catchProbs['catchProb'] + _diveC * MENTAL_DIVE_K)
+                    # Confidence gets them off their feet; FLAIR (creativity +
+                    # xFactor) and DETERMINATION decide how much a lay-out is
+                    # really worth — the same three-part model the stretch and the
+                    # runner moves use, so those attributes matter everywhere a
+                    # player chooses to do something audacious.
+                    from constants import DIVE_FLAIR_K, DIVE_DETERMINATION_K
+                    _diveBonus = (_diveC * MENTAL_DIVE_K
+                                  + DIVE_FLAIR_K * (self._flair(self.receiver) - 0.5) * 2.0
+                                  + DIVE_DETERMINATION_K * self._determinationState(self.receiver))
+                    catchProbs['catchProb'] = min(85, catchProbs['catchProb'] + max(0.0, _diveBonus))
                     self._diveAttempt = True
                 else:
                     self._diveAttempt = False
@@ -14290,8 +14763,24 @@ class Play():
                     # (mechanics + narration) when it was a diving catch.
                     self._stretchNote = None
                     _stFumbleBump = 0
+                    # A receiver with the ball in space is a ball carrier — same
+                    # moves available. Not after a diving catch: you can't spin
+                    # out of a tackle from the ground.
+                    if not getattr(self, '_diveCatch', False):
+                        # No tackler argument: `tackledBy` isn't resolved until
+                        # further down this branch, so the move falls back to the
+                        # team's run-coverage rating rather than an individual's.
+                        _mvBonus, self.runnerMove, _mvFumbleBump = self._runnerMove(
+                            self.receiver, None)
+                        if _mvBonus:
+                            self.yardage = min(self.yardage + _mvBonus, self.yardsToEndzone)
+                            self.insights['runnerMove'] = self.runnerMove
+                    else:
+                        _mvFumbleBump = 0
                     if not getattr(self, '_diveCatch', False):
                         _stBonus, self._stretchNote, _stFumbleBump = self._stretchForFirst(self.receiver)
+                        # Added AFTER the stretch call, which reassigns _stFumbleBump.
+                        _stFumbleBump += _mvFumbleBump
                         if _stBonus:
                             # Cap at the goal line, NOT one short — a 'stretch_goal' reach
                             # (target == yardsToEndzone) must be allowed to cross for the TD

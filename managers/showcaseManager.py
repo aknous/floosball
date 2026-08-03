@@ -46,7 +46,8 @@ def _recency(seasonCreated: int, currentSeason: int) -> float:
     return SHOWCASE_RECENCY_BY_AGE.get(seasonsOld, SHOWCASE_RECENCY_FLOOR)
 
 
-_CLASSIFICATION_LABELS = {"rookie": "Rookie", "all_pro": "All-Pro", "champion": "Champion", "mvp": "MVP"}
+_CLASSIFICATION_LABELS = {"rookie": "Rookie", "all_pro": "All-Pro", "champion": "Champion",
+                          "mvp": "MVP", "enshrined": "Hall of Fame"}
 
 
 def _classificationPoints(classification) -> int:
@@ -66,7 +67,29 @@ def _classificationTags(classification) -> list:
             if key in classification]
 
 
-def _cardBreakdown(card: dict, currentSeason: int) -> dict:
+def rookieLegacyPoints(card: dict, legacy: dict) -> int:
+    """Extra points a ROOKIE card earns from what its player went on to do.
+
+    Only rookie cards. MVP / Champion / All-Pro cards keep exactly the values they
+    already had — the gap this closes is that a rookie card was the LOWEST
+    classification (5 points) and then decayed with age, so the one card type real
+    collecting prizes most was worth least here.
+
+    `legacy` = {"hof": bool, "mvp": n, "all_pro": n} for the depicted player,
+    counted from AFTER the rookie season, so it measures what they became.
+    """
+    from constants import SHOWCASE_ROOKIE_LEGACY as L, SHOWCASE_ROOKIE_LEGACY_CAP as CAP
+    if not legacy or "rookie" not in (card.get("classification") or ""):
+        return 0
+    pts = 0
+    if legacy.get("hof"):
+        pts += L["hof"]
+    pts += L["mvp"] * int(legacy.get("mvp") or 0)
+    pts += L["all_pro"] * int(legacy.get("all_pro") or 0)
+    return min(CAP, pts)
+
+
+def _cardBreakdown(card: dict, currentSeason: int, legacyByPlayer: dict = None) -> dict:
     """Per-card scoring breakdown. card = {edition, classification, tier, seasonCreated}.
 
     Returns the raw multipliers AND the card's pre-set-bonus point contribution
@@ -81,11 +104,15 @@ def _cardBreakdown(card: dict, currentSeason: int) -> dict:
     # Recency decays the WHOLE base — prestige (MVP/champ/all-pro) included — so an
     # old trophy card doesn't let a collector coast; the showcase rewards hunting
     # for new cards every season.
-    points = (editionPts + classificationPts) * rec * tierMult
+    # Rookie legacy premium is NOT decayed by recency — the whole point is that an
+    # old rookie card of a great player gains worth rather than losing it.
+    legacyPts = rookieLegacyPoints(card, (legacyByPlayer or {}).get(card.get("playerId")))
+    points = (editionPts + classificationPts) * rec * tierMult + legacyPts * tierMult
     return {
         "userCardId": card.get("userCardId"),
         "editionPoints": editionPts,
         "classificationPoints": classificationPts,
+        "legacyPoints": legacyPts,
         "classifications": _classificationTags(card.get("classification")),
         "recency": round(rec, 3),
         "tierMult": round(tierMult, 3),
@@ -166,13 +193,13 @@ def _distRainbow(cards):
 # key, name, bonus, detector, a human "requirement" line for the paytable, and
 # singular/plural units for the "almost" hint.
 SET_RULES = [
-    {"key": "full_spectrum",  "name": "Full Spectrum",  "bonus": 0.5, "fn": _distFullSpectrum,  "req": "All 4 editions of one player",     "one": "edition of one player",        "many": "editions of one player"},
-    {"key": "one_club",       "name": "One Club",       "bonus": 0.6, "fn": _distOneClub,       "req": "6 cards from one team",            "one": "card from one team",           "many": "cards from one team"},
-    {"key": "champion_squad", "name": "Champion Squad", "bonus": 0.8, "fn": _distChampionSquad, "req": "6 champions from one team",        "one": "champion from one team",       "many": "champions from one team"},
-    {"key": "all_pro_line",   "name": "All-Pro Line",   "bonus": 0.5, "fn": _distAllProLine,    "req": "5 All-Pro cards",                  "one": "All-Pro card",                 "many": "All-Pro cards"},
-    {"key": "hall_of_fame",   "name": "Hall of Fame",   "bonus": 0.7, "fn": _distHallOfFame,    "req": "8 MVP / Champion / All-Pro cards", "one": "MVP/Champion/All-Pro card",    "many": "MVP/Champion/All-Pro cards"},
-    {"key": "diamond_vault",  "name": "Diamond Vault",  "bonus": 1.0, "fn": _distDiamondVault,  "req": "8 Diamonds",                       "one": "Diamond",                      "many": "Diamonds"},
-    {"key": "rainbow",        "name": "Rainbow",        "bonus": 0.3, "fn": _distRainbow,       "req": "One card of each edition",         "one": "edition",                      "many": "editions"},
+    {"key": "full_spectrum",  "name": "Full Spectrum",  "bonus": 0.25, "fn": _distFullSpectrum,  "req": "All 4 editions of one player",     "one": "edition of one player",        "many": "editions of one player"},
+    {"key": "one_club",       "name": "One Club",       "bonus": 0.3, "fn": _distOneClub,       "req": "6 cards from one team",            "one": "card from one team",           "many": "cards from one team"},
+    {"key": "champion_squad", "name": "Champion Squad", "bonus": 0.4, "fn": _distChampionSquad, "req": "6 champions from one team",        "one": "champion from one team",       "many": "champions from one team"},
+    {"key": "all_pro_line",   "name": "All-Pro Line",   "bonus": 0.25, "fn": _distAllProLine,    "req": "5 All-Pro cards",                  "one": "All-Pro card",                 "many": "All-Pro cards"},
+    {"key": "hall_of_fame",   "name": "Hall of Fame",   "bonus": 0.35, "fn": _distHallOfFame,    "req": "8 MVP / Champion / All-Pro cards", "one": "MVP/Champion/All-Pro card",    "many": "MVP/Champion/All-Pro cards"},
+    {"key": "diamond_vault",  "name": "Diamond Vault",  "bonus": 0.5, "fn": _distDiamondVault,  "req": "8 Diamonds",                       "one": "Diamond",                      "many": "Diamonds"},
+    {"key": "rainbow",        "name": "Rainbow",        "bonus": 0.15, "fn": _distRainbow,       "req": "One card of each edition",         "one": "edition",                      "many": "editions"},
 ]
 
 
@@ -203,7 +230,7 @@ def weeklyDividend(finalScore: float) -> int:
     return round(SHOWCASE_DIVIDEND_RATE * finalScore)
 
 
-def evaluate(cards, currentSeason: int) -> dict:
+def evaluate(cards, currentSeason: int, legacyByPlayer: dict = None) -> dict:
     """Score a showcase. `cards` = list of card-info dicts (≤ SHOWCASE_SLOTS).
 
     Returns the grade (a label), the weekly Floobit dividend, the active named
@@ -211,7 +238,7 @@ def evaluate(cards, currentSeason: int) -> dict:
     (each card's multipliers + its Floobit share of the dividend), and the raw
     scores (`baseScore`, `score`, `setBonus`). Everything here is now client-safe
     — the dividend is deliberately legible."""
-    breakdowns = [_cardBreakdown(c, currentSeason) for c in cards]
+    breakdowns = [_cardBreakdown(c, currentSeason, legacyByPlayer) for c in cards]
     baseScore = sum(b["points"] for b in breakdowns)
     # `sets` is the full paytable with each set's LIVE status (active / almost /
     # locked); `active` and `almost` are kept as filtered convenience views.
@@ -318,7 +345,7 @@ def awardWeeklyDividends(session, season: int, week: int) -> dict:
         infos = loadShowcaseCardInfos(session, userId, season)
         if not infos:
             continue
-        ev = evaluate(infos, season)
+        ev = evaluate(infos, season, buildLegacyLookup(session, infos))
         dividend = ev["weeklyDividend"]
         results.append({"userId": userId, "grade": ev["grade"], "dividend": dividend})
         if dividend > 0:
@@ -344,3 +371,31 @@ def loadShowcaseCardInfos(session, userId: int, season: int) -> list:
         if uc and uc.card_template:
             infos.append(cardInfo(uc))
     return infos
+
+
+def buildLegacyLookup(session, cards) -> dict:
+    """{playerId: {"hof": bool, "mvp": n, "all_pro": n}} for the ROOKIE cards in a
+    showcase, counting only accolades earned AFTER that card's rookie season.
+
+    Scoped to rookie cards so this is one small query, not a sweep: no other card
+    type uses the premium.
+    """
+    from database.models import Player
+
+    wanted = {}
+    for c in cards or []:
+        if "rookie" in (c.get("classification") or "") and c.get("playerId"):
+            wanted[c["playerId"]] = c.get("seasonCreated") or 0
+    if not wanted:
+        return {}
+    out = {}
+    for p in session.query(Player).filter(Player.id.in_(list(wanted))).all():
+        rookieSeason = wanted.get(p.id, 0)
+        mvps = [s for s in (p.mvp_awards or []) if not rookieSeason or s > rookieSeason]
+        aps = [s for s in (p.all_pro_seasons or []) if not rookieSeason or s > rookieSeason]
+        out[p.id] = {
+            "hof": bool(getattr(p, "is_hof", False)),
+            "mvp": len(mvps),
+            "all_pro": len(aps),
+        }
+    return out

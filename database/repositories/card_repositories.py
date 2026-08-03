@@ -40,19 +40,30 @@ class CardTemplateRepository:
     def getById(self, templateId: int) -> Optional[CardTemplate]:
         return self.session.query(CardTemplate).filter_by(id=templateId).first()
 
-    def getBySeason(self, season: int, includeUpgraded: bool = False) -> List[CardTemplate]:
+    def getBySeason(self, season: int, includeUpgraded: bool = False,
+                    includeShowpieces: bool = False) -> List[CardTemplate]:
+        """Season pool. EXCLUDES showpieces by default.
+
+        This feeds the pack pools and the shop rotation, and a showpiece landing
+        in a fantasy pack would be a brick — it can never be equipped. Callers
+        that genuinely want them (the collection shop) pass includeShowpieces."""
         query = self.session.query(CardTemplate).filter_by(season_created=season)
         if not includeUpgraded:
             query = query.filter(CardTemplate.is_upgraded == False)
+        if not includeShowpieces:
+            query = query.filter(CardTemplate.is_showpiece == False)
         return query.all()
 
-    def getBySeasonAndEdition(self, season: int, edition: str, includeUpgraded: bool = False) -> List[CardTemplate]:
+    def getBySeasonAndEdition(self, season: int, edition: str, includeUpgraded: bool = False,
+                              includeShowpieces: bool = False) -> List[CardTemplate]:
         query = (
             self.session.query(CardTemplate)
             .filter_by(season_created=season, edition=edition)
         )
         if not includeUpgraded:
             query = query.filter(CardTemplate.is_upgraded == False)
+        if not includeShowpieces:
+            query = query.filter(CardTemplate.is_showpiece == False)
         return query.all()
 
     def getByPlayer(self, playerId: int, season: Optional[int] = None) -> List[CardTemplate]:
@@ -608,6 +619,45 @@ class PackTypeRepository:
             rarity_weights=themedRarityWeights,
             description='Reveal 5, keep 3. Last season\u2019s All-Pro selections.',
             theme_type='allpro',
+            theme_value=None,
+        ))
+
+        # COLLECTION PACK — the only source of collection cards, and the only
+        # pack on sale outside the regular season.
+        #
+        # ONE pack, not a legacy pack plus a current-season one: the pool is every
+        # past-season MVP / Champion / All-Pro print, so Hall of Fame players show
+        # up in it naturally (43% of the pool on the dev DB) as the chase rather
+        # than needing a pack of their own.
+        #
+        # Guarantees prismatic-or-better and drops nothing below holographic —
+        # far more generous than any fantasy pack. That is safe precisely BECAUSE
+        # these cards can never be equipped: there is no power creep to protect
+        # against, so the pack can promise something worth opening every time.
+        defaults.append(PackType(
+            name='themed_collection',
+            display_name='Collection Pack',
+            cost=90,
+            cards_per_pack=5,
+            cards_kept=3,
+            guaranteed_rarity='prismatic',
+            # ONE hit per pack, like a real card pack: the guaranteed slot IS the
+            # valuable card and the rest are ordinary.
+            #
+            # This pool has no commons to lean on — prestige classifications only
+            # stamp on holographic and above, so every card in it is nominally a
+            # hit and holographic has to play the role of the common. Hence the
+            # lopsided weights: the four unguaranteed slots are overwhelmingly
+            # holographic, and prismatic/diamond arrive mainly through the
+            # guarantee. Within that guaranteed slot the 9:3 split makes diamond
+            # the rarer pull.
+            #
+            # Weights govern the four UNGUARANTEED slots, not the output — the
+            # guarantee shifts the final mix on top of them, which is what made
+            # earlier 45/35/20 weights come out prismatic-led.
+            rarity_weights={'holographic': 95, 'prismatic': 4, 'diamond': 1},
+            description='Reveal 5, keep 3. Past-season greats, from the seasons they earned it.',
+            theme_type='collection',
             theme_value=None,
         ))
 

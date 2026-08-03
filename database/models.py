@@ -136,6 +136,9 @@ class Coach(Base):
     # Locker-room presence on toxic→leader spectrum. Drives attitude contagion
     # control + 'play hard for them' game-day effect.
     attitude: Mapped[int] = mapped_column(Integer, default=80)
+    # How much fan sentiment moves this GM's roster decisions (60-100). GM-only,
+    # no gameday effect. See docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md Part B.
+    fan_trust: Mapped[int] = mapped_column(Integer, default=80)
     overall_rating: Mapped[int] = mapped_column(Integer, default=80)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -1372,6 +1375,13 @@ class CardTemplate(Base):
     edition: Mapped[str] = mapped_column(String(20), nullable=False)  # base, holographic, prismatic, diamond
     season_created: Mapped[int] = mapped_column(Integer, nullable=False)
     is_rookie: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Showpiece: a prestige print that is COLLECTED, not fielded. Depicts a real
+    # player (so player_id stays non-null) but can never be equipped — the equip
+    # endpoint rejects it. Scores in the Showcase unchanged, because showcase
+    # scoring reads edition/classification/tier/season and never the player.
+    # This is what makes an all-year shop coherent: fantasy cards bought outside
+    # the regular season could never be equipped, showpieces lose nothing.
+    is_showpiece: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     classification: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # rookie, mvp, champion, all_pro, or compound e.g. mvp_champion
 
     # Snapshot of player at creation time
@@ -1758,6 +1768,10 @@ class FeaturedShopCard(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     season: Mapped[int] = mapped_column(Integer, nullable=False)
     card_template_id: Mapped[int] = mapped_column(Integer, ForeignKey("card_templates.id"), nullable=False)
+    # Which shop tab this row belongs to. 'fantasy' = the current-season daily
+    # selection; 'collection' = past-season collectibles. Without this the two
+    # rotations share a table and would contaminate each other's queries.
+    kind: Mapped[str] = mapped_column(String(20), default='fantasy', nullable=False)
     purchased: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Relationships
@@ -1965,6 +1979,121 @@ class AwardVote(Base):
     def __repr__(self):
         return (f"<AwardVote(user={self.user_id}, season={self.season}, "
                 f"type='{self.award_type}', player={self.target_player_id})>")
+
+
+class PlayerSentimentRating(Base):
+    """A fan's standing 1-5 rating of a player — the quiet, persistent signal
+    that nudges the autonomous GM brain.
+
+    Deliberately NOT a vote: it binds nothing. It expresses how a fan FEELS
+    about a player, and the sim's GM weighs that in proportion to their own
+    `fanTrust`. Net ONE rating per fan per player (anti-brigade) — re-rating
+    updates the row rather than adding another.
+
+    Persistent across seasons on purpose: this is a standing stance, not a
+    season-scoped ballot, which is what separates it from AwardVote. Sentiment
+    is the VALENCE axis; anomaly attention is the MAGNITUDE axis — separate
+    axes with shared inputs (see plan Part D / Q7).
+
+    See docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md Part D.
+    """
+    __tablename__ = "player_sentiment_ratings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)   # 1..5
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User")
+    player: Mapped["Player"] = relationship("Player")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "player_id", name="uq_player_sentiment_rating"),
+        Index("idx_sentiment_player", "player_id"),
+        Index("idx_sentiment_user", "user_id"),
+    )
+
+    def __repr__(self):
+        return (f"<PlayerSentimentRating(user={self.user_id}, "
+                f"player={self.player_id}, rating={self.rating})>")
+
+
+class CoachSentimentVote(Base):
+    """A fan's 1-5 rating of a GM (AFO plan Part D).
+
+    Same shape as PlayerSentimentRating on purpose — a GM is judged on the same
+    scale as a player, and one rating model is easier to reason about than two.
+    (An earlier pass made this a binary like/dislike; the 1-5 scale carries the
+    shades that actually matter, e.g. "fine" vs "real asset".)
+
+    Net ONE per fan per coach; re-rating replaces. This is what drives GM
+    fire/leave risk, replacing an earlier approach that counted "Fire the GM"
+    catalog posts — far noisier, since posts are rate-limited spam rather than
+    one considered stance per fan.
+    """
+    __tablename__ = "coach_sentiment_votes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    coach_id: Mapped[int] = mapped_column(Integer, ForeignKey("coaches.id"), nullable=False)
+    # 1-5, same scale as players
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "coach_id", name="uq_coach_sentiment_vote"),
+        Index("idx_coach_sentiment_coach", "coach_id"),
+    )
+
+    def __repr__(self):
+        return (f"<CoachSentimentVote(user={self.user_id}, "
+                f"coach={self.coach_id}, rating={self.rating})>")
+
+
+class TeamFeedPost(Base):
+    """A fan's pre-made reaction on a team's social feed (AFO plan Part D).
+
+    The loud, EPHEMERAL half of fan sentiment. Where PlayerSentimentRating is a
+    standing 1-5 stance, a post is an emotional pulse: it decays out of the feed
+    (FEED_POST_TTL_HOURS) and its influence fades with age.
+
+    Text is never user-supplied — `post_key` indexes FEED_POST_CATALOG, so there
+    is no moderation surface at all.
+
+    Posts drive: the feed itself, GM fire/leave heat, and team mood.
+    """
+    __tablename__ = "team_feed_posts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    team_id: Mapped[int] = mapped_column(Integer, ForeignKey("teams.id"), nullable=False)
+    post_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(8), nullable=False)  # player|gm|team
+    # Only set for target_type == 'player'.
+    target_player_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("players.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # True when generated by a rating / GM vote rather than chosen by the fan.
+    # Auto posts are a DISPLAY artifact of a vote that already counts as
+    # sentiment — they never feed the model again, or every vote would count twice.
+    is_auto: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        Index("idx_feed_team_created", "team_id", "created_at"),
+        Index("idx_feed_target_player", "target_player_id"),
+        Index("idx_feed_user_created", "user_id", "created_at"),
+    )
+
+    def __repr__(self):
+        return (f"<TeamFeedPost(user={self.user_id}, team={self.team_id}, "
+                f"key='{self.post_key}', target='{self.target_type}')>")
 
 
 class HofBallotEntry(Base):

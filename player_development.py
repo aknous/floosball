@@ -197,8 +197,32 @@ class PlayerDevelopment:
         PlayerDevelopment._dev(attributes, 'accuracy', 'trueSkillAccuracy', 'potentialAccuracy', ctx)
 
     @staticmethod
+    def selfDevelopmentBias(player: Any) -> int:
+        """Development bias for an UNROSTERED player, from their own mental
+        makeup rather than a coach's `playerDevelopment`.
+
+        A free agent has no staff, so what improvement they make comes down to
+        whether they keep themselves sharp — discipline, focus, resilience and
+        self-belief. Mapped onto the same scale coaches use so the two are
+        directly comparable, then damped (FA_SELF_DEV_SCALE) because training
+        alone is genuinely less effective than being coached, and floored at
+        FA_SELF_DEV_MIN so sitting in the pool is stagnation, never decay.
+        """
+        from constants import (FA_SELF_DEV_ATTRS, FA_SELF_DEV_SCALE, FA_SELF_DEV_MIN)
+        attrs = getattr(player, 'attributes', None)
+        if attrs is None:
+            return FA_SELF_DEV_MIN
+        vals = [float(getattr(attrs, a, 0) or 0) for a in FA_SELF_DEV_ATTRS]
+        vals = [v for v in vals if v > 0]
+        if not vals:
+            return FA_SELF_DEV_MIN
+        selfDrive = sum(vals) / len(vals)
+        bias = round((selfDrive - 60) / 10 * FA_SELF_DEV_SCALE)
+        return max(FA_SELF_DEV_MIN, int(bias))
+
+    @staticmethod
     def apply_offseason_training(player: Any, position_type: str = None,
-                                 coachDevRating: int = 50, fundingDevBonus: int = 0) -> Dict[str, Any]:
+                                 coachDevRating: int = None, fundingDevBonus: int = 0) -> Dict[str, Any]:
         """Apply one offseason's training to a player.
 
         coachDevRating (0-100): coach's playerDevelopment attribute.
@@ -218,7 +242,15 @@ class PlayerDevelopment:
             frac = fb - fundingInt
             if frac > 0 and random.random() < frac:
                 fundingInt += 1
-            devBias = round((coachDevRating - 60) / 10) + fundingInt
+            if coachDevRating is None:
+                # UNROSTERED: no staff, so the player trains off their own
+                # makeup. Floored at zero — being unsigned must never be worse
+                # than having a bad coach, which is what the old default-50
+                # fallback produced (devBias -1). No facility bonus either:
+                # they have no facility.
+                devBias = PlayerDevelopment.selfDevelopmentBias(player)
+            else:
+                devBias = round((coachDevRating - 60) / 10) + fundingInt
 
             PlayerDevelopment.update_intangible_attributes(player.attributes)
 

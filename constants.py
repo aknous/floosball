@@ -352,7 +352,172 @@ RUN_CONCEPTS = {
     'sweep':   {'base': 0.22, 'deception': 0.40, 'exec': {'speed': 0.4, 'agility': 0.3, 'blocking': 0.3},
                 'edge': {'blitz': 0.05, 'runFocus': 0.35, 'aggr': -0.45},
                 'gaps': {'A-gap': 0.05, 'B-gap': 0.25, 'C-gap': 0.70}},
+    # QB SNEAK — situational only. `base` 0 because it is never part of the normal
+    # weighting: _selectRunConcept skips it and injects its weight explicitly when
+    # the down/distance qualifies. Nothing deceptive (deception 0) — everyone in
+    # the stadium knows it's coming; it wins on leverage, not surprise. Punished
+    # hard by a run-committed box (runFocus -0.55, steeper than power) because
+    # stacking the A-gap is exactly the answer to it, and helped slightly by a
+    # blitz (rushers moving upfield vacate the interior surge).
+    'sneak':   {'base': 0.00, 'deception': 0.00, 'exec': {'power': 0.7, 'discipline': 0.3},
+                'edge': {'blitz': 0.15, 'runFocus': -0.55, 'aggr': 0.00},
+                'gaps': {'A-gap': 1.00}},
 }
+
+# ---------------------------------------------------------------------------
+# Ball-carrier moves — stiff arm / spin / hurdle
+# ---------------------------------------------------------------------------
+# A carrier about to be brought down tries to beat the tackler for extra yards.
+# Slots into the same place `_stretchForFirst` does (the shared run tail, used by
+# both runs and receptions) and returns the same shape.
+#
+# The three-part model these all follow, and which the stretch and the diving
+# catch now follow too:
+#   WILLINGNESS to try it   <- flair (creativity + xFactor) and mental state
+#                              (confidence + determination)
+#   ABILITY to pull it off  <- the physical attribute the move actually uses
+#   RISK taken on           <- discipline (exposure -> fumble bump)
+# That split is what gives `creativity` and `xFactor` real work: before this they
+# were almost inert in play resolution (xFactor appeared in one QB-mobility
+# calculation, creativity in two concept exec weights and otherwise nothing).
+RUNNER_MOVE_ENABLED = True
+RUNNER_MOVE_BASE_CHANCE = 0.05    # attempt rate for a neutral-flair, neutral-state carrier
+RUNNER_MOVE_FLAIR_K = 0.18        # how much full flair raises the attempt rate
+RUNNER_MOVE_STATE_K = 0.06        # how much confidence+determination raise it
+# Per move: the attribute(s) that decide success, the yardage band on a make, and
+# `risk` scaling the fumble bump on the attempt. Bigger swings cost more.
+RUNNER_MOVES = {
+    'stiff arm': {'attrs': {'power': 1.0},                  'gain': (1, 3), 'risk': 0.6},
+    'spin':      {'attrs': {'agility': 1.0},                'gain': (1, 4), 'risk': 0.9},
+    'hurdle':    {'attrs': {'agility': 0.6, 'speed': 0.4},  'gain': (2, 5), 'risk': 1.5},
+}
+RUNNER_MOVE_BASE_SUCCESS = 42.0   # % before the attribute-vs-tackler term
+RUNNER_MOVE_SWING = 1.15          # % per point of (carrier attribute - tackler defense)
+RUNNER_MOVE_SUCCESS_MIN = 12.0
+RUNNER_MOVE_SUCCESS_MAX = 88.0
+# The defender's resistance blends SKILL and DISCIPLINE. Tackling is whether they
+# can bring the carrier down; discipline is whether they stay square and refuse to
+# bite on the move in the first place — which is what actually beats flair. A
+# disciplined defender resists the high-risk moves hardest (`disciplineRiskK`
+# scales by the move's own risk), so a hurdle against a squared-up veteran is a
+# bad idea and a hurdle against a lunger is not.
+RUNNER_MOVE_DEF_TACKLING_W = 0.6
+RUNNER_MOVE_DEF_DISCIPLINE_W = 0.4
+RUNNER_MOVE_DISCIPLINE_RISK_K = 6.0   # extra % resistance per unit risk from a disciplined defender
+# Contact gate — a move only happens at the point of contact. Beyond this many
+# yards the carrier is into open field with nobody to beat, and a stiff-arm on a
+# 40-yard housecall reads as nonsense.
+RUNNER_MOVE_MAX_CONTACT_YARDS = 12
+# Beating a man is a confidence event for both players. Small, and it uses the
+# same in-game confidence channel everything else does.
+RUNNER_MOVE_CONF_CARRIER = 0.04
+RUNNER_MOVE_CONF_DEFENSE = -0.02
+
+# Flair — the shared "does this player try audacious things" term, 0..1, built
+# from creativity + xFactor around the 80 house-neutral pivot.
+FLAIR_PIVOT = 80.0
+FLAIR_RANGE = 20.0
+FLAIR_CREATIVITY_W = 0.5
+FLAIR_XFACTOR_W = 0.5
+# How much flair and determination feed the EXISTING audacious plays, so the same
+# attributes matter there too rather than only on the new moves.
+STRETCH_FLAIR_K = 12.0            # success-chance points at full flair on a stretch
+STRETCH_DETERMINATION_K = 8.0     # success-chance points at full determination
+DIVE_FLAIR_K = 4.0                # catch-prob points at full flair on a lay-out
+DIVE_DETERMINATION_K = 3.0        # catch-prob points at full determination
+
+# ---------------------------------------------------------------------------
+# Pre-snap recognition (the defense's read)
+# ---------------------------------------------------------------------------
+# Everything else in the playbook resolves deception as an OFFENSIVE execution
+# roll against the defense's standing gameplan numbers — `conceptTelegraphed` is
+# the runner executing badly, play-action bites according to a pre-set
+# runStopFocus, tricks pay off against a tendency. The defense never made a
+# per-play decision it could be right or wrong about, which is also why
+# `defensiveMind` did no per-play work at all.
+#
+# This is the mirror of the RPO read: before the play resolves, the defense
+# commits to run or pass.
+PRESNAP_READ_ENABLED = True
+# Base accuracy for a league-average defense. 0.50 is deliberate: at the average
+# the layer nets ZERO (right and wrong are equally likely, and the payoffs are
+# equal and opposite), so it REDISTRIBUTES between sharp and poor defenses
+# rather than taxing offense league-wide. League scoring should not move.
+PRESNAP_READ_BASE = 0.50
+PRESNAP_READ_SKILL = 0.26         # swing from coach defensiveMind + the reader's instinct/focus
+PRESNAP_READ_EDGE = 0.09          # defensive multiplier swing on a correct vs wrong read
+# Disguise — how much each fake degrades recognition. This is the whole point of
+# a fake, and until now they had nothing to beat but a static tendency.
+PRESNAP_DISGUISE = {
+    'playAction': 0.22,
+    'rpo':        0.30,           # genuinely both plays until the QB decides
+    'sneakLook':  0.28,
+    'trick':      0.32,
+}
+# Run concepts that disguise against a RUN/PASS read specifically.
+#
+# Deliberately not "every concept, scaled by its `deception` value". What a
+# concept deceives ABOUT decides whether it belongs here:
+#   * draw    — a RUN that looks like a PASS. The exact mirror of play-action,
+#               and it attacks precisely the question this layer asks. Belongs.
+#   * counter — deceives about DIRECTION (misdirection vs over-pursuit).
+#   * sweep   — deceives about direction/edge speed.
+# The read only commits to run-or-pass, so counter and sweep have nothing here
+# to fool; paying them would be rewarding them for beating a read that never
+# happened. They already get their payoff in the concept-edge channel. If the
+# layer ever grows a directional commit, this is where they'd earn one.
+PRESNAP_CONCEPT_DISGUISE = {'draw': 0.24}
+# Scaled by how well this back sells it (_runConceptExecQ, deterministic from
+# attributes): a shifty, cerebral back disguises a draw; a plodder telegraphs it.
+# Range is this floor to 1.0 of the nominal value above.
+PRESNAP_CONCEPT_DISGUISE_FLOOR = 0.5
+# Leverage — the read only pays where the situation is genuinely ambiguous. On
+# 3rd-and-15 both sides know it's a pass, so guessing right isn't skill; those
+# spots are already handled by the situational branch in getDefensiveScheme.
+# Scaling by leverage is also what stops this layer double-counting with it.
+PRESNAP_LEVERAGE_FLOOR = 0.20     # obvious situations still leave a sliver
+PRESNAP_OBVIOUS_SHORT = 2         # ytg at or under this reads run to everyone
+PRESNAP_OBVIOUS_LONG = 12         # ytg at or over this reads pass to everyone
+
+# ---------------------------------------------------------------------------
+# QB sneak (short-yardage concept — see RUN_CONCEPTS['sneak'])
+# ---------------------------------------------------------------------------
+# The QB follows the interior surge for the yard. Mechanically unlike a tailback
+# run: it is a leverage play with a HIGH floor and almost no ceiling, so it does
+# NOT run the three-gate model (no second level, no breakaway — a sneak never
+# goes 40 yards). It resolves on one push and rejoins the shared run tail, so
+# stats/WPA/fumbles/PBP all flow through the existing paths.
+QB_SNEAK_ENABLED = True           # flip off to remove sneaks entirely
+QB_SNEAK_MAX_YTG = 2              # only with this many yards or fewer to go
+QB_SNEAK_GOAL_LINE_YTE = 2        # ...or this close to the goal line (any down)
+QB_SNEAK_MIN_DOWN = 3             # 3rd/4th down, unless it's goal-line
+QB_SNEAK_WEIGHT = 1.30            # call propensity against power in sneak range
+# Conversion odds. The pivot compares the QB's push (power/discipline, the same
+# attributes as the concept's exec roll) against the defense's effective run
+# defense. Real short-yardage sneaks convert at a very high rate, which is the
+# point of the play — hence a high base and a generous ceiling.
+QB_SNEAK_BASE_SUCCESS = 76.0      # % before the matchup term
+QB_SNEAK_SUCCESS_SWING = 0.85     # % per point of (QB push - effective run D)
+QB_SNEAK_SUCCESS_MIN = 42.0
+QB_SNEAK_SUCCESS_MAX = 93.0
+QB_SNEAK_GAIN_MEAN = 1.6          # yards when the push gets there
+QB_SNEAK_GAIN_MAX = 4             # a sneak that "breaks" still only falls forward
+QB_SNEAK_STUFF_MEAN = 0.2         # yards when stuffed (rarely a loss — it's a pile)
+
+# ---------------------------------------------------------------------------
+# Sneak-look trick (the fake off the sneak)
+# ---------------------------------------------------------------------------
+# Show the sneak, then don't run it. Only worth calling when the defense has
+# actually committed to stopping the sneak — a stacked box vacates the edge and
+# the flat, which is what the fake attacks. Same design rule as the other trick
+# plays: match the gadget to the tendency, never gadget for its own sake.
+SNEAK_LOOK_ENABLED = True
+SNEAK_LOOK_BASE = 0.16            # chance in a qualifying spot, before gating
+SNEAK_LOOK_MIN_RUNFOCUS = 0.52    # D must be leaning run for the fake to pay
+SNEAK_LOOK_AGGR_PIVOT = 78        # coach aggressiveness where the call unlocks
+SNEAK_LOOK_PITCH_SHARE = 0.55     # split between pitch-to-the-RB and quick pass
+SNEAK_LOOK_PITCH_EDGE = 0.55      # run-def relief on the pitch (interior crashed down)
+SNEAK_LOOK_PASS_OPENNESS = 26     # receiver openness on the quick throw off the fake
 
 # Defensive counter-adaptation (Phase 1b): the D-coach reads the offense's run-
 # concept tendencies during the game and adjusts to take them away — lean on
@@ -877,6 +1042,312 @@ RESIGN_ONCE_LIMIT = 1             # re-signs allowed with the SAME team before a
                                   # this is the real dynasty-breaker; 2 let a 6-peat re-emerge)
 RESIGN_LIMIT_ENABLED = True
 RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
+
+# ---- Fan sentiment (AFO plan Part D) ----
+# Fans rate players 1-5. This is the quiet, PERSISTENT signal the GM brain
+# reads — the valence axis, distinct from anomaly attention (magnitude).
+# Free to cast, net one per fan per player.
+SENTIMENT_ENABLED = True
+SENTIMENT_RATING_MIN = 1
+SENTIMENT_RATING_MAX = 5
+SENTIMENT_NEUTRAL = 3.0           # midpoint; maps to 0.0 sentiment
+
+# How many distinct raters a subject needs before their sentiment counts at all.
+# Below it the GM reads neutral and the average is withheld, so one loud fan
+# can't move a roster decision or manufacture a public number.
+#
+# SCALES WITH ENGAGEMENT, like the awards quorum: a bigger, busier league should
+# need more turnout before a number is trustworthy.
+#     required = max(SENTIMENT_MIN_RATERS, ceil(activeUsers x FRACTION))
+#
+# The fraction is far below the awards' 0.20 on purpose. An award is ONE
+# league-wide vote where all attention converges; ratings are spread across 144
+# players plus 24 GMs. At 0.20 with 140 active fans every player would need 28
+# raters — thousands of ratings league-wide — and nothing would ever unhide.
+# At 0.05: 140 fans -> 7 raters, 50 -> 3 (the floor).
+SENTIMENT_MIN_RATERS = 3
+SENTIMENT_QUORUM_ACTIVE_FRACTION = 0.05
+
+# How far sentiment can move a valuation, in perceivedValue points, at FULL
+# fan trust and maximum love/hate. Deliberately small: the plan says sentiment
+# TIPS CLOSE CALLS and must never force a clearly-bad move. A 5-star darling on
+# a maximally populist GM is worth this much extra; a hated player this much less.
+SENTIMENT_MAX_VALUE_SWING = 5.0
+
+# Boards: how many to surface per leaderboard.
+SENTIMENT_BOARD_SIZE = 10
+
+# ---- Social feed: fan posts (AFO plan Part D, signal 2) ----
+# The team page becomes a feed of PRE-MADE reactions. Pre-made is the whole
+# point: no free text means no moderation problem, and it keeps the register
+# consistent. Posts are the EMOTIONAL PULSE — fast, decaying, spammy-fun —
+# as opposed to the 1-5 ratings, which are the slow standing stance.
+FEED_ENABLED = True
+
+# Rate limit: posts should feel cheap and loud, but bounded.
+FEED_MAX_POSTS_PER_WINDOW = 10
+FEED_RATE_WINDOW_HOURS = 1
+
+# How long a post stays in the feed / counts toward the pulse. Ephemeral by
+# design — the pulse is "how the fanbase feels RIGHT NOW", not a permanent record.
+FEED_POST_TTL_HOURS = 72
+
+# Pulse saturation: how many net decayed posts it takes to reach full intensity.
+# Above this the pulse saturates rather than growing without bound, so a
+# brigade of one target can't dominate the whole model.
+FEED_PULSE_SATURATION = 12.0
+
+# How much the (fast, noisy) post pulse can move a player's sentiment relative
+# to their (slow, deliberate) star rating. Ratings lead; posts nudge.
+FEED_PULSE_SENTIMENT_WEIGHT = 0.35
+
+# Post catalog. Each entry: key -> (text, target, valence).
+#   target : 'player' | 'gm' | 'team'
+#   valence: +1 supportive, -1 angry, 0 neutral hype
+#
+# TWO kinds of entry, split by how they reach the feed:
+#   - target 'team'  -> what a fan can POST manually. General support and
+#     frustration only. Opinions about a specific player or the GM are not
+#     posted directly; they come from rating that player / voting on that GM.
+#   - target 'player' | 'gm' -> the AUTO-POST vocabulary. When you rate a player
+#     or vote on the GM, one of these is generated on your behalf so your
+#     opinion shows up in the feed. Never manually selectable.
+#
+# Naming: durable idiom, nothing that will read as dated. `{name}` is filled
+# with the target's name at render time.
+FEED_POST_CATALOG = {
+    # -- manually postable: general support
+    'our_season':    ('This is our season',           'team',    1),
+    'believe':       ('Believe!',                     'team',    1),
+    'all_the_way':   ('We\'re going all the way!',    'team',    1),
+    'floosbowl':     ('The Floosbowl is ours',        'team',    1),
+    # -- manually postable: general frustration
+    'not_good':      ('Not good enough',              'team',   -1),
+    'same_old':      ('Same story every season',      'team',   -1),
+    'disappointing': ('Disappointing!',               'team',  -1),
+    'terrible':      ('Absolutely terrible',          'team',   -1),
+
+        # Vocabulary is limited to moves that EXIST in Floosball: cut, re-sign,
+    # sign a free agent, fire the GM. Nothing may imply a trade — there are
+    # none — so "Trade them" and "Untouchable" (i.e. trade-protected) are out.
+    # -- AUTO from a 4-5 star rating
+    'cornerstone':   ('Franchise cornerstone',        'player',  1),
+    'indispensable': ('Indispensable',                'player',  1),
+    'favorite':      ('Fan favorite',                 'player',  1),
+    'carried_us':    ('Carried this team all season', 'player',  1),
+    # -- AUTO from a 1-2 star rating
+    'cut_them':      ('Cut them',                     'player', -1),
+    'liability':     ('A liability out there',        'player', -1),
+    'move_on':       ('Time to move on',              'player', -1),
+    'get_out':       ("Get them out of here",         'player', -1),
+    # -- AUTO from a GM like
+    'in_trust':      ('In {name} we trust',           'gm',      1),
+    'plan':          ('Trust the plan',               'gm',      1),
+    'best_hire':     ('Best GM in the league',        'gm',      1),
+    # -- AUTO from a GM dislike
+    'fire_the_gm':   ('Fire the GM',                  'gm',     -1),
+    'lost_the_room': ('{name} has lost the room',     'gm',     -1),
+    'enough':        ('Enough excuses',               'gm',     -1),
+}
+
+# Which star ratings generate a post, and of which flavour. A 3 says nothing —
+# a shrug isn't worth a post, and the feed stays signal.
+FEED_AUTOPOST_BY_RATING = {5: 1, 4: 1, 3: None, 2: -1, 1: -1}
+
+# GMs use the same scaled quorum as players — one rating model, one floor.
+# (Kept as its own name so a GM-specific floor stays possible later.)
+GM_SENTIMENT_MIN_VOTERS = 3
+
+# ---- GM turnover: fired / retire / leave (AFO plan Part C) ----
+# All three exits are sim decisions, each rolling the replacement gamble. Since
+# coaches are specialists, a replacement is better-or-worse PER DIMENSION, so
+# turnover is a real trade rather than a reroll on a quality number.
+# Target: a few GM changes league-wide per season, NOT a carousel.
+GM_TURNOVER_ENABLED = True
+
+# Fire pressure comes only from falling BELOW this win rate — at or above it a
+# GM is never rolled on, so competence is genuine job security.
+GM_FIRE_BASELINE_WINPCT = 0.45
+GM_FIRE_SENSITIVITY = 2.60    # fire chance per point of win-rate deficit.
+                              # Tuned over 2.5k simulated seasons against a
+                              # realistic 24-team record spread: yields ~2.9
+                              # fire+leave exits/season, landing 3-4 once
+                              # retirements are added (target 3-5).
+GM_FIRE_GRACE_SEASONS = 1     # a GM isn't fired on their first season's record —
+                              # they inherited the roster and haven't had an
+                              # offseason to shape it
+GM_FIRE_GOODWILL_MAX = 0.14   # max fire-chance reduction for a beloved leader.
+                              # Kept BELOW a typical fire chance on purpose: at
+                              # 0.18 goodwill could zero out the roll entirely,
+                              # making a well-liked GM unfireable rather than
+                              # merely harder to fire.
+                              # (coach `attitude` 100). This is the plan's
+                              # "threshold varies by GM", sourced from a visible
+                              # attribute rather than a hidden per-coach roll.
+GM_FIRE_MAX_CHANCE = 0.75     # even a catastrophe isn't a certainty
+
+# Voluntary departure — independent of record, so a hostile fanbase can drive out
+# a GM who is WINNING. Sentiment weights are dormant until plan Part D.
+GM_LEAVE_BASE_CHANCE = 0.03
+GM_LEAVE_SENTIMENT_WEIGHT = 0.35
+GM_FIRE_SENTIMENT_WEIGHT = 0.25
+
+# ---- Unrostered (free-agent) self-development ----
+# Development is coach-driven: devBias = round((coachDevRating - 60) / 10).
+# Free agents used to fall to a default coachDevRating of 50, i.e. devBias -1 —
+# WORSE than the worst possible coach (60 -> 0), so an unsigned player actively
+# DECAYED. That was a latent oddity while most players were rostered; it becomes
+# a real problem under AFO Part F, where every new player enters the FA pool and
+# would take the penalty until signed.
+#
+# Unrostered players now train off their OWN mental makeup instead — the player
+# who keeps themselves sharp without a staff. Never negative: sitting in the pool is
+# stagnation at worst, never punishment.
+FA_SELF_DEV_ATTRS = ('discipline', 'focus', 'resilience', 'selfBelief')
+FA_SELF_DEV_SCALE = 0.7       # damping vs a coached player — self-training is
+                              # real but less effective than actual coaching.
+                              # League mean self-drive ~74 => devBias ~+1, vs a
+                              # neutral coach's +2 and the worst coach's 0.
+FA_SELF_DEV_MIN = 0           # floor: unsigned never decays
+
+# ---- Coach generation: specialists, not uniformly good/bad (AFO plan Part B) ----
+# Coaches used to draw every attribute from normal(center, 10) around ONE
+# per-coach center, so a coach was uniformly strong or weak and the aggregate
+# actually meant something. GMs should instead be SPECIALISTS — great offensive
+# mind / weak defense / sharp scout / poor developer — so each attribute is drawn
+# largely independently, with only a SMALL shared component so a rare all-around
+# elite or bust still exists.
+#   attr = clip(center + shared + N(0, INDEP_SIGMA), 60, 100),  shared ~ N(0, SHARED_SIGMA)
+# SHARED_SIGMA << INDEP_SIGMA is the whole point: most coaches land near-average
+# overall while differing sharply attribute to attribute.
+COACH_ATTR_CENTER = 80
+COACH_ATTR_SHARED_SIGMA = 4.5     # all-around quality component (rare tails).
+                                  # Tuned over 4k draws: gives ~3.7% all-around
+                                  # elites / ~4.8% busts (target 3-5% each) while
+                                  # leaving the within-coach attribute spread at
+                                  # ~24 pts. Raising it past ~5.5 starts making
+                                  # coaches uniformly good/bad again.
+COACH_ATTR_INDEP_SIGMA = 9.0      # per-attribute spread (the specialist signal)
+
+# Scouting-report profile thresholds. A coach only earns a specialty/flaw tag
+# when the attribute is genuinely notable — otherwise they read as a generalist,
+# which is honest rather than forcing a label onto a flat spread.
+COACH_PROFILE_SPECIALTY_MIN = 88  # top attribute must clear this to be a specialty
+COACH_PROFILE_FLAW_MAX = 70       # bottom attribute must fall below this to be a flaw
+COACH_FANTRUST_POPULIST_MIN = 90  # listens to the fans to a fault
+COACH_FANTRUST_INDEPENDENT_MAX = 70   # ignores them entirely
+
+# ---- Player intake: rookie draft vs FA trickle (AFO plan Part F) ----
+# When False, no rookie class is generated and the rookie draft has nothing to
+# draft: new players enter ONLY via playerManager.ensurePositionSupply, which
+# generates the per-position DEFICIT into the free-agent pool. That deficit fill
+# is the whole intake model — it produces nothing while the pool is above target
+# (so an inflated pool drains), then replaces retirees one-for-one once at
+# target. ROSTER_SUPPLY_BUFFER_PER_POSITION sets the steady-state pool depth.
+# OFF (plan Part F). No rookie class is generated and the draft has nothing to
+# draft: new players enter ONLY as the position-supply deficit fill — a trickle
+# into the FA pool that produces nothing while the pool is above target, so it
+# cannot inflate. Existing prospects drain through and are not replaced.
+ROOKIE_DRAFT_ENABLED = False
+
+# ---- Autonomous Front Office (docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md) ----
+# The sim's GM brain makes roster decisions; fans express sentiment that tips
+# close calls. Phase 1 = valuation + the re-sign decider. While this flag is
+# False the existing fan-vote path runs unchanged, so the two never both decide.
+# Now ON (plan step 7). The brain decides; the binding-vote path is dead and
+# is being removed. Kept as a flag so a bad offseason can be rolled back to
+# fan votes without a revert.
+AUTONOMOUS_FO_ENABLED = True
+
+# Positional value multiplier. Every fill/upgrade/re-sign decision ranks by
+# perceivedValue = projectedRating x POSITION_VALUE, which is what stops
+# "best available" handing a team a great kicker while the QB slot rots.
+# Universal table for now; small per-GM biases are a later flavour option.
+POSITION_VALUE = {
+    'QB': 1.00,
+    'RB': 0.72,
+    'WR': 0.78,
+    'TE': 0.60,
+    'K':  0.35,
+}
+
+# Scouting -> career-arc vision. A GM's read of a player is a blend of the
+# CURRENT rating and the true FORWARD projection, mixed by how good a scout
+# they are: at FO_SCOUT_VISION_FLOOR scouting they see only today's number, at
+# FO_SCOUT_VISION_CEILING they see the arc almost perfectly. What's left of the
+# gap becomes random error, so a poor scout is genuinely WRONG (buys the fading
+# vet, passes on the ascender), not merely noisy.
+FO_SCOUT_VISION_FLOOR = 60        # scouting at/below this = current-number-only
+FO_SCOUT_VISION_CEILING = 100     # scouting at this = near-perfect arc vision
+FO_SCOUT_NOISE_MAX = 6.0          # rating points of error at zero vision (1 sigma)
+
+# Development-minded GMs credit part of a young player's CEILING (not just the
+# trueSkill they'd reach on their own) because they back themselves to develop them.
+FO_CEILING_CREDIT = 0.45          # fraction of the remaining (ceiling - current) gap a GM
+                                  # expects to realise at max playerDevelopment; 0 at the floor
+
+# Potential headroom required before a player reads as DEVELOPING rather than
+# PRIME. Nearly every player carries a point or two of slack, so without a
+# floor here 'developing' would describe the whole league.
+FO_DEVELOPING_HEADROOM = 2
+
+# Age decline. A player past their longevity clock is projected DOWN — this is
+# the "sell high before the cliff" read that separates a sharp GM from a poor one.
+FO_DECLINE_PER_YEAR_PAST = 0.06   # rating fraction shed per season past longevity
+FO_DECLINE_MAX = 0.40             # cap so an ancient vet never projects to nothing
+
+# Re-sign decision. A walk-year incumbent only takes one of the scarce re-sign
+# slots if their perceived value beats the replacement the team can REALISTICALLY sign
+# by this margin (in value points). Slots then go to the biggest surpluses
+# first, so a team spends them where the incumbent genuinely wins.
+FO_RESIGN_SURPLUS_MARGIN = 0.5
+
+# Cut-for-upgrade. A GM cuts a player under contract only when the replacement
+# it can REALISTICALLY sign beats them by this margin in value points. Bigger
+# than the re-sign margin on purpose: letting a walk-year player leave is free,
+# whereas cutting someone under contract opens a hole you may not fill.
+#
+# NOTE — the plan describes an upgrade threshold that scales with draft position
+# as "the aggression dial". That dial is ALREADY expressed by FO_FA_CONTENTION
+# below: an early picker is measured against the top of the board and a late
+# picker against thin leftovers, which is the same early-aggressive /
+# late-conservative behaviour. Scaling the threshold by pick slot TOO would
+# double-count it and, with a near-minimum pool, suppress cuts almost entirely.
+# So the threshold is flat and the dial lives in one place.
+FO_CUT_ENABLED = True
+FO_CUT_UPGRADE_MARGIN = 6.0   # value points the replacement must beat the
+                              # incumbent by. Raised from 4.0: at 4.0 a QB was
+                              # cut for a 4-rating-point upgrade, which isn't
+                              # worth the risk of a hole you may not refill.
+# Soft per-team cap. The plan left cuts uncapped and expected churn to
+# self-limit; a fresh-league sim produced 70 cuts in ONE offseason (half the
+# league), because a brand-new FA pool is fat and every roster has an upgrade
+# available. In an ongoing league cuts settle near zero, so this cap only ever
+# binds on that transient — but 70 would read as absurd, so it is bounded.
+# Mirrors the re-sign cap: a GM makes at most a couple of decisive moves a year.
+FO_CUT_MAX_PER_TEAM = 2
+
+# How deep into the FA pool a team should look when judging its own incumbent.
+# Benchmarking every team against the single league-best free agent is wrong:
+# all 24 teams would conclude their starter is replaceable, yet only one can
+# actually sign that player, so the whole league sheds its incumbents. Instead
+# each team looks at the free agent it can expect to still be there at ITS slot
+# in the worst-first FA order. Not every team ahead takes the same position, so
+# only this fraction of them is assumed to.
+#   effectiveDepth = floor(faOrderIndex x FO_FA_CONTENTION)
+# This is also the plan's aggression dial in its natural home: a bad team
+# picking early benchmarks against the best available and churns boldly, while
+# a good team picking late sees thin leftovers and holds onto its own.
+FO_FA_CONTENTION = 0.30
+
+# Benefit of the doubt given to a prospect the team ALREADY owns when weighing
+# promotion against signing a free agent. Promotion costs the team nothing and
+# the prospect is under its own control, so a prospect within this fraction of
+# the free agent it could otherwise land gets the roster spot. Below 1.0 or a
+# prospect essentially never wins — a developing player's forward projection
+# sits under a proven veteran's almost by definition, and the whole pipeline
+# would wash out to free agency instead of ever reaching a roster.
+FO_PROSPECT_PROMOTE_EDGE = 0.88
 
 # ---- Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ----
 # A Core-driven, user-voted live rule mutation. Each game day (weeks 1/8/15/22) there's
@@ -1650,7 +2121,19 @@ TRANSPLANT_COST_BY_EDITION = {
 SHOWCASE_SLOTS = 8
 # Per-card base = EDITION_POINTS × recency + Σ CLASSIFICATION_POINTS, ×tier mult.
 SHOWCASE_EDITION_POINTS = {"metallic": 1, "holographic": 4, "prismatic": 12, "diamond": 30}
-SHOWCASE_CLASSIFICATION_POINTS = {"rookie": 5, "all_pro": 10, "champion": 12, "mvp": 20}
+# `enshrined` = a Hall of Fame showpiece. Highest classification points because
+# induction is the terminal accolade and the card can never be fielded — the
+# Showcase is the only place it earns anything.
+# NOTE: the showcase SET named "Hall of Fame" (8 MVP/Champion/All-Pro cards)
+# predates this and is a DIFFERENT thing. Key deliberately `enshrined` rather
+# than `hall_of_fame` so the two never collide in code; the set's display name
+# is the collision that remains and wants an owner call.
+# Editions a Hall of Fame showpiece is minted in. Deliberately the top tiers
+# only — an enshrined player does not get a common print.
+SHOWPIECE_EDITIONS = ("prismatic", "diamond")
+
+SHOWCASE_CLASSIFICATION_POINTS = {"rookie": 5, "all_pro": 10, "champion": 12, "mvp": 20,
+                                  "enshrined": 26}
 # Recency: newer cards pay more, keyed by card age (seasons old). Newest score full;
 # older cards taper but stay meaningfully valuable (the decline was too aggressive
 # before — old cards fell off a cliff). Ages past the table use the floor. Non-linear
@@ -1663,7 +2146,64 @@ SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
 # score = Σ cardPoints × (1 + Σ bonuses), with the sum capped here so stacked sets
 # can't run away. Card quality is already priced into cardPoints (edition/recency/
 # tier), so a completed set pays its full bonus regardless of the editions in it.
-SHOWCASE_MAX_SET_BONUS = 1.5
+# Cap on stacked set bonuses. Lowered 1.5 -> 1.10 (owner, 2026-08-02) so no build
+# holds S into a second season. At 1.5 the best real showcase (base 363) scored
+# 908 fresh and 817 a week later, both S; at 1.10 it scores 762 then 686, so S
+# lasts exactly one season and staying there means adding cards.
+#
+# 1.20 was tried first and is NOT enough — it still lands 719 at age 1, above the
+# 700 S line. The curve is steep here, hence the precise value.
+#
+# Recency was deliberately NOT touched: the Collection Pack exists for collectors,
+# and cutting old-card value would work against it. This dial does the job on its
+# own without devaluing anything anyone owns.
+#
+# Trade-off, stated plainly: a typical 3-set stack is +105%, just under this cap,
+# so a 4th set now adds almost nothing. Diminishing returns is the intent of
+# having a cap at all, but if the 4-set diamond route should feel meaningfully
+# better than three sets, the individual bonuses want scaling down rather than
+# the cap coming further in.
+SHOWCASE_MAX_SET_BONUS = 1.10
+# Classification rarity ladder — how likely each accolade combination is to be
+# DRAWN, relative to an undecorated card at 100. Owner's order, least to most
+# rare: AP -> CH -> MVP -> AP/CH -> AP/MVP -> CH/MVP -> AP/CH/MVP.
+#
+# Before this, draw odds keyed on edition and player rating only, so a
+# triple-crown card was exactly as likely as a plain All-Pro of the same
+# edition — the pool's natural scarcity was the only thing making decorated
+# cards rare, and in the collection pool that scarcity doesn't match the ladder
+# (mvp_all_pro sits at 9.4% while all_pro_champion is 8.2%).
+#
+# Keyed by the SET of tags, not the joined string: the strings are ordered
+# inconsistently ('mvp_all_pro' vs 'all_pro_champion') and matching them
+# literally would silently miss combinations.
+CLASSIFICATION_DRAW_WEIGHTS = {
+    frozenset({'all_pro'}):                     100,
+    frozenset({'champion'}):                     70,
+    frozenset({'mvp'}):                          45,
+    frozenset({'all_pro', 'champion'}):          25,
+    frozenset({'mvp', 'all_pro'}):               14,
+    frozenset({'mvp', 'champion'}):               8,
+    frozenset({'mvp', 'all_pro', 'champion'}):    4,
+}
+CLASSIFICATION_TAGS = ('mvp', 'champion', 'all_pro')
+
+# Rookie legacy premium — a rookie card is worth what the player BECAME.
+#
+# Real card collecting works this way round: a rookie card of a future great is
+# the prize, precisely because nobody knew at the time. The scoring model had the
+# opposite instinct (rookie = 5 points, the lowest classification, then decaying
+# with age), so rookie cards meant nothing. This is applied ONLY to rookie cards —
+# MVP / Champion / All-Pro keep exactly the values they already had.
+#
+# Counted from the player's career AFTER that rookie season, so the premium is
+# genuinely "what they went on to do".
+SHOWCASE_ROOKIE_LEGACY = {
+    "hof": 30,        # inducted — the terminal accolade
+    "mvp": 12,        # per MVP
+    "all_pro": 5,     # per All-Pro season
+}
+SHOWCASE_ROOKIE_LEGACY_CAP = 60   # a rookie card can't outrun a full diamond MVP by much
 # Score → grade (first threshold the score meets, scanning high to low).
 # Calibrated against target card-quality profiles + the real season-9 showcases.
 # The top grades demand QUALITY (fresh, high-edition, decorated cards), not
@@ -1706,7 +2246,10 @@ DAILY_RESET_HOUR_UTC = 10
 
 # ─── GM Mode ────────────────────────────────────────────────────────────────────
 
-GM_VOTE_TYPES = {"fire_coach", "cut_player", "resign_player", "sign_fa", "hire_coach"}
+# RETIRED (plan step 7). The binding fan votes are gone — the GM brain decides
+# roster moves and gmTurnover decides coach changes. Kept as an empty set so any
+# stray reader degrades to "no vote types" rather than an AttributeError.
+GM_VOTE_TYPES: set = set()
 
 # Cost per vote (Floobits)
 # ── Discord name submissions (/name) ──────────────────────────────────────────
@@ -1790,7 +2333,11 @@ AWARD_HOF_QUORUM = 3                # FLOOR for distinct voters before fan induc
 # this fraction)), where active users = the recent-login + engaged base the
 # anomaly threshold uses (anomalyManager._countActiveUsers).
 AWARD_QUORUM_ACTIVE_FRACTION = 0.20
-AWARD_HOF_BALLOT_PREFILTER = 10     # _computeHofPoints needed to make the ballot (looser than the 22 auto-induct)
+# Points needed to make the BALLOT. Lowered 10 -> 6 (owner, 2026-08-02): being on
+# the ballot only means fans get to consider you, and the approval floor is the
+# real filter. A tight pre-filter just shrinks the electorate's choices, which is
+# the opposite of what a fan vote wants.
+AWARD_HOF_BALLOT_PREFILTER = 6
 AWARD_HOF_CLASS_CAP = 5             # max inductions per season
 AWARD_HOF_BALLOT_TENURE = 5         # seasons a candidate stays on the ballot before being dropped
 AWARD_HOF_APPROVAL_FRACTION = 0.5   # fraction of HoF voters who must approve to be induct-eligible
