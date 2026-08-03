@@ -1118,32 +1118,32 @@ FEED_PULSE_SENTIMENT_WEIGHT = 0.35
 FEED_POST_CATALOG = {
     # -- manually postable: general support
     'our_season':    ('This is our season',           'team',    1),
-    'believe':       ('Believe',                      'team',    1),
-    'stand_by_them': ('We ride with this team',       'team',    1),
-    'best_days':     ('Best days are ahead',          'team',    1),
+    'believe':       ('Believe!',                     'team',    1),
+    'all_the_way':   ('We\'re going all the way!',    'team',    1),
+    'floosbowl':     ('The Floosbowl is ours',        'team',    1),
     # -- manually postable: general frustration
     'not_good':      ('Not good enough',              'team',   -1),
     'same_old':      ('Same story every season',      'team',   -1),
-    'wasted_year':   ('Another year wasted',          'team',   -1),
-    'deserve_better':('This franchise deserves better', 'team',  -1),
+    'disappointing': ('Disappointing!',               'team',  -1),
+    'terrible':      ('Absolutely terrible',          'team',   -1),
 
         # Vocabulary is limited to moves that EXIST in Floosball: cut, re-sign,
     # sign a free agent, fire the GM. Nothing may imply a trade — there are
     # none — so "Trade them" and "Untouchable" (i.e. trade-protected) are out.
     # -- AUTO from a 4-5 star rating
     'cornerstone':   ('Franchise cornerstone',        'player',  1),
-    'resign_them':   ('Re-sign them',                 'player',  1),
-    'worth_it':      ('Worth every Floobit',          'player',  1),
-    'carried_us':    ('Carried us all season',        'player',  1),
+    'indispensable': ('Indispensable',                'player',  1),
+    'favorite':      ('Fan favorite',                 'player',  1),
+    'carried_us':    ('Carried this team all season', 'player',  1),
     # -- AUTO from a 1-2 star rating
     'cut_them':      ('Cut them',                     'player', -1),
     'liability':     ('A liability out there',        'player', -1),
     'move_on':       ('Time to move on',              'player', -1),
-    'not_the_slot':  ("Not worth the roster slot",    'player', -1),
+    'get_out':       ("Get them out of here",         'player', -1),
     # -- AUTO from a GM like
     'in_trust':      ('In {name} we trust',           'gm',      1),
-    'has_a_plan':    ('The front office has a plan',  'gm',      1),
-    'best_hire':     ('Best hire we have made',       'gm',      1),
+    'plan':          ('Trust the plan',               'gm',      1),
+    'best_hire':     ('Best GM in the league',        'gm',      1),
     # -- AUTO from a GM dislike
     'fire_the_gm':   ('Fire the GM',                  'gm',     -1),
     'lost_the_room': ('{name} has lost the room',     'gm',     -1),
