@@ -47,6 +47,9 @@ from constants import (
     FO_RESIGN_SURPLUS_MARGIN, FO_FA_CONTENTION,
     FO_CUT_ENABLED, FO_CUT_UPGRADE_MARGIN, FO_CUT_MAX_PER_TEAM,
     SENTIMENT_MAX_VALUE_SWING,
+    FO_SCOUT_FACILITY_ENABLED,
+    FA_PREFERENCE_ENABLED, FA_PREF_MAX_DEMAND, FA_PREF_VET_FULL_SEASONS,
+    FA_PREF_VET_WEIGHT, FA_PREF_JITTER,
 )
 
 logger = logging.getLogger(__name__)
@@ -167,21 +170,41 @@ class FrontOfficeBrain:
 
         return current
 
-    def _attrLean(self, coach, attr: str) -> float:
+    def _attrLean(self, coach, attr: str, bonus: float = 0.0) -> float:
         """Normalise a 60-100 coach attribute to 0.0-1.0. A missing coach reads
         as neutral-average rather than incompetent, so an unmanaged team still
-        makes middling-sane decisions."""
-        if coach is None:
+        makes middling-sane decisions.
+
+        `bonus` is added to the raw attribute BEFORE normalising — that's how
+        the Scouting Department buys vision (see scoutingVision). A coach with
+        no bonus behaves exactly as before."""
+        if coach is None and not bonus:
             return 0.5
-        raw = float(getattr(coach, attr, 80) or 80)
+        raw = float(getattr(coach, attr, 80) or 80) + float(bonus or 0.0)
         span = FO_SCOUT_VISION_CEILING - FO_SCOUT_VISION_FLOOR
         if span <= 0:
             return 0.5
         return _clamp((raw - FO_SCOUT_VISION_FLOOR) / span, 0.0, 1.0)
 
+    def scoutingVision(self, coach, team=None) -> float:
+        """How much of a player's forward arc this front office actually sees.
+
+        The GM's own `scouting` plus whatever their Scouting Department buys
+        them. The facility is worth up to +7 attribute points at level 5, which
+        on the 40-point vision span is about +17% of the arc — enough to matter
+        on a close call, never enough to turn a bad evaluator into a good one.
+        """
+        bonus = 0.0
+        if FO_SCOUT_FACILITY_ENABLED and team is not None:
+            try:
+                bonus = float(team.facilityEffect('scouting_bonus') or 0.0)
+            except Exception:
+                bonus = 0.0
+        return self._attrLean(coach, 'scouting', bonus=bonus)
+
     # ------------------------------------------------------------- value
 
-    def perceivedValue(self, player, coach=None, rng=None) -> float:
+    def perceivedValue(self, player, coach=None, rng=None, team=None) -> float:
         """What THIS GM believes the player is worth, position-weighted.
 
         The GM's read is a blend of today's number and the true forward
@@ -196,7 +219,7 @@ class FrontOfficeBrain:
         current = float(getattr(player, 'playerRating', 0) or 0)
         forward = self.trueForwardRating(player, coach)
 
-        vision = self._attrLean(coach, 'scouting')
+        vision = self.scoutingVision(coach, team)
         seen = current + (forward - current) * vision
 
         # Error shrinks to zero as vision approaches 1.
@@ -228,15 +251,15 @@ class FrontOfficeBrain:
         trust = self._attrLean(coach, 'fanTrust')
         return sentiment * trust * SENTIMENT_MAX_VALUE_SWING
 
-    def decisionValue(self, player, coach=None, rng=None) -> float:
+    def decisionValue(self, player, coach=None, rng=None, team=None) -> float:
         """perceivedValue plus the sentiment tilt — the number decisions use."""
-        return (self.perceivedValue(player, coach, rng=rng)
+        return (self.perceivedValue(player, coach, rng=rng, team=team)
                 + self.sentimentTilt(player, coach))
 
     # ---------------------------------------------------------- re-sign
 
     def bestReplacementValue(self, player, coach=None, pool=None, rng=None,
-                             pickDepth=0) -> float:
+                             pickDepth=0, team=None) -> float:
         """Value of the replacement this team can REALISTICALLY sign at the
         player's position.
 
@@ -248,7 +271,12 @@ class FrontOfficeBrain:
         — how far depends on its own slot in the worst-first order — which makes
         cutting a genuine gamble for a good team and cheap for a bad one.
 
-        Retiring free agents are excluded: they cannot actually be signed.
+        Retiring free agents are excluded: they cannot actually be signed. So
+        are players who wouldn't sign HERE — that's the point of settling
+        destination preference before the draft rather than during it. A club
+        with no facilities must not cut its veteran on the strength of an
+        upgrade who was never going to take the call.
+
         Returns 0.0 when the position is picked clean before this team's turn,
         which correctly means "nobody to replace them with, keep them".
         """
@@ -263,7 +291,9 @@ class FrontOfficeBrain:
                 continue
             if getattr(fa, 'willRetire', False):
                 continue
-            values.append(self.decisionValue(fa, coach, rng=rng))
+            if team is not None and not self.willSignWith(fa, team):
+                continue
+            values.append(self.decisionValue(fa, coach, rng=rng, team=team))
         if not values:
             return 0.0
         values.sort(reverse=True)
@@ -271,6 +301,89 @@ class FrontOfficeBrain:
         if depth >= len(values):
             return 0.0      # position picked clean before this team's turn
         return values[depth]
+
+    # ------------------------------------------------- destination preference
+
+    def appealDemand(self, player) -> float:
+        """The minimum team Appeal this player will sign for.
+
+        AGE ONLY, by design. Rating is deliberately not an input: if demand
+        tracked talent then the best players would pool at the best-funded
+        clubs and the league would stratify by treasury. Keyed on service time,
+        what money buys you is veterans, not talent.
+
+        The per-player jitter is scaled by the veteran term, so rookies cluster
+        at zero (they go anywhere for a shot) while two equally old players can
+        want quite different things. Deterministic in the player id so a
+        player's preference doesn't change between calls, or between a
+        pre-draft board and the pick that acts on it.
+        """
+        seasons = float(getattr(player, 'seasonsPlayed', 0) or 0)
+        vet = _clamp(seasons / max(1.0, FA_PREF_VET_FULL_SEASONS), 0.0, 1.0)
+
+        # Stable per-player draw in -1..+1. hash() is salted per process, so
+        # the id is folded by hand to keep this reproducible across runs.
+        pid = int(getattr(player, 'id', 0) or 0)
+        spread = (((pid * 2654435761) % 1000) / 1000.0 - 0.5) * 2.0
+
+        base = vet * FA_PREF_VET_WEIGHT + spread * FA_PREF_JITTER * vet
+        return FA_PREF_MAX_DEMAND * _clamp(base, 0.0, 1.0)
+
+    def teamAppeal(self, team) -> float:
+        """This team's Appeal — the weighted facility sum. One definition,
+        shared with the Front Office readout."""
+        try:
+            from managers.facilitiesManager import computeAppeal
+            return float(computeAppeal(getattr(team, 'facilities', None) or {}))
+        except Exception:
+            return 0.0
+
+    def willSignWith(self, player, team) -> bool:
+        """Would this player join this team at all?
+
+        Checked ONCE, before the draft, so a GM never ranks or plans a cut
+        around a player who was never going to come. Nothing downstream asks a
+        player to reconsider mid-draft."""
+        if not FA_PREFERENCE_ENABLED or team is None or player is None:
+            return True
+        return self.teamAppeal(team) >= self.appealDemand(player)
+
+    def buildDraftBoard(self, team, pool, coach=None, rng=None, alsoValue=None):
+        """This team's own ranking of the free agents who would sign here.
+
+        Two teams see two different boards: the order is `decisionValue`, which
+        is scouting-gated and carries that GM's own error, so one club's top
+        target is another's fifth choice. The scouting error is drawn ONCE here
+        rather than per pick, so a team's board doesn't reshuffle underneath it
+        between rounds.
+
+        `alsoValue` (the team's own prospects) is priced onto the SAME board
+        without the willingness check — they're already here, so there's nothing
+        to agree to. They have to share the board's currency: decisionValue is
+        position-weighted and a raw playerRating is not, so scoring prospects
+        the old way would have made every cross-position comparison at pick time
+        a unit mismatch.
+
+        Returns {playerId: value}. Free agents who won't sign here are absent,
+        which is what keeps them out of both the ranking and the
+        cut-for-upgrade math.
+        """
+        board = {}
+        for fa in pool or []:
+            if fa is None or getattr(fa, 'willRetire', False):
+                continue
+            if not self.willSignWith(fa, team):
+                continue
+            pid = getattr(fa, 'id', None)
+            if pid is None:
+                continue
+            board[pid] = self.decisionValue(fa, coach, rng=rng, team=team)
+        for p in alsoValue or []:
+            pid = getattr(p, 'id', None)
+            if p is None or pid is None:
+                continue
+            board[pid] = self.decisionValue(p, coach, rng=rng, team=team)
+        return board
 
     def faPickDepth(self, team, faOrder=None) -> int:
         """How far down the FA board this team should expect to be shopping.

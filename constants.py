@@ -1279,7 +1279,57 @@ POSITION_VALUE = {
 # vet, passes on the ascender), not merely noisy.
 FO_SCOUT_VISION_FLOOR = 60        # scouting at/below this = current-number-only
 FO_SCOUT_VISION_CEILING = 100     # scouting at this = near-perfect arc vision
-FO_SCOUT_NOISE_MAX = 6.0          # rating points of error at zero vision (1 sigma)
+# Rating points of error at zero vision (1 sigma). Raised from 6.0 once boards
+# became per-team: at 6.0 the error was so small next to the gaps between free
+# agents that all 21 clubs named the SAME top target, which defeats the point of
+# each GM having their own board. Measured over the live pool, by noise level —
+# "own #1" is where a club's top target sits on the true-rating board:
+#
+#     noise   distinct #1s   avg own #1   top-3 shared with consensus
+#       6.0            16        1.48                        2.25/3
+#       9.0            24        1.93                        2.02/3
+#      12.0            29        2.50                        1.86/3
+#      16.0            35        3.02                        1.74/3
+#
+# 12.0 puts a club's own top target around the consensus #2-3, so one team's
+# man really is another's fifth choice, without making the whole league blind.
+FO_SCOUT_NOISE_MAX = 12.0
+
+# The Scouting Department facility adds to the GM's EFFECTIVE scouting, in the
+# same attribute points the coach attribute uses. This is what finally consumes
+# FACILITY_CATALOG['scouting']['effect'] = 'scouting_bonus' (levels 0/0/0/3/5/7):
+# a maxed department is +7 points of vision on a 40-point span, so it buys a
+# sharper read of the board without ever replacing the GM's own eye. Before
+# this the facility had no reader anywhere in the codebase.
+FO_SCOUT_FACILITY_ENABLED = True
+
+# ── Free agent destination preference ───────────────────────────────────────
+# Players decide where they are willing to sign BEFORE the draft, so a team's
+# board only ever holds players who would actually come, and a GM never plans a
+# cut around an upgrade that was never available to them. `demand` is the
+# minimum team Appeal (the weighted facility sum) a player will accept.
+#
+# AGE ONLY. Talent is deliberately NOT an input: if demand tracked rating, the
+# best players would pool at the best-funded clubs and the league would stratify
+# by treasury. Keyed on service time instead, a 95-rated second-year player will
+# sign anywhere, and what a rich club buys is veterans, not talent.
+#
+# Measured against the live league (24 teams): Appeal min 4, p25 4, median 11,
+# p75 17, max 20. The curve is set against those numbers, not a 0-25 ideal.
+#
+#   rookie      demand 0            -> signs anywhere
+#   4 seasons   demand ~2 to 6      -> nearly anywhere
+#   8+ seasons  demand ~4 to 11     -> anywhere, or the top half, depending on
+#                                      the player
+#
+# The jitter is scaled BY the veteran term, so young players have almost no
+# spread (they all go anywhere) while veterans differ a lot from each other.
+# That's what keeps preference wide rather than a hard tier gate.
+FA_PREFERENCE_ENABLED = True
+FA_PREF_MAX_DEMAND = 11.0         # Appeal a maximally-picky player demands
+FA_PREF_VET_FULL_SEASONS = 8      # service seasons at which the veteran term maxes
+FA_PREF_VET_WEIGHT = 0.75         # how much of the scale a full veteran uses
+FA_PREF_JITTER = 0.35             # per-player swing, deterministic from player id
 
 # Development-minded GMs credit part of a young player's CEILING (not just the
 # trueSkill they'd reach on their own) because they back themselves to develop them.
