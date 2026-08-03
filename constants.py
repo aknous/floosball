@@ -2164,6 +2164,30 @@ SHOWCASE_TIER_BONUS_PER_LEVEL = 0.15
 # better than three sets, the individual bonuses want scaling down rather than
 # the cap coming further in.
 SHOWCASE_MAX_SET_BONUS = 1.10
+# Classification rarity ladder — how likely each accolade combination is to be
+# DRAWN, relative to an undecorated card at 100. Owner's order, least to most
+# rare: AP -> CH -> MVP -> AP/CH -> AP/MVP -> CH/MVP -> AP/CH/MVP.
+#
+# Before this, draw odds keyed on edition and player rating only, so a
+# triple-crown card was exactly as likely as a plain All-Pro of the same
+# edition — the pool's natural scarcity was the only thing making decorated
+# cards rare, and in the collection pool that scarcity doesn't match the ladder
+# (mvp_all_pro sits at 9.4% while all_pro_champion is 8.2%).
+#
+# Keyed by the SET of tags, not the joined string: the strings are ordered
+# inconsistently ('mvp_all_pro' vs 'all_pro_champion') and matching them
+# literally would silently miss combinations.
+CLASSIFICATION_DRAW_WEIGHTS = {
+    frozenset({'all_pro'}):                     100,
+    frozenset({'champion'}):                     70,
+    frozenset({'mvp'}):                          45,
+    frozenset({'all_pro', 'champion'}):          25,
+    frozenset({'mvp', 'all_pro'}):               14,
+    frozenset({'mvp', 'champion'}):               8,
+    frozenset({'mvp', 'all_pro', 'champion'}):    4,
+}
+CLASSIFICATION_TAGS = ('mvp', 'champion', 'all_pro')
+
 # Rookie legacy premium — a rookie card is worth what the player BECAME.
 #
 # Real card collecting works this way round: a rookie card of a future great is

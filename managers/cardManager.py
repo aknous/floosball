@@ -463,6 +463,23 @@ def getCollectionTemplates(session, currentSeason: int,
     )
 
 
+def classificationDrawWeight(classification) -> int:
+    """Relative draw weight for a card's accolade combination (100 = undecorated).
+
+    Multiplies the existing within-edition rating weight, so a triple-crown card
+    becomes genuinely hard to pull rather than merely uncommon because few
+    players earned it. Unknown or absent classifications return 100, which leaves
+    rookie/base cards and every non-prestige pack exactly as they were.
+    """
+    from constants import CLASSIFICATION_DRAW_WEIGHTS, CLASSIFICATION_TAGS
+    if not classification:
+        return 100
+    tags = frozenset(t for t in CLASSIFICATION_TAGS if t in classification)
+    if not tags:
+        return 100
+    return CLASSIFICATION_DRAW_WEIGHTS.get(tags, 100)
+
+
 def _vaultOnAcquire(template, currentSeason: int = None, currentWeek: int = 0) -> bool:
     """Should this card land straight in the Vault?
 
@@ -2216,7 +2233,13 @@ class CardManager:
         for _ in range(count):
             edition = random.choices(editions, weights=editionWeights, k=1)[0]
             candidates = byEdition[edition]
-            ratingWeights = [max(1, 120 - t.player_rating) for t in candidates]
+            # Rating rarity x accolade rarity. /100 keeps undecorated cards at
+            # their previous weight so nothing outside the prestige ladder moves.
+            ratingWeights = [
+                max(1, int((120 - t.player_rating)
+                           * classificationDrawWeight(t.classification) / 100))
+                for t in candidates
+            ]
             drawn.extend(random.choices(candidates, weights=ratingWeights, k=1))
         return drawn
 
