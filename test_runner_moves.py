@@ -125,7 +125,10 @@ def testFlairDoesNotDecideWhetherTheMoveWorks():
     """Two carriers with identical physicals but opposite flair should convert
     attempts at the same rate — flair only changes how OFTEN they try."""
     p = _play(defRun=75)
-    def hitRate(c, n=6000):
+    # Large n because the LOW-flair carrier rarely attempts a move at all, so its
+    # hit rate is computed from a small denominator; at n=6000 that denominator
+    # was thin enough to fail this occasionally on noise alone.
+    def hitRate(c, n=40000):
         made = tried = 0
         for _ in range(n):
             _, name, _ = p._runnerMove(c, None)
