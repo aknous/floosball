@@ -2313,7 +2313,13 @@ class CardManager:
             # almost every slot, which produced four holographics out of four.
             poolCopy = sorted(
                 pool,
-                key=lambda t: random.random() ** (1.0 / max(1, weights.get(t.edition, 5))),
+                # Edition weight x accolade weight, so the classification ladder
+                # applies to the singles shelf exactly as it does to packs. This
+                # sampler is separate from _weightedDraw, so wiring the ladder
+                # there alone left the shelf handing out triple-crowns freely.
+                key=lambda t: random.random() ** (
+                    1.0 / max(1, weights.get(t.edition, 5)
+                              * classificationDrawWeight(t.classification) / 100)),
                 reverse=True,
             )
             for t in poolCopy:
@@ -2429,7 +2435,12 @@ class CardManager:
             }
             weights = []
             for t in allTemplates:
-                weights.append(SHOP_EDITION_WEIGHTS.get(t.edition, 50))
+                # Accolade rarity rides on top of edition rarity here as well, so
+                # a decorated single is as hard to see in the shop as it is to
+                # pull from a pack. Undecorated cards multiply by 1.0.
+                weights.append(max(1, int(
+                    SHOP_EDITION_WEIGHTS.get(t.edition, 50)
+                    * classificationDrawWeight(t.classification) / 100)))
 
             count = min(self.FEATURED_CARD_COUNT, len(allTemplates))
             picked = []
