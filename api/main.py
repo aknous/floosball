@@ -9830,6 +9830,7 @@ def getPendingPack(user: _User = Depends(_getCurrentUser)):
 
         sm = floosball_app.seasonManager if floosball_app else None
         currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else pending.season
+        currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
         cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
 
         # Re-serialize the templates the same way revealPack did originally.
@@ -9842,7 +9843,10 @@ def getPendingPack(user: _User = Depends(_getCurrentUser)):
         # arbitrarily; we want indices to match what selectPackKeeps expects.
         byId = {t.id: t for t in templates}
         ordered = [byId[tid] for tid in revealedIds if tid in byId]
-        revealed = [cardManager._serializeTemplate(t, currentSeason) for t in ordered]
+        # session so the card backs carry season stats, and currentWeek so the
+        # vault state matches what selection will actually produce.
+        revealed = [cardManager._serializeTemplate(t, currentSeason, currentWeek, session=session)
+                    for t in ordered]
 
         packType = pending.pack_type
         return build_success_response({

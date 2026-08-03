@@ -1942,7 +1942,8 @@ class CardManager:
             ).update({FeaturedPackRotation.purchased: True})
             session.flush()
 
-        revealed = [self._serializeTemplate(t, currentSeason, currentWeek) for t in drawnTemplates]
+        revealed = [self._serializeTemplate(t, currentSeason, currentWeek, session=session)
+                    for t in drawnTemplates]
 
         # Annotate each revealed card with how many of that EFFECT the user
         # already owns — current-season, non-vaulted only. Expired (past-season)
@@ -2122,7 +2123,8 @@ class CardManager:
         session.commit()
         return len(stale)
 
-    def _serializeTemplate(self, template, currentSeason: int, currentWeek: int = 0) -> dict:
+    def _serializeTemplate(self, template, currentSeason: int, currentWeek: int = 0,
+                           session=None) -> dict:
         """Template-only serialization for reveal payloads. Mirrors the
         rich shape of serializeCard so the reveal UI can render cards
         identically to a UserCard view, but without an `id` (no UserCard
@@ -2154,6 +2156,17 @@ class CardManager:
         # the relationship event machinery doesn't fire.
         set_committed_value(stub, 'card_template', template)
         result = self.serializeCard(stub, currentSeason)
+        # Attach the player's season stat line, same as the collection view and
+        # the fantasy shop do. Without it every card rendered through this path —
+        # pack reveals and the collection singles shelf — showed "No stats
+        # recorded" on its back, which is especially wrong for a collection card
+        # whose whole point is the season it came from.
+        if session is not None and template.player_id:
+            stats = self.buildPlayerSeasonStats(
+                session, template.player_id, template.season_created, template.position,
+            )
+            if stats:
+                result["playerStats"] = stats
         # Strip the fake id — the card doesn't exist yet
         result.pop('id', None)
         return result
@@ -2306,7 +2319,7 @@ class CardManager:
             t = r.card_template
             if not t:
                 continue
-            d = self._serializeTemplate(t, currentSeason, currentWeek)
+            d = self._serializeTemplate(t, currentSeason, currentWeek, session=session)
             d['templateId'] = t.id
             d['buyPrice'] = self._featuredBuyPrice(t)
             out.append(d)
