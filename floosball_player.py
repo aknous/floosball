@@ -19,7 +19,6 @@ from floosball_team import Team
 from constants import POTENTIAL_HEADROOM
 from stat_tracker import StatTracker
 from player_development import PlayerDevelopment
-from rating_cache import CachedRatingMixin
 
 class Position(enum.Enum):
     QB = 1
@@ -1062,7 +1061,7 @@ class PlayerAttributes:
             value += randint(5, 5)
 
 
-class PlayerQB(Player, CachedRatingMixin):
+class PlayerQB(Player):
     def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.QB
@@ -1089,33 +1088,14 @@ class PlayerQB(Player, CachedRatingMixin):
         if self.gameAttributes.overallRating > 100:
             self.gameAttributes.overallRating = 100
 
-    def _calculate_skill_rating(self) -> float:
-        """Calculate QB-specific skill rating"""
-        return round(((self.attributes.armStrength*1.2) + (self.attributes.accuracy*1.3) + (self.attributes.agility*.5))/3)
-
     def updateRating(self):
         self.attributes.calculateIntangibles()
         self.attributes.calculateSkills()
-
-        # Use cached calculations
-        self.attributes.skillRating = self.get_cached_skill_rating()
-        self.attributes.overallRating = self.get_cached_overall_rating()
+        self.attributes.skillRating = round(((self.attributes.armStrength*1.2) + (self.attributes.accuracy*1.3) + (self.attributes.agility*.5))/3)
+        self.attributes.overallRating = round(((self.attributes.skillRating*3) + (self.attributes.playMakingAbility) + (self.attributes.xFactor))/5)
         self.offensiveRating = self.attributes.overallRating
         self.defensiveRating = self.attributes.calculateDefensiveRating(self.position)
         self.playerRating = round((self.offensiveRating + self.defensiveRating) / 2)
-
-    def updateInGameRating(self):
-        # Invalidate cache when game attributes change
-        self.invalidate_rating_cache()
-        self.gameAttributes.calculateIntangibles()
-        self.gameAttributes.calculateSkills()
-
-        # For game ratings, we still calculate directly since they change frequently
-        self.gameAttributes.skillRating = round(((self.gameAttributes.armStrength*1.2) + (self.gameAttributes.accuracy*1.3) + (self.gameAttributes.agility*.5))/3)
-        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*3) + (self.gameAttributes.playMakingAbility) + (self.gameAttributes.xFactor))/5)
-        if self.gameAttributes.overallRating > 100:
-            self.gameAttributes.overallRating = 100
-
 
     def offseasonTraining(self, coachDevRating: int = None, fundingDevBonus: int = 0):
         PlayerDevelopment.apply_offseason_training(self, "QB", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)
