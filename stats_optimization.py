@@ -82,6 +82,7 @@ class RushingStats:
     brokenTackles: int = 0    # successful stiff arm / spin / hurdle
     moveAttempts: int = 0    # moves tried, made or missed
     stuffs: int = 0    # carries for <= 0
+    tackleAttempts: int = 0    # contacts faced (a failed gate IS a tackle attempt)
     gapQualitySum: int = 0    # / carries = avg blocking faced
 
     
@@ -98,6 +99,7 @@ class RushingStats:
         self.brokenTackles = 0
         self.moveAttempts = 0
         self.stuffs = 0
+        self.tackleAttempts = 0
         self.gapQualitySum = 0
     
     def copy_from(self, other: 'RushingStats'):
@@ -114,6 +116,7 @@ class RushingStats:
         self.brokenTackles = other.brokenTackles
         self.moveAttempts = other.moveAttempts
         self.stuffs = other.stuffs
+        self.tackleAttempts = other.tackleAttempts
         self.gapQualitySum = other.gapQualitySum
 @dataclass
 class ReceivingStats:
@@ -322,6 +325,7 @@ class OptimizedPlayerStats:
                 'brokenTackles': self.rushing.brokenTackles,
                 'moveAttempts': self.rushing.moveAttempts,
                 'stuffs': self.rushing.stuffs,
+                'tackleAttempts': self.rushing.tackleAttempts,
                 'gapQualitySum': self.rushing.gapQualitySum
             },
             'receiving': {

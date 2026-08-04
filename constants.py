@@ -944,6 +944,42 @@ FORM_FORCE = float(_os.environ.get('FLOOS_FORM_FORCE', '0'))
 POSITION_FORCE = float(_os.environ.get('FLOOS_POS_FORCE', '0'))
 POSITION_FORCE_SLOT = _os.environ.get('FLOOS_POS_SLOT', 'qb')
 
+# ---- Run Gate Model (three stages with carrier momentum) ----
+# A carry is three contests: the line, the second level, the open field. What
+# makes them mean something is that the runner's STATE carries between them --
+# how you cleared one gate sets your odds at the next.
+#   clean     : untouched, at full speed  -> edge to the runner
+#   contacted : broke a tackle, slowed    -> roughly even, slight edge defender
+#   fought    : forced through a plugged gap -> at a disadvantage
+# At each contact the runner either powers through or elects a move; flair
+# (creativity + xFactor) decides whether he tries something, the move's own
+# physical attribute decides whether it works. See Game._resolveRunGates.
+RUN_GATE_MODEL_V2 = _os.environ.get('FLOOS_RUN_GATES') != 'off'
+RUN_GAP_OPEN = 74          # gap quality at/above this: clean release, no tackle attempt
+RUN_GAP_PLUGGED = 38       # below this the gap is closed and the defender has the edge
+# Winning the contact AT THE LINE is common -- it is "did I get past the front",
+# not "did I break a tackle". Breaking one DOWNFIELD is genuinely rare, so it gets
+# its own much lower base; without that split every run promoted to the open field
+# and league ypc ran to 9.6.
+RUN_CONTACT_BASE = 46      # line, partially open gap: roughly even, slight runner edge
+RUN_CONTACT_PLUGGED = 16   # line, closed gap: only a genuinely elite back busts through
+RUN_BREAK_BASE = 18       # second level / open field: an actual broken tackle
+RUN_BLITZ_EDGE = 14        # blitzing LB is out of the run fit: easier clean second level
+RUN_CONTACT_SWING = 0.30   # rating points -> percentage points in a contact contest
+RUN_MOVE_ELECT_BASE = 0.18 # baseline chance of trying a move instead of lowering a shoulder
+RUN_MOVE_ELECT_FLAIR = 0.55  # ...scaled by flair, so flashy backs try things plodders don't
+RUN_MOVE_BONUS = 5         # a move that lands beats the tackler by this much
+# Entry-state modifier on the gate-2 / gate-3 roll. The negatives are deliberately
+# steep: breaking a tackle should keep a run ALIVE, not routinely convert it into a
+# housecall. Without that, every broken tackle cascaded to the open field.
+RUN_STATE_EDGE = {
+    'clean': 9,            # full speed, hard to square up
+    'contacted': -6,       # broke one but lost his legs
+    'fought': -10,         # squeezed through a pile, no momentum at all
+}
+RUN_MAX_BREAKS = 2         # tackles a carrier may break on one carry
+RUN_SECOND_BREAK_PENALTY = 18  # ...and the second is this much harder
+
 # ---- Advanced Metrics ----
 # Thresholds for the derived per-play metrics. These describe how a play is
 # CLASSIFIED for the box score; they do not feed resolution.

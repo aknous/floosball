@@ -12816,6 +12816,7 @@ class Play():
         # direction matches the play (dives inside, sweeps to the edge). Falls
         # back to the coach's gap tendencies when concepts are off.
         from constants import RUN_CONCEPT_ENABLED as _RC_ON, RUN_CONCEPTS as _RCS
+        from constants import RUN_GATE_MODEL_V2
         _conceptName = getattr(self, 'runConcept', None)
         _conceptGaps = _RCS.get(_conceptName, {}).get('gaps') if _RC_ON else None
         _forcedGap = getattr(self, '_forcedGap', None)   # trick plays (statue/reverse) force the edge
@@ -13009,6 +13010,11 @@ class Play():
                 self.yardage = max(-1, min(1, int(round(np.random.normal(QB_SNEAK_STUFF_MEAN, 0.7)))))
             self.insights['sneak'] = {'converted': self.sneakConverted,
                                       'chance': round(chance, 1)}
+        elif RUN_GATE_MODEL_V2:
+            # Three stages with carrier momentum carried between them — see
+            # _resolveRunGates. Sets self.yardage and self.tackledBy.
+            self._gateOutcome = self._resolveRunGates(
+                gapQuality, gapType, gate2Chance, gate3Chance, scheme)
         elif batched_randint(1, 100) > gate1Chance:
             # Stuffed at the line — -2 to 2 yards
             self.yardage = max(-3, min(3, int(np.random.normal(0.5, 1.3))))
@@ -13071,7 +13077,17 @@ class Play():
         # Yardage at this instant IS the contact point — _runnerMove is gated to
         # it. Everything gained past here is yards after contact.
         _contactYards = self.yardage
-        _moveBonus, self.runnerMove, _moveFumbleBump = self._runnerMove(self.runner, self.tackledBy)
+        _gate = getattr(self, '_gateOutcome', None)
+        if _gate is not None:
+            # V2 resolved contacts inside the cascade; the post-hoc move would
+            # double-count. Surface the last move it produced for the PBP.
+            _moveBonus, _moveFumbleBump = 0, 0
+            _mvs = [m for m in (_gate.get('moves') or []) if not str(m).endswith('_miss')]
+            self.runnerMove = _mvs[-1] if _mvs else None
+            if self.runnerMove:
+                self.insights['runnerMove'] = self.runnerMove
+        else:
+            _moveBonus, self.runnerMove, _moveFumbleBump = self._runnerMove(self.runner, self.tackledBy)
         if _moveBonus:
             self.yardage = min(self.yardage + _moveBonus, self.yardsToEndzone)
             self.insights['runnerMove'] = self.runnerMove
@@ -13081,13 +13097,30 @@ class Play():
         try:
             from stat_tracker import StatCategory as _SCR
             _rsr = self.game.isRegularSeasonGame
-            if self.runnerMove:
+            if _gate is not None:
+                # Real tackle attempts and breaks, counted per stage by the gate
+                # model. A failed gate IS a tackle attempt — that is the signal
+                # the flat cascade never surfaced.
+                _att = int(_gate.get('attempts', 0) or 0)
+                _brk = int(_gate.get('breaks', 0) or 0)
+                if _att:
+                    self.runner.addAdvanced(_SCR.RUSHING, 'tackleAttempts', _att, _rsr)
+                if _brk:
+                    self.runner.addAdvanced(_SCR.RUSHING, 'brokenTackles', _brk, _rsr)
+                _mvAtt = len(_gate.get('moves') or [])
+                if _mvAtt:
+                    self.runner.addAdvanced(_SCR.RUSHING, 'moveAttempts', _mvAtt, _rsr)
+                _fc = _gate.get('firstContactYards')
+                if _fc is not None:
+                    self._contactYards = _fc
+            elif self.runnerMove:
                 self.runner.addAdvanced(_SCR.RUSHING, 'moveAttempts', 1, _rsr)
                 if not str(self.runnerMove).endswith('_miss'):
                     self.runner.addAdvanced(_SCR.RUSHING, 'brokenTackles', 1, _rsr)
             self.runner.addAdvanced(_SCR.RUSHING, 'gapQualitySum',
                                     int(round(gapQuality)), _rsr)
-            self._contactYards = _contactYards
+            if _gate is None:
+                self._contactYards = _contactYards
         except Exception:
             pass
 
@@ -13572,6 +13605,193 @@ class Play():
         xf = (getattr(a, 'xFactor', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
         raw = cre * FLAIR_CREATIVITY_W + xf * FLAIR_XFACTOR_W    # ~-1..+1
         return max(0.0, min(1.0, 0.5 + raw / 2.0))               # 0..1, 0.5 at neutral
+
+    def _levelDefender(self, level, gapType):
+        """The defender the carrier meets at each stage of a run.
+
+        Uses the sim's offense->defense position mapping (TE->DE, RB->LB, QB->S,
+        WR->CB), so each stage is contested by a real, named player rather than a
+        team rating. Level 1 is the line, 2 the second level, 3 the secondary.
+        """
+        d = getattr(self.defense, 'rosterDict', None) or {}
+        if level == 1:
+            # Inside runs meet the LB filling; edge runs meet the DE setting the edge.
+            return d.get('rb') if gapType in ('A-gap', 'B-gap') else d.get('te')
+        if level == 2:
+            return d.get('rb') or d.get('te')
+        return d.get('qb') or d.get('wr1')
+
+    def _contactContest(self, carrier, tackler, baseChance, breaksUsed):
+        """One tackle attempt. Returns (broke, moveName).
+
+        The carrier either lowers a shoulder and runs through it, or elects a
+        move. Flair (creativity + xFactor) decides whether he TRIES something
+        audacious; the move's own physical attribute decides whether it works —
+        the same split `_runnerMove` uses. Powering through leans on power and
+        discipline instead, so a battering-ram back and a shifty one both have a
+        way to win, just different ones.
+        """
+        from constants import (RUN_CONTACT_SWING, RUN_MOVE_ELECT_BASE,
+                               RUN_MOVE_ELECT_FLAIR, RUN_MOVE_BONUS,
+                               RUN_SECOND_BREAK_PENALTY, RUNNER_MOVES)
+        if carrier is None:
+            return (False, None)
+        a = getattr(carrier, 'gameAttributes', None) or carrier.attributes
+
+        # Defender resistance: tackling skill blended with the discipline to stay
+        # square — the same pairing that resists a move elsewhere in the sim.
+        defRating = self.defense.defenseRunCoverageRating
+        if tackler is not None:
+            try:
+                dAttrs = tackler.attributes.getDefensiveAttributes(tackler.position)
+                tAttrs = getattr(tackler, 'gameAttributes', None) or tackler.attributes
+                defRating = (dAttrs.get('tackling', defRating) * 0.65
+                             + getattr(tAttrs, 'discipline', 80.0) * 0.35)
+            except Exception:
+                pass
+
+        moveName = None
+        elect = RUN_MOVE_ELECT_BASE + RUN_MOVE_ELECT_FLAIR * self._flair(carrier)
+        if _random.random() < max(0.0, min(1.0, elect)):
+            # Pick the move this carrier is built for, same selection as _runnerMove.
+            best, bestVal = None, -1e9
+            for name, spec in RUNNER_MOVES.items():
+                val = sum(getattr(a, attr, 80) * w for attr, w in spec['attrs'].items())
+                if val > bestVal:
+                    best, bestVal = name, val
+            carrierRating = bestVal + RUN_MOVE_BONUS
+            moveName = best
+        else:
+            # Run through it: power carries the contact, discipline keeps the feet.
+            carrierRating = getattr(a, 'power', 80) * 0.75 + getattr(a, 'discipline', 80) * 0.25
+
+        chance = baseChance + (carrierRating - defRating) * RUN_CONTACT_SWING
+        if breaksUsed:
+            chance -= RUN_SECOND_BREAK_PENALTY   # a second break is genuinely rare
+        broke = batched_randint(1, 100) <= max(2, min(95, chance))
+        if not broke and moveName:
+            moveName = f'{moveName}_miss'
+        return (broke, moveName)
+
+    def _resolveRunGates(self, gapQuality, gapType, gate2Chance, gate3Chance, scheme):
+        """Three-stage run resolution with carrier momentum carried between gates.
+
+        Replaces a flat pass/fail cascade in which a broken tackle was a post-hoc
+        yardage bonus rather than the thing that GOT the runner to the next level.
+
+          Gate 1 (the line) is tiered by gap quality: a wide-open gap releases the
+          carrier untouched; a partial gap is an even contest with a defender in
+          the hole; a plugged gap gives the defender the edge and only an elite
+          back busts out of it.
+
+          Gate 2 (second level) is where state matters most. Through clean means
+          full speed and an edge; through after breaking a tackle means the legs
+          are gone and it is roughly even; squeezed through a pile means a real
+          disadvantage. It is rarely uncontested — only when the linebacker is
+          blitzing or pulled into coverage.
+
+          Gate 3 (open field) is a pure speed contest for a carrier still
+          untouched, and a speed/agility contest with moves available otherwise.
+
+        Sets self.yardage and returns a dict of what happened for the box score.
+        """
+        from constants import (RUN_GAP_OPEN, RUN_GAP_PLUGGED, RUN_CONTACT_BASE,
+                               RUN_CONTACT_PLUGGED, RUN_BREAK_BASE, RUN_STATE_EDGE,
+                               RUN_MAX_BREAKS)
+        carrier = self.runner
+        state = 'clean'
+        breaks = 0      # tackles broken DOWNFIELD (gates 2 and 3)
+        lineWins = 0    # contacts won at the line — counted separately
+        attempts = 0
+        firstContactYards = None
+        moves = []
+
+        # ── GATE 1: the line ────────────────────────────────────────────────
+        if gapQuality >= RUN_GAP_OPEN:
+            # Wide open — nobody to beat. Straight through at full speed.
+            self.yardage = max(2, min(7, int(np.random.normal(3.9, 1.0))))
+        else:
+            plugged = gapQuality < RUN_GAP_PLUGGED
+            base = RUN_CONTACT_PLUGGED if plugged else RUN_CONTACT_BASE
+            tackler = self._levelDefender(1, gapType)
+            attempts += 1
+            # The back meets the front a yard or two deep, not at the line itself.
+            firstContactYards = batched_randint(0, 2)
+            broke, mv = self._contactContest(carrier, tackler, base, breaks)
+            if mv:
+                moves.append(mv)
+            if not broke:
+                self.tackledBy = tackler
+                self.yardage = (max(-3, min(2, int(np.random.normal(0.2, 1.2)))) if plugged
+                                else max(-2, min(3, int(np.random.normal(1.1, 1.3)))))
+                return {'level': 1, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
+                        'state': state, 'moves': moves,
+                        'firstContactYards': firstContactYards}
+            lineWins += 1   # got through the front — NOT a broken tackle
+            state = 'fought' if plugged else 'contacted'
+            self.yardage = max(1, min(7, int(np.random.normal(3.7, 1.1))))
+
+        # ── GATE 2: second level ────────────────────────────────────────────
+        # A blitzing linebacker is out of the run fit, which makes a clean second
+        # level much more likely — but it is an EDGE, not a free pass. Letting a
+        # blitz skip the stage outright sent every blitzed run to the open field.
+        from constants import RUN_BLITZ_EDGE
+        lbEdge = RUN_BLITZ_EDGE if (scheme and scheme.get('blitzPackage') is not None) else 0
+        if True:
+            tackler = self._levelDefender(2, gapType)
+            edge = RUN_STATE_EDGE.get(state, 0)
+            attempts += 1
+            if firstContactYards is None:
+                firstContactYards = self.yardage
+            if batched_randint(1, 100) > max(4, min(92, gate2Chance + edge + lbEdge)):
+                # A linebacker has him. Break it, or the run ends here.
+                if (breaks + lineWins) < RUN_MAX_BREAKS:
+                    broke, mv = self._contactContest(
+                        carrier, tackler, RUN_BREAK_BASE, breaks + lineWins)
+                    if mv:
+                        moves.append(mv)
+                else:
+                    broke = False
+                if not broke:
+                    self.tackledBy = tackler
+                    self.yardage += max(1, min(5, int(np.random.normal(3.0, 1.2))))
+                    return {'level': 2, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
+                            'state': state, 'moves': moves,
+                            'firstContactYards': firstContactYards}
+                breaks += 1
+                state = 'contacted'
+                # Broke it, but he is not running clean — a smaller gain than the
+                # back who came through the second level untouched.
+                self.yardage += max(2, min(9, int(np.random.normal(4.6, 1.6))))
+            else:
+                self.yardage += max(4, min(12, int(np.random.normal(7.5, 2.0))))
+
+        # ── GATE 3: open field ──────────────────────────────────────────────
+        tackler = self._levelDefender(3, gapType)
+        edge = RUN_STATE_EDGE.get(state, 0)
+        if batched_randint(1, 100) > max(4, min(92, gate3Chance + edge)):
+            attempts += 1
+            if firstContactYards is None:
+                firstContactYards = self.yardage
+            # A clean carrier at full speed is simply run down — no move saves you
+            # from a correct angle. A contacted one can still make a man miss.
+            broke = False
+            if state != 'clean' and breaks < RUN_MAX_BREAKS:
+                broke, mv = self._contactContest(
+                    carrier, tackler, RUN_BREAK_BASE, breaks + lineWins)
+                if mv:
+                    moves.append(mv)
+            if not broke:
+                self.tackledBy = tackler
+                self.yardage += max(4, min(16, int(np.random.normal(8.5, 3.0))))
+                return {'level': 3, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
+                        'state': state, 'moves': moves,
+                        'firstContactYards': firstContactYards}
+            breaks += 1
+        remaining = self.yardsToEndzone - self.yardage
+        self.yardage += min(remaining, max(10, int(np.random.exponential(14))))
+        return {'level': 4, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins, 'state': state,
+                'moves': moves, 'firstContactYards': firstContactYards}
 
     def _runnerMove(self, carrier, tackler):
         """A carrier about to be brought down tries to beat the tackler.

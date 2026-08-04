@@ -135,6 +135,7 @@ playerStatsDict =   {
                             'brokenTackles': 0,      # successful stiff arm / spin / hurdle
                             'moveAttempts': 0,       # moves tried, made or missed
                             'stuffs': 0,             # carries for <= 0
+                            'tackleAttempts': 0,     # contacts faced
                             'gapQualitySum': 0,      # / carries = avg blocking faced
                         },
                         'receiving': {
