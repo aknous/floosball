@@ -1,6 +1,14 @@
 import enum
 from os import stat
 import math
+import os as _os
+_FREEZE_CONFIDENCE = _os.environ.get('FLOOS_FREEZE_CONFIDENCE') == '1'
+try:
+    from constants import CONFIDENCE_DECAY_PER_GAME as _CONF_DECAY_DEFAULT
+except Exception:
+    _CONF_DECAY_DEFAULT = 1.0
+# env override so the decay can be swept without editing constants between arms
+_CONF_DECAY = float(_os.environ.get('FLOOS_CONF_DECAY', _CONF_DECAY_DEFAULT))
 from random import randint
 from random_batch import batched_randint, batched_random
 import copy
@@ -266,6 +274,9 @@ class Player:
         self.stat_tracker.game_stats_dict = self.gameStatsDict
 
     def postgameChanges(self, isRegularSeason: bool = True):
+        if _FREEZE_CONFIDENCE:
+            _preConf = self.attributes.confidenceModifier
+            _preDet = self.attributes.determinationModifier
         self.attributes.confidenceModifier = round((self.attributes.confidenceModifier + self.gameAttributes.confidenceModifier)/2, 3)
         self.attributes.determinationModifier = round((self.attributes.determinationModifier + self.gameAttributes.determinationModifier)/2, 3)
         # Games played tracks REGULAR SEASON only. Playoff games are display- and
@@ -331,6 +342,27 @@ class Player:
 
         self.updateRating()
 
+
+        # A/B harness: freeze the CROSS-GAME mental loop. Confidence and
+        # determination persist between games and are boosted by team win streaks,
+        # so a good team compounds: win -> confidence up -> play better -> win.
+        # Setting FLOOS_FREEZE_CONFIDENCE=1 zeroes the persistent state after every
+        # game, leaving in-game confidence intact but breaking the season-long
+        # feedback. Used to measure how much of the league's win spread this loop
+        # is responsible for. No effect unless the env var is set.
+        if _FREEZE_CONFIDENCE:
+            # Restore the PRE-GAME values rather than zeroing. Forcing 0 also moved the
+            # league's resting confidence (scoring fell 17%), which confounded the test:
+            # it measured "everyone worse" as well as "no compounding". Putting the
+            # snapshot back freezes the carryover at each player's own level, so the
+            # only thing removed is the drift.
+            self.attributes.confidenceModifier = _preConf
+            self.attributes.determinationModifier = _preDet
+        elif _CONF_DECAY < 1.0:
+            # Pull the persistent state back toward neutral every game. Applied AFTER
+            # the streak boost, so a run still lifts a club — it just stops ratcheting.
+            self.attributes.confidenceModifier = round(self.attributes.confidenceModifier * _CONF_DECAY, 3)
+            self.attributes.determinationModifier = round(self.attributes.determinationModifier * _CONF_DECAY, 3)
     def updateInGameRating(self):
         pass
 

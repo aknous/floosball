@@ -84,7 +84,16 @@ class PlayerManager:
         # If no existing players found, generate new ones
         logger.info("No existing players found, generating new player pool")
         leagueConfig = config.get('leagueConfig', {})
-        totalPlayers = leagueConfig.get('initialPlayerCount', 144)
+        # Size the starting pool off the ACTUAL club count. This was a flat 144 —
+        # 24 clubs x 6 slots — so expanding the league silently under-generated and
+        # the opening draft left whole rosters empty (the supply floor only runs
+        # later, by which point the draft has already happened). An explicit
+        # initialPlayerCount in config still wins if one is set.
+        slotsPerTeam = 6
+        teamCount = len(config.get('teams') or []) or 24
+        totalPlayers = leagueConfig.get('initialPlayerCount') or (teamCount * slotsPerTeam)
+        logger.info(f"Initial pool: {totalPlayers} players for {teamCount} clubs "
+                    f"({slotsPerTeam} slots each)")
         
         # Load name lists from main config
         self.loadNameLists(config)
@@ -3156,44 +3165,16 @@ class PlayerManager:
 
         logger.info(f"Free agency starting with {len(self.freeAgents)} free agents and {len(teams)} teams")
 
-        # GM directives: {teamId: [playerId, ...]} — populated by GM Mode sign_fa votes
-        gmDirectives = getattr(self, '_gmFaDirectives', {})
-
-        # DIRECTIVE PHASE: Honor GM directives first (one pass per team)
+        # The DIRECTIVE PHASE that used to run here is gone. It signed the players a
+        # team's fans had ranked on the sign_fa ballot before the fill rounds began.
+        # Binding fan votes were removed with the autonomous Front Office (gmManager.py
+        # is deleted), so `_gmFaDirectives` is now only ever assigned an empty dict and
+        # the phase was a no-op loop over nothing.
         freeAgentLists = {
             'qb': freeAgentQbList, 'rb': freeAgentRbList,
             'wr1': freeAgentWrList, 'wr2': freeAgentWrList,
             'te': freeAgentTeList, 'k': freeAgentKList,
         }
-        for team in freeAgencyOrder:
-            directives = gmDirectives.get(getattr(team, 'id', None), [])
-            for targetId in directives:
-                # Find the targeted player in the FA pool
-                targetPlayer = None
-                targetListKey = None
-                for lKey, faList in freeAgentLists.items():
-                    for p in faList:
-                        if p.id == targetId:
-                            targetPlayer = p
-                            targetListKey = lKey
-                            break
-                    if targetPlayer:
-                        break
-                if not targetPlayer:
-                    continue
-                # Don't re-sign a player this team just released this offseason
-                # (cut by fan vote, or expired and not kept) even if fans ranked
-                # them on the FA ballot.
-                if self._leftThisTeamThisOffseason(targetPlayer, team):
-                    continue
-                # Find open roster slot matching player's position
-                openSlot = self._findOpenSlotForPosition(team, targetPlayer.position.value)
-                if not openSlot:
-                    continue
-                # Sign the player
-                self._signPlayer(team, targetPlayer, openSlot, freeAgentLists[targetListKey],
-                                 freeAgencyDict, leagueHighlights, eventLog, allFaLists=freeAgentLists)
-                log_fa(f"  GM DIRECTIVE: {team.name} signs {targetPlayer.name} at {openSlot}")
 
         # FILL PHASE: Multi-round fill for remaining open roster spots
         teamsComplete = 0
@@ -3374,12 +3355,9 @@ class PlayerManager:
             'wr1': freeAgentWrList, 'wr2': freeAgentWrList,
             'te': freeAgentTeList, 'k': freeAgentKList,
         }
-        gmDirectives = getattr(self, '_gmFaDirectives', {})
+        # Per-team directive queues (fan sign_fa ballot targets) are gone with the
+        # binding-vote system — see the note in conductFreeAgencySimulation.
         teamDirectiveQueues = {}
-        for team in freeAgencyOrder:
-            directives = gmDirectives.get(getattr(team, 'id', None), [])
-            if directives:
-                teamDirectiveQueues[team.id] = list(directives)
 
         # --- DRAFT ROUNDS: one pick per team per round ---
         teamsComplete = 0
@@ -3422,94 +3400,11 @@ class PlayerManager:
                 # the queue is a fall-through pick (Rule 2 — their higher-
                 # ranked FAs ahead of them are gone or no longer eligible).
                 directivePick = False
-                prospectsById = {p.id: p for p in getattr(team, 'prospects', [])}
-                queue = teamDirectiveQueues.get(team.id, [])
-                while queue:
-                    targetId = queue.pop(0)
-
-                    # Case A — ranked target is a prospect: promote them
-                    prospectTarget = prospectsById.get(targetId)
-                    if prospectTarget is not None:
-                        openSlot = self._findOpenSlotForPosition(team, prospectTarget.position.value)
-                        if not openSlot:
-                            continue
-                        prospectTarget.is_prospect = False
-                        prospectTarget.prospect_seasons = 0
-                        prospectTarget.drafting_team_id = None
-                        prospectTarget.team = team
-                        team.rosterDict[openSlot] = prospectTarget
-                        if prospectTarget in team.prospects:
-                            team.prospects.remove(prospectTarget)
-                        try:
-                            prospectTarget.term = self._getPlayerTerm(prospectTarget)
-                            prospectTarget.termRemaining = prospectTarget.term
-                        except Exception:
-                            prospectTarget.termRemaining = 1
-                        freeAgencyDict.setdefault(team.name, []).append({
-                            'action': 'promote', 'player': prospectTarget.name,
-                            'position': prospectTarget.position.name, 'slot': openSlot,
-                        })
-                        leagueHighlights.insert(0, {
-                            'event': {'text': f"{team.name} promoted prospect {prospectTarget.name} ({prospectTarget.position.name}) by fan vote"}
-                        })
-                        logFa(f"  FAN VOTE PROMOTE (fall-through): {team.name} promotes {prospectTarget.name} at {openSlot}")
-                        yield {
-                            'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
-                            'playerId': getattr(prospectTarget, 'id', None),
-                            'player': prospectTarget.name, 'position': prospectTarget.position.name,
-                            'rating': round(prospectTarget.playerRating, 1), 'tier': prospectTarget.playerTier.name,
-                            'isPromotion': True,
-                            'slot': openSlot,
-                        }
-                        directivePick = True
-                        openPositions = [k for k, v in team.rosterDict.items() if v is None
-                                         and k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')]
-                        if not openPositions:
-                            teamsComplete += 1
-                            team.freeAgencyComplete = True
-                            yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
-                        break  # One action per turn
-
-                    # Case B — ranked target is an FA: sign them
-                    targetPlayer = None
-                    targetListKey = None
-                    for lKey, faList in freeAgentLists.items():
-                        for p in faList:
-                            if p.id == targetId:
-                                targetPlayer = p
-                                targetListKey = lKey
-                                break
-                        if targetPlayer:
-                            break
-                    if not targetPlayer:
-                        continue
-                    # Skip a player this team just released this offseason (cut
-                    # or let walk) even if fans ranked them on the FA ballot.
-                    if self._leftThisTeamThisOffseason(targetPlayer, team):
-                        continue
-                    openSlot = self._findOpenSlotForPosition(team, targetPlayer.position.value)
-                    if not openSlot:
-                        continue
-                    self._signPlayer(team, targetPlayer, openSlot, freeAgentLists[targetListKey],
-                                     freeAgencyDict, leagueHighlights, allFaLists=freeAgentLists)
-                    logFa(f"  GM DIRECTIVE: {team.name} signs {targetPlayer.name} at {openSlot}")
-                    yield {
-                        'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
-                        'playerId': getattr(targetPlayer, 'id', None),
-                        'player': targetPlayer.name, 'position': targetPlayer.position.name,
-                        'rating': round(targetPlayer.playerRating, 1), 'tier': targetPlayer.playerTier.name,
-                        'slot': openSlot,
-                    }
-                    directivePick = True
-                    # Check if roster is now full
-                    openPositions = [k for k, v in team.rosterDict.items() if v is None
-                                     and k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')]
-                    if not openPositions:
-                        teamsComplete += 1
-                        team.freeAgencyComplete = True
-                        yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
-                    break  # One pick per turn
-
+                # The fan-directive pass (sign_fa ballot targets, incl. the
+                # prospect fall-through promotion) used to run here. Binding fan
+                # votes are gone with the autonomous Front Office, so the queue was
+                # always empty and the whole pass unreachable. directivePick stays
+                # False, so every team now goes straight to best-available below.
                 if not directivePick:
                     # Rule 3 — no fan directive matched. Sign or promote the
                     # best player available across FAs and prospects (handled
@@ -4399,20 +4294,11 @@ class PlayerManager:
                     return board[pid]
             return getattr(player, 'playerRating', getattr(player.attributes, 'skillRating', 0))
 
-        # Fan position priority (set by the FA ballot's "fill order"): when present,
-        # fill the highest-priority OPEN position first — best player there —
-        # OVERRIDING pure rating, so a team that ranked QB/WR ahead of K won't grab
-        # a higher-rated kicker first. Positions no fan ranked fall to the back,
-        # tie-broken by rating. No priority set -> best-rated overall (legacy).
-        priority = getattr(self, '_gmFaPositionPriority', {}).get(getattr(team, 'id', None))
-        if priority:
-            def _prioKey(c):
-                posVal = getattr(getattr(c[1], 'position', None), 'value', None)
-                idx = priority.index(posVal) if posVal in priority else len(priority)
-                return (idx, -_rating(c))
-            slot, candidate, kind = min(candidates, key=_prioKey)
-        else:
-            slot, candidate, kind = max(candidates, key=_rating)
+        # Best player available, in this GM's own currency. The fan "fill order"
+        # override that used to sit here (FA ballot position priority) is gone with
+        # the binding-vote system — `_gmFaPositionPriority` was only ever assigned an
+        # empty dict, so the override never fired.
+        slot, candidate, kind = max(candidates, key=_rating)
 
         teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
 

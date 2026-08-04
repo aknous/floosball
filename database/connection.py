@@ -92,6 +92,18 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()  # column already exists — ignore
 
+        # Team avatar override: draw the mark with primary/secondary swapped, so a club
+        # can flip its kit colours without the logo's figure/ground flipping too.
+        for col, colDef in [
+            ('logo_invert', 'INTEGER DEFAULT 0'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE teams ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added teams.{col}")
+            except Exception:
+                conn.rollback()  # column already exists — ignore
+
         # Email preference columns on users (v0.7.1)
         for col in ['email_day_report', 'email_season_report']:
             try:

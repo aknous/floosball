@@ -249,6 +249,20 @@ DEF_BOX_WEIGHTS = {
 MOMENTUM_DECAY_RATE = 0.03              # Per-play decay toward neutral
 MOMENTUM_BLOWOUT_DECAY_RATE = 0.08     # Accelerated decay in blowouts (22+ diff)
 MOMENTUM_MIDGAP_DECAY_RATE = 0.05      # Moderate decay (15-21 diff)
+# Per-game decay pulling persistent confidence/determination back toward neutral.
+# The streak boost in Player.postgameChanges accumulates with nothing pulling it
+# back, so a club on a run reaches the +-5 ceiling in ~20 games and stays pinned,
+# while a bad start digs a hole the roster can't climb out of. Decay gives a streak
+# a real but FADING lift: steady state is roughly meanBoost / (1 - decay), so 0.90
+# settles a sustained run near +1.25 instead of pinning at +5. 1.0 disables.
+# Measured on fresh 32-club leagues, 24 seasons per arm, against a no-loop control:
+#   0.95 -> 23% of the available drop in win std dev (too weak to bother with)
+#   0.90 -> 86% of it, and 101% of the drop in 3+ season contender runs
+# 0.90 therefore captures nearly all the dispersion benefit while a streak still
+# means something. Title concentration only improves part-way at either value,
+# which points at roster quality rather than morale for the rest.
+CONFIDENCE_DECAY_PER_GAME = 0.90
+
 MOMENTUM_CASCADE_STEP = 0.15           # Multiplier increase per consecutive streak event
 MOMENTUM_MAX_CASCADE = 1.6             # Max cascade multiplier (streak of 5)
 MOMENTUM_MAX_STREAK = 5                # Max consecutive streak count
@@ -1036,11 +1050,15 @@ LEAGUE_REALIGN_WINDOW_SEASONS = 2
 #  - Re-sign count limit: a team may re-sign at most RESIGN_LIMIT_PER_OFFSEASON
 #    players in a single offseason; the rest of its expiring players walk. Forces
 #    an annual "who do we protect?" decision.
-RESIGN_ONCE_ENABLED = True
+# Env overrides so the retention levers can be A/B'd without editing this file.
+# FLOOS_RETENTION=off disables both. Default (unset) = the shipped behaviour.
+import os as _os
+_RETENTION_OFF = _os.environ.get('FLOOS_RETENTION') == 'off'
+RESIGN_ONCE_ENABLED = not _RETENTION_OFF
 RESIGN_ONCE_LIMIT = 1             # re-signs allowed with the SAME team before a forced walk
                                   # (1 = a player stays ~2 contracts / 4-5 yrs, then walks —
                                   # this is the real dynasty-breaker; 2 let a 6-peat re-emerge)
-RESIGN_LIMIT_ENABLED = True
+RESIGN_LIMIT_ENABLED = not _RETENTION_OFF
 RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
 
 # ---- Fan sentiment (AFO plan Part D) ----

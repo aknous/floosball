@@ -205,6 +205,7 @@ class TeamManager:
             team.color = db_team.color
             team.secondaryColor = getattr(db_team, 'secondary_color', db_team.color)
             team.tertiaryColor = getattr(db_team, 'tertiary_color', db_team.color)
+            team.logoInvert = bool(getattr(db_team, 'logo_invert', False) or False)
             
             # Ratings
             team.offenseRating = db_team.offense_rating or 0
@@ -262,6 +263,7 @@ class TeamManager:
         newTeam.color = teamData['color']
         newTeam.secondaryColor = teamData.get('secondaryColor', teamData['color'])
         newTeam.tertiaryColor = teamData.get('tertiaryColor', teamData['color'])
+        newTeam.logoInvert = bool(teamData.get('logoInvert', False))
         
         # Ratings
         newTeam.offenseRating = teamData['offenseRating']
@@ -424,6 +426,7 @@ class TeamManager:
             team.color = teamConfig['color']
             team.secondaryColor = teamConfig.get('secondaryColor', teamConfig['color'])
             team.tertiaryColor = teamConfig.get('tertiaryColor', teamConfig['color'])
+            team.logoInvert = bool(teamConfig.get('logoInvert', False))
             team.id = teamId
             
             self.teams.append(team)
@@ -501,12 +504,14 @@ class TeamManager:
                     abbr=team.abbr,
                     color=team.color,
                     secondary_color=getattr(team, 'secondaryColor', team.color),
-                    tertiary_color=getattr(team, 'tertiaryColor', team.color)
+                    tertiary_color=getattr(team, 'tertiaryColor', team.color),
+                    logo_invert=bool(getattr(team, 'logoInvert', False))
                 )
             else:
                 # Update color fields if they exist
                 db_team.secondary_color = getattr(team, 'secondaryColor', team.color)
                 db_team.tertiary_color = getattr(team, 'tertiaryColor', team.color)
+                db_team.logo_invert = bool(getattr(team, 'logoInvert', False))
             
             # Update team data
             db_team.offense_rating = team.offenseRating
@@ -568,6 +573,7 @@ class TeamManager:
             'color': team.color,
             'secondaryColor': getattr(team, 'secondaryColor', team.color),
             'tertiaryColor': getattr(team, 'tertiaryColor', team.color),
+            'logoInvert': bool(getattr(team, 'logoInvert', False)),
             'id': team.id,
             'offenseRating': team.offenseRating,
             'defenseRunCoverageRating': team.defenseRunCoverageRating,

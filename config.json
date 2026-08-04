@@ -14,8 +14,7 @@
         "totalSeasons": 10,
         "deleteDataOnRestart": true,
         "saveSeasonProgress": false,
-        "lastSeason": 0,
-        "initialPlayerCount": 144
+        "lastSeason": 0
     },
     "leagues": [
         {
@@ -30,17 +29,18 @@
             "city": "New York",
             "name": "Strangers",
             "abbr": "NYS",
-            "color": "#E91E8C",
-            "secondaryColor": "#ECEFF1",
-            "tertiaryColor": "#F06292"
+            "color": "#1B5E20",
+            "secondaryColor": "#FFC72C",
+            "tertiaryColor": "#2E7D32"
         },
         {
             "city": "Boston",
             "name": "Normals",
             "abbr": "BOS",
-            "color": "#1565C0",
-            "secondaryColor": "#FF8C00",
-            "tertiaryColor": "#1976D2"
+            "color": "#FF8C00",
+            "secondaryColor": "#1565C0",
+            "tertiaryColor": "#FFA733",
+            "logoInvert": true
         },
         {
             "city": "Philadelphia",
@@ -55,7 +55,7 @@
             "name": "Drivers",
             "abbr": "MDD",
             "color": "#FFB300",
-            "secondaryColor": "#D32F2F",
+            "secondaryColor": "#B71C1C",
             "tertiaryColor": "#FFD740"
         },
         {
@@ -78,9 +78,9 @@
             "city": "Chicago",
             "name": "Beans",
             "abbr": "CHI",
-            "color": "#7C4DFF",
-            "secondaryColor": "#18FFFF",
-            "tertiaryColor": "#B388FF"
+            "color": "#B0BEC5",
+            "secondaryColor": "#0D47A1",
+            "tertiaryColor": "#CFD8DC"
         },
         {
             "city": "Detroit",
@@ -94,9 +94,9 @@
             "city": "Minnesota",
             "name": "Blouses",
             "abbr": "MIN",
-            "color": "#D500F9",
-            "secondaryColor": "#00E5FF",
-            "tertiaryColor": "#E040FB"
+            "color": "#582C83",
+            "secondaryColor": "#FF6EC7",
+            "tertiaryColor": "#6A3494"
         },
         {
             "city": "Seattle",
@@ -126,9 +126,9 @@
             "city": "Austin",
             "name": "Moonlight",
             "abbr": "AUS",
-            "color": "#FF6D00",
-            "secondaryColor": "#6200EA",
-            "tertiaryColor": "#FF9E40"
+            "color": "#1A237E",
+            "secondaryColor": "#CFD8DC",
+            "tertiaryColor": "#283593"
         },
         {
             "city": "Kansas City",
@@ -159,7 +159,7 @@
             "name": "Residents",
             "abbr": "LVR",
             "color": "#FFD700",
-            "secondaryColor": "#AA00FF",
+            "secondaryColor": "#7B1FA2",
             "tertiaryColor": "#FFE040"
         },
         {
@@ -175,16 +175,16 @@
             "name": "Bachelorettes",
             "abbr": "NSH",
             "color": "#D4AF37",
-            "secondaryColor": "#9E3D5E",
-            "tertiaryColor": "#D4AF37"
+            "secondaryColor": "#880E4F",
+            "tertiaryColor": "#E0C25C"
         },
         {
             "city": "Portland",
             "name": "Lattes",
             "abbr": "POR",
-            "color": "#E91E63",
-            "secondaryColor": "#00BCD4",
-            "tertiaryColor": "#F06292"
+            "color": "#455A64",
+            "secondaryColor": "#FF7043",
+            "tertiaryColor": "#546E7A"
         },
         {
             "city": "Miami",
@@ -199,16 +199,16 @@
             "name": "Phones",
             "abbr": "SFP",
             "color": "#0071E3",
-            "secondaryColor": "#FF3B30",
+            "secondaryColor": "#F5F5F0",
             "tertiaryColor": "#409EFF"
         },
         {
             "city": "Tampa",
             "name": "Babies",
             "abbr": "TAM",
-            "color": "#FFC107",
-            "secondaryColor": "#7B1FA2",
-            "tertiaryColor": "#FFD54F"
+            "color": "#8E24AA",
+            "secondaryColor": "#FFD54F",
+            "tertiaryColor": "#AB47BC"
         },
         {
             "city": "Georgia",
@@ -217,6 +217,70 @@
             "color": "#3F51B5",
             "secondaryColor": "#FF8F00",
             "tertiaryColor": "#5C6BC0"
+        },
+        {
+            "city": "Los Angeles",
+            "name": "Extras",
+            "abbr": "LAE",
+            "color": "#00838F",
+            "secondaryColor": "#FFD600",
+            "tertiaryColor": "#0097A7"
+        },
+        {
+            "city": "Houston",
+            "name": "Boosters",
+            "abbr": "HOU",
+            "color": "#FF6F00",
+            "secondaryColor": "#1A237E",
+            "tertiaryColor": "#FF8F00"
+        },
+        {
+            "city": "New Orleans",
+            "name": "Balconies",
+            "abbr": "NOB",
+            "color": "#4A148C",
+            "secondaryColor": "#00C853",
+            "tertiaryColor": "#6A1B9A"
+        },
+        {
+            "city": "St. Louis",
+            "name": "Arches",
+            "abbr": "STL",
+            "color": "#90A4AE",
+            "secondaryColor": "#C62828",
+            "tertiaryColor": "#B0BEC5"
+        },
+        {
+            "city": "Milwaukee",
+            "name": "Steins",
+            "abbr": "MIL",
+            "color": "#F9A825",
+            "secondaryColor": "#00695C",
+            "tertiaryColor": "#FBC02D"
+        },
+        {
+            "city": "Toronto",
+            "name": "Raccoons",
+            "abbr": "TOR",
+            "color": "#8D6E63",
+            "secondaryColor": "#ECEFF1",
+            "tertiaryColor": "#A1887F"
+        },
+        {
+            "city": "Buffalo",
+            "name": "Snowbanks",
+            "abbr": "BUF",
+            "color": "#0288D1",
+            "secondaryColor": "#ECEFF1",
+            "tertiaryColor": "#4FC3F7"
+        },
+        {
+            "city": "Salt Lake",
+            "name": "Gulls",
+            "abbr": "SLG",
+            "color": "#00897B",
+            "secondaryColor": "#FFFFFF",
+            "tertiaryColor": "#26A69A"
         }
     ],
     "players": [

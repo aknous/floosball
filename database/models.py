@@ -51,6 +51,10 @@ class Team(Base):
     color: Mapped[str] = mapped_column(String(50))
     secondary_color: Mapped[Optional[str]] = mapped_column(String(50))
     tertiary_color: Mapped[Optional[str]] = mapped_column(String(50))
+    # Draw the avatar with primary/secondary swapped. Lets a club change its
+    # primary colour (kit, team page) without the mark's figure/ground flipping
+    # with it — the generator otherwise always paints the field in `color`.
+    logo_invert: Mapped[bool] = mapped_column(Boolean, default=False)
     offense_rating: Mapped[int] = mapped_column(Integer)
     defense_rating: Mapped[int] = mapped_column(Integer)
     overall_rating: Mapped[int] = mapped_column(Integer)

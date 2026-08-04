@@ -914,6 +914,7 @@ async def get_team_avatar(team_id: int, size: int = Query(default=32, ge=16, le=
         primaryColor = team.color
         secondaryColor = getattr(team, 'secondaryColor', team.color)
         tertiaryColor = getattr(team, 'tertiaryColor', team.color)
+        logoInvert = bool(getattr(team, 'logoInvert', False))
 
         cacheHeaders = {
             "Cache-Control": "public, max-age=86400, immutable",
@@ -924,13 +925,13 @@ async def get_team_avatar(team_id: int, size: int = Query(default=32, ge=16, le=
 
         if format == "png":
             pngBytes = avatarGen.getPng(
-                team.name, primaryColor, secondaryColor, tertiaryColor, size, team.id
+                team.name, primaryColor, secondaryColor, tertiaryColor, size, team.id, logoInvert
             )
             return Response(content=pngBytes, media_type="image/png", headers=cacheHeaders)
 
         # Default: SVG
         svg = avatarGen.generateTeamAvatar(
-            team.name, primaryColor, secondaryColor, tertiaryColor, size, team.id
+            team.name, primaryColor, secondaryColor, tertiaryColor, size, team.id, logoInvert
         )
         return Response(content=svg, media_type="image/svg+xml", headers=cacheHeaders)
     
@@ -6377,30 +6378,11 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         except Exception:
             pass
 
-    # Include resolved FA directives for user's favorite team (if any)
+    # Always empty now: this listed the players a user's favourite team was directed
+    # to sign by the sign_fa fan ballot. Binding fan votes went away with the
+    # autonomous Front Office, so `_gmFaDirectives` is never populated. Kept as a
+    # field so the response shape doesn't change under the frontend.
     faDirectives = []
-    if user and isOffseason:
-        try:
-            gmDirectives = getattr(pm, '_gmFaDirectives', {}) or {}
-            from database.models import User as _UserModel
-            session2 = get_session()
-            try:
-                dbUser2 = session2.query(_UserModel).filter_by(id=user.id).first()
-                favTeamId = dbUser2.favorite_team_id if dbUser2 else None
-            finally:
-                session2.close()
-            if favTeamId and favTeamId in gmDirectives:
-                faLookup = {p.id: p for p in pm.activePlayers}
-                for pid in gmDirectives[favTeamId]:
-                    p = faLookup.get(pid)
-                    if p:
-                        faDirectives.append({
-                            "id": p.id, "name": p.name,
-                            "position": p.position.name,
-                            "rating": round(p.playerRating, 1),
-                        })
-        except Exception:
-            pass
 
     draftComplete = len(draftOrder) > 0 and all(t.get("complete") for t in draftOrder)
     # GM vote resolutions for the Directives tab — survives refresh.

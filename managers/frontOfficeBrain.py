@@ -39,6 +39,14 @@ into `sentimentTilt` once the ratings layer exists.
 import logging
 from random import gauss
 
+import os as _os
+# A/B: soften destination preference from a hard veto into a ranking penalty.
+# FLOOS_SOFT_APPEAL=1 lets any player sign anywhere, but a club below the player's
+# Appeal demand values them lower, so they go to a club that suits them when one
+# exists and still get signed when none does. Off by default.
+_SOFT_APPEAL = _os.environ.get('FLOOS_SOFT_APPEAL') == '1'
+_SOFT_APPEAL_PENALTY = float(_os.environ.get('FLOOS_SOFT_APPEAL_PENALTY', '0.75'))
+
 from constants import (
     POSITION_VALUE,
     FO_SCOUT_VISION_FLOOR, FO_SCOUT_VISION_CEILING, FO_SCOUT_NOISE_MAX,
@@ -253,8 +261,18 @@ class FrontOfficeBrain:
 
     def decisionValue(self, player, coach=None, rng=None, team=None) -> float:
         """perceivedValue plus the sentiment tilt — the number decisions use."""
-        return (self.perceivedValue(player, coach, rng=rng, team=team)
-                + self.sentimentTilt(player, coach))
+        value = (self.perceivedValue(player, coach, rng=rng, team=team)
+                 + self.sentimentTilt(player, coach))
+        if _SOFT_APPEAL and team is not None and player is not None:
+            # Below the player's Appeal demand this club is a worse fit, so it ranks
+            # them lower — it does NOT lose the right to sign them. Under the hard
+            # gate a low-Appeal club simply could not sign any veteran at all.
+            try:
+                if self.teamAppeal(team) < self.appealDemand(player):
+                    value *= _SOFT_APPEAL_PENALTY
+            except Exception:
+                pass
+        return value
 
     # ---------------------------------------------------------- re-sign
 
@@ -345,6 +363,11 @@ class FrontOfficeBrain:
         around a player who was never going to come. Nothing downstream asks a
         player to reconsider mid-draft."""
         if not FA_PREFERENCE_ENABLED or team is None or player is None:
+            return True
+        if _SOFT_APPEAL:
+            # Preference, not veto: a player would rather play than sit out, so
+            # nobody is excluded from a board. The cost of a poor fit is applied
+            # in decisionValue instead.
             return True
         return self.teamAppeal(team) >= self.appealDemand(player)
 

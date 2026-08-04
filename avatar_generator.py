@@ -25,7 +25,8 @@ class AvatarGenerator:
             os.makedirs(cacheDir)
             logger.info(f"Created avatar cache directory: {cacheDir}")
         
-    def generateTeamAvatar(self, teamName: str, primaryColor: str, secondaryColor: str, tertiaryColor: str, size: int = 32, teamId: int = None) -> str:
+    def generateTeamAvatar(self, teamName: str, primaryColor: str, secondaryColor: str, tertiaryColor: str,
+                           size: int = 32, teamId: int = None, logoInvert: bool = False) -> str:
         """
         Generate a marble-style SVG avatar for a team
         
@@ -41,7 +42,7 @@ class AvatarGenerator:
             SVG string
         """
         # Create cache key
-        cacheKey = self._getCacheKey(teamName, primaryColor, secondaryColor, tertiaryColor, size)
+        cacheKey = self._getCacheKey(teamName, primaryColor, secondaryColor, tertiaryColor, size, logoInvert)
         
         # Check memory cache first
         if cacheKey in self.cache:
@@ -59,7 +60,7 @@ class AvatarGenerator:
             return svg
         
         # Generate new avatar
-        svg = self._generateMarbleSvg(teamName, primaryColor, secondaryColor, tertiaryColor, size, teamId)
+        svg = self._generateMarbleSvg(teamName, primaryColor, secondaryColor, tertiaryColor, size, teamId, logoInvert)
         
         # Save to disk
         self._saveToDisk(cacheKey, svg)
@@ -74,9 +75,10 @@ class AvatarGenerator:
         """Get file path for cached avatar"""
         return os.path.join(self.cacheDir, f"{cacheKey}.svg")
     
-    def getPng(self, teamName: str, primaryColor: str, secondaryColor: str, tertiaryColor: str, size: int = 256, teamId: int = None) -> bytes:
+    def getPng(self, teamName: str, primaryColor: str, secondaryColor: str, tertiaryColor: str,
+               size: int = 256, teamId: int = None, logoInvert: bool = False) -> bytes:
         """Generate or return cached PNG avatar for a team."""
-        cacheKey = self._getCacheKey(teamName, primaryColor, secondaryColor, tertiaryColor, size)
+        cacheKey = self._getCacheKey(teamName, primaryColor, secondaryColor, tertiaryColor, size, logoInvert)
         pngPath = os.path.join(self.cacheDir, f"{cacheKey}.png")
 
         # Check disk cache
@@ -85,7 +87,7 @@ class AvatarGenerator:
                 return f.read()
 
         # Generate SVG first, then convert
-        svg = self.generateTeamAvatar(teamName, primaryColor, secondaryColor, tertiaryColor, size, teamId)
+        svg = self.generateTeamAvatar(teamName, primaryColor, secondaryColor, tertiaryColor, size, teamId, logoInvert)
         import cairosvg
         pngBytes = cairosvg.svg2png(bytestring=svg.encode('utf-8'), output_width=size, output_height=size)
 
@@ -175,27 +177,36 @@ class AvatarGenerator:
         except Exception as e:
             logger.error(f"Failed to save avatar to disk: {e}")
     
-    def _getCacheKey(self, teamName: str, primaryColor: str, secondaryColor: str, tertiaryColor: str, size: int) -> str:
+    def _getCacheKey(self, teamName: str, primaryColor: str, secondaryColor: str, tertiaryColor: str,
+                     size: int, logoInvert: bool = False) -> str:
         """Generate a cache key from team data"""
-        data = f"{teamName}|{primaryColor}|{secondaryColor}|{tertiaryColor}|{size}"
+        data = f"{teamName}|{primaryColor}|{secondaryColor}|{tertiaryColor}|{size}|{int(bool(logoInvert))}"
         return hashlib.md5(data.encode()).hexdigest()
     
-    def _generateMarbleSvg(self, seed: str, color1: str, color2: str, color3: str, size: int, teamId: int = None) -> str:
+    def _generateMarbleSvg(self, seed: str, color1: str, color2: str, color3: str, size: int,
+                           teamId: int = None, logoInvert: bool = False) -> str:
         """
         Generate medieval banner-style SVG with patterns using two colors.
         Patterns include various heraldic designs for visual variety.
         Pattern is sequentially assigned based on team ID.
         """
-        # Choose pattern sequentially based on team ID, or fallback to hash
+        # Choose pattern sequentially based on team ID, or fallback to hash.
+        # 32 patterns for 32 clubs — one each, no repeats. At 24 the league outgrew the
+        # set on expansion and team IDs 25-32 silently drew the same marks as 1-8.
         if teamId is not None:
-            patternType = (teamId - 1) % 24  # Cycle through 24 patterns (team IDs start at 1)
+            patternType = (teamId - 1) % 32  # team IDs start at 1
         else:
             patternHash = int(hashlib.md5(seed.encode()).hexdigest(), 16)
-            patternType = patternHash % 24
+            patternType = patternHash % 32
         
         # Remove # from hex colors if present
         c1 = color1.lstrip('#')
         c2 = color2.lstrip('#')
+        # logoInvert: paint the field in the SECONDARY and the figure in the primary.
+        # A club that swaps its two colours can set this to keep the mark looking
+        # exactly as it did, while kits and team pages pick up the new primary.
+        if logoInvert:
+            c1, c2 = c2, c1
         c3 = color3.lstrip('#')
         
         # Generate unique ID for pattern definition
@@ -256,11 +267,20 @@ class AvatarGenerator:
                 <path d="M {size} 0 L {size} {cw * 1.5:.2f} L {cw * 1.5:.2f} {size} L 0 {size} L 0 {size - cw * 1.5:.2f} L {size - cw * 1.5:.2f} 0 Z" fill="#{c1}"/>'''
 
         elif patternType == 6:
-            # Double chevron
+            # Double chevron. The arms are drawn PAST the square on both sides and then
+            # clipped by the circle, so each one meets the rim cleanly. Terminating them
+            # at x=0 and x=size left the butt cap sitting inside the circle at that height
+            # (at y=0.42*size the rim is ~0.6px in, not 0), which read as a notch where the
+            # chevron met the outline.
             sw = size * 0.16
+            over = 0.25                      # how far past each edge to run the arms
+            slope = (0.42 - 0.16) / 0.5      # arm gradient, in units of size
+            yTop, yBot = 0.42, 0.82
+            yTopEdge = yTop + over * slope
+            yBotEdge = yBot + over * slope
             content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>
-                <polyline points="0,{size*0.42:.1f} {half:.1f},{size*0.16:.1f} {size},{size*0.42:.1f}" stroke="#{c2}" stroke-width="{sw:.1f}" fill="none" stroke-linejoin="miter"/>
-                <polyline points="0,{size*0.82:.1f} {half:.1f},{size*0.56:.1f} {size},{size*0.82:.1f}" stroke="#{c2}" stroke-width="{sw:.1f}" fill="none" stroke-linejoin="miter"/>'''
+                <polyline points="{-over*size:.1f},{yTopEdge*size:.1f} {half:.1f},{size*0.16:.1f} {(1+over)*size:.1f},{yTopEdge*size:.1f}" stroke="#{c2}" stroke-width="{sw:.1f}" fill="none" stroke-linejoin="miter"/>
+                <polyline points="{-over*size:.1f},{yBotEdge*size:.1f} {half:.1f},{size*0.56:.1f} {(1+over)*size:.1f},{yBotEdge*size:.1f}" stroke="#{c2}" stroke-width="{sw:.1f}" fill="none" stroke-linejoin="miter"/>'''
 
         elif patternType == 7:
             # Meshing bands - 5 pairs where c1 goes thick→thin (top→bottom) and c2 goes thin→thick
@@ -281,22 +301,30 @@ class AvatarGenerator:
             content = mbBands
 
         elif patternType == 8:
-            # Isometric cube hexagon - solid hex fill with 3 internal depth lines
-            r = size * 0.42
-            v0x, v0y = half, half - r
-            v1x, v1y = half + r*0.866, half - r*0.5
-            v2x, v2y = half + r*0.866, half + r*0.5
-            v3x, v3y = half, half + r
-            v4x, v4y = half - r*0.866, half + r*0.5
-            v5x, v5y = half - r*0.866, half - r*0.5
-            sw = size * 0.025
-            hexPts = f'{v0x:.1f},{v0y:.1f} {v1x:.1f},{v1y:.1f} {v2x:.1f},{v2y:.1f} {v3x:.1f},{v3y:.1f} {v4x:.1f},{v4y:.1f} {v5x:.1f},{v5y:.1f}'
+            # Ruffle (nebuly) - a scalloped division, all curves and no straight edges.
+            # Owned by the Blouses; the isometric cube that used to sit here read as
+            # technical drawing, which is the wrong register for that club entirely.
+            n = 5
+            w = size / n
+            r = w / 2
+            midY = size * 0.47
+            arcs = "".join(
+                f" A {r:.1f},{r:.1f} 0 0,1 {(i + 1) * w:.1f},{midY:.1f}" for i in range(n)
+            )
+            skirt = (f"M 0,{size} L 0,{midY:.1f}{arcs} L {size},{size} Z")
+            # A second, smaller scalloped hem inside it for the layered look.
+            n2 = 7
+            w2 = size / n2
+            r2 = w2 / 2
+            lowY = size * 0.72
+            arcs2 = "".join(
+                f" A {r2:.1f},{r2:.1f} 0 0,1 {(i + 1) * w2:.1f},{lowY:.1f}" for i in range(n2)
+            )
+            hem = (f"M 0,{size} L 0,{lowY:.1f}{arcs2} L {size},{size} Z")
             content = (
-                f'<rect width="{size}" height="{size}" fill="#{c2}"/>'
-                f'<polygon points="{hexPts}" fill="#{c1}"/>'
-                f'<line x1="{half:.1f}" y1="{half:.1f}" x2="{v1x:.1f}" y2="{v1y:.1f}" stroke="#{c2}" stroke-width="{sw:.1f}"/>'
-                f'<line x1="{half:.1f}" y1="{half:.1f}" x2="{v3x:.1f}" y2="{v3y:.1f}" stroke="#{c2}" stroke-width="{sw:.1f}"/>'
-                f'<line x1="{half:.1f}" y1="{half:.1f}" x2="{v5x:.1f}" y2="{v5y:.1f}" stroke="#{c2}" stroke-width="{sw:.1f}"/>'
+                f'<rect width="{size}" height="{size}" fill="#{c1}"/>'
+                f'<path d="{skirt}" fill="#{c2}"/>'
+                f'<path d="{hem}" fill="#{c1}" opacity="0.35"/>'
             )
 
         elif patternType == 9:
@@ -435,6 +463,96 @@ class AvatarGenerator:
             content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>
                 <path d="{wavePath}" fill="#{c2}"/>'''
 
+        elif patternType == 24:
+            # Bullseye - concentric rings. Nothing else in the set is radial-symmetric.
+            content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>
+                <circle cx="{half}" cy="{half}" r="{size * 0.40:.1f}" fill="#{c2}"/>
+                <circle cx="{half}" cy="{half}" r="{size * 0.26:.1f}" fill="#{c1}"/>
+                <circle cx="{half}" cy="{half}" r="{size * 0.12:.1f}" fill="#{c2}"/>'''
+
+        elif patternType == 25:
+            # Chequy - a 4x4 checkerboard. The only grid in the set.
+            cell = size / 4
+            squares = "".join(
+                f'<rect x="{c * cell:.1f}" y="{r * cell:.1f}" width="{cell:.1f}" '
+                f'height="{cell:.1f}" fill="#{c2}"/>'
+                for r in range(4) for c in range(4) if (r + c) % 2
+            )
+            content = f'<rect width="{size}" height="{size}" fill="#{c1}"/>{squares}'
+
+        elif patternType == 26:
+            # Honeycomb - seven hexagons, one ringed by six. Still the "loose shapes"
+            # idea, but hexagons tile visually where circles read as dice pips.
+            hr = size * 0.152
+            step = hr * 1.74
+            centres = [(half, half)] + [
+                (half + step * math.cos(math.radians(60 * k)),
+                 half + step * math.sin(math.radians(60 * k)))
+                for k in range(6)
+            ]
+            hexes = ""
+            for cx, cy in centres:
+                pts = " ".join(
+                    f"{cx + hr * math.cos(math.radians(60 * v + 90)):.1f},"
+                    f"{cy + hr * math.sin(math.radians(60 * v + 90)):.1f}"
+                    for v in range(6)
+                )
+                hexes += f'<polygon points="{pts}" fill="#{c2}"/>'
+            content = f'<rect width="{size}" height="{size}" fill="#{c1}"/>{hexes}'
+
+        elif patternType == 27:
+            # Crescent - a disc with a second disc bitten out of it.
+            content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>
+                <circle cx="{half}" cy="{half}" r="{size * 0.38:.1f}" fill="#{c2}"/>
+                <circle cx="{size * 0.62:.1f}" cy="{size * 0.40:.1f}" r="{size * 0.32:.1f}" fill="#{c1}"/>'''
+
+        elif patternType == 28:
+            # Spiral - an Archimedean coil. The only curve-based mark in the set.
+            turns, steps = 3.0, 96
+            maxR = size * 0.42
+            pts = []
+            for i in range(steps + 1):
+                th = (i / steps) * turns * 2 * math.pi
+                rr = maxR * (i / steps)
+                pts.append(f"{half + rr * math.cos(th):.1f},{half + rr * math.sin(th):.1f}")
+            content = (f'<rect width="{size}" height="{size}" fill="#{c1}"/>'
+                       f'<polyline points="{" ".join(pts)}" fill="none" stroke="#{c2}" '
+                       f'stroke-width="{size * 0.105:.1f}" stroke-linecap="round"/>')
+
+        elif patternType == 29:
+            # Sunrise - rays fanning from the base, not from the centre.
+            rays = 7
+            wedges = ""
+            for i in range(rays):
+                if i % 2:
+                    continue
+                a1 = math.pi * (i / rays)
+                a2 = math.pi * ((i + 1) / rays)
+                L = size * 1.45
+                x1, y1 = half - L * math.cos(a1), size - L * math.sin(a1)
+                x2, y2 = half - L * math.cos(a2), size - L * math.sin(a2)
+                wedges += (f'<polygon points="{half},{size} {x1:.1f},{y1:.1f} '
+                           f'{x2:.1f},{y2:.1f}" fill="#{c2}"/>')
+            content = f'<rect width="{size}" height="{size}" fill="#{c1}"/>{wedges}'
+
+        elif patternType == 30:
+            # Peaks - a three-summit range. The existing "pile" is one triangle, not a skyline.
+            base = size * 1.02
+            peaks = "".join(
+                f'<polygon points="{cx * size - size * 0.30:.1f},{base:.1f} '
+                f'{cx * size:.1f},{py * size:.1f} {cx * size + size * 0.30:.1f},{base:.1f}" '
+                f'fill="#{c2}"/>'
+                for cx, py in [(0.22, 0.52), (0.78, 0.46), (0.5, 0.28)]
+            )
+            content = f'<rect width="{size}" height="{size}" fill="#{c1}"/>{peaks}'
+
+        elif patternType == 31:
+            # Orbit - an open ring with a satellite riding it.
+            content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>
+                <circle cx="{half}" cy="{half}" r="{size * 0.31:.1f}" fill="none"
+                        stroke="#{c2}" stroke-width="{size * 0.085:.1f}"/>
+                <circle cx="{half}" cy="{size * 0.19:.1f}" r="{size * 0.125:.1f}" fill="#{c2}"/>'''
+
         else:
             # Pale - single bold vertical band
             pw = size * 0.32
@@ -500,12 +618,14 @@ class AvatarGenerator:
             tertiaryColor = getattr(team, 'tertiaryColor', team.color)
             
             # Check if already exists
-            cacheKey = self._getCacheKey(team.name, primaryColor, secondaryColor, tertiaryColor, size)
+            cacheKey = self._getCacheKey(team.name, primaryColor, secondaryColor, tertiaryColor, size,
+                                        getattr(team, 'logoInvert', False))
             filePath = self._getCacheFilePath(cacheKey)
             
             if not os.path.exists(filePath):
                 # Generate and save
-                self.generateTeamAvatar(team.name, primaryColor, secondaryColor, tertiaryColor, size, team.id)
+                self.generateTeamAvatar(team.name, primaryColor, secondaryColor, tertiaryColor, size, team.id,
+                                        getattr(team, 'logoInvert', False))
                 generated += 1
         
         logger.info(f"Pre-generated {generated} team avatars ({len(teams) - generated} already cached)")

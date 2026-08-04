@@ -54,7 +54,8 @@ managers/
   cardEffectCalculator.py         # Two-pass effect calculator (first pass + second-pass cross-card effects)
   cardProjection.py               # Projected card payouts for the upcoming week
   fantasyTracker.py               # Live fantasy scoring, weekly FP banking, snapshots, card bonus
-  gmManager.py                    # GM voting resolution (fire/hire/cut/resign + FA & rookie ranked ballots)
+  frontOfficeBrain.py             # Autonomous GM brain — valuation, per-team draft boards, re-sign/cut deciders
+  gmTurnover.py                   # GM fired / retires / leaves, and the replacement gamble
   achievementManager.py           # Achievement progress, grants, pending rewards, secret unlocks, WS toasts
   emailManager.py                 # Transactional emails via Resend (NOT SES)
 database/
@@ -194,12 +195,14 @@ Tracked in `ShopPurchase` with `expires_at_week`. Display names differ from slug
 | `fortunes_favor` | Patronage | 125F | +10% chance-card trigger (3 wks) | 2/season |
 | `income_boost` | Endowment | 100F | Flatter FP→Floobit curve (4 wks) | 2/season |
 
-### GM / Front Office (`gmManager.py`, `gm_repository.py`)
-- **Single-vote model**: one net vote per fan per target (yea/nay), withdraw to change. The old per-season/per-type/per-target caps in `constants.py` are **legacy/unused**.
-- Vote types + costs (`GM_VOTE_COST`): `fire_coach` 15F, `cut_player` 10F, `resign_player` 10F, `hire_coach` 10F, `sign_fa` 12F.
-- **Thresholds**: fire/cut/resign pass when `net votes (yea−nay) ≥ teamFanCount` (frozen at week `GM_ACTIVE_WEEK=22` via `front_office_fan_snapshot`). `hire_coach` is plurality among the team's 3 candidates. `sign_fa` is ranked-choice (IRV) over open positions.
+### Front Office (`frontOfficeBrain.py`, `gmTurnover.py`)
+**The sim decides; fans express sentiment.** `gmManager.py` and the binding fan-vote system are **DELETED** — there are no longer sign/cut/re-sign/fire/hire votes, and no FA or rookie ballots. Plan: `docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md`.
+- **The brain** (`frontOfficeBrain.py`) ranks every fill/upgrade/re-sign by `perceivedValue = projectedRating × POSITION_VALUE`, scouting-gated per GM (`FO_SCOUT_*`, noise `FO_SCOUT_NOISE_MAX=12.0`) so **each team drafts off its own board**. `AUTONOMOUS_FO_ENABLED` (`constants.py:1260`) is **vestigial — read nowhere**; there is no rollback switch to fan votes.
+- **Destination preference** (`willSignWith`): a player signs only where `teamAppeal(team) >= appealDemand(player)`. Demand is **age-only** (`FA_PREF_*`, maxing at `FA_PREF_VET_FULL_SEASONS=8` seasons → up to `FA_PREF_MAX_DEMAND=11.0`); Appeal comes from facility levels. ⚠️ It's a **hard gate**: prod Appeal spans 4.0–20.0, so the six teams at 4.0 cannot sign anyone past ~4 service seasons. `_attemptRosterFill`'s last tier drops the board entirely so preference can't leave a slot empty.
 - **FA-draft cut exclusion**: a team cannot re-sign a player it released this offseason (cut OR expired-unsigned) in the same FA draft — detected by `previousTeam == team.name and freeAgentYears == 0` (`playerManager._leftThisTeamThisOffseason`); lifts next offseason; overridden only if a slot is otherwise unfillable.
-- Secret hooks: `tribune` (cast `GM_TRIBUNE_VOTE_THRESHOLD` votes/season), `mutineer`/Scorched Earth (full teardown).
+- **Week `GM_ACTIVE_WEEK` (22) open block** (`seasonManager.py:~715-800`), once per season, gated `>= week` + the `front_office_open_season` app_setting marker (`_frontOfficeProcessed` / `_markFrontOfficeProcessed`; falls back to the legacy `front_office_fan_snapshot` column for DBs that ran week 22 under the old scheme): retirement roll → FA retirements → position-supply top-up → `savePlayerData` → stamp marker. `_seedHofBallot` runs alongside. **No longer here**: the per-team 3-candidate coach slate (removed — it drew 3 names/team/season from the shared `unusedNames` pool and never recycled them, exhausting the ~789-name seed in ~11 seasons and silently breaking player generation) and `_snapshotActiveFanCounts` (froze fan counts for vote thresholds that no longer exist).
+- **Still live for fans**: the FA *window* (`_openFaVotingWindowMidSeason`) is now **informational only** — it drives a Front Office UI panel of projected free agents (`faWindowOpen`/`faPool`), but nothing it collects feeds the draft.
+- Secret hooks: `tribune` (cast `GM_TRIBUNE_VOTE_THRESHOLD` votes/season), `mutineer`/Scorched Earth (full teardown). Both predate the rework — verify against code before relying on them.
 
 ### Team Funding (`TeamFunding` model)
 - `FUNDING_BASELINE_PER_TEAM=200F` granted each season; users contribute directly (`POST /api/teams/{id}/contribute`) or via passive end-of-season `team_funding_pct` (default 25%). `FUNDING_DECAY_RATE=0.5` carries 50% into next season.
