@@ -50,7 +50,7 @@ from constants import (
     MOMENTUM_TD, MOMENTUM_TURNOVER, MOMENTUM_SAFETY, MOMENTUM_TURNOVER_ON_DOWNS,
     MOMENTUM_FG_MISSED, MOMENTUM_FG_MADE, MOMENTUM_SACK, MOMENTUM_BIG_PLAY_BONUS,
     MOMENTUM_PUNT,
-    WPA_PASS_QB_SHARE, DEF_PLAYMAKER_BONUS,
+    WPA_PASS_QB_SHARE, WPA_DROP_RECEIVER_SHARE, DEF_PLAYMAKER_BONUS,
 )
 
 # Import TimingManager for game-level timing control
@@ -6729,6 +6729,12 @@ class Game:
         self._applyFormOffset(self.homeTeam)
         self._applyFormOffset(self.awayTeam)
 
+        # Calibration only (POSITION_FORCE): boost one roster slot on half the
+        # league and cut it on the other half, to measure that position's causal
+        # impact on wins. No-op unless the env switch is set.
+        self._applyPositionForce(self.homeTeam)
+        self._applyPositionForce(self.awayTeam)
+
         # Enforce the soft floor — scale a player's attributes back up if
         # the compounded modifiers dropped their overall rating more than
         # MENTAL_FLOOR_RATIO permits. Preserves attribute *proportions*
@@ -8631,6 +8637,39 @@ class Game:
             except Exception:
                 pass  # never break the game loop over a rating refresh
 
+    def _applyPositionForce(self, team):
+        """Calibration harness (FLOOS_POS_FORCE / FLOOS_POS_SLOT): multiply a single
+        roster slot's in-game attributes up on even-id teams and down on odd-id ones.
+
+        Correlation between a position's RATING and team wins cannot separate "this
+        position barely matters" from "this rating is a poor summary of the position".
+        Forcing the attributes directly measures the position's causal impact on
+        winning, independent of how well its rating describes it.
+
+        No-op unless POSITION_FORCE is non-zero.
+        """
+        from constants import POSITION_FORCE, POSITION_FORCE_SLOT
+        if not POSITION_FORCE:
+            return
+        player = (team.rosterDict or {}).get(POSITION_FORCE_SLOT)
+        if player is None or player.gameAttributes is None:
+            return
+        mult = 1.0 + (POSITION_FORCE if (team.id % 2 == 0) else -POSITION_FORCE)
+        from constants import RATING_SCALE_MIN
+        for attr in ('speed', 'hands', 'agility', 'power', 'armStrength',
+                     'accuracy', 'legStrength', 'reach',
+                     'focus', 'discipline', 'instinct'):
+            val = getattr(player.gameAttributes, attr, 0)
+            if val:
+                setattr(player.gameAttributes, attr,
+                        max(RATING_SCALE_MIN, min(100, round(val * mult))))
+        try:
+            player.gameAttributes.calculateIntangibles()
+            player.gameAttributes.calculateSkills()
+            player.updateInGameRating()
+        except Exception:
+            pass
+
     def _applyFormOffset(self, team):
         """Apply the club's continuous form offset — where it currently sits in
         its own hot/cold arc. The offset itself is moved once a week by
@@ -9540,6 +9579,16 @@ class Game:
             if getattr(play, 'isPassCompletion', False) and getattr(play, 'receiver', None) is not None:
                 creditOff(getattr(play, 'passer', None), offenseWpa * WPA_PASS_QB_SHARE)
                 creditOff(play.receiver, offenseWpa * (1.0 - WPA_PASS_QB_SHARE))
+            elif getattr(play, 'passIsDropped', False) and getattr(play, 'receiver', None) is not None:
+                # A DROP is the receiver's miss, not the passer's. Charging it
+                # entirely to the QB — as every incompletion used to be — made the
+                # metric structurally unfair to quarterbacks: they took 100% of
+                # every bad pass outcome but only WPA_PASS_QB_SHARE of the good
+                # ones, and that feeds the MVP ballot. The QB keeps a share because
+                # drop probability scales with how poorly the ball was placed.
+                creditOff(play.receiver, offenseWpa * WPA_DROP_RECEIVER_SHARE)
+                creditOff(getattr(play, 'passer', None),
+                          offenseWpa * (1.0 - WPA_DROP_RECEIVER_SHARE))
             else:
                 # incompletion / sack / throwaway → all on the QB
                 creditOff(getattr(play, 'passer', None), offenseWpa)
@@ -13019,10 +13068,28 @@ class Play():
         # Beat the tackler first (stiff arm / spin / hurdle), THEN reach for the
         # marker — that's the real sequence, and it means a move can carry a
         # carrier into stretch range who wasn't there before.
+        # Yardage at this instant IS the contact point — _runnerMove is gated to
+        # it. Everything gained past here is yards after contact.
+        _contactYards = self.yardage
         _moveBonus, self.runnerMove, _moveFumbleBump = self._runnerMove(self.runner, self.tackledBy)
         if _moveBonus:
             self.yardage = min(self.yardage + _moveBonus, self.yardsToEndzone)
             self.insights['runnerMove'] = self.runnerMove
+        # Advanced RB metrics. The run game computed all of this already and threw
+        # it away — a broken tackle had no stat to land in (see _runnerMove), so
+        # elusiveness was invisible in the box score.
+        try:
+            from stat_tracker import StatCategory as _SCR
+            _rsr = self.game.isRegularSeasonGame
+            if self.runnerMove:
+                self.runner.addAdvanced(_SCR.RUSHING, 'moveAttempts', 1, _rsr)
+                if not str(self.runnerMove).endswith('_miss'):
+                    self.runner.addAdvanced(_SCR.RUSHING, 'brokenTackles', 1, _rsr)
+            self.runner.addAdvanced(_SCR.RUSHING, 'gapQualitySum',
+                                    int(round(gapQuality)), _rsr)
+            self._contactYards = _contactYards
+        except Exception:
+            pass
 
         # Stretch for the first down / goal line — a confident back reaches it out
         # to convert; the reach can expose the ball (fumble bump, resolved below).
@@ -13154,6 +13221,20 @@ class Play():
         # Update stats
         self.runner.addRushYards(self.yardage, self.game.isRegularSeasonGame)
         self.runner.addCarry(self.game.isRegularSeasonGame)
+        # Yards after contact + stuffs, banked with the carry so the denominators
+        # line up. _contactYards is the yardage at the moment the primary tackler
+        # arrived (see the runner-move block above); anything past it was earned
+        # after being hit.
+        try:
+            from stat_tracker import StatCategory as _SCR2
+            _rsr2 = self.game.isRegularSeasonGame
+            _yac = self.yardage - int(getattr(self, '_contactYards', self.yardage))
+            if _yac > 0:
+                self.runner.addAdvanced(_SCR2.RUSHING, 'yardsAfterContact', _yac, _rsr2)
+            if self.yardage <= 0:
+                self.runner.addAdvanced(_SCR2.RUSHING, 'stuffs', 1, _rsr2)
+        except Exception:
+            pass
         self.defense.gameDefenseStats['runYardsAlwd'] += self.yardage
         self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
         if self.game.currentQuarter <= 2:
@@ -14344,6 +14425,15 @@ class Play():
             self.yardage = -int(np.random.choice(sackYardages, p=sackCurve))
             self.defense.gameDefenseStats['sacks'] += 1
             self.isSack = True
+            # Sacks were credited to the defense but never charged to the QB, so
+            # nothing in a quarterback's own record showed he took them.
+            try:
+                from stat_tracker import StatCategory as _SC
+                if self.passer is not None:
+                    self.passer.addAdvanced(_SC.PASSING, 'sacked', 1,
+                                            self.game.isRegularSeasonGame)
+            except Exception:
+                pass
             fumbleRoll = batched_randint(1,100)
             fumbleResist = round(((self.passer.gameAttributes.power*.7) + (self.passer.gameAttributes.discipline*1.3)/2) + self.passer.gameAttributes.luckModifier)
             fumbleResistModifyer = 0
@@ -14573,6 +14663,39 @@ class Play():
                 if self.targetSideline:
                     throwQuality = max(5, throwQuality * 0.90)
 
+                # ── Advanced QB metrics, banked at release ──
+                # Throw quality is the sim's own measure of how well the ball was
+                # put there. It drives resolution but was never kept, so a QB's
+                # box score could not separate "threw it badly" from "receiver
+                # dropped it" or "was covered".
+                try:
+                    from constants import BAD_THROW_THRESHOLD as _BTT
+                    from stat_tracker import StatCategory as _SC
+                    _rs = self.game.isRegularSeasonGame
+                    self.throwQualityValue = throwQuality
+                    self.passer.addAdvanced(_SC.PASSING, 'throws', 1, _rs)
+                    self.passer.addAdvanced(_SC.PASSING, 'throwQualitySum',
+                                            int(round(throwQuality)), _rs)
+                    if throwQuality < _BTT:
+                        self.passer.addAdvanced(_SC.PASSING, 'badThrows', 1, _rs)
+                    # Intended depth of the throw, banked at RELEASE so aDOT
+                    # covers incompletions too (calculatePassYardage only rolls on
+                    # the completion path). Means mirror its passTypeParams.
+                    _air = {PassType.short: 3, PassType.medium: 7, PassType.long: 15,
+                            PassType.deep: 24, PassType.hailMary: 45}.get(self.passType, 7)
+                    self.passer.addAdvanced(_SC.PASSING, 'airYardsSum', _air, _rs)
+                    # Was the target covered when the ball went up? Recorded on
+                    # every throw so contested RATE has a denominator.
+                    from constants import CONTESTED_OPENNESS_THRESHOLD as _COT
+                    _tgt = self.selectedTarget or {}
+                    _rcv = _tgt.get('receiver')
+                    _open = _tgt.get('actualOpenness', _tgt.get('openness'))
+                    self._wasContested = (_open is not None and _open < _COT)
+                    if _rcv is not None and self._wasContested:
+                        _rcv.addAdvanced(_SC.RECEIVING, 'contestedTargets', 1, _rs)
+                except Exception:
+                    pass
+
                 # ── Record pass target + throw insights ──
                 self.insights['pass']['wasSacked'] = False
                 self.insights['pass']['qbVision'] = self.passer.attributes.vision
@@ -14747,7 +14870,20 @@ class Play():
                     if getattr(self, '_diveAttempt', False):
                         self._diveCatch = True
                     self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
-                    
+                    # Advanced: did the receiver win a contested ball, and did he
+                    # bail out a poorly placed one? Separates his contribution from
+                    # the quality of throw he was given.
+                    try:
+                        from constants import BAD_THROW_THRESHOLD as _BTT2
+                        from stat_tracker import StatCategory as _SC2
+                        _rs2 = self.game.isRegularSeasonGame
+                        if getattr(self, '_wasContested', False):
+                            self.receiver.addAdvanced(_SC2.RECEIVING, 'contestedCatches', 1, _rs2)
+                        if getattr(self, 'throwQualityValue', 100) < _BTT2:
+                            self.receiver.addAdvanced(_SC2.RECEIVING, 'bailouts', 1, _rs2)
+                    except Exception:
+                        pass
+
                     # Calculate air yards based on throw quality
                     passYards = self.calculatePassYardage(self.passType)
                     passYards = min(passYards, self.yardsToEndzone)

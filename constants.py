@@ -936,6 +936,24 @@ FORM_OSCILLATION_ENABLED = _os.environ.get('FLOOS_FORM') != 'off'
 # probability transfer directly. 0 = off (normal play). See Game._applyFormOffset.
 FORM_FORCE = float(_os.environ.get('FLOOS_FORM_FORCE', '0'))
 
+# Calibration only: multiply ONE roster slot's in-game attributes up on even-id
+# teams and down on odd-id teams, to measure that position's CAUSAL impact on
+# winning. Correlation between a position's rating and team wins cannot separate
+# "this position barely matters" from "this rating poorly summarises the position";
+# forcing the attributes directly can. 0 = off. See Game._applyPositionForce.
+POSITION_FORCE = float(_os.environ.get('FLOOS_POS_FORCE', '0'))
+POSITION_FORCE_SLOT = _os.environ.get('FLOOS_POS_SLOT', 'qb')
+
+# ---- Advanced Metrics ----
+# Thresholds for the derived per-play metrics. These describe how a play is
+# CLASSIFIED for the box score; they do not feed resolution.
+BAD_THROW_THRESHOLD = 45        # throwQuality below this counts as a bad throw
+CONTESTED_OPENNESS_THRESHOLD = 40  # receiver openness below this counts as contested
+# A dropped pass is mostly on the receiver, but drop probability scales with how
+# poorly the ball was placed (dropProb derives from un-secured contact, which is
+# throw-driven), so the QB keeps a share of the negative swing.
+WPA_DROP_RECEIVER_SHARE = 0.7
+
 # ---- Leading-Team Ease-Off ----
 # The sim modelled the trailing team giving up (_isGarbageTime) but never the
 # LEADING team easing off, so a club building a blowout pressed at full intensity

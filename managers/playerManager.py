@@ -501,6 +501,12 @@ class PlayerManager:
                             'gamesPlayed': stat_record.games_played,
                             'fantasyPoints': stat_record.fantasy_points,
                         }
+                        # Backfill any stat keys this stored blob predates. Stats
+                        # round-trip as JSON, and add_stat silently skips unknown
+                        # keys, so without this an existing player would never
+                        # accumulate a newly-added advanced metric.
+                        from floosball_player import mergeStatDefaults
+                        mergeStatDefaults(player.careerStatsDict)
                         # Re-point stat_tracker at the restored dict — without
                         # this, in-game stat increments go to the original
                         # empty dict from Player.__init__ and never reach
@@ -1513,6 +1519,10 @@ class PlayerManager:
                     'kicking': row.kicking_stats or {},
                     'defense': row.defense_stats or {},
                 }
+                # Backfill stat keys this stored blob predates (see the career
+                # restore above) so newly-added advanced metrics accumulate.
+                from floosball_player import mergeStatDefaults
+                mergeStatDefaults(player.seasonStatsDict)
                 # Restore the direct gamesPlayed attribute used by MVP/All-Pro eligibility
                 player.gamesPlayed = row.games_played or 0
                 # Restore the season WPA value totals (plain attributes, not in the

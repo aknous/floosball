@@ -20,6 +20,26 @@ from constants import POTENTIAL_HEADROOM
 from stat_tracker import StatTracker
 from player_development import PlayerDevelopment
 
+def mergeStatDefaults(statsDict):
+    """Backfill stat keys a stored dict predates, in place, and return it.
+
+    Stats round-trip as JSON blobs, so a row written before a new advanced metric
+    existed comes back missing those keys. StatTracker.add_stat silently skips
+    unknown keys, so without this an existing player would never accumulate a
+    newly-added stat. Cheap, idempotent, safe to call on every load.
+    """
+    if not isinstance(statsDict, dict):
+        return statsDict
+    for group, defaults in playerStatsDict.items():
+        if not isinstance(defaults, dict):
+            continue
+        target = statsDict.get(group)
+        if isinstance(target, dict):
+            for key, val in defaults.items():
+                target.setdefault(key, val)
+    return statsDict
+
+
 class Position(enum.Enum):
     QB = 1
     RB = 2
@@ -88,7 +108,14 @@ playerStatsDict =   {
                             'yards': 0, 
                             'ypc': 0, 
                             '20+': 0,
-                            'longest': 0
+                            'longest': 0,
+                            # --- Advanced. Raw counters; averages derived on read
+                            # (see ADVANCED_STAT_DEFAULTS / deriveAdvancedStats).
+                            'sacked': 0,          # sacks taken — was never recorded
+                            'throws': 0,          # balls actually released (excludes sacks)
+                            'throwQualitySum': 0, # / throws = avg throw quality
+                            'badThrows': 0,       # releases below BAD_THROW_THRESHOLD
+                            'airYardsSum': 0,     # / throws = average depth of target
                         },
                         'rushing': {
                             'carries': 0,
@@ -97,7 +124,18 @@ playerStatsDict =   {
                             'tds': 0, 
                             'fumblesLost': 0, 
                             '20+': 0,
-                            'longest': 0
+                            'longest': 0,
+                            # --- Advanced. The run game already computes all of
+                            # this per play; none of it was being kept.
+                            # Yards earned AFTER the tackler engaged (runner move +
+                            # stretch). NOT the NFL stat -- the sim has no first-contact
+                            # point inside base yardage, so this is the extra-effort
+                            # portion only, ~4% of rush yards league-wide.
+                            'yardsAfterContact': 0,
+                            'brokenTackles': 0,      # successful stiff arm / spin / hurdle
+                            'moveAttempts': 0,       # moves tried, made or missed
+                            'stuffs': 0,             # carries for <= 0
+                            'gapQualitySum': 0,      # / carries = avg blocking faced
                         },
                         'receiving': {
                             'receptions': 0,
@@ -110,7 +148,12 @@ playerStatsDict =   {
                             'tds': 0,
                             '20+': 0,
                             'longest': 0,
-                            'fumbles': 0
+                            'fumbles': 0,
+                            # --- Advanced. Separates the receiver's contribution
+                            # from the throw they were given.
+                            'contestedTargets': 0,  # targeted while covered
+                            'contestedCatches': 0,  # ...and caught it anyway
+                            'bailouts': 0,          # caught a ball below BAD_THROW_THRESHOLD
                         },
                         'kicking': {
                             'fgAtt': 0,
@@ -495,6 +538,14 @@ class Player:
 
     def addReception(self, isRegularSeason):
         self.stat_tracker.add_reception(isRegularSeason)
+
+    def addAdvanced(self, category, key, amount=1, isRegularSeason=True):
+        """Record an advanced metric. Thin pass-through to the tracker's generic
+        add_stat so new metrics don't each need a bespoke method on Player."""
+        try:
+            self.stat_tracker.add_stat(category, key, amount, isRegularSeason)
+        except Exception:
+            pass  # a metric must never break play resolution
 
     def addPassDrop(self, isRegularSeason):
         self.stat_tracker.add_pass_drop(isRegularSeason)
