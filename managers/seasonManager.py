@@ -997,6 +997,10 @@ class SeasonManager:
             # current form state — feeds the regression-to-mean weakening
             # in _applyFormState.
             self._updateTeamFormHistory()
+            # Continuous form oscillation: pull each club back toward its own
+            # level, hard enough to overshoot, so seasons develop arcs instead
+            # of every team playing at one fixed level for 28 weeks.
+            self._updateTeamFormOffsets()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
@@ -8902,6 +8906,121 @@ class SeasonManager:
                         min(5.0, p.attributes.confidenceModifier + boost * 0.5 * confStability), 3)
                     p.attributes.determinationModifier = round(
                         min(5.0, p.attributes.determinationModifier + boost), 3)
+
+    def _recentTeamResults(self, window: int) -> dict:
+        """{team_id: [1|0, ...]} — each team's last `window` completed regular
+        season games this season, oldest first.
+
+        Read back off the games table rather than tracked on the team object so
+        a mid-season restart picks the window straight back up instead of
+        rebuilding it over the next few weeks.
+        """
+        from collections import defaultdict
+        out = defaultdict(list)
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session):
+            return {}
+        try:
+            rows = self.db_session.query(
+                DBGame.home_team_id, DBGame.away_team_id,
+                DBGame.home_score, DBGame.away_score
+            ).filter(
+                DBGame.season == self.currentSeason.seasonNumber,
+                DBGame.status == 'final',
+                DBGame.is_playoff == False  # noqa: E712 — SQL boolean, not Python
+            ).order_by(DBGame.week.asc(), DBGame.id.asc()).all()
+        except Exception as e:
+            logger.debug(f"_recentTeamResults: query failed ({e})")
+            return {}
+        for homeId, awayId, homeScore, awayScore in rows:
+            if homeScore is None or awayScore is None:
+                continue
+            out[homeId].append(1 if homeScore > awayScore else 0)
+            out[awayId].append(1 if awayScore > homeScore else 0)
+        return {teamId: results[-window:] for teamId, results in out.items()}
+
+    def _updateTeamFormOffsets(self) -> None:
+        """Weekly update of every team's continuous form offset — the layer that
+        makes a club run hot and cold across a season.
+
+        Without it, measured form variance (sd of a team's wins across the four
+        game days) sat at 1.06-1.13 against a coin-flip baseline of 1.32: every
+        club played at one fixed level all year and nothing ever moved. With the
+        shipped constants it reads 1.11, and clubs with a visibly flat season
+        (sd < 1.0) drop from 45% to 39%. See constants.py for the full measured
+        amplitude curve and why the plan's 1.6-1.9 target is out of reach here.
+
+        The feedback is NEGATIVE by construction. `recent` is the club's win rate
+        over the last FORM_WINDOW games MINUS its own season-to-date rate, so the
+        target is a deviation from the team's own level, not from .500 — and the
+        pull is the opposite sign. A team riding high gets pulled down toward its
+        true level and overshoots into a trough; a team in a hole gets pulled up
+        and overshoots into a run. It oscillates instead of running away, which
+        is what lets it add within-season variance without moving the win spread.
+
+        Both directions are trait-earned: collectiveVulnerability scales the fall
+        from a peak, collectiveResolve scales the climb out of a slump. A club of
+        disciplined professionals barely moves; a volatile one swings hard.
+
+        Deliberately separate from FORM_STATE_RATING_MULT, which stays as the
+        discrete badge layer with all its positive states pinned at 1.00.
+        """
+        from constants import (FORM_OSCILLATION_ENABLED, FORM_WINDOW, FORM_PULL,
+                               FORM_REVERSION, FORM_NOISE, FORM_MAX,
+                               FORM_FEEDBACK, FORM_DECAY)
+        if not FORM_OSCILLATION_ENABLED:
+            return
+        from random import gauss as _gauss
+
+        recentByTeam = self._recentTeamResults(FORM_WINDOW)
+        moved = []
+        for team in self.leagueManager.teams:
+            recentGames = recentByTeam.get(team.id) or []
+            wins = team.seasonTeamStats.get('wins', 0)
+            losses = team.seasonTeamStats.get('losses', 0)
+            played = wins + losses
+            # Until the season is longer than the window the two rates are the
+            # same number and `recent` is identically zero — nothing to react to.
+            if played <= FORM_WINDOW or len(recentGames) < FORM_WINDOW:
+                continue
+
+            recent = (sum(recentGames) / len(recentGames)) - (wins / played)
+            if FORM_FEEDBACK == 'momentum':
+                # A run FEEDS itself, and a slump deepens — the only shape that
+                # actually sustains a multi-week arc. Bounded by FORM_DECAY
+                # below, not by a restoring force, so it cannot run away.
+                target = recent * FORM_PULL
+                if recent > 0:
+                    target *= 0.5 + team.collectiveResolve()       # ride the run
+                else:
+                    target *= 0.5 + team.collectiveVulnerability()  # the collapse
+            else:
+                # Mean-reverting: above your own level pulls you down. Stable, and
+                # measured to cancel arcs rather than create them — kept for A/B.
+                target = -recent * FORM_PULL
+                if recent > 0:
+                    target *= 0.5 + team.collectiveVulnerability()
+                else:
+                    target *= 0.5 + team.collectiveResolve()
+
+            offset = getattr(team, 'formOffset', 0.0) or 0.0
+            offset += (target - offset) * FORM_REVERSION + _gauss(0, FORM_NOISE)
+            offset *= FORM_DECAY
+            team.formOffset = round(max(-FORM_MAX, min(FORM_MAX, offset)), 4)
+            moved.append(team)
+
+        # Persist here rather than leaving it to teamManager.saveTeamData(), which
+        # only runs at app init — without this the column would sit at 0 all season
+        # and a mid-season restart would flatten every club's arc.
+        if moved and DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session:
+            try:
+                from database.models import Team as DBTeam
+                for team in moved:
+                    self.db_session.query(DBTeam).filter_by(id=team.id).update(
+                        {'form_offset': team.formOffset})
+                self.db_session.commit()
+            except Exception as e:
+                self.db_session.rollback()
+                logger.debug(f"_updateTeamFormOffsets: persist failed ({e})")
 
     def _updateTeamFormHistory(self) -> None:
         """Track how many consecutive weeks each team has been in their

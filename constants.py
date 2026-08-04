@@ -1,3 +1,8 @@
+# Env-override helper — several balance levers below can be A/B'd from the
+# environment without editing this file. Imported here so every such lever,
+# wherever it sits in the file, can read it.
+import os as _os
+
 # Game Constants
 GAME_MAX_PLAYS = 132
 PLAYS_TO_FOURTH_QUARTER = 100
@@ -884,6 +889,127 @@ FORM_STATE_RATING_MULT = {
     'UNKNOWN':     1.00,
 }
 
+# ---- Team Form Oscillation ----
+# A continuous per-team form multiplier so clubs run hot and cold ACROSS a season
+# instead of playing at one fixed level all year. Before it existed, the sd of a
+# club's wins across the four game days was 1.06 against a coin-flip line of 1.32
+# — team form varied LESS than chance, and a season was legible from game one
+# (corr(day-1 wins, final wins) = +0.750).
+#
+# THE KEY MEASUREMENT (FLOOS_FORM_FORCE, 16,128 team-games): a ±10% roster-wide
+# rating multiplier is worth ±4.5 wins over a 28-game season — 1.619 win
+# probability per 1.0 of multiplier. The transfer is STEEP. Measure this before
+# tuning any rating-multiplier layer; it is easy to assume a lever is weak when
+# what is actually happening is that its value never sits near its clamp.
+#
+# WHY MOMENTUM AND NOT MEAN REVERSION. The layer was first built mean-reverting
+# (deviation from your own level pulls you back). It moved form variance 1.06 ->
+# 1.11 and no amount of amplitude helped, because the failure is structural: an
+# arc IS a sustained multi-week deviation, and negative feedback exists precisely
+# to cancel sustained deviation. Momentum — a run feeds itself, bounded by an
+# unconditional weekly FORM_DECAY rather than by a restoring force — is what
+# actually produces arcs, and the decay keeps it from running away (measured
+# win-sd is unchanged vs the reverting design).
+#
+# MEASURED (8 fresh 32-club leagues x 5 seasons per arm, ~1,275 team-seasons):
+#
+#   arm                        form var   flat (<1.0)   win spread   corr(day1,final)
+#   control (no form)             1.06       45%           22.3          +0.750
+#   mean-reverting (as specced)   1.11       39%           22.0          +0.752
+#   momentum                      1.36       25%           21.5          +0.593
+#   momentum + parity package     1.46       18%           19.4          +0.502
+#
+# Momentum clears the 1.32 coin-flip line, which was the plan's own bar for real
+# oscillation. The plan's 1.6-1.9 target is retired as unreachable: at 7 games a
+# block, binomial noise alone has sd 1.32 and dominates, so 1.75 would need a club
+# to genuinely become a different-quality team for seven straight weeks.
+#
+# It does NOT replace FORM_STATE_RATING_MULT above, which stays the discrete
+# badge/flavour layer with every positive state pinned at 1.00.
+#
+# Env switches for A/B sweeps (unset = shipped): FLOOS_FORM=off, FLOOS_FORM_FEEDBACK,
+# FLOOS_FORM_PULL / _REVERSION / _NOISE / _MAX / _DECAY, FLOOS_FORM_PLAYOFFS=off,
+# FLOOS_FORM_PLAYOFF_SCALE, and FLOOS_FORM_FORCE for the transfer calibration.
+FORM_OSCILLATION_ENABLED = _os.environ.get('FLOOS_FORM') != 'off'
+# Calibration only: pin even-id teams at +this and odd-id at -this all season, so
+# the win-rate gap between the halves measures the rating-multiplier -> win-
+# probability transfer directly. 0 = off (normal play). See Game._applyFormOffset.
+FORM_FORCE = float(_os.environ.get('FLOOS_FORM_FORCE', '0'))
+
+# ---- Leading-Team Ease-Off ----
+# The sim modelled the trailing team giving up (_isGarbageTime) but never the
+# LEADING team easing off, so a club building a blowout pressed at full intensity
+# for four quarters and the trailing side often finished with nothing. Real teams
+# rush three and keep everything in front once the result is settled — that soft
+# coverage is why a blowout still usually has the loser scoring at least once.
+# Applied to the leading team's effective run D, pass D and pass rush in the
+# second half when they are up more than two scores (Game.leadEaseOffFactor).
+# NOTE this is DEFENSE-only. The leading offense is affected separately, and only
+# through play-CALLING (the Q3 drain + Q4 lead-protection floor in
+# _applySituationalMods lean run and suppress deep/long) — its execution quality is
+# untouched, i.e. a leading team still runs the ball just as well, it runs it more.
+# WHO eases off is coach-scaled: 0.5*(1-aggressiveness) + 0.5*clockManagement maps
+# to a 0.4x (killer, keeps his foot down) .. 1.6x (professional, calls off the dogs)
+# multiplier on the ease-off, centred at 1.0 for a neutral coach so league-average
+# behaviour stays the measured one and the spread is character.
+LEAD_EASE_OFF_ENABLED = _os.environ.get('FLOOS_LEAD_EASE') != 'off'
+LEAD_EASE_OFF_MAX = float(_os.environ.get('FLOOS_LEAD_EASE_MAX', '0.15'))
+
+# ---- Defensive Modifiers ----
+# Whether the pre-game modifier chain reaches the DEFENSE. Team defense ratings
+# are derived from PROFILE attributes at roster setup and never recomputed, and
+# the per-defender lookups in runPlay/passPlay read `.attributes` as well — so
+# without this, league compression, fatigue, funding morale, team disposition and
+# form oscillation were all offense-only. A cold team still defended at full
+# strength, and a stacked roster's defensive edge was never compressed at all.
+# FLOOS_DEF_MODS=off reverts to the old offense-only behaviour.
+# MEASURED (8 leagues x 5 seasons/arm): switching this ON made parity WORSE, not
+# better. Win spread barely moved (22.3 -> 21.9) but the playoffs got far more
+# deterministic — champions with the league's best record went 28% -> 45%, and the
+# Cinderella rate (champion from outside the top 8 by record) collapsed 12% -> 5%.
+# Compression does shrink defensive talent gaps, but the same change also hands the
+# confidence / disposition / funding-morale boosts to defenders, and those all
+# correlate with already being good, which more than cancels it. So this ships OFF:
+# the offense-only behaviour is now a documented deliberate choice rather than an
+# accident. FLOOS_DEF_MODS=on to re-enable (and re-measure before trusting it).
+DEFENSE_MODIFIERS_ENABLED = _os.environ.get('FLOOS_DEF_MODS') != 'off'
+# 'momentum'  — a run feeds itself and a slump deepens, bounded by FORM_DECAY.
+#               The only shape measured to actually sustain a season arc.
+# 'reverting' — the originally specced negative feedback. Stable, and measured to
+#               CANCEL arcs: it exists to erase sustained deviation, which is
+#               exactly what an arc is. Kept for A/B, not recommended.
+FORM_FEEDBACK = _os.environ.get('FLOOS_FORM_FEEDBACK', 'momentum')
+# Unconditional weekly decay on the offset. This is what bounds momentum — a club
+# cannot stay lifted without continuing to over-perform, so positive feedback
+# cannot run away. Measured: win-sd is unchanged vs the reverting design.
+FORM_DECAY = float(_os.environ.get('FLOOS_FORM_DECAY', '0.80'))
+# Whether form carries into the playoffs. The offset stops UPDATING at the end of
+# the regular season either way, so ON means a club takes whatever arc it ended on
+# into the bracket — peaking at the right time is the canonical Cinderella story,
+# and the alternative is that a late surge evaporates exactly when it matters.
+FORM_PLAYOFFS_ENABLED = _os.environ.get('FLOOS_FORM_PLAYOFFS') != 'off'
+# How much of the offset carries into the bracket. Full weight measured out at 40%
+# of champions coming from outside the top 8 by record (and the best record winning
+# only 8% of the time), which reads as the regular season not mattering; zero
+# weight goes the other way at 8% / 35%. This scales between those two endpoints.
+FORM_PLAYOFF_SCALE = float(_os.environ.get('FLOOS_FORM_PLAYOFF_SCALE', '0.5'))
+# Asymmetry on the DOWN side only. Measured: the form layer causes essentially the
+# whole shutout increase (7.0% -> 10.2% of team-games) while leaving mean scoring
+# untouched (30.4 -> 30.2) — it is pure tail-widening, and the bottom tail is a
+# slumping club getting blanked. Damping the negative half keeps the arcs (which
+# are driven by the swing, not by the depth of the trough) while pulling the bad
+# tail back in. 1.0 = symmetric.
+FORM_DOWNSIDE_SCALE = float(_os.environ.get('FLOOS_FORM_DOWNSIDE', '0.6'))
+FORM_WINDOW = 4        # games in the "recent form" window
+FORM_PULL = float(_os.environ.get('FLOOS_FORM_PULL', '0.50'))   # how hard a deviation from your own baseline pulls back
+# How fast formOffset chases its target each week (0-1). Doubles as the layer's
+# MEMORY: a high value makes the offset flicker week to week and average out
+# inside a game day, contributing nothing at the block scale form is measured on.
+# Keep it slow enough that a hot spell lasts a few weeks.
+FORM_REVERSION = float(_os.environ.get('FLOOS_FORM_REVERSION', '0.45'))
+FORM_NOISE = float(_os.environ.get('FLOOS_FORM_NOISE', '0.050'))  # weekly gaussian wobble — the un-earned part of a slump
+FORM_MAX = float(_os.environ.get('FLOOS_FORM_MAX', '0.14'))     # clamp on the multiplier; ±10% ≈ ±7-8 rating points
+
 # ---- Prospect Pipeline ----
 # Prospects are drafted rookies stashed on the team's pipeline (not roster-eligible).
 # They develop each offseason via offseasonTraining(), same as active players, and
@@ -1052,7 +1178,6 @@ LEAGUE_REALIGN_WINDOW_SEASONS = 2
 #    an annual "who do we protect?" decision.
 # Env overrides so the retention levers can be A/B'd without editing this file.
 # FLOOS_RETENTION=off disables both. Default (unset) = the shipped behaviour.
-import os as _os
 _RETENTION_OFF = _os.environ.get('FLOOS_RETENTION') == 'off'
 RESIGN_ONCE_ENABLED = not _RETENTION_OFF
 RESIGN_ONCE_LIMIT = 1             # re-signs allowed with the SAME team before a forced walk
@@ -1912,7 +2037,7 @@ MENTAL_FLOOR_RATIO = 0.85           # 15% max aggregate reduction from baseline
 # auto-win gap without erasing skill order. Profile ratings stay
 # untouched; only `gameAttributes` is compressed. Set factor=1.0 to
 # disable.
-LEAGUE_COMPRESSION_FACTOR = 0.7     # 1.0 = no compression, 0.5 = aggressive
+LEAGUE_COMPRESSION_FACTOR = float(_os.environ.get('FLOOS_COMPRESSION', '0.45'))  # 1.0 = none, 0.5 = aggressive
 # Center of the compression curve — this is the effective baseline every player
 # plays at, so it also sets the league's overall scoring level (higher = more
 # offense). Raised 80 -> 84 to recover the scoring the attribute remap cost:

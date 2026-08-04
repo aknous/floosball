@@ -96,6 +96,10 @@ def _runPendingMigrations():
         # can flip its kit colours without the logo's figure/ground flipping too.
         for col, colDef in [
             ('logo_invert', 'INTEGER DEFAULT 0'),
+            # Continuous form offset (roughly ±FORM_MAX) — where the club sits in
+            # its own hot/cold arc. Persisted so a mid-season restart doesn't
+            # flatten every team back to neutral form.
+            ('form_offset', 'REAL DEFAULT 0'),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE teams ADD COLUMN {col} {colDef}"))

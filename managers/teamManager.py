@@ -219,7 +219,10 @@ class TeamManager:
             team.gmScore = db_team.gm_score or 0
             team.defenseOverallTier = db_team.defense_tier or 0
             team.defenseSeasonPerformanceRating = db_team.defense_season_performance or 0
-            
+            # Where the club sits in its hot/cold arc — restored so a mid-season
+            # restart doesn't flatten every team back to neutral form.
+            team.formOffset = getattr(db_team, 'form_offset', 0.0) or 0.0
+
             # Historical stats (stored as JSON in database)
             team.allTimeTeamStats = db_team.all_time_stats or {}
             team.leagueChampionships = db_team.league_championships or []
@@ -523,7 +526,8 @@ class TeamManager:
             db_team.gm_score = team.gmScore
             db_team.defense_tier = team.defenseOverallTier
             db_team.defense_season_performance = team.defenseSeasonPerformanceRating
-            
+            db_team.form_offset = getattr(team, 'formOffset', 0.0) or 0.0
+
             # Historical stats (stored as JSON)
             db_team.all_time_stats = team.allTimeTeamStats
             db_team.league_championships = team.leagueChampionships
@@ -1135,6 +1139,9 @@ class TeamManager:
             team.pressureModifier = prior  # Game-time value starts at full prior expectation
             team.currentWinStreak = 0
             team.streakPressure = 0.0
+            # Form arcs are a within-season story — everyone starts flat, and
+            # the oscillation layer builds a new arc off this season's results.
+            team.formOffset = 0.0
             self.logger.debug(f"{team.name}: priorSeasonPressure={prior}")
 
         self.logger.info("Prior-season pressure baselines set")

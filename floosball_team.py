@@ -108,6 +108,12 @@ class Team:
         # at game-time scaling. See constants.STREAK_PRESSURE_*.
         self.currentWinStreak = 0
         self.streakPressure = 0.0
+        # Continuous form offset (roughly ±FORM_MAX) — the oscillation layer that
+        # makes a club run hot and cold across a season. Updated once a week by
+        # seasonManager._updateTeamFormOffsets, applied pre-game by
+        # Game._applyFormOffset, persisted to teams.form_offset so a mid-season
+        # restart doesn't reset everyone to flat.
+        self.formOffset = 0.0
         self.leagueChampionships = []
         self.floosbowlChampionships = []
         self.topSeeds = []
@@ -166,12 +172,26 @@ class Team:
     def updateInGameDefenseRating(self):
         self.defenseRating = round((((self.defenseRunCoverageRating*.8)+(self.defensePassCoverageRating*1.2)+(self.defensePassRushRating*1))/3) + ((self._gameDefenseConfidence + self._gameDefenseDetermination)/2))
 
-    def deriveDefenseFromRoster(self):
+    def deriveDefenseFromRoster(self, useGameAttributes=False):
         """Derive team defense ratings from player defensive attributes.
 
         Replaces old random 70-90 generation and weekly drift.
         Called whenever roster changes (trades, free agency, setup).
+
+        `useGameAttributes` re-derives from the live pre-game copy instead of the
+        profile, so the pre-game chain (league compression, fatigue, funding
+        morale, disposition, form) reaches the defense. Without it those layers
+        are offense-only: the team defense numbers are computed once at roster
+        setup off untouched profile attributes and never move again.
         """
+        source = 'gameAttributes' if useGameAttributes else 'attributes'
+
+        def attrsOf(player):
+            if player is None:
+                return {}
+            attrs = getattr(player, source, None) or player.attributes
+            return attrs.getDefensiveAttributes(player.position)
+
         # Get defensive attributes for each roster position
         qb = self.rosterDict.get('qb')
         rb = self.rosterDict.get('rb')
@@ -179,16 +199,11 @@ class Team:
         wr2 = self.rosterDict.get('wr2')
         te = self.rosterDict.get('te')
 
-        # Safety (QB) attributes
-        sAttrs = qb.attributes.getDefensiveAttributes(qb.position) if qb else {}
-        # Linebacker (RB) attributes
-        lbAttrs = rb.attributes.getDefensiveAttributes(rb.position) if rb else {}
-        # Cornerback (WR1) attributes
-        cb1Attrs = wr1.attributes.getDefensiveAttributes(wr1.position) if wr1 else {}
-        # Cornerback (WR2) attributes
-        cb2Attrs = wr2.attributes.getDefensiveAttributes(wr2.position) if wr2 else {}
-        # Defensive End (TE) attributes
-        deAttrs = te.attributes.getDefensiveAttributes(te.position) if te else {}
+        sAttrs = attrsOf(qb)      # Safety (QB)
+        lbAttrs = attrsOf(rb)     # Linebacker (RB)
+        cb1Attrs = attrsOf(wr1)   # Cornerback (WR1)
+        cb2Attrs = attrsOf(wr2)   # Cornerback (WR2)
+        deAttrs = attrsOf(te)     # Defensive End (TE)
 
         # Pass coverage: CB1 35% + CB2 35% + S 30%
         cb1Cov = cb1Attrs.get('coverage', 70)
@@ -350,6 +365,28 @@ class Team:
         for player in self.rosterDict.values():
             player.updateInGameDetermination(.01)
         self.updateInGameDetermination(.01)
+
+    def _collectiveTrait(self, methodName):
+        """Mean of a per-player mental composite across the rostered starters.
+        Returns the neutral 0.5 for an empty roster so callers that scale by it
+        get a 1.0 multiplier rather than a hole."""
+        values = []
+        for player in (self.rosterDict or {}).values():
+            attrs = getattr(player, 'attributes', None) if player is not None else None
+            method = getattr(attrs, methodName, None)
+            if callable(method):
+                values.append(method())
+        return sum(values) / len(values) if values else 0.5
+
+    def collectiveVulnerability(self):
+        """How hard this club falls off a peak — mean complacencyVulnerability
+        over the roster. Scales the DOWNWARD half of the form oscillation."""
+        return self._collectiveTrait('complacencyVulnerability')
+
+    def collectiveResolve(self):
+        """How fast this club climbs out of a slump — mean adversityResolve over
+        the roster. Scales the UPWARD half of the form oscillation."""
+        return self._collectiveTrait('adversityResolve')
 
     def facilityLevel(self, facilityKey):
         """Current level of a facility (0 if unbuilt / not loaded)."""

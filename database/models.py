@@ -60,6 +60,10 @@ class Team(Base):
     overall_rating: Mapped[int] = mapped_column(Integer)
     league_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("leagues.id"))
     gm_score: Mapped[Optional[int]] = mapped_column(Integer)
+    # Continuous form offset (roughly ±FORM_MAX) — where the club currently sits
+    # in its own hot/cold arc. Updated weekly by the form oscillation layer;
+    # persisted so a mid-season restart doesn't flatten everyone to neutral.
+    form_offset: Mapped[Optional[float]] = mapped_column(Float, default=0.0)
     defense_tier: Mapped[Optional[int]] = mapped_column(Integer)
     defense_run_coverage_rating: Mapped[Optional[int]] = mapped_column(Integer)
     defense_pass_coverage_rating: Mapped[Optional[int]] = mapped_column(Integer)

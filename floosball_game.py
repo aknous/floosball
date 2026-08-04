@@ -1978,6 +1978,56 @@ class Game:
                 secs -= 18
         return plays
 
+    def leadEaseOffFactor(self) -> float:
+        """Multiplier on the DEFENSE's effective ratings when that defense's own
+        team is sitting on a big lead.
+
+        The sim already models the trailing team giving up (`_isGarbageTime` stops
+        them hurrying and spiking). It had no model of the LEADING team easing off,
+        so a club building a blowout kept pressing at full intensity for four
+        quarters — which is the main reason the trailing side so often finished
+        with nothing. Real teams rush three, keep everything in front and trade
+        yards for clock once the result is settled; that soft coverage is exactly
+        why a blowout still usually has the losing team scoring at least once.
+
+        Returns 1.0 (no ease-off) unless the defending team leads by more than two
+        scores in the second half. Ramps with lead size and quarter.
+        """
+        from constants import LEAD_EASE_OFF_ENABLED, LEAD_EASE_OFF_MAX
+        if not LEAD_EASE_OFF_ENABLED:
+            return 1.0
+        q = self.currentQuarter
+        if q < 3:
+            return 1.0  # a first-half lead is not safe enough to sit on
+        try:
+            defIsHome = (self.defensiveTeam == self.homeTeam)
+            defScore = self.homeScore if defIsHome else self.awayScore
+            offScore = self.awayScore if defIsHome else self.homeScore
+        except Exception:
+            return 1.0
+        lead = defScore - offScore
+        oneScore = self._oneScore()
+        if lead <= 2 * oneScore:
+            return 1.0
+        tier = 1.0 if lead > 3 * oneScore else 0.55
+        qScale = 0.6 if q == 3 else 1.0
+
+        # WHO eases off is a coaching trait, not a league-wide rule. A conservative
+        # coach with clock sense calls the dogs off and lets the other side have the
+        # underneath stuff; an aggressive one keeps his foot down and runs it up.
+        # Centred on 1.0 at a neutral coach so the league-average behaviour is the
+        # measured one, with the spread being the character.
+        coach = getattr(self.defensiveTeam, 'coach', None)
+        if coach:
+            def _norm(attr):
+                raw = (getattr(coach, attr, COACH_ATTR_NEUTRAL) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+                return max(0.0, min(1.0, (raw + 1.0) / 2.0))
+            restraint = 0.5 * (1.0 - _norm('aggressiveness')) + 0.5 * _norm('clockManagement')
+            coachScale = 0.4 + 1.2 * restraint          # 0.4 (killer) .. 1.6 (professional)
+        else:
+            coachScale = 1.0
+        return 1.0 - LEAD_EASE_OFF_MAX * tier * qScale * coachScale
+
     def _isGarbageTime(self, scoreDiff: int) -> bool:
         """Check if the deficit is too large to realistically overcome.
 
@@ -3514,6 +3564,16 @@ class Game:
         # (no clock-IQ scaling) so even a poor clock-manager stops firing deep.
         # Stacks on the mods above. Not Q2 — the half ends either way (handled
         # below); this is about protecting a lead, which only exists end-of-GAME.
+        if scoreDiff > 2 * self._oneScore() and q == 3:
+            # Q3 blowout: start draining early. The floor below was Q4-only, so a
+            # team building a rout in Q3 kept airing it out and ran the score up.
+            # Coach-scaled via _mul (unlike the Q4 floor, which is deliberately flat
+            # because NOBODY should be firing deep on a Q4 lead): draining in Q3 is
+            # still discretionary, so a sharp clock manager starts early and a poor
+            # one keeps swinging.
+            _mul('run',    1.35)
+            _mul('long',   0.7)
+            _mul('deep',   0.6)
         if scoreDiff > 0 and q >= 4:
             floorUrg = 1.0 if secs <= 120 else (0.6 if secs <= 300 else 0.25)
             _flat('run',    1 + 0.6 * floorUrg)
@@ -6663,12 +6723,26 @@ class Game:
         self._snapshotMentalPhase(self.homeTeam, 'afterDisposition')
         self._snapshotMentalPhase(self.awayTeam, 'afterDisposition')
 
+        # Continuous form oscillation — the club's current position in its own
+        # hot/cold arc. Runs after disposition so both form layers land on the
+        # same compounded stack and stay bounded by the soft floor below.
+        self._applyFormOffset(self.homeTeam)
+        self._applyFormOffset(self.awayTeam)
+
         # Enforce the soft floor — scale a player's attributes back up if
         # the compounded modifiers dropped their overall rating more than
         # MENTAL_FLOOR_RATIO permits. Preserves attribute *proportions*
         # so a power-back stays power-heavy, etc.
         self._enforceMentalSoftCap(self.homeTeam)
         self._enforceMentalSoftCap(self.awayTeam)
+
+        # Re-derive team defense from the modified copy. Team defense ratings are
+        # otherwise computed once at roster setup off untouched PROFILE attributes,
+        # which made every layer above — league compression, fatigue, funding
+        # morale, disposition, form — offense-only. A cold team still defended at
+        # full strength, and a stacked roster's defensive edge was never
+        # compressed. Runs last so it picks up the whole stack including the cap.
+        self._applyDefensiveModifiers()
         self._snapshotMentalPhase(self.homeTeam, 'afterCap')
         self._snapshotMentalPhase(self.awayTeam, 'afterCap')
 
@@ -8533,6 +8607,66 @@ class Game:
                             max(RATING_SCALE_MIN, min(100, round(val * multiplier))))
             player.gameAttributes.calculateIntangibles()
             player.gameAttributes.calculateSkills()
+
+    def _applyDefensiveModifiers(self):
+        """Re-derive both teams' defense ratings from their live pre-game
+        attribute copy, so the pre-game chain reaches the defensive half.
+
+        Every modifier in that chain writes to `gameAttributes`, but the team
+        defense numbers (`defensePassCoverageRating` etc.) are derived from
+        PROFILE attributes at roster setup and never recomputed, and the
+        per-defender skill lookups in `runPlay`/`passPlay` read `.attributes`
+        too. Net effect without this: compression, fatigue, funding morale,
+        disposition and form were all offense-only.
+
+        Gated by DEFENSE_MODIFIERS_ENABLED — this changes the balance of every
+        game, so it is a deliberate switch rather than a silent fix.
+        """
+        from constants import DEFENSE_MODIFIERS_ENABLED
+        if not DEFENSE_MODIFIERS_ENABLED:
+            return
+        for team in (self.homeTeam, self.awayTeam):
+            try:
+                team.deriveDefenseFromRoster(useGameAttributes=True)
+            except Exception:
+                pass  # never break the game loop over a rating refresh
+
+    def _applyFormOffset(self, team):
+        """Apply the club's continuous form offset — where it currently sits in
+        its own hot/cold arc. The offset itself is moved once a week by
+        seasonManager._updateTeamFormOffsets; this just cashes it in.
+
+        The offset stops UPDATING once the playoffs start. Whether it still
+        applies there is FORM_PLAYOFFS_ENABLED: ON means a club carries the arc
+        it ended the season on into the bracket, which is how a team peaking at
+        the right time turns into a Cinderella run. OFF freezes everyone back to
+        their true level for the bracket, which measurably makes the playoffs
+        more chalk.
+        """
+        from constants import (FORM_OSCILLATION_ENABLED, FORM_FORCE,
+                               FORM_PLAYOFFS_ENABLED, FORM_PLAYOFF_SCALE,
+                               FORM_DOWNSIDE_SCALE)
+        if not self.isRegularSeasonGame and not FORM_PLAYOFFS_ENABLED:
+            return
+        if FORM_FORCE:
+            # Calibration switch (FLOOS_FORM_FORCE): pin half the league at
+            # +FORM_FORCE and half at -FORM_FORCE for a whole season, so the
+            # win-rate split between the halves measures how much win
+            # probability a rating multiplier of that size actually buys.
+            offset = FORM_FORCE if (team.id % 2 == 0) else -FORM_FORCE
+        else:
+            if not FORM_OSCILLATION_ENABLED:
+                return
+            offset = getattr(team, 'formOffset', 0.0) or 0.0
+        if offset < 0:
+            # A slump should cost a club games, not blank it. See FORM_DOWNSIDE_SCALE.
+            offset *= FORM_DOWNSIDE_SCALE
+        if not self.isRegularSeasonGame:
+            offset *= FORM_PLAYOFF_SCALE
+        if not offset:
+            return
+        team._formOffsetApplied = offset
+        self._applyTeamRatingMult(team, 1.0 + offset)
 
     def _applyFormState(self, team):
         """Deprecated. Use _applyTeamDisposition (combines form + context
@@ -12672,6 +12806,7 @@ class Play():
         # the multiplier. Mutates `scheme` in place.
         self._applyPreSnapRead(scheme, isRun=True)
         effectiveRunDef = self.defense.defenseRunCoverageRating * scheme['runDefMult']
+        effectiveRunDef *= self.game.leadEaseOffFactor()  # leader sits on it, plays soft
 
         # --- Run CONCEPT: deception vs the defense's commitment, gated by execution ---
         # The coach called the concept (self.runConcept). Its matchup edge vs the
@@ -14014,10 +14149,12 @@ class Play():
         else:
             basePassRush = self.defense.defensePassRushRating
         effectivePassRush = basePassRush * scheme['passRushMult']
+        effectivePassRush *= self.game.leadEaseOffFactor()  # rush three, drop eight
         effectivePassRush *= getattr(self, '_trickSackMult', 1.0)  # flea flicker blown up -> rush gets home
         self._trickSackMult = 1.0
         # Team-level pass coverage as fallback (individual matchups applied per-receiver below)
         effectivePassDef = self.defense.defensePassCoverageRating * scheme['passDefMult']
+        effectivePassDef *= self.game.leadEaseOffFactor()  # soft coverage, keep it in front
 
         # --- Play-action: a sold fake vs a run-committed defense freezes the second
         # level -> receivers open (softer coverage) and the rush is slower. Vs a
