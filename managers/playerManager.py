@@ -498,6 +498,7 @@ class PlayerManager:
                             'receiving': stat_record.receiving_stats or {},
                             'kicking': stat_record.kicking_stats or {},
                             'defense': stat_record.defense_stats or {},
+                            'returning': stat_record.returning_stats or {},
                             'gamesPlayed': stat_record.games_played,
                             'fantasyPoints': stat_record.fantasy_points,
                         }
@@ -1518,6 +1519,7 @@ class PlayerManager:
                     'receiving': row.receiving_stats or {},
                     'kicking': row.kicking_stats or {},
                     'defense': row.defense_stats or {},
+                    'returning': row.returning_stats or {},
                 }
                 # Backfill stat keys this stored blob predates (see the career
                 # restore above) so newly-added advanced metrics accumulate.
@@ -1831,6 +1833,7 @@ class PlayerManager:
                             receiving_stats=stats_dict.get('receiving'),
                             kicking_stats=stats_dict.get('kicking'),
                             defense_stats=stats_dict.get('defense'),
+                            returning_stats=stats_dict.get('returning'),
                         )
                         self.db_session.add(db_career_stats)
                     else:
@@ -1854,8 +1857,9 @@ class PlayerManager:
                         db_career_stats.receiving_stats = dict(stats_dict.get('receiving') or {})
                         db_career_stats.kicking_stats = dict(stats_dict.get('kicking') or {})
                         db_career_stats.defense_stats = dict(stats_dict.get('defense') or {})
+                        db_career_stats.returning_stats = dict(stats_dict.get('returning') or {})
                         for _f in ('passing_stats', 'rushing_stats', 'receiving_stats',
-                                   'kicking_stats', 'defense_stats'):
+                                   'kicking_stats', 'defense_stats', 'returning_stats'):
                             flag_modified(db_career_stats, _f)
                 
                 # Save season stats (if we have a current season)
@@ -1922,6 +1926,7 @@ class PlayerManager:
                                     receiving_stats=season_dict.get('receiving'),
                                     kicking_stats=season_dict.get('kicking'),
                                     defense_stats=season_dict.get('defense'),
+                                    returning_stats=season_dict.get('returning'),
                                 )
                                 self.db_session.add(db_season_stats)
                             else:
@@ -1963,8 +1968,9 @@ class PlayerManager:
                                 db_season_stats.receiving_stats = dict(season_dict.get('receiving') or {})
                                 db_season_stats.kicking_stats = dict(season_dict.get('kicking') or {})
                                 db_season_stats.defense_stats = dict(season_dict.get('defense') or {})
+                                db_season_stats.returning_stats = dict(season_dict.get('returning') or {})
                                 for _f in ('passing_stats', 'rushing_stats', 'receiving_stats',
-                                           'kicking_stats', 'defense_stats'):
+                                           'kicking_stats', 'defense_stats', 'returning_stats'):
                                     flag_modified(db_season_stats, _f)
             
             # Commit all changes

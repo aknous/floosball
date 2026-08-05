@@ -382,6 +382,9 @@ class PlayerCareerStats(Base):
     receiving_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     kicking_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Punt/kick return production. Separate blob so a returner's work is
+    # credited to HIM, not just charged against the kicker.
+    returning_stats: Mapped[Optional[dict]] = mapped_column(JSON)
 
     # Relationship
     player: Mapped["Player"] = relationship("Player", back_populates="career_stats")
@@ -436,6 +439,9 @@ class PlayerSeasonStats(Base):
     receiving_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     kicking_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Punt/kick return production. Separate blob so a returner's work is
+    # credited to HIM, not just charged against the kicker.
+    returning_stats: Mapped[Optional[dict]] = mapped_column(JSON)
 
     # Relationships
     player: Mapped["Player"] = relationship("Player", back_populates="season_stats")
@@ -538,6 +544,9 @@ class TeamSeasonStats(Base):
     # Stats stored as JSON (detailed breakdown)
     offense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Punt/kick return production. Separate blob so a returner's work is
+    # credited to HIM, not just charged against the kicker.
+    returning_stats: Mapped[Optional[dict]] = mapped_column(JSON)
 
     # Relationship
     team: Mapped["Team"] = relationship("Team", back_populates="season_stats")
@@ -786,6 +795,9 @@ class GamePlayerStats(Base):
     receiving_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     kicking_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Punt/kick return production. Separate blob so a returner's work is
+    # credited to HIM, not just charged against the kicker.
+    returning_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     
     fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
     q4_fantasy_points: Mapped[int] = mapped_column(Integer, default=0)

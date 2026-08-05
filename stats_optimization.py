@@ -235,6 +235,33 @@ class KickingStats:
         self.xpPerc = 0.0
 
 @dataclass
+class ReturningStats:
+    """Punt/kick return production. The returner previously got NO credit at all --
+    return yards were only ever charged against the kicker as yards given back."""
+    puntReturns: int = 0
+    puntReturnYards: int = 0
+    puntReturnTds: int = 0
+    fairCatches: int = 0
+    muffs: int = 0
+    longest: int = 0
+
+    def reset(self):
+        self.puntReturns = 0
+        self.puntReturnYards = 0
+        self.puntReturnTds = 0
+        self.fairCatches = 0
+        self.muffs = 0
+        self.longest = 0
+
+    def copy_from(self, other: 'ReturningStats'):
+        self.puntReturns = other.puntReturns
+        self.puntReturnYards = other.puntReturnYards
+        self.puntReturnTds = other.puntReturnTds
+        self.fairCatches = other.fairCatches
+        self.muffs = other.muffs
+        self.longest = other.longest
+
+@dataclass
 class DefenseStats:
     """Optimized defensive statistics structure"""
     sacks: int = 0
@@ -276,6 +303,7 @@ class OptimizedPlayerStats:
     receiving: ReceivingStats = field(default_factory=ReceivingStats)
     kicking: KickingStats = field(default_factory=KickingStats)
     defense: DefenseStats = field(default_factory=DefenseStats)
+    returning: ReturningStats = field(default_factory=ReturningStats)
     
     def reset_for_new_game(self):
         """Reset game stats (much faster than deepcopy)"""
@@ -286,6 +314,7 @@ class OptimizedPlayerStats:
         self.receiving.reset()
         self.kicking.reset()
         self.defense.reset()
+        self.returning.reset()
     
     def copy_from(self, other: 'OptimizedPlayerStats'):
         """Copy stats from another instance (faster than deepcopy)"""
@@ -390,6 +419,14 @@ class OptimizedPlayerStats:
                 'tfl': self.defense.tfl,
                 'forcedFumbles': self.defense.forcedFumbles,
                 'passBreakups': self.defense.passBreakups,
+            },
+            'returning': {
+                'puntReturns': self.returning.puntReturns,
+                'puntReturnYards': self.returning.puntReturnYards,
+                'puntReturnTds': self.returning.puntReturnTds,
+                'fairCatches': self.returning.fairCatches,
+                'muffs': self.returning.muffs,
+                'longest': self.returning.longest,
             }
         }
     

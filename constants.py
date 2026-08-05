@@ -1011,9 +1011,23 @@ PUNT_RETURN_ENABLED = _os.environ.get('FLOOS_PUNT_RETURNS') != 'off'
 PUNT_RETURN_BASE = 7.0          # mean return yards at a neutral (80/80) returner
 PUNT_RETURN_SPREAD = 4.5
 PUNT_RETURN_ATTR_K = 6.0        # speed/agility swing on the mean
-PUNT_RETURN_FAIRCATCH_INSIDE = 12   # downed this close in -> fair catch, no return
-PUNT_RETURN_BREAK_CHANCE = 0.04     # a return that genuinely breaks open
+PUNT_RETURN_BREAK_CHANCE = 0.045    # a return that genuinely breaks open
 PUNT_RETURN_BREAK_MEAN = 22.0
+# The returner is whichever of WR1/WR2/RB is the most explosive (speed+agility) --
+# a real team puts its best athlete back there, not a fixed slot.
+# FAIR CATCH is a DECISION, not a distance rule: the returner weighs how deep he
+# is and how fast the coverage is on him, with instinct deciding how well he reads
+# it. A short, high (pin/coffin) punt hangs longer, so coverage arrives sooner.
+PUNT_FAIRCATCH_BASE = 0.20          # baseline waving it off on a returnable ball
+PUNT_FAIRCATCH_DEEP_INSIDE = 10     # this close to his own goal, almost always fair
+PUNT_FAIRCATCH_HANG_BONUS = 0.34    # pin/coffin punts hang -> far likelier fair catch
+PUNT_FAIRCATCH_INSTINCT_K = 0.22    # instinct shifts the read either way
+# A MUFF is the swing play punting has and the sim did not model at all. Hands and
+# focus prevent it; a hanging punt with coverage bearing down causes it.
+PUNT_MUFF_BASE = 0.018
+PUNT_MUFF_HANG_K = 0.020            # extra risk on a high, short punt
+PUNT_MUFF_ATTR_K = 0.022            # hands/focus swing
+PUNT_MUFF_RECOVER_KICKING = 0.50    # who comes up with a muffed ball
 
 # ---- Passing: pressure and depth ----
 # Sack rate was ~0.33 per team per game against a real-world ~2.4. Two

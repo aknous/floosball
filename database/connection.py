@@ -92,6 +92,15 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()  # column already exists — ignore
 
+        # Returning stats blob (punt returns) on the three player stat tables.
+        for _tbl in ('game_player_stats', 'player_season_stats', 'player_career_stats'):
+            try:
+                conn.execute(text(f"ALTER TABLE {_tbl} ADD COLUMN returning_stats TEXT"))
+                conn.commit()
+                logger.info(f"  Migration: added {_tbl}.returning_stats")
+            except Exception:
+                conn.rollback()  # column already exists — ignore
+
         # Team avatar override: draw the mark with primary/secondary swapped, so a club
         # can flip its kit colours without the logo's figure/ground flipping too.
         for col, colDef in [

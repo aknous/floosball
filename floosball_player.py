@@ -185,6 +185,14 @@ playerStatsDict =   {
                             'puntLongest': 0,
                             'puntReturnYards': 0,
                         },
+                        'returning': {
+                            'puntReturns': 0,
+                            'puntReturnYards': 0,
+                            'puntReturnTds': 0,
+                            'fairCatches': 0,
+                            'muffs': 0,
+                            'longest': 0
+                        },
                         'defense': {
                             'sacks': 0,
                             'ints': 0,

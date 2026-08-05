@@ -7517,33 +7517,50 @@ class Game:
                     kicker = self.offensiveTeam.rosterDict['k']
                     if kicker is None:
                         logging.error(f"Team {self.offensiveTeam.name} has no kicker - using default punt distance")
-                    puntDistance, puntType, puntResult, puntReturn = self.resolvePunt(
+                    puntDistance, puntType, puntResult = self.resolvePunt(
                         kicker, self.yardsToEndzone)
+                    # Where the ball actually came down, as yards from the RECEIVING
+                    # team's own goal line.
+                    landing = self.yardsToEndzone - puntDistance
+                    if puntResult == 'touchback':
+                        landing = 0
+                    ret = ({'action': 'fairCatch', 'returner': None, 'returnYards': 0,
+                            'muffRecoveredBy': None} if puntResult == 'touchback'
+                           else self._resolvePuntReturn(landing, puntType, self.defensiveTeam))
+                    puntReturn = int(ret.get('returnYards', 0) or 0)
+                    returner = ret.get('returner')
+                    action = ret.get('action')
+
                     self.play.puntType = puntType
                     self.play.puntResult = puntResult
+                    self.play.puntAction = action
+                    self.play.puntLanding = landing          # yards from receiving goal
+                    self.play.puntGross = puntDistance
+                    self.play.returner = returner
+                    self.play.returnYardage = puntReturn
+                    self.play.puntTouchback = (puntResult == 'touchback')
                     self.play.yardage = puntDistance
+
+                    # ── Kicker stats (gross; the return is charged separately) ──
                     if kicker is not None:
                         try:
                             from stat_tracker import StatCategory as _SCK
                             _rsk = self.isRegularSeasonGame
                             kicker.addAdvanced(_SCK.KICKING, 'punts', 1, _rsk)
-                            # Gross is the kick; puntDistance is already NET of the return.
-                            kicker.addAdvanced(_SCK.KICKING, 'puntYards',
-                                               puntDistance + puntReturn, _rsk)
+                            kicker.addAdvanced(_SCK.KICKING, 'puntYards', puntDistance, _rsk)
                             kicker.addAdvanced(_SCK.KICKING, 'puntReturnYards', puntReturn, _rsk)
-                            # Inside-20 is GEOMETRIC — where the ball actually
-                            # ends up — not a property of the punt type. Crediting
-                            # it only on pin/coffin successes ignored every boomer
-                            # that happened to land inside the 20, which is most of
-                            # how a real team gets there.
-                            _landing = self.yardsToEndzone - puntDistance
                             if puntResult == 'touchback':
                                 kicker.addAdvanced(_SCK.KICKING, 'puntTouchbacks', 1, _rsk)
-                            elif 0 < _landing <= 20:
-                                kicker.addAdvanced(_SCK.KICKING, 'puntsInside20', 1, _rsk)
-                                if _landing <= 10:
-                                    kicker.addAdvanced(_SCK.KICKING, 'puntsInside10', 1, _rsk)
-                            # A max, not a sum, so it can't go through add_stat.
+                            else:
+                                # `landing` is yards from the RECEIVING team's own
+                                # goal, so a return moves the ball AWAY from it —
+                                # the spot INCREASES. Subtracting drove the ball
+                                # backwards and pushed inside-20 to 62%.
+                                _spot = min(99, landing + puntReturn)
+                                if 0 < _spot <= 20:
+                                    kicker.addAdvanced(_SCK.KICKING, 'puntsInside20', 1, _rsk)
+                                    if _spot <= 10:
+                                        kicker.addAdvanced(_SCK.KICKING, 'puntsInside10', 1, _rsk)
                             for _d in (kicker.gameStatsDict, kicker.seasonStatsDict,
                                        kicker.careerStatsDict):
                                 _k = _d.get('kicking') if isinstance(_d, dict) else None
@@ -7551,7 +7568,86 @@ class Game:
                                     _k['puntLongest'] = puntDistance
                         except Exception:
                             pass
-                    newYards = 100 - (self.yardsToEndzone - puntDistance)
+
+                    # ── Returner stats — the returner previously got NOTHING; the
+                    #    yards were only ever charged against the kicker. ──
+                    if returner is not None:
+                        try:
+                            from stat_tracker import StatCategory as _SCR3
+                            _rsr3 = self.isRegularSeasonGame
+                            if action == 'fairCatch':
+                                returner.addAdvanced(_SCR3.RETURNING, 'fairCatches', 1, _rsr3)
+                            elif action == 'muff':
+                                returner.addAdvanced(_SCR3.RETURNING, 'muffs', 1, _rsr3)
+                            else:
+                                returner.addAdvanced(_SCR3.RETURNING, 'puntReturns', 1, _rsr3)
+                                returner.addAdvanced(_SCR3.RETURNING, 'puntReturnYards', puntReturn, _rsr3)
+                                if action == 'touchdown':
+                                    returner.addAdvanced(_SCR3.RETURNING, 'puntReturnTds', 1, _rsr3)
+                                for _d in (returner.gameStatsDict, returner.seasonStatsDict,
+                                           returner.careerStatsDict):
+                                    _r = _d.get('returning') if isinstance(_d, dict) else None
+                                    if isinstance(_r, dict) and puntReturn > (_r.get('longest', 0) or 0):
+                                        _r['longest'] = puntReturn
+                        except Exception:
+                            pass
+
+                    playDuration = self.calculatePlayDuration(PlayType.Punt, False)
+                    self.consumeGameTime(playDuration)
+                    self.play.stampClock()
+                    self.checkTwoMinuteWarning()
+                    self.clockRunning = False
+
+                    # ── Muff: a live ball. The kicking team recovering it is the
+                    #    single biggest swing on a punt, and it did not exist before. ──
+                    if action == 'muff' and ret.get('muffRecoveredBy') == 'kicking':
+                        self.play.playResult = PlayResult.Fumble
+                        self.play.isFumbleLost = True
+                        self._applyMomentumEvent(MOMENTUM_TURNOVER, self.offensiveTeam)
+                        self.formatPlayText()
+                        self.gameFeed.insert(0, {'play': self.play})
+                        self.highlights.insert(0, {'play': self.play})
+                        self.leagueHighlights.insert(0, {'play': self.play})
+                        self.broadcastGameState(includeLastPlay=True)
+                        # Punting team keeps it where the muff happened.
+                        # Kicking team keeps it at the muff spot. `landing` is from
+                        # the RECEIVING team's goal, so in the punting team's own
+                        # attacking coordinates that is `landing` yards out.
+                        self.yardsToEndzone = max(1, landing)
+                        self.down = 1
+                        self.yardsToFirstDown = min(10, self.yardsToEndzone)
+                        lastPlayFormatted = True
+                        break
+
+                    # ── Return touchdown ──
+                    if action == 'touchdown':
+                        self._addScore(self.defensiveTeam, self.gameRules.touchdownPoints)
+                        self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
+                        self.play.playResult = PlayResult.Touchdown
+                        self.play.isTd = True
+                        self.play.scoreChange = True
+                        self.play.homeTeamScore = self.homeScore
+                        self.play.awayTeamScore = self.awayScore
+                        self.formatPlayText()
+                        self.gameFeed.insert(0, {'play': self.play})
+                        self.highlights.insert(0, {'play': self.play})
+                        self.leagueHighlights.insert(0, {'play': self.play})
+                        if self.checkOvertimeEnd(defensiveScore=True):
+                            self.otSecondPossComplete = True
+                            self.broadcastGameState(includeLastPlay=True)
+                            lastPlayFormatted = True
+                            break
+                        self.broadcastGameState(includeLastPlay=True)
+                        self._attemptConversion(self.defensiveTeam, self.offensiveTeam,
+                                                trackPtsAllowed=False)
+                        self.turnover(self.defensiveTeam, self.offensiveTeam, 80)
+                        self._pendingPossessionChange = True
+                        lastPlayFormatted = True
+                        break
+
+                    # Final spot = where it was caught, ADVANCED by the return
+                    # (away from the receiving team's own goal line).
+                    newYards = 100 - min(99, max(1, landing + puntReturn))
                     
                     # Consume time for punt (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.Punt, False)
@@ -9968,6 +10064,13 @@ class Game:
                     'yardLine': getattr(playObj, 'yardLine', self.yardLine),
                     'playType': playObj.playType.name if hasattr(playObj, 'playType') and hasattr(playObj.playType, 'name') else 'Unknown',
                     'yardsGained': getattr(playObj, 'yardage', 0),
+                    'puntType': getattr(playObj, 'puntType', None),
+                    'puntAction': getattr(playObj, 'puntAction', None),
+                    'puntLanding': getattr(playObj, 'puntLanding', None),
+                    'puntGross': getattr(playObj, 'puntGross', None),
+                    'puntTouchback': getattr(playObj, 'puntTouchback', False),
+                    'returnYards': getattr(playObj, 'returnYardage', 0) or 0,
+                    'returnerName': getattr(getattr(playObj, 'returner', None), 'name', None),
                     'description': getattr(playObj, 'playText', ''),
                     'playResult': playObj.playResult.value if hasattr(playObj, 'playResult') and playObj.playResult else None,
                     'hoopPair': getattr(playObj, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
@@ -10025,6 +10128,19 @@ class Game:
                 'yardsGained': getattr(self.play, 'yardage', 0),
                 'description': getattr(self.play, 'playText', ''),
                 'playResult': self.play.playResult.value if hasattr(self.play, 'playResult') and self.play.playResult else None,
+                # ── Punt telemetry for the field graphic ──
+                # yardsGained on a punt is the GROSS kick, so the arc must be drawn
+                # to puntLanding and the RETURN drawn back from it as a separate
+                # leg. Without these the graphic drew one arc to the post-return
+                # spot, which is neither where the ball landed nor how it got there.
+                # All values are yards from the RECEIVING team's own goal line.
+                'puntType': getattr(self.play, 'puntType', None),
+                'puntAction': getattr(self.play, 'puntAction', None),   # fairCatch|return|muff|touchdown
+                'puntLanding': getattr(self.play, 'puntLanding', None),
+                'puntGross': getattr(self.play, 'puntGross', None),
+                'puntTouchback': getattr(self.play, 'puntTouchback', False),
+                'returnYards': getattr(self.play, 'returnYardage', 0) or 0,
+                'returnerName': (getattr(getattr(self.play, 'returner', None), 'name', None)),
                 'hoopPair': getattr(self.play, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                 'conversionPoints': getattr(self.play, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                 'isTouchdown': getattr(self.play, 'isTd', False),
@@ -10424,7 +10540,8 @@ class Game:
         return 5  # Default
 
     def resolvePunt(self, kicker, yardsToEndzone):
-        """Choose a punt type and resolve it. Returns (netDistance, type, result, returnYards).
+        """Choose a punt type and resolve it. Returns (grossDistance, type, result).
+        The RETURN is resolved separately by _resolvePuntReturn.
 
         Punting used to be one line -- a random draw inside a 20-yard band set by
         leg strength -- so there was no reason to punt differently from your own 5
@@ -10506,35 +10623,96 @@ class Game:
 
         dist = max(15, min(dist, yardsToEndzone - 1))
 
-        # ── Return ──
-        # Without this the gross average IS the net average, which downs the ball
-        # inside the 20 on ~52% of punts against a real ~35%. The inside-20 rate is
-        # geometric (a 46-yarder from your own 35 lands there however it was struck),
-        # so the return is what separates gross from net, not placement tuning.
-        from constants import (PUNT_RETURN_ENABLED, PUNT_RETURN_BASE,
-                               PUNT_RETURN_SPREAD, PUNT_RETURN_ATTR_K,
-                               PUNT_RETURN_FAIRCATCH_INSIDE, PUNT_RETURN_BREAK_CHANCE,
-                               PUNT_RETURN_BREAK_MEAN)
-        returnYards = 0
-        landing = yardsToEndzone - dist
-        if (PUNT_RETURN_ENABLED and result != 'touchback'
-                and landing > PUNT_RETURN_FAIRCATCH_INSIDE):
-            returner = (self.defensiveTeam.rosterDict.get('wr1')
-                        if getattr(self, 'defensiveTeam', None) else None)
-            ra = (getattr(returner, 'gameAttributes', None) or
-                  getattr(returner, 'attributes', None)) if returner else None
-            edge = 0.0
-            if ra is not None:
-                edge = ((getattr(ra, 'speed', 80) + getattr(ra, 'agility', 80)) / 2 - 80) / 20.0
-            mean = PUNT_RETURN_BASE + PUNT_RETURN_ATTR_K * edge
-            if _random.random() < PUNT_RETURN_BREAK_CHANCE:
-                returnYards = _rnd(np.random.exponential(PUNT_RETURN_BREAK_MEAN)) + 10
-            else:
-                returnYards = max(0, _rnd(np.random.normal(mean, PUNT_RETURN_SPREAD)))
-            returnYards = min(returnYards, max(0, landing - 1))
-            dist -= returnYards
-            dist = max(10, dist)
-        return (dist, puntType, result, returnYards)
+        dist = max(15, min(dist, yardsToEndzone - 1))
+        return (dist, puntType, result)
+
+    def _pickReturner(self, team):
+        """Most explosive man on the roster (speed + agility) — a real team puts its
+        best athlete back there rather than a fixed roster slot."""
+        cands = [team.rosterDict.get(k) for k in ('wr1', 'wr2', 'rb')]
+        cands = [p for p in cands if p is not None]
+        if not cands:
+            return None
+        def burst(p):
+            a = getattr(p, 'gameAttributes', None) or p.attributes
+            return (getattr(a, 'speed', 70) + getattr(a, 'agility', 70)) / 2
+        return max(cands, key=burst)
+
+    def _resolvePuntReturn(self, landing, puntType, receivingTeam):
+        """Resolve what the receiving team does with a punt.
+
+        Returns a dict: {'action', 'returner', 'returnYards', 'muffRecoveredBy'}
+        where action is 'fairCatch' | 'return' | 'muff' | 'touchdown'.
+
+        Fair catch is a DECISION, not a distance rule — the returner weighs how deep
+        he is against how quickly coverage is on him, with instinct deciding how well
+        he reads it. A pin or coffin punt is short and high, so it hangs: coverage
+        arrives sooner, fair catches go up and muffs get likelier. That is the
+        trade the punter is making when he gives up distance for placement.
+        """
+        from constants import (PUNT_RETURN_ENABLED, PUNT_RETURN_BASE, PUNT_RETURN_SPREAD,
+                               PUNT_RETURN_ATTR_K, PUNT_RETURN_BREAK_CHANCE,
+                               PUNT_RETURN_BREAK_MEAN, PUNT_FAIRCATCH_BASE,
+                               PUNT_FAIRCATCH_DEEP_INSIDE, PUNT_FAIRCATCH_HANG_BONUS,
+                               PUNT_FAIRCATCH_INSTINCT_K, PUNT_MUFF_BASE, PUNT_MUFF_HANG_K,
+                               PUNT_MUFF_ATTR_K, PUNT_MUFF_RECOVER_KICKING)
+        out = {'action': 'return', 'returner': None, 'returnYards': 0, 'muffRecoveredBy': None}
+        if not PUNT_RETURN_ENABLED:
+            return {'action': 'fairCatch', 'returner': None, 'returnYards': 0,
+                    'muffRecoveredBy': None}
+        returner = self._pickReturner(receivingTeam)
+        out['returner'] = returner
+        a = (getattr(returner, 'gameAttributes', None) or
+             getattr(returner, 'attributes', None)) if returner else None
+        hang = 1.0 if puntType in ('pin', 'coffin') else 0.0
+
+        # ── Muff: hands and focus prevent it, a hanging ball with coverage arriving
+        #    causes it. The swing play punting never had. ──
+        handsEdge = 0.0
+        if a is not None:
+            handsEdge = ((getattr(a, 'hands', 78) + getattr(a, 'focus', 80)) / 2 - 80) / 20.0
+        muffChance = max(0.0, PUNT_MUFF_BASE + PUNT_MUFF_HANG_K * hang - PUNT_MUFF_ATTR_K * handsEdge)
+        if _random.random() < muffChance:
+            out['action'] = 'muff'
+            out['muffRecoveredBy'] = ('kicking' if _random.random() < PUNT_MUFF_RECOVER_KICKING
+                                      else 'receiving')
+            return out
+
+        # ── Fair catch decision ──
+        instinct = 0.0
+        if a is not None:
+            instinct = (getattr(a, 'instinct', 80) - 80) / 20.0
+        fairChance = PUNT_FAIRCATCH_BASE + PUNT_FAIRCATCH_HANG_BONUS * hang
+        if landing <= PUNT_FAIRCATCH_DEEP_INSIDE:
+            fairChance += 0.55        # pinned deep: almost never worth running out
+        # A sharp returner both waves off the bad ones AND takes the ones with room,
+        # so instinct pushes the decision toward whichever is correct here.
+        fairChance += PUNT_FAIRCATCH_INSTINCT_K * instinct * (1.0 if hang or landing <= 20 else -1.0)
+        if _random.random() < max(0.0, min(0.95, fairChance)):
+            out['action'] = 'fairCatch'
+            return out
+
+        # ── The return ──
+        edge = 0.0
+        if a is not None:
+            edge = ((getattr(a, 'speed', 80) + getattr(a, 'agility', 80)) / 2 - 80) / 20.0
+        mean = PUNT_RETURN_BASE + PUNT_RETURN_ATTR_K * edge
+        breakChance = PUNT_RETURN_BREAK_CHANCE * (1.0 + max(0.0, edge))
+        if _random.random() < breakChance:
+            yards = _rnd(np.random.exponential(PUNT_RETURN_BREAK_MEAN)) + 10
+        else:
+            yards = max(0, _rnd(np.random.normal(mean, PUNT_RETURN_SPREAD)))
+        # `landing` is the returner's distance from HIS OWN goal line, so the field
+        # ahead of him is the whole rest of the field. Taking it to the house is
+        # possible — the old inline version capped it below that and made a punt
+        # return touchdown structurally impossible.
+        fieldAhead = 100 - landing
+        if yards >= fieldAhead:
+            out['action'] = 'touchdown'
+            out['returnYards'] = fieldAhead
+        else:
+            out['returnYards'] = max(0, yards)
+        return out
 
     def _shouldOnsideKick(self) -> bool:
         """
