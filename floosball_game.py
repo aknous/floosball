@@ -10604,6 +10604,19 @@ class Game:
         else:
             dist = batched_randint(max(1, ceiling - 18), max(2, ceiling))
 
+        # ── Shank ──
+        # A punt that simply comes off the foot badly. Applies to EVERY type,
+        # checked before placement because it cancels whatever was intended: no
+        # punt could previously cost a team field position through bad execution.
+        from constants import (PUNT_SHANK_BASE, PUNT_SHANK_ACC_K, PUNT_SHANK_MIN,
+                               PUNT_SHANK_MAX, PUNT_PIN_TOODEEP, PUNT_PIN_SHORT_MIN,
+                               PUNT_PIN_SHORT_MAX)
+        shankChance = max(0.004, PUNT_SHANK_BASE - PUNT_SHANK_ACC_K * accEdge)
+        if _random.random() < shankChance:
+            dist = min(batched_randint(PUNT_SHANK_MIN, PUNT_SHANK_MAX),
+                       max(1, yardsToEndzone - 1))
+            return (dist, puntType, 'shank')
+
         # ── Placement outcome ──
         result = None
         landing = yardsToEndzone - dist          # yards from THEIR goal line
@@ -10621,9 +10634,14 @@ class Game:
             if _random.random() < max(0.05, min(0.90, PUNT_PIN_BASE + PUNT_PIN_ACC_K * accEdge)):
                 result = 'inside20'
                 dist = yardsToEndzone - batched_randint(6, 18)
-            elif landing <= 0:
-                result = 'touchback'
+            elif _random.random() < PUNT_PIN_TOODEEP:
+                result = 'touchback'          # over-cooked it
                 dist = yardsToEndzone - PUNT_TOUCHBACK_TO
+            else:
+                # Came up short — a returnable ball around their own 25-30.
+                result = 'short_pin'
+                dist = yardsToEndzone - batched_randint(PUNT_PIN_SHORT_MIN,
+                                                        PUNT_PIN_SHORT_MAX)
         elif landing <= 0:
             # A boomer that outkicks the field is a touchback -- the cost of the big leg.
             result = 'touchback'

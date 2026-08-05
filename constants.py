@@ -983,7 +983,10 @@ FG_MARGIN_CEILING = 0.35    # plenty of leg helps, but only so much -- accuracy 
 # (creativity + xFactor), the same three-part model the sim uses for runner moves
 # and diving catches.
 PUNT_TYPES_ENABLED = _os.environ.get('FLOOS_PUNT_TYPES') != 'off'
-PUNT_MAX_YARDS_PER_LEG = 0.70   # legStrength * this = a punter's ceiling
+# legStrength * this = a punter's ceiling. Raised from 0.70 when the shank and the
+# missed-pin outcomes landed: those are correct behaviour, but they cost ~2.5 yards
+# of league gross average, so the base kick has to absorb them.
+PUNT_MAX_YARDS_PER_LEG = 0.755
 PUNT_BOOMER_YTE = 65            # own end: at/beyond this yards-to-endzone, boom it
 PUNT_PIN_YTE = 58               # inside this, placement starts to matter
 PUNT_COFFIN_MAX_YTE = 52        # coffin corner only makes sense this close in
@@ -996,11 +999,25 @@ PUNT_ACCURACY_PIVOT = 80.0
 # The inside-20 rate is GEOMETRIC, not placement-driven: halving these barely moved
 # it (52% -> 53%), because a 46-yard punt from your own 35 lands inside the 20 no
 # matter how it was struck. What was actually missing was the RETURN -- see below.
-PUNT_PIN_BASE = 0.38
+PUNT_PIN_BASE = 0.48
 PUNT_PIN_ACC_K = 0.32
 PUNT_COFFIN_BASE = 0.34
 PUNT_COFFIN_ACC_K = 0.40
 PUNT_COFFIN_TOUCHBACK = 0.30    # a missed coffin corner sails through
+# A missed PIN has degrees too -- it either sails too deep (touchback) or comes up
+# short and hands the opponent a returnable ball around their own 25-30. Before
+# this a failed pin silently landed at its distance draw, i.e. it was still a good
+# punt: only the coffin corner had any downside, which is backwards.
+PUNT_PIN_TOODEEP = 0.22         # share of missed pins that sail through
+PUNT_PIN_SHORT_MIN = 17         # a pin that comes up short lands out this far
+PUNT_PIN_SHORT_MAX = 25
+# THE SHANK. Nothing modelled a punt simply coming off the foot badly, on ANY punt
+# type -- so a routine punt could never cost you field position. Accuracy prevents
+# it; it cancels whatever placement was intended.
+PUNT_SHANK_BASE = 0.038         # ~4% of punts, in line with real sub-30-yard punts
+PUNT_SHANK_ACC_K = 0.050        # accuracy swing
+PUNT_SHANK_MIN = 14
+PUNT_SHANK_MAX = 30
 PUNT_TOUCHBACK_TO = 20          # touchback spots the ball here
 # Punt clock. A punt burned only 4-6s (snap to kick) -- but the ball hangs and the
 # return takes time, so the live-ball portion is far longer than that. The clock
