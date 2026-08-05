@@ -5928,7 +5928,7 @@ class Game:
                 text = ("{}'s punt is BLOCKED by {}!".format(punterName, blockerName)
                         if blockerName else "{}'s punt is BLOCKED!".format(punterName))
             else:
-                text = '{} punts'.format(punterName)
+                text = self._puntPlayText(punterName)
         elif self.play.playType is PlayType.Spike:
             qb = self.play.offense.rosterDict.get('qb')
             qbName = qb.name if qb else 'QB'
@@ -7539,6 +7539,7 @@ class Game:
                     self.play.returner = returner
                     self.play.returnYardage = puntReturn
                     self.play.puntTouchback = (puntResult == 'touchback')
+                    self.play.puntMuffRecoveredBy = ret.get('muffRecoveredBy')
                     self.play.yardage = puntDistance
 
                     # ── Kicker stats (gross; the return is charged separately) ──
@@ -10739,6 +10740,59 @@ class Game:
         else:
             out['returnYards'] = max(0, yards)
         return out
+
+    def _puntPlayText(self, punterName):
+        """Punt play-by-play: the kick, then what the receiving team did with it.
+
+        This used to read "X punts" and stop, so a fair catch, a touchback, a
+        40-yard return and a shank all produced identical text. Split out of
+        formatPlayText so it can be exercised on its own.
+        """
+        play = self.play
+        gross = getattr(play, 'puntGross', None) or getattr(play, 'yardage', 0) or 0
+        action = getattr(play, 'puntAction', None)
+        result = getattr(play, 'puntResult', None)
+        landing = getattr(play, 'puntLanding', None)
+        retYds = int(getattr(play, 'returnYardage', 0) or 0)
+        retName = getattr(getattr(play, 'returner', None), 'name', None)
+        spot = (landing + retYds) if landing is not None else None
+        base = '{} punts {} yards'.format(punterName, gross)
+
+        if result == 'shank':
+            return '{} shanks the punt, {} yards'.format(punterName, gross)
+        if getattr(play, 'puntTouchback', False):
+            return '{}, touchback'.format(base)
+        if action == 'touchdown' and retName:
+            return '{}, {} returns it {} yards for a TOUCHDOWN'.format(base, retName, retYds)
+        if action == 'muff':
+            muffer = retName or 'the returner'
+            if getattr(play, 'puntMuffRecoveredBy', None) == 'kicking':
+                return '{}, {} muffs it and {} recover'.format(
+                    base, muffer, getattr(play.offense, 'name', 'the kicking team'))
+            return '{}, {} muffs it but recovers'.format(base, muffer)
+
+        if action == 'return' and retName:
+            text = '{}, {} returns it {} yards'.format(base, retName, retYds)
+        elif action == 'fairCatch':
+            # A ball coming down inside the 10 is run down and downed by the
+            # coverage team, not waved off by a returner standing under it.
+            if landing is not None and landing <= 10:
+                return '{}, downed at the {}'.format(base, landing)
+            if retName and landing is not None:
+                text = '{}, fair catch by {} at the {}'.format(base, retName, landing)
+            elif retName:
+                text = '{}, fair catch by {}'.format(base, retName)
+            else:
+                text = base
+        else:
+            text = base
+
+        # Pinned deep is the punt doing its job, so say so — but only after an
+        # actual return. A fair catch already names the spot, and appending it
+        # again read "fair catch at the 18, pinned at the 18".
+        if retYds > 0 and spot is not None and 0 < spot <= 20:
+            text += ', pinned at the {}'.format(spot)
+        return text
 
     def _shouldOnsideKick(self) -> bool:
         """

@@ -51,9 +51,9 @@
             "tertiaryColor": "#F50057"
         },
         {
-            "city": "Maryland",
-            "name": "Drivers",
-            "abbr": "MDD",
+            "city": "Washington",
+            "name": "Avenues",
+            "abbr": "WAS",
             "color": "#FFB300",
             "secondaryColor": "#B71C1C",
             "tertiaryColor": "#FFD740"
@@ -92,7 +92,7 @@
         },
         {
             "city": "Minnesota",
-            "name": "Blouses",
+            "name": "Pops",
             "abbr": "MIN",
             "color": "#582C83",
             "secondaryColor": "#FF6EC7",
@@ -188,7 +188,7 @@
         },
         {
             "city": "Miami",
-            "name": "Jetskis",
+            "name": "Amors",
             "abbr": "MIA",
             "color": "#FF00B8",
             "secondaryColor": "#00FFFF",
@@ -203,8 +203,8 @@
             "tertiaryColor": "#409EFF"
         },
         {
-            "city": "Tampa",
-            "name": "Babies",
+            "city": "Tampa Bay",
+            "name": "Bees",
             "abbr": "TAM",
             "color": "#8E24AA",
             "secondaryColor": "#FFD54F",
@@ -275,9 +275,9 @@
             "tertiaryColor": "#4FC3F7"
         },
         {
-            "city": "Salt Lake",
-            "name": "Gulls",
-            "abbr": "SLG",
+            "city": "Salt Lake City",
+            "name": "Funk",
+            "abbr": "SLC",
             "color": "#00897B",
             "secondaryColor": "#FFFFFF",
             "tertiaryColor": "#26A69A"
