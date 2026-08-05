@@ -53,12 +53,9 @@ def testTouchbackIsCalledOut():
     assert _text(gross=52, action='fairCatch', tb=True, landing=0).endswith('touchback')
 
 
-def testFairCatchNamesTheSpotOnce():
-    """A fair catch already states where it happened, so the 'pinned at' suffix
-    must not repeat it — that read 'fair catch at the 18, pinned at the 18'."""
+def testFairCatchNamesTheSpot():
     t = _text(gross=41, action='fairCatch', landing=18)
     assert t == 'Dane Fulcher punts 41 yards, fair catch by Cass Whitlow at the 18'
-    assert t.count('18') == 1
 
 
 def testInsideTenIsDownedNotFairCaught():
@@ -69,9 +66,12 @@ def testInsideTenIsDownedNotFairCaught():
     assert 'fair catch' not in t
 
 
-def testPinnedSuffixOnlyAfterARealReturn():
+def testNoPinnedSuffix():
+    """A punt downed deep says so via the spot itself; the extra "pinned at the N"
+    clause was noise (owner call 2026-08-05)."""
     t = _text(gross=44, action='return', landing=14, ret=4)
-    assert t.endswith('pinned at the 18')
+    assert t == 'Dane Fulcher punts 44 yards, Cass Whitlow returns it 4 yards'
+    assert 'pinned' not in t
 
 
 def testShankReadsAsAShank():

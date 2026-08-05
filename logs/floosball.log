@@ -8548,3 +8548,6 @@
 2026-08-05 10:19:22 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: grounded
 2026-08-05 10:19:22 - floosball.anomaly - INFO - Anomaly weekly tick complete — season 1, week 7
 2026-08-05 10:19:22 - floosball.seasonManager - INFO - Memory cleanup: cleared play-by-play data from 16 completed games
+2026-08-05 10:46:35 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-05 10:46:36 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-05 10:46:52 - floosball.websocket - INFO - WebSocket ConnectionManager initialized

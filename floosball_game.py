@@ -10755,7 +10755,6 @@ class Game:
         landing = getattr(play, 'puntLanding', None)
         retYds = int(getattr(play, 'returnYardage', 0) or 0)
         retName = getattr(getattr(play, 'returner', None), 'name', None)
-        spot = (landing + retYds) if landing is not None else None
         base = '{} punts {} yards'.format(punterName, gross)
 
         if result == 'shank':
@@ -10787,11 +10786,6 @@ class Game:
         else:
             text = base
 
-        # Pinned deep is the punt doing its job, so say so — but only after an
-        # actual return. A fair catch already names the spot, and appending it
-        # again read "fair catch at the 18, pinned at the 18".
-        if retYds > 0 and spot is not None and 0 < spot <= 20:
-            text += ', pinned at the {}'.format(spot)
         return text
 
     def _shouldOnsideKick(self) -> bool:
