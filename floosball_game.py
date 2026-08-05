@@ -7592,11 +7592,20 @@ class Game:
                         except Exception:
                             pass
 
+                    # Clock: the kick, plus hang time, plus however long the return
+                    # took. A punt is not a 5-second play.
+                    from constants import PUNT_HANG_SECONDS, PUNT_RETURN_SECS_PER_YARD
                     playDuration = self.calculatePlayDuration(PlayType.Punt, False)
+                    playDuration += batched_randint(*PUNT_HANG_SECONDS)
+                    if action in ('return', 'touchdown'):
+                        playDuration += int(round(puntReturn * PUNT_RETURN_SECS_PER_YARD))
                     self.consumeGameTime(playDuration)
                     self.play.stampClock()
                     self.checkTwoMinuteWarning()
-                    self.clockRunning = False
+                    # A returner tackled IN BOUNDS does not stop the clock. A fair
+                    # catch, touchback or muff does. Stopping it on every punt gave
+                    # the next snap a free huddle and inflated the play count.
+                    self.clockRunning = (action == 'return')
 
                     # ── Muff: a live ball. The kicking team recovering it is the
                     #    single biggest swing on a punt, and it did not exist before. ──
@@ -11491,7 +11500,10 @@ class Game:
         if self.play.playType == PlayType.FieldGoal:
             return False
         if self.play.playType == PlayType.Punt:
-            return False
+            # A returner tackled IN BOUNDS keeps the clock running; a fair catch,
+            # touchback or muff kills it. The punt branch sets clockRunning
+            # directly and breaks, so this is the fallback for any other caller.
+            return getattr(self.play, 'puntAction', None) == 'return'
         if self.play.playType == PlayType.Spike:
             return False
         if self.play.scoreChange:

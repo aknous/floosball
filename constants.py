@@ -1002,6 +1002,13 @@ PUNT_COFFIN_BASE = 0.34
 PUNT_COFFIN_ACC_K = 0.40
 PUNT_COFFIN_TOUCHBACK = 0.30    # a missed coffin corner sails through
 PUNT_TOUCHBACK_TO = 20          # touchback spots the ball here
+# Punt clock. A punt used to burn 4-6s (snap to kick) and ALWAYS stop the clock.
+# Neither is right: the ball hangs, the return takes time, and a returner tackled
+# in bounds does NOT stop the clock. Punts stopping the clock every single time
+# also gifted the next snap a free ~35s huddle, which feeds the plays-per-game
+# problem (the sim runs ~70 scrimmage plays a team against a real ~63).
+PUNT_HANG_SECONDS = (3, 5)      # snap-to-catch hang on top of the kick itself
+PUNT_RETURN_SECS_PER_YARD = 0.32
 # Punt returns. Without these, gross average IS net average and the ball is downed
 # inside the 20 on ~52% of punts against a real ~35%. Real football nets ~41 off a
 # ~46 gross, and that missing ~5 yards is most of the difference. The returner is
