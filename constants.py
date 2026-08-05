@@ -960,10 +960,10 @@ SACK_PROB_CAP = float(_os.environ.get('FLOOS_SACK_CAP', '30'))      # ceiling on
 # air yards is really a short throw -- which held league aDOT at 6.29 against a
 # real-world ~7.8 and made every completion tiny.
 PASS_DEPTH_MEANS = {
-    'short': float(_os.environ.get('FLOOS_DEPTH_SHORT', '3.5')),
-    'medium': float(_os.environ.get('FLOOS_DEPTH_MEDIUM', '8.5')),
-    'long': float(_os.environ.get('FLOOS_DEPTH_LONG', '17.5')),
-    'deep': float(_os.environ.get('FLOOS_DEPTH_DEEP', '28.0')),
+    'short': float(_os.environ.get('FLOOS_DEPTH_SHORT', '3.35')),
+    'medium': float(_os.environ.get('FLOOS_DEPTH_MEDIUM', '8.25')),
+    'long': float(_os.environ.get('FLOOS_DEPTH_LONG', '17.0')),
+    'deep': float(_os.environ.get('FLOOS_DEPTH_DEEP', '27.0')),
 }
 
 # YAC shape. The sim is dink-and-dunk: it throws MORE than real football and

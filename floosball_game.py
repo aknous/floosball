@@ -865,6 +865,22 @@ def returnMediumPassPlay():
 def returnLongPassPlay():
     return choice(['Play1', 'Play2', 'Play4', 'Play5', 'Play18', 'Play19', 'Play20'])
     
+def _rnd(value) -> int:
+    """Unbiased round to int, replacing int() on every random yardage draw.
+
+    int() truncates TOWARD ZERO. That collapses every draw in the open interval
+    (-1, 1) to exactly 0 and shaves ~0.5 off every positive draw, which produced
+    two artefacts across the whole sim: an artificial spike of zero-yard plays
+    (P(<=0) on a lost line contact was 47% against the 20% the distribution
+    actually implies, driving a 28-31% RB stuff rate vs a real-world ~18%), and
+    every configured mean reading ~0.5 higher than it behaved -- which is why the
+    pass depth bands set to average 7.9 air yards measured 7.49.
+
+    Means downstream were retuned when this landed, so they now mean what they say.
+    """
+    return int(np.floor(value + 0.5))
+
+
 class Game:
     def __init__(self, homeTeam, awayTeam, timingManager=None, personalityManager=None, gameRules=None):
         self.id = None  # Integer ID assigned by SeasonManager
@@ -12765,7 +12781,7 @@ class Play():
         """
         from constants import AWAKENED_FORCE_MIN_GAIN, AWAKENED_FORCE_GAIN_TAIL
         floor = max(AWAKENED_FORCE_MIN_GAIN, int(self.game.yardsToFirstDown or 0))
-        tail = int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
+        tail = _rnd(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
         return int(min(self.yardsToEndzone, floor + tail))
 
     def _holdUpShortCap(self, yardage):
@@ -13018,19 +13034,19 @@ class Play():
                 gapQuality, gapType, gate2Chance, gate3Chance, scheme)
         elif batched_randint(1, 100) > gate1Chance:
             # Stuffed at the line — -2 to 2 yards
-            self.yardage = max(-3, min(3, int(np.random.normal(0.5, 1.3))))
+            self.yardage = max(-3, min(3, _rnd(np.random.normal(0.5, 1.3))))
         else:
             # Through the line: 2-6 baseline yards (avg 3.5)
-            self.yardage = max(2, min(7, int(np.random.normal(3.5, 1.0))))
+            self.yardage = max(2, min(7, _rnd(np.random.normal(3.5, 1.0))))
             if batched_randint(1, 100) > gate2Chance:
                 # Wrapped up at second level: 1-5 more yards (avg 3)
-                self.yardage += max(1, min(5, int(np.random.normal(3.0, 1.2))))
+                self.yardage += max(1, min(5, _rnd(np.random.normal(2.4, 1.2))))
             else:
                 # Broke through: 5-12 more yards (avg 8)
-                self.yardage += max(4, min(12, int(np.random.normal(8.0, 2.0))))
+                self.yardage += max(4, min(12, _rnd(np.random.normal(8.0, 2.0))))
                 if batched_randint(1, 100) > gate3Chance:
                     # Chased down by deep coverage: trimmed (avg 11→8.5, cap 22→16)
-                    self.yardage += max(4, min(16, int(np.random.normal(8.5, 3.0))))
+                    self.yardage += max(4, min(16, _rnd(np.random.normal(7.6, 3.0))))
                 else:
                     # Housecall — exponential tail, TRIMMED (mean 22→14, min 12→10)
                     # so a full game rarely tops ~7 ypc and the 400-yard freak lines
@@ -13038,7 +13054,7 @@ class Play():
                     # slice of runs, so it barely moves the mean); this only clips
                     # the boom-run magnitudes, keeping the RB's normal workload/impact.
                     remaining = self.yardsToEndzone - self.yardage
-                    self.yardage += min(remaining, max(10, int(np.random.exponential(14))))
+                    self.yardage += min(remaining, max(10, _rnd(np.random.exponential(12))))
 
         self.yardage = min(self.yardage, self.yardsToEndzone)
 
@@ -13711,7 +13727,7 @@ class Play():
         # ── GATE 1: the line ────────────────────────────────────────────────
         if gapQuality >= RUN_GAP_OPEN:
             # Wide open — nobody to beat. Straight through at full speed.
-            self.yardage = max(2, min(7, int(np.random.normal(3.9, 1.0))))
+            self.yardage = max(2, min(7, _rnd(np.random.normal(3.25, 1.0))))
         else:
             plugged = gapQuality < RUN_GAP_PLUGGED
             base = RUN_CONTACT_PLUGGED if plugged else RUN_CONTACT_BASE
@@ -13724,14 +13740,14 @@ class Play():
                 moves.append(mv)
             if not broke:
                 self.tackledBy = tackler
-                self.yardage = (max(-3, min(2, int(np.random.normal(0.2, 1.2)))) if plugged
-                                else max(-2, min(3, int(np.random.normal(1.1, 1.3)))))
+                self.yardage = (max(-3, min(2, _rnd(np.random.normal(0.2, 1.2)))) if plugged
+                                else max(-2, min(3, _rnd(np.random.normal(1.1, 1.3)))))
                 return {'level': 1, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
                         'state': state, 'moves': moves,
                         'firstContactYards': firstContactYards}
             lineWins += 1   # got through the front — NOT a broken tackle
             state = 'fought' if plugged else 'contacted'
-            self.yardage = max(1, min(7, int(np.random.normal(3.7, 1.1))))
+            self.yardage = max(1, min(7, _rnd(np.random.normal(3.05, 1.1))))
 
         # ── GATE 2: second level ────────────────────────────────────────────
         # A blitzing linebacker is out of the run fit, which makes a clean second
@@ -13756,7 +13772,7 @@ class Play():
                     broke = False
                 if not broke:
                     self.tackledBy = tackler
-                    self.yardage += max(1, min(5, int(np.random.normal(3.0, 1.2))))
+                    self.yardage += max(1, min(5, _rnd(np.random.normal(2.4, 1.2))))
                     return {'level': 2, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
                             'state': state, 'moves': moves,
                             'firstContactYards': firstContactYards}
@@ -13764,9 +13780,9 @@ class Play():
                 state = 'contacted'
                 # Broke it, but he is not running clean — a smaller gain than the
                 # back who came through the second level untouched.
-                self.yardage += max(2, min(9, int(np.random.normal(4.6, 1.6))))
+                self.yardage += max(2, min(9, _rnd(np.random.normal(3.9, 1.6))))
             else:
-                self.yardage += max(4, min(12, int(np.random.normal(7.5, 2.0))))
+                self.yardage += max(4, min(12, _rnd(np.random.normal(6.7, 2.0))))
 
         # ── GATE 3: open field ──────────────────────────────────────────────
         tackler = self._levelDefender(3, gapType)
@@ -13785,13 +13801,13 @@ class Play():
                     moves.append(mv)
             if not broke:
                 self.tackledBy = tackler
-                self.yardage += max(4, min(16, int(np.random.normal(8.5, 3.0))))
+                self.yardage += max(4, min(16, _rnd(np.random.normal(7.6, 3.0))))
                 return {'level': 3, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
                         'state': state, 'moves': moves,
                         'firstContactYards': firstContactYards}
             breaks += 1
         remaining = self.yardsToEndzone - self.yardage
-        self.yardage += min(remaining, max(10, int(np.random.exponential(14))))
+        self.yardage += min(remaining, max(10, _rnd(np.random.exponential(12))))
         return {'level': 4, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins, 'state': state,
                 'moves': moves, 'firstContactYards': firstContactYards}
 
@@ -14372,10 +14388,10 @@ class Play():
         # gain is all run-after-catch, so air yards are ~0 regardless of the
         # target's nominal route depth.
         if getattr(self, 'passConcept', 'standard') == 'screen':
-            return max(0, int(np.random.normal(0.4, 0.8)))
+            return max(0, _rnd(np.random.normal(0.4, 0.8)))
 
         params = passTypeParams.get(passType, passTypeParams[PassType.medium])
-        airYards = int(np.random.normal(params['mean'], params['stdDev']))
+        airYards = _rnd(np.random.normal(params['mean'], params['stdDev']))
         return max(0, airYards)
 
     def passPlay(self, playKey):
@@ -15198,18 +15214,18 @@ class Play():
 
                         if batched_randint(1, 100) > gateAChance:
                             # Tackled by covering defender — clamped 0-3 YAC
-                            yac += _capYac(max(0, int(np.random.normal(1.5, 1.0))), caps['gateAFail'])
+                            yac += _capYac(max(0, _rnd(np.random.normal(1.0, 1.0))), caps['gateAFail'])
                         else:
                             # Slipped the tackle — clamped 2-6 YAC
-                            yac += _capYac(max(2, int(np.random.normal(4.0, 1.5))), caps['gateAPass'])
+                            yac += _capYac(max(2, _rnd(np.random.normal(3.2, 1.5))), caps['gateAPass'])
                             if (passYards + yac) < self.yardsToEndzone and not self.targetSideline:
                                 if batched_randint(1, 100) > gateBChance:
                                     # Safety angles WR off — clamped per tier
-                                    yac += _capYac(max(3, int(np.random.normal(7.0, 2.5))), caps['gateBFail'])
+                                    yac += _capYac(max(3, _rnd(np.random.normal(6.0, 2.5))), caps['gateBFail'])
                                 else:
                                     # Housecall — exponential tail, bounded by remaining field
                                     remYards = self.yardsToEndzone - passYards - yac
-                                    yac += min(remYards, max(8, int(np.random.exponential(caps['housecallMean']) * throwYacMult)))
+                                    yac += min(remYards, max(8, _rnd(np.random.exponential(caps['housecallMean']) * throwYacMult)))
 
                     self.yardage = passYards + yac
                     if self.yardage > self.yardsToEndzone:
