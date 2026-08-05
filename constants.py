@@ -944,6 +944,28 @@ FORM_FORCE = float(_os.environ.get('FLOOS_FORM_FORCE', '0'))
 POSITION_FORCE = float(_os.environ.get('FLOOS_POS_FORCE', '0'))
 POSITION_FORCE_SLOT = _os.environ.get('FLOOS_POS_SLOT', 'qb')
 
+# ---- Passing: pressure and depth ----
+# Sack rate was ~0.33 per team per game against a real-world ~2.4. Two
+# multiplicative suppressors: the base rate at an even matchup was half of
+# reality, and 45% of would-be sacks were dumped to the RB before a sack could
+# register. A pass rush that never gets home also inflates completion % and
+# attempts, so this distorts the whole passing picture, not just the sack column.
+# NOTE this is a CURVE parameter, not the realized rate. Protection systematically
+# outweighs the rush here (qbProtection = mobility + blocking*4), so the typical
+# rushDifferential is negative and the logistic lands well below this number. 14.0
+# yields ~6.0% of dropbacks, i.e. a real-world 2.48 sacks per team per game.
+SACK_BASE_RATE = float(_os.environ.get('FLOOS_SACK_BASE', '14.0'))  # curve param, not the rate
+SACK_PROB_CAP = float(_os.environ.get('FLOOS_SACK_CAP', '30'))      # ceiling on a normal dropback
+# Air-yard means per pass tier. The old bands were compressed -- "medium" at 6.5
+# air yards is really a short throw -- which held league aDOT at 6.29 against a
+# real-world ~7.8 and made every completion tiny.
+PASS_DEPTH_MEANS = {
+    'short': float(_os.environ.get('FLOOS_DEPTH_SHORT', '3.5')),
+    'medium': float(_os.environ.get('FLOOS_DEPTH_MEDIUM', '8.5')),
+    'long': float(_os.environ.get('FLOOS_DEPTH_LONG', '15.5')),
+    'deep': float(_os.environ.get('FLOOS_DEPTH_DEEP', '25.0')),
+}
+
 # ---- Run Gate Model (three stages with carrier momentum) ----
 # A carry is three contests: the line, the second level, the open field. What
 # makes them mean something is that the runner's STATE carries between them --
@@ -2229,7 +2251,7 @@ PUNT_BLOCK_CHANCE = 0.1    # % of punts blocked (punts are far more frequent tha
 # so pass-catching backs get realistic receiving production. Keep volume modest (a
 # few catches a game). Flip RB_CHECKDOWN_ENABLED to disable.
 RB_CHECKDOWN_ENABLED = True
-RB_CHECKDOWN_PRESSURE_CHANCE = 45   # % of would-be sacks dumped to the RB instead
+RB_CHECKDOWN_PRESSURE_CHANCE = float(_os.environ.get('FLOOS_CHECKDOWN', '12'))   # % of would-be sacks dumped to the RB instead
 RB_CHECKDOWN_OPEN_CHANCE = 55       # % of "no one open" dropbacks checked down to the RB
 RB_CHECKDOWN_BASE_YAC = 3.5         # mean YAC on a dump-off at RB speed pivot 78
 RB_CHECKDOWN_YAC_PER_SPEED = 0.12   # mean YAC added per RB speed point above 78

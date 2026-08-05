@@ -67488,3 +67488,5 @@ Shutting down API server...
 2026-08-04 17:34:54 - floosball.seasonManager - INFO - Weekly modifier already set for S1W28: synergy
 2026-08-04 17:34:54 - floosball.anomaly - INFO - Anomaly weekly tick complete — season 1, week 24
 2026-08-04 17:34:54 - floosball.seasonManager - INFO - Memory cleanup: cleared play-by-play data from 16 completed games
+2026-08-04 21:17:32 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-04 21:17:33 - floosball.websocket - INFO - WebSocket ConnectionManager initialized

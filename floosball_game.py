@@ -13297,7 +13297,8 @@ class Play():
 
         # Base sack rate at even matchup (differential = 0) is ~3%
         # Logistic function: probability increases smoothly with rush advantage
-        baseSackRate = 3.0
+        from constants import SACK_BASE_RATE, SACK_PROB_CAP
+        baseSackRate = SACK_BASE_RATE
         steepness = 0.15
 
         # Shift the curve so 0 differential = baseSackRate
@@ -13307,7 +13308,7 @@ class Play():
         # longer than normal — the standard 15% cap underestimates real risk.
         # Lift cap to 28% so a strong rush against thin protection can wreck
         # the play before it leaves the QB's hand.
-        capMax = 28 if dropbackDepth >= 6 else 15
+        capMax = 28 if dropbackDepth >= 6 else SACK_PROB_CAP
         return max(0.5, min(capMax, probability))
 
     def _qbEscapesSack(self) -> bool:
@@ -14358,11 +14359,12 @@ class Play():
             maxHeave = 50 + (arm - 70) * 0.4   # ~46 yds (weak arm) → ~62 yds (elite)
             return max(0, int(min(self.yardsToEndzone, maxHeave)))
 
+        from constants import PASS_DEPTH_MEANS as _PDM
         passTypeParams = {
-            PassType.short:    {'mean': 3,    'stdDev': 1.0},
-            PassType.medium:   {'mean': 6.5,  'stdDev': 2.0},
-            PassType.long:     {'mean': 15,   'stdDev': 3.5},
-            PassType.deep:     {'mean': 24,   'stdDev': 4.5},
+            PassType.short:    {'mean': _PDM['short'],  'stdDev': 1.2},
+            PassType.medium:   {'mean': _PDM['medium'], 'stdDev': 2.4},
+            PassType.long:     {'mean': _PDM['long'],   'stdDev': 3.5},
+            PassType.deep:     {'mean': _PDM['deep'],   'stdDev': 4.5},
             PassType.hailMary: {'mean': 45,   'stdDev': 8.0},
         }
         # A called screen (route concept) is a throw at or behind the line — the
@@ -14901,8 +14903,11 @@ class Play():
                     # Intended depth of the throw, banked at RELEASE so aDOT
                     # covers incompletions too (calculatePassYardage only rolls on
                     # the completion path). Means mirror its passTypeParams.
-                    _air = {PassType.short: 3, PassType.medium: 7, PassType.long: 15,
-                            PassType.deep: 24, PassType.hailMary: 45}.get(self.passType, 7)
+                    from constants import PASS_DEPTH_MEANS as _PDM2
+                    _air = {PassType.short: _PDM2['short'], PassType.medium: _PDM2['medium'],
+                            PassType.long: _PDM2['long'], PassType.deep: _PDM2['deep'],
+                            PassType.hailMary: 45}.get(self.passType, _PDM2['medium'])
+                    _air = int(round(_air))
                     self.passer.addAdvanced(_SC.PASSING, 'airYardsSum', _air, _rs)
                     # Was the target covered when the ball went up? Recorded on
                     # every throw so contested RATE has a denominator.
