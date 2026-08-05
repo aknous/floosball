@@ -865,6 +865,28 @@ def returnMediumPassPlay():
 def returnLongPassPlay():
     return choice(['Play1', 'Play2', 'Play4', 'Play5', 'Play18', 'Play19', 'Play20'])
     
+def flairOf(player) -> float:
+    """0..1 — how likely this player is to TRY something audacious.
+
+    Built from creativity + xFactor, which were nearly inert in play resolution
+    before this (xFactor appeared in one QB-mobility calculation; creativity in two
+    concept exec weights). Flair never decides whether something WORKS — that's the
+    physical attribute — only whether it is attempted. Module-level because both
+    Game (punt-type selection) and Play (runner moves, diving catches) need it.
+    """
+    from constants import (FLAIR_PIVOT, FLAIR_RANGE, FLAIR_CREATIVITY_W,
+                           FLAIR_XFACTOR_W)
+    if player is None:
+        return 0.0
+    a = getattr(player, 'gameAttributes', None) or getattr(player, 'attributes', None)
+    if a is None:
+        return 0.0
+    cre = (getattr(a, 'creativity', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
+    xf = (getattr(a, 'xFactor', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
+    raw = cre * FLAIR_CREATIVITY_W + xf * FLAIR_XFACTOR_W    # ~-1..+1
+    return max(0.0, min(1.0, 0.5 + raw / 2.0))               # 0..1, 0.5 at neutral
+
+
 def _rnd(value) -> int:
     """Unbiased round to int, replacing int() on every random yardage draw.
 
@@ -7495,13 +7517,40 @@ class Game:
                     kicker = self.offensiveTeam.rosterDict['k']
                     if kicker is None:
                         logging.error(f"Team {self.offensiveTeam.name} has no kicker - using default punt distance")
-                    maxPuntYards = round(70*(kicker.attributes.legStrength/100)) if kicker else 45
-                    if maxPuntYards > self.yardsToEndzone:
-                        maxPuntYards = self.yardsToEndzone + 10
-                    puntDistance = randint((maxPuntYards-20), maxPuntYards)
-                    if puntDistance >= self.yardsToEndzone:
-                        puntDistance = self.yardsToEndzone - 20
+                    puntDistance, puntType, puntResult, puntReturn = self.resolvePunt(
+                        kicker, self.yardsToEndzone)
+                    self.play.puntType = puntType
+                    self.play.puntResult = puntResult
                     self.play.yardage = puntDistance
+                    if kicker is not None:
+                        try:
+                            from stat_tracker import StatCategory as _SCK
+                            _rsk = self.isRegularSeasonGame
+                            kicker.addAdvanced(_SCK.KICKING, 'punts', 1, _rsk)
+                            # Gross is the kick; puntDistance is already NET of the return.
+                            kicker.addAdvanced(_SCK.KICKING, 'puntYards',
+                                               puntDistance + puntReturn, _rsk)
+                            kicker.addAdvanced(_SCK.KICKING, 'puntReturnYards', puntReturn, _rsk)
+                            # Inside-20 is GEOMETRIC — where the ball actually
+                            # ends up — not a property of the punt type. Crediting
+                            # it only on pin/coffin successes ignored every boomer
+                            # that happened to land inside the 20, which is most of
+                            # how a real team gets there.
+                            _landing = self.yardsToEndzone - puntDistance
+                            if puntResult == 'touchback':
+                                kicker.addAdvanced(_SCK.KICKING, 'puntTouchbacks', 1, _rsk)
+                            elif 0 < _landing <= 20:
+                                kicker.addAdvanced(_SCK.KICKING, 'puntsInside20', 1, _rsk)
+                                if _landing <= 10:
+                                    kicker.addAdvanced(_SCK.KICKING, 'puntsInside10', 1, _rsk)
+                            # A max, not a sum, so it can't go through add_stat.
+                            for _d in (kicker.gameStatsDict, kicker.seasonStatsDict,
+                                       kicker.careerStatsDict):
+                                _k = _d.get('kicking') if isinstance(_d, dict) else None
+                                if isinstance(_k, dict) and puntDistance > (_k.get('puntLongest', 0) or 0):
+                                    _k['puntLongest'] = puntDistance
+                        except Exception:
+                            pass
                     newYards = 100 - (self.yardsToEndzone - puntDistance)
                     
                     # Consume time for punt (always stops clock)
@@ -10373,6 +10422,119 @@ class Game:
             return 4  # Snap to knee-down; play clock drain handled separately
 
         return 5  # Default
+
+    def resolvePunt(self, kicker, yardsToEndzone):
+        """Choose a punt type and resolve it. Returns (netDistance, type, result, returnYards).
+
+        Punting used to be one line -- a random draw inside a 20-yard band set by
+        leg strength -- so there was no reason to punt differently from your own 5
+        than from midfield, and accuracy did nothing. Leg strength IS the right
+        lever for a punt (unlike a field goal, where it only sets range), but
+        distance alone is not the job: from midfield the job is placement.
+
+        Ability is ACCURACY. Willingness to try the coffin corner comes from
+        _flair (creativity + xFactor) -- the same three-part model used for runner
+        moves and diving catches: flair decides whether you TRY something, the
+        physical attribute decides whether it WORKS.
+        """
+        from constants import (PUNT_TYPES_ENABLED, PUNT_MAX_YARDS_PER_LEG,
+                               PUNT_BOOMER_YTE, PUNT_PIN_YTE, PUNT_COFFIN_MAX_YTE,
+                               PUNT_COFFIN_MIN_YTE, PUNT_COFFIN_ELECT_BASE,
+                               PUNT_COFFIN_ELECT_FLAIR, PUNT_ACCURACY_PIVOT,
+                               PUNT_PIN_BASE, PUNT_PIN_ACC_K, PUNT_COFFIN_BASE,
+                               PUNT_COFFIN_ACC_K, PUNT_COFFIN_TOUCHBACK,
+                               PUNT_TOUCHBACK_TO)
+        leg = getattr(getattr(kicker, 'gameAttributes', None) or kicker.attributes,
+                      'legStrength', 70) if kicker else 70
+        acc = getattr(getattr(kicker, 'gameAttributes', None) or kicker.attributes,
+                      'accuracy', 75) if kicker else 75
+        ceiling = round(leg * PUNT_MAX_YARDS_PER_LEG)
+
+        if not PUNT_TYPES_ENABLED:
+            dist = batched_randint(max(1, ceiling - 20), max(2, ceiling))
+            return (dist, 'standard', None)
+
+        accEdge = (acc - PUNT_ACCURACY_PIVOT) / 20.0   # -1 .. +1
+
+        # ── Type selection ──
+        puntType = 'standard'
+        if yardsToEndzone >= PUNT_BOOMER_YTE:
+            puntType = 'boomer'          # own end -- just flip the field
+        elif PUNT_COFFIN_MIN_YTE <= yardsToEndzone <= PUNT_COFFIN_MAX_YTE:
+            elect = PUNT_COFFIN_ELECT_BASE + PUNT_COFFIN_ELECT_FLAIR * flairOf(kicker)
+            puntType = 'coffin' if _random.random() < elect else 'pin'
+        elif yardsToEndzone <= PUNT_PIN_YTE:
+            puntType = 'pin'
+
+        # ── Distance ──
+        if puntType == 'boomer':
+            dist = batched_randint(max(1, ceiling - 12), max(2, ceiling + 3))
+        elif puntType == 'pin':
+            # Shorter and higher: trades yards for hang time and placement.
+            target = yardsToEndzone - 12
+            dist = max(20, min(target + batched_randint(-4, 4), ceiling))
+        elif puntType == 'coffin':
+            target = yardsToEndzone - 7
+            dist = max(20, min(target + batched_randint(-3, 3), ceiling + 2))
+        else:
+            dist = batched_randint(max(1, ceiling - 18), max(2, ceiling))
+
+        # ── Placement outcome ──
+        result = None
+        landing = yardsToEndzone - dist          # yards from THEIR goal line
+        if puntType == 'coffin':
+            if _random.random() < max(0.05, min(0.92, PUNT_COFFIN_BASE + PUNT_COFFIN_ACC_K * accEdge)):
+                result = 'coffin'                 # pinned inside the 10
+                dist = yardsToEndzone - batched_randint(3, 9)
+            elif _random.random() < PUNT_COFFIN_TOUCHBACK:
+                result = 'touchback'              # sailed through -- gave the yards back
+                dist = yardsToEndzone - PUNT_TOUCHBACK_TO
+            else:
+                result = 'missed_coffin'
+                dist = yardsToEndzone - batched_randint(12, 22)
+        elif puntType == 'pin':
+            if _random.random() < max(0.05, min(0.90, PUNT_PIN_BASE + PUNT_PIN_ACC_K * accEdge)):
+                result = 'inside20'
+                dist = yardsToEndzone - batched_randint(6, 18)
+            elif landing <= 0:
+                result = 'touchback'
+                dist = yardsToEndzone - PUNT_TOUCHBACK_TO
+        elif landing <= 0:
+            # A boomer that outkicks the field is a touchback -- the cost of the big leg.
+            result = 'touchback'
+            dist = yardsToEndzone - PUNT_TOUCHBACK_TO
+
+        dist = max(15, min(dist, yardsToEndzone - 1))
+
+        # ── Return ──
+        # Without this the gross average IS the net average, which downs the ball
+        # inside the 20 on ~52% of punts against a real ~35%. The inside-20 rate is
+        # geometric (a 46-yarder from your own 35 lands there however it was struck),
+        # so the return is what separates gross from net, not placement tuning.
+        from constants import (PUNT_RETURN_ENABLED, PUNT_RETURN_BASE,
+                               PUNT_RETURN_SPREAD, PUNT_RETURN_ATTR_K,
+                               PUNT_RETURN_FAIRCATCH_INSIDE, PUNT_RETURN_BREAK_CHANCE,
+                               PUNT_RETURN_BREAK_MEAN)
+        returnYards = 0
+        landing = yardsToEndzone - dist
+        if (PUNT_RETURN_ENABLED and result != 'touchback'
+                and landing > PUNT_RETURN_FAIRCATCH_INSIDE):
+            returner = (self.defensiveTeam.rosterDict.get('wr1')
+                        if getattr(self, 'defensiveTeam', None) else None)
+            ra = (getattr(returner, 'gameAttributes', None) or
+                  getattr(returner, 'attributes', None)) if returner else None
+            edge = 0.0
+            if ra is not None:
+                edge = ((getattr(ra, 'speed', 80) + getattr(ra, 'agility', 80)) / 2 - 80) / 20.0
+            mean = PUNT_RETURN_BASE + PUNT_RETURN_ATTR_K * edge
+            if _random.random() < PUNT_RETURN_BREAK_CHANCE:
+                returnYards = _rnd(np.random.exponential(PUNT_RETURN_BREAK_MEAN)) + 10
+            else:
+                returnYards = max(0, _rnd(np.random.normal(mean, PUNT_RETURN_SPREAD)))
+            returnYards = min(returnYards, max(0, landing - 1))
+            dist -= returnYards
+            dist = max(10, dist)
+        return (dist, puntType, result, returnYards)
 
     def _shouldOnsideKick(self) -> bool:
         """
@@ -13608,22 +13770,9 @@ class Play():
 
     def _flair(self, player):
         """0..1 — how likely this player is to TRY something audacious.
-
-        Built from creativity + xFactor, which were nearly inert in play
-        resolution before this (xFactor appeared in one QB-mobility calculation;
-        creativity in two concept exec weights). Flair never decides whether a
-        move WORKS — that's the physical attribute — only whether it's attempted."""
-        from constants import (FLAIR_PIVOT, FLAIR_RANGE, FLAIR_CREATIVITY_W,
-                               FLAIR_XFACTOR_W)
-        if player is None:
-            return 0.0
-        a = getattr(player, 'gameAttributes', None) or getattr(player, 'attributes', None)
-        if a is None:
-            return 0.0
-        cre = (getattr(a, 'creativity', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
-        xf = (getattr(a, 'xFactor', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
-        raw = cre * FLAIR_CREATIVITY_W + xf * FLAIR_XFACTOR_W    # ~-1..+1
-        return max(0.0, min(1.0, 0.5 + raw / 2.0))               # 0..1, 0.5 at neutral
+        Thin wrapper on the module-level flairOf so Game (punt selection) and Play
+        (runner moves, diving catches) share one implementation."""
+        return flairOf(player)
 
     def _levelDefender(self, level, gapType):
         """The defender the carrier meets at each stage of a run.

@@ -175,7 +175,15 @@ playerStatsDict =   {
                             'fgOver50att': 0,
                             'fgOver50': 0,
                             'fgOver50perc': 0,
-                            'longest': 0
+                            'longest': 0,
+                            # --- Punting
+                            'punts': 0,
+                            'puntYards': 0,
+                            'puntsInside20': 0,
+                            'puntsInside10': 0,
+                            'puntTouchbacks': 0,
+                            'puntLongest': 0,
+                            'puntReturnYards': 0,
                         },
                         'defense': {
                             'sacks': 0,

@@ -966,6 +966,55 @@ FG_MARGIN_SCALE = 12.0      # yards of spare leg for a full +1 margin term
 FG_MARGIN_FLOOR = -1.4      # at/over the range limit, the penalty bottoms out here
 FG_MARGIN_CEILING = 0.35    # plenty of leg helps, but only so much -- accuracy still rules
 
+# ---- Kicking: punts ----
+# Punts were `randint(70*legStrength/100 - 20, 70*legStrength/100)` and nothing
+# else: no accuracy, no placement, no touchback risk, no reason to punt any
+# differently from your own 5 than from midfield. Leg strength is the RIGHT lever
+# for a punt (unlike a field goal) -- but distance alone is not the whole job.
+#
+# Four types, chosen by field position and situation:
+#   boomer  deep in your own end -- flip the field, low and long. Pure leg.
+#   standard
+#   pin     from around midfield -- shorter, higher, aim to down it inside the 20.
+#   coffin  the audacious one -- aim at the sideline inside the 10. Big reward,
+#           and a miss is a touchback that gives back ~20 yards of it.
+#
+# Ability is ACCURACY; willingness to try the coffin corner comes from _flair
+# (creativity + xFactor), the same three-part model the sim uses for runner moves
+# and diving catches.
+PUNT_TYPES_ENABLED = _os.environ.get('FLOOS_PUNT_TYPES') != 'off'
+PUNT_MAX_YARDS_PER_LEG = 0.70   # legStrength * this = a punter's ceiling
+PUNT_BOOMER_YTE = 65            # own end: at/beyond this yards-to-endzone, boom it
+PUNT_PIN_YTE = 58               # inside this, placement starts to matter
+PUNT_COFFIN_MAX_YTE = 52        # coffin corner only makes sense this close in
+PUNT_COFFIN_MIN_YTE = 38
+PUNT_COFFIN_ELECT_BASE = 0.10   # baseline willingness to try it...
+PUNT_COFFIN_ELECT_FLAIR = 0.45  # ...scaled by flair
+PUNT_ACCURACY_PIVOT = 80.0
+# Placement success: chance of downing it inside the 20 on a pin, or inside the 10
+# on a coffin corner. Accuracy-driven, and a coffin miss is a touchback.
+# The inside-20 rate is GEOMETRIC, not placement-driven: halving these barely moved
+# it (52% -> 53%), because a 46-yard punt from your own 35 lands inside the 20 no
+# matter how it was struck. What was actually missing was the RETURN -- see below.
+PUNT_PIN_BASE = 0.38
+PUNT_PIN_ACC_K = 0.32
+PUNT_COFFIN_BASE = 0.34
+PUNT_COFFIN_ACC_K = 0.40
+PUNT_COFFIN_TOUCHBACK = 0.30    # a missed coffin corner sails through
+PUNT_TOUCHBACK_TO = 20          # touchback spots the ball here
+# Punt returns. Without these, gross average IS net average and the ball is downed
+# inside the 20 on ~52% of punts against a real ~35%. Real football nets ~41 off a
+# ~46 gross, and that missing ~5 yards is most of the difference. The returner is
+# the receiving team's WR1 (the sim's WR->CB mapping makes them the coverage-unit
+# athlete); speed and agility drive it.
+PUNT_RETURN_ENABLED = _os.environ.get('FLOOS_PUNT_RETURNS') != 'off'
+PUNT_RETURN_BASE = 7.0          # mean return yards at a neutral (80/80) returner
+PUNT_RETURN_SPREAD = 4.5
+PUNT_RETURN_ATTR_K = 6.0        # speed/agility swing on the mean
+PUNT_RETURN_FAIRCATCH_INSIDE = 12   # downed this close in -> fair catch, no return
+PUNT_RETURN_BREAK_CHANCE = 0.04     # a return that genuinely breaks open
+PUNT_RETURN_BREAK_MEAN = 22.0
+
 # ---- Passing: pressure and depth ----
 # Sack rate was ~0.33 per team per game against a real-world ~2.4. Two
 # multiplicative suppressors: the base rate at an even matchup was half of

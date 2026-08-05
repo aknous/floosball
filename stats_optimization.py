@@ -200,6 +200,15 @@ class KickingStats:
     xpAtt: int = 0
     xps: int = 0
     xpPerc: float = 0.0
+    # --- Punting. Leg strength drives distance; accuracy drives placement.
+    punts: int = 0    # punts attempted
+    puntYards: int = 0    # gross punt yards
+    puntsInside20: int = 0    # downed inside the 20
+    puntsInside10: int = 0    # coffin corner
+    puntTouchbacks: int = 0    # sailed through -- gave the placement back
+    puntLongest: int = 0    # longest punt
+    puntReturnYards: int = 0    # yards given back on returns
+
     
     def reset(self):
         """Reset all stats to zero"""
@@ -365,7 +374,14 @@ class OptimizedPlayerStats:
                 'fgOver50perc': self.kicking.fgOver50perc,
                 'xpAtt': self.kicking.xpAtt,
                 'xps': self.kicking.xps,
-                'xpPerc': self.kicking.xpPerc
+                'xpPerc': self.kicking.xpPerc,
+                'punts': self.kicking.punts,
+                'puntYards': self.kicking.puntYards,
+                'puntsInside20': self.kicking.puntsInside20,
+                'puntsInside10': self.kicking.puntsInside10,
+                'puntTouchbacks': self.kicking.puntTouchbacks,
+                'puntLongest': self.kicking.puntLongest,
+                'puntReturnYards': self.kicking.puntReturnYards
             },
             'defense': {
                 'sacks': self.defense.sacks,
