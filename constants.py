@@ -944,6 +944,28 @@ FORM_FORCE = float(_os.environ.get('FLOOS_FORM_FORCE', '0'))
 POSITION_FORCE = float(_os.environ.get('FLOOS_POS_FORCE', '0'))
 POSITION_FORCE_SLOT = _os.environ.get('FLOOS_POS_SLOT', 'qb')
 
+# ---- Kicking: field goals ----
+# FG success used to key off the kicker's OVERALL rating, which is
+# (legStrength+accuracy)/2 * 3/5 + playMaking/5 + xFactor/5 -- so leg strength was
+# ~30% of success and playmaking/xFactor together were 40%, neither of which
+# should decide whether a kick goes through the uprights.
+#
+# The model now matches how kicking actually works: LEG STRENGTH sets RANGE (it
+# already drives maxFgDistance), ACCURACY decides whether it is on line, and the
+# existing pressure layer handles nerve. The margin term is the important part --
+# what matters is not raw leg but how much leg you have TO SPARE at this distance.
+# A kick at the edge of a kicker's range is a very different proposition from the
+# same distance for someone with 10 yards in hand, which is why most kickers can
+# hit 50-55 and only the elite-elite convert from 60+.
+FG_CURVE_CENTER = 58.0      # distance at which the raw curve sits at 50%
+FG_CURVE_SLOPE = 0.14       # how sharply make% falls with distance
+FG_SKILL_BASE = 0.90        # multiplier at a neutral (80 accuracy, comfortable range) kick
+FG_ACCURACY_WEIGHT = 0.30   # primary driver: (accuracy-80)/20 scaled by this
+FG_MARGIN_WEIGHT = 0.26     # how much spare leg matters
+FG_MARGIN_SCALE = 12.0      # yards of spare leg for a full +1 margin term
+FG_MARGIN_FLOOR = -1.4      # at/over the range limit, the penalty bottoms out here
+FG_MARGIN_CEILING = 0.35    # plenty of leg helps, but only so much -- accuracy still rules
+
 # ---- Passing: pressure and depth ----
 # Sack rate was ~0.33 per team per game against a real-world ~2.4. Two
 # multiplicative suppressors: the base rate at an even matchup was half of

@@ -2319,18 +2319,39 @@ class Game:
         from constants import AWAKENED_FG_MAX_YARDS
         return max(kicker.maxFgDistance, AWAKENED_FG_MAX_YARDS) - self.gameRules.fgSnapDistance
 
+    def fgMakeProbability(self, kicker, fgDist) -> float:
+        """Pre-pressure FG make probability. THE single source of truth, shared by
+        the coach's attempt decision and the kick resolution — they used to carry
+        duplicate copies of this formula and could drift apart.
+
+        Leg strength is NOT a success term here; it sets RANGE via maxFgDistance,
+        and enters only through the margin (how much leg is to spare at this
+        distance). Accuracy is the skill that decides whether the ball is on line.
+        """
+        from constants import (FG_SKILL_BASE, FG_ACCURACY_WEIGHT, FG_MARGIN_WEIGHT,
+                               FG_MARGIN_SCALE, FG_MARGIN_FLOOR, FG_MARGIN_CEILING,
+                               FG_CURVE_CENTER, FG_CURVE_SLOPE)
+        if not kicker:
+            return 0.0
+        # Centred at FG_CURVE_CENTER. The old centre of 52 with slope 0.18 put an
+        # average kicker at ~50% from 52 yards where real kickers are ~68%, so the
+        # distance curve was pessimistic before any skill term applied.
+        baseFgProb = 1 / (1 + math.exp(FG_CURVE_SLOPE * (fgDist - FG_CURVE_CENTER)))
+        a = getattr(kicker, 'gameAttributes', None) or kicker.attributes
+        accTerm = (getattr(a, 'accuracy', 80) - 80) / 20.0
+        margin = getattr(kicker, 'maxFgDistance', 55) - fgDist
+        marginTerm = max(FG_MARGIN_FLOOR, min(FG_MARGIN_CEILING, margin / FG_MARGIN_SCALE))
+        skill = FG_ACCURACY_WEIGHT * accTerm + FG_MARGIN_WEIGHT * marginTerm
+        fgProb = baseFgProb * max(0.05, FG_SKILL_BASE + skill)
+        if fgDist < 30:
+            fgProb = min(0.96, fgProb + 0.10)
+        return max(0.02, min(0.96, fgProb))
+
     def _estimateFgProbability(self):
         """Estimate FG make probability for the current field position and kicker."""
         kicker = self.offensiveTeam.rosterDict.get('k')
-        if not kicker:
-            return 0.0
         fgDist = self.yardsToEndzone + self.gameRules.fgSnapDistance
-        baseFgProb = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
-        normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
-        fgProb = baseFgProb * (0.52 + normalizedSkill * 0.85)
-        if fgDist < 30:
-            fgProb = min(0.96, fgProb + 0.10)
-        return max(0.05, min(0.96, fgProb))
+        return self.fgMakeProbability(kicker, fgDist)
 
     def _coachFgThreshold(self, coach):
         """Compute the minimum FG probability a coach requires before attempting.
@@ -10592,17 +10613,13 @@ class Game:
     def _estimateKickConversionProb(self, scoringTeam) -> float:
         """Make odds for the safe PAT kick (from the 15, like `_simulateExtraPointPlay`),
         so the last-chance chooser can weigh it against the go-for-it rungs on the same
-        scale. Mirrors `_estimateFgProbability`'s model at that fixed spot."""
+        scale. Shares Game.fgMakeProbability, so it cannot drift from the real kick."""
         kicker = scoringTeam.rosterDict.get('k')
         if not kicker:
             return 0.0
         fgDist = 15 + self.gameRules.fgSnapDistance
-        base = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
-        normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
-        prob = base * (0.52 + normalizedSkill * 0.85)
-        if fgDist < 30:
-            prob = min(0.96, prob + 0.10)
-        return max(0.05, min(0.96, prob))
+        # fgMakeProbability already applies the chip-shot bonus and the caps.
+        return self.fgMakeProbability(kicker, fgDist)
 
     def _lastChanceLeadConversion(self, scoringTeam, goRungs: list, fallback: dict) -> dict:
         """Innings, last try of the final at-bat, already AHEAD in the TOP half. Nothing is
@@ -11543,19 +11560,11 @@ class Game:
                 # In FG range, WP should reflect the near-certainty of a made kick.
                 yte = self.yardsToEndzone
                 fgDist = yte + 17
-                # Estimate FG make probability using the SAME constants as fieldGoalTry()
-                # (slope 0.18, skill 0.52 + ×0.85, chip +0.10 under 30, cap 0.96) so OT-tied
-                # WP matches the kick the engine will actually roll.
-                baseFgProb = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
+                # Shared with the kick the engine will actually roll — see
+                # Game.fgMakeProbability. These used to carry their own copy of the
+                # curve and silently drifted when the model changed.
                 kicker = self.offensiveTeam.rosterDict.get('k')
-                if kicker:
-                    normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
-                    fgProb = baseFgProb * (0.52 + normalizedSkill * 0.85)
-                    if fgDist < 30:
-                        fgProb = min(0.96, fgProb + 0.10)
-                    fgProb = max(0.05, min(0.96, fgProb))
-                else:
-                    fgProb = baseFgProb
+                fgProb = self.fgMakeProbability(kicker, fgDist)
                 # Continuous scoring probability: union of two paths —
                 # FG probability (viable when in range, drops smoothly to
                 # ~0 outside of kicker range) and drive-TD probability
@@ -12399,21 +12408,12 @@ class Play():
         self.kicker.addFgAttempt(self.game.isRegularSeasonGame)
         yardsToFG = self.yardsToEndzone + 17
         self.fgDistance = yardsToFG
-        distanceFactor = 0.18   # Steeper drop-off with distance for realistic miss rates
-        skillFactor = 0.85      # Tighter kicker skill impact range
-
-        # Base probability uses sigmoid centered at 52 yards
-        baseProbability = round(1 / (1 + math.exp(distanceFactor * (self.fgDistance - 52))), 2)
-        normalizedSkill = (self.kicker.gameAttributes.overallRating - 50) / 50
-
-        # Base skill probability (no pressure)
-        probability = baseProbability * (0.52 + normalizedSkill * skillFactor)
-
-        # Bonus for chip shots (under 30 yards)
-        if self.fgDistance < 30:
-            probability = min(0.96, probability + 0.10)
-
-        probability = max(0.05, min(0.96, probability))
+        # Shared with the coach's attempt decision — see Game.fgMakeProbability.
+        probability = self.game.fgMakeProbability(self.kicker, self.fgDistance)
+        # Raw distance curve, kept for the insight panel so the box score can show
+        # how much of the outcome was distance vs kicker.
+        from constants import FG_CURVE_CENTER as _FGC, FG_CURVE_SLOPE as _FGS
+        baseProbability = 1 / (1 + math.exp(_FGS * (self.fgDistance - _FGC)))
 
         # ── Kicker Pressure System ──
         # FG attempts are uniquely high-pressure — apply a direct probability
@@ -12511,7 +12511,8 @@ class Play():
             'distance': yardsToFG,
             'baseProbability': round(baseProbability * 100, 1),
             'finalProbability': probability,
-            'kickerRating': self.kicker.gameAttributes.overallRating,
+            'kickerAccuracy': getattr(self.kicker.gameAttributes, 'accuracy', 0),
+            'kickerMaxFg': getattr(self.kicker, 'maxFgDistance', 0),
             'kickerName': self.kicker.name,
             'pressureAdj': self.keyPressureMod,
             'gamePressure': round(self.game.gamePressure),

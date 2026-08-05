@@ -160,7 +160,11 @@ class GameRules:
 
     # ── Field goal mechanics ───────────────────────────────────────
     fgSnapDistance: int = 17            # Yards added to LOS for snap + hold
-    fgMinAttemptProb: float = 0.20      # Coaches attempt FG if make-prob >= this
+    # Coaches attempt a FG if make-prob >= this. Was 0.20, which sent kickers out
+    # on attempts a punt beats comfortably: a miss hands the opponent the ball at
+    # the spot instead of pinning them. That is why a BETTER kicker measured as
+    # WORSE for his team (-0.93 wins) -- more leg meant more marginal long tries.
+    fgMinAttemptProb: float = 0.38
 
     # ── Multiple uprights (future: Cores may add weird ones) ───────
     # Each entry: { "name": str, "value": int, "rangeBonus": int }
