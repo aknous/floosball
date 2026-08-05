@@ -4598,3 +4598,5 @@
 2026-08-05 09:08:44 - floosball.playerManager - INFO - Saved 207 players to database (207 active, 0 retired)
 2026-08-05 09:08:44 - floosball.playerManager - INFO - Team assignment stats: 192 with teams, 15 free agents, 0 retired, 0 null teams, 0 errors
 2026-08-05 09:09:08 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-05 09:10:32 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-05 09:10:32 - floosball.websocket - INFO - WebSocket ConnectionManager initialized

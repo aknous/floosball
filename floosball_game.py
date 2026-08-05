@@ -7602,10 +7602,9 @@ class Game:
                     self.consumeGameTime(playDuration)
                     self.play.stampClock()
                     self.checkTwoMinuteWarning()
-                    # A returner tackled IN BOUNDS does not stop the clock. A fair
-                    # catch, touchback or muff does. Stopping it on every punt gave
-                    # the next snap a free huddle and inflated the play count.
-                    self.clockRunning = (action == 'return')
+                    # A punt is a change of possession, so the clock stops
+                    # regardless of whether the returner was tackled in bounds.
+                    self.clockRunning = False
 
                     # ── Muff: a live ball. The kicking team recovering it is the
                     #    single biggest swing on a punt, and it did not exist before. ──
@@ -11500,10 +11499,7 @@ class Game:
         if self.play.playType == PlayType.FieldGoal:
             return False
         if self.play.playType == PlayType.Punt:
-            # A returner tackled IN BOUNDS keeps the clock running; a fair catch,
-            # touchback or muff kills it. The punt branch sets clockRunning
-            # directly and breaks, so this is the fallback for any other caller.
-            return getattr(self.play, 'puntAction', None) == 'return'
+            return False   # change of possession — clock stops either way
         if self.play.playType == PlayType.Spike:
             return False
         if self.play.scoreChange:

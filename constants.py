@@ -1002,11 +1002,10 @@ PUNT_COFFIN_BASE = 0.34
 PUNT_COFFIN_ACC_K = 0.40
 PUNT_COFFIN_TOUCHBACK = 0.30    # a missed coffin corner sails through
 PUNT_TOUCHBACK_TO = 20          # touchback spots the ball here
-# Punt clock. A punt used to burn 4-6s (snap to kick) and ALWAYS stop the clock.
-# Neither is right: the ball hangs, the return takes time, and a returner tackled
-# in bounds does NOT stop the clock. Punts stopping the clock every single time
-# also gifted the next snap a free ~35s huddle, which feeds the plays-per-game
-# problem (the sim runs ~70 scrimmage plays a team against a real ~63).
+# Punt clock. A punt burned only 4-6s (snap to kick) -- but the ball hangs and the
+# return takes time, so the live-ball portion is far longer than that. The clock
+# still STOPS after a punt regardless of whether the returner was tackled in
+# bounds, because a punt is a change of possession.
 PUNT_HANG_SECONDS = (3, 5)      # snap-to-catch hang on top of the kick itself
 PUNT_RETURN_SECS_PER_YARD = 0.32
 # Punt returns. Without these, gross average IS net average and the ball is downed
