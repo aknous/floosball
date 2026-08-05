@@ -3285,7 +3285,8 @@ class Game:
         if self.down == 1:
             # 1st down: balanced 50/50 base. Most plays happen here, so
             # this is the biggest lever on overall pass/run ratio.
-            return {'run': 50.0, 'short': 22.0, 'medium': 18.0, 'long': 8.0, 'deep': 2.0}
+            from constants import FIRST_DOWN_RUN_WEIGHT as _FDR
+            return {'run': _FDR, 'short': 22.0, 'medium': 18.0, 'long': 8.0, 'deep': 2.0}
         elif self.down == 2:
             if ytg <= 4:
                 # 2nd & short — run preferred (was already).
@@ -15121,14 +15122,15 @@ class Play():
                     yac = 0
                     if passYards < self.yardsToEndzone:
                         # Bad throws can't be caught in stride — limits all YAC.
+                        from constants import YAC_THROW_MULT as _YTM
                         if throwQuality >= 80:
-                            throwYacMult = 1.0
+                            throwYacMult = _YTM['elite']
                         elif throwQuality >= 60:
-                            throwYacMult = 0.75
+                            throwYacMult = _YTM['good']
                         elif throwQuality >= 40:
-                            throwYacMult = 0.45
+                            throwYacMult = _YTM['poor']
                         else:
-                            throwYacMult = 0.20
+                            throwYacMult = _YTM['bad']
 
                         # Sideline cap from receiver discipline (heads for boundary).
                         if self.targetSideline:
@@ -15158,11 +15160,17 @@ class Play():
                         # caught with defenders converging, so the chase-down
                         # outcome caps tighter. Mirrors the run game's bounded
                         # gate yardage — no stage can produce unbounded YAC.
+                        from constants import YAC_GATE_A_FAIL_CAP as _YFC
+                        from constants import YAC_TIER_CAPS as _YTC
+                        def _tc(name):
+                            t = _YTC[name]
+                            return {'gateAFail': _YFC, 'gateAPass': t['pass'],
+                                    'gateBFail': t['bFail'], 'housecallMean': t['house']}
                         yacCaps = {
-                            PassType.short:    {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 8,  'housecallMean': 12},
-                            PassType.medium:   {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 10, 'housecallMean': 12},
-                            PassType.long:     {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 12, 'housecallMean': 14},
-                            PassType.deep:     {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 15, 'housecallMean': 14},
+                            PassType.short:    _tc('short'),
+                            PassType.medium:   _tc('medium'),
+                            PassType.long:     _tc('long'),
+                            PassType.deep:     _tc('deep'),
                             PassType.hailMary: {'gateAFail': 2, 'gateAPass': 5, 'gateBFail': 10, 'housecallMean': 10},
                         }
                         caps = yacCaps.get(self.passType, yacCaps[PassType.medium])
@@ -15175,7 +15183,8 @@ class Play():
                                      self.receiver.gameAttributes.routeRunning * 0.2) / 2
                         slipPower += receiverPressureMod
                         slipExec = (4 if throwQuality >= 75 else 0) + (4 if self.selectedTarget['openness'] >= 70 else 0)
-                        gateAChance = max(8, min(45, 22 + (slipPower - slipDef) * 0.9 + slipExec))
+                        from constants import YAC_GATE_A_BASE as _YGB, YAC_GATE_A_CAP as _YGC
+                        gateAChance = max(8, min(_YGC, _YGB + (slipPower - slipDef) * 0.9 + slipExec))
 
                         # GATE B — open field (speed vs deep coverage).
                         rcvSpeed = (self.receiver.gameAttributes.speed * 1.7 +

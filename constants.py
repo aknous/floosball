@@ -962,9 +962,49 @@ SACK_PROB_CAP = float(_os.environ.get('FLOOS_SACK_CAP', '30'))      # ceiling on
 PASS_DEPTH_MEANS = {
     'short': float(_os.environ.get('FLOOS_DEPTH_SHORT', '3.5')),
     'medium': float(_os.environ.get('FLOOS_DEPTH_MEDIUM', '8.5')),
-    'long': float(_os.environ.get('FLOOS_DEPTH_LONG', '15.5')),
-    'deep': float(_os.environ.get('FLOOS_DEPTH_DEEP', '25.0')),
+    'long': float(_os.environ.get('FLOOS_DEPTH_LONG', '17.5')),
+    'deep': float(_os.environ.get('FLOOS_DEPTH_DEEP', '28.0')),
 }
+
+# YAC shape. The sim is dink-and-dunk: it throws MORE than real football and
+# completes MORE, but each completion is tiny (Y/C 8.3 vs ~11.2, YAC 33% vs ~50%).
+# Two suppressors -- a receiver slips the first tackler only ~25-35% of the time
+# (YAC_GATE_A_BASE / _CAP), and YAC_THROW_MULT then cuts everything again by 0.75
+# for an average 66.6 throw. Fixing this ALONE would overshoot yards and scoring,
+# so it is paired with fewer attempts (see FIRST_DOWN_RUN_WEIGHT) to keep total
+# yardage flat: the same yards from fewer, longer completions.
+# Per-tier YAC ceilings. These were nearly FLAT across tiers -- a short pass had
+# almost the same explosive ceiling as a deep one (housecall mean 12 vs 14) -- so
+# most big pass plays were short throws with a long run after, and a called "long"
+# play could travel 10 yards through the air and still be the shorter gain. Big
+# plays should come from genuine downfield throws. Tightening the short tiers and
+# lengthening the deep air bands REDISTRIBUTES yardage rather than adding it.
+YAC_TIER_CAPS = {
+    'short':  {'pass': int(_os.environ.get('FLOOS_YACC_S_P', '4')),
+               'bFail': int(_os.environ.get('FLOOS_YACC_S_B', '5')),
+               'house': int(_os.environ.get('FLOOS_YACC_S_H', '7'))},
+    'medium': {'pass': int(_os.environ.get('FLOOS_YACC_M_P', '6')),
+               'bFail': int(_os.environ.get('FLOOS_YACC_M_B', '8')),
+               'house': int(_os.environ.get('FLOOS_YACC_M_H', '10'))},
+    'long':   {'pass': 6, 'bFail': 12, 'house': 14},
+    'deep':   {'pass': 6, 'bFail': 15, 'house': 14},
+}
+YAC_GATE_A_BASE = float(_os.environ.get('FLOOS_YAC_BASE', '22'))
+YAC_GATE_A_CAP = float(_os.environ.get('FLOOS_YAC_CAP', '45'))
+YAC_GATE_A_FAIL_CAP = int(_os.environ.get('FLOOS_YAC_FAILCAP', '3'))
+# throwQuality -> YAC multiplier. Average league throw quality is ~66.6, so the
+# 60-79 band is the one that matters most for league-wide YAC.
+YAC_THROW_MULT = {
+    'elite': float(_os.environ.get('FLOOS_YACM_ELITE', '1.0')),   # >= 80
+    'good': float(_os.environ.get('FLOOS_YACM_GOOD', '0.75')),    # 60-79
+    'poor': float(_os.environ.get('FLOOS_YACM_POOR', '0.45')),    # 40-59
+    'bad': float(_os.environ.get('FLOOS_YACM_BAD', '0.20')),      # < 40
+}
+# 1st-down run weight -- the single biggest lever on the league pass/run split
+# (most plays happen on 1st down). 50 = the balanced base; raising it cuts pass
+# attempts, which is what makes room for longer completions without inflating
+# total yardage.
+FIRST_DOWN_RUN_WEIGHT = float(_os.environ.get('FLOOS_FD_RUN', '50'))
 
 # ---- Run Gate Model (three stages with carrier momentum) ----
 # A carry is three contests: the line, the second level, the open field. What
