@@ -18,7 +18,7 @@ import managers.cardEffects as ce
 from managers.cardEffectCalculator import CardCalcContext
 from managers.fantasyTracker import _dbStatsToCardFormat
 
-WR, TE, RB, K = 3, 4, 2, 5
+QB, RB, WR, TE, K = 1, 2, 3, 4, 5
 
 
 def _ctx(stats, pid=1, streak=1):
@@ -50,6 +50,16 @@ P90 = {
     'rb': _dbStatsToCardFormat({}, {'yards': 209, 'yardsAfterContact': 190}, {}, {}, 28, 5),
     'k':  _dbStatsToCardFormat({}, {}, {}, {'puntsInside20': 4, 'puntsInside10': 2}, 12, 5),
 }
+
+
+def testReceptionCardsNoLongerDrift():
+    """Possession (WR) and Safety Blanket (TE) are the same mechanic on two positions.
+    They drifted to 2.47 and 5.5 FP per reception against volumes of 9.35 and 8.22 a
+    game, leaving the TE card measuring 47.0 FP/week and the WR one 21.4."""
+    wr, _ = _score('possession', WR, MEAN['wr'])
+    te, _ = _score('safety_blanket', TE, MEAN['te'])
+    assert abs(wr - te) < 4, f"reception cards still disagree: WR {wr}, TE {te}"
+    assert 22 <= wr <= 34 and 22 <= te <= 34
 
 
 def testMetallicRungsLandOnTheAnchorOnEveryPosition():
@@ -99,10 +109,43 @@ def testPromisedLandSurvivesFractionalTds():
     assert fp > 0
 
 
+QB_MEAN = _dbStatsToCardFormat(
+    {'yards': 229.9, 'goodThrows': 13.4, 'badThrows': 1.56, 'throws': 37.8}, {}, {}, {}, 24, 5)
+QB_P90 = _dbStatsToCardFormat(
+    {'yards': 332, 'goodThrows': 28, 'badThrows': 0, 'throws': 51}, {}, {}, {}, 34, 5)
+
+
+def testQbFamiliesHoldTheirTypicalWeek():
+    for effect in ('gunslinger', 'updraft'):
+        fp, _ = _score(effect, QB, QB_MEAN)
+        assert 22 <= fp <= 34, f"{effect} paid {fp} on a mean week"
+    for effect in ('slipstream', 'marksman'):
+        _, d = _score(effect, QB, QB_MEAN)
+        assert 0.07 <= d <= 0.13, f"{effect} paid {d:.3f} FPx on a mean week"
+
+
+def testMarksmanCleanSheetDoesNotFireOnATypicalWeek():
+    """A QB throws ~1.6 bad balls a game, so a clean sheet is genuinely rare."""
+    _, mean = _score('marksman', QB, QB_MEAN)
+    _, p90 = _score('marksman', QB, QB_P90)      # 0 bad throws
+    assert p90 > mean * 2, f"clean-sheet bonus barely registers: {mean:.3f} -> {p90:.3f}"
+
+
+def testGunslingerStillScoresOnAPreRepointCard():
+    """Params are frozen at mint, so a card minted before Gunslinger moved from pass
+    yards to throw quality still carries perHundredYardsFP. Without the fallback it
+    would silently read zero for a whole season."""
+    legacy = {'effectName': 'gunslinger',
+              'primary': {'rewardType': 'fp', 'perHundredYardsFP': 13.5}}
+    r = ce.computeEffect(legacy, _ctx(QB_MEAN), 1, 99)
+    assert r.fpBonus > 0, "a pre-re-point Gunslinger scores nothing"
+
+
 def testEveryLadderEffectIsFullyRegistered():
     NEW = ['frontier', 'territory', 'dominion', 'freight', 'grinder', 'landslide',
            'pinpoint', 'coffin_corner', 'undertaker', 'paydirt', 'end_zone',
-           'promised_land']
+           'promised_land', 'slipstream', 'updraft', 'stratosphere', 'marksman',
+           'dead_eye']
     for e in NEW:
         assert e in ce.EFFECT_REGISTRY, f"{e} missing from EFFECT_REGISTRY"
         assert e in ce.EFFECT_EDITION_TIER, f"{e} missing an edition"
@@ -116,7 +159,9 @@ def testLadderEffectsOnlyMintWhereTheStatExists():
     expect = {'frontier': {WR, TE}, 'territory': {WR, TE}, 'dominion': {WR, TE},
               'paydirt': {WR, TE}, 'end_zone': {WR, TE}, 'promised_land': {WR, TE},
               'freight': {RB}, 'grinder': {RB}, 'landslide': {RB},
-              'pinpoint': {K}, 'coffin_corner': {K}, 'undertaker': {K}}
+              'pinpoint': {K}, 'coffin_corner': {K}, 'undertaker': {K},
+              'slipstream': {QB}, 'updraft': {QB}, 'stratosphere': {QB},
+              'marksman': {QB}, 'dead_eye': {QB}, 'gunslinger': {QB}}
     for e, positions in expect.items():
         assert ce.effectValidPositions(e) == positions, \
             f"{e} mints on {ce.effectValidPositions(e)}, expected {positions}"

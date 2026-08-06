@@ -113,6 +113,8 @@ EFFECT_CATEGORY = {
     # Stat ladder families — the compute functions read the card player directly, so
     # category only drives param-builder dispatch and output typing.
     "frontier": "flat_fp", "territory": "multiplier", "dominion": "multiplier",
+    "slipstream": "multiplier", "updraft": "flat_fp", "stratosphere": "multiplier",
+    "marksman": "multiplier", "dead_eye": "multiplier",
     "freight": "flat_fp", "grinder": "multiplier", "landslide": "multiplier",
     "pinpoint": "flat_fp", "coffin_corner": "multiplier", "undertaker": "multiplier",
     "paydirt": "multiplier", "end_zone": "flat_fp", "promised_land": "flat_fp",
@@ -135,6 +137,8 @@ EFFECT_OUTPUT_TYPE = {
     # ── Concrete FP output ──
     # Stat ladder families
     "frontier": "fp", "territory": "fpx", "dominion": "fpx",
+    "slipstream": "fpx", "updraft": "fp", "stratosphere": "fpx",
+    "marksman": "fpx", "dead_eye": "fpx",
     "freight": "fp", "grinder": "fpx", "landslide": "fpx",
     "pinpoint": "fp", "coffin_corner": "fpx", "undertaker": "fpx",
     "paydirt": "fpx", "end_zone": "fp", "promised_land": "fp",
@@ -325,6 +329,8 @@ EFFECT_EDITION_TIER = {
     # One stat, three rungs, each containing the one below: metallic pays a flat rate,
     # holographic adds a conditional bonus, prismatic adds a streak or chance.
     "frontier": "metallic", "territory": "holographic", "dominion": "prismatic",
+    "slipstream": "metallic", "updraft": "holographic", "stratosphere": "prismatic",
+    "marksman": "holographic", "dead_eye": "prismatic",
     "freight": "metallic", "grinder": "holographic", "landslide": "prismatic",
     "pinpoint": "metallic", "coffin_corner": "holographic", "undertaker": "prismatic",
     "paydirt": "metallic", "end_zone": "holographic", "promised_land": "prismatic",
@@ -407,6 +413,8 @@ def _positionConditionalBonus(raw: int) -> int:
 EFFECT_DISPLAY_NAMES = {
     # Stat ladder families
     "frontier": "Frontier", "territory": "Territory", "dominion": "Dominion",
+    "slipstream": "Slipstream", "updraft": "Updraft", "stratosphere": "Stratosphere",
+    "marksman": "Marksman", "dead_eye": "Dead Eye",
     "freight": "Freight", "grinder": "Grinder", "landslide": "Landslide",
     "pinpoint": "Pinpoint", "coffin_corner": "Coffin Corner", "undertaker": "Undertaker",
     "paydirt": "Paydirt", "end_zone": "End Zone", "promised_land": "Promised Land",
@@ -577,6 +585,11 @@ STAT_DISPLAY_NAMES = {
 
 EFFECT_TAGLINES = {
     # Stat ladder families
+    "slipstream": "Riding the air",
+    "updraft": "Catching a lift",
+    "stratosphere": "Thin air up here",
+    "marksman": "Nothing wasted",
+    "dead_eye": "Never off target",
     "frontier": "Always pushing out",
     "territory": "Claiming ground",
     "dominion": "The whole field",
@@ -740,6 +753,11 @@ EFFECT_TAGLINES = {
 
 EFFECT_TOOLTIPS = {
     # Stat ladder families
+    "slipstream": "The ball hangs and the yards pile up. FPx scaling with passing yards.",
+    "updraft": "Some days the ball just carries. FP on every passing yard, with more at 300, 400 and 500.",
+    "stratosphere": "Territory most passers never see. FPx on passing yards, plus a streak for every big week.",
+    "marksman": "FPx on every well-placed ball, and more for a week without a single bad throw.",
+    "dead_eye": "FPx on well-placed balls, plus a streak for every week with nothing off target.",
     "frontier": "Every yard is new ground. FP for every receiving yard.",
     "territory": "FPx on every receiving yard, with more at 75, 125 and 175.",
     "dominion": "FPx on receiving yards, plus a streak for every hundred-yard week.",
@@ -903,6 +921,11 @@ EFFECT_TOOLTIPS = {
 
 EFFECT_DETAIL_TEMPLATES = {
     # Stat ladder families
+    "slipstream": "+{per100Mult} FPx per 100 passing yards by this player",
+    "updraft": "+{perYardFP} FP per passing yard, +{gateFP} bonus at each of {gates}",
+    "stratosphere": "+{per100Mult} FPx per 100 passing yards, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "marksman": "+{per5Mult} FPx per 5 well-placed throws, +{cleanSheetMult} more on 0 bad throws",
+    "dead_eye": "+{per5Mult} FPx per 5 well-placed throws, plus a streak growing {growthPerTick} FPx per clean sheet",
     "frontier": "+{perYardFP} FP per receiving yard by this player",
     "territory": "+{per50Mult} FPx per 50 receiving yards, +{gateMult} more at 75, 125 and 175",
     "dominion": "+{per50Mult} FPx per 50 receiving yards, plus a streak growing {growthPerTick} FPx per week past {threshold}",
@@ -1204,6 +1227,7 @@ SHARED_EFFECT_POOL = [
 
 POSITION_EXCLUSIVE_POOLS = {
     1: ["gunslinger", "air_raid", "stack", "backfield_buddies",
+        "slipstream", "updraft", "stratosphere", "marksman", "dead_eye",
         "crescendo", "traverse"],
     2: ["workhorse", "expedition", "stampede", "goal_line_vulture",
         "freight", "grinder", "landslide",
@@ -1280,6 +1304,8 @@ STREAK_CONFIGS = {
     "dominion":     {"resetCondition": "card_player_100_rec_yards", "isWeekly": False},
     "landslide":    {"resetCondition": "card_player_100_contact_yards", "isWeekly": False},
     "undertaker":   {"resetCondition": "card_player_multi_pin", "isWeekly": False},
+    "stratosphere": {"resetCondition": "card_player_big_passing_week", "isWeekly": False},
+    "dead_eye":     {"resetCondition": "card_player_clean_sheet", "isWeekly": False},
 }
 
 # ─── Cultivation Trigger Pool ────────────────────────────────────────────────
@@ -1499,6 +1525,10 @@ _LADDER_VOLUMES = {
     "yac":       {2: 87.5},
     "puntsIn20": {5: 2.03},
     "recTds":    {3: 0.40, 4: 0.26},
+    "receptions": {3: 9.35, 4: 8.22},
+    "fgMade":    {5: 1.98},
+    "goodThrows": {1: 13.4},   # GOOD_THROW_THRESHOLD 76 -> 35% of throws
+    "passYards": {1: 229.9},
 }
 # A metallic flat card should mean this much FP in a typical week (Freebie measures 26.0).
 _LADDER_FP_ANCHOR = 26.0
@@ -1538,6 +1568,11 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
     rn = playerRating - 60
 
     # ── Stat ladder: metallic flat rungs ──
+    if effectName == "updraft":
+        vol = _ladderVolume("passYards", position, 229.9)
+        return {"perYardFP": round(_LADDER_FP_ANCHOR / vol, 3),
+                "gateFP": round(_LADDER_FP_ANCHOR * 0.35, 1),
+                "gates": [int(round(vol * m)) for m in (1.3, 1.7, 2.1)]}
     if effectName == "frontier":
         return {"perYardFP": _ladderFpRate("recYards", position, 83.5, 0.004, rn)}
     if effectName == "freight":
@@ -1586,7 +1621,9 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
                 "maxMult": round(1 + (0.42 + rn * 0.014) * editionScale * _BAL_FPX_MULT, 2),
                 "fpThreshold": 15}
     if effectName == "three_pointer":
-        return {"perFgFP": round((25.0 + rn * 0.81) * editionScale * _BAL_FP_MULT, 1)}
+        # Measured 39.0 FP/week, second highest at metallic, off only 1.98 FGs a game.
+        # Sized from the volume table like the rest of the flat rungs.
+        return {"perFgFP": _ladderFpRate("fgMade", position, 1.98, 0.004, rn)}
     if effectName == "garbage_time":
         return {"perPlayerFP": round((13.5 + rn * 0.54) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "loyalty_bonus":
@@ -1605,7 +1642,11 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
                 "rewardValue": round((42 + rn * 1.50) * editionScale * _BAL_FP_MULT, 1),
                 "stat": "recYards", "threshold": 125}
     if effectName == "possession":
-        return {"perReceptionFP": round((2.7 + rn * 0.081) * editionScale * _BAL_FP_MULT, 2)}
+        # Sized from the volume table, same as safety_blanket. These two are the SAME
+        # mechanic on two positions and drifted to 2.47 and 5.5 FP per reception against
+        # volumes of 9.35 and 8.22 a game — the TE card paid 96% more per catch for 12%
+        # less volume and measured 47.0 FP/week, the highest of any metallic card.
+        return {"perReceptionFP": _ladderFpRate("receptions", position, 9.35, 0.004, rn)}
     if effectName == "slippery":
         return {"perYacFP": round((1.02 + rn * 0.054) * editionScale * _BAL_FP_MULT, 2)}
     if effectName == "jailbreak":
@@ -1624,7 +1665,9 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         return {"baseFP": round((13.5 + rn * 0.54) * editionScale * _BAL_FP_MULT, 1),
                 "perStreakFP": round((5.4 + rn * 0.27) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "safety_blanket":
-        return {"rewardType": "fp", "perReceptionFP": round((5.3 + rn * 0.21) * editionScale * _BAL_FP_MULT, 1)}
+        # See possession — one rate source for both, so the TE and WR prints stay in step.
+        return {"rewardType": "fp",
+                "perReceptionFP": _ladderFpRate("receptions", position, 8.22, 0.004, rn)}
     if effectName == "lead_blocker":
         return {"rewardType": "fp", "perTdFP": round((43.0 + rn * 2.16) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "sniper":
@@ -1693,6 +1736,22 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
     """FPx param builder. See `_buildFlatFPParams` for the Balatro dial note."""
     rn = playerRating - 60
     # ── Stat ladder: FPx rungs ──
+    if effectName == "slipstream":
+        return {"rewardType": "mult",
+                "per100Mult": _ladderFpxRate("passYards", position, 229.9, 100)}
+    if effectName == "stratosphere":
+        vol = _ladderVolume("passYards", position, 229.9)
+        return {"rewardType": "mult",
+                "per100Mult": round(_ladderFpxRate("passYards", position, 229.9, 100) * 0.55, 2),
+                "growthPerTick": 0.03, "threshold": int(round(vol * 1.3)), "isStreak": True}
+    if effectName == "marksman":
+        return {"rewardType": "mult",
+                "per5Mult": _ladderFpxRate("goodThrows", position, 13.4, 5),
+                "cleanSheetMult": round(_LADDER_FPX_TARGET * 0.65, 2)}
+    if effectName == "dead_eye":
+        return {"rewardType": "mult",
+                "per5Mult": round(_ladderFpxRate("goodThrows", position, 13.4, 5) * 0.55, 2),
+                "growthPerTick": 0.03, "isStreak": True}
     if effectName == "territory":
         # Gates must sit ABOVE a typical week or the bonus is not conditional at all.
         # Derived from this position's own mean: 1.2x / 1.7x / 2.3x.
@@ -1811,7 +1870,11 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
                 "singleWrFP": round((15.0 + rn * 0.62) * editionScale * _BAL_FP_MULT, 1),
                 "rewardValue": round((35.0 + rn * 1.38) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "gunslinger":
-        return {"rewardType": "fp", "perHundredYardsFP": round((13.5 + rn * 0.42) * editionScale * _BAL_FP_MULT, 1)}
+        # RE-POINTED from pass yards to throw quality (docs/CARD_STAT_LADDER.md). The name
+        # read as marksmanship while the card measured yardage; it now sits on the stat it
+        # describes. Pass yards moved to Slipstream. Needs GOOD_THROW_THRESHOLD's counter.
+        return {"rewardType": "fp",
+                "perGoodThrowFP": _ladderFpRate("goodThrows", position, 13.4, 0.004, rn)}
     if effectName == "air_raid":
         # Floobits output — left alone
         return {"rewardType": "floobits", "perTdFloobits": int(round((6 + rn * 0.3) * editionScale))}
@@ -3699,14 +3762,21 @@ def _getStatValue(playerStats: dict, statKey: str) -> float:
 # ── New Position-Based Effects ────────────────────────────────────────────────
 
 def _computeGunslinger(primary, ctx, cardPlayerId, eqId):
-    """FP scaling with QB slot's pass yards."""
-    perHundredFP = primary.get("perHundredYardsFP", 6.0)
-    stats = _getCardPlayerStats(ctx, cardPlayerId)
-    passYards = stats.get("passing_stats", {}).get("passYards", 0) if isinstance(stats.get("passing_stats"), dict) else 0
-    chunks = passYards / 100.0
-    fp = round(perHundredFP * chunks, 1)
-    eq = f"{perHundredFP} FP/100yds × {passYards} pass yds = +{fp} FP"
-    return EffectResult(fpBonus=fp, equation=eq)
+    """FP per well-placed ball by this player.
+
+    Was pass yards; re-pointed onto the goodThrows counter so the marksmanship name
+    matches the stat. Falls back to the old param so any card minted before the change
+    still scores its original effect rather than silently reading zero.
+    """
+    per = primary.get("perGoodThrowFP")
+    if per is None:
+        legacy = primary.get("perHundredYardsFP", 6.0)
+        yards = _ladderStat(ctx, cardPlayerId, "passing_stats", "passYards")
+        fp = round(legacy * yards / 100.0, 1)
+        return EffectResult(fpBonus=fp, equation=f"{legacy} FP/100yds x {yards} pass yds")
+    good = _ladderStat(ctx, cardPlayerId, "passing_stats", "goodThrows")
+    return EffectResult(fpBonus=round(per * good, 1),
+                        equation=f"{per}/throw x {good} well-placed")
 
 
 def _computeAirRaid(primary, ctx, cardPlayerId, eqId):
@@ -5117,10 +5187,81 @@ def _computePromisedLand(primary, ctx, cardPlayerId, eqId):
                         equation=f"+{base} FP. {tds} TD rolled, none hit")
 
 
+# ── Pass yards: Slipstream -> Updraft -> Stratosphere ──
+def _computeSlipstream(primary, ctx, cardPlayerId, eqId):
+    """FPx per 100 passing yards by this player."""
+    per100 = primary.get("per100Mult", 0.04)
+    yards = _ladderStat(ctx, cardPlayerId, "passing_stats", "passYards")
+    delta = per100 * (yards / 100.0)
+    if delta <= 0:
+        return EffectResult(equation="no passing yards")
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({yards} pass yds)")
+
+
+def _computeUpdraft(primary, ctx, cardPlayerId, eqId):
+    """FP per passing yard, with a step at each yardage gate."""
+    per = primary.get("perYardFP", 0.11)
+    gateFP = primary.get("gateFP", 9.0)
+    gates = primary.get("gates", [300, 390, 480])
+    yards = _ladderStat(ctx, cardPlayerId, "passing_stats", "passYards")
+    cleared = sum(1 for g in gates if yards >= g)
+    total = per * yards + gateFP * cleared
+    return EffectResult(fpBonus=round(total, 1),
+                        equation=f"{per}/yd x {yards} yds, {cleared}/{len(gates)} gates")
+
+
+def _computeStratosphere(primary, ctx, cardPlayerId, eqId):
+    """FPx per 100 passing yards, plus a streak of big weeks."""
+    per100 = primary.get("per100Mult", 0.02)
+    yards = _ladderStat(ctx, cardPlayerId, "passing_stats", "passYards")
+    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    delta = per100 * (yards / 100.0) + streak
+    if delta <= 0:
+        return EffectResult(equation="no passing yards")
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({yards} yds + {count} wk streak)")
+
+
+# ── Throw quality: Gunslinger -> Marksman -> Dead Eye ──
+def _computeMarksman(primary, ctx, cardPlayerId, eqId):
+    """FPx per well-placed ball, with more for a week without a bad throw."""
+    per5 = primary.get("per5Mult", 0.04)
+    clean = primary.get("cleanSheetMult", 0.07)
+    good = _ladderStat(ctx, cardPlayerId, "passing_stats", "goodThrows")
+    bad = _ladderStat(ctx, cardPlayerId, "passing_stats", "badThrows")
+    threw = _ladderStat(ctx, cardPlayerId, "passing_stats", "throws")
+    delta = per5 * (good / 5.0)
+    # A clean sheet only counts if they actually threw; 0 attempts is not accuracy.
+    sheet = threw > 0 and bad == 0
+    if sheet:
+        delta += clean
+    if delta <= 0:
+        return EffectResult(equation="no well-placed throws")
+    tail = ", no bad throws" if sheet else ""
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({good} well-placed{tail})")
+
+
+def _computeDeadEye(primary, ctx, cardPlayerId, eqId):
+    """FPx per well-placed ball, plus a streak of clean sheets."""
+    per5 = primary.get("per5Mult", 0.02)
+    good = _ladderStat(ctx, cardPlayerId, "passing_stats", "goodThrows")
+    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    delta = per5 * (good / 5.0) + streak
+    if delta <= 0:
+        return EffectResult(equation="no well-placed throws")
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({good} well-placed + {count} wk streak)")
+
+
 # ─── Effect Registry ─────────────────────────────────────────────────────────
 
 EFFECT_REGISTRY = {
     # Stat ladder families
+    "slipstream": _computeSlipstream, "updraft": _computeUpdraft,
+    "stratosphere": _computeStratosphere,
+    "marksman": _computeMarksman, "dead_eye": _computeDeadEye,
     "frontier": _computeFrontier, "territory": _computeTerritory,
     "dominion": _computeDominion,
     "freight": _computeFreight, "grinder": _computeGrinder,
@@ -5566,6 +5707,14 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
         # Key name kept as "roster_under_50fp" for backwards-compat with
         # stored STREAK_CONFIGS — no DB migration needed.
         return (ctx.weekRawFP or 0) < 35
+
+    if condition == "card_player_big_passing_week":
+        return _ladderStat(ctx, cardPlayerId, "passing_stats", "passYards") >= 300
+
+    if condition == "card_player_clean_sheet":
+        # Zero bad throws, but only if they actually threw the ball.
+        return (_ladderStat(ctx, cardPlayerId, "passing_stats", "throws") > 0
+                and _ladderStat(ctx, cardPlayerId, "passing_stats", "badThrows") == 0)
 
     if condition == "card_player_100_rec_yards":
         return _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvYards") >= 100
