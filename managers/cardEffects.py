@@ -115,6 +115,14 @@ EFFECT_CATEGORY = {
     "frontier": "flat_fp", "territory": "multiplier", "dominion": "multiplier",
     "slipstream": "multiplier", "updraft": "flat_fp", "stratosphere": "multiplier",
     "marksman": "multiplier", "dead_eye": "multiplier",
+    "cadence": "flat_fp", "rhythm": "multiplier", "clockwork": "multiplier",
+    "beast_of_burden": "multiplier", "iron_man": "multiplier",
+    "odyssey": "multiplier", "battering_ram": "multiplier",
+    "custody": "multiplier", "tenure": "multiplier", "getaway": "multiplier",
+    "runback": "flat_fp", "house_call": "flat_fp",
+    "attention": "multiplier", "altitude": "flat_fp", "haymaker": "flat_fp",
+    "highpoint": "flat_fp", "breakaway": "flat_fp",
+    "houdini": "flat_fp", "custodian": "flat_fp",
     "freight": "flat_fp", "grinder": "multiplier", "landslide": "multiplier",
     "pinpoint": "flat_fp", "coffin_corner": "multiplier", "undertaker": "multiplier",
     "paydirt": "multiplier", "end_zone": "flat_fp", "promised_land": "flat_fp",
@@ -139,6 +147,13 @@ EFFECT_OUTPUT_TYPE = {
     "frontier": "fp", "territory": "fpx", "dominion": "fpx",
     "slipstream": "fpx", "updraft": "fp", "stratosphere": "fpx",
     "marksman": "fpx", "dead_eye": "fpx",
+    "cadence": "fp", "rhythm": "fpx", "clockwork": "fpx",
+    "beast_of_burden": "fpx", "iron_man": "fpx",
+    "odyssey": "fpx", "battering_ram": "fpx",
+    "custody": "fpx", "tenure": "fpx", "getaway": "fpx",
+    "runback": "fp", "house_call": "fp",
+    "attention": "fpx", "altitude": "fp", "haymaker": "fp",
+    "highpoint": "fp", "breakaway": "fp", "houdini": "fp", "custodian": "fp",
     "freight": "fp", "grinder": "fpx", "landslide": "fpx",
     "pinpoint": "fp", "coffin_corner": "fpx", "undertaker": "fpx",
     "paydirt": "fpx", "end_zone": "fp", "promised_land": "fp",
@@ -331,6 +346,14 @@ EFFECT_EDITION_TIER = {
     "frontier": "metallic", "territory": "holographic", "dominion": "prismatic",
     "slipstream": "metallic", "updraft": "holographic", "stratosphere": "prismatic",
     "marksman": "holographic", "dead_eye": "prismatic",
+    "cadence": "metallic", "rhythm": "holographic", "clockwork": "prismatic",
+    "beast_of_burden": "holographic", "iron_man": "prismatic",
+    "odyssey": "prismatic", "battering_ram": "metallic",
+    "custody": "holographic", "tenure": "prismatic", "getaway": "prismatic",
+    "runback": "metallic", "house_call": "prismatic",
+    "attention": "metallic", "altitude": "holographic", "haymaker": "holographic",
+    "highpoint": "holographic", "breakaway": "holographic",
+    "houdini": "prismatic", "custodian": "prismatic",
     "freight": "metallic", "grinder": "holographic", "landslide": "prismatic",
     "pinpoint": "metallic", "coffin_corner": "holographic", "undertaker": "prismatic",
     "paydirt": "metallic", "end_zone": "holographic", "promised_land": "prismatic",
@@ -415,6 +438,16 @@ EFFECT_DISPLAY_NAMES = {
     "frontier": "Frontier", "territory": "Territory", "dominion": "Dominion",
     "slipstream": "Slipstream", "updraft": "Updraft", "stratosphere": "Stratosphere",
     "marksman": "Marksman", "dead_eye": "Dead Eye",
+    "cadence": "Cadence", "rhythm": "Rhythm", "clockwork": "Clockwork",
+    "beast_of_burden": "Beast of Burden", "iron_man": "Iron Man",
+    "odyssey": "Odyssey", "battering_ram": "Battering Ram",
+    "custody": "Custody", "tenure": "Tenure", "getaway": "Getaway",
+    "runback": "Runback", "house_call": "House Call",
+    "attention": "Attention", "altitude": "Altitude", "haymaker": "Haymaker",
+    "highpoint": "Highpoint", "breakaway": "Breakaway",
+    "houdini": "Houdini", "custodian": "Custodian",
+    # Stampede renamed to join the rush-yards journey motif (Expedition -> Odyssey).
+    "stampede": "Trailblazer",
     "freight": "Freight", "grinder": "Grinder", "landslide": "Landslide",
     "pinpoint": "Pinpoint", "coffin_corner": "Coffin Corner", "undertaker": "Undertaker",
     "paydirt": "Paydirt", "end_zone": "End Zone", "promised_land": "Promised Land",
@@ -482,7 +515,6 @@ EFFECT_DISPLAY_NAMES = {
     "air_raid": "Air Raid",
     "workhorse": "Workhorse",
     "expedition": "Expedition",
-    "stampede": "Stampede",
     "goal_line_vulture": "Goal Line Vulture",
     "possession": "Possession",
     "trebuchet": "Trebuchet",
@@ -585,6 +617,25 @@ STAT_DISPLAY_NAMES = {
 
 EFFECT_TAGLINES = {
     # Stat ladder families
+    "cadence": "Keep the chains moving",
+    "rhythm": "Finding a groove",
+    "clockwork": "Never misses a beat",
+    "beast_of_burden": "Carrying the load",
+    "iron_man": "Never comes off the field",
+    "odyssey": "The long road",
+    "battering_ram": "Straight through",
+    "custody": "Safe hands",
+    "tenure": "Long service",
+    "getaway": "Gone",
+    "runback": "Bring it out",
+    "house_call": "All the way",
+    "attention": "Feed the target",
+    "altitude": "Throwing it deep",
+    "haymaker": "Swinging big",
+    "highpoint": "Above the crowd",
+    "breakaway": "Gone in a blink",
+    "houdini": "Impossible to corner",
+    "custodian": "Cleaning up",
     "slipstream": "Riding the air",
     "updraft": "Catching a lift",
     "stratosphere": "Thin air up here",
@@ -753,6 +804,25 @@ EFFECT_TAGLINES = {
 
 EFFECT_TOOLTIPS = {
     # Stat ladder families
+    "cadence": "Tick, tick, tick. FP for every completion this player makes.",
+    "rhythm": "Once the rhythm arrives, everything comes easier. FPx on every completion, and more once past a big week.",
+    "clockwork": "Same time every week. FPx on completions, plus a streak for every week the count holds up.",
+    "beast_of_burden": "FPx on every carry, and more once the workload runs long.",
+    "iron_man": "FPx on carries, plus a streak for every week the load holds up.",
+    "odyssey": "FPx on rushing yards, plus a streak for every hundred-yard week.",
+    "battering_ram": "No finesse required. FPx for every rushing touchdown.",
+    "custody": "FPx on every catch, and more once the count runs high.",
+    "tenure": "FPx on catches, plus a streak for every week the count holds up.",
+    "getaway": "FPx on yards after the catch, plus a streak for every big week.",
+    "runback": "The play starts on the catch. FP for every punt return yard.",
+    "house_call": "FP on every return yard, and sometimes nobody gets a hand on it at all.",
+    "attention": "The ball is coming down there, caught or not. FPx for every target.",
+    "altitude": "Nothing underneath. FP that grows the further downfield the ball goes.",
+    "haymaker": "Twenty yards at a time. FP for passing yards, and a bonus on every throw that goes deep.",
+    "highpoint": "Two defenders on the ball and it still comes down. FP per catch, and a bonus for the ones taken in traffic.",
+    "breakaway": "One crease is all it takes. FP for rushing yards, and a bonus every time one breaks loose.",
+    "houdini": "FP on every rushing yard, and a shot at more every time a tackle gets broken.",
+    "custodian": "The throw was bad. The catch was made anyway. FP per catch, and a bonus for rescuing a bad ball.",
     "slipstream": "The ball hangs and the yards pile up. FPx scaling with passing yards.",
     "updraft": "Some days the ball just carries. FP on every passing yard, with more at 300, 400 and 500.",
     "stratosphere": "Territory most passers never see. FPx on passing yards, plus a streak for every big week.",
@@ -921,6 +991,25 @@ EFFECT_TOOLTIPS = {
 
 EFFECT_DETAIL_TEMPLATES = {
     # Stat ladder families
+    "cadence": "+{perCompletionFP} FP for every completion by this player",
+    "rhythm": "+{per25Mult} FPx per 25 completions, +{bonusMult} more past {threshold}",
+    "clockwork": "+{per25Mult} FPx per 25 completions, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "beast_of_burden": "+{per25Mult} FPx per 25 carries, +{bonusMult} more past {threshold}",
+    "iron_man": "+{per25Mult} FPx per 25 carries, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "odyssey": "+{per50Mult} FPx per 50 rushing yards, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "battering_ram": "+{perTdMult} FPx for every rushing TD by this player",
+    "custody": "+{per5Mult} FPx per 5 receptions, +{bonusMult} more past {threshold}",
+    "tenure": "+{per5Mult} FPx per 5 receptions, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "getaway": "+{per10Mult} FPx per 10 YAC, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "runback": "+{perYardFP} FP per punt return yard by this player",
+    "house_call": "+{perYardFP} FP per return yard, plus a chance at {bonusFP} FP on a return TD",
+    "attention": "+{per5Mult} FPx per 5 targets by this player",
+    "altitude": "+{perYardFP} FP per yard of average target depth above {threshold}",
+    "haymaker": "+{perYardFP} FP per passing yard, +{bonusFP} for every 20+ yard completion",
+    "highpoint": "+{perReceptionFP} FP per reception, +{bonusFP} per contested catch",
+    "breakaway": "+{perYardFP} FP per rushing yard, +{bonusFP} for every 20+ yard run",
+    "houdini": "+{perYardFP} FP per rushing yard, plus a chance at {bonusFP} FP filling from broken tackles",
+    "custodian": "+{perReceptionFP} FP per reception, +{bonusFP} per bailout",
     "slipstream": "+{per100Mult} FPx per 100 passing yards by this player",
     "updraft": "+{perYardFP} FP per passing yard, +{gateFP} bonus at each of {gates}",
     "stratosphere": "+{per100Mult} FPx per 100 passing yards, plus a streak growing {growthPerTick} FPx per week past {threshold}",
@@ -1228,16 +1317,22 @@ SHARED_EFFECT_POOL = [
 POSITION_EXCLUSIVE_POOLS = {
     1: ["gunslinger", "air_raid", "stack", "backfield_buddies",
         "slipstream", "updraft", "stratosphere", "marksman", "dead_eye",
+        "cadence", "rhythm", "clockwork", "altitude", "haymaker",
         "crescendo", "traverse"],
     2: ["workhorse", "expedition", "stampede", "goal_line_vulture",
         "freight", "grinder", "landslide",
+        "beast_of_burden", "iron_man", "odyssey", "battering_ram",
+        "breakaway", "houdini", "runback", "house_call",
         "crescendo", "traverse"],
     3: ["possession", "trebuchet", "double_trouble",
         "frontier", "territory", "dominion", "paydirt", "end_zone", "promised_land",
+        "custody", "tenure", "getaway", "attention", "highpoint", "custodian",
+        "runback", "house_call",
         "slippery", "jailbreak",
         "ace_up_the_sleeve", "crescendo", "traverse"],
     4: ["safety_blanket", "industrious", "lead_blocker",
         "frontier", "territory", "dominion", "paydirt", "end_zone", "promised_land",
+        "custody", "tenure", "getaway", "attention", "highpoint", "custodian",
         "traverse"],
     5: ["three_pointer", "sniper", "leg_day", "good_neighbor",
         "pinpoint", "coffin_corner", "undertaker",
@@ -1306,6 +1401,11 @@ STREAK_CONFIGS = {
     "undertaker":   {"resetCondition": "card_player_multi_pin", "isWeekly": False},
     "stratosphere": {"resetCondition": "card_player_big_passing_week", "isWeekly": False},
     "dead_eye":     {"resetCondition": "card_player_clean_sheet", "isWeekly": False},
+    "clockwork":    {"resetCondition": "card_player_completion_bar", "isWeekly": False},
+    "iron_man":     {"resetCondition": "card_player_carry_bar", "isWeekly": False},
+    "odyssey":      {"resetCondition": "card_player_100_rush_yards", "isWeekly": False},
+    "tenure":       {"resetCondition": "card_player_reception_bar", "isWeekly": False},
+    "getaway":      {"resetCondition": "card_player_big_yac", "isWeekly": False},
 }
 
 # ─── Cultivation Trigger Pool ────────────────────────────────────────────────
@@ -1529,6 +1629,20 @@ _LADDER_VOLUMES = {
     "fgMade":    {5: 1.98},
     "goodThrows": {1: 13.4},   # GOOD_THROW_THRESHOLD 76 -> 35% of throws
     "passYards": {1: 229.9},
+    "completions": {1: 27.7},
+    "carries":   {2: 25.9},
+    "rushYards": {2: 110.5},
+    "rushTds":   {2: 0.69},
+    "yac":       {3: 23.0, 4: 17.6},
+    "targets":   {3: 9.9, 4: 8.7},
+    # Return yards go to whichever skill player returns; ~2.5 returns a game at ~9 yards.
+    "returnYards": {2: 23.0, 3: 23.0},
+    # Rare one-off events, used as the BONUS half of a base+bonus card.
+    "bigRuns":   {2: 0.88},
+    "bigThrows": {1: 1.75},
+    "contested": {3: 1.02, 4: 0.98},
+    "bailouts":  {3: 0.31, 4: 0.25},
+    "brokenTackles": {2: 0.64},
 }
 # A metallic flat card should mean this much FP in a typical week (Freebie measures 26.0).
 _LADDER_FP_ANCHOR = 26.0
@@ -1568,6 +1682,37 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
     rn = playerRating - 60
 
     # ── Stat ladder: metallic flat rungs ──
+    if effectName == "cadence":
+        return {"perCompletionFP": _ladderFpRate("completions", position, 27.7, 0.004, rn)}
+    if effectName == "runback":
+        return {"perYardFP": _ladderFpRate("returnYards", position, 23.0, 0.004, rn)}
+    if effectName == "house_call":
+        # Return TDs run ~3 per 100 games, so the jackpot contributes almost nothing in
+        # EV and the base has to carry the card. The TD is the drama, not the value.
+        return {"perYardFP": round(_ladderFpRate("returnYards", position, 23.0) * 0.85, 3),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 2.2, 1), "isChanceEffect": True}
+    if effectName == "altitude":
+        # League aDOT is ~6.8. A bar AT the mean pays nothing on a typical week and only
+        # ~12 FP at p90, so it sits below it and the rate carries the anchor: a typical
+        # passer clears it by ~1.3 yards, a deep thrower by ~2.7.
+        bar = 5.5
+        return {"perYardFP": round(_LADDER_FP_ANCHOR / (6.79 - bar), 1), "threshold": bar}
+    # ── base + bonus one-offs: a floor on the parent stat, the rare event as the kicker ──
+    if effectName == "haymaker":
+        return {"perYardFP": round(_LADDER_FP_ANCHOR * 0.60 / _ladderVolume("passYards", position, 229.9), 3),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 0.40 / _ladderVolume("bigThrows", position, 1.75), 1)}
+    if effectName == "breakaway":
+        return {"perYardFP": round(_LADDER_FP_ANCHOR * 0.60 / _ladderVolume("rushYards", position, 110.5), 3),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 0.40 / _ladderVolume("bigRuns", position, 0.88), 1)}
+    if effectName == "highpoint":
+        return {"perReceptionFP": round(_LADDER_FP_ANCHOR * 0.60 / _ladderVolume("receptions", position, 9.35), 2),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 0.40 / _ladderVolume("contested", position, 1.02), 1)}
+    if effectName == "custodian":
+        return {"perReceptionFP": round(_LADDER_FP_ANCHOR * 0.60 / _ladderVolume("receptions", position, 9.35), 2),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 0.40 / _ladderVolume("bailouts", position, 0.31), 1)}
+    if effectName == "houdini":
+        return {"perYardFP": round(_LADDER_FP_ANCHOR * 0.45 / _ladderVolume("rushYards", position, 110.5), 3),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 1.3, 1), "isChanceEffect": True}
     if effectName == "updraft":
         vol = _ladderVolume("passYards", position, 229.9)
         return {"perYardFP": round(_LADDER_FP_ANCHOR / vol, 3),
@@ -1648,6 +1793,10 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         # less volume and measured 47.0 FP/week, the highest of any metallic card.
         return {"perReceptionFP": _ladderFpRate("receptions", position, 9.35, 0.004, rn)}
     if effectName == "slippery":
+        # perYacFP is per TEN yards (see _computeSlippery), so 1.21 paid 2.8 FP against
+        # the 26 anchor — the most under-tuned card in the tier.
+        return {"perYacFP": round(_ladderFpRate("yac", position, 23.0, 0.004, rn) * 10, 2)}
+    if effectName == "__retired_slippery":
         return {"perYacFP": round((1.02 + rn * 0.054) * editionScale * _BAL_FP_MULT, 2)}
     if effectName == "jailbreak":
         return {"rewardType": "fp",
@@ -1655,6 +1804,10 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
                 "rewardValue": round((35 + rn * 1.2) * editionScale * _BAL_FP_MULT, 1),
                 "threshold": 30}
     if effectName == "expedition":
+        # Paid 7.5 per 50 yards against a 110.5-yard mean, i.e. 16.6 FP against the 26
+        # anchor. Routed through the volume table like the rest.
+        return {"perFiftyYardsFP": round(_ladderFpRate("rushYards", position, 110.5, 0.004, rn) * 50, 2)}
+    if effectName == "__retired_expedition":
         return {"perFiftyYardsFP": round((6.6 + rn * 0.32) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "homer":
         # FPx delta per fav-team player on roster.
@@ -1736,6 +1889,54 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
     """FPx param builder. See `_buildFlatFPParams` for the Balatro dial note."""
     rn = playerRating - 60
     # ── Stat ladder: FPx rungs ──
+    if effectName == "rhythm":
+        vol = _ladderVolume("completions", position, 27.7)
+        return {"rewardType": "mult",
+                "per25Mult": _ladderFpxRate("completions", position, 27.7, 25),
+                "bonusMult": round(_LADDER_FPX_TARGET * 0.55, 2),
+                "threshold": int(round(vol * 1.3))}
+    if effectName == "clockwork":
+        vol = _ladderVolume("completions", position, 27.7)
+        return {"rewardType": "mult",
+                "per25Mult": round(_ladderFpxRate("completions", position, 27.7, 25) * 0.55, 2),
+                "growthPerTick": 0.03, "threshold": int(round(vol * 1.15)), "isStreak": True}
+    if effectName == "beast_of_burden":
+        vol = _ladderVolume("carries", position, 25.9)
+        return {"rewardType": "mult",
+                "per25Mult": _ladderFpxRate("carries", position, 25.9, 25),
+                "bonusMult": round(_LADDER_FPX_TARGET * 0.55, 2),
+                "threshold": int(round(vol * 1.3))}
+    if effectName == "iron_man":
+        vol = _ladderVolume("carries", position, 25.9)
+        return {"rewardType": "mult",
+                "per25Mult": round(_ladderFpxRate("carries", position, 25.9, 25) * 0.55, 2),
+                "growthPerTick": 0.03, "threshold": int(round(vol * 1.15)), "isStreak": True}
+    if effectName == "odyssey":
+        return {"rewardType": "mult",
+                "per50Mult": round(_ladderFpxRate("rushYards", position, 110.5, 50) * 0.55, 2),
+                "growthPerTick": 0.03, "threshold": 100, "isStreak": True}
+    if effectName == "battering_ram":
+        return {"rewardType": "mult",
+                "perTdMult": _ladderFpxRate("rushTds", position, 0.69)}
+    if effectName == "custody":
+        vol = _ladderVolume("receptions", position, 9.35)
+        return {"rewardType": "mult",
+                "per5Mult": _ladderFpxRate("receptions", position, 9.35, 5),
+                "bonusMult": round(_LADDER_FPX_TARGET * 0.55, 2),
+                "threshold": int(round(vol * 1.4))}
+    if effectName == "tenure":
+        vol = _ladderVolume("receptions", position, 9.35)
+        return {"rewardType": "mult",
+                "per5Mult": round(_ladderFpxRate("receptions", position, 9.35, 5) * 0.55, 2),
+                "growthPerTick": 0.03, "threshold": int(round(vol * 1.15)), "isStreak": True}
+    if effectName == "getaway":
+        vol = _ladderVolume("yac", position, 23.0)
+        return {"rewardType": "mult",
+                "per10Mult": round(_ladderFpxRate("yac", position, 23.0, 10) * 0.55, 2),
+                "growthPerTick": 0.03, "threshold": int(round(vol * 1.7)), "isStreak": True}
+    if effectName == "attention":
+        return {"rewardType": "mult",
+                "per5Mult": _ladderFpxRate("targets", position, 9.9, 5)}
     if effectName == "slipstream":
         return {"rewardType": "mult",
                 "per100Mult": _ladderFpxRate("passYards", position, 229.9, 100)}
@@ -1968,6 +2169,9 @@ def _buildFloobitsParams(effectName, playerRating, editionScale, position=None):
         return {"rewardType": "floobits", "rewardValue": int(round((6 + rn * 0.3) * editionScale)),
                 "wpaThreshold": 7.0}
     if effectName == "workhorse":
+        return {"rewardType": "fp",
+                "perAttemptFP": _ladderFpRate("carries", position, 25.9, 0.004, rn)}
+    if effectName == "__retired_workhorse":
         return {"rewardType": "fp", "perAttemptFP": round((0.6 + rn * 0.03) * editionScale, 2)}
     if effectName == "goal_line_vulture":
         return {"perTdFloobits": int(round((8 + rn * 0.4) * editionScale))}
@@ -5255,10 +5459,226 @@ def _computeDeadEye(primary, ctx, cardPlayerId, eqId):
                         equation=f"+{delta:.2f} FPx ({good} well-placed + {count} wk streak)")
 
 
+# ── Completions: Cadence -> Rhythm -> Clockwork ──
+def _computeCadence(primary, ctx, cardPlayerId, eqId):
+    """FP for every completion by this player."""
+    per = primary.get("perCompletionFP", 0.9)
+    comp = _ladderStat(ctx, cardPlayerId, "passing_stats", "comp")
+    return EffectResult(fpBonus=round(per * comp, 1),
+                        equation=f"{per}/comp x {comp} completions")
+
+
+def _ladderRateBonus(primary, ctx, cardPlayerId, group, key, rateKey, unit, label):
+    """Shared holo shape: a rate on the stat, plus a step once it clears a bar."""
+    rate = primary.get(rateKey, 0.05)
+    bonus = primary.get("bonusMult", 0.05)
+    threshold = primary.get("threshold", 0)
+    val = _ladderStat(ctx, cardPlayerId, group, key)
+    delta = rate * (val / float(unit))
+    earned = threshold and val >= threshold
+    if earned:
+        delta += bonus
+    if delta <= 0:
+        return EffectResult(equation=f"no {label}")
+    tail = f", past {threshold}" if earned else ""
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({val} {label}{tail})")
+
+
+def _ladderRateStreak(primary, ctx, cardPlayerId, eqId, group, key, rateKey, unit, label):
+    """Shared prismatic shape: a rate on the stat, plus the streak riding on top."""
+    rate = primary.get(rateKey, 0.03)
+    val = _ladderStat(ctx, cardPlayerId, group, key)
+    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    delta = rate * (val / float(unit)) + streak
+    if delta <= 0:
+        return EffectResult(equation=f"no {label}")
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({val} {label} + {count} wk streak)")
+
+
+def _computeRhythm(primary, ctx, cardPlayerId, eqId):
+    return _ladderRateBonus(primary, ctx, cardPlayerId, "passing_stats", "comp",
+                            "per25Mult", 25, "completions")
+
+
+def _computeClockwork(primary, ctx, cardPlayerId, eqId):
+    return _ladderRateStreak(primary, ctx, cardPlayerId, eqId, "passing_stats", "comp",
+                             "per25Mult", 25, "completions")
+
+
+# ── Carries: Workhorse -> Beast of Burden -> Iron Man ──
+def _computeBeastOfBurden(primary, ctx, cardPlayerId, eqId):
+    return _ladderRateBonus(primary, ctx, cardPlayerId, "rushing_stats", "carries",
+                            "per25Mult", 25, "carries")
+
+
+def _computeIronMan(primary, ctx, cardPlayerId, eqId):
+    return _ladderRateStreak(primary, ctx, cardPlayerId, eqId, "rushing_stats", "carries",
+                             "per25Mult", 25, "carries")
+
+
+# ── Rush yards: Expedition -> Trailblazer -> Odyssey ──
+def _computeOdyssey(primary, ctx, cardPlayerId, eqId):
+    return _ladderRateStreak(primary, ctx, cardPlayerId, eqId, "rushing_stats", "runYards",
+                             "per50Mult", 50, "rush yds")
+
+
+# ── Rush TDs ──
+def _computeBatteringRam(primary, ctx, cardPlayerId, eqId):
+    per = primary.get("perTdMult", 0.14)
+    tds = _ladderStat(ctx, cardPlayerId, "rushing_stats", "runTds")
+    if tds <= 0:
+        return EffectResult(equation="no rushing TDs")
+    return EffectResult(multBonus=round(1.0 + per * tds, 3),
+                        equation=f"+{per * tds:.2f} FPx ({tds} rush TD)")
+
+
+# ── Receptions: Possession / Safety Blanket -> Custody -> Tenure ──
+def _computeCustody(primary, ctx, cardPlayerId, eqId):
+    return _ladderRateBonus(primary, ctx, cardPlayerId, "receiving_stats", "receptions",
+                            "per5Mult", 5, "catches")
+
+
+def _computeTenure(primary, ctx, cardPlayerId, eqId):
+    return _ladderRateStreak(primary, ctx, cardPlayerId, eqId, "receiving_stats",
+                             "receptions", "per5Mult", 5, "catches")
+
+
+# ── YAC: Slippery -> Jailbreak -> Getaway ──
+def _computeGetaway(primary, ctx, cardPlayerId, eqId):
+    return _ladderRateStreak(primary, ctx, cardPlayerId, eqId, "receiving_stats", "yac",
+                             "per10Mult", 10, "YAC")
+
+
+# ── Targets ──
+def _computeAttention(primary, ctx, cardPlayerId, eqId):
+    per5 = primary.get("per5Mult", 0.05)
+    targets = _ladderStat(ctx, cardPlayerId, "receiving_stats", "targets")
+    delta = per5 * (targets / 5.0)
+    if delta <= 0:
+        return EffectResult(equation="no targets")
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({targets} targets)")
+
+
+# ── Punt returns: Runback -> House Call ──
+def _computeRunback(primary, ctx, cardPlayerId, eqId):
+    per = primary.get("perYardFP", 1.1)
+    yards = _ladderStat(ctx, cardPlayerId, "returning_stats", "puntReturnYards")
+    return EffectResult(fpBonus=round(per * yards, 1),
+                        equation=f"{per}/yd x {yards} return yds")
+
+
+def _computeHouseCall(primary, ctx, cardPlayerId, eqId):
+    """FP per return yard, with a jackpot on a return touchdown."""
+    per = primary.get("perYardFP", 0.45)
+    bonus = primary.get("bonusFP", 36.0)
+    yards = _ladderStat(ctx, cardPlayerId, "returning_stats", "puntReturnYards")
+    tds = _ladderStat(ctx, cardPlayerId, "returning_stats", "puntReturnTds")
+    base = round(per * yards, 1)
+    if tds > 0:
+        return EffectResult(fpBonus=round(base + bonus, 1), chanceTriggered=True,
+                            equation=f"+{base} FP + {bonus} (return TD)")
+    return EffectResult(fpBonus=base, equation=f"{per}/yd x {yards} return yds")
+
+
+# ── Deep passing ──
+def _computeAltitude(primary, ctx, cardPlayerId, eqId):
+    """FP scaling with how far downfield this player throws.
+
+    Average depth of target, not raw air yards: a checkdown machine with volume should
+    not out-earn someone genuinely pushing the ball downfield.
+    """
+    per = primary.get("perYardFP", 8.7)
+    bar = primary.get("threshold", 6.8)
+    air = _ladderStat(ctx, cardPlayerId, "passing_stats", "airYardsSum")
+    throws = _ladderStat(ctx, cardPlayerId, "passing_stats", "throws")
+    if throws <= 0:
+        return EffectResult(equation="no throws")
+    adot = air / float(throws)
+    over = max(0.0, adot - bar)
+    return EffectResult(fpBonus=round(per * over, 1),
+                        equation=f"{adot:.1f} aDOT, {over:.1f} over {bar}")
+
+
+# ── base + bonus one-offs ────────────────────────────────────────────────────
+def _ladderBaseBonus(primary, ctx, cardPlayerId, baseGroup, baseKey, baseRateKey,
+                     bonusGroup, bonusKey, baseLabel, bonusLabel):
+    """A floor on the parent stat plus a kicker on a rare event.
+
+    Rare stats cannot carry a card alone — at under two a game the per-unit value needed
+    to reach the anchor makes a typical week pay nothing. The base is what stops that.
+    """
+    rate = primary.get(baseRateKey, 0.1)
+    bonus = primary.get("bonusFP", 10.0)
+    base = _ladderStat(ctx, cardPlayerId, baseGroup, baseKey)
+    events = _ladderStat(ctx, cardPlayerId, bonusGroup, bonusKey)
+    total = rate * base + bonus * events
+    tail = f", {events} {bonusLabel}" if events else ""
+    return EffectResult(fpBonus=round(total, 1),
+                        equation=f"{rate}/{baseLabel} x {base}{tail}")
+
+
+def _computeHaymaker(primary, ctx, cardPlayerId, eqId):
+    return _ladderBaseBonus(primary, ctx, cardPlayerId, "passing_stats", "passYards",
+                            "perYardFP", "passing_stats", "twentyPlus", "yd", "20+ throws")
+
+
+def _computeBreakaway(primary, ctx, cardPlayerId, eqId):
+    return _ladderBaseBonus(primary, ctx, cardPlayerId, "rushing_stats", "runYards",
+                            "perYardFP", "rushing_stats", "twentyPlus", "yd", "20+ runs")
+
+
+def _computeHighpoint(primary, ctx, cardPlayerId, eqId):
+    return _ladderBaseBonus(primary, ctx, cardPlayerId, "receiving_stats", "receptions",
+                            "perReceptionFP", "receiving_stats", "contestedCatches",
+                            "rec", "contested")
+
+
+def _computeCustodian(primary, ctx, cardPlayerId, eqId):
+    return _ladderBaseBonus(primary, ctx, cardPlayerId, "receiving_stats", "receptions",
+                            "perReceptionFP", "receiving_stats", "bailouts",
+                            "rec", "bailouts")
+
+
+def _computeHoudini(primary, ctx, cardPlayerId, eqId):
+    """FP per rushing yard, with odds of a jackpot filling from broken tackles."""
+    from managers.cardEffectCalculator import _chanceRoll
+    per = primary.get("perYardFP", 0.1)
+    bonus = primary.get("bonusFP", 34.0)
+    yards = _ladderStat(ctx, cardPlayerId, "rushing_stats", "runYards")
+    breaks = _ladderStat(ctx, cardPlayerId, "rushing_stats", "brokenTackles")
+    base = round(per * yards, 1)
+    conditionFill = min(1.0, breaks / 3.0)
+    odds = _chanceOdds(ctx, cardPlayerId, conditionFill, useFP=True)
+    if getattr(ctx, "gamesActive", False):
+        return EffectResult(fpBonus=base, chanceThreshold=odds,
+                            equation=_chanceBarEq(ctx, odds, conditionFill, True, False,
+                                                  f"+{bonus} FP", f"{breaks} broken",
+                                                  f"+{base} FP"))
+    rng = _chanceRoll(ctx, eqId)
+    if rng.random() < odds:
+        return EffectResult(fpBonus=round(base + bonus, 1), chanceTriggered=True,
+                            chanceThreshold=odds,
+                            equation=f"+{base} FP. {odds:.0%} ({breaks} broken) hit, +{bonus} FP")
+    return EffectResult(fpBonus=base, chanceThreshold=odds,
+                        equation=f"+{base} FP. {odds:.0%} ({breaks} broken) missed")
+
+
 # ─── Effect Registry ─────────────────────────────────────────────────────────
 
 EFFECT_REGISTRY = {
     # Stat ladder families
+    "cadence": _computeCadence, "rhythm": _computeRhythm, "clockwork": _computeClockwork,
+    "beast_of_burden": _computeBeastOfBurden, "iron_man": _computeIronMan,
+    "odyssey": _computeOdyssey, "battering_ram": _computeBatteringRam,
+    "custody": _computeCustody, "tenure": _computeTenure, "getaway": _computeGetaway,
+    "runback": _computeRunback, "house_call": _computeHouseCall,
+    "attention": _computeAttention, "altitude": _computeAltitude,
+    "haymaker": _computeHaymaker, "breakaway": _computeBreakaway,
+    "highpoint": _computeHighpoint, "custodian": _computeCustodian,
+    "houdini": _computeHoudini,
     "slipstream": _computeSlipstream, "updraft": _computeUpdraft,
     "stratosphere": _computeStratosphere,
     "marksman": _computeMarksman, "dead_eye": _computeDeadEye,
@@ -5707,6 +6127,21 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
         # Key name kept as "roster_under_50fp" for backwards-compat with
         # stored STREAK_CONFIGS — no DB migration needed.
         return (ctx.weekRawFP or 0) < 35
+
+    if condition == "card_player_completion_bar":
+        return _ladderStat(ctx, cardPlayerId, "passing_stats", "comp") >= 32
+
+    if condition == "card_player_carry_bar":
+        return _ladderStat(ctx, cardPlayerId, "rushing_stats", "carries") >= 30
+
+    if condition == "card_player_100_rush_yards":
+        return _ladderStat(ctx, cardPlayerId, "rushing_stats", "runYards") >= 100
+
+    if condition == "card_player_reception_bar":
+        return _ladderStat(ctx, cardPlayerId, "receiving_stats", "receptions") >= 11
+
+    if condition == "card_player_big_yac":
+        return _ladderStat(ctx, cardPlayerId, "receiving_stats", "yac") >= 40
 
     if condition == "card_player_big_passing_week":
         return _ladderStat(ctx, cardPlayerId, "passing_stats", "passYards") >= 300

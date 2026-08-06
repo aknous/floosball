@@ -44,6 +44,14 @@ MEAN = {
     'rb': _dbStatsToCardFormat({}, {'yards': 110.5, 'yardsAfterContact': 87.5}, {}, {}, 24, 5),
     'k':  _dbStatsToCardFormat({}, {}, {}, {'puntsInside20': 2.03, 'puntsInside10': 1.0}, 10, 5),
 }
+MEAN['rb2'] = _dbStatsToCardFormat(
+    {}, {'yards': 110.5, 'carries': 25.9, 'tds': 0.69, '20+': 0.88,
+     'brokenTackles': 0.64, 'yardsAfterContact': 87.5},
+    {}, {}, 24, 5, {'puntReturnYards': 23.0})
+MEAN['wr2'] = _dbStatsToCardFormat(
+    {}, {}, {'yards': 83.5, 'receptions': 9.35, 'yac': 23.0, 'targets': 9.9,
+             'tds': 0.40, 'contestedCatches': 1.02, 'bailouts': 0.31}, {}, 22, 5,
+    {'puntReturnYards': 23.0})
 P90 = {
     'wr': _dbStatsToCardFormat({}, {}, {'yards': 143, 'tds': 1, 'receptions': 14}, {}, 30, 5),
     'te': _dbStatsToCardFormat({}, {}, {'yards': 94, 'tds': 1, 'receptions': 13}, {}, 26, 5),
@@ -110,9 +118,11 @@ def testPromisedLandSurvivesFractionalTds():
 
 
 QB_MEAN = _dbStatsToCardFormat(
-    {'yards': 229.9, 'goodThrows': 13.4, 'badThrows': 1.56, 'throws': 37.8}, {}, {}, {}, 24, 5)
+    {'yards': 229.9, 'comp': 27.7, 'goodThrows': 13.4, 'badThrows': 1.56,
+     'throws': 37.8, 'airYardsSum': 256.6, '20+': 1.75}, {}, {}, {}, 24, 5)
 QB_P90 = _dbStatsToCardFormat(
-    {'yards': 332, 'goodThrows': 28, 'badThrows': 0, 'throws': 51}, {}, {}, {}, 34, 5)
+    {'yards': 332, 'comp': 38, 'goodThrows': 28, 'badThrows': 0,
+     'throws': 51, 'airYardsSum': 420, '20+': 4}, {}, {}, {}, 34, 5)
 
 
 def testQbFamiliesHoldTheirTypicalWeek():
@@ -141,12 +151,38 @@ def testGunslingerStillScoresOnAPreRepointCard():
     assert r.fpBonus > 0, "a pre-re-point Gunslinger scores nothing"
 
 
+ALL_LADDER = [
+    'frontier', 'territory', 'dominion', 'freight', 'grinder', 'landslide',
+    'pinpoint', 'coffin_corner', 'undertaker', 'paydirt', 'end_zone', 'promised_land',
+    'slipstream', 'updraft', 'stratosphere', 'marksman', 'dead_eye',
+    'cadence', 'rhythm', 'clockwork', 'beast_of_burden', 'iron_man', 'odyssey',
+    'battering_ram', 'custody', 'tenure', 'getaway', 'runback', 'house_call',
+    'attention', 'altitude', 'haymaker', 'highpoint', 'breakaway', 'houdini',
+    'custodian',
+]
+
+
+def testNoLadderCardIsDeadOnATypicalWeek():
+    """A card paying nothing on an ordinary week is a dead card however good its
+    ceiling. Altitude sat its bar exactly AT league-average aDOT and paid 0; House
+    Call leaned on return TDs, which run ~3 per 100 games and carry no EV at all."""
+    means = {1: QB_MEAN, 2: MEAN['rb2'], 3: MEAN['wr2']}
+    for effect in ALL_LADDER:
+        positions = ce.effectValidPositions(effect)
+        pos = next((p for p in (1, 2, 3) if p in positions), None)
+        if pos is None:
+            continue          # K and TE-only cards are covered by the anchor test
+        fp, fpx = _score(effect, pos, means[pos])
+        assert fp > 0 or fpx > 0, f"{effect} pays nothing on a typical week"
+
+
+def testStampedeDisplaysAsTrailblazer():
+    """A stale duplicate key later in EFFECT_DISPLAY_NAMES silently shadowed this."""
+    assert ce.EFFECT_DISPLAY_NAMES['stampede'] == 'Trailblazer'
+
+
 def testEveryLadderEffectIsFullyRegistered():
-    NEW = ['frontier', 'territory', 'dominion', 'freight', 'grinder', 'landslide',
-           'pinpoint', 'coffin_corner', 'undertaker', 'paydirt', 'end_zone',
-           'promised_land', 'slipstream', 'updraft', 'stratosphere', 'marksman',
-           'dead_eye']
-    for e in NEW:
+    for e in ALL_LADDER:
         assert e in ce.EFFECT_REGISTRY, f"{e} missing from EFFECT_REGISTRY"
         assert e in ce.EFFECT_EDITION_TIER, f"{e} missing an edition"
         assert e in ce.EFFECT_DISPLAY_NAMES, f"{e} missing a display name"
