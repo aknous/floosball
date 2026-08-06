@@ -508,6 +508,62 @@ tuning.
 **Diamond is excluded from this ladder.** It is mostly modifier and amplifier cards
 (1 FP / 6 FPx / 6 cross-effect of 14), so it does not have a per-stat curve to shape.
 
+### Streak and chance cards are not per-week distributions
+
+The tail model above treats a prismatic card as a single-week draw. Neither prismatic
+mechanic actually is one, and both break the model in the same direction: **their real
+value depends on an investment the card itself cannot show you.**
+
+**A streak ramps, and the ramp eats the front of the season.** Payout is
+`carriedBase + growthPerTick x (streakCount - 1)`, so a fresh streak card starts near its
+base and climbs:
+
+| week | solo | +1 peer streak | +2 peers |
+|---|---|---|---|
+| 1 | 10.0 | 14.0 | 18.0 |
+| 3 | 18.0 | 22.0 | 26.0 |
+| 4 | 22.0 | 26.0 | 30.0 |
+| 6 | 30.0 | 34.0 | 38.0 |
+| 12 | 54.0 | 58.0 | 62.0 |
+
+At those numbers a solo streak card takes **5 weeks to reach the 26 FP metallic anchor**,
+which is 14% of a 28-week season spent below a base-tier card. Note peers count as extra
+weeks (`effectiveCount = streakCount + peerBonus`), so a second streak card is worth a
+free week to every other one, and a streak deck starts ahead.
+
+It also means **a roster swap is not free** — breaking a streak pays out the peak once and
+then restarts the ramp. That is a real strategic cost and should stay, but it is a cost
+the per-week model does not see.
+
+**A chance card is bought with the rest of the hand.** Trigger odds are additive:
+`0.5 x player FP fill + 0.5 x condition fill + ctx.chanceBonus`, and that last term is fed
+entirely by what else you are holding:
+
+| hand | chanceBonus | odds on an average week |
+|---|---|---|
+| lone chance card | 0.00 | 50% |
+| 2 chance cards (innate +0.04 each) | 0.04 | 54% |
+| 4 chance cards | 0.12 | 62% |
+| 4 + Providence | 0.20 | 70% |
+| 4 + Providence + Catalyst at cap | 0.30 | 80% |
+| ... + the Patronage powerup | 0.40 | 90% |
+
+**A built chance hand roughly doubles the trigger rate of the same card played alone.**
+That is the intent — chance cards are build-arounds — but it means a single chance card
+measured in isolation is showing you its floor, not its value.
+
+**Consequences for this plan:**
+
+1. **Do not size a streak card against a single week.** Size it against a realistic
+   steady-state streak length (5-8 weeks) and accept that the opening weeks pay under a
+   metallic card. The ramp IS the cost of the higher ceiling.
+2. **Do not size a chance card in isolation.** `simcheck_effect_spread.py` puts the card
+   in a hand of no-effect floor prints, which is precisely the zero-synergy case, so every
+   chance card it measures reads at its floor. Use `simcheck_edition_power.py` (full
+   lineups) for these.
+3. **A prismatic family rung is a slower card, not just a swingier one.** Worth saying on
+   the card itself: a user who swaps rosters weekly should be steered to holographic.
+
 ### What this does NOT fix
 
 At an equal typical week the extra mean is small (1.16x / 1.25x), and the two payoff
