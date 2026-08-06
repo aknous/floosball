@@ -116,7 +116,46 @@ metallic and vanishes on diamond.
 | runaway | 5.00 | 8% | 141.5 |
 
 (The old `quiet` row is gone — not triggering IS the quiet outcome, so it should not also be a
-table entry.) Names are placeholder and want an owner pass.
+table entry.)
+
+### FPx surges are damped to 0.80 (owner)
+
+An FP surge is a FIXED amount. An FPx surge multiplies the whole lineup, so it grows with the
+rest of your hand — a strong hand should not also make your glitch stronger.
+
+⚠️ The size of that problem was overstated in an earlier note. At the ~250 lineup the ladder is
+anchored to, an undamped FPx surge is actually slightly WEAKER than the FP one (0.88x). The
+imbalance only appears in rich hands:
+
+| lineup total | undamped | damped 0.80 |
+|---|---|---|
+| 220 | 0.78x | 0.62x |
+| 250 | 0.88x | 0.71x |
+| 300 | 1.06x | 0.85x |
+| 350 | 1.24x | 0.99x |
+| 450 | **1.59x** | 1.27x |
+
+**0.80** holds near parity through a typical hand and clips only the top end. A deeper cut
+(0.55 was tried) halves FPx everywhere and fixes a problem that does not exist at normal lineup
+sizes.
+
+| outcome | FP mult | FPx mult | FPx pays at a 250 lineup |
+|---|---|---|---|
+| flicker | 0.35 | 0.28 | 7 FP |
+| surge | 1.00 | 0.80 | 20 FP |
+| cascade | 2.50 | 2.00 | 50 FP |
+| runaway | 5.00 | 4.00 | 100 FP |
+
+### Naming — deliberately cryptic (owner)
+
+The four outcomes are not surfaced as clean labels. In the card's score breakdown a glitch adds
+**its own line item, rendered in glitched text** — you can see the card did something and how
+much it paid, but WHAT it was stays corrupted and unreadable.
+
+**Unless the player is awakened**, in which case it reads clearly. That is the payoff of the arc
+and it needs no separate mechanic: a player in control produces a legible readout, a player
+cracking produces noise. It also means the internal names never have to be good, because most of
+the time nobody sees them.
 
 ## The card looks glitched (owner)
 
@@ -137,18 +176,28 @@ makes a glitched card read as *the same phenomenon* rather than a card cosmetic.
 **Mapping it onto the card.** The existing L1/L2/L3 tiers already correspond to exactly the
 three anomaly levels the trigger boost uses, so the card can key off the same thing:
 
+**Use the AWAKENED treatment, not the glitch one, for the card itself (owner).** The card sits
+on screen for minutes in a collection view, where a line in the play feed is gone in seconds.
+The `l1`/`l2` glitch animations sway, drift, slam and strobe — fine for a passing line, actively
+unpleasant on something you are reading.
+
+The awakened treatment is built for exactly this and says so in its own comment:
+
+> A brilliant gold glow that only breathes in INTENSITY (box-shadow), **never moves position** —
+> so it stays perfectly smooth as new plays push the row down the feed (the old position-swept
+> shimmer janked on every reflow).
+
+So: `.awakened-row`'s shape — a static wash plus a slow box-shadow breath, **no movement, no
+character corruption** — for every glitched card. Only the colour varies:
+
 | card state | treatment |
 |---|---|
-| glitched, player `stable`/`stirring` | `l1` — occasional chroma shimmer on the card frame, card name via `GlitchedText` at `low` |
-| glitched, player `erratic`/`rampant` | `l2` — sway/slam on the frame, name at `high` |
-| glitched, player `awakened` | `l3` — the reserved tier; steadier and more deliberate, matching a player in control |
-| **the week a surge triggers** | a one-off burst on the card, scaled to the outcome — `flicker` barely registers, `runaway` should be unmistakable |
+| glitched, player not awakened | the awakened glow SHAPE in a Criticality hue (the violet of `CriticalityGlitch`'s wash) rather than gold |
+| glitched, player awakened | the gold `.awakened-row` treatment as-is — the two states have converged |
+| **the week a surge triggers** | a brief one-off intensity burst, scaled to the outcome. This is the only moment anything moves |
 
-Two notes carried from `CriticalityGlitch.tsx`'s own tuning comments, which learned this the
-hard way: keep element shifts small (it uses 4px) so layout and click targets barely move, and
-pace bursts so the effect is *apparent but not annoying*. A card sitting in a collection view is
-on screen far longer than a line in a play feed, so the persistent tier wants to be gentler than
-the equivalent feed treatment — the loud version belongs on the trigger, not the idle state.
+Character corruption is reserved for the **score-detail line item** (see Naming), where it is
+read once rather than stared at.
 
 `?criticality=1` previews the site-wide mode without a real event; the card treatment should get
 a similar preview hook.
@@ -161,13 +210,9 @@ natural home. It scores only in the season it was earned.
 
 ## Open questions
 
-1. **FPx surges need their own damping.** Multiplying a `+0.10 FPx` card by 5 is ~150 FP across
-   a full lineup versus ~140 for the equivalent FP card, and FPx compounds against everything
-   else held. The table must be output-aware or FPx needs a gentler multiplier column.
-2. **Names** for the four surge outcomes.
-3. **Does the trigger resolve before or after the week scores?** Resolving early makes it
+1. **Does the trigger resolve before or after the week scores?** Resolving early makes it
    plannable, which cuts against wild magic; resolving late makes checking the card the payoff.
-4. **Do the base rates want the instability dial on top?** `getCriticalityMultiplier` already
+2. **Do the base rates want the instability dial on top?** `getCriticalityMultiplier` already
    ramps as the league approaches a crossing. Applying it to the base would make every glitched
    card livelier during a hot stretch, which reinforces the deeper game — but it stacks with the
    event boost, which also rises then.
