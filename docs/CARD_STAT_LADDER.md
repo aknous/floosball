@@ -82,53 +82,186 @@ below is blocked on widening it. No design risk; do this first.
 
 ---
 
+## How a family works
+
+A **family** is one stat, three cards, one motif. The stat never changes as you climb —
+only what the card does with it, and the names should read as a set so the chain is
+visible on the shelf.
+
+    metallic      flat            every unit pays the same
+    holographic   thresholded     units past a line pay more, or a shape of game doubles it
+    prismatic     compounding     a streak across weeks, or odds that fill from the stat
+
+**Universal cards are not rungs.** Odometer (sums pass + rush + receiving yards) and the
+position-adaptive set (Crescendo, Squire, Spotlight Moment, Luminary, Traverse) key off a
+GENERIC concept that changes meaning by position. They keep their own identity and sit
+outside the families — an earlier draft used Odometer as the prismatic rung for three
+different families at once, which is exactly what the evolution idea rules out.
+
+Where a family already contains a shipped card, the other two rungs are built around
+**that card's** motif, or the shipped card gets renamed. Mixed families
+(`Gunslinger → Aerialist → Odometer`) read as three unrelated ideas and defeat the point.
+
+All names below are candidates.
+
+---
+
 ## QB
 
-| stat | metallic | holographic | prismatic |
-|---|---|---|---|
-| pass yards | **Gunslinger** (exists) | NEW *Aerialist* — tiered gates at 200/300/400 | **Odometer** (exists) |
-| pass TDs | **Air Raid** (exists, Floobits) · NEW *Bombardier* (FP) | NEW *Salvo* — flat, doubled at 3+ TDs | **Crescendo** (exists) |
-| completions | NEW *Cadence* — +0.9 FP/completion | NEW *Rhythm* — +FPx per completion past 20 | NEW *Clockwork* — streak on 25+ completions |
-| 20+ throws | NEW *Haymaker* — +15 FP per 20+ throw | — | — |
-| good throws | NEW *Draftsman* (FPx) — needs the new stat | — | — |
-| air yards | — | NEW *Altitude* — scales with aDOT above 8 | — |
+**Completions — timekeeping.** The metronomic passer. *(the shape this whole idea came from)*
+
+| | card | mechanic |
+|---|---|---|
+| metallic | *Cadence* | +0.9 FP per completion |
+| holographic | *Rhythm* | +FPx per completion past 20 |
+| prismatic | *Clockwork* | streak, grows each week they clear 25 completions |
+
+**Pass yards — flight.** Contains **Gunslinger** (shipped), whose motif is gun/accuracy,
+not distance. Either rename it or rebuild the family around marksmanship.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | **Gunslinger** (shipped) | +FP per 100 pass yards |
+| holographic | *Aerialist* | tiered gates at 200 / 300 / 400 |
+| prismatic | *Stratosphere* | streak on 300-yard weeks |
+
+**Pass TDs — ordnance.** Contains **Air Raid** (shipped, pays Floobits), which fits the
+motif cleanly. Needs an FP sibling since the metallic rung currently pays the wrong currency.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | **Air Raid** (shipped, Floobits) · *Bombardier* (FP) | flat per pass TD |
+| holographic | *Salvo* | flat, doubled at 3+ TDs |
+| prismatic | *Barrage* | escalating odds per TD |
+
+**Good throws — precision.** Blocked on the new `goodThrows` stat.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | *Draftsman* (FPx) | +FPx per well-placed ball |
+| holographic | *Marksman* | bonus when the bad-throw count stays at zero |
+| prismatic | *Dead Eye* | streak on clean-sheet weeks |
+
+**Unfamilied QB one-offs:** *Haymaker* (+15 FP per 20+ throw, 1.75/game),
+*Altitude* (holo, scales with aDOT above 8).
 
 ## RB
 
-| stat | metallic | holographic | prismatic |
-|---|---|---|---|
-| carries | **Workhorse** (exists) | NEW *Anvil* — flat, bonus at 25+ carries | NEW *Relentless* — streak on 20+ carries |
-| rush yards | **Expedition** (exists) | **Stampede** (exists) | **Odometer** (exists) |
-| rush TDs | **Goal Line Vulture** (exists, Floobits) · NEW *Battering Ram* (FP) | **Lead Blocker** (exists) | — |
-| yards after contact | NEW *Freight* — +0.3 FP/yard | NEW *Grinder* — +FPx when YAC exceeds half of rush yards | — |
-| broken tackles | — | NEW *Houdini* — +18 FP per break (0.64/game) | NEW *Escape Artist* — chance fills from breaks |
-| 20+ runs | NEW *Breakaway* — +28 FP per 20+ run | — | — |
+**Carries — labour.** Contains **Workhorse** (shipped), motif fits.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | **Workhorse** (shipped) | +FP per carry |
+| holographic | *Beast of Burden* | flat, bonus at 25+ carries |
+| prismatic | *Iron Man* | streak on 20-carry weeks |
+
+**Rush yards — journey.** Contains **Expedition** and **Stampede** (both shipped).
+Expedition is a journey, Stampede is a herd — already mixed. One should move.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | **Expedition** (shipped) | +FP per rush yard |
+| holographic | **Stampede** (shipped) | FPx on rush yardage |
+| prismatic | *Odyssey* | streak on 100-yard weeks |
+
+**Yards after contact — mass.** Wholly new; the stat only became real this session
+(80% of rush yards, mean 87.5/game).
+
+| | card | mechanic |
+|---|---|---|
+| metallic | *Freight* | +0.3 FP per yard after contact |
+| holographic | *Grinder* | +FPx when YAC exceeds half of rush yards |
+| prismatic | *Landslide* | streak on 100-yard-after-contact weeks |
+
+**Rush TDs — force.** Contains **Goal Line Vulture** (Floobits) and **Lead Blocker**.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | **Goal Line Vulture** (shipped, Floobits) · *Battering Ram* (FP) | flat per rush TD |
+| holographic | **Lead Blocker** (shipped) | flat per rush TD |
+| prismatic | — | |
+
+**Broken tackles — escape.** Rare stat (0.64/game) — see the variance note below.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | — | too rare for a dependable tier |
+| holographic | *Houdini* | +18 FP per break |
+| prismatic | *Vanishing Act* | chance whose odds fill from breaks |
+
+**Unfamilied RB one-off:** *Breakaway* (+28 FP per 20+ run, 0.88/game).
 
 ## WR / TE
 
-| stat | metallic | holographic | prismatic |
-|---|---|---|---|
-| receptions | **Possession** (WR, exists) · **Safety Blanket** (TE, exists — *retune to 3.2*) · **Industrious** (TE, Floobits) | NEW *Chainmover* — +FPx per catch past 8 | NEW *Sure Thing* — streak on 8+ catches |
-| rec yards | **NEW *Frontier*** — +0.31 FP/yard · **the biggest gap in the pool** | NEW *Territory* — tiered gates at 75/125/175 | **Odometer** (exists) |
-| rec TDs | NEW *Paydirt* — +55 FP per rec TD | NEW *End Zone* — flat, doubled at 2+ | — |
-| YAC | **Slippery** (exists) | **Jailbreak** (exists) | — |
-| targets | NEW *Attention* (FPx) — pays on volume even without the catch | — | — |
-| contested catches | — | NEW *Highpoint* — +25 FP per contested catch | NEW *Contortionist* — chance fills from contested rate |
-| bailouts | — | NEW *Custodian* — +80 FP per bailout (0.31/game) | — |
-| longest catch | — | **Trebuchet** (exists) | — |
+**Receptions — custody.** Contains **Possession** (WR), **Safety Blanket** (TE, *retune to
+3.2/rec*) and **Industrious** (TE, Floobits). Possession's motif carries the family.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | **Possession** (WR) · **Safety Blanket** (TE) | +FP per reception |
+| holographic | *Custody* | +FPx per catch past 8 |
+| prismatic | *Tenure* | streak on 8-catch weeks |
+
+**Receiving yards — territory.** **Entirely absent below prismatic today — the biggest
+hole in the pool.** Most-produced skill stat in the game at 83.5 yards a game.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | *Frontier* | +0.31 FP per receiving yard |
+| holographic | *Territory* | tiered gates at 75 / 125 / 175 |
+| prismatic | *Dominion* | streak on 100-yard weeks |
+
+**Receiving TDs — the end zone.** No card anywhere today.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | *Paydirt* | +55 FP per receiving TD |
+| holographic | *End Zone* | flat, doubled at 2+ |
+| prismatic | *Promised Land* | escalating odds per TD |
+
+**YAC — escape.** Contains **Slippery** and **Jailbreak** (both shipped); the motifs
+already agree.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | **Slippery** (shipped) | +FP per YAC yard |
+| holographic | **Jailbreak** (shipped) | FPx on YAC |
+| prismatic | *Getaway* | streak on 40-YAC weeks |
+
+**Contested catches — the aerial contest.** Nothing today (1.02/game).
+
+| | card | mechanic |
+|---|---|---|
+| metallic | — | too rare for a dependable tier |
+| holographic | *Highpoint* | +25 FP per contested catch |
+| prismatic | *Larceny* | chance filling from contested rate |
+
+**Unfamilied WR one-offs:** *Attention* (FPx on targets, pays without the catch),
+*Custodian* (holo, +80 FP per bailout, 0.31/game), **Trebuchet** (shipped, longest catch).
 
 ## K
 
-| stat | metallic | holographic | prismatic |
-|---|---|---|---|
-| FGs made | **Three Pointer** (exists — measures 39.0 FP, *retune down*) | **Good Neighbor** (exists, Floobits) | **On Fire** (exists, streak) |
-| FG yards | NEW *Surveyor's Mark* (FPx) | **Range** (exists) | — |
-| 45+ FGs | **Sniper** (exists) | — | **Leg Day** (exists, streak) |
-| punts inside 20 | NEW *Pinpoint* — +13 FP each | NEW *Coffin Corner* — bonus for inside-10 | — |
-| punt longest | — | NEW *Cannon* — scales past 60 yards | — |
-| punt returns | NEW *Runback* — return yards, any skill player | — | NEW *House Call* — chance on return TDs |
+**Field goals — the kick itself.** Contains **Three Pointer** (*measures 39.0 FP, retune
+down*), **Good Neighbor**, **Range**, **Sniper**, **On Fire**, **Leg Day**. The kicker is
+already the best-served position; it needs pruning, not additions.
 
----
+**Punting — burial.** Wholly new; punt placement only became a real stat this session.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | *Pinpoint* | +13 FP per punt inside the 20 (2.03/game) |
+| holographic | *Coffin Corner* | bonus for inside the 10 |
+| prismatic | *Undertaker* | streak on multi-pin weeks |
+
+**Returns — the runback.** Any skill player. Unblocked as of this session's
+`returning_stats` fix.
+
+| | card | mechanic |
+|---|---|---|
+| metallic | *Runback* | +FP per return yard |
+| holographic | — | |
+| prismatic | *House Call* | chance on return TDs |
+
 
 ## Output-type balance
 
@@ -143,11 +276,16 @@ Target after the build: roughly **half FP, a third FPx, the rest Floobits** at m
 ## Open questions for the owner
 
 1. **Names.** All *italic* names are candidates only.
-2. **Scope.** 24 new cards as drafted. Trim by dropping the rarer-stat cards (bailouts,
-   broken tackles, 20+ plays) which need large per-unit values to reach the anchor and so
-   land as high-variance cards at a tier meant to be dependable.
-3. **Defense.** Excluded here per the "offensive stats" scope, but every rostered player
+2. **Scope.** 14 families plus 6 one-offs. Trim by dropping the rare-stat families
+   (broken tackles 0.64/game, contested catches 1.02, bailouts 0.31) — to reach the ~26 FP
+   anchor they need large per-unit values, so a typical week pays nothing and a p90 week
+   pays double. That is a fine shape at prismatic and the wrong shape at metallic, which
+   is why those families start at holographic above.
+3. **Mixed families.** Three families contain a shipped card whose motif fights the set:
+   Gunslinger (gun) in a flight family, Stampede (herd) in a journey family, Industrious
+   in a custody family. Rename the old card, rename the family, or accept the mismatch.
+4. **Defense.** Excluded here per the "offensive stats" scope, but every rostered player
    produces sacks, tackles, INTs, TFL, forced fumbles and pass breakups through their
    defensive position, and no card reads any of it. Largest untouched surface in the game.
-4. **Floobits share.** 13 of 28 metallic cards pay Floobits — a larger share than any
+5. **Floobits share.** 13 of 28 metallic cards pay Floobits — a larger share than any
    tier above it. Worth deciding whether that is intended.
