@@ -487,6 +487,39 @@ along with a real increase in expected value.
 > is the most RELIABLE tier, so if the expected values match, the rational play is always
 > metallic and rarity becomes a downgrade. A collectible ladder has to reward the pull.
 
+### The gate gives the ceiling for free
+
+The FP power bar gets **harder** with rarity (`CARD_GATE_FP_THRESHOLDS_BY_EDITION`: QB 9
+at metallic, 11 holo, 13 prismatic, 15 diamond), so higher tiers fire less often. That
+means a target MEAN implies a much bigger payout on the weeks it does fire:
+
+| tier | target mean | clears its bar | pays when it fires | vs metallic |
+|---|---|---|---|---|
+| metallic | 26.0 | 70% | 37.1 | 1.00x |
+| holographic | 32.5 | 65% | 50.0 | 1.35x |
+| prismatic | 40.3 | 58% | 69.5 | 1.87x |
+| diamond | 49.4 | 55% | 89.8 | **2.42x** |
+
+So the mean rises 1.90x across the ladder while the live payout rises **2.42x**. The
+ceiling comes along without having to be tuned separately, which is the cheap part of this.
+
+### The expensive part: FPx stacks across the hand
+
+`aggregateMultFactors` is `1 + sum(delta)` — additive, not multiplicative, which is the
+only reason this is tractable at all. But it applies to the WHOLE lineup, so multiplier
+cards compound with each other in a way flat FP cards do not:
+
+    6 x metallic     FPx cards  ->  1.36x on the entire lineup
+    6 x holographic  FPx cards  ->  1.45x
+    6 x prismatic    FPx cards  ->  1.56x
+
+Raising the FPx tiers by the strength ladder raises that ceiling too, and it lands on top
+of every FP card in the hand rather than on one stat. **Tune the FP side first, measure,
+then move FPx** — a change that looks small per card is worth several times more in a
+stacked hand. `simcheck_effect_spread.py` measures per card and
+`simcheck_edition_power.py` measures per full lineup; the second is the one that catches
+this.
+
 **What has to change in code:** `EDITION_POWER_SCALE` in `cardEffects.py`.
 
 | edition | now | proposed |
