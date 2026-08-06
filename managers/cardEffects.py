@@ -1634,6 +1634,7 @@ _LADDER_VOLUMES = {
     "rushYards": {2: 110.5},
     "rushTds":   {2: 0.69},
     "yac":       {3: 23.0, 4: 17.6},
+    "yac2":      {2: 87.5},   # yards after contact (RB), distinct from receiving YAC
     "targets":   {3: 9.9, 4: 8.7},
     # Return yards go to whichever skill player returns; ~2.5 returns a game at ~9 yards.
     "returnYards": {2: 23.0, 3: 23.0},
@@ -1650,6 +1651,39 @@ _LADDER_FP_ANCHOR = 26.0
 # multFactors are appended as round(mult, 2), so the delta is quantised to 0.01 and a
 # card under ~+0.05 has too few steps left to tune with.
 _LADDER_FPX_TARGET = 0.10
+
+
+# A streak bar means "showed up", NOT "had a good week". Set above the mean it gives a
+# hold rate near 30% and an average run under one week, so the streak never builds and the
+# card loses to its own metallic sibling over a season (measured 0.17-0.49x before this).
+# At 0.75x the mean the hold rate lands near 75%, which is an average run of ~3 weeks.
+_STREAK_BAR_RATIO = 0.75
+
+# Per-stat override. A single ratio does not work because the stats differ in SPREAD, not
+# just level: at 0.75x the mean, carries held 80% of weeks and YAC only 56%, and season
+# value tracks hold rate almost exactly (corr 0.87 across the ten cards). A spiky stat
+# needs a lower bar to reach the same hold rate. Tuned against simcheck_streak_replay.py
+# toward ~1.10x the metallic sibling's season total.
+_STREAK_BAR_OVERRIDES = {
+    "carries": 0.92,       # 80% hold -> too generous
+    "completions": 0.90,   # 78%
+    "passYards": 0.90,     # 74%
+    "recYards": 0.56,      # tuned to ~1.1x
+    "receptions": 0.66,    # 70% but a low per-unit rate
+    "rushYards": 0.70,     # 62%
+    "yac2": 0.70,          # 61%
+    "yac": 0.40,           # the spikiest of the set, so the lowest bar
+        # Only ~2 pins a game, and the bar is an INTEGER, so the sole options are 1 or 2.
+    # 0.45 and 0.70 both round to 1 and held 84%; 0.85 rounds to 2.
+    "puntsIn20": 0.85,
+}
+
+
+def _streakBar(stat, position, fallback):
+    """The bar a streak card's condition checks, derived from the position's own volume."""
+    vol = (_LADDER_VOLUMES.get(stat) or {}).get(position or 0, fallback)
+    ratio = _STREAK_BAR_OVERRIDES.get(stat, _STREAK_BAR_RATIO)
+    return max(1, int(round(vol * ratio)))
 
 
 def _ladderVolume(stat, position, fallback):
@@ -1898,7 +1932,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
     if effectName == "clockwork":
         vol = _ladderVolume("completions", position, 27.7)
         return {"rewardType": "mult",
-                "per25Mult": round(_ladderFpxRate("completions", position, 27.7, 25) * 0.55, 2),
+                "per25Mult": round(_ladderFpxRate("completions", position, 27.7, 25) * 0.85, 2),
                 "growthPerTick": 0.03, "threshold": int(round(vol * 1.15)), "isStreak": True}
     if effectName == "beast_of_burden":
         vol = _ladderVolume("carries", position, 25.9)
@@ -1909,11 +1943,11 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
     if effectName == "iron_man":
         vol = _ladderVolume("carries", position, 25.9)
         return {"rewardType": "mult",
-                "per25Mult": round(_ladderFpxRate("carries", position, 25.9, 25) * 0.55, 2),
+                "per25Mult": round(_ladderFpxRate("carries", position, 25.9, 25) * 0.85, 2),
                 "growthPerTick": 0.03, "threshold": int(round(vol * 1.15)), "isStreak": True}
     if effectName == "odyssey":
         return {"rewardType": "mult",
-                "per50Mult": round(_ladderFpxRate("rushYards", position, 110.5, 50) * 0.55, 2),
+                "per50Mult": round(_ladderFpxRate("rushYards", position, 110.5, 50) * 0.85, 2),
                 "growthPerTick": 0.03, "threshold": 100, "isStreak": True}
     if effectName == "battering_ram":
         return {"rewardType": "mult",
@@ -1927,12 +1961,12 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
     if effectName == "tenure":
         vol = _ladderVolume("receptions", position, 9.35)
         return {"rewardType": "mult",
-                "per5Mult": round(_ladderFpxRate("receptions", position, 9.35, 5) * 0.55, 2),
+                "per5Mult": round(_ladderFpxRate("receptions", position, 9.35, 5) * 0.85, 2),
                 "growthPerTick": 0.03, "threshold": int(round(vol * 1.15)), "isStreak": True}
     if effectName == "getaway":
         vol = _ladderVolume("yac", position, 23.0)
         return {"rewardType": "mult",
-                "per10Mult": round(_ladderFpxRate("yac", position, 23.0, 10) * 0.55, 2),
+                "per10Mult": round(_ladderFpxRate("yac", position, 23.0, 10) * 0.85, 2),
                 "growthPerTick": 0.03, "threshold": int(round(vol * 1.7)), "isStreak": True}
     if effectName == "attention":
         return {"rewardType": "mult",
@@ -1943,7 +1977,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
     if effectName == "stratosphere":
         vol = _ladderVolume("passYards", position, 229.9)
         return {"rewardType": "mult",
-                "per100Mult": round(_ladderFpxRate("passYards", position, 229.9, 100) * 0.55, 2),
+                "per100Mult": round(_ladderFpxRate("passYards", position, 229.9, 100) * 0.85, 2),
                 "growthPerTick": 0.03, "threshold": int(round(vol * 1.3)), "isStreak": True}
     if effectName == "marksman":
         return {"rewardType": "mult",
@@ -1951,7 +1985,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
                 "cleanSheetMult": round(_LADDER_FPX_TARGET * 0.65, 2)}
     if effectName == "dead_eye":
         return {"rewardType": "mult",
-                "per5Mult": round(_ladderFpxRate("goodThrows", position, 13.4, 5) * 0.55, 2),
+                "per5Mult": round(_ladderFpxRate("goodThrows", position, 13.4, 5) * 0.85, 2),
                 "growthPerTick": 0.03, "isStreak": True}
     if effectName == "territory":
         # Gates must sit ABOVE a typical week or the bonus is not conditional at all.
@@ -1963,7 +1997,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
                 "gates": [int(round(vol * m)) for m in (1.2, 1.7, 2.3)]}
     if effectName == "dominion":
         return {"rewardType": "mult",
-                "per50Mult": round(_ladderFpxRate("recYards", position, 83.5, 50) * 0.55, 2),
+                "per50Mult": round(_ladderFpxRate("recYards", position, 83.5, 50) * 0.85, 2),
                 "growthPerTick": 0.03, "threshold": 100, "isStreak": True}
     if effectName == "grinder":
         # Contact yards are ~80% of rush yards league-wide, so "over half" is the norm,
@@ -1974,7 +2008,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
                 "ratioBar": 0.88}
     if effectName == "landslide":
         return {"rewardType": "mult",
-                "per50Mult": round(_ladderFpxRate("yac", position, 87.5, 50) * 0.55, 2),
+                "per50Mult": round(_ladderFpxRate("yac", position, 87.5, 50) * 0.85, 2),
                 "growthPerTick": 0.03, "threshold": 100, "isStreak": True}
     if effectName == "coffin_corner":
         # ~1 punt a week is downed inside the 10, so paying per inside-10 punt fires every
@@ -1983,9 +2017,14 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
                 "perPuntMult": _ladderFpxRate("puntsIn20", position, 2.03),
                 "bonusMult": round(_LADDER_FPX_TARGET * 0.70, 2), "deepBar": 2}
     if effectName == "undertaker":
+        # The streak bar is an integer on a ~2-per-game stat, so it can only be 1 or 2:
+        # at 1 the card ran 1.50x its sibling over a season, at 2 it ran 0.88x, with
+        # nothing in between. With the bar quantised, the RATE is the only continuous
+        # lever, so the growth carries the difference.
         return {"rewardType": "mult",
-                "perPuntMult": round(_ladderFpxRate("puntsIn20", position, 2.03) * 0.55, 2),
-                "growthPerTick": 0.03, "threshold": 3, "isStreak": True}
+                "perPuntMult": round(_ladderFpxRate("puntsIn20", position, 2.03) * 0.85, 2),
+                "growthPerTick": 0.05,
+                "threshold": _streakBar("puntsIn20", position, 2.03), "isStreak": True}
     if effectName == "paydirt":
         return {"rewardType": "mult",
                 "perTdMult": _ladderFpxRate("recTds", position, 0.40)}
@@ -6129,36 +6168,38 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
         return (ctx.weekRawFP or 0) < 35
 
     if condition == "card_player_completion_bar":
-        return _ladderStat(ctx, cardPlayerId, "passing_stats", "comp") >= 32
+        return _ladderStat(ctx, cardPlayerId, "passing_stats", "comp") >= _streakBar("completions", 1, 27.7)
 
     if condition == "card_player_carry_bar":
-        return _ladderStat(ctx, cardPlayerId, "rushing_stats", "carries") >= 30
+        return _ladderStat(ctx, cardPlayerId, "rushing_stats", "carries") >= _streakBar("carries", 2, 25.9)
 
     if condition == "card_player_100_rush_yards":
-        return _ladderStat(ctx, cardPlayerId, "rushing_stats", "runYards") >= 100
+        return _ladderStat(ctx, cardPlayerId, "rushing_stats", "runYards") >= _streakBar("rushYards", 2, 110.5)
 
     if condition == "card_player_reception_bar":
-        return _ladderStat(ctx, cardPlayerId, "receiving_stats", "receptions") >= 11
+        return _ladderStat(ctx, cardPlayerId, "receiving_stats", "receptions") >= _streakBar("receptions", 3, 9.35)
 
     if condition == "card_player_big_yac":
-        return _ladderStat(ctx, cardPlayerId, "receiving_stats", "yac") >= 40
+        return _ladderStat(ctx, cardPlayerId, "receiving_stats", "yac") >= _streakBar("yac", 3, 23.0)
 
     if condition == "card_player_big_passing_week":
-        return _ladderStat(ctx, cardPlayerId, "passing_stats", "passYards") >= 300
+        return _ladderStat(ctx, cardPlayerId, "passing_stats", "passYards") >= _streakBar("passYards", 1, 229.9)
 
     if condition == "card_player_clean_sheet":
         # Zero bad throws, but only if they actually threw the ball.
+        # One errant ball is not a bad week. Demanding a perfect sheet held only 49% of
+        # weeks, which is too brittle for a streak to survive on.
         return (_ladderStat(ctx, cardPlayerId, "passing_stats", "throws") > 0
-                and _ladderStat(ctx, cardPlayerId, "passing_stats", "badThrows") == 0)
+                and _ladderStat(ctx, cardPlayerId, "passing_stats", "badThrows") <= 1)
 
     if condition == "card_player_100_rec_yards":
-        return _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvYards") >= 100
+        return _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvYards") >= _streakBar("recYards", 3, 83.5)
 
     if condition == "card_player_100_contact_yards":
-        return _ladderStat(ctx, cardPlayerId, "rushing_stats", "yardsAfterContact") >= 100
+        return _ladderStat(ctx, cardPlayerId, "rushing_stats", "yardsAfterContact") >= _streakBar("yac2", 2, 87.5)
 
     if condition == "card_player_multi_pin":
-        return _ladderStat(ctx, cardPlayerId, "kicking_stats", "puntsInside20") >= 3
+        return _ladderStat(ctx, cardPlayerId, "kicking_stats", "puntsInside20") >= _streakBar("puntsIn20", 5, 2.03)
 
     if condition == "pickem_manual_submit":
         # Streak grows when the user submitted Prognostications manually
