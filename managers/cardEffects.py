@@ -386,9 +386,17 @@ _BAL_FPX_MULT = 0.5    # scales FPx deltas (multiplier portions) added by the Ba
 EDITION_POWER_SCALE = {
     'base': 1.0,          # no-effect floor card — no params, scale is moot
     'metallic': 1.10,     # 84% -> 103%: nudge the flat/reliable floor to parity
-    'holographic': 0.47,  # 161% -> 99%
-    'prismatic': 0.30,    # 218% -> 99% (FPx-heavy; compounds, so needs the deepest cut)
-    'diamond': 1.0,       # ~100-109% mean; low median/high p90 is its by-design variance
+    # Retuned 2026-08-06 against simcheck_pool_power.py, which measures whole six-card
+    # lineups on the LIVE path. The previous values (holo 0.47, prismatic 0.30) were
+    # calibrated in PROJECTION mode on a prod snapshot and against a pool with no ladder
+    # cards in it. Two things had since made them wrong: the live on/off FP gate pays less
+    # than projection's EV-scaled version, and the ~27 stat-ladder cards bypass this dial
+    # entirely (they are anchored per rung by construction), so it now moves only the
+    # older half of each pool. Measured before: metallic 91% / holo 36% / prismatic 50%.
+    # After: 91 / 87 / 92.
+    'holographic': 1.70,
+    'prismatic': 0.70,
+    'diamond': 1.0,       # see below — the dial is NOT the lever here
 }
 
 # Rookie Hype pays flat FP per rookie in the fantasy lineup, uncapped by roster
