@@ -1009,10 +1009,18 @@ SHARED_EFFECT_POOL = [
     # flat_fp effects
     "freebie", "entourage", "touchdown_pinata", "scrappy",
     "honor_roll", "garbage_time", "loyalty_bonus",
-    "windfall", "homer", "gone_streaking", "rng", "snake_eyes", "avalanche", "hedge",
+    "homer", "gone_streaking", "rng", "snake_eyes", "avalanche", "hedge",
+    # NOTE: the OVER/UNDERPERFORMANCE set — "resplendent" (Hot Stove), "windfall",
+    # "buy_low", "reclamation", "rising_tide", "spectacle" — retired together (owner call
+    # 2026-08-06). All six keyed off `playerPerformanceRatings`, a percentile-of-production
+    # score computed weekly in memory and surfaced nowhere a user can see, so "is my roster
+    # overperforming?" was unanswerable while setting a lineup. It is also a LAUNDERED stat:
+    # derived from real production but stripped of the texture that made it readable. The
+    # replacement direction is stat-native cards (see the stat ladder). Removed from the
+    # minting pool; compute/templates stay dormant so any card already carrying them scores.
     # multiplier effects
     "big_deal", "cornucopia", "babysitter",
-    "juggernaut", "resplendent",
+    "juggernaut",
     # NOTE: "martyr" and "underdog" retired in the fusion chance rework (owner call 2026-07-26).
     # Both are "worse = better odds" losers keyed off the favorite team's record — the exact
     # inverse of the new "fill the bar to raise your odds" chance model, so they can't be
@@ -1022,7 +1030,7 @@ SHARED_EFFECT_POOL = [
     # UNUSED roster swaps, and swaps are gone. Removed from the minting pool so no
     # new copies are created; the handler + display + payout reader are kept so any
     # existing owned copies still render (they compute 0 with no swaps).
-    "providence", "rising_tide",
+    "providence",
     # NOTE: "house_money" retired in the fusion chance/favorite-team cleanup (owner call
     # 2026-07-26) — it accumulated FP only on the favorite team's UPSET wins, which are rare,
     # so it barely grew past its base. Same favorite-team-parasite class as underdog/martyr/
@@ -1034,11 +1042,11 @@ SHARED_EFFECT_POOL = [
     # NOTE: "rock_bottom" retired alongside martyr/underdog (owner call 2026-07-26) — its odds
     # ride the favorite team's LOSING streak, another "worse = better" loser incompatible with
     # the fill-the-bar chance model. Dormant compute/templates kept for owned copies.
-    "buy_low", "trust_fund",
+    "trust_fund",
     "feeding_frenzy", "highlight_reel",
     # conditional effects
     "showoff", "bandwagon",
-    "believe", "reclamation",
+    "believe",
     "pedigree", "mismatch",
     # streak effects
     "snowball_fight",
@@ -1047,7 +1055,6 @@ SHARED_EFFECT_POOL = [
     # position-keyed (generic concept, adapts to card position)
     "luminary", "squire", "spotlight_moment",
     # cross-position
-    "spectacle",
     # NOTE: "indemnity" retired in the fusion chance rework (owner call 2026-07-26) — its odds
     # grew as THIS player underperformed, the direct inverse of "clear your bar to raise your
     # odds." Dormant compute/templates kept for owned copies.
