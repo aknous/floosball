@@ -11,10 +11,9 @@ progression for a stat they like watching.
     holographic   thresholded/tiered   "+X per reception, doubled on 20+ yard catches"
     prismatic     compounding          "streak grows each week they clear 8 catches"
 
-Rarity buys **power**. A holographic card pays what its metallic sibling pays and adds a
-conditional bonus; a prismatic card adds a streak or chance instead. Means rise 1.00x /
-1.25x / 1.55x / 1.90x across the tiers, because metallic is the most reliable tier and
-equal means would make it the rational play every time. See *It is a strength ladder*.
+Rarity buys **ceiling**. Every tier scores about the same on a typical week; holographic
+and prismatic score far more on a big one. Median holds flat while p90 rises ~1.3x and
+~1.5x and p99 ~1.4x and ~1.7x. See *Same typical week, bigger tail*.
 
 ## Measured volumes (this is what sizes every rate)
 
@@ -465,85 +464,65 @@ a flat rate too, with a streak or a chance built on the same stat.
 That is what makes a chain feel like an upgrade path rather than three unrelated cards
 that happen to share a number.
 
-### It is a strength ladder (owner call 2026-08-06)
+### Same typical week, bigger tail (owner call 2026-08-06)
 
-A rarer card is a **better** card, not merely a swingier one. The holographic card pays
-everything its metallic sibling pays and adds a conditional bonus on top; the prismatic
-card pays that same flat rate and adds a streak or chance.
+**Hold the typical week constant and add to the upper tail.** On an ordinary week every
+tier scores about the same; on a big week holographic and prismatic score far more.
 
-| tier | base | bonus | streak | mean | vs metallic | guaranteed |
+The distinction that makes this work is **typical week (median) versus mean**. They are
+not the same number, and only the first is held flat. A fatter tail necessarily lifts the
+mean, so the mean rises as a CONSEQUENCE, never as the design target.
+
+Modelled on receptions (measured mean 9.35, p50 9, p90 14), 60,000 weeks per tier:
+
+| tier | typical (p50) | mean | p75 | p90 | p99 | max |
 |---|---|---|---|---|---|---|
-| metallic | 26.0 | — | — | 26.0 | 1.00x | 100% |
-| holographic | 26.0 | 6.5 | — | 32.5 | **1.25x** | 80% |
-| prismatic | 26.0 | — | 14.3 | 40.3 | **1.55x** | 65% |
-| diamond | 26.0 | 7.8 | 15.6 | 49.4 | **1.90x** | 53% |
+| metallic | 25.2 | 26.1 | 33.6 | 39.2 | 58.8 | 67.2 |
+| holographic | 25.2 | 30.4 | 41.4 | 52.2 | 84.6 | 106.2 |
+| prismatic | 28.0 | 32.7 | 39.2 | 58.8 | 102.0 | 144.0 |
 
-Variance still rises with rarity, but it is no longer the PRICE of rarity — it comes
-along with a real increase in expected value.
-
-> **This reverses a previous decision, deliberately.** `EDITION_POWER_SCALE` was tuned on
-> 2026-07-23 so every edition averages ~100% of player FP, on the rationale that "rarity
-> buys ceiling/variance, not a higher mean." The problem with equal means is that metallic
-> is the most RELIABLE tier, so if the expected values match, the rational play is always
-> metallic and rarity becomes a downgrade. A collectible ladder has to reward the pull.
-
-### The gate gives the ceiling for free
-
-The FP power bar gets **harder** with rarity (`CARD_GATE_FP_THRESHOLDS_BY_EDITION`: QB 9
-at metallic, 11 holo, 13 prismatic, 15 diamond), so higher tiers fire less often. That
-means a target MEAN implies a much bigger payout on the weeks it does fire:
-
-| tier | target mean | clears its bar | pays when it fires | vs metallic |
+| tier | typical | mean | p90 | p99 |
 |---|---|---|---|---|
-| metallic | 26.0 | 70% | 37.1 | 1.00x |
-| holographic | 32.5 | 65% | 50.0 | 1.35x |
-| prismatic | 40.3 | 58% | 69.5 | 1.87x |
-| diamond | 49.4 | 55% | 89.8 | **2.42x** |
+| holographic | **1.00x** | 1.16x | 1.33x | 1.44x |
+| prismatic | **1.11x** | 1.25x | 1.50x | **1.73x** |
 
-So the mean rises 1.90x across the ladder while the live payout rises **2.42x**. The
-ceiling comes along without having to be tuned separately, which is the cheap part of this.
+The typical week is flat and the tail roughly doubles. That is the shape.
 
-### The expensive part: FPx stacks across the hand
+**How each tier gets there:**
 
-`aggregateMultFactors` is `1 + sum(delta)` — additive, not multiplicative, which is the
-only reason this is tractable at all. But it applies to the WHOLE lineup, so multiplier
-cards compound with each other in a way flat FP cards do not:
+    metallic      rate x stat
+    holographic   rate x stat  +  bonus on the PART OF THE STAT ABOVE A TYPICAL WEEK
+    prismatic     rate x stat  +  a chance or streak whose payout SCALES WITH THE WEEK
 
-    6 x metallic     FPx cards  ->  1.36x on the entire lineup
-    6 x holographic  FPx cards  ->  1.45x
-    6 x prismatic    FPx cards  ->  1.56x
+The holographic bonus keys off the excess (`max(0, stat - typical)`), so it pays nothing
+on an ordinary week by construction. That is what keeps the median flat without any
+tuning.
 
-Raising the FPx tiers by the strength ladder raises that ceiling too, and it lands on top
-of every FP card in the hand rather than on one stat. **Tune the FP side first, measure,
-then move FPx** — a change that looks small per card is worth several times more in a
-stacked hand. `simcheck_effect_spread.py` measures per card and
-`simcheck_edition_power.py` measures per full lineup; the second is the one that catches
-this.
+> ⚠️ **The prismatic payout must scale with the stat, not be a flat number.** A first pass
+> gave prismatic a fixed bonus on a chance roll, and its p99 came out BELOW holographic's
+> (78.8 vs 84.6) — a flat bonus cannot out-ceiling a bonus that grows with the week, no
+> matter how often it fires. Making the prismatic payout proportional (`~3.2 x stat` on a
+> ~22% trigger) restores the ordering: metallic < holo < prismatic at every upper
+> percentile.
 
-**What has to change in code:** `EDITION_POWER_SCALE` in `cardEffects.py`.
+**Diamond is excluded from this ladder.** It is mostly modifier and amplifier cards
+(1 FP / 6 FPx / 6 cross-effect of 14), so it does not have a per-stat curve to shape.
 
-| edition | now | proposed |
-|---|---|---|
-| metallic | 1.10 | 1.10 |
-| holographic | 0.47 | 0.59 |
-| prismatic | 0.30 | 0.46 |
-| diamond | 1.00 | 1.90 |
+### What this does NOT fix
 
-Frozen at mint, so this re-values every scoreable card cleanly at the season cutover.
-Re-measure with `simcheck_edition_power.py` afterwards, and note that harness currently
-asserts the ~100% target in its own output text, so its expectations need updating too.
+At an equal typical week the extra mean is small (1.16x / 1.25x), and the two payoff
+surfaces that matter barely notice a fatter tail:
 
-**Economy knock-on is damped and small.** Weekly FP converts at `0.43 x FP^0.78`, so the
-sublinear exponent absorbs most of the increase. An all-prismatic lineup against an
-all-metallic one:
+- the fantasy leaderboard sorts on `seasonTotal`, a cumulative SUM, which responds only
+  to the mean;
+- Floobits convert at `0.43 x FP^0.78`, which is concave, so a spike is worth slightly
+  LESS than the same total spread evenly.
 
-    all-metallic    240.0 FP  ->  30.9 Floobits
-    all-prismatic   306.0 FP  ->  37.4 Floobits
-    FP +27%         ->            Floobits +21%
-
-The fantasy leaderboard is the place to watch rather than the currency: a user with deep
-prismatic holdings now genuinely outscores one without, which is the intent, but it does
-mean pack luck matters more to standings than it did.
+Measured over 400 simulated seasons at strictly equal means, a rising ceiling moved season
+FP not at all and Floobit income slightly DOWN. The modest mean lift above is what makes
+rarity worth playing at all; the ceiling itself pays off only in **Banner Week** (a
+one-time achievement ladder). If rarity should be about shape rather than power, the game
+needs a recurring surface that rewards a peak week. Recorded as an open question.
 
 **Universal cards are not rungs.** Odometer (sums pass + rush + receiving yards) and the
 position-adaptive set (Crescendo, Squire, Spotlight Moment, Luminary, Traverse) key off a
@@ -703,10 +682,11 @@ became measurable this session.
    receiving TDs. Nothing shipped limits them and receiving yards is the biggest gap.
 5. **Retune the two outliers** — Safety Blanket 5.3 → ~3.2 per reception, Three Pointer
    down from 39.0 FP/week.
-6. **Move `EDITION_POWER_SCALE` to the strength ladder** — holographic 0.47 → 0.59,
-   prismatic 0.30 → 0.46, diamond 1.00 → 1.90, metallic unchanged. Re-measure with
-   `simcheck_edition_power.py`, whose own output text still asserts the retired ~100%
-   target and needs updating with it.
+6. **Shape the tail, not the dial.** `EDITION_POWER_SCALE` stays roughly where it is —
+   the lift comes from HOW the holo and prismatic bonuses are written (excess-of-typical
+   and scales-with-the-week), not from a global multiplier. Measure the resulting
+   percentile curve per tier rather than the mean alone; `simcheck_effect_spread.py`
+   already reports p10/p90 per card.
 
 Counts: **12 families + 11 one-offs, ~31 new cards** including the FPx siblings.
 Three shipped Floobits cards (Air Raid, Goal Line Vulture, Industrious) moved OUT of
