@@ -283,7 +283,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Breakaway** **`NEW`** | Gone in a blink | One crease is all it takes. FP for rushing yards, and a bonus every time this player breaks one for 20. | +{perYardFP} FP per rushing yard, +{bonusFP} for every 20+ yard run by this player |
 | **Diversified** | Variety pack | Don't put all your eggs in one basket. FP per unique output type (FP, FPx, Floobits) across your equipped cards. | +{perTypeFP} FP per unique output type in your hand (FP, FPx, Floobits) |
 | **Double Trouble** | Both WRs deliver | Two is better than one. FP when either WR scores a TD, bonus when both WRs score. | +{singleWrFP} FP when a WR scores, +{rewardValue} bonus FP when both WRs score |
-| **End Zone** **`NEW`** | Where it counts | One is good. Two is somebody else's problem. FP per receiving TD, doubled at two. | +{perTdFP} FP per receiving TD, doubled at {threshold}+ |
+| **End Zone** **`NEW`** | Where it counts | One is good. Two is somebody else's problem. FP on every receiving TD, with a bonus at two. | +{perTdFP} FP per receiving TD, +{bonusFP} bonus at {threshold}+ |
 | **Fat Cat** | Rolling in it | Money talks. FP that scales with your Floobits balance. Excludes current week earnings. | +1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP) |
 | **Gone Streaking** | CENSORED | Don't look away. FP based on your favorite team's longest streak (wins or losses). | +{baseFP} FP base, +{perStreakFP} per game in longest streak (winning or losing) by your favorite team this season. Streak does not need to be active. |
 | **Group Project** | Everyone showed up | Everyone chipped in. FP if 4 or more of your other cards triggered a non-zero bonus this week. | +{rewardValue} FP when 4 or more of your other cards produced a non-zero bonus this week |
@@ -301,10 +301,10 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Pocket Aces** | AA | Pocket Rockets. Base FP every week, plus bonus FP when this player hits a combined stat threshold. | +{baseFP} FP base, +{rewardValue} bonus if this player combines for {threshold}+ {statDisplay} |
 | **Range** | Boot it through | Distance is the reward. FP scaling with the total FG yardage this player kicked this week. | +{perYardFP} FP per yard of FG kicked by this player this week. |
 | **Rookie Hype** | Trust the kids | Believe in the new class. Bonus FP per rookie on your roster. | +{perRookieFP} FP per rookie on your roster |
-| **Salvo** **`NEW`** | All at once | One is a shot. Three is a salvo. FP per passing TD, doubled at three. | +{perTdFP} FP per passing TD, doubled at {threshold}+ |
+| **Salvo** **`NEW`** | All at once | One is a shot. Three is a salvo. FP on every passing TD, with a bonus at three. | +{perTdFP} FP per passing TD, +{bonusFP} bonus at {threshold}+ |
 | **Spotlight Moment** | Lights please | Lights, camera, action. FP whenever this player scores a TD. For WR, either counts. | +{rewardValue} FP when this player scores a TD. WR counts either WR scoring a TD. |
 | **Trebuchet** | Siege engine | Send it deep. Base FP every week, plus bonus FP when this player catches a pass of 25+ yards. | +{baseFP} FP base, +{rewardValue} bonus if this player catches a {threshold}+ yard pass |
-| **Updraft** **`NEW`** | Catching a lift | Some days the ball just carries. Escalating FP past 200, 300 and 400 yards. | +{gate1}/{gate2}/{gate3} FP at 200, 300 and 400 passing yards |
+| **Updraft** **`NEW`** | Catching a lift | Some days the ball just carries. FP on every passing yard, with more at 200, 300 and 400. | +{perYardFP} FP per passing yard, +{gate1}/{gate2}/{gate3} bonus at 200, 300 and 400 |
 | **Walk Off** | Show up when it counts | Built for the late game. FP per Q4 or OT TD or field goal scored by a roster player. Bonus floobits if your favorite team wins on a walk-off. | +{perScoreFP} FP per Q4/OT TD or FG by this player, +{floobitsOnTrigger}F when your favorite team wins with a walk-off |
 | **Wanderer** | Spread thin | A bit of everywhere. Output scales with how many different teams your roster players come from. Max payout when no two share a team. | +{perTeamFP} FP per unique team represented across your roster |
 
@@ -313,21 +313,21 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | card | tagline | back of card | detail |
 |---|---|---|---|
 | **Backfield Buddies** | Same backfield | Same backfield, double the payoff. FPx when this player and your rostered RB play on the same team. | +{rewardValue} FPx when this player and your rostered RB share a team |
-| **Beast of Burden** **`NEW`** | Carrying the load | Keep feeding the ball until the legs give out. FPx once this player clears 25 carries. | +{perCarryMult} FPx per carry past {threshold} |
+| **Beast of Burden** **`NEW`** | Carrying the load | FPx on every carry, and more once the workload passes 25. | +{perCarryMult} FPx per carry, +{bonusMult} more once past {threshold} |
 | **Closers** | See this watch? | Always be closing. Bonus FP from this player's Q4 and OT production. | This player's Q4/OT fantasy points are multiplied by {q4MultFactor}x |
-| **Coffin Corner** **`NEW`** | Nowhere to go | Inside the ten and pinned against the sideline. FPx per punt downed inside the 10. | +{perPuntMult} FPx per punt downed inside the 10 |
-| **Custody** **`NEW`** | Safe hands | Everything thrown that way comes down. FPx per catch past eight. | +{perReceptionMult} FPx per reception past {threshold} |
+| **Coffin Corner** **`NEW`** | Nowhere to go | FPx on every punt downed inside the 20, and more for the ones inside the 10. | +{perPuntMult} FPx per punt inside the 20, +{bonusMult} more for inside the 10 |
+| **Custody** **`NEW`** | Safe hands | FPx on every catch, and more once the count passes eight. | +{perReceptionMult} FPx per reception, +{bonusMult} more once past {threshold} |
 | **Eminence** | Stack the leaderboard | Top of the heap. FPx per roster player ranked top-10 at their position by season FP/game. | +{perPlayerMult} FPx per roster player ranked top-10 at their position. Max +{maxDelta} FPx. Active from week 3. |
-| **Grinder** **`NEW`** | Earning every inch | More yards after the hit than before it. FPx when contact yards clear half the total. | +{ratioMult} FPx when yards after contact exceed half of rushing yards |
+| **Grinder** **`NEW`** | Earning every inch | FPx on every yard after contact, and more when those yards clear half the total. | +{perYardMult} FPx per yard after contact, +{ratioMult} more when they exceed half the total |
 | **Luminary** | Your {posLabel} runs the show | Your {posLabel} runs the offense. FPx that increases the more FP this player earns. | FPx that grows the more FP this player earns compared to teammates |
-| **Marksman** **`NEW`** | Nothing wasted | Not one ball off target. FPx when this player finishes the week without a bad throw. | +{cleanSheetMult} FPx when this player records 0 bad throws |
+| **Marksman** **`NEW`** | Nothing wasted | FPx on every well-placed ball, and more for a week without a single bad throw. | +{perGoodThrowMult} FPx per well-placed throw, +{cleanSheetMult} more on 0 bad throws |
 | **No Passengers** | No free rides | Depth pays. FPx that scales with your lowest-scoring roster player, so a lineup with no weak link earns more. | +{perFloorFP} FPx per FP scored by your lowest roster player (max +{maxDelta}) |
 | **Parlay** | Let it ride | FPx that grows with your weekly Prognostication points. | FPx that grows with your weekly Prognostication points. Counts auto-picks |
 | **Providence** | A little something extra | Fortune favors the prepared. FPx bonus plus chance boost to all chance cards in your hand. | +{baseDelta} FPx, plus +{chanceBonusPct}% trigger odds to every chance card in your hand |
-| **Rhythm** **`NEW`** | Finding a groove | Once the rhythm arrives, everything comes easier. FPx growing with every completion past 20. | +{perCompletionMult} FPx per completion past {threshold} |
+| **Rhythm** **`NEW`** | Finding a groove | Once the rhythm arrives, everything comes easier. FPx on every completion, and more once past 20. | +{perCompletionMult} FPx per completion, +{bonusMult} more once past {threshold} |
 | **Stack** | QB-WR stack | Stack attack. FPx when this player and any rostered WR play on the same team. | +{rewardDelta} FPx when this player and a rostered WR share a team |
 | **Synergy** | Stack the depth chart | Two heads, one team. FPx per pair of roster players on the same actual team. | +{perPairMult} FPx per pair of roster players on the same actual team. Max +{maxDelta} FPx. |
-| **Territory** **`NEW`** | Claiming ground | Escalating FPx as this player passes 75, 125 and 175 receiving yards. | +{gate1}/{gate2}/{gate3} FPx at 75, 125 and 175 receiving yards |
+| **Territory** **`NEW`** | Claiming ground | FPx on every receiving yard, with more at 75, 125 and 175. | +{perYardMult} FPx per receiving yard, +{gate1}/{gate2}/{gate3} more at 75, 125 and 175 |
 | **Trailblazer** | Unstoppable force | Get rolling. Base FPx, enhanced FPx when this player hits 75+ rushing yards. | +{baseDelta} FPx base, +{enhancedDelta} FPx when this player hits {yardThreshold}+ rush yards in a game<br>*RENAMED to **Trailblazer** — joins the rush-yards journey motif.* |
 | **Vanguard** | Old guard | The old guard endures. FPx per roster player with 5 or more seasons played. | +{perVetMult} FPx per roster player with 5+ seasons played. Max +{maxDelta} FPx. |
 
@@ -355,30 +355,30 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Avalanche** | Bury them | Momentum builds with every score. Each roster TD pays more FP than the last. | Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing |
 | **Babysitter** | Carrying the team | Someone has to do the heavy lifting. Guaranteed FP floor plus a chance at enhanced FP. The trigger bar fills from this player's own FP and from each roster player who underperforms. | +{baseFP} FP guaranteed, chance at {enhancedFP} FP. Trigger odds fill from this player's FP plus each roster player under {fpThreshold} FP. |
 | **Bandwagon Express** | Choo choo! | Next stop: more points. FP growing each week your favorite team wins. Stacking streak cards accelerates growth. | +{baseReward} FP base, +{growthPerTick} per consecutive favorite-team win. |
-| **Barrage** **`NEW`** | Keep firing | Each score raises the odds the next one pays. Escalating chance per passing TD. | +{baseFP} FP, escalating chance at {bonusFP} FP per passing TD |
+| **Barrage** **`NEW`** | Keep firing | FP on every passing TD, and each one raises the odds the next pays out. | +{perTdFP} FP per passing TD, plus escalating odds at {bonusFP} FP on each one |
 | **Bonsai** | Snip snip | Grown, not gifted. Roster performance earns permanent FP growth each week. Higher levels demand bigger weeks. Resets if unequipped. | +{baseFP} FP guaranteed. This player's {triggerLabel} scale the chance to grow the base by +{growthFP} FP at week's end. Every grow slows the next. |
 | **Charmed** | The dice love you | Pays out every time luck breaks your way. FP per chance card that triggered this week. | +{perTriggerFP} FP per chance card that triggered this week. |
-| **Clockwork** **`NEW`** | Never misses a beat | Same time every week. Streak grows each week this player clears 25 completions. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} completions |
+| **Clockwork** **`NEW`** | Never misses a beat | Same time every week. FP on every completion, plus a streak for every week past 25. | +{perCompletionFP} FP per completion, plus a streak growing {growthPerTick} per week this player clears {threshold} |
 | **Complacency** | Stop tinkering | Put the phone down. FP that grows each week you don't touch your roster. Stacking streak cards accelerates growth. | +{baseReward} FP, +{growthPerTick} per week roster is unchanged. |
 | **Crescendo** | Keep missing, it only gets easier | Miss enough and eventually you can't miss. Each TD by this player rolls for a bonus. Miss and the odds go up. For K, triggers on FGs. | +{baseFP} FP guaranteed. {baseChance}% chance at {bonusFP} FP on this player's first {scoreNoun}, chance increases by +{chanceStep}% if bonus doesn't trigger. |
 | **Custodian** **`NEW`** | Cleaning up | The throw was bad. The catch was made anyway. FP per catch, and a bonus for rescuing a bad ball. | +{perReceptionFP} FP per reception, +{bonusFP} per bailout by this player |
-| **Dead Eye** **`NEW`** | Never off target | Week after week, right on the numbers. Streak grows with every clean sheet. | +{baseFP} FP, +{growthPerTick} per week this player records 0 bad throws |
-| **Dominion** **`NEW`** | The whole field | A hundred yards a week and nobody takes it back. Streak grows each time. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} receiving yards |
-| **Getaway** **`NEW`** | Gone | Forty yards after the catch, every week. Streak grows each time. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} YAC |
-| **Houdini** **`NEW`** | Impossible to corner | The tackle was there and then it wasn't. Chance filling from broken tackles. | +{baseFP} FP guaranteed, chance at {bonusFP} FP filling from broken tackles |
-| **House Call** **`NEW`** | All the way | Sometimes nobody gets a hand on it. Chance paying out on a return touchdown. | +{baseFP} FP, chance at {bonusFP} FP on a punt return TD |
-| **Iron Man** **`NEW`** | Never comes off the field | Twenty carries, every single week. Streak grows each week the bar is cleared. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} carries |
-| **Landslide** **`NEW`** | Gathering weight | A hundred yards after contact, every week. Streak grows each time. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} yards after contact |
+| **Dead Eye** **`NEW`** | Never off target | FP on every well-placed ball, plus a streak for every week with nothing off target. | +{perGoodThrowFP} FP per well-placed throw, plus a streak growing {growthPerTick} per clean sheet |
+| **Dominion** **`NEW`** | The whole field | FP on every receiving yard, plus a streak for every hundred-yard week. | +{perYardFP} FP per receiving yard, plus a streak growing {growthPerTick} per week past {threshold} |
+| **Getaway** **`NEW`** | Gone | FP on every yard after the catch, plus a streak for every forty-yard week. | +{perYardFP} FP per YAC yard, plus a streak growing {growthPerTick} per week past {threshold} |
+| **Houdini** **`NEW`** | Impossible to corner | FP on every rushing yard, and a shot at more every time a tackle gets broken. | +{perYardFP} FP per rushing yard, plus a chance at {bonusFP} FP filling from broken tackles |
+| **House Call** **`NEW`** | All the way | FP on every return yard, and sometimes nobody gets a hand on it at all. | +{perYardFP} FP per punt return yard, plus a chance at {bonusFP} FP on a return TD |
+| **Iron Man** **`NEW`** | Never comes off the field | FP on every carry, plus a streak for every week the load passes twenty. | +{perCarryFP} FP per carry, plus a streak growing {growthPerTick} per week past {threshold} |
+| **Landslide** **`NEW`** | Gathering weight | FP on every yard after contact, plus a streak for every hundred-yard week. | +{perYardFP} FP per yard after contact, plus a streak growing {growthPerTick} per week past {threshold} |
 | **Last Resort** | The ultimate insurance | When nothing else works. Guaranteed FP floor plus a chance at enhanced FP. The trigger bar fills from this player's own FP and from each of your other cards that fails to produce a bonus. | +{baseFP} FP guaranteed, chance at {enhancedFP} FP. Trigger odds fill from this player's FP plus each of your other cards that produced no bonus. |
 | **Leg Day** | Never skip leg day | Never skip it. FP growing each week this player nails a 35+ yard FG. Stacking streak cards accelerates growth. | +{baseReward} FP base, +{growthPerTick} per consecutive game with a 35+ yd FG by your K. A week with no FG attempts will not break the streak. |
 | **Metronome** | Never misses a beat | FP that grows each week this player clears their power bar. A cold week holds the streak rather than resetting it. | +{baseReward} FP, +{growthPerTick} per consecutive week this player clears their power bar. Streak does not reset on cold weeks. |
 | **Odometer** | Every milestone pays | Hit the milestones. Escalating FP at each yardage gate this player hits. Resets weekly. | Escalating FP as this player piles up yards this week (40 / 80 / 120 / 160+). |
-| **Odyssey** **`NEW`** | The long road | A hundred yards a week, week after week. Streak grows each time the mark is reached. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} rushing yards |
-| **Promised Land** **`NEW`** | Getting there | Each score raises the odds the next one pays. | +{baseFP} FP, escalating chance at {bonusFP} FP per receiving TD |
+| **Odyssey** **`NEW`** | The long road | FP on every rushing yard, plus a streak for every hundred-yard week. | +{perYardFP} FP per rushing yard, plus a streak growing {growthPerTick} per week past {threshold} |
+| **Promised Land** **`NEW`** | Getting there | FP on every receiving TD, and each one raises the odds the next pays out. | +{perTdFP} FP per receiving TD, plus escalating odds at {bonusFP} FP on each one |
 | **Snowball Fight** | Getting bigger | It just keeps getting bigger. FP growing each week your roster scores a TD. Stacking streak cards accelerates growth. | +{baseReward} FP base, +{growthPerTick} per consecutive week at least one player on your roster scores a TD. |
-| **Tenure** **`NEW`** | Long service | Eight catches a week, without fail. Streak grows each week the bar is cleared. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} receptions |
+| **Tenure** **`NEW`** | Long service | FP on every catch, plus a streak for every week the count passes eight. | +{perReceptionFP} FP per reception, plus a streak growing {growthPerTick} per week past {threshold} |
 | **Traverse** | Take the long way | High stakes yardage gamble. FP floor plus a jackpot chance based on yardage by this player. | +{baseFP} FP floor + {bonusFP} FP jackpot. Jackpot chance starts at {baseChance}%, +{chancePerStep}% per {yardStep} {yardType} yards |
-| **Undertaker** **`NEW`** | Bury them | Week after week the opponent starts in a hole. Streak grows with multi-pin weeks. | +{baseFP} FP, +{growthPerTick} per week this player pins {threshold}+ punts inside the 20 |
+| **Undertaker** **`NEW`** | Bury them | FP on every punt downed inside the 20, plus a streak for every multi-pin week. | +{perPuntFP} FP per punt inside the 20, plus a streak growing {growthPerTick} per week past {threshold} |
 
 #### Prismatic · FPx
 
@@ -392,7 +392,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Juggernaut** | I'M THE JUGGERNAUT | Momentum is a beautiful thing. FPx grows with every win in your favorite team's streak, with diminishing returns past long runs. | +{baseXDelta} FPx base, grows with your favorite team's win streak. |
 | **Momentum** | Rolling | Can't stop won't stop. FPx grows each week your roster breaks 100 FP. Stacking streak cards accelerates growth. | +{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week your roster scores 100+ FP. |
 | **On Fire** | Keep the flame alive | Don't let the flame die. FPx that grows each week this player makes a FG. Stacking streak cards accelerates growth. | +{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week with a FG made by your K. |
-| **Stratosphere** **`NEW`** | Thin air up here | Territory most passers never see. Streak grows each week this player clears 300 yards. | +{baseMult} FPx, +{growthPerTick} per week this player clears {threshold} passing yards |
+| **Stratosphere** **`NEW`** | Thin air up here | Territory most passers never see. FPx on passing yards, plus a streak for every 300-yard week. | +{perHundredMult} FPx per 100 passing yards, plus a streak growing {growthPerTick} per week past {threshold} |
 
 #### Prismatic · Floobits
 
@@ -452,12 +452,32 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 
 ## How a family works
 
-A **family** is one stat, three cards, one motif. The stat never changes as you climb —
-only what the card does with it, and the names read as a set so the chain is visible.
+A **family** is one stat, three cards, one motif. The stat never changes as you climb, and
+**each tier contains the one below it**. A holographic card still pays the flat rate its
+metallic sibling pays; it just adds a conditional bonus on top. A prismatic card still pays
+a flat rate too, with a streak or a chance built on the same stat.
 
-    metallic      flat            every unit pays the same
-    holographic   thresholded     units past a line pay more, or a shape of game doubles it
-    prismatic     compounding     a streak across weeks, or odds that fill from the stat
+    metallic      output per stat
+    holographic   output per stat  +  conditional bonus
+    prismatic     output per stat  +  streak or chance on that stat
+
+That is what makes a chain feel like an upgrade path rather than three unrelated cards
+that happen to share a number.
+
+### The magnitude re-splits; it does not stack
+
+If each tier simply ADDED, prismatic would be strictly stronger and the ~100% mean-per-
+edition target would break. So the mechanic accumulates while the money moves:
+
+| tier | structure | base | bonus | streak | mean | guaranteed |
+|---|---|---|---|---|---|---|
+| metallic | flat rate only | 26.0 | — | — | 26.0 | **100%** |
+| holographic | flat rate + conditional bonus | 16.0 | 10.0 | — | 26.0 | **62%** |
+| prismatic | flat rate + streak or chance | 10.0 | — | 16.0 | 26.0 | **38%** |
+
+Every tier means the same to a typical week. What changes is **how much of it is
+guaranteed** — variance rises with rarity, which is the stated design intent, while the
+card above always still does what the card below did.
 
 **Universal cards are not rungs.** Odometer (sums pass + rush + receiving yards) and the
 position-adaptive set (Crescendo, Squire, Spotlight Moment, Luminary, Traverse) key off a
@@ -549,51 +569,53 @@ stat that separates a receiver's contribution from the quality of throw they wer
 
 ## QB
 
-| family / motif | metallic | holographic | prismatic |
+| family / motif | metallic — per stat | holographic — + conditional bonus | prismatic — + streak or chance |
 |---|---|---|---|
-| **completions** — timekeeping | *Cadence* **FP** · 0.9/comp | *Rhythm* **FPx** past 20 | *Clockwork* **FP** streak at 25+ |
-| **pass yards** — flight | *Slipstream* **FPx** per 100 | *Updraft* **FP** gates 200/300/400 | *Stratosphere* **FPx** streak at 300 |
-| **pass TDs** — ordnance | *Bombardier* **FPx** | *Salvo* **FP** doubled at 3+ | *Barrage* **FP** escalating odds |
-| **throw quality** — marksmanship | **Gunslinger** **FP** *(re-pointed)* | *Marksman* **FPx** on a clean sheet | *Dead Eye* **FP** streak |
+| **completions** — timekeeping | *Cadence* **FP** per completion | *Rhythm* **FPx** per completion, more past 20 | *Clockwork* **FP** per completion + streak at 25+ |
+| **pass yards** — flight | *Slipstream* **FPx** per 100 yards | *Updraft* **FP** per yard, + bonus at 200/300/400 | *Stratosphere* **FPx** per 100 + streak at 300 |
+| **pass TDs** — ordnance | *Bombardier* **FPx** per pass TD | *Salvo* **FP** per TD, + bonus at 3+ | *Barrage* **FP** per TD + escalating odds |
+| **throw quality** — marksmanship | **Gunslinger** **FP** per good throw *(re-pointed)* | *Marksman* **FPx** per good throw, + bonus on a clean sheet | *Dead Eye* **FP** per good throw + clean-sheet streak |
 
 One-offs: *Attention* **FPx** (targets), *Altitude* (holo, aDOT above 8), *Haymaker*
-(holo, 20+ throws), **Air Raid** (shipped, Floobits on pass TDs).
+(holo, pass yards + bonus per 20+ throw), **Air Raid** (shipped, Floobits on pass TDs).
 Blocked: throw quality needs the new `goodThrows` counter.
 
 ## RB
 
-| family / motif | metallic | holographic | prismatic |
+| family / motif | metallic — per stat | holographic — + conditional bonus | prismatic — + streak or chance |
 |---|---|---|---|
-| **carries** — labour | **Workhorse** **FP** | *Beast of Burden* **FPx** at 25+ | *Iron Man* **FP** streak at 20 |
-| **rush yards** — journey | **Expedition** **FP** | **Trailblazer** **FPx** *(was Stampede)* | *Odyssey* **FP** streak at 100 |
-| **rush TDs** — force | *Battering Ram* **FPx** | **Lead Blocker** **FP** | — |
-| **yards after contact** — mass | *Freight* **FP** · 0.3/yd | *Grinder* **FPx** when YAC > half | *Landslide* **FP** streak at 100 |
+| **carries** — labour | **Workhorse** **FP** per carry | *Beast of Burden* **FPx** per carry, more past 25 | *Iron Man* **FP** per carry + streak at 20 |
+| **rush yards** — journey | **Expedition** **FP** per yard | **Trailblazer** **FPx** per yard, + bonus on the big game *(was Stampede)* | *Odyssey* **FP** per yard + streak at 100 |
+| **rush TDs** — force | *Battering Ram* **FPx** per rush TD | **Lead Blocker** **FP** per rush TD, + bonus | — |
+| **yards after contact** — mass | *Freight* **FP** per contact yard | *Grinder* **FPx** per contact yard, + bonus past half | *Landslide* **FP** per contact yard + streak at 100 |
 
-One-offs: *Breakaway* (holo, 20+ runs), *Houdini* (prismatic, chance filling from broken
-tackles), **Goal Line Vulture** (shipped, Floobits on rush TDs).
+One-offs: *Breakaway* (holo, rush yards + bonus per 20+ run), *Houdini* (prismatic, chance
+filling from broken tackles), **Goal Line Vulture** (shipped, Floobits on rush TDs).
 
 Yards after contact only became a real stat this session (80% of rush yards, 87.5/game).
 
 ## WR / TE
 
-| family / motif | metallic | holographic | prismatic |
+| family / motif | metallic — per stat | holographic — + conditional bonus | prismatic — + streak or chance |
 |---|---|---|---|
-| **receptions** — custody | **Possession** (WR) **FP** · **Safety Blanket** (TE) **FP** | *Custody* **FPx** past 8 | *Tenure* **FP** streak at 8 |
-| **receiving yards** — territory | *Frontier* **FP** · 0.31/yd | *Territory* **FPx** gates 75/125/175 | *Dominion* **FP** streak at 100 |
-| **receiving TDs** — the end zone | *Paydirt* **FPx** | *End Zone* **FP** doubled at 2+ | *Promised Land* **FP** escalating odds |
-| **YAC** — escape | **Slippery** **FP** | **Jailbreak** **FPx** | *Getaway* **FP** streak at 40 |
+| **receptions** — custody | **Possession** (WR) · **Safety Blanket** (TE) **FP** per catch | *Custody* **FPx** per catch, more past 8 | *Tenure* **FP** per catch + streak at 8 |
+| **receiving yards** — territory | *Frontier* **FP** per yard | *Territory* **FPx** per yard, + bonus at 75/125/175 | *Dominion* **FP** per yard + streak at 100 |
+| **receiving TDs** — the end zone | *Paydirt* **FPx** per rec TD | *End Zone* **FP** per TD, + bonus at 2+ | *Promised Land* **FP** per TD + escalating odds |
+| **YAC** — escape | **Slippery** **FP** per YAC yard | **Jailbreak** **FPx** per YAC yard, + bonus | *Getaway* **FP** per YAC yard + streak at 40 |
 
-One-offs: **Trebuchet** (shipped, longest catch), *Highpoint* (holo, contested catches),
-*Custodian* (prismatic, bailouts), **Industrious** (shipped, Floobits on TE receptions).
+One-offs: **Trebuchet** (shipped, longest catch), *Highpoint* (holo, receptions + bonus per
+contested catch), *Custodian* (prismatic, receptions + bonus per bailout), **Industrious**
+(shipped, Floobits on TE receptions).
+
 **Receiving yards is the biggest hole in the pool** — 83.5/game, the most-produced skill
 stat in the game, and no card below prismatic today.
 
 ## K
 
-| family / motif | metallic | holographic | prismatic |
+| family / motif | metallic — per stat | holographic — + conditional bonus | prismatic — + streak or chance |
 |---|---|---|---|
-| **punting** — burial | *Pinpoint* **FP** · 13/punt inside 20 | *Coffin Corner* **FPx** inside the 10 | *Undertaker* **FP** streak |
-| **returns** — the runback | *Runback* **FP** per return yard | — | *House Call* **FP** odds on return TDs |
+| **punting** — burial | *Pinpoint* **FP** per punt inside the 20 | *Coffin Corner* **FPx** per pin, + bonus inside the 10 | *Undertaker* **FP** per pin + multi-pin streak |
+| **returns** — the runback | *Runback* **FP** per return yard | — | *House Call* **FP** per return yard + odds on a return TD |
 
 **Field goals need pruning, not building.** The kicker already carries six cards —
 Three Pointer, Good Neighbor, Range, Sniper, On Fire, Leg Day — on a stat line of 1.98
