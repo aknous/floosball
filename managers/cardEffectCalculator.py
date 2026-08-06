@@ -924,12 +924,20 @@ def calculateWeekCardBonuses(
             from constants import CARD_TIER_MULT
             _t = getattr(eq.user_card, "tier", 1) or 1
             _scaled = tierScaledStrength("catalyst", primary, CARD_TIER_MULT.get(_t, 1.0))
-            fpPer1Pct = _scaled.get("fpPer1Pct", primary.get("fpPer1Pct", 12))
-            baseline = primary.get("baseline", 55)
+            # Reads the CARD's own player, matching _computeCatalyst and the card text.
+            # This ran on ctx.weekRawFP (a whole roster, ~120 FP) against a baseline of
+            # 25 sized for ONE player, so it sat near its cap every week. Falls back to
+            # the roster-era keys so a card minted before the rebase still behaves.
+            fpPer1Pct = _scaled.get("fpPer1PctSolo",
+                                    primary.get("fpPer1PctSolo",
+                                                primary.get("fpPer1Pct", 5)))
+            baseline = primary.get("baselineSolo", primary.get("baseline", 12))
             maxBoost = _scaled.get("maxBoost", primary.get("maxBoost", 0.10))
-            rosterFP = ctx.weekRawFP
-            if rosterFP > baseline:
-                boost = min(maxBoost, (rosterFP - baseline) / fpPer1Pct / 100)
+            _cardPid = getattr(eq.user_card.card_template, "player_id", None)
+            playerFP = float(((ctx.weekPlayerStats or {}).get(_cardPid) or {})
+                             .get("fantasyPoints", 0) or 0)
+            if playerFP > baseline:
+                boost = min(maxBoost, (playerFP - baseline) / fpPer1Pct / 100)
             else:
                 boost = 0.0
             ctx.chanceBonus += boost

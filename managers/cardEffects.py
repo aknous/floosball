@@ -238,8 +238,9 @@ def tierScaledStrength(effectName: str, primary: dict, tierMult: float) -> dict:
         return {"fgMult": round(1 + (p["fgMult"] - 1) * tierMult, 2)}
     if effectName == "catalyst":
         out = {}
-        if "fpPer1Pct" in p:
-            out["fpPer1Pct"] = max(1, int(round(p["fpPer1Pct"] / tierMult)))
+        for _k in ("fpPer1PctSolo", "fpPer1Pct"):   # Solo is current; the other is legacy
+            if _k in p:
+                out[_k] = max(1, int(round(p[_k] / tierMult)))
         if "maxBoost" in p:
             out["maxBoost"] = round(p["maxBoost"] * tierMult, 2)
             out["maxBoostDisplay"] = int(round(out["maxBoost"] * 100))
@@ -2229,12 +2230,18 @@ def _buildFloobitsParams(effectName, playerRating, editionScale, position=None):
         return {"flatBonus": flatBonus}
     # ── Catalyst: dynamic chance boost from roster FP + small floobits base
     if effectName == "catalyst":
-        # Diamond tier — big chance boost + meaningful Floobits output
-        fpPer1Pct = 5
-        baseline = 25
+        # Diamond tier — big chance boost + meaningful Floobits output.
+        # SOLO keys: the compute and the detail template were both rebased onto the card's
+        # own player, but this builder still emitted the roster-era `fpPer1Pct`/`baseline`.
+        # The effect of that split: the detail rendered raw {fpPer1PctSolo} placeholders,
+        # _computeCatalyst silently fell through to its hardcoded defaults, and the
+        # calculator pre-scan (the path that actually feeds ctx.chanceBonus) measured
+        # ROSTER FP against a single-player baseline of 25 and sat near its cap every week.
+        fpPer1PctSolo = 5
+        baselineSolo = 12
         maxBoostPct = 35
         baseFloobits = int(round((10 + rn * 0.40) * editionScale))
-        return {"fpPer1Pct": fpPer1Pct, "baseline": baseline,
+        return {"fpPer1PctSolo": fpPer1PctSolo, "baselineSolo": baselineSolo,
                 "maxBoost": maxBoostPct / 100, "maxBoostDisplay": maxBoostPct,
                 "baseFloobits": baseFloobits,
                 "isChanceAmplifier": True}
