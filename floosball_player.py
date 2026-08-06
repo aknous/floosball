@@ -115,6 +115,7 @@ playerStatsDict =   {
                             'throws': 0,          # balls actually released (excludes sacks)
                             'throwQualitySum': 0, # / throws = avg throw quality
                             'badThrows': 0,       # releases below BAD_THROW_THRESHOLD
+                            'goodThrows': 0,      # releases at or above GOOD_THROW_THRESHOLD
                             'airYardsSum': 0,     # / throws = average depth of target
                         },
                         'rushing': {

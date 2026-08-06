@@ -15310,7 +15310,8 @@ class Play():
                 # box score could not separate "threw it badly" from "receiver
                 # dropped it" or "was covered".
                 try:
-                    from constants import BAD_THROW_THRESHOLD as _BTT
+                    from constants import (BAD_THROW_THRESHOLD as _BTT,
+                                           GOOD_THROW_THRESHOLD as _GTT)
                     from stat_tracker import StatCategory as _SC
                     _rs = self.game.isRegularSeasonGame
                     self.throwQualityValue = throwQuality
@@ -15319,6 +15320,10 @@ class Play():
                                             int(round(throwQuality)), _rs)
                     if throwQuality < _BTT:
                         self.passer.addAdvanced(_SC.PASSING, 'badThrows', 1, _rs)
+                    elif throwQuality >= _GTT:
+                        # A well-placed ball. Counted at RELEASE like the other two, so it
+                        # covers incompletions and does not credit the receiver's hands.
+                        self.passer.addAdvanced(_SC.PASSING, 'goodThrows', 1, _rs)
                     # Intended depth of the throw, banked at RELEASE so aDOT
                     # covers incompletions too (calculatePassYardage only rolls on
                     # the completion path). Means mirror its passTypeParams.

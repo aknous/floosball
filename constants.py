@@ -1154,6 +1154,15 @@ RUN_SECOND_BREAK_PENALTY = 18  # ...and the second is this much harder
 # Thresholds for the derived per-play metrics. These describe how a play is
 # CLASSIFIED for the box score; they do not feed resolution.
 BAD_THROW_THRESHOLD = 45        # throwQuality below this counts as a bad throw
+# throwQuality at or above this counts as a GOOD throw — a genuinely well-placed ball,
+# the stat the throw-quality card family keys off. The bad-throw bar cannot serve: only
+# 4.1% of throws fall under 45, so "not bad" is 96% of throws and triggers nothing.
+# Calibrated to land near a third of throws (~12-14 a game) so it has card-trigger volume
+# comparable to receptions. Measured over 1,502 QB games on a fresh sim: at 78 the rate was
+# 29.3% (11.1/game, slightly tight); at 76 it is 35.0% (13.4/game, p90 28, max 50), which
+# is the target band. Do not reuse BAD_THROW_THRESHOLD's mirror for this — only 3-4% of
+# throws fall below 45, so "not bad" is ~96% of throws and triggers nothing.
+GOOD_THROW_THRESHOLD = 76
 CONTESTED_OPENNESS_THRESHOLD = 40  # receiver openness below this counts as contested
 # A dropped pass is mostly on the receiver, but drop probability scales with how
 # poorly the ball was placed (dropProb derives from un-secured contact, which is

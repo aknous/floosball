@@ -228,6 +228,7 @@ def _perGameAverageStats(row) -> Optional[dict]:
         kickingStats=_avg(row.kicking_stats),
         fantasyPoints=(row.fantasy_points or 0) / gp,
         teamId=row.team_id or 0,
+        returningStats=_avg(getattr(row, 'returning_stats', None)),
     )
 
 

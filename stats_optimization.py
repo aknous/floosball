@@ -25,6 +25,7 @@ class PassingStats:
     throws: int = 0    # balls actually released (excludes sacks)
     throwQualitySum: int = 0    # / throws = avg throw quality
     badThrows: int = 0    # releases below BAD_THROW_THRESHOLD
+    goodThrows: int = 0    # releases at or above GOOD_THROW_THRESHOLD
     airYardsSum: int = 0    # / throws = average depth of target
 
     
@@ -44,6 +45,7 @@ class PassingStats:
         self.throws = 0
         self.throwQualitySum = 0
         self.badThrows = 0
+        self.goodThrows = 0
         self.airYardsSum = 0
     
     def copy_from(self, other: 'PassingStats'):
@@ -63,6 +65,7 @@ class PassingStats:
         self.throws = other.throws
         self.throwQualitySum = other.throwQualitySum
         self.badThrows = other.badThrows
+        self.goodThrows = other.goodThrows
         self.airYardsSum = other.airYardsSum
 @dataclass
 class RushingStats:
@@ -349,6 +352,7 @@ class OptimizedPlayerStats:
                 'throws': self.passing.throws,
                 'throwQualitySum': self.passing.throwQualitySum,
                 'badThrows': self.passing.badThrows,
+                'goodThrows': self.passing.goodThrows,
                 'airYardsSum': self.passing.airYardsSum
             },
             'rushing': {

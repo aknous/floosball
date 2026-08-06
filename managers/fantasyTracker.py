@@ -19,83 +19,120 @@ from typing import Dict, Set
 logger = logging.getLogger(__name__)
 
 
+def _buildCardStatFormat(passing: dict, rushing: dict, receiving: dict,
+                         kicking: dict, returning: dict = None,
+                         fantasyPoints: float = 0, teamId: int = 0) -> dict:
+    """Build the card-calc weekPlayerStats format from raw stat sub-dicts.
+
+    THE single source of the card layer's view of a player's week. Both entry points
+    below feed it: `_liveStatsToDbFormat` during active games and `_dbStatsToCardFormat`
+    from stored GamePlayerStats rows.
+
+    They used to be two independent literals and had already drifted — the live one was
+    missing `comp` and `att`, so a card gating on completions read 0 mid-week and the
+    correct value at week end. One builder means they cannot diverge again.
+
+    Raw sub-dict keys are the sim's own (`yards`, `tds`, `20+`); the card-facing names are
+    explicit (`passYards`, `twentyPlus`) because effect configs are frozen at mint and a
+    renamed key would silently read 0 on every already-minted card.
+    """
+    p_, r_, c_, k_ = passing or {}, rushing or {}, receiving or {}, kicking or {}
+    t_ = returning or {}
+    return {
+        "teamId": teamId,
+        "fantasyPoints": fantasyPoints,
+        "passing_stats": {
+            "passYards": p_.get("yards", 0),
+            "tds": p_.get("tds", 0),
+            "comp": p_.get("comp", 0),
+            "att": p_.get("att", 0),
+            "longest": p_.get("longest", 0),
+            "twentyPlus": p_.get("20+", 0),
+            "ints": p_.get("ints", 0),
+            # Advanced (added with the WPA/metrics work). `goodThrows` is the
+            # well-placed-ball counter the throw-quality family keys off.
+            "sacked": p_.get("sacked", 0),
+            "throws": p_.get("throws", 0),
+            "badThrows": p_.get("badThrows", 0),
+            "goodThrows": p_.get("goodThrows", 0),
+            "airYardsSum": p_.get("airYardsSum", 0),
+        },
+        "rushing_stats": {
+            "runYards": r_.get("yards", 0),
+            "runTds": r_.get("tds", 0),
+            "carries": r_.get("carries", 0),
+            "longest": r_.get("longest", 0),
+            "twentyPlus": r_.get("20+", 0),
+            "yardsAfterContact": r_.get("yardsAfterContact", 0),
+            "brokenTackles": r_.get("brokenTackles", 0),
+            "tackleAttempts": r_.get("tackleAttempts", 0),
+            "stuffs": r_.get("stuffs", 0),
+        },
+        "receiving_stats": {
+            "rcvYards": c_.get("yards", 0),
+            "rcvTds": c_.get("tds", 0),
+            "receptions": c_.get("receptions", 0),
+            "yac": c_.get("yac", 0),
+            "longest": c_.get("longest", 0),
+            "twentyPlus": c_.get("20+", 0),
+            "targets": c_.get("targets", 0),
+            "drops": c_.get("drops", 0),
+            "contestedTargets": c_.get("contestedTargets", 0),
+            "contestedCatches": c_.get("contestedCatches", 0),
+            "bailouts": c_.get("bailouts", 0),
+        },
+        "kicking_stats": {
+            "fgs": k_.get("fgs", 0),
+            "fgAtt": k_.get("fgAtt", 0),
+            "fgYards": k_.get("fgYards", 0),
+            "longest": k_.get("longest", 0),
+            "fg40plus": k_.get("fg40+", k_.get("fg40plus", 0)),
+            "fg45plus": k_.get("fg45+", k_.get("fg45plus", 0)),
+            "xps": k_.get("xps", 0),
+            # Punting. Placement only became a real stat with the punt rework.
+            "punts": k_.get("punts", 0),
+            "puntYards": k_.get("puntYards", 0),
+            "puntsInside20": k_.get("puntsInside20", 0),
+            "puntsInside10": k_.get("puntsInside10", 0),
+            "puntTouchbacks": k_.get("puntTouchbacks", 0),
+            "puntLongest": k_.get("puntLongest", 0),
+        },
+        # Return production, credited to the RETURNER rather than charged to the kicker.
+        "returning_stats": {
+            "puntReturns": t_.get("puntReturns", 0),
+            "puntReturnYards": t_.get("puntReturnYards", 0),
+            "puntReturnTds": t_.get("puntReturnTds", 0),
+            "fairCatches": t_.get("fairCatches", 0),
+            "muffs": t_.get("muffs", 0),
+            "longest": t_.get("longest", 0),
+        },
+    }
+
+
 def _liveStatsToDbFormat(gameStatsDict: dict, teamId: int = 0) -> dict:
     """Translate a live gameStatsDict to card-calc weekPlayerStats format.
 
     Used to build CardCalcContext from live game data during active games.
     """
-    passing = gameStatsDict.get("passing", {})
-    rushing = gameStatsDict.get("rushing", {})
-    receiving = gameStatsDict.get("receiving", {})
-    kicking = gameStatsDict.get("kicking", {})
-    return {
-        "teamId": teamId,
-        "fantasyPoints": gameStatsDict.get("fantasyPoints", 0),
-        "passing_stats": {
-            "passYards": passing.get("yards", 0),
-            "tds": passing.get("tds", 0),
-        },
-        "rushing_stats": {
-            "runYards": rushing.get("yards", 0),
-            "runTds": rushing.get("tds", 0),
-            "carries": rushing.get("carries", 0),
-        },
-        "receiving_stats": {
-            "rcvYards": receiving.get("yards", 0),
-            "rcvTds": receiving.get("tds", 0),
-            "receptions": receiving.get("receptions", 0),
-            "yac": receiving.get("yac", 0),
-            "longest": receiving.get("longest", 0),
-        },
-        "kicking_stats": {
-            "fgs": kicking.get("fgs", 0),
-            "fgAtt": kicking.get("fgAtt", 0),
-            "fgYards": kicking.get("fgYards", 0),
-            "longest": kicking.get("longest", 0),
-            "fg40plus": kicking.get("fg40+", 0),
-        },
-    }
+    g = gameStatsDict or {}
+    return _buildCardStatFormat(
+        g.get("passing", {}), g.get("rushing", {}), g.get("receiving", {}),
+        g.get("kicking", {}), g.get("returning", {}),
+        fantasyPoints=g.get("fantasyPoints", 0), teamId=teamId)
 
 
 def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
                          receivingStats: dict, kickingStats: dict,
-                         fantasyPoints: float = 0, teamId: int = 0) -> dict:
+                         fantasyPoints: float = 0, teamId: int = 0,
+                         returningStats: dict = None) -> dict:
     """Convert raw DB GamePlayerStats JSON to card-calc weekPlayerStats format.
 
-    DB stores raw gameStatsDict sub-dicts (e.g. passing_stats = {"yards": 100, "tds": 2}).
-    Card effects expect the converted format (e.g. passing_stats = {"passYards": 100, "tds": 2}).
+    `returningStats` is keyword-only-by-position on purpose: several simcheck harnesses
+    call this with six positional args, and appending it keeps them working.
     """
-    return {
-        "teamId": teamId,
-        "fantasyPoints": fantasyPoints,
-        "passing_stats": {
-            "passYards": (passingStats or {}).get("yards", 0),
-            "tds": (passingStats or {}).get("tds", 0),
-            # Exposed for card gates (a QB card can gate on completions / attempts).
-            "comp": (passingStats or {}).get("comp", 0),
-            "att": (passingStats or {}).get("att", 0),
-        },
-        "rushing_stats": {
-            "runYards": (rushingStats or {}).get("yards", 0),
-            "runTds": (rushingStats or {}).get("tds", 0),
-            "carries": (rushingStats or {}).get("carries", 0),
-        },
-        "receiving_stats": {
-            "rcvYards": (receivingStats or {}).get("yards", 0),
-            "rcvTds": (receivingStats or {}).get("tds", 0),
-            "receptions": (receivingStats or {}).get("receptions", 0),
-            "yac": (receivingStats or {}).get("yac", 0),
-            "longest": (receivingStats or {}).get("longest", 0),
-        },
-        "kicking_stats": {
-            "fgs": (kickingStats or {}).get("fgs", 0),
-            "fgAtt": (kickingStats or {}).get("fgAtt", 0),
-            "fgYards": (kickingStats or {}).get("fgYards", 0),
-            "longest": (kickingStats or {}).get("longest", 0),
-            "fg40plus": (kickingStats or {}).get("fg40+", (kickingStats or {}).get("fg40plus", 0)),
-        },
-    }
-
+    return _buildCardStatFormat(
+        passingStats, rushingStats, receivingStats, kickingStats, returningStats,
+        fantasyPoints=fantasyPoints, teamId=teamId)
 
 
 class FantasyTracker:
@@ -1020,6 +1057,7 @@ class FantasyTracker:
                 gps.receiving_stats, gps.kicking_stats,
                 fpByPlayer.get(gps.player_id, 0),
                 teamId=gps.team_id,
+                returningStats=gps.returning_stats,
             )
         return result
 
