@@ -1745,8 +1745,9 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         return {"perReceptionFP": round(_LADDER_FP_ANCHOR * 0.60 / _ladderVolume("receptions", position, 9.35), 2),
                 "bonusFP": round(_LADDER_FP_ANCHOR * 0.40 / _ladderVolume("bailouts", position, 0.31), 1)}
     if effectName == "houdini":
-        return {"perYardFP": round(_LADDER_FP_ANCHOR * 0.45 / _ladderVolume("rushYards", position, 110.5), 3),
-                "bonusFP": round(_LADDER_FP_ANCHOR * 1.3, 1), "isChanceEffect": True}
+        # Same problem as promised_land: 0.47x alone, 0.79x fully built.
+        return {"perYardFP": round(_LADDER_FP_ANCHOR * 0.70 / _ladderVolume("rushYards", position, 110.5), 3),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 2.2, 1), "isChanceEffect": True}
     if effectName == "updraft":
         vol = _ladderVolume("passYards", position, 229.9)
         return {"perYardFP": round(_LADDER_FP_ANCHOR / vol, 3),
@@ -1765,10 +1766,13 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         return {"perTdFP": round(_LADDER_FP_ANCHOR / vol * 0.62, 1),
                 "bonusFP": round(_LADDER_FP_ANCHOR * 0.55, 1), "threshold": 2}
     if effectName == "promised_land":
+        # Measured at 0.47x its metallic sibling alone and 0.60x at full hand synergy —
+        # a build-around that loses even when you build around it. Base and jackpot both
+        # raised, and the opening odds lowered so the HAND has more room to move them.
         vol = _ladderVolume("recTds", position, 0.40)
-        return {"perTdFP": round(_LADDER_FP_ANCHOR / vol * 0.40, 1),
-                "bonusFP": round(_LADDER_FP_ANCHOR * 1.25, 1),
-                "baseChance": 22, "chanceStep": 14, "isChanceEffect": True}
+        return {"perTdFP": round(_LADDER_FP_ANCHOR / vol * 0.70, 1),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 2.4, 1),
+                "baseChance": 14, "chanceStep": 12, "isChanceEffect": True}
     if effectName == "freebie":
         return {"baseFP": round((48 + rn * 1.02) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "entourage":
