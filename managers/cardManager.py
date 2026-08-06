@@ -893,6 +893,11 @@ class CardManager:
             "tierNote": tierNote,
             "vaulted": bool(getattr(userCard, "vaulted", False)),
             "vaultPosition": getattr(userCard, "vault_position", None),
+            # Glitch (docs/GLITCH_CARDS.md) — per-INSTANCE, so it rides on the userCard
+            # rather than the template. Drives the card's visual treatment.
+            "glitched": bool(getattr(userCard, "glitched", False)),
+            "glitchedSeason": getattr(userCard, "glitched_season", None),
+            "glitchedWeek": getattr(userCard, "glitched_week", None),
             "seasonCreated": template.season_created,
             "isRookie": template.is_rookie,
             "classification": classification,

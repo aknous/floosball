@@ -1703,4 +1703,14 @@ class FantasyTracker:
             "gateThreshold": b.gateThreshold,
             "gateInverse": b.gateInverse,
             "gateAllPro": b.gateAllPro,
+            # Glitch (docs/GLITCH_CARDS.md). `glitchChance` drives the in-week scramble
+            # intensity; `glitchOutcome` is the surge name and must only be SHOWN when
+            # `glitchReadable` — otherwise the UI renders it as corrupted characters.
+            "glitched": b.glitched,
+            "glitchChance": b.glitchChance,
+            "glitchTriggered": b.glitchTriggered,
+            "glitchOutcome": b.glitchOutcome,
+            "glitchFp": b.glitchFp,
+            "glitchMultDelta": b.glitchMultDelta,
+            "glitchReadable": b.glitchReadable,
         }
