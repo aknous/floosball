@@ -163,8 +163,31 @@ def markCardsForCriticality(session, season: int, week: int) -> int:
         already = {uid for (uid,) in session.query(UserCard.user_id)
                    .filter(UserCard.glitched_season == season,
                            UserCard.glitched_week == week).distinct()}
-        rows = (session.query(EquippedCard)
-                .filter(EquippedCard.season == season, EquippedCard.week == week).all())
+
+        # ⚠️ Look BACK for the most recent equipped snapshot, do not demand one for this
+        # exact week. The anomaly weekly tick (which fires the Criticality) runs at
+        # seasonManager:667, but equipped cards are only carried forward into the new week
+        # at :850 — so at the moment a Criticality fires, this week's rows do not exist yet
+        # and an exact-week query marks nothing at all. That is not a hypothetical: a live
+        # sim fired a Criticality and glitched zero cards.
+        #
+        # Looking back also matches what "equipped during the Criticality" means to a user:
+        # whatever lineup they had standing. It mirrors the same lookback
+        # _carryForwardEquippedCards already does for exactly this reason.
+        rows = []
+        for lookback in range(week, 0, -1):
+            rows = (session.query(EquippedCard)
+                    .filter(EquippedCard.season == season,
+                            EquippedCard.week == lookback).all())
+            if rows:
+                if lookback != week:
+                    logger.info(f"glitch: no equipped rows at S{season}W{week} yet, "
+                                f"using the W{lookback} lineup")
+                break
+        if not rows:
+            logger.info(f"glitch: nobody had cards equipped at S{season}W{week}")
+            return 0
+
         byUser: Dict[int, list] = {}
         for eq in rows:
             if eq.user_id in already:

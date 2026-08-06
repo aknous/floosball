@@ -122,6 +122,23 @@ def testCleansedIsQuietNotDead():
     assert 0 < triggerChance('cleansed', {}, 1.0) <= GLITCH_TRIGGER_BASE['stirring']
 
 
+def testAcquisitionLooksBackForTheLineup():
+    """The anomaly weekly tick fires a Criticality at seasonManager:667, but equipped cards
+    are only carried forward into the new week at :850 — so at the moment a Criticality
+    fires, THIS week's equipped rows do not exist yet. An exact-week query marks nothing,
+    which is exactly what a live sim did: Criticality fired, zero cards glitched.
+
+    Checked by source inspection rather than a DB fixture: the lookback is the whole point
+    of the function and a fixture that happens to have current-week rows would pass either
+    way, silently.
+    """
+    import inspect
+    from managers import glitchCards
+    src = inspect.getsource(glitchCards.markCardsForCriticality)
+    assert 'for lookback in range(week, 0, -1)' in src, \
+        "acquisition demands an exact-week equipped snapshot; a Criticality will mark nothing"
+
+
 if __name__ == '__main__':
     fails = 0
     for name, fn in sorted(globals().items()):
