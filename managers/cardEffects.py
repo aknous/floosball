@@ -1069,7 +1069,16 @@ SHARED_EFFECT_POOL = [
     # odds." Dormant compute/templates kept for owned copies.
     # same-team / game-outcome
     "hometown_hero",
-    "comeback_kid", "domination", "walk_off",
+    "walk_off",
+    # NOTE: the STANDINGS-LOOKUP set — "comeback_kid", "domination", "castaway" — retired
+    # together (owner call 2026-08-06). Each paid off a fact about a roster player's TEAM
+    # rather than anything the player did: castaway wanted someone on a sub-.500 club,
+    # domination someone on a top-6 club, comeback_kid someone whose club missed the
+    # playoffs LAST season. Playing them well meant leaving the fantasy page to read the
+    # standings (or worse, last season's final table) for a modest per-player bonus, and
+    # the answer changed under you as the season moved. Dropped from the minting pool;
+    # compute/templates stay dormant so owned copies still score. "walk_off" is KEPT — it
+    # pays on this player's own Q4/OT scores.
     # card-to-card
     "full_roster", "all_in", "diversified", "gold_rush",
     "stacked_deck", "copycat", "chain_reaction",
@@ -1096,7 +1105,7 @@ SHARED_EFFECT_POOL = [
     "fat_cat", "bonsai",
     # New cards (FP/FPx rebalance)
     "anthem", "conductor", "captain",
-    "castaway", "rookie_hype", "wanderer",
+    "rookie_hype", "wanderer",
     # fusion additions (2026-07) — replace the retired anti-synergy effects
     "winners_circle", "no_passengers", "franchise", "metronome",
     # NOTE: "sandbagger", "quiet_storm", "drought" retired from circulation (owner call

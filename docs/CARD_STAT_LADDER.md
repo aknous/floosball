@@ -181,6 +181,20 @@ entries stay so any card already owned still scores.
 **Entourage** (3★+) and **Showoff** (5★) are KEPT. The objection is to rewarding weakness,
 not to reading a rating.
 
+### Also retired — the standings-lookup cards
+
+| card | edition | keyed off |
+|---|---|---|
+| **Castaway** | holographic | a roster player on a sub-.500 team |
+| **Domination** | holographic | a roster player on a top-6 team |
+| **Comeback Kid** | holographic | a roster player whose team missed the playoffs LAST season |
+
+Each paid off a fact about a roster player's TEAM rather than anything the player did.
+Playing them well meant leaving the fantasy page to read the standings, or in Comeback
+Kid's case last season's final table, for a modest per-player bonus — and the answer moved
+under you as the season went on. **Walk Off is KEPT**: it pays on this player's own Q4 and
+OT scores, which is a stat.
+
 **Still live and unresolved:** *Babysitter* and *Consolation Prize* fill their chance bar
 from roster players under an FP threshold. That is low PRODUCTION, not low rating, so a
 high-rated player still triggers them on a cold week and they are not structurally dead
@@ -255,9 +269,9 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Trust Fund** | Set it and collect | The lazy investor strategy. Floobits that grow each week your roster stays unchanged. | {baseFloobits} Floobits base, +{growthPerWeek} per week your roster stays unchanged |
 | **Winner's Circle** | Ride the winners | Back the winners. Floobits whenever this player's real team wins their game this week. | {winFloobits} Floobits when this player's team wins this week |
 
-### Holographic — 55 cards
+### Holographic — 52 cards
 
-*FP 32  ·  FPx 18  ·  Floobits 5*
+*FP 29  ·  FPx 18  ·  Floobits 5*
 
 
 #### Holographic · FP
@@ -267,10 +281,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Altitude** **`NEW`** | Throwing it deep | Nothing underneath. FP scaling with average depth of target above 8 yards. | +{perYardFP} FP per yard of average target depth above {threshold} |
 | **Blue Ribbon** | Pedigree | Prize winner. FP with a bonus when your favorite team's ELO reaches elite status (1600+). | +{baseFP} FP base, +{rewardValue} FP when your favorite team's ELO ≥ {eloThreshold} |
 | **Breakaway** **`NEW`** | Gone in a blink | One crease is all it takes. FP for rushing yards, and a bonus every time this player breaks one for 20. | +{perYardFP} FP per rushing yard, +{bonusFP} for every 20+ yard run by this player |
-| **Castaway** | Diamond in the basement | Find the gem on a bad team and they pay you. Bonus FP when your roster includes any player whose team is below .500. | +{rewardFP} FP when at least one roster player is on a sub-.500 team |
-| **Comeback Kid** | Bet on the bounce-back | Find the rising teams. FP per roster player whose team missed playoffs last season. Bonus floobits if your favorite team pulls off a comeback win. | +{perPlayerFP} FP per roster player whose team missed playoffs last season, +{floobitsOnTrigger}F if your favorite team wins a comeback this week |
 | **Diversified** | Variety pack | Don't put all your eggs in one basket. FP per unique output type (FP, FPx, Floobits) across your equipped cards. | +{perTypeFP} FP per unique output type in your hand (FP, FPx, Floobits) |
-| **Domination** | Ride the contenders | Ride with the leaders. FP per roster player whose team is currently top-6 in their league. Bonus floobits if your favorite team wins by 21+. | +{perPlayerFP} FP per roster player whose team is top-6 in their league, +{floobitsOnTrigger}F if your favorite team wins by {marginThreshold}+ this week |
 | **Double Trouble** | Both WRs deliver | Two is better than one. FP when either WR scores a TD, bonus when both WRs score. | +{singleWrFP} FP when a WR scores, +{rewardValue} bonus FP when both WRs score |
 | **End Zone** **`NEW`** | Where it counts | One is good. Two is somebody else's problem. FP per receiving TD, doubled at two. | +{perTdFP} FP per receiving TD, doubled at {threshold}+ |
 | **Fat Cat** | Rolling in it | Money talks. FP that scales with your Floobits balance. Excludes current week earnings. | +1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP) |
@@ -435,7 +446,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Sharpshooter** | Boots that pay double | Kicks land harder. Roster FGs count 2x for every other card. Produces nothing on its own. | Roster FGs count {fgMult}x for every other card's effect this week. |
 | **Surveyor** | Every yard counts more | Measures every yard twice. Roster yards count 1.5x for every other card. Produces nothing on its own. | Roster yards count {yardMult}x for every other card's effect this week. |
 
-**Totals: 148 cards (39 new).**
+**Totals: 145 cards (39 new).**
 
 ---
 
