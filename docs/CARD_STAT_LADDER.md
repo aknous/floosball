@@ -266,7 +266,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 |---|---|---|---|
 | **Altitude** **`NEW`** | Throwing it deep | Nothing underneath. FP scaling with average depth of target above 8 yards. | +{perYardFP} FP per yard of average target depth above {threshold} |
 | **Blue Ribbon** | Pedigree | Prize winner. FP with a bonus when your favorite team's ELO reaches elite status (1600+). | +{baseFP} FP base, +{rewardValue} FP when your favorite team's ELO ≥ {eloThreshold} |
-| **Breakaway** **`NEW`** | Gone in a blink | One crease is all it takes. FP for every run of 20 or more. | +{perRunFP} FP for every 20+ yard run by this player |
+| **Breakaway** **`NEW`** | Gone in a blink | One crease is all it takes. FP for rushing yards, and a bonus every time this player breaks one for 20. | +{perYardFP} FP per rushing yard, +{bonusFP} for every 20+ yard run by this player |
 | **Castaway** | Diamond in the basement | Find the gem on a bad team and they pay you. Bonus FP when your roster includes any player whose team is below .500. | +{rewardFP} FP when at least one roster player is on a sub-.500 team |
 | **Comeback Kid** | Bet on the bounce-back | Find the rising teams. FP per roster player whose team missed playoffs last season. Bonus floobits if your favorite team pulls off a comeback win. | +{perPlayerFP} FP per roster player whose team missed playoffs last season, +{floobitsOnTrigger}F if your favorite team wins a comeback this week |
 | **Diversified** | Variety pack | Don't put all your eggs in one basket. FP per unique output type (FP, FPx, Floobits) across your equipped cards. | +{perTypeFP} FP per unique output type in your hand (FP, FPx, Floobits) |
@@ -276,9 +276,9 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Fat Cat** | Rolling in it | Money talks. FP that scales with your Floobits balance. Excludes current week earnings. | +1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP) |
 | **Gone Streaking** | CENSORED | Don't look away. FP based on your favorite team's longest streak (wins or losses). | +{baseFP} FP base, +{perStreakFP} per game in longest streak (winning or losing) by your favorite team this season. Streak does not need to be active. |
 | **Group Project** | Everyone showed up | Everyone chipped in. FP if 4 or more of your other cards triggered a non-zero bonus this week. | +{rewardValue} FP when 4 or more of your other cards produced a non-zero bonus this week |
-| **Haymaker** **`NEW`** | Swinging big | Twenty yards at a time. FP for every throw of 20 or more. | +{perThrowFP} FP for every 20+ yard completion by this player |
+| **Haymaker** **`NEW`** | Swinging big | Twenty yards at a time. FP for passing yards, and a bonus on every throw that goes 20. | +{perYardFP} FP per passing yard, +{bonusFP} for every 20+ yard completion by this player |
 | **Hedge** | Downside protection | Insurance policy. Tops this player up to an FP floor on a quiet week. | Tops this player up to a {floorSoloFP} FP floor if they have a quiet week. |
-| **Highpoint** **`NEW`** | Above the crowd | Two defenders on the ball and it still comes down. FP per contested catch. | +{perCatchFP} FP per contested catch by this player |
+| **Highpoint** **`NEW`** | Above the crowd | Two defenders on the ball and it still comes down. FP per catch, and a bonus for the ones taken in traffic. | +{perReceptionFP} FP per reception, +{bonusFP} per contested catch by this player |
 | **Hype Man** | Your {posLabel}'s biggest fan | The crowd goes wild. FP that stacks with each TD this player scores. | +{perTdFP} FP per TD by this player |
 | **Jailbreak** | Breaking out | Can't catch them. Base FP every week, plus bonus FP when this player racks up enough yards after catch. | +{baseFP} FP base, +{rewardValue} bonus if this player racks up {threshold}+ yards after catch in a game |
 | **Lead Blocker** | Paving the way | Clearing the path. FP per TD by your TE. RB TDs count as TE TDs if they are on the same team. | +{perTdFP} FP per TE TD in a game. Rushing touchdowns by the TE team's RB count as TE TDs |
@@ -350,7 +350,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Clockwork** **`NEW`** | Never misses a beat | Same time every week. Streak grows each week this player clears 25 completions. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} completions |
 | **Complacency** | Stop tinkering | Put the phone down. FP that grows each week you don't touch your roster. Stacking streak cards accelerates growth. | +{baseReward} FP, +{growthPerTick} per week roster is unchanged. |
 | **Crescendo** | Keep missing, it only gets easier | Miss enough and eventually you can't miss. Each TD by this player rolls for a bonus. Miss and the odds go up. For K, triggers on FGs. | +{baseFP} FP guaranteed. {baseChance}% chance at {bonusFP} FP on this player's first {scoreNoun}, chance increases by +{chanceStep}% if bonus doesn't trigger. |
-| **Custodian** **`NEW`** | Cleaning up | The throw was bad. The catch was made anyway. FP for every bailout. | +{perBailoutFP} FP per bailout by this player |
+| **Custodian** **`NEW`** | Cleaning up | The throw was bad. The catch was made anyway. FP per catch, and a bonus for rescuing a bad ball. | +{perReceptionFP} FP per reception, +{bonusFP} per bailout by this player |
 | **Dead Eye** **`NEW`** | Never off target | Week after week, right on the numbers. Streak grows with every clean sheet. | +{baseFP} FP, +{growthPerTick} per week this player records 0 bad throws |
 | **Dominion** **`NEW`** | The whole field | A hundred yards a week and nobody takes it back. Streak grows each time. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} receiving yards |
 | **Getaway** **`NEW`** | Gone | Forty yards after the catch, every week. Streak grows each time. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} YAC |
@@ -483,28 +483,44 @@ yards, yards after contact, carries, rush yards and receptions. **Those are not 
 below** — each needs its own name, and the naming pass is the owner's. Flagged rather than
 invented.
 
-### Rare stats live OUTSIDE the families (owner call 2026-08-06)
+### Rare stats live OUTSIDE the families — as base + bonus (owner call 2026-08-06)
 
-Five stats are too rare to carry a family. To reach the ~26 FP metallic anchor each needs
-an enormous per-unit value, so a typical week pays nothing and a p90 week pays double —
-the wrong shape for a tier meant to be dependable, and there is not enough room above a
-one-a-game stat to build three distinct rungs on it.
+Five stats are too rare to carry a family. A card paying only on a sub-2-per-game event
+needs an enormous per-unit value to reach the ~26 FP anchor, so a typical week pays nothing
+and a p90 week pays double. There is also not enough room above a one-a-game stat to build
+three distinct rungs on it.
 
-They are still good cards. They become **one-offs**: a single card at the tier whose shape
-already is high-variance, with no ladder above or below.
+The fix is **base + bonus**: a modest rate on the PARENT stat as a floor, with the rare
+event as the kicker. The card is still about the highlight play, it just stops being dead
+in the weeks the highlight does not come. Sized to the same ~26 FP anchor:
 
-| stat | mean/game | p90 | card | tier | why there |
-|---|---|---|---|---|---|
-| 20+ throws | 1.75 | 4 | *Haymaker* | holographic | ~1-2 a game, so it lands most weeks |
-| contested catches | 1.02 | 3 | *Highpoint* | holographic | about one a game |
-| 20+ runs | 0.88 | 2 | *Breakaway* | holographic | about one a game |
-| broken tackles | 0.64 | 2 | *Houdini* | prismatic | chance card — odds fill from breaks |
-| bailouts | 0.31 | 1 | *Custodian* | prismatic | rarest; belongs where variance is the point |
+| card | base | rate | bonus on | mean | bonus | floor | p90 |
+|---|---|---|---|---|---|---|---|
+| *Breakaway* | rush yards | 0.14/yd | 20+ runs (0.88/g) | 12.0 | 26.0 | 15.5 | 53.3 |
+| *Haymaker* | pass yards | 0.055/yd | 20+ throws (1.75/g) | 7.5 | 25.8 | 12.6 | 48.3 |
+| *Highpoint* | receptions | 1.7/rec | contested catches (1.02/g) | 10.0 | 26.1 | 15.9 | 53.8 |
+| *Custodian* | receptions | 1.7/rec | bailouts (0.31/g) | 33.0 | 26.1 | 15.9 | 56.8 |
 
-These share a character without being a family: each is a **single highlight moment**
-rather than accumulated volume. That is exactly what the upper tiers are for — rarity buys
-variance, and a card that pays on the one play you remember from the game is a better
-prismatic than a better metallic.
+**Floor** is what a week with none of the rare event still pays. Roughly 60% of the mean
+comes from the base and 40% from the bonus, and the p90 is about double the mean — the
+variance that earns the holographic slot, now sitting on a floor instead of a hole.
+
+*Houdini* is excluded: it is a chance card filling its odds from broken tackles, so its
+shape is already floor-plus-jackpot by construction.
+
+**These borrow the parent stat as a floor, which is deliberate.** Breakaway pays rushing
+yards, the same stat as the Expedition family. It is not competing with that family's
+premise — its identity is still the explosive run, and the yards only stop it reading as a
+dead card. A one-off standing on a family's stat is fine; a one-off standing on nothing is
+what got these cut in the first draft.
+
+| card | tier | why there |
+|---|---|---|
+| *Haymaker* | holographic | base + bonus, ~1-2 events a game |
+| *Highpoint* | holographic | base + bonus, about one a game |
+| *Breakaway* | holographic | base + bonus, about one a game |
+| *Houdini* | prismatic | chance card, odds fill from broken tackles |
+| *Custodian* | prismatic | rarest event; belongs where variance is the point |
 
 **Bailout** = the receiver caught a ball thrown below the bad-throw bar (quality < 45),
 credited only on the completion. The mirror of the QB's `badThrows`: bad throws run
