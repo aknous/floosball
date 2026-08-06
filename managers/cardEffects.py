@@ -1873,11 +1873,14 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         return {"perTdFP": round((27 + rn * 1.02) * editionScale * _BAL_FP_MULT, 1)}
     # ── Escalating chance: Crescendo (TD/FG triggers, escalating per miss)
     if effectName == "crescendo":
-        # Buff pass (pool diversity): guaranteed floor was ~17 FP, far under the
-        # prismatic band and the lowest of any chance card. Raised baseFP floor
-        # to ~49 (in line with scrappy/martyr) so a miss is still respectable.
-        return {"baseFP": round((75.0 + rn * 1.5) * editionScale * _BAL_FP_MULT, 1),
-                "bonusFP": round((90.0 + rn * 2.4) * editionScale * _BAL_FP_MULT, 1),
+        # Measured at a 1.04x build gain — it barely responded to hand synergy despite
+        # being a chance card, because a 12.5 guaranteed floor dwarfed a 15.5 jackpot.
+        # Doubling the trigger rate moved the season 4%. It also ran ~0.50x a metallic
+        # sibling, so it needed BOTH more total value and more of that value in the
+        # jackpot. Split solved against the measured trigger rates (22% alone, 31% mid,
+        # 38% fully built) for a ~1.5x build gain at the prismatic band.
+        return {"baseFP": round(_LADDER_FP_ANCHOR * 0.32, 1),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 3.1, 1),
                 "baseChance": 15, "chanceStep": 12,
                 "isChanceEffect": True}
     # ── Yardage chance: Traverse (end-of-game roll scaled by yards)

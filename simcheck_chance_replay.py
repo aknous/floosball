@@ -54,7 +54,7 @@ HANDS = [
 CARDS = [
     ('houdini',       'expedition', 2),
     ('promised_land', 'paydirt',    3),
-    ('crescendo',     None,         2),
+    ('crescendo',     'expedition', 2),
     ('traverse',      None,         3),
 ]
 
