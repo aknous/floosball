@@ -3133,6 +3133,12 @@ class SeasonManager:
                         receiving_stats=stats.get('receiving'),
                         kicking_stats=stats.get('kicking'),
                         defense_stats=stats.get('defense'),
+                        # Punt-return production. The season and career save paths
+                        # already persisted this; the per-game write dropped it, so
+                        # returning_stats was NULL on every game row and a returner's
+                        # work never reached the box score, the card layer (which reads
+                        # per-game stats) or the season backfill.
+                        returning_stats=stats.get('returning'),
                     )
                     self.game_repo.save_player_stats(db_stats)
         except Exception as e:
