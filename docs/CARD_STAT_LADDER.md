@@ -118,26 +118,40 @@ Three rules fix it without inventing premises:
 Rule 3 is what actually moves the number. Six FPx siblings takes metallic to roughly
 **48% FP / 32% FPx / 20% Floobits**, against 54/14/32 today.
 
-### Trimmed (owner call 2026-08-06)
+### Rare stats live OUTSIDE the families (owner call 2026-08-06)
 
-Rare stats need enormous per-unit values to reach the ~26 FP anchor, so a typical week
-pays nothing and a p90 week pays double — the wrong shape for a tier meant to be
-dependable. Cut:
+Five stats are too rare to carry a family. To reach the ~26 FP metallic anchor each needs
+an enormous per-unit value, so a typical week pays nothing and a p90 week pays double —
+the wrong shape for a tier meant to be dependable, and there is not enough room above a
+one-a-game stat to build three distinct rungs on it.
 
-| stat | mean/game | rate needed | cut |
-|---|---|---|---|
-| bailouts | 0.31 | 84 FP each | *Custodian* |
-| broken tackles | 0.64 | 40 FP each | *Houdini*, *Vanishing Act* |
-| 20+ runs | 0.88 | 30 FP each | *Breakaway* |
-| contested catches | 1.02 | 25 FP each | *Highpoint*, *Larceny* |
-| 20+ throws | 1.75 | 15 FP each | *Haymaker* |
+They are still good cards. They become **one-offs**: a single card at the tier whose shape
+already is high-variance, with no ladder above or below.
 
-> **Touchdowns are just as lumpy and are NOT cut.** Rush TDs run 0.69/game and receiving
-> TDs 0.40 — rarer than contested catches. They stay because they are the most legible
-> event in football, the pool already supports them (Piñata, Squire, Spotlight Moment,
-> Crescendo, Avalanche, Lead Blocker, Goal Line Vulture), and the owner asked for them
-> explicitly. Rule 2 is how the lumpiness is handled: **the TD families take FPx at
-> metallic**, so a scoreless week costs nothing instead of reading as a dead card.
+| stat | mean/game | p90 | card | tier | why there |
+|---|---|---|---|---|---|
+| 20+ throws | 1.75 | 4 | *Haymaker* | holographic | ~1-2 a game, so it lands most weeks |
+| contested catches | 1.02 | 3 | *Highpoint* | holographic | about one a game |
+| 20+ runs | 0.88 | 2 | *Breakaway* | holographic | about one a game |
+| broken tackles | 0.64 | 2 | *Houdini* | prismatic | chance card — odds fill from breaks |
+| bailouts | 0.31 | 1 | *Custodian* | prismatic | rarest; belongs where variance is the point |
+
+These share a character without being a family: each is a **single highlight moment**
+rather than accumulated volume. That is exactly what the upper tiers are for — rarity buys
+variance, and a card that pays on the one play you remember from the game is a better
+prismatic than a better metallic.
+
+**Bailout** = the receiver caught a ball thrown below the bad-throw bar (quality < 45),
+credited only on the completion. The mirror of the QB's `badThrows`: bad throws run
+1.56/game against 0.31 bailouts, so about one bad ball in five is caught anyway. It is the
+stat that separates a receiver's contribution from the quality of throw he was given.
+
+> **Touchdowns are lumpier still and stay in families anyway.** Rush TDs run 0.69/game and
+> receiving TDs 0.40 — rarer than contested catches. They keep their ladders because they
+> are the most legible event in football and the pool already supports them (Piñata,
+> Squire, Spotlight Moment, Crescendo, Avalanche, Lead Blocker, Goal Line Vulture). Rule 2
+> handles the lumpiness: **the TD families take FPx at metallic**, so a scoreless week
+> costs nothing instead of reading as a dead card.
 
 ---
 
@@ -150,7 +164,8 @@ dependable. Cut:
 | **pass TDs** — ordnance | **Air Raid** *(Floo)* · *Bombardier* **FPx** | *Salvo* **FP** doubled at 3+ | *Barrage* **FP** escalating odds |
 | **throw quality** — marksmanship | **Gunslinger** **FP** *(re-pointed)* | *Marksman* **FPx** on a clean sheet | *Dead Eye* **FP** streak |
 
-One-off: *Attention* **FPx** on targets — pays on volume without the catch.
+One-offs: *Attention* **FPx** (targets), *Altitude* (holo, aDOT above 8), *Haymaker*
+(holo, 20+ throws).
 Blocked: throw quality needs the new `goodThrows` counter.
 
 ## RB
@@ -161,6 +176,9 @@ Blocked: throw quality needs the new `goodThrows` counter.
 | **rush yards** — journey | **Expedition** **FP** | **Trailblazer** **FPx** *(was Stampede)* | *Odyssey* **FP** streak at 100 |
 | **rush TDs** — force | **Goal Line Vulture** *(Floo)* · *Battering Ram* **FPx** | **Lead Blocker** **FP** | — |
 | **yards after contact** — mass | *Freight* **FP** · 0.3/yd | *Grinder* **FPx** when YAC > half | *Landslide* **FP** streak at 100 |
+
+One-offs: *Breakaway* (holo, 20+ runs), *Houdini* (prismatic, chance filling from broken
+tackles).
 
 Yards after contact only became a real stat this session (80% of rush yards, 87.5/game).
 
@@ -173,7 +191,8 @@ Yards after contact only became a real stat this session (80% of rush yards, 87.
 | **receiving TDs** — the end zone | *Paydirt* **FPx** | *End Zone* **FP** doubled at 2+ | *Promised Land* **FP** escalating odds |
 | **YAC** — escape | **Slippery** **FP** | **Jailbreak** **FPx** | *Getaway* **FP** streak at 40 |
 
-One-off: **Trebuchet** (shipped, longest catch).
+One-offs: **Trebuchet** (shipped, longest catch), *Highpoint* (holo, contested catches),
+*Custodian* (prismatic, bailouts).
 **Receiving yards is the biggest hole in the pool** — 83.5/game, the most-produced skill
 stat in the game, and no card below prismatic today.
 
@@ -205,7 +224,11 @@ became measurable this session.
 5. **Retune the two outliers** — Safety Blanket 5.3 → ~3.2 per reception, Three Pointer
    down from 39.0 FP/week.
 
-Counts: **12 families, 1 one-off retained, ~26 new cards** including the FPx siblings.
+Counts: **12 families + 8 one-offs, ~31 new cards** including the FPx siblings.
+
+One-offs in full: *Haymaker*, *Highpoint*, *Breakaway*, *Houdini*, *Custodian* (the five
+rare-stat cards above), *Attention* (targets, FPx), *Altitude* (holo, aDOT), plus shipped
+**Trebuchet** (longest catch).
 
 ## Renames (owner-approved 2026-08-06)
 
