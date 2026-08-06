@@ -508,6 +508,21 @@ tuning.
 **Diamond is excluded from this ladder.** It is mostly modifier and amplifier cards
 (1 FP / 6 FPx / 6 cross-effect of 14), so it does not have a per-stat curve to shape.
 
+### FPx stacks across the whole hand
+
+Independent of which tier model is chosen. `aggregateMultFactors` is `1 + sum(delta)` —
+additive rather than multiplicative, which is the only reason this is tractable — but it
+applies to the **entire lineup**, so multiplier cards compound with each other in a way
+flat FP cards never do:
+
+    6 x metallic     FPx cards  ->  1.36x on everything else in the hand
+    6 x holographic  FPx cards  ->  1.45x
+    6 x prismatic    FPx cards  ->  1.56x
+
+Widening the FPx tail lands on top of every FP card at once. **Tune the FP side first,
+measure, then move FPx** — a change that looks small per card is worth several times more
+in a stacked hand, and only full-lineup measurement catches it.
+
 ### Streak and chance cards are not per-week distributions
 
 The tail model above treats a prismatic card as a single-week draw. Neither prismatic
