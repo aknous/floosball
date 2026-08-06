@@ -116,13 +116,13 @@ All names below are candidates.
 | holographic | *Rhythm* | +FPx per completion past 20 |
 | prismatic | *Clockwork* | streak, grows each week they clear 25 completions |
 
-**Pass yards — flight.** Contains **Gunslinger** (shipped), whose motif is gun/accuracy,
-not distance. Either rename it or rebuild the family around marksmanship.
+**Pass yards — flight.** New family. **Gunslinger** moves out of it onto throw quality
+(see Renames), so the shipped effect is renamed and the family is built fresh.
 
 | | card | mechanic |
 |---|---|---|
-| metallic | **Gunslinger** (shipped) | +FP per 100 pass yards |
-| holographic | *Aerialist* | tiered gates at 200 / 300 / 400 |
+| metallic | *Slipstream* | +FP per 100 pass yards |
+| holographic | *Updraft* | tiered gates at 200 / 300 / 400 |
 | prismatic | *Stratosphere* | streak on 300-yard weeks |
 
 **Pass TDs — ordnance.** Contains **Air Raid** (shipped, pays Floobits), which fits the
@@ -134,11 +134,12 @@ motif cleanly. Needs an FP sibling since the metallic rung currently pays the wr
 | holographic | *Salvo* | flat, doubled at 3+ TDs |
 | prismatic | *Barrage* | escalating odds per TD |
 
-**Good throws — precision.** Blocked on the new `goodThrows` stat.
+**Throw quality — marksmanship.** Blocked on the new `goodThrows` stat. Takes the
+**Gunslinger** name, which finally sits on a stat it describes.
 
 | | card | mechanic |
 |---|---|---|
-| metallic | *Draftsman* (FPx) | +FPx per well-placed ball |
+| metallic | **Gunslinger** (re-pointed) | +FP per well-placed ball (~12-14/game) |
 | holographic | *Marksman* | bonus when the bad-throw count stays at zero |
 | prismatic | *Dead Eye* | streak on clean-sheet weeks |
 
@@ -272,21 +273,44 @@ so a rename only reaches newly-minted templates. Shipping on `next-season` lands
 uniformly at the season cutover with no migration; a mid-season deploy would split the
 name across two cohorts of the same card.
 
-### 1. Pass yards — Gunslinger is spent on the wrong stat
+### 1. Gunslinger moves to throw quality; pass yards gets a new name
 
-Firearms are overloaded across the pool already: **Sniper** (K), **Sharpshooter**
-(diamond), **Gunslinger** (QB). All three read as accuracy, and only Sniper actually
-keys off accuracy. Free the motif rather than stack a fourth on it.
+Gunslinger reads as marksmanship but measured YARDAGE — that mismatch was the real
+problem, not the name. Firearms were also overloaded three ways (**Sniper** on the
+kicker, **Sharpshooter** on the diamond amplifier, **Gunslinger** on the QB) while only
+one of them keyed off accuracy. Moving Gunslinger onto throw quality fixes both at once:
+the motif lands on the stat it describes, and firearms now cluster on accuracy.
 
-| | old | new | why |
-|---|---|---|---|
-| metallic | **Gunslinger** | *Slipstream* | pass yards travel through the air |
-| holographic | — | *Updraft* | |
-| prismatic | — | *Stratosphere* | escalating altitude |
+**Throw quality — marksmanship** (blocked on the new `goodThrows` stat)
 
-Gunslinger is a good name being spent. The alternative is to keep it and let pass yards
-carry a western motif (*Gunslinger → Quickdraw → Dead Eye*), accepting that the family
-then reads as accuracy while measuring volume.
+| | card |
+|---|---|
+| metallic | **Gunslinger** (name kept, re-pointed) |
+| holographic | *Marksman* |
+| prismatic | *Dead Eye* |
+
+**Pass yards — flight** (new family, new effect)
+
+| | card | why |
+|---|---|---|
+| metallic | *Slipstream* | pass yards travel through the air |
+| holographic | *Updraft* | |
+| prismatic | *Stratosphere* | escalating altitude |
+
+> **This one is not display-only.** Every other rename here changes a string; this moves
+> Gunslinger from `passYards` to `goodThrows`, which means a new compute path, a new param
+> builder (per good throw, not per 100 yards) and a rate resized against ~12-14 good throws
+> a game instead of 229.9 yards. Pass yards needs its own new effect key for *Slipstream*.
+> Both are safe **only at the season boundary** — params and names are frozen at mint, so
+> a mid-season deploy leaves the old Gunslinger scoring pass yards under the same name.
+>
+> **Ordering constraint:** the `goodThrows` counter must land BEFORE Gunslinger is
+> re-pointed, or the card reads zero.
+
+**Considered and rejected:** Gunslinger on completions. Semantically the better fit — the
+term connotes volume and fearlessness more than precision — but completions already carries
+*Cadence → Rhythm → Clockwork*, and Gunslinger cannot head that family without breaking
+the motif that made the evolution idea click.
 
 ### 2. Rush yards — Stampede is a herd in a journey family
 
@@ -312,17 +336,6 @@ custody and reliability.
 
 Safety Blanket keeps its name and still needs its **rate cut from 5.3 to ~3.2 per
 reception** — that is a balance fix, independent of naming.
-
-### 4. Good throws — precision, without firearms
-
-Blocked on the new `goodThrows` stat. Firearms being freed above does not mean spending
-them here; escalating mastery avoids every existing collision.
-
-| | card |
-|---|---|
-| metallic | *Draftsman* |
-| holographic | *Surgeon* |
-| prismatic | *Virtuoso* |
 
 ## Output-type balance
 
