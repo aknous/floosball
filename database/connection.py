@@ -92,8 +92,11 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()  # column already exists — ignore
 
-        # Returning stats blob (punt returns) on the three player stat tables.
-        for _tbl in ('game_player_stats', 'player_season_stats', 'player_career_stats'):
+        # Returning stats blob (punt returns) on the three player stat tables, plus
+        # team_season_stats — the model carries the column there too, and without the
+        # migration every query against that table breaks on an existing DB.
+        for _tbl in ('game_player_stats', 'player_season_stats', 'player_career_stats',
+                     'team_season_stats'):
             try:
                 conn.execute(text(f"ALTER TABLE {_tbl} ADD COLUMN returning_stats TEXT"))
                 conn.commit()
