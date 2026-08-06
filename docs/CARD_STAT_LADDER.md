@@ -181,6 +181,13 @@ entries stay so any card already owned still scores.
 **Entourage** (3★+) and **Showoff** (5★) are KEPT. The objection is to rewarding weakness,
 not to reading a rating.
 
+**Babysitter** and **Consolation Prize** are now retired too (owner call 2026-08-06),
+closing out the "worse is better" class the fusion rework began cutting (martyr, underdog,
+rock_bottom, indemnity). Both filled their chance bar from roster players under an FP
+threshold, so they paid for a COLD roster. Unlike the low-rated set they were not
+structurally dead — a well-rated player still has quiet weeks — but they pull against the
+direction of every stat-native card in this plan.
+
 ### Also retired — the standings-lookup cards
 
 | card | edition | keyed off |
@@ -211,9 +218,9 @@ changes.
 
 Detail lines use `{placeholder}` tokens that resolve at mint from the card player's rating.
 
-### Metallic — 38 cards
+### Metallic — 37 cards
 
-*FP 20  ·  FPx 9  ·  Floobits 9*
+*FP 20  ·  FPx 9  ·  Floobits 8*
 
 
 #### Metallic · FP
@@ -261,7 +268,6 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 |---|---|---|---|
 | **Air Raid** | Bombs away | Death from above. Floobits for each passing TD this player throws. | {perTdFloobits} Floobits for every passing TD in one game by this player |
 | **Allowance** | Weekly pocket money | Don't spend it all in one place. Free Floobits every week just for existing. | {floobits} Floobits per week |
-| **Consolation Prize** | Better luck next time | Here's a little something for your troubles. Guaranteed Floobits floor plus a chance at enhanced Floobits. The trigger bar fills from this player's own FP and from each roster player who has a bad week. | +{baseFloobits}F guaranteed, chance at {enhancedFloobits}F. Trigger odds fill from this player's FP plus each roster player under {fpThreshold} FP. |
 | **Goal Line Vulture** | Opportunistic scavenging | Vulture season. Floobits for every rushing TD this player punches in. | {perTdFloobits} Floobits for every rushing TD by this player in a game |
 | **Gold Rush** | Floobits love company | Floobits cards amplify each other. Floobits bonus for each other floobits card in your hand. | {perCardFloobits} Floobits per other Floobits card in your hand |
 | **Industrious** | Honest work | Honest work deserves honest pay. Floobits scaling with receptions by this player. | {perReceptionFloobits} Floobits per reception by this player in a game |
@@ -341,9 +347,9 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Good Neighbor** | You're covered | Worry free. Guaranteed Floobits plus a bonus for each FG your kicker misses. | +{baseFloobits}F base + {perMissFloobits}F per missed FG this week |
 | **Highlight Reel** | Did you see that? | Highlight reel material. Floobits for every big play your favorite team pulls off. | {rewardValue} Floobits per your favorite team's big plays |
 
-### Prismatic — 41 cards
+### Prismatic — 40 cards
 
-*FP 20  ·  FPx 18  ·  Floobits 2  ·  Other 1*
+*FP 19  ·  FPx 18  ·  Floobits 2  ·  Other 1*
 
 
 #### Prismatic · FP
@@ -353,7 +359,6 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Anthem** | All together now | Power in numbers. Flat FP that fires when your hand is heavy on flat-FP cards. 3 or more pays a bonus, 4 raises it, 5 maxes it out. | +{tier3FP} FP with 3 flat-FP cards equipped, +{tier4FP} with 4, +{tier5FP} with 5 |
 | **Automatic** | Perfect kicks only | Perfection pays. FP growing each consecutive week this player goes perfect on FGs. Stacking streak cards accelerates growth. | +{baseReward} FP base, +{growthPerTick} per consecutive week your K makes all FG attempts. A week with no FG attempts will not break the streak. |
 | **Avalanche** | Bury them | Momentum builds with every score. Each roster TD pays more FP than the last. | Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing |
-| **Babysitter** | Carrying the team | Someone has to do the heavy lifting. Guaranteed FP floor plus a chance at enhanced FP. The trigger bar fills from this player's own FP and from each roster player who underperforms. | +{baseFP} FP guaranteed, chance at {enhancedFP} FP. Trigger odds fill from this player's FP plus each roster player under {fpThreshold} FP. |
 | **Bandwagon Express** | Choo choo! | Next stop: more points. FP growing each week your favorite team wins. Stacking streak cards accelerates growth. | +{baseReward} FP base, +{growthPerTick} per consecutive favorite-team win. |
 | **Barrage** **`NEW`** | Keep firing | FP on every passing TD, and each one raises the odds the next pays out. | +{perTdFP} FP per passing TD, plus escalating odds at {bonusFP} FP on each one |
 | **Bonsai** | Snip snip | Grown, not gifted. Roster performance earns permanent FP growth each week. Higher levels demand bigger weeks. Resets if unequipped. | +{baseFP} FP guaranteed. This player's {triggerLabel} scale the chance to grow the base by +{growthFP} FP at week's end. Every grow slows the next. |
@@ -446,7 +451,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Sharpshooter** | Boots that pay double | Kicks land harder. Roster FGs count 2x for every other card. Produces nothing on its own. | Roster FGs count {fgMult}x for every other card's effect this week. |
 | **Surveyor** | Every yard counts more | Measures every yard twice. Roster yards count 1.5x for every other card. Produces nothing on its own. | Roster yards count {yardMult}x for every other card's effect this week. |
 
-**Totals: 145 cards (39 new).**
+**Totals: 143 cards (39 new).**
 
 ---
 
@@ -793,9 +798,10 @@ stat in the game, and no card below prismatic today.
 | **punting** — burial | *Pinpoint* **FP** per punt inside the 20 | *Coffin Corner* **FPx** per pin, + bonus inside the 10 | *Undertaker* **FP** per pin + multi-pin streak |
 | **returns** — the runback | *Runback* **FP** per return yard | — | *House Call* **FP** per return yard + odds on a return TD |
 
-**Field goals need pruning, not building.** The kicker already carries six cards —
-Three Pointer, Good Neighbor, Range, Sniper, On Fire, Leg Day — on a stat line of 1.98
-FGs a game, and Three Pointer alone measures 39.0 FP/week.
+**Field goal cards are KEPT** (owner call 2026-08-06). The kicker carries six of them —
+Three Pointer, Good Neighbor, Range, Sniper, On Fire, Leg Day — on a stat line of 1.98 FGs
+a game, which is dense, but they do no harm and the position has little else. Three Pointer
+still gets its retune (39.0 FP/week, second highest at metallic); the rest stand.
 
 Returns are unblocked as of this session's `returning_stats` fix; punt placement only
 became measurable this session.
@@ -920,7 +926,17 @@ reception** — that is a balance fix, independent of naming.
 2. **Field goals.** The kicker carries six shipped cards on 1.98 FGs a game and Three
    Pointer alone measures 39.0 FP/week. This wants pruning, which is a separate pass from
    the ladder build.
-3. **Good Neighbor is multi-position but reads the roster's kicker.** Every other
+3. ~~**Good Neighbor is multi-position but reads the roster's kicker.**~~ RESOLVED — locked
+   to K (owner call 2026-08-06), establishing the rule below.
+
+   **Rule: a card must never sit on one position and read another's stats.** The whole pool
+   was audited for this. Three other cards touch a second position and all three KEEP it,
+   because the card's own player is a real participant rather than decoration:
+   *lead_blocker* pays the TE's own TDs with same-team RB TDs added on, and *stack* /
+   *backfield_buddies* make the card player half of a same-team pair. Good Neighbor was the
+   only case where the depicted player contributed nothing at all.
+
+   ~~old note:~~ Every other
    "your roster's K" card is K-LOCKED, so under fusion the roster slot and the card player
    are the same person and the wording was just stale framing (now fixed). Good Neighbor
    mints on ANY position while paying off the roster kicker's missed FGs, so a QB card's

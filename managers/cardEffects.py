@@ -1028,7 +1028,14 @@ SHARED_EFFECT_POOL = [
     # replacement direction is stat-native cards (see the stat ladder). Removed from the
     # minting pool; compute/templates stay dormant so any card already carrying them scores.
     # multiplier effects
-    "big_deal", "cornucopia", "babysitter",
+    "big_deal", "cornucopia",
+    # NOTE: "babysitter" and "consolation_prize" retired (owner call 2026-08-06) — the last
+    # two of the "worse is better" class the fusion rework began cutting (martyr, underdog,
+    # rock_bottom, indemnity). Both filled their chance bar from roster players under an FP
+    # threshold, so they paid for a COLD roster. Unlike the low-rated set they were not
+    # structurally dead (a well-rated player still has quiet weeks), but they pull against
+    # the direction of every stat-native card. Dropped from the minting pool;
+    # compute/templates stay dormant so owned copies still score.
     "juggernaut",
     # NOTE: "martyr" and "underdog" retired in the fusion chance rework (owner call 2026-07-26).
     # Both are "worse = better odds" losers keyed off the favorite team's record — the exact
@@ -1047,7 +1054,13 @@ SHARED_EFFECT_POOL = [
     # so any card already carrying it still scores.
     # floobits effects
     "allowance", "cha_ching", "piggy_bank",
-    "good_neighbor", "consolation_prize",
+    # NOTE: "good_neighbor" moved to the K-exclusive pool (owner call 2026-08-06). It minted
+    # on ANY position while paying off the ROSTER kicker's missed FGs, so on a QB card the
+    # depicted player was decorative. Rule: a card must never sit on one position and read
+    # another's stats. Audited the whole pool for this — lead_blocker, stack and
+    # backfield_buddies also touch a second position but use the CARD's player as a real
+    # participant (lead_blocker pays the TE's own TDs with same-team RB TDs added; stack and
+    # backfield_buddies make the card player half of a same-team pair), so they stay.
     # NOTE: "rock_bottom" retired alongside martyr/underdog (owner call 2026-07-26) — its odds
     # ride the favorite team's LOSING streak, another "worse = better" loser incompatible with
     # the fill-the-bar chance model. Dormant compute/templates kept for owned copies.
@@ -1136,7 +1149,7 @@ POSITION_EXCLUSIVE_POOLS = {
         "ace_up_the_sleeve", "crescendo", "traverse"],
     4: ["safety_blanket", "industrious", "lead_blocker",
         "traverse"],
-    5: ["three_pointer", "sniper", "leg_day",
+    5: ["three_pointer", "sniper", "leg_day", "good_neighbor",
         "automatic", "on_fire",
         "crescendo", "alchemy",
         "range"],
