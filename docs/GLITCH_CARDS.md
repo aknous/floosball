@@ -208,11 +208,33 @@ a similar preview hook.
 played.** It stays in the collection as a record of the event — the Vault and Showcase are its
 natural home. It scores only in the season it was earned.
 
-## Open questions
+## Resolution — end of week, and the line item scrambles until then (owner)
 
-1. **Does the trigger resolve before or after the week scores?** Resolving early makes it
-   plannable, which cuts against wild magic; resolving late makes checking the card the payoff.
-2. ~~**Do the base rates want the instability dial on top?**~~ RESOLVED (owner) — see below.
+**The trigger resolves at WEEK END, and this is forced rather than chosen.** The chance is
+`base + boosts from anomaly events that player fired this week`, and those events fire during
+the week's games. There is no correct answer available before the games are done.
+
+That is also exactly how chance cards already behave, so it needs no new machinery:
+
+    cardEffects.py:2969
+    triggered = roll <= odds and not getattr(ctx, 'gamesActive', False)
+
+Chance cards refuse to resolve while `gamesActive`, and `_processWeekCardEffects` persists
+`WeeklyCardBonus` at week end.
+
+**During the week the line item shows nothing but noise.** The glitch's score-detail line renders
+as random glitch characters — not a number, not a name, not a percentage. The card is visibly
+computing something it will not tell you yet.
+
+**The scramble should get louder as the odds climb.** The trigger chance genuinely rises through
+the week as events fire, so `GlitchedText`'s intensity can track it: a quiet week stays at `low`
+and barely flickers, a week where the player has already glitched twice runs at `high` and is
+obviously agitated. That turns the line into a **live readout of pressure without ever showing a
+number** — you can tell your card is getting interested, which is the cryptic version of watching
+the odds build.
+
+At week end it resolves: the line becomes the payout, and the OUTCOME name stays corrupted unless
+the player is awakened (see Naming).
 
 ## The instability dial lifts the base, at a fraction (owner)
 
@@ -271,6 +293,9 @@ the master dial), that distribution shifts and the bases want re-measuring. The 
 in particular was set from a measured 37% power-use rate that chrome will change outright.
 
 Build against today's system; expect to re-tune the five numbers, not the design.
+
+## Open questions
+2. ~~**Do the base rates want the instability dial on top?**~~ RESOLVED (owner) — see below.
 
 ## What is NOT in scope
 
