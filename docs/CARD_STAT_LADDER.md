@@ -222,8 +222,8 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Safety Blanket** | Reliable target | Every QB needs one. FP scaling with receptions by this player. | +{perReceptionFP} FP per reception by this player in a game<br>*RETUNED — 5.3 to ~3.2 FP per reception. Measured 47.0 FP/week, highest of any metallic card.* |
 | **Showoff** | Star power | Stack the studs. FP per 5-star player on your roster. | +{perStarFP} FP per 5-star roster player |
 | **Slippery** | Can't bring me down | Yards after the catch turn into points. FP that scales with this player's YAC. | +{perYacFP} FP per 10 yards after catch by this player in a game |
-| **Sniper** | From downtown | From long range. FP for each field goal your roster's K makes from 40+ yards out. | +{perFgFP} FP per 40+ yard FG by your roster's K in a game |
-| **Three Pointer** | Count it | Three points for them, bonus for you. FP for every kicker FG. | +{perFgFP} FP for every FG your roster's K makes<br>*RETUNED down — measured 39.0 FP/week, second highest at metallic.* |
+| **Sniper** | From downtown | From long range. FP for each field goal this player makes from 40+ yards out. | +{perFgFP} FP per 40+ yard FG by this player in a game |
+| **Three Pointer** | Count it | Three points for them, bonus for you. FP for every kicker FG. | +{perFgFP} FP for every FG this player makes<br>*RETUNED down — measured 39.0 FP/week, second highest at metallic.* |
 | **Touchdown Piñata** | Smash for points | Every house call fills the piñata. Bonus FP per roster TD. | +{perTdFP} FP for every TD your roster scores |
 | **Workhorse** | Feed the beast | Pound the rock. FP scaling with rushing attempts by this player. | +{perAttemptFP} FP for every rushing attempt in one game by this player |
 
@@ -250,7 +250,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Consolation Prize** | Better luck next time | Here's a little something for your troubles. Guaranteed Floobits floor plus a chance at enhanced Floobits. The trigger bar fills from this player's own FP and from each roster player who has a bad week. | +{baseFloobits}F guaranteed, chance at {enhancedFloobits}F. Trigger odds fill from this player's FP plus each roster player under {fpThreshold} FP. |
 | **Goal Line Vulture** | Opportunistic scavenging | Vulture season. Floobits for every rushing TD this player punches in. | {perTdFloobits} Floobits for every rushing TD by this player in a game |
 | **Gold Rush** | Floobits love company | Floobits cards amplify each other. Floobits bonus for each other floobits card in your hand. | {perCardFloobits} Floobits per other Floobits card in your hand |
-| **Industrious** | Honest work | Honest work deserves honest pay. Floobits scaling with receptions by your roster's TE. | {perReceptionFloobits} Floobits per reception by your roster's TE in a game |
+| **Industrious** | Honest work | Honest work deserves honest pay. Floobits scaling with receptions by this player. | {perReceptionFloobits} Floobits per reception by this player in a game |
 | **Piggy Bank** | Points into coins | Automatic savings plan. Converts a chunk of this player's total FP into Floobits. | {fpPercent}% of this player's FP → Floobits |
 | **Trust Fund** | Set it and collect | The lazy investor strategy. Floobits that grow each week your roster stays unchanged. | {baseFloobits} Floobits base, +{growthPerWeek} per week your roster stays unchanged |
 | **Winner's Circle** | Ride the winners | Back the winners. Floobits whenever this player's real team wins their game this week. | {winFloobits} Floobits when this player's team wins this week |
@@ -288,7 +288,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Mismatch** | Too big, too fast | They can't cover this guy. FP per TD by this player, plus a bonus when they score multiple TDs. | +{perTdFP} FP per TD by this player, +{bonusFP} bonus at {tdThreshold}+ TDs |
 | **Nose Picker** | Pick it yourself | Streak grows each week you submit picks yourself instead of letting auto-pick fill them in. | +{baseReward} FP base. Grows every week you submit manual picks. Growth starts at +{firstWeekGrowth} FP and tapers off as the streak continues. |
 | **Pocket Aces** | AA | Pocket Rockets. Base FP every week, plus bonus FP when this player hits a combined stat threshold. | +{baseFP} FP base, +{rewardValue} bonus if this player combines for {threshold}+ {statDisplay} |
-| **Range** | Boot it through | Distance is the reward. FP scaling with the total FG yardage your roster's K kicked this week. | +{perYardFP} FP per yard of FG kicked by your roster's K this week. |
+| **Range** | Boot it through | Distance is the reward. FP scaling with the total FG yardage this player kicked this week. | +{perYardFP} FP per yard of FG kicked by this player this week. |
 | **Rookie Hype** | Trust the kids | Believe in the new class. Bonus FP per rookie on your roster. | +{perRookieFP} FP per rookie on your roster |
 | **Salvo** **`NEW`** | All at once | One is a shot. Three is a salvo. FP per passing TD, doubled at three. | +{perTdFP} FP per passing TD, doubled at {threshold}+ |
 | **Spotlight Moment** | Lights please | Lights, camera, action. FP whenever this player scores a TD. For WR, either counts. | +{rewardValue} FP when this player scores a TD. WR counts either WR scoring a TD. |
@@ -301,7 +301,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 
 | card | tagline | back of card | detail |
 |---|---|---|---|
-| **Backfield Buddies** | Same backfield | Same backfield, double the payoff. FPx when your roster's QB and RB play on the same team. | +{rewardValue} FPx when your roster's QB and RB share a team |
+| **Backfield Buddies** | Same backfield | Same backfield, double the payoff. FPx when this player and your rostered RB play on the same team. | +{rewardValue} FPx when this player and your rostered RB share a team |
 | **Beast of Burden** **`NEW`** | Carrying the load | Keep feeding the ball until the legs give out. FPx once this player clears 25 carries. | +{perCarryMult} FPx per carry past {threshold} |
 | **Closers** | See this watch? | Always be closing. Bonus FP from this player's Q4 and OT production. | This player's Q4/OT fantasy points are multiplied by {q4MultFactor}x |
 | **Coffin Corner** **`NEW`** | Nowhere to go | Inside the ten and pinned against the sideline. FPx per punt downed inside the 10. | +{perPuntMult} FPx per punt downed inside the 10 |
@@ -314,7 +314,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Parlay** | Let it ride | FPx that grows with your weekly Prognostication points. | FPx that grows with your weekly Prognostication points. Counts auto-picks |
 | **Providence** | A little something extra | Fortune favors the prepared. FPx bonus plus chance boost to all chance cards in your hand. | +{baseDelta} FPx, plus +{chanceBonusPct}% trigger odds to every chance card in your hand |
 | **Rhythm** **`NEW`** | Finding a groove | Once the rhythm arrives, everything comes easier. FPx growing with every completion past 20. | +{perCompletionMult} FPx per completion past {threshold} |
-| **Stack** | QB-WR stack | Stack attack. FPx when your roster's QB and any WR play on the same team. | +{rewardDelta} FPx when your roster's QB and WR share a team |
+| **Stack** | QB-WR stack | Stack attack. FPx when this player and any rostered WR play on the same team. | +{rewardDelta} FPx when this player and a rostered WR share a team |
 | **Synergy** | Stack the depth chart | Two heads, one team. FPx per pair of roster players on the same actual team. | +{perPairMult} FPx per pair of roster players on the same actual team. Max +{maxDelta} FPx. |
 | **Territory** **`NEW`** | Claiming ground | Escalating FPx as this player passes 75, 125 and 175 receiving yards. | +{gate1}/{gate2}/{gate3} FPx at 75, 125 and 175 receiving yards |
 | **Trailblazer** | Unstoppable force | Get rolling. Base FPx, enhanced FPx when this player hits 75+ rushing yards. | +{baseDelta} FPx base, +{enhancedDelta} FPx when this player hits {yardThreshold}+ rush yards in a game<br>*RENAMED to **Trailblazer** — joins the rush-yards journey motif.* |
@@ -340,7 +340,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | card | tagline | back of card | detail |
 |---|---|---|---|
 | **Anthem** | All together now | Power in numbers. Flat FP that fires when your hand is heavy on flat-FP cards. 3 or more pays a bonus, 4 raises it, 5 maxes it out. | +{tier3FP} FP with 3 flat-FP cards equipped, +{tier4FP} with 4, +{tier5FP} with 5 |
-| **Automatic** | Perfect kicks only | Perfection pays. FP growing each consecutive week your roster's K goes perfect on FGs. Stacking streak cards accelerates growth. | +{baseReward} FP base, +{growthPerTick} per consecutive week your K makes all FG attempts. A week with no FG attempts will not break the streak. |
+| **Automatic** | Perfect kicks only | Perfection pays. FP growing each consecutive week this player goes perfect on FGs. Stacking streak cards accelerates growth. | +{baseReward} FP base, +{growthPerTick} per consecutive week your K makes all FG attempts. A week with no FG attempts will not break the streak. |
 | **Avalanche** | Bury them | Momentum builds with every score. Each roster TD pays more FP than the last. | Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing |
 | **Babysitter** | Carrying the team | Someone has to do the heavy lifting. Guaranteed FP floor plus a chance at enhanced FP. The trigger bar fills from this player's own FP and from each roster player who underperforms. | +{baseFP} FP guaranteed, chance at {enhancedFP} FP. Trigger odds fill from this player's FP plus each roster player under {fpThreshold} FP. |
 | **Bandwagon Express** | Choo choo! | Next stop: more points. FP growing each week your favorite team wins. Stacking streak cards accelerates growth. | +{baseReward} FP base, +{growthPerTick} per consecutive favorite-team win. |
@@ -359,7 +359,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Iron Man** **`NEW`** | Never comes off the field | Twenty carries, every single week. Streak grows each week the bar is cleared. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} carries |
 | **Landslide** **`NEW`** | Gathering weight | A hundred yards after contact, every week. Streak grows each time. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} yards after contact |
 | **Last Resort** | The ultimate insurance | When nothing else works. Guaranteed FP floor plus a chance at enhanced FP. The trigger bar fills from this player's own FP and from each of your other cards that fails to produce a bonus. | +{baseFP} FP guaranteed, chance at {enhancedFP} FP. Trigger odds fill from this player's FP plus each of your other cards that produced no bonus. |
-| **Leg Day** | Never skip leg day | Never skip it. FP growing each week your roster's K nails a 35+ yard FG. Stacking streak cards accelerates growth. | +{baseReward} FP base, +{growthPerTick} per consecutive game with a 35+ yd FG by your K. A week with no FG attempts will not break the streak. |
+| **Leg Day** | Never skip leg day | Never skip it. FP growing each week this player nails a 35+ yard FG. Stacking streak cards accelerates growth. | +{baseReward} FP base, +{growthPerTick} per consecutive game with a 35+ yd FG by your K. A week with no FG attempts will not break the streak. |
 | **Metronome** | Never misses a beat | FP that grows each week this player clears their power bar. A cold week holds the streak rather than resetting it. | +{baseReward} FP, +{growthPerTick} per consecutive week this player clears their power bar. Streak does not reset on cold weeks. |
 | **Odometer** | Every milestone pays | Hit the milestones. Escalating FP at each yardage gate this player hits. Resets weekly. | Escalating FP as this player piles up yards this week (40 / 80 / 120 / 160+). |
 | **Odyssey** **`NEW`** | The long road | A hundred yards a week, week after week. Streak grows each time the mark is reached. | +{baseFP} FP, +{growthPerTick} per week this player clears {threshold} rushing yards |
@@ -380,7 +380,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 | **Franchise** | The centerpiece | Build around your guy. FPx when this player is your single highest scorer this week. | +{topScorerDelta} FPx when this player is your top scorer this week |
 | **Juggernaut** | I'M THE JUGGERNAUT | Momentum is a beautiful thing. FPx grows with every win in your favorite team's streak, with diminishing returns past long runs. | +{baseXDelta} FPx base, grows with your favorite team's win streak. |
 | **Momentum** | Rolling | Can't stop won't stop. FPx grows each week your roster breaks 100 FP. Stacking streak cards accelerates growth. | +{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week your roster scores 100+ FP. |
-| **On Fire** | Keep the flame alive | Don't let the flame die. FPx that grows each week your roster's K makes a FG. Stacking streak cards accelerates growth. | +{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week with a FG made by your K. |
+| **On Fire** | Keep the flame alive | Don't let the flame die. FPx that grows each week this player makes a FG. Stacking streak cards accelerates growth. | +{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week with a FG made by your K. |
 | **Stratosphere** **`NEW`** | Thin air up here | Territory most passers never see. Streak grows each week this player clears 300 yards. | +{baseMult} FPx, +{growthPerTick} per week this player clears {threshold} passing yards |
 
 #### Prismatic · Floobits
@@ -405,7 +405,7 @@ Detail lines use `{placeholder}` tokens that resolve at mint from the card playe
 
 | card | tagline | back of card | detail |
 |---|---|---|---|
-| **Alchemy** | Lead into gold | Transmutation complete. Each FG by your roster's K counts as a TD for fantasy scoring and other card effects. | +{perFgBonusFP} bonus FP per FG by your roster's K. FGs also count as roster TDs for other cards in your hand. |
+| **Alchemy** | Lead into gold | Transmutation complete. Each FG by this player counts as a TD for fantasy scoring and other card effects. | +{perFgBonusFP} bonus FP per FG by this player. FGs also count as roster TDs for other cards in your hand. |
 
 #### Diamond · FPx
 
@@ -690,7 +690,13 @@ reception** — that is a balance fix, independent of naming.
 2. **Field goals.** The kicker carries six shipped cards on 1.98 FGs a game and Three
    Pointer alone measures 39.0 FP/week. This wants pruning, which is a separate pass from
    the ladder build.
-3. **The ten remaining rating-keyed cards** (see *Still rating-keyed*). The chance-fill
+3. **Good Neighbor is multi-position but reads the roster's kicker.** Every other
+   "your roster's K" card is K-LOCKED, so under fusion the roster slot and the card player
+   are the same person and the wording was just stale framing (now fixed). Good Neighbor
+   mints on ANY position while paying off the roster kicker's missed FGs, so a QB card's
+   depicted player is decorative. Lock it to K, or re-base it. Text left accurate until
+   the behaviour is settled.
+4. **The remaining rating-keyed cards** (see *Still rating-keyed*). The chance-fill
    group is half stat-driven already and needs only its `conditionFill` input swapped; the
    star-count group needs a decision on whether a static rating band is acceptable at all
    given the direction this plan sets.
