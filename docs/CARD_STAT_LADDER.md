@@ -263,6 +263,67 @@ already the best-served position; it needs pruning, not additions.
 | prismatic | *House Call* | chance on return TDs |
 
 
+## Renames (owner-approved 2026-08-06)
+
+Renaming is **display-only**: `displayName`, `tagline` and `detail` live in the stored
+`effect_config`, so the effect KEY is untouched — no compute or registry churn, and no
+risk to how an existing card scores. Like the numeric params, the name is frozen at mint,
+so a rename only reaches newly-minted templates. Shipping on `next-season` lands it
+uniformly at the season cutover with no migration; a mid-season deploy would split the
+name across two cohorts of the same card.
+
+### 1. Pass yards — Gunslinger is spent on the wrong stat
+
+Firearms are overloaded across the pool already: **Sniper** (K), **Sharpshooter**
+(diamond), **Gunslinger** (QB). All three read as accuracy, and only Sniper actually
+keys off accuracy. Free the motif rather than stack a fourth on it.
+
+| | old | new | why |
+|---|---|---|---|
+| metallic | **Gunslinger** | *Slipstream* | pass yards travel through the air |
+| holographic | — | *Updraft* | |
+| prismatic | — | *Stratosphere* | escalating altitude |
+
+Gunslinger is a good name being spent. The alternative is to keep it and let pass yards
+carry a western motif (*Gunslinger → Quickdraw → Dead Eye*), accepting that the family
+then reads as accuracy while measuring volume.
+
+### 2. Rush yards — Stampede is a herd in a journey family
+
+| | old | new | why |
+|---|---|---|---|
+| metallic | **Expedition** | *(keep)* | sets the journey motif |
+| holographic | **Stampede** | *Trailblazer* | joins the journey |
+| prismatic | — | *Odyssey* | the long haul |
+
+### 3. Receptions — three shipped cards, three motifs
+
+The metallic rung here is TWO position-exclusive cards (Possession on WR, Safety Blanket
+on TE), so it is one family with two entry points rather than a conflict. Motif is
+custody and reliability.
+
+| | old | new | why |
+|---|---|---|---|
+| metallic (WR) | **Possession** | *(keep)* | sets the motif |
+| metallic (TE) | **Safety Blanket** | *(keep)* | best-known TE term in football; reads as reliability |
+| metallic (TE, Floobits) | **Industrious** | *Steward* | labour → custody |
+| holographic | — | *Custody* | |
+| prismatic | — | *Tenure* | held the longest |
+
+Safety Blanket keeps its name and still needs its **rate cut from 5.3 to ~3.2 per
+reception** — that is a balance fix, independent of naming.
+
+### 4. Good throws — precision, without firearms
+
+Blocked on the new `goodThrows` stat. Firearms being freed above does not mean spending
+them here; escalating mastery avoids every existing collision.
+
+| | card |
+|---|---|
+| metallic | *Draftsman* |
+| holographic | *Surgeon* |
+| prismatic | *Virtuoso* |
+
 ## Output-type balance
 
 Metallic currently mints **17 FP / 4 FPx / 13 Floobits**, and two of the four FPx cards
@@ -281,9 +342,8 @@ Target after the build: roughly **half FP, a third FPx, the rest Floobits** at m
    anchor they need large per-unit values, so a typical week pays nothing and a p90 week
    pays double. That is a fine shape at prismatic and the wrong shape at metallic, which
    is why those families start at holographic above.
-3. **Mixed families.** Three families contain a shipped card whose motif fights the set:
-   Gunslinger (gun) in a flight family, Stampede (herd) in a journey family, Industrious
-   in a custody family. Rename the old card, rename the family, or accept the mismatch.
+3. **Mixed families.** RESOLVED — see Renames. Three shipped cards get new display
+   names (Gunslinger, Stampede, Industrious); Possession and Safety Blanket keep theirs.
 4. **Defense.** Excluded here per the "offensive stats" scope, but every rostered player
    produces sacks, tackles, INTs, TFL, forced fumbles and pass breakups through their
    defensive position, and no card reads any of it. Largest untouched surface in the game.
