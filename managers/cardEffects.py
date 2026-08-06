@@ -1007,7 +1007,16 @@ EFFECT_DETAIL_TEMPLATES = {
 
 SHARED_EFFECT_POOL = [
     # flat_fp effects
-    "freebie", "entourage", "touchdown_pinata", "scrappy",
+    "freebie", "entourage", "touchdown_pinata",
+    # NOTE: the LOW-RATED-PLAYER set — "scrappy", "sleeper", "patient", "dark_horse" —
+    # retired together (owner call 2026-08-06). Each paid for FIELDING WEAK PLAYERS:
+    # scrappy and sleeper filled their chance bar from 2-star-or-lower roster players,
+    # patient paid per week a sub-3-star slot went untouched, dark_horse scaled FPx
+    # INVERSELY to the card player's stars. Under fusion an equipped card IS a rostered
+    # player, so almost nobody fields a weak lineup on purpose and these sat dead in hand.
+    # Their high-rated counterparts (Entourage 3-star-plus, Showoff 5-star) are KEPT — the
+    # objection is to rewarding weakness, not to reading a rating. Dropped from the minting
+    # pool; compute/templates stay dormant so owned copies still score.
     "honor_roll", "garbage_time", "loyalty_bonus",
     "homer", "gone_streaking", "rng", "snake_eyes", "avalanche", "hedge",
     # NOTE: the OVER/UNDERPERFORMANCE set — "resplendent" (Hot Stove), "windfall",
@@ -1072,7 +1081,7 @@ SHARED_EFFECT_POOL = [
     # chance synergy
     "advantage", "catalyst",
     # strategy-warping
-    "closer", "dark_horse",
+    "closer",
     # NOTE: "home_alone" retired from circulation (owner call 2026-07-25) — its "empty
     # roster slot" reward doesn't fit the position-locked fusion lineup, where a full
     # lineup is always the goal. Removed from the minting pool; its compute/templates
@@ -1087,7 +1096,7 @@ SHARED_EFFECT_POOL = [
     "fat_cat", "bonsai",
     # New cards (FP/FPx rebalance)
     "anthem", "conductor", "captain",
-    "castaway", "sleeper", "patient", "rookie_hype", "wanderer",
+    "castaway", "rookie_hype", "wanderer",
     # fusion additions (2026-07) — replace the retired anti-synergy effects
     "winners_circle", "no_passengers", "franchise", "metronome",
     # NOTE: "sandbagger", "quiet_storm", "drought" retired from circulation (owner call
