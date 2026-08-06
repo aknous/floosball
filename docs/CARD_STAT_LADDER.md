@@ -106,8 +106,9 @@ same two cards.
 
 Three rules fix it without inventing premises:
 
-1. **A family's three rungs are not all the same output type.** The chain should feel
-   different at each step, not just bigger.
+1. **A family's three rungs are FP and FPx only, and not all the same type.** Floobits
+   cards live outside the families entirely (owner call 2026-08-06), so a ladder is always
+   a fantasy-points ladder and never changes currency partway up.
 2. **Lumpy stats take FPx, not flat FP.** A stat under ~1/game (TDs) pays nothing most
    weeks as a flat card. As a multiplier the dead week costs you nothing and the live week
    compounds with the rest of the hand.
@@ -161,11 +162,11 @@ stat that separates a receiver's contribution from the quality of throw he was g
 |---|---|---|---|
 | **completions** — timekeeping | *Cadence* **FP** · 0.9/comp | *Rhythm* **FPx** past 20 | *Clockwork* **FP** streak at 25+ |
 | **pass yards** — flight | *Slipstream* **FPx** per 100 | *Updraft* **FP** gates 200/300/400 | *Stratosphere* **FPx** streak at 300 |
-| **pass TDs** — ordnance | **Air Raid** *(Floo)* · *Bombardier* **FPx** | *Salvo* **FP** doubled at 3+ | *Barrage* **FP** escalating odds |
+| **pass TDs** — ordnance | *Bombardier* **FPx** | *Salvo* **FP** doubled at 3+ | *Barrage* **FP** escalating odds |
 | **throw quality** — marksmanship | **Gunslinger** **FP** *(re-pointed)* | *Marksman* **FPx** on a clean sheet | *Dead Eye* **FP** streak |
 
 One-offs: *Attention* **FPx** (targets), *Altitude* (holo, aDOT above 8), *Haymaker*
-(holo, 20+ throws).
+(holo, 20+ throws), **Air Raid** (shipped, Floobits on pass TDs).
 Blocked: throw quality needs the new `goodThrows` counter.
 
 ## RB
@@ -174,11 +175,11 @@ Blocked: throw quality needs the new `goodThrows` counter.
 |---|---|---|---|
 | **carries** — labour | **Workhorse** **FP** | *Beast of Burden* **FPx** at 25+ | *Iron Man* **FP** streak at 20 |
 | **rush yards** — journey | **Expedition** **FP** | **Trailblazer** **FPx** *(was Stampede)* | *Odyssey* **FP** streak at 100 |
-| **rush TDs** — force | **Goal Line Vulture** *(Floo)* · *Battering Ram* **FPx** | **Lead Blocker** **FP** | — |
+| **rush TDs** — force | *Battering Ram* **FPx** | **Lead Blocker** **FP** | — |
 | **yards after contact** — mass | *Freight* **FP** · 0.3/yd | *Grinder* **FPx** when YAC > half | *Landslide* **FP** streak at 100 |
 
 One-offs: *Breakaway* (holo, 20+ runs), *Houdini* (prismatic, chance filling from broken
-tackles).
+tackles), **Goal Line Vulture** (shipped, Floobits on rush TDs).
 
 Yards after contact only became a real stat this session (80% of rush yards, 87.5/game).
 
@@ -186,13 +187,13 @@ Yards after contact only became a real stat this session (80% of rush yards, 87.
 
 | family / motif | metallic | holographic | prismatic |
 |---|---|---|---|
-| **receptions** — custody | **Possession** (WR) **FP** · **Safety Blanket** (TE) **FP** · **Steward** (TE, *Floo*) | *Custody* **FPx** past 8 | *Tenure* **FP** streak at 8 |
+| **receptions** — custody | **Possession** (WR) **FP** · **Safety Blanket** (TE) **FP** | *Custody* **FPx** past 8 | *Tenure* **FP** streak at 8 |
 | **receiving yards** — territory | *Frontier* **FP** · 0.31/yd | *Territory* **FPx** gates 75/125/175 | *Dominion* **FP** streak at 100 |
 | **receiving TDs** — the end zone | *Paydirt* **FPx** | *End Zone* **FP** doubled at 2+ | *Promised Land* **FP** escalating odds |
 | **YAC** — escape | **Slippery** **FP** | **Jailbreak** **FPx** | *Getaway* **FP** streak at 40 |
 
 One-offs: **Trebuchet** (shipped, longest catch), *Highpoint* (holo, contested catches),
-*Custodian* (prismatic, bailouts).
+*Custodian* (prismatic, bailouts), **Industrious** (shipped, Floobits on TE receptions).
 **Receiving yards is the biggest hole in the pool** — 83.5/game, the most-produced skill
 stat in the game, and no card below prismatic today.
 
@@ -224,11 +225,14 @@ became measurable this session.
 5. **Retune the two outliers** — Safety Blanket 5.3 → ~3.2 per reception, Three Pointer
    down from 39.0 FP/week.
 
-Counts: **12 families + 8 one-offs, ~31 new cards** including the FPx siblings.
+Counts: **12 families + 11 one-offs, ~31 new cards** including the FPx siblings.
+Three shipped Floobits cards (Air Raid, Goal Line Vulture, Industrious) moved OUT of
+families into the one-off pool; no new cards were needed to replace them, because the
+TD families take FPx at metallic under rule 2 regardless.
 
 One-offs in full: *Haymaker*, *Highpoint*, *Breakaway*, *Houdini*, *Custodian* (the five
-rare-stat cards above), *Attention* (targets, FPx), *Altitude* (holo, aDOT), plus shipped
-**Trebuchet** (longest catch).
+rare-stat cards), *Attention* (targets, FPx), *Altitude* (holo, aDOT), plus shipped
+**Trebuchet**, **Air Raid**, **Goal Line Vulture** and **Industrious**.
 
 ## Renames (owner-approved 2026-08-06)
 
@@ -286,7 +290,7 @@ the motif that made the evolution idea click.
 | holographic | **Stampede** | *Trailblazer* | joins the journey |
 | prismatic | — | *Odyssey* | the long haul |
 
-### 3. Receptions — three shipped cards, three motifs
+### 3. Receptions — two shipped cards set the motif
 
 The metallic rung here is TWO position-exclusive cards (Possession on WR, Safety Blanket
 on TE), so it is one family with two entry points rather than a conflict. Motif is
@@ -296,20 +300,29 @@ custody and reliability.
 |---|---|---|---|
 | metallic (WR) | **Possession** | *(keep)* | sets the motif |
 | metallic (TE) | **Safety Blanket** | *(keep)* | best-known TE term in football; reads as reliability |
-| metallic (TE, Floobits) | **Industrious** | *Steward* | labour → custody |
 | holographic | — | *Custody* | |
 | prismatic | — | *Tenure* | held the longest |
+
+**Industrious is no longer renamed.** The *Steward* rename existed only to pull it into the
+custody motif; with Floobits cards living outside the families it keeps its own name and
+its own identity. Two renames, not three.
 
 Safety Blanket keeps its name and still needs its **rate cut from 5.3 to ~3.2 per
 reception** — that is a balance fix, independent of naming.
 
+## Settled
+
+- **Offense only** (owner call 2026-08-06). Defensive stats are recorded for every player
+  through their defensive position — sacks, tackles, INTs, TFL, forced fumbles, pass
+  breakups — and remain the largest surface no card reads. Deferred, not rejected:
+  offensive stats are the ones a user actually sees.
+- **Floobits cards are one-offs** (owner call 2026-08-06). No Floobits card sits in a
+  family. This removes the sibling problem entirely — a family's rungs are FP and FPx only,
+  and the nine shipped Floobits cards keep their own identities outside the ladder.
+
 ## Open questions for the owner
 
 1. **Names.** All *italic* names are candidates.
-2. **Defense.** Excluded per the offensive-stats scope, but every rostered player produces
-   sacks, tackles, INTs, TFL, forced fumbles and pass breakups through their defensive
-   position, and no card reads any of it. Largest untouched surface in the game.
-3. **Floobits inside families.** Air Raid (pass TDs), Goal Line Vulture (rush TDs) and
-   Steward (receptions) are Floobits cards sitting inside FP/FPx families, which is why
-   each needed a sibling. Worth deciding whether Floobits cards belong in families at all
-   or live outside them the way the universal cards do.
+2. **Field goals.** The kicker carries six shipped cards on 1.98 FGs a game and Three
+   Pointer alone measures 39.0 FP/week. This wants pruning, which is a separate pass from
+   the ladder build.
