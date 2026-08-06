@@ -92,6 +92,17 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()  # column already exists — ignore
 
+        # Glitch marks on owned cards (docs/GLITCH_CARDS.md).
+        for _col, _def in (('glitched', 'BOOLEAN DEFAULT 0 NOT NULL'),
+                           ('glitched_season', 'INTEGER'),
+                           ('glitched_week', 'INTEGER')):
+            try:
+                conn.execute(text(f"ALTER TABLE user_cards ADD COLUMN {_col} {_def}"))
+                conn.commit()
+                logger.info(f"  Migration: added user_cards.{_col}")
+            except Exception:
+                conn.rollback()  # column already exists — ignore
+
         # Returning stats blob (punt returns) on the three player stat tables, plus
         # team_season_stats — the model carries the column there too, and without the
         # migration every query against that table breaks on an existing DB.

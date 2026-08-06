@@ -1,0 +1,192 @@
+"""Glitch cards — the extra payout a card carries after a Criticality.
+
+Full design: `docs/GLITCH_CARDS.md`.
+
+A glitched card is a REAL card that caught something during a Criticality. It keeps
+everything it already did; some weeks it also pays an unpredictable bonus on top. The load
+bearing rule is that a glitch **never takes anything away** — people cultivate cards and
+lineups, and degrading what someone built punishes them for having built it. It also keeps
+the feature inside the locked constraint in `CRITICALITY_METAGAME_PLAN.md`, which names
+collections as never at risk.
+
+Two halves:
+
+  ACQUISITION  one equipped card per user is marked when a Criticality fires
+  OPERATION    each week a marked card rolls once; base from the on-card player's ladder
+               position, raised by the anomaly events that player actually fired
+
+The roll resolves at WEEK END and cannot resolve earlier — the chance depends on events
+that fire during the week's games. That matches how chance cards already behave
+(`cardEffects` refuses to resolve while `ctx.gamesActive`).
+"""
+from __future__ import annotations
+
+import hashlib
+import random as _random
+from typing import Dict, Optional, Tuple
+
+from constants import (GLITCH_CARDS_ENABLED, GLITCH_TRIGGER_BASE, GLITCH_EVENT_BOOST,
+                       GLITCH_TRIGGER_CAP, GLITCH_DIAL_SHARE, GLITCH_SURGE_TABLE,
+                       GLITCH_FPX_DAMP)
+from logger_config import get_logger
+
+logger = get_logger("floosball.glitchCards")
+
+
+def triggerChance(playerState: Optional[str], eventCounts: Optional[Dict[str, int]] = None,
+                  instabilityDial: float = 1.0) -> float:
+    """Odds a glitched card's surge fires this week.
+
+        base(ladder state) scaled by a FRACTION of the instability dial,
+        plus a boost per anomaly event the player fired, escalating with its level.
+
+    The dial is applied at `GLITCH_DIAL_SHARE` rather than in full because it ALSO drives
+    how many events fire — applying it at full strength to both terms compounds and pins a
+    rampant card at the cap through an entire Criticality.
+    """
+    base = GLITCH_TRIGGER_BASE.get(playerState or 'stable', GLITCH_TRIGGER_BASE['stable'])
+    # dial 1.0 is quiet and leaves the base untouched; 5.0 is a live Criticality.
+    scaled = base * (1.0 + (float(instabilityDial) - 1.0) * GLITCH_DIAL_SHARE)
+    boost = sum(GLITCH_EVENT_BOOST.get(layer, 0.0) * count
+                for layer, count in (eventCounts or {}).items())
+    return max(0.0, min(GLITCH_TRIGGER_CAP, scaled + boost))
+
+
+def _rng(userId: int, season: int, week: int, userCardId: int) -> _random.Random:
+    """Deterministic per (user, season, week, card), mirroring the chance-card RNG so a
+    week's result is stable no matter how many times it is recomputed."""
+    seed = f"glitch-{userId}-{season}-{week}-{userCardId}"
+    return _random.Random(int(hashlib.sha256(seed.encode()).hexdigest(), 16) % (2 ** 32))
+
+
+def rollSurge(userId: int, season: int, week: int, userCardId: int,
+              chance: float) -> Tuple[bool, Optional[str], float]:
+    """Resolve a glitched card's week. Returns (triggered, outcomeName, multiplier).
+
+    Two draws off the same stream: whether it fires, then how big.
+    """
+    rng = _rng(userId, season, week, userCardId)
+    if rng.random() >= chance:
+        return (False, None, 0.0)
+    total = sum(w for _, w, _ in GLITCH_SURGE_TABLE)
+    pick = rng.uniform(0, total)
+    upto = 0.0
+    for name, weight, mult in GLITCH_SURGE_TABLE:
+        upto += weight
+        if pick <= upto:
+            return (True, name, mult)
+    name, _, mult = GLITCH_SURGE_TABLE[-1]
+    return (True, name, mult)
+
+
+def surgePayout(multiplier: float, cardFp: float, cardMultBonus: float) -> Tuple[float, float]:
+    """The extra FP / FPx delta a surge adds, given what the card itself produced.
+
+    Returns (extraFp, extraMultDelta) — ADDITIVE, never replacing. A card that produced
+    nothing this week gets nothing extra: the surge scales the card's own output, so
+    there is nothing to amplify.
+
+    FPx is damped (`GLITCH_FPX_DAMP`) because an FP surge is a fixed amount while an FPx
+    surge multiplies the whole lineup, so it grows with the rest of the hand — a strong
+    hand should not also make the glitch stronger.
+    """
+    extraFp = round(max(0.0, cardFp) * multiplier, 2)
+    delta = max(0.0, (cardMultBonus or 0.0) - 1.0)
+    extraMult = round(delta * multiplier * GLITCH_FPX_DAMP, 3)
+    return (extraFp, extraMult)
+
+
+def anomalyContextFor(playerIds, season: int, week: int) -> Dict[int, Tuple[str, Dict[str, int]]]:
+    """{playerId: (ladderState, {layer: count})} for a set of players, in ONE round trip.
+
+    Batched on purpose. The card calculator runs per user per week, and a per-player query
+    for state plus another for events would be two round trips per glitched card. Both
+    sources already exist — `AnomalyState` holds the ladder position and `AnomalyEvent`
+    persists every fired anomaly with player, season, week and layer — so this needs no new
+    instrumentation, only care about how often it is asked.
+
+    Opens its own session: `CardCalcContext` carries none, and threading one through every
+    call site buys nothing here.
+    """
+    ids = [p for p in (playerIds or []) if p]
+    if not ids:
+        return {}
+    out: Dict[int, Tuple[str, Dict[str, int]]] = {p: ('stable', {}) for p in ids}
+    try:
+        from database.connection import get_session
+        from database.models import AnomalyEvent, AnomalyState
+    except Exception:
+        return out
+    session = None
+    try:
+        session = get_session()
+        for pid, state in session.query(AnomalyState.player_id, AnomalyState.state).filter(
+                AnomalyState.player_id.in_(ids), AnomalyState.season == season):
+            out[pid] = (state or 'stable', out[pid][1])
+        for pid, layer in session.query(AnomalyEvent.player_id, AnomalyEvent.layer).filter(
+                AnomalyEvent.player_id.in_(ids), AnomalyEvent.season == season,
+                AnomalyEvent.week == week):
+            counts = out[pid][1]
+            counts[layer] = counts.get(layer, 0) + 1
+    except Exception as e:
+        logger.debug("glitch: anomaly context lookup failed: %s", e)
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+    return out
+
+
+def markCardsForCriticality(session, season: int, week: int) -> int:
+    """ACQUISITION. Mark one equipped card per user when a Criticality fires.
+
+    Everyone with cards equipped is affected — a Criticality hits the whole league and
+    exposure is the only qualification. Returns how many cards were marked.
+
+    ⚠️ Deliberately gameable (owner call): equipping exactly ONE card during a Criticality
+    guarantees the glitch lands on it, where a full lineup gives any card a 1-in-6 chance.
+    Stripping a lineup costs five cards' output for the week, so it is a real trade rather
+    than a free exploit.
+
+    Idempotent per (season, week): re-running will not mark a second card, so a replayed or
+    resumed week cannot double-dip.
+    """
+    if not GLITCH_CARDS_ENABLED:
+        return 0
+    try:
+        from database.models import EquippedCard, UserCard
+    except Exception:
+        return 0
+    try:
+        already = {uid for (uid,) in session.query(UserCard.user_id)
+                   .filter(UserCard.glitched_season == season,
+                           UserCard.glitched_week == week).distinct()}
+        rows = (session.query(EquippedCard)
+                .filter(EquippedCard.season == season, EquippedCard.week == week).all())
+        byUser: Dict[int, list] = {}
+        for eq in rows:
+            if eq.user_id in already:
+                continue
+            byUser.setdefault(eq.user_id, []).append(eq)
+        marked = 0
+        for userId, equipped in byUser.items():
+            # Deterministic per user+event, so a retry picks the same card.
+            rng = _rng(userId, season, week, 0)
+            chosen = rng.choice(equipped)
+            card = session.get(UserCard, chosen.user_card_id)
+            if card is None or card.glitched:
+                continue
+            card.glitched = True
+            card.glitched_season = season
+            card.glitched_week = week
+            marked += 1
+        if marked:
+            session.commit()
+            logger.info(f"Criticality S{season}W{week}: glitched {marked} cards")
+        return marked
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to mark glitch cards for S{season}W{week}: {e}")
+        return 0

@@ -1523,6 +1523,15 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
     # active-user-scaled seeding rather than snapping back up to the old band.
     state.threshold = max(THRESHOLD_FLOOR, int(state.threshold * THRESHOLD_DECAY_AFTER_CRITICALITY))
 
+    # Glitch cards: the Criticality marks one equipped card per user (docs/GLITCH_CARDS.md).
+    # Best-effort — a failure here must never stop the Criticality itself from firing.
+    try:
+        from managers.glitchCards import markCardsForCriticality
+        if session is not None:
+            markCardsForCriticality(session, state.season, startWeek)
+    except Exception as e:
+        logger.error(f"glitch card marking failed for S{state.season}W{startWeek}: {e}")
+
     # Compose the Cores' narration (multi-Core exchange) and record a
     # representative entry on the audit trail. Event type 'criticality' matches
     # the coresManager pools (the old 'thinning' key had no pool).

@@ -1452,6 +1452,14 @@ class UserCard(Base):
     vaulted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # Permanent collection — irreversible; can't equip/sell/combine
     vaulted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # When it was vaulted
     vault_position: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Manual sort order within the Vault (null = unset)
+    # ── Glitch (docs/GLITCH_CARDS.md) ──
+    # Marked during a Criticality. Per-INSTANCE, not per-template: the same card can be
+    # clean in one collection and glitched in another, because the glitch happened to
+    # this copy at a specific event. A glitch only ever ADDS an extra payout; it never
+    # degrades the printed effect and the card can never be taken away.
+    glitched: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    glitched_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    glitched_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="user_cards")

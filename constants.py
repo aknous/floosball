@@ -3016,3 +3016,62 @@ OFFSEASON_SNAPSHOT_EXCLUDE_TABLES = {
     'pick_em_picks',        # weekly pick-em selections
     'games',                # game records
 }
+
+# ─── Glitch Cards (docs/GLITCH_CARDS.md) ─────────────────────────────────────
+# A card marked during a Criticality. Each week it rolls ONCE for an extra payout on
+# top of whatever it already does. It never degrades the printed effect and is never
+# taken away — the locked no-wipe constraint names collections as never at risk.
+GLITCH_CARDS_ENABLED = True
+
+# Trigger base, by the on-card player's position on the attention ladder. Chosen over an
+# event-led design (much lower bases, events doing the work) because 89% of player-weeks
+# contain NO anomaly event at all — a low base would leave a glitched card dormant most
+# weeks at current volumes, and the event rate for a larger user base is unknowable from
+# the one league that exists. This degrades gracefully if events stay rare.
+# 'awakened' keeps a real base deliberately: awakened players fire a power on only 37% of
+# their weeks, LESS often than glitching, so keying the card solely to power use would
+# make awakening quieten the card rather than upgrade it.
+GLITCH_TRIGGER_BASE = {
+    'stable':   0.05,
+    'stirring': 0.15,
+    'erratic':  0.25,
+    'rampant':  0.35,
+    'awakened': 0.30,
+    'cleansed': 0.05,
+}
+
+# Each anomaly event the player fired THIS WEEK raises the chance, escalating with the
+# level of the anomaly. Stacks per event. A week where something actually happened roughly
+# doubles the chance (rampant 35% -> 69%).
+GLITCH_EVENT_BOOST = {
+    'micro':       0.15,   # cosmetic flicker, generic
+    'personality': 0.25,   # glitch keyed to who they are
+    'signature':   0.40,   # an actual L4 power, real mechanical effect
+}
+GLITCH_TRIGGER_CAP = 0.90
+
+# The instability dial (anomalyManager.getCriticalityMultiplier) already lifts a glitched
+# card INDIRECTLY — a hot league fires more events. But only from ~37% to ~45%, so the
+# event people spent a season building toward barely shows. Applying the dial to the base
+# at FULL strength overcorrects the other way: both terms rise together, pinning a rampant
+# card at the cap through a whole Criticality. This fraction splits the difference —
+# a live Criticality moves a rampant card 35% -> ~59% instead of 90%.
+GLITCH_DIAL_SHARE = 0.30
+
+# Magnitude, rolled on a trigger. Multiplies the CARD'S OWN output, so a surge scales with
+# whatever it is attached to rather than being a flat FP number that trivialises metallic
+# and vanishes on diamond. (weight, multiplier)
+GLITCH_SURGE_TABLE = [
+    ('flicker', 39, 0.35),
+    ('surge',   33, 1.00),
+    ('cascade', 20, 2.50),
+    ('runaway',  8, 5.00),
+]
+
+# An FP surge is a FIXED amount; an FPx surge multiplies the whole lineup, so it grows with
+# the rest of the hand. At the ~250 lineup the ladder is anchored to an undamped FPx surge
+# is actually slightly WEAKER (0.88x) — the imbalance only appears in rich hands, reaching
+# 1.59x at 450. 0.80 holds parity through a typical hand and clips only the top end.
+# A deeper cut (0.55) was tried and halves FPx everywhere, fixing a problem that does not
+# exist at normal lineup sizes.
+GLITCH_FPX_DAMP = 0.80
