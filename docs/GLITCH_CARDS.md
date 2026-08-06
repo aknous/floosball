@@ -212,10 +212,65 @@ natural home. It scores only in the season it was earned.
 
 1. **Does the trigger resolve before or after the week scores?** Resolving early makes it
    plannable, which cuts against wild magic; resolving late makes checking the card the payoff.
-2. **Do the base rates want the instability dial on top?** `getCriticalityMultiplier` already
-   ramps as the league approaches a crossing. Applying it to the base would make every glitched
-   card livelier during a hot stretch, which reinforces the deeper game — but it stacks with the
-   event boost, which also rises then.
+2. ~~**Do the base rates want the instability dial on top?**~~ RESOLVED (owner) — see below.
+
+## The instability dial lifts the base, at a fraction (owner)
+
+`getCriticalityMultiplier` scales per-play glitch probability with how close the league is to a
+crossing: 0.45 in a suppression window, 1.0 quiet, 1.8 building, 2.6 pre-criticality, 5.0 during
+a live one.
+
+It ALREADY lifts a glitched card indirectly — a hot league fires more anomaly events, and events
+boost the trigger. But only slightly, because one player's event count stays small however the
+dial scales it:
+
+| league state | dial | as designed | full dial on base |
+|---|---|---|---|
+| suppressed | 0.45 | 36% | 17% |
+| quiet | 1.00 | 37% | 37% |
+| building | 1.80 | 39% | **67%** |
+| pre-criticality | 2.60 | 40% | **90%** (cap) |
+| live Criticality | 5.00 | 45% | **90%** (cap) |
+
+Neither extreme works. The indirect-only column barely moves (37% to 45%), so the event people
+have been building toward does not visibly change their cards. The full-dial column compounds —
+both terms rise together, so a rampant card sits pinned at the cap through an entire Criticality
+and at 67% during mere buildup, which is most of a hot season. A card that is reliably on is the
+opposite of wild magic.
+
+**So apply the dial to the base at a fraction:**
+
+    effectiveBase = base * (1 + (dial - 1) * 0.3)
+
+A live Criticality takes a rampant card from 35% to ~59% rather than pinning it at 90%. The
+buildup is felt without becoming a certainty.
+
+This also makes the design robust to something no measurement can settle: the event rate for a
+real user base is unknown, and prod's is a floor. A partial dial on the base delivers the
+hot-stretch feel whether events stay rare or not.
+
+## ⚠️ Chrome will move the ground under this (owner)
+
+`docs/CHROME.md`'s 2026-07-31 revision promotes chrome to **the input layer of the anomaly
+system**, and this spec keys off two things it changes:
+
+| this spec assumes | chrome changes it to |
+|---|---|
+| ladder position is driven by user ATTENTION | **chrome IS how players awaken** — "a specific augment drives it; attention no longer does" |
+| awakened powers come from the L4 catalog | **powers are chrome too** — fans gift them |
+| a player's state is their own | awakening **spreads like a virus** through teammates and on-field contact; cleansed players spread the inverse |
+
+**What survives.** The card keys off *how anomalous its player is* and *what that player did this
+week*. Both remain true under chrome — only the mechanism producing the state changes. The
+`AnomalyEvent` log, the micro/personality/signature layers, the awakened distinction and the
+instability dial are all upstream of chrome rather than replaced by it.
+
+**What needs revisiting when chrome lands.** The five base rates are calibrated against today's
+ladder distribution. If chrome makes awakening common (contagion spreads it) or rare (supply is
+the master dial), that distribution shifts and the bases want re-measuring. The 30% awakened base
+in particular was set from a measured 37% power-use rate that chrome will change outright.
+
+Build against today's system; expect to re-tune the five numbers, not the design.
 
 ## What is NOT in scope
 
