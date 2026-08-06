@@ -110,6 +110,12 @@ EFFECT_CATEGORY = {
     "loyalty": "flat_fp",        # FP per first-save roster player still on roster
     "charmed": "cross",          # second-pass FP per chance trigger this week
     "cornerstone": "multiplier", # FPx per roster player who is #1 at their position
+    # Stat ladder families — the compute functions read the card player directly, so
+    # category only drives param-builder dispatch and output typing.
+    "frontier": "flat_fp", "territory": "multiplier", "dominion": "multiplier",
+    "freight": "flat_fp", "grinder": "multiplier", "landslide": "multiplier",
+    "pinpoint": "flat_fp", "coffin_corner": "multiplier", "undertaker": "multiplier",
+    "paydirt": "multiplier", "end_zone": "flat_fp", "promised_land": "flat_fp",
     # Diamond stat amplifiers — no own output, pre-pass mutates ctx stats
     "doubler": "cross",          # roster TDs counted 2x for other card effects
     "surveyor": "cross",         # roster yards counted 1.5x for other card effects
@@ -127,6 +133,11 @@ POSITION_LABELS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K"}
 # resolves to NULL (mixed) at template-generation time.
 EFFECT_OUTPUT_TYPE = {
     # ── Concrete FP output ──
+    # Stat ladder families
+    "frontier": "fp", "territory": "fpx", "dominion": "fpx",
+    "freight": "fp", "grinder": "fpx", "landslide": "fpx",
+    "pinpoint": "fp", "coffin_corner": "fpx", "undertaker": "fpx",
+    "paydirt": "fpx", "end_zone": "fp", "promised_land": "fp",
     "freebie": "fp", "entourage": "fp", "touchdown_pinata": "fp", "scrappy": "fp",
     "honor_roll": "fpx", "three_pointer": "fp", "garbage_time": "fp",
     "loyalty_bonus": "fp", "spotlight_moment": "fp", "ace_up_the_sleeve": "fp",
@@ -309,6 +320,14 @@ EFFECT_EDITION_TIER = {
     "cornerstone": "prismatic",
     # Diamond stat amplifiers
     "doubler": "diamond", "surveyor": "diamond", "sharpshooter": "diamond",
+
+    # ── Stat ladder families (docs/CARD_STAT_LADDER.md) ──
+    # One stat, three rungs, each containing the one below: metallic pays a flat rate,
+    # holographic adds a conditional bonus, prismatic adds a streak or chance.
+    "frontier": "metallic", "territory": "holographic", "dominion": "prismatic",
+    "freight": "metallic", "grinder": "holographic", "landslide": "prismatic",
+    "pinpoint": "metallic", "coffin_corner": "holographic", "undertaker": "prismatic",
+    "paydirt": "metallic", "end_zone": "holographic", "promised_land": "prismatic",
 }
 
 
@@ -386,6 +405,11 @@ def _positionConditionalBonus(raw: int) -> int:
 # ─── Effect Display Names ────────────────────────────────────────────────────
 
 EFFECT_DISPLAY_NAMES = {
+    # Stat ladder families
+    "frontier": "Frontier", "territory": "Territory", "dominion": "Dominion",
+    "freight": "Freight", "grinder": "Grinder", "landslide": "Landslide",
+    "pinpoint": "Pinpoint", "coffin_corner": "Coffin Corner", "undertaker": "Undertaker",
+    "paydirt": "Paydirt", "end_zone": "End Zone", "promised_land": "Promised Land",
     # Flat FP (WR)
     "freebie": "Freebie",
     "entourage": "Entourage",
@@ -552,6 +576,19 @@ STAT_DISPLAY_NAMES = {
 }
 
 EFFECT_TAGLINES = {
+    # Stat ladder families
+    "frontier": "Always pushing out",
+    "territory": "Claiming ground",
+    "dominion": "The whole field",
+    "freight": "Hard to stop",
+    "grinder": "Earning every inch",
+    "landslide": "Gathering weight",
+    "pinpoint": "Drop it on a dime",
+    "coffin_corner": "Nowhere to go",
+    "undertaker": "Bury them",
+    "paydirt": "Cash in",
+    "end_zone": "Where it counts",
+    "promised_land": "Getting there",
     # Flat FP (WR)
     "freebie": "Free real estate",
     "entourage": "Seeing stars",
@@ -702,6 +739,19 @@ EFFECT_TAGLINES = {
 }
 
 EFFECT_TOOLTIPS = {
+    # Stat ladder families
+    "frontier": "Every yard is new ground. FP for every receiving yard.",
+    "territory": "FPx on every receiving yard, with more at 75, 125 and 175.",
+    "dominion": "FPx on receiving yards, plus a streak for every hundred-yard week.",
+    "freight": "The first hit never finishes the job. FP for every yard gained after contact.",
+    "grinder": "FPx on every yard after contact, and more when those yards clear half the total.",
+    "landslide": "FPx on yards after contact, plus a streak for every hundred-yard week.",
+    "pinpoint": "Placement over power. FP for every punt downed inside the 20.",
+    "coffin_corner": "FPx on every punt downed inside the 20, and more for the ones inside the 10.",
+    "undertaker": "FPx on punts downed inside the 20, plus a streak for every multi-pin week.",
+    "paydirt": "Cross the line, collect. FPx for every receiving touchdown.",
+    "end_zone": "One is good. Two is somebody else's problem. FP on every receiving TD, with a bonus at two.",
+    "promised_land": "FP on every receiving TD, and each one raises the odds the next pays out.",
     # Flat FP (WR)
     "freebie": "It's free. Bonus FP every week.",
     "entourage": "Seeing stars. Bonus FP for each high-rated player on your roster.",
@@ -852,6 +902,19 @@ EFFECT_TOOLTIPS = {
 }
 
 EFFECT_DETAIL_TEMPLATES = {
+    # Stat ladder families
+    "frontier": "+{perYardFP} FP per receiving yard by this player",
+    "territory": "+{per50Mult} FPx per 50 receiving yards, +{gateMult} more at 75, 125 and 175",
+    "dominion": "+{per50Mult} FPx per 50 receiving yards, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "freight": "+{perYardFP} FP per yard after contact by this player",
+    "grinder": "+{per50Mult} FPx per 50 yards after contact, +{ratioMult} more when they exceed half the total",
+    "landslide": "+{per50Mult} FPx per 50 yards after contact, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "pinpoint": "+{perPuntFP} FP per punt downed inside the 20",
+    "coffin_corner": "+{perPuntMult} FPx per punt inside the 20, +{bonusMult} more for inside the 10",
+    "undertaker": "+{perPuntMult} FPx per punt inside the 20, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "paydirt": "+{perTdMult} FPx for every receiving TD by this player",
+    "end_zone": "+{perTdFP} FP per receiving TD, +{bonusFP} bonus at {threshold}+",
+    "promised_land": "+{perTdFP} FP per receiving TD, plus escalating odds at {bonusFP} FP on each one",
     # Flat FP (WR)
     "freebie": "+{baseFP} FP per week",
     "entourage": "+{perPlayerFP} FP for every roster player with {minStars}★+",
@@ -1143,13 +1206,17 @@ POSITION_EXCLUSIVE_POOLS = {
     1: ["gunslinger", "air_raid", "stack", "backfield_buddies",
         "crescendo", "traverse"],
     2: ["workhorse", "expedition", "stampede", "goal_line_vulture",
+        "freight", "grinder", "landslide",
         "crescendo", "traverse"],
     3: ["possession", "trebuchet", "double_trouble",
+        "frontier", "territory", "dominion", "paydirt", "end_zone", "promised_land",
         "slippery", "jailbreak",
         "ace_up_the_sleeve", "crescendo", "traverse"],
     4: ["safety_blanket", "industrious", "lead_blocker",
+        "frontier", "territory", "dominion", "paydirt", "end_zone", "promised_land",
         "traverse"],
     5: ["three_pointer", "sniper", "leg_day", "good_neighbor",
+        "pinpoint", "coffin_corner", "undertaker",
         "automatic", "on_fire",
         "crescendo", "alchemy",
         "range"],
@@ -1208,6 +1275,11 @@ STREAK_CONFIGS = {
     "nose_picker":        {"resetCondition": "pickem_manual_submit", "isWeekly": False},
     "house_money":       {"resetCondition": "favorite_team_upset_win", "isWeekly": False, "noReset": True},
     "bonsai":       {"resetCondition": "equipped", "isWeekly": False, "noReset": True},
+    # Stat ladder prismatic rungs — the streak rides on top of a base rate that pays
+    # every week, so a cold week costs the growth but never the whole card.
+    "dominion":     {"resetCondition": "card_player_100_rec_yards", "isWeekly": False},
+    "landslide":    {"resetCondition": "card_player_100_contact_yards", "isWeekly": False},
+    "undertaker":   {"resetCondition": "card_player_multi_pin", "isWeekly": False},
 }
 
 # ─── Cultivation Trigger Pool ────────────────────────────────────────────────
@@ -1319,7 +1391,7 @@ def _chanceBarEq(ctx, odds, conditionFill, useFP, triggered, reward, context, ba
 # Each effect has base values scaled by playerRating and editionScale.
 # ratingNorm = playerRating - 60 (range 0–40 for ratings 60–100)
 
-def _buildCrossPositionParams(effectName, playerRating, editionScale):
+def _buildCrossPositionParams(effectName, playerRating, editionScale, position=None):
     """Cross-category effects (hand composition, trigger-chain, etc.).
 
     Numeric constants represent the post-Balatro (3×) values; `_BAL_FP_MULT`
@@ -1417,7 +1489,47 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale):
     return None
 
 
-def _buildFlatFPParams(effectName, playerRating, editionScale):
+# ─── Stat Ladder: measured per-game volumes ─────────────────────────────────
+# The denominator every ladder rate is sized against. Measured per position on a fresh
+# sim (see docs/CARD_STAT_LADDER.md). Position-keyed because the SAME mechanic on two
+# positions needs two rates — a TE catches 8.2 balls a game to a WR's 9.4, which is
+# exactly the drift that left Safety Blanket paying 5.3/reception and Possession 2.7.
+_LADDER_VOLUMES = {
+    "recYards":  {3: 83.5, 4: 59.0},
+    "yac":       {2: 87.5},
+    "puntsIn20": {5: 2.03},
+    "recTds":    {3: 0.40, 4: 0.26},
+}
+# A metallic flat card should mean this much FP in a typical week (Freebie measures 26.0).
+_LADDER_FP_ANCHOR = 26.0
+# An FPx card should deliver about this much on a typical week. Cannot go far below it:
+# multFactors are appended as round(mult, 2), so the delta is quantised to 0.01 and a
+# card under ~+0.05 has too few steps left to tune with.
+_LADDER_FPX_TARGET = 0.10
+
+
+def _ladderVolume(stat, position, fallback):
+    """Per-game volume for a stat at a position, for rate sizing at mint."""
+    return (_LADDER_VOLUMES.get(stat) or {}).get(position or 0, fallback)
+
+
+def _ladderFpRate(stat, position, fallback, ratingScale=0.0, rn=0.0):
+    """Flat FP per unit, sized so a typical week lands on the anchor."""
+    vol = _ladderVolume(stat, position, fallback)
+    return round((_LADDER_FP_ANCHOR / vol) * (1 + ratingScale * rn), 3)
+
+
+def _ladderFpxRate(stat, position, fallback, unit=1):
+    """FPx per `unit` of a stat, sized so a typical week lands on the FPx target.
+
+    Rounded to 2dp because that is the resolution the calculator stores and aggregates
+    at; `unit` exists so the stored value does not round to 0.00 on a high-volume stat.
+    """
+    vol = _ladderVolume(stat, position, fallback)
+    return round(_LADDER_FPX_TARGET / vol * unit, 2)
+
+
+def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
     """Flat-FP card parameter builder.
 
     Numeric constants represent the post-Balatro (3×) values; `_BAL_FP_MULT`
@@ -1425,6 +1537,24 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     """
     rn = playerRating - 60
 
+    # ── Stat ladder: metallic flat rungs ──
+    if effectName == "frontier":
+        return {"perYardFP": _ladderFpRate("recYards", position, 83.5, 0.004, rn)}
+    if effectName == "freight":
+        return {"perYardFP": _ladderFpRate("yac", position, 87.5, 0.004, rn)}
+    if effectName == "pinpoint":
+        return {"perPuntFP": _ladderFpRate("puntsIn20", position, 2.03, 0.004, rn)}
+    # ── Stat ladder: holographic / prismatic FP rungs ──
+    if effectName == "end_zone":
+        # Pays the metallic rate on every TD, with a bonus once a second one lands.
+        vol = _ladderVolume("recTds", position, 0.40)
+        return {"perTdFP": round(_LADDER_FP_ANCHOR / vol * 0.62, 1),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 0.55, 1), "threshold": 2}
+    if effectName == "promised_land":
+        vol = _ladderVolume("recTds", position, 0.40)
+        return {"perTdFP": round(_LADDER_FP_ANCHOR / vol * 0.40, 1),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 1.25, 1),
+                "baseChance": 22, "chanceStep": 14, "isChanceEffect": True}
     if effectName == "freebie":
         return {"baseFP": round((48 + rn * 1.02) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "entourage":
@@ -1559,7 +1689,46 @@ def _buildFlatFPParams(effectName, playerRating, editionScale):
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"baseFP": round(13.5 * editionScale * _BAL_FP_MULT, 1)}
 
 
-def _buildMultiplierParams(effectName, playerRating, editionScale):
+def _buildMultiplierParams(effectName, playerRating, editionScale, position=None):
+    """FPx param builder. See `_buildFlatFPParams` for the Balatro dial note."""
+    rn = playerRating - 60
+    # ── Stat ladder: FPx rungs ──
+    if effectName == "territory":
+        # Gates must sit ABOVE a typical week or the bonus is not conditional at all.
+        # Derived from this position's own mean: 1.2x / 1.7x / 2.3x.
+        vol = _ladderVolume("recYards", position, 83.5)
+        return {"rewardType": "mult",
+                "per50Mult": _ladderFpxRate("recYards", position, 83.5, 50),
+                "gateMult": round(_LADDER_FPX_TARGET * 0.55, 2),
+                "gates": [int(round(vol * m)) for m in (1.2, 1.7, 2.3)]}
+    if effectName == "dominion":
+        return {"rewardType": "mult",
+                "per50Mult": round(_ladderFpxRate("recYards", position, 83.5, 50) * 0.55, 2),
+                "growthPerTick": 0.03, "threshold": 100, "isStreak": True}
+    if effectName == "grinder":
+        # Contact yards are ~80% of rush yards league-wide, so "over half" is the norm,
+        # not an achievement. The bar sits above it.
+        return {"rewardType": "mult",
+                "per50Mult": _ladderFpxRate("yac", position, 87.5, 50),
+                "ratioMult": round(_LADDER_FPX_TARGET * 0.60, 2),
+                "ratioBar": 0.88}
+    if effectName == "landslide":
+        return {"rewardType": "mult",
+                "per50Mult": round(_ladderFpxRate("yac", position, 87.5, 50) * 0.55, 2),
+                "growthPerTick": 0.03, "threshold": 100, "isStreak": True}
+    if effectName == "coffin_corner":
+        # ~1 punt a week is downed inside the 10, so paying per inside-10 punt fires every
+        # week. The bonus needs MORE than one.
+        return {"rewardType": "mult",
+                "perPuntMult": _ladderFpxRate("puntsIn20", position, 2.03),
+                "bonusMult": round(_LADDER_FPX_TARGET * 0.70, 2), "deepBar": 2}
+    if effectName == "undertaker":
+        return {"rewardType": "mult",
+                "perPuntMult": round(_ladderFpxRate("puntsIn20", position, 2.03) * 0.55, 2),
+                "growthPerTick": 0.03, "threshold": 3, "isStreak": True}
+    if effectName == "paydirt":
+        return {"rewardType": "mult",
+                "perTdMult": _ladderFpxRate("recTds", position, 0.40)}
     """FPx (multiplier) card parameter builder.
 
     Numeric constants represent the post-Balatro (3×) deltas; `_BAL_FPX_MULT`
@@ -1698,7 +1867,7 @@ def _buildMultiplierParams(effectName, playerRating, editionScale):
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"multPercent": round(0.42 * editionScale * _BAL_FPX_MULT, 1)}
 
 
-def _buildFloobitsParams(effectName, playerRating, editionScale):
+def _buildFloobitsParams(effectName, playerRating, editionScale, position=None):
     rn = playerRating - 60
 
     if effectName == "allowance":
@@ -1759,7 +1928,7 @@ def _buildFloobitsParams(effectName, playerRating, editionScale):
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"floobits": int(round(5 * editionScale))}
 
 
-def _buildConditionalParams(effectName, playerRating, editionScale):
+def _buildConditionalParams(effectName, playerRating, editionScale, position=None):
     """Conditional card parameter builder.
 
     Numeric constants represent the post-Balatro (3×) values; `_BAL_FP_MULT`
@@ -1820,7 +1989,7 @@ def _buildConditionalParams(effectName, playerRating, editionScale):
     return _buildCrossPositionParams(effectName, playerRating, editionScale) or {"rewardType": "fp", "rewardValue": round(20.4 * editionScale * _BAL_FP_MULT, 1)}
 
 
-def _buildStreakParams(effectName, playerRating, editionScale):
+def _buildStreakParams(effectName, playerRating, editionScale, position=None):
     """Streak card parameter builder.
 
     Numeric constants represent the post-Balatro (3×) values; `_BAL_FP_MULT`
@@ -2106,7 +2275,11 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
         builder = _EFFECT_BUILDER_OVERRIDES[effectName]
     else:
         builder = _PARAM_BUILDERS.get(category, _buildFlatFPParams)
-    primary = builder(effectName, dampenedRating, editionScale)
+    # Position is threaded to every builder so a rate can be sized against the volume
+    # THAT position actually produces. Its absence is what let Safety Blanket (TE) and
+    # Possession (WR) drift to 5.3 and 2.7 FP per reception for the same mechanic, on
+    # positions that catch 8.2 and 9.4 balls a game.
+    primary = builder(effectName, dampenedRating, editionScale, position)
     # _buildCrossPositionParams returns None for unknown effects — fallback
     if primary is None:
         primary = {"baseFP": round(2 * editionScale, 1)}
@@ -4753,9 +4926,209 @@ def _computeFranchise(primary, ctx, cardPlayerId, eqId):
     return EffectResult(equation="not your top scorer this week")
 
 
+# ─── Stat Ladder Families ────────────────────────────────────────────────────
+# One stat, three rungs, each containing the one below. Every function reads the
+# CARD's own player via _getCardPlayerStats. See docs/CARD_STAT_LADDER.md.
+
+def _ladderStat(ctx, cardPlayerId, group, key):
+    """A single stat off the card's own player, defaulting to 0."""
+    stats = _getCardPlayerStats(ctx, cardPlayerId)
+    sub = stats.get(group)
+    return (sub or {}).get(key, 0) if isinstance(sub, dict) else 0
+
+
+def _ladderStreakDelta(primary, ctx, eqId):
+    """The streak half of a prismatic rung: growth per week the bar has been cleared.
+
+    Kept separate from the base rate so the prismatic rung literally contains the
+    metallic one — the base pays every week and this rides on top.
+    """
+    growth = primary.get("growthPerTick", 0.0) or 0.0
+    count = max(0, (ctx.streakCounts.get(eqId, 1) or 1) - 1)
+    return round(growth * count, 3), count
+
+
+# ── Receiving yards: Frontier -> Territory -> Dominion ──
+def _computeFrontier(primary, ctx, cardPlayerId, eqId):
+    """FP per receiving yard by this player."""
+    per = primary.get("perYardFP", 0.3)
+    yards = _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvYards")
+    return EffectResult(fpBonus=round(per * yards, 1),
+                        equation=f"{per}/yd x {yards} rec yds")
+
+
+def _computeTerritory(primary, ctx, cardPlayerId, eqId):
+    """FPx per 50 receiving yards, plus a step at each yardage gate."""
+    per50 = primary.get("per50Mult", 0.06)
+    gateMult = primary.get("gateMult", 0.05)
+    gates = primary.get("gates", [75, 125, 175])
+    yards = _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvYards")
+    cleared = sum(1 for g in gates if yards >= g)
+    delta = per50 * (yards / 50.0) + gateMult * cleared
+    if delta <= 0:
+        return EffectResult(equation="no receiving yards")
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({yards} yds, {cleared}/{len(gates)} gates)")
+
+
+def _computeDominion(primary, ctx, cardPlayerId, eqId):
+    """FPx per 50 receiving yards, plus a streak of hundred-yard weeks."""
+    per50 = primary.get("per50Mult", 0.03)
+    yards = _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvYards")
+    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    delta = per50 * (yards / 50.0) + streak
+    if delta <= 0:
+        return EffectResult(equation="no receiving yards")
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({yards} yds + {count} wk streak)")
+
+
+# ── Yards after contact: Freight -> Grinder -> Landslide ──
+def _computeFreight(primary, ctx, cardPlayerId, eqId):
+    """FP per yard gained after contact by this player."""
+    per = primary.get("perYardFP", 0.3)
+    yac = _ladderStat(ctx, cardPlayerId, "rushing_stats", "yardsAfterContact")
+    return EffectResult(fpBonus=round(per * yac, 1),
+                        equation=f"{per}/yd x {yac} yds after contact")
+
+
+def _computeGrinder(primary, ctx, cardPlayerId, eqId):
+    """FPx per 50 contact yards, more when they are most of the total."""
+    per50 = primary.get("per50Mult", 0.06)
+    ratioMult = primary.get("ratioMult", 0.06)
+    bar = primary.get("ratioBar", 0.88)
+    yac = _ladderStat(ctx, cardPlayerId, "rushing_stats", "yardsAfterContact")
+    total = _ladderStat(ctx, cardPlayerId, "rushing_stats", "runYards")
+    delta = per50 * (yac / 50.0)
+    earned = total > 0 and yac >= total * bar
+    if earned:
+        delta += ratioMult
+    if delta <= 0:
+        return EffectResult(equation="no yards after contact")
+    tail = f" ({yac / total:.0%} after contact)" if earned else ""
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({yac}/{total} yds{tail})")
+
+
+def _computeLandslide(primary, ctx, cardPlayerId, eqId):
+    """FPx per 50 contact yards, plus a streak of hundred-yard weeks."""
+    per50 = primary.get("per50Mult", 0.03)
+    yac = _ladderStat(ctx, cardPlayerId, "rushing_stats", "yardsAfterContact")
+    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    delta = per50 * (yac / 50.0) + streak
+    if delta <= 0:
+        return EffectResult(equation="no yards after contact")
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({yac} yds + {count} wk streak)")
+
+
+# ── Punt placement: Pinpoint -> Coffin Corner -> Undertaker ──
+def _computePinpoint(primary, ctx, cardPlayerId, eqId):
+    """FP per punt this player downed inside the 20."""
+    per = primary.get("perPuntFP", 13.0)
+    pins = _ladderStat(ctx, cardPlayerId, "kicking_stats", "puntsInside20")
+    return EffectResult(fpBonus=round(per * pins, 1),
+                        equation=f"{per}/punt x {pins} inside the 20")
+
+
+def _computeCoffinCorner(primary, ctx, cardPlayerId, eqId):
+    """FPx per pin, with more for the ones downed inside the 10."""
+    perPunt = primary.get("perPuntMult", 0.05)
+    bonus = primary.get("bonusMult", 0.07)
+    deepBar = primary.get("deepBar", 2)
+    pins = _ladderStat(ctx, cardPlayerId, "kicking_stats", "puntsInside20")
+    deep = _ladderStat(ctx, cardPlayerId, "kicking_stats", "puntsInside10")
+    delta = perPunt * pins + (bonus * deep if deep >= deepBar else 0)
+    if delta <= 0:
+        return EffectResult(equation="no punts inside the 20")
+    tail = f", {deep} inside 10" if deep >= deepBar else ""
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({pins} inside 20{tail})")
+
+
+def _computeUndertaker(primary, ctx, cardPlayerId, eqId):
+    """FPx per pin, plus a streak of multi-pin weeks."""
+    perPunt = primary.get("perPuntMult", 0.03)
+    pins = _ladderStat(ctx, cardPlayerId, "kicking_stats", "puntsInside20")
+    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    delta = perPunt * pins + streak
+    if delta <= 0:
+        return EffectResult(equation="no punts inside the 20")
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({pins} pinned + {count} wk streak)")
+
+
+# ── Receiving TDs: Paydirt -> End Zone -> Promised Land ──
+def _computePaydirt(primary, ctx, cardPlayerId, eqId):
+    """FPx for every receiving TD by this player."""
+    per = primary.get("perTdMult", 0.25)
+    tds = _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvTds")
+    if tds <= 0:
+        return EffectResult(equation="no receiving TDs")
+    return EffectResult(multBonus=round(1.0 + per * tds, 3),
+                        equation=f"+{per * tds:.2f} FPx ({tds} rec TD)")
+
+
+def _computeEndZone(primary, ctx, cardPlayerId, eqId):
+    """FP per receiving TD, with a bonus once a second one lands."""
+    per = primary.get("perTdFP", 40.0)
+    bonus = primary.get("bonusFP", 14.0)
+    threshold = primary.get("threshold", 2)
+    tds = _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvTds")
+    total = per * tds + (bonus if tds >= threshold else 0)
+    tail = f", +{bonus} at {threshold}+" if tds >= threshold else ""
+    return EffectResult(fpBonus=round(total, 1),
+                        equation=f"{per}/TD x {tds}{tail}")
+
+
+def _computePromisedLand(primary, ctx, cardPlayerId, eqId):
+    """FP per receiving TD, each one raising the odds of a jackpot.
+
+    Mirrors Crescendo's escalating-odds shape: every score rolls, and a miss lifts
+    the chance on the next one. Pays out once.
+    """
+    from managers.cardEffectCalculator import _chanceRoll
+    per = primary.get("perTdFP", 26.0)
+    bonus = primary.get("bonusFP", 32.0)
+    baseChance = primary.get("baseChance", 22)
+    step = primary.get("chanceStep", 14)
+    rawTds = _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvTds")
+    base = round(per * rawTds, 1)
+    if rawTds <= 0:
+        return EffectResult(equation="no receiving TDs")
+    # The projection path feeds PER-GAME AVERAGES, so this arrives fractional there.
+    # Round up to one roll so a projected part-TD still shows its chance.
+    tds = max(1, int(round(rawTds)))
+    if getattr(ctx, "gamesActive", False):
+        live = min(0.97, (baseChance + max(0, tds - 1) * step) / 100.0
+                   + getattr(ctx, "chanceBonus", 0.0))
+        return EffectResult(fpBonus=base, chanceThreshold=live,
+                            equation=_chanceEq(live, 0, live, False, f"+{bonus} FP",
+                                               f"{tds} rec TD", ctx, f"+{base} FP"))
+    rng = _chanceRoll(ctx, eqId)
+    for i in range(tds):
+        odds = min(0.97, (baseChance + i * step) / 100.0
+                   + getattr(ctx, "chanceBonus", 0.0))
+        if rng.random() < odds:
+            return EffectResult(fpBonus=round(base + bonus, 1), chanceTriggered=True,
+                                chanceThreshold=odds,
+                                equation=f"+{base} FP. {odds:.0%} on TD {i + 1} hit, +{bonus} FP")
+    return EffectResult(fpBonus=base,
+                        equation=f"+{base} FP. {tds} TD rolled, none hit")
+
+
 # ─── Effect Registry ─────────────────────────────────────────────────────────
 
 EFFECT_REGISTRY = {
+    # Stat ladder families
+    "frontier": _computeFrontier, "territory": _computeTerritory,
+    "dominion": _computeDominion,
+    "freight": _computeFreight, "grinder": _computeGrinder,
+    "landslide": _computeLandslide,
+    "pinpoint": _computePinpoint, "coffin_corner": _computeCoffinCorner,
+    "undertaker": _computeUndertaker,
+    "paydirt": _computePaydirt, "end_zone": _computeEndZone,
+    "promised_land": _computePromisedLand,
     # Flat FP (WR)
     "freebie": _computeFreebie,
     "entourage": _computeEntourage,
@@ -5193,6 +5566,15 @@ def checkStreakCondition(effectName: str, ctx, cardPlayerId: int) -> bool:
         # Key name kept as "roster_under_50fp" for backwards-compat with
         # stored STREAK_CONFIGS — no DB migration needed.
         return (ctx.weekRawFP or 0) < 35
+
+    if condition == "card_player_100_rec_yards":
+        return _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvYards") >= 100
+
+    if condition == "card_player_100_contact_yards":
+        return _ladderStat(ctx, cardPlayerId, "rushing_stats", "yardsAfterContact") >= 100
+
+    if condition == "card_player_multi_pin":
+        return _ladderStat(ctx, cardPlayerId, "kicking_stats", "puntsInside20") >= 3
 
     if condition == "pickem_manual_submit":
         # Streak grows when the user submitted Prognostications manually
