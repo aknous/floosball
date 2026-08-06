@@ -80,6 +80,83 @@ measured live). Divide 26 by the volume above to get the per-unit rate.
 the card layer, and does not take `returning_stats` as a parameter at all. Every NEW card
 below is blocked on widening it. No design risk; do this first.
 
+## What this replaces
+
+Six cards were retired to make room (commit `a66af81`). All keyed off
+`playerPerformanceRatings`, a percentile-of-production score computed weekly in memory and
+surfaced nowhere a user can see, so "is my roster overperforming?" was unanswerable while
+setting a lineup:
+
+**Hot Stove** (resplendent) · **Windfall** · **Buy Low** · **Reclamation** ·
+**Rising Tide** · **Spectacle**
+
+Retirement pattern: dropped from `SHARED_EFFECT_POOL` so nothing new mints; compute
+functions and `EFFECT_EDITION_TIER` entries stay so any card already carrying them still
+scores. Metallic went 32 → 28 mintable, holographic 44 → 42. Twelve effects were already
+out of circulation the same way before this (drought, home_alone, house_money, indemnity,
+martyr, quiet_storm, rock_bottom, sandbagger, stockpiler, surplus, underdog, vagabond).
+
+### Still rating-keyed — NOT yet resolved
+
+The audit found **17** effects reading a rating or performance-rating proxy. Six are
+retired above. **Ten remain live**, in two groups:
+
+| group | effects | note |
+|---|---|---|
+| star count | Entourage, Showoff, Patient, Dark Horse | reads a rating band; legible but static — cannot change during a week, so the card has no game-day story |
+| chance fill | Scrappy, Babysitter, Last Resort, Sleeper, Consolation Prize | **already half fixed** — `CARD_CHANCE_FP_WEIGHT` is 0.5, so half the trigger bar comes from the on-card player's FP. Only the other half (counting low-rated roster players) is a proxy |
+
+The chance-fill group is the cheaper fix by far: swap the `conditionFill` input for a
+stat-based one and the mechanic is untouched. Neither group is addressed by this plan.
+
+## How the numbers here were measured
+
+Harness: **`simcheck_effect_spread.py`** (committed). It isolates ONE effect at a time —
+five slots hold no-effect floor prints, the sixth holds the card under test on a real
+player — and differences against the same lineup scored with no live card at all.
+
+    PROBE_EDITION=metallic PROBE_TRIALS=40 .venv/bin/python simcheck_effect_spread.py
+
+Three caveats that matter when re-running:
+
+- **Isolation understates hand-synergy cards.** Gold Rush pays per OTHER Floobits card in
+  hand, so in a lineup of floor prints it is structurally zero. Same for Diversified,
+  Stack, Backfield Buddies, Rookie Hype. Metallic is mostly standalone cards and
+  holographic mostly synergy cards, so tier maxima are NOT comparable across editions.
+- **FP and Floobits are different currencies** and do not belong in one column. Trust Fund
+  reads 0 FP and pays 57 Floobits.
+- **Measure the LIVE path.** `buildProjectionContext` leaves the context in projection
+  mode, where the FP power bar returns a fractional clear PROBABILITY and every payout
+  comes out EV-scaled. Week-end banking is pure on/off. The harness forces
+  `ctx.isProjection = False`; without it hit rates read 100% and payouts are smoothed.
+
+Two earlier instrument traps, both fixed, both of which would have been reported as
+balance findings: a booted snapshot has no season performance ratings (so every
+over/underperformer effect counted zero players and looked dead), and the filler cards'
+own team-stacking FPx leaks into an undifferenced measurement, giving every dead effect a
+phantom 1-2 FP.
+
+### Metallic, live path, marginal FP per week (40 trials each)
+
+| card | FP | hit% | p90 | | card | FP | hit% | p90 |
+|---|---|---|---|---|---|---|---|---|
+| Safety Blanket | 47.0 | 58% | 112.0 | | Bandwagon | 9.1 | 70% | 16.6 |
+| Three Pointer | 39.0 | 68% | 90.8 | | Honor Roll | 5.4 | 45% | 18.2 |
+| RNG | 33.9 | 68% | 65.9 | | Big Deal | 4.5 | 58% | 9.2 |
+| Workhorse | 30.7 | 60% | 87.0 | | Showoff | 2.6 | 22% | 10.5 |
+| Believe | 27.7 | 62% | 46.8 | | Slippery | 2.5 | 62% | 5.3 |
+| Gunslinger | 26.5 | 70% | 58.3 | | Homer | 1.5 | 15% | 6.5 |
+| Freebie | 26.0 | 65% | 43.6 | | | | | |
+| Garbage Time | 24.9 | 60% | 60.4 | | *Floobits cards* | | | |
+| Entourage | 23.9 | 65% | 46.6 | | Trust Fund | — | 78% | 57.4F |
+| Possession | 21.4 | 65% | 42.2 | | Consolation Prize | — | 100% | 32.0F |
+| Sniper | 13.1 | 52% | 29.2 | | Industrious | — | 62% | 26.9F |
+| Expedition | 10.5 | 68% | 22.3 | | Allowance | — | 60% | 13.4F |
+| Touchdown Piñata | 10.4 | 48% | 30.5 | | Air Raid | — | 58% | 16.7F |
+
+Freebie at 26.0 is the anchor the metallic rates in this plan are sized against. The
+19× spread between Safety Blanket and Homer is the problem this plan exists to fix.
+
 ---
 
 ## How a family works
@@ -326,3 +403,7 @@ reception** — that is a balance fix, independent of naming.
 2. **Field goals.** The kicker carries six shipped cards on 1.98 FGs a game and Three
    Pointer alone measures 39.0 FP/week. This wants pruning, which is a separate pass from
    the ladder build.
+3. **The ten remaining rating-keyed cards** (see *Still rating-keyed*). The chance-fill
+   group is half stat-driven already and needs only its `conditionFill` input swapped; the
+   star-count group needs a decision on whether a static rating band is acceptable at all
+   given the direction this plan sets.
