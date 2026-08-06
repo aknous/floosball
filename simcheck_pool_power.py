@@ -149,6 +149,57 @@ def scoreLineup(edition, week, byPos, meta, rng, mixWith=None, mixCount=0):
     return (total - ctx.weekRawFP) / ctx.weekRawFP
 
 
+def scoreMixed(week, byPos, meta, rng, weightsRaw):
+    """A lineup whose editions are drawn at the real pack rates."""
+    eds = [e for e, _ in weightsRaw]
+    ws = [w for _, w in weightsRaw]
+    equipped, weekStats, positions = [], {}, {}
+    used = set()
+    for i, (slot, pos) in enumerate(SLOTS):
+        pool = [x for x in byPos.get(pos, []) if x[0] not in used]
+        if not pool:
+            return None
+        for _ in range(12):
+            ed = rng.choices(eds, weights=ws)[0]
+            effects = livePool(ed, pos)
+            if effects:
+                break
+        else:
+            return None
+        pid, stats = rng.choice(pool)
+        used.add(pid)
+        name, rating = meta.get(pid, ('Probe', 80))
+        cfg = ce.buildEffectConfig(ed, rating, pos, forceEffect=rng.choice(effects))
+        tpl = _Template(cfg, pid, pos, ed, rating, name)
+        equipped.append(_Equipped(1000 + i, i + 1, _UserCard(2000 + i, tpl)))
+        weekStats[pid] = stats
+        positions[pid] = pos
+    ctx = CardCalcContext()
+    ctx.userId = 1
+    ctx.season, ctx.weekNumber = 15, week
+    ctx.weekPlayerStats = weekStats
+    ctx.rosterPlayerIds = set(weekStats)
+    ctx.rosterPlayerPositions = positions
+    ctx.rosterPlayerRatings = {p: meta.get(p, ('', 80))[1] for p in weekStats}
+    ctx.rosterPlayerNames = {p: meta.get(p, ('Probe', 0))[0] for p in weekStats}
+    ctx.rosterPlayerTeamIds = {p: 0 for p in weekStats}
+    ctx.streakCounts = {e.id: 1 for e in equipped}
+    ctx.weekRawFP = sum(s.get('fantasyPoints', 0) for s in weekStats.values())
+    ctx.rosterTotalTds = 0
+    ctx.isProjection = False
+    if ctx.weekRawFP <= 0:
+        return None
+    try:
+        res = calculateWeekCardBonuses(equipped, ctx)
+    except Exception:
+        return None
+    mult = aggregateMultFactors(res.multFactors or [])
+    total = (ctx.weekRawFP + res.totalBonusFP) * mult
+    globals().setdefault('_RAW', []).append(ctx.weekRawFP)
+    globals().setdefault('_TOT', []).append(total)
+    return (total - ctx.weekRawFP) / ctx.weekRawFP
+
+
 def main():
     conn = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)
     season = int(SEASON) if SEASON else conn.execute(
@@ -163,6 +214,27 @@ def main():
     print(f"  {'edition':13}{'mean':>8}{'median':>8}{'p10':>8}{'p90':>8}{'spread':>9}"
           f"{'pool':>6}")
     errors = collections.Counter()
+    # A REALISTIC hand, weighted by the actual pack drop rates (cardManager
+    # EDITION_BASE_WEIGHTS). This is the arm that answers "what will users actually
+    # score?", since nobody fields six cards of one edition.
+    print()
+    weightsRaw = [('metallic', 100), ('holographic', 25), ('prismatic', 10), ('diamond', 2)]
+    tot = sum(w for _, w in weightsRaw)
+    pcts = []
+    for _ in range(TRIALS * 3):
+        wk = rng.choice(weeks)
+        r = scoreMixed(wk, byWeek[wk], meta, rng, weightsRaw)
+        if isinstance(r, float):
+            pcts.append(r)
+    if pcts:
+        pcts.sort()
+        print(f"  {'REALISTIC':13}{100*statistics.mean(pcts):7.0f}%"
+              f"{100*statistics.median(pcts):7.0f}%"
+              f"{100*pcts[int(0.10*(len(pcts)-1))]:7.0f}%"
+              f"{100*pcts[int(0.90*(len(pcts)-1))]:7.0f}%"
+              f"   (pack-weighted: "
+              + ", ".join(f"{e} {100*w//tot}%" for e, w in weightsRaw) + ")")
+    print()
     ARMS = [(ed, None, 0) for ed in EDITIONS] + [
         ('diamond', 'metallic', 2),   # 2 diamonds in an otherwise metallic hand
         ('diamond', 'metallic', 1),   # the realistic case: one diamond pull
@@ -192,6 +264,12 @@ def main():
         print("\n  errors:")
         for msg, n in errors.most_common(5):
             print(f"    {n:4} x {msg[:88]}")
+    raw, tot = globals().get('_RAW', []), globals().get('_TOT', [])
+    if raw:
+        print(f"\n  realistic weekly TOTALS: raw player FP {statistics.mean(raw):.0f} "
+              f"-> final {statistics.mean(tot):.0f}   "
+              f"(p10 {sorted(tot)[int(.1*(len(tot)-1))]:.0f}, "
+              f"p90 {sorted(tot)[int(.9*(len(tot)-1))]:.0f})")
     print("\n  cardPct = how much the six cards add on top of the lineup's own player FP.")
     print("  Want comparable MEANS with the p10-p90 spread widening as rarity rises.")
 
