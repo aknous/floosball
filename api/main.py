@@ -5260,6 +5260,7 @@ def admin_card_options(_auth: None = Depends(_checkAdminAuth)):
     from managers.cardEffects import (
         SHARED_EFFECT_POOL, POSITION_EXCLUSIVE_POOLS,
         EFFECT_DISPLAY_NAMES, EFFECT_CATEGORY, EFFECT_EDITION_TIER,
+        effectValidPositions,
     )
     from managers.cardManager import EDITION_ORDER
     editions = list(EDITION_ORDER)
@@ -5276,7 +5277,11 @@ def admin_card_options(_auth: None = Depends(_checkAdminAuth)):
         cat = EFFECT_CATEGORY.get(name, "flat_fp")
         if cat not in effects:
             effects[cat] = []
-        effects[cat].append({"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name), "edition": EFFECT_EDITION_TIER.get(name, "metallic")})
+        # A shared effect reports all five positions and an exclusive one reports its own,
+        # so the UI can filter the player picker uniformly instead of letting the grant 400.
+        effects[cat].append({"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name),
+                             "edition": EFFECT_EDITION_TIER.get(name, "metallic"),
+                             "validPositions": sorted(effectValidPositions(name))})
     classifications = ["rookie", "mvp", "champion", "all_pro",
                         "mvp_champion", "all_pro_champion", "mvp_all_pro_champion"]
     return build_success_response({
@@ -5351,6 +5356,17 @@ def admin_grant_card(payload: Dict[str, Any],
         teamId = getattr(teamObj, 'id', None) if teamObj is not None else None
         return bool(teamId)
 
+    # A position-exclusive effect on the wrong player mints a PERMANENTLY DEAD card: it
+    # reads a stat that position never records, so it pays zero forever, and its detail
+    # line can carry an unresolved {placeholder} (which makes the calculator rebuild the
+    # stored params at score time). The transplant path has guarded this all along via
+    # effectValidPositions; the grant tool never did.
+    from managers.cardEffects import effectValidPositions, POSITION_LABELS
+    validPositions = effectValidPositions(effectName) if effectName else set()
+
+    def _posOf(p):
+        return p.position.value if hasattr(p.position, 'value') else p.position
+
     if playerId:
         playerObj = pm.getPlayerById(playerId)
         if playerObj is None:
@@ -5360,14 +5376,29 @@ def admin_grant_card(payload: Dict[str, Any],
                 status_code=400,
                 detail=f"Player {playerObj.name} is a prospect / upcoming rookie / unrostered — cards require a rostered player",
             )
+        if validPositions and _posOf(playerObj) not in validPositions:
+            allowed = ", ".join(POSITION_LABELS.get(v, str(v)) for v in sorted(validPositions))
+            raise HTTPException(
+                status_code=400,
+                detail=(f"{effectName} only works on {allowed}, and {playerObj.name} is a "
+                        f"{POSITION_LABELS.get(_posOf(playerObj), 'unknown')}. "
+                        f"The card would read a stat this player never records and score zero."),
+            )
     else:
-        # Pick a random player eligible for this edition's rating threshold
+        # Pick a random player eligible for this edition's rating threshold — and, when an
+        # effect is forced, only from the positions that effect can actually read.
         import random as _rand
         from managers.cardManager import EDITION_THRESHOLDS
         threshold = EDITION_THRESHOLDS.get(edition, 0)
         eligible = [p for p in pm.activePlayers
-                    if round(p.playerRating) >= threshold and _isCardEligiblePlayer(p)]
+                    if round(p.playerRating) >= threshold and _isCardEligiblePlayer(p)
+                    and (not validPositions or _posOf(p) in validPositions)]
         if not eligible:
+            if validPositions:
+                allowed = ", ".join(POSITION_LABELS.get(v, str(v)) for v in sorted(validPositions))
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No {allowed} rated high enough for a {edition} card")
             raise HTTPException(status_code=400, detail=f"No players eligible for {edition} edition")
         playerObj = _rand.choice(eligible)
         playerId = playerObj.id
