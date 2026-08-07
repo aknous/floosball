@@ -91,6 +91,52 @@ def testEvenTheWorstStatePaysWithinAMonth():
     assert math.log(0.5) / math.log(1 - p) < 6, f"stable waits too long: {p:.0%}"
 
 
+# The population the card actually lives in. Every test above checks ORDERING or BOUNDS,
+# which is why "it almost never triggers" had to be found by playing rather than by
+# running these — a ladder can be perfectly ordered and still be dormant in practice
+# because 85% of players sit on its bottom rung.
+_LADDER_MIX = [('stable', 0.85), ('stirring', 0.07), ('erratic', 0.04),
+               ('rampant', 0.02), ('awakened', 0.02)]
+_EVENT_MIX = [({}, 0.89), ({'micro': 1}, 0.07), ({'personality': 1}, 0.03),
+              ({'signature': 1}, 0.01)]
+
+
+def _blendedRate(dial=1.0):
+    return sum(pl * pe * triggerChance(state, ev, dial)
+               for state, pl in _LADDER_MIX for ev, pe in _EVENT_MIX)
+
+
+def testItFiresOftenEnoughToNotice():
+    """Owner, twice: the bonus almost never pays. Measured at 20.8% a week, a glitched
+    card was dormant for nearly five weeks at a stretch — on a 28-week season that is ~6
+    payouts for a card you can only get during a Criticality."""
+    r = _blendedRate()
+    assert r >= 0.28, f"a glitched card fires only {r:.1%} of weeks, once every {1/r:.1f}"
+
+
+def testItIsStillWildMagicRatherThanAnUpgrade():
+    """The other side of the same dial. A card that fires most weeks stops being something
+    happening TO the lineup and becomes a flat buff you plan around."""
+    r = _blendedRate()
+    assert r <= 0.45, f"fires {r:.0%} of weeks, which reads as a permanent bonus"
+    assert _blendedRate(5.0) <= 0.70, "even a live Criticality should not make it routine"
+
+
+def testACriticalityIsVisiblyDifferent():
+    """If the dial does not show, the season people spend building toward means nothing."""
+    assert _blendedRate(5.0) >= _blendedRate() * 1.5
+
+
+def testTheSurgeIsWorthNoticingWhenItLands():
+    """Rewards were raised alongside the rate (owner 2026-08-07). The weight sits on the
+    BIG outcomes deliberately: making the small one less small would raise the average
+    without ever producing a moment."""
+    ev = sum(w / 100 * mult for _n, w, mult in GLITCH_SURGE_TABLE)
+    assert ev >= 1.5, f"surge EV {ev:.2f}x is not worth the rarity of the card"
+    top = sum(w / 100 * mult for _n, w, mult in GLITCH_SURGE_TABLE if mult >= 2.0)
+    assert top / ev >= 0.6, "the payout is coming from the small outcomes, not the memorable ones"
+
+
 def testSurgeNeverSubtracts():
     """The rule the whole design rests on. A glitch adds; it never degrades the card."""
     for _, _, mult in GLITCH_SURGE_TABLE:

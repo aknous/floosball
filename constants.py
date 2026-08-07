@@ -3040,13 +3040,23 @@ GLITCH_CARDS_ENABLED = True
 #      effective rate was base x 0.70.
 # At the old 5% floor that was 3.5%, a median wait of TWENTY WEEKS to see one payout. The
 # ladder still orders the odds; the floor is simply no longer a punishment.
+# ⚠️ RAISED AGAIN (owner, 2026-08-07: "needs to trigger more"). Measured before: a blended
+# 20.8% a week, i.e. a glitched card sat dormant for nearly FIVE weeks at a time. The lift
+# has to come from the BOTTOM of the ladder, not the top: 85% of players are 'stable', so
+# that one number sets the realized rate almost by itself, while the top is boxed in by the
+# cap (rampant already reaches 0.83 of a 0.90 cap during a live Criticality — see
+# GLITCH_DIAL_SHARE). Raising the floor to 0.28 takes the blended rate to ~31%, about once
+# every three weeks.
+# The cost is honest: the ladder's spread compresses from 0.16-0.46 to 0.28-0.46, so WHERE a
+# player sits matters less than it did. That is the trade for the common case not being
+# dormant, and it is the ceiling — not the design — that forces it.
 GLITCH_TRIGGER_BASE = {
-    'stable':   0.16,
-    'stirring': 0.26,
-    'erratic':  0.36,
+    'stable':   0.28,
+    'stirring': 0.35,
+    'erratic':  0.41,
     'rampant':  0.46,
-    'awakened': 0.40,
-    'cleansed': 0.16,
+    'awakened': 0.43,
+    'cleansed': 0.28,
 }
 
 # Each anomaly event the player fired THIS WEEK raises the chance, escalating with the
@@ -3074,11 +3084,16 @@ GLITCH_DIAL_SHARE = 0.20
 # Magnitude, rolled on a trigger. Multiplies the CARD'S OWN output, so a surge scales with
 # whatever it is attached to rather than being a flat FP number that trivialises metallic
 # and vanishes on diamond. (weight, multiplier)
+# Rebalanced upward with the trigger rate (owner, 2026-08-07: rewards "slightly better").
+# EV moves 1.367x -> 1.603x of the card's own output. Weight shifts from the flicker tier
+# into cascade/runaway as well as the multipliers rising, so the improvement lands on the
+# MEMORABLE outcomes rather than making the small one less small — a glitch should be worth
+# noticing when it hits, which is what a rare, cultivated card is for.
 GLITCH_SURGE_TABLE = [
-    ('flicker', 39, 0.35),
-    ('surge',   33, 1.00),
-    ('cascade', 20, 2.50),
-    ('runaway',  8, 5.00),
+    ('flicker', 34, 0.40),
+    ('surge',   34, 1.10),
+    ('cascade', 23, 2.60),
+    ('runaway',  9, 5.50),
 ]
 
 # An FP surge is a FIXED amount; an FPx surge multiplies the whole lineup, so it grows with
@@ -3095,4 +3110,4 @@ GLITCH_FPX_DAMP = 0.80
 # glitch is supposed to be something happening TO the card, so it should not be silently
 # cancelled by the card having a quiet week. Deliberately modest: the surge still scales
 # the card's own output when there IS output, and this is only the fallback.
-GLITCH_SURGE_FLOOR_FP = 9.0
+GLITCH_SURGE_FLOOR_FP = 11.0
