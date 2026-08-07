@@ -185,6 +185,8 @@ NEW = [
   '+{perReceptionFP} FP per reception, +{bonusFP} per bailout by this player'),
 ]
 
+NEW_KEYS = {row[0] for row in NEW}
+
 rows = collections.defaultdict(lambda: collections.defaultdict(list))
 for e in sorted(live):
     ed = tier.get(e)
@@ -197,9 +199,15 @@ for e in sorted(live):
     if e == 'stampede':
         label = 'Trailblazer'
     note = CHANGED.get(e, '')
-    rows[ed][kind(e)].append((label, t, d, dd, note, False))
-for key, ed, k, disp, t, d, dd in NEW:
-    rows[ed][k].append((disp, t, d, dd, '', True))
+    rows[ed][kind(e)].append((label, t, d, dd, note, e in NEW_KEYS))
+
+# NEW started life as a list of cards that existed only on paper, appended after the
+# code-derived rows. Every one is now built, so appending them listed all 39 TWICE.
+# The literal is kept for its copy (NEWCOPY reads it), but membership is what flags a
+# row — so a card drops off the "new" list by being removed here, not by being built.
+_unbuilt = sorted(NEW_KEYS - set(tier))
+if _unbuilt:
+    print(f"  NOTE: {len(_unbuilt)} card(s) in NEW are not in the code: {_unbuilt}")
 
 buf = []
 ORDER = ['metallic', 'holographic', 'prismatic', 'diamond']
