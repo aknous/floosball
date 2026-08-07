@@ -14,7 +14,7 @@ Pins the properties the design is actually made of, rather than the arithmetic:
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from managers.glitchCards import triggerChance, rollSurge, surgePayout, _rng
+from managers.glitchCards import triggerChance, rollSurge, surgePayout, _rng, _canCatch
 from constants import (GLITCH_TRIGGER_BASE, GLITCH_TRIGGER_CAP, GLITCH_SURGE_TABLE,
                        GLITCH_FPX_DAMP)
 
@@ -135,6 +135,60 @@ def testTheSurgeIsWorthNoticingWhenItLands():
     assert ev >= 1.5, f"surge EV {ev:.2f}x is not worth the rarity of the card"
     top = sum(w / 100 * mult for _n, w, mult in GLITCH_SURGE_TABLE if mult >= 2.0)
     assert top / ev >= 0.6, "the payout is coming from the small outcomes, not the memorable ones"
+
+
+def testAQuietStablePlayerCannotCatchAGlitch():
+    """Owner, 2026-08-07. A Criticality is the anomaly reaching THROUGH players who are
+    already unsettled, so a card whose player never flickered has nothing to reach
+    through. This is also the lever that makes the on-card player matter at all: measured
+    across a realistic population the ladder was worth only +1.7 points of trigger chance
+    because 85% of players sit at 'stable' and drowned it out. Excluding them moves the
+    decision to ACQUISITION, where the stable majority cannot dilute it."""
+    assert not _canCatch('stable', {})
+    assert not _canCatch(None, {})
+    assert not _canCatch('stable', {'micro': 0})
+
+
+def testAnEventQualifiesEvenFromTheBottomRung():
+    """`state` is a slow accumulator, so someone who glitched this week but has not yet
+    climbed off 'stable' is visibly unsettled — the evidence should count on its own."""
+    assert _canCatch('stable', {'micro': 1})
+    assert _canCatch('stable', {'signature': 1})
+
+
+def testEveryStateAboveTheBottomQualifies():
+    """`cleansed` included: the power is gone but the history is not, and it is a distinct
+    state rather than the bottom rung."""
+    for state in ('stirring', 'erratic', 'rampant', 'awakened', 'cleansed'):
+        assert _canCatch(state, {}), state
+
+
+def testStrippingTheLineupIsNowATrapRatherThanAnExploit():
+    """Inverted deliberately. One card is ONE roll at having anybody unsettled, so a
+    single-card lineup catches a glitch far less often than a full one — the opposite of
+    the old behaviour, where stripping down guaranteed the target."""
+    import random as _r
+    ladder = [('stable', 0.85), ('stirring', 0.07), ('erratic', 0.04),
+              ('rampant', 0.02), ('awakened', 0.02)]
+    events = [({}, 0.89), ({'micro': 1}, 0.07), ({'personality': 1}, 0.03),
+              ({'signature': 1}, 0.01)]
+
+    def pick(rng, table):
+        r, acc = rng.random(), 0.0
+        for val, p in table:
+            acc += p
+            if r <= acc: return val
+        return table[-1][0]
+
+    def catchRate(size, seed):
+        rng = _r.Random(seed); hits = 0; N = 4000
+        for _ in range(N):
+            if any(_canCatch(pick(rng, ladder), pick(rng, events)) for _ in range(size)):
+                hits += 1
+        return hits / N
+
+    full, single = catchRate(6, 3), catchRate(1, 3)
+    assert full > single * 2, f"full {full:.0%} vs single {single:.0%}"
 
 
 def testSurgeNeverSubtracts():

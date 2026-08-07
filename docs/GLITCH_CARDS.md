@@ -40,14 +40,37 @@ another. The glitch happened to *your copy*, at a specific event.
 
 ## Acquisition — one card per Criticality
 
-At a Criticality, **one of each user's equipped cards becomes glitched.** Everyone with cards
-equipped is affected; exposure is the only qualification. Criticalities fire 2-3 times a season
-in prod (season 15: 3, season 14: 2), so a lineup accumulates them slowly.
+At a Criticality, **one of each user's equipped cards becomes glitched** — if any of them can
+catch it. Criticalities fire 2-3 times a season in prod (season 15: 3, season 14: 2), so a
+lineup accumulates them slowly.
 
-⚠️ **This is gameable and that is accepted (owner).** Equipping exactly one card during a
-Criticality guarantees the glitch lands on it, where a full lineup gives any given card a 1-in-6
-chance. Stripping your lineup costs you five cards' output for that week, so it is a real
-trade rather than a free exploit — "just another layer."
+**Eligibility (owner, 2026-08-07): a player at the very bottom of the ladder cannot catch a
+glitch.** `stable` with no anomaly events this week is excluded outright. A Criticality is the
+anomaly reaching THROUGH players who are already unsettled, so a card whose player never
+flickered has nothing for it to reach through. Firing an event qualifies on its own, because
+`state` is a slow accumulator and someone who glitched this week but has not yet climbed off
+`stable` is visibly unsettled. `cleansed` stays eligible — the power is gone but the history is
+not.
+
+**Selection: the eligible player highest on the ladder**, ranked by `GLITCH_TRIGGER_BASE` rather
+than a separate ordering so it cannot drift from what drives the payout. That also settles two
+cases a hand-written order gets wrong: `cleansed` sits at the floor (the power is gone, so it
+should not be hunted) and `rampant` outranks `awakened` (an awakened player is in control; a
+rampant one is coming apart). Ties break on a deterministic per-user shuffle.
+
+**Why gate acquisition rather than tune the trigger.** Measured across a realistic population,
+the per-player terms in `triggerChance` were nearly inert: the ladder was worth **+1.7 points**
+of trigger chance and events **+2.2**, while the league dial — which moves every glitched card
+at once — did all the work. 85% of players carry no anomaly row and sit at `stable`, drowning
+the signal. Gating acquisition moves the decision somewhere the stable majority cannot dilute
+it. Measured after: a full lineup catches a glitch **81%** of the time and the card it lands on
+fires **37.3%** of weeks against the 31.9% population blend.
+
+⚠️ **The old exploit is now a trap.** Stripping down to one card used to guarantee the glitch
+landed on it; now it is one roll at having anybody unsettled at all, so a single-card lineup
+catches a glitch only **24%** of the time against a full lineup's 81%. The strategy that
+replaces it is better: field a player who is actually climbing the ladder. That is aiming
+rather than starving, and it points at the anomaly system instead of away from it.
 
 ## Operation — a weekly roll the anomaly layer drives
 

@@ -52,6 +52,26 @@ def triggerChance(playerState: Optional[str], eventCounts: Optional[Dict[str, in
     return max(0.0, min(GLITCH_TRIGGER_CAP, scaled + boost))
 
 
+def _canCatch(playerState: Optional[str], eventCounts: Optional[Dict[str, int]] = None) -> bool:
+    """Can this player's card catch a glitch at all?
+
+    No, if they are at the very bottom and quiet (owner, 2026-08-07). A Criticality is the
+    anomaly reaching through players who are ALREADY unsettled, so a card depicting someone
+    who never flickered has nothing for it to reach through. This is what makes the on-card
+    player matter: measured across a realistic population the ladder was worth only +1.7
+    points of trigger chance, because 85% of players sit at 'stable' and drowned it out.
+    Excluding them moves the decision from the trigger maths to acquisition, where the
+    stable majority cannot dilute it.
+
+    Firing an anomaly event qualifies on its own. `state` is a slow accumulator, so someone
+    who glitched this week but has not yet climbed off 'stable' is visibly unsettled and
+    the evidence should count.
+    """
+    if any((eventCounts or {}).values()):
+        return True
+    return (playerState or 'stable') != 'stable'
+
+
 def _rng(userId: int, season: int, week: int, userCardId: int) -> _random.Random:
     """Deterministic per (user, season, week, card), mirroring the chance-card RNG so a
     week's result is stable no matter how many times it is recomputed."""
@@ -153,10 +173,28 @@ def markCardsForCriticality(session, season: int, week: int) -> int:
     Everyone with cards equipped is affected — a Criticality hits the whole league and
     exposure is the only qualification. Returns how many cards were marked.
 
-    ⚠️ Deliberately gameable (owner call): equipping exactly ONE card during a Criticality
-    guarantees the glitch lands on it, where a full lineup gives any card a 1-in-6 chance.
-    Stripping a lineup costs five cards' output for the week, so it is a real trade rather
-    than a free exploit.
+    WHICH card it lands on is not random: it goes to the equipped player highest on the
+    anomaly ladder (owner, 2026-08-07). That is the fix for a measured problem rather than
+    flavour. The per-player terms in `triggerChance` were nearly inert in practice — 85% of
+    players carry no anomaly row and sit at 'stable', so across a realistic population the
+    ladder was worth only +1.7 points of trigger chance and the events +2.2, while the
+    LEAGUE dial (which moves every glitched card at once) did all the work. Selecting for
+    ladder position attacks that from the other end: if the card is on an unstable player
+    by construction, the ladder term stops being diluted by the stable majority.
+
+    Ranked by GLITCH_TRIGGER_BASE rather than a separate ordering, so "highest on the
+    ladder" cannot drift from what actually drives the payout. That also settles two cases
+    a hand-written order gets wrong: `cleansed` sits at the FLOOR (the power is gone, so it
+    should not be hunted) and `rampant` outranks `awakened` (an awakened player is in
+    control; a rampant one is the one coming apart).
+
+    ⚠️ The old exploit is now a TRAP, which is worth knowing before anyone "fixes" it back.
+    Stripping down to one card used to guarantee the glitch landed on it. With eligibility
+    gating acquisition it does the opposite: measured against a realistic population, a
+    full lineup catches a glitch 81% of the time and a single-card lineup only 24%, because
+    one card is one roll at having anyone unsettled. The strategy that replaces it is
+    better — field a player who is actually climbing the ladder. That is aiming rather than
+    starving, and it points at the anomaly system instead of away from it.
 
     Idempotent per (season, week): re-running will not mark a second card, so a replayed or
     resumed week cannot double-dip.
@@ -201,11 +239,48 @@ def markCardsForCriticality(session, season: int, week: int) -> int:
             if eq.user_id in already:
                 continue
             byUser.setdefault(eq.user_id, []).append(eq)
+        # One round trip for every candidate card's depicted player, then one for their
+        # ladder states. Per-card lookups here would be 6 queries per user per Criticality.
+        ctxByCard: Dict[int, Tuple[str, Dict[str, int]]] = {}
+        try:
+            from database.models import CardTemplate
+            cardIds = [eq.user_card_id for eqs in byUser.values() for eq in eqs]
+            if cardIds:
+                pairs = (session.query(UserCard.id, CardTemplate.player_id)
+                         .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
+                         .filter(UserCard.id.in_(cardIds)).all())
+                states = anomalyContextFor([pid for _c, pid in pairs], season, week)
+                ctxByCard = {cid: states.get(pid, ('stable', {})) for cid, pid in pairs}
+        except Exception as e:
+            # Leave ctxByCard empty: every card then reads as untouched 'stable', which
+            # under the eligibility rule below means nothing is glitched. Failing to a
+            # no-op is right — inventing glitches off a failed lookup is worse.
+            logger.warning("glitch: ladder lookup failed, marking nothing: %s", e)
+
         marked = 0
+        skippedAllStable = 0
         for userId, equipped in byUser.items():
-            # Deterministic per user+event, so a retry picks the same card.
+            # A player at the very bottom of the ladder cannot catch anything (owner,
+            # 2026-08-07). Untouched and quiet means untouched: a Criticality is the
+            # anomaly reaching THROUGH players who are already unsettled, so a card whose
+            # player never flickered has nothing for it to reach through.
+            #
+            # An event is an alternative qualification, not a bonus: `state` is a slow
+            # accumulator, so a player who glitched this week but has not yet climbed off
+            # 'stable' is visibly unsettled and should qualify on that evidence.
+            # `cleansed` stays eligible — the power is gone but the history is not, and it
+            # is a distinct state rather than the bottom rung.
+            eligible = [eq for eq in equipped if _canCatch(*ctxByCard.get(eq.user_card_id,
+                                                                         ('stable', {})))]
+            if not eligible:
+                skippedAllStable += 1
+                continue
+            # Deterministic per user+event, so a retry picks the same card. The shuffle is
+            # what breaks ties between players on the same rung.
             rng = _rng(userId, season, week, 0)
-            chosen = rng.choice(equipped)
+            rng.shuffle(eligible)
+            chosen = max(eligible, key=lambda eq: GLITCH_TRIGGER_BASE.get(
+                ctxByCard.get(eq.user_card_id, ('stable', {}))[0], 0.0))
             card = session.get(UserCard, chosen.user_card_id)
             if card is None or card.glitched:
                 continue
@@ -215,7 +290,9 @@ def markCardsForCriticality(session, season: int, week: int) -> int:
             marked += 1
         if marked:
             session.commit()
-            logger.info(f"Criticality S{season}W{week}: glitched {marked} cards")
+        logger.info(f"Criticality S{season}W{week}: glitched {marked} cards"
+                    + (f", {skippedAllStable} lineups had nobody unsettled enough to catch it"
+                       if skippedAllStable else ""))
         return marked
     except Exception as e:
         session.rollback()
