@@ -66,14 +66,36 @@ def testChanceIsAlwaysCapped():
     assert hot <= GLITCH_TRIGGER_CAP
 
 
+def testATriggerAlwaysPaysSomething():
+    """A trigger that pays nothing is indistinguishable from no trigger, which is exactly
+    what live testing hit: the glitch line showed every week and never a score. The FP
+    power bar gates ~30% of weeks, so scaling purely off the card's own output silently
+    cancelled roughly a third of triggers."""
+    for _, _, mult in GLITCH_SURGE_TABLE:
+        fp, mx = surgePayout(mult, 0.0, 0.0)   # card produced nothing this week
+        assert fp > 0, f"surge {mult} pays nothing on a gated-out card"
+
+
+def testTheFloorIsSmallerThanScalingARealCard():
+    """The floor is a fallback, not a better deal than the card actually producing."""
+    floorFp, _ = surgePayout(1.0, 0.0, 0.0)
+    scaledFp, _ = surgePayout(1.0, 28.3, 0.0)
+    assert floorFp < scaledFp
+
+
+def testEvenTheWorstStatePaysWithinAMonth():
+    """85% of players carry no anomaly row and default to 'stable'. At the original 5%
+    base that was a median wait of twenty weeks — a whole season to see the feature once."""
+    import math
+    p = triggerChance('stable', {}, 1.0)
+    assert math.log(0.5) / math.log(1 - p) < 6, f"stable waits too long: {p:.0%}"
+
+
 def testSurgeNeverSubtracts():
     """The rule the whole design rests on. A glitch adds; it never degrades the card."""
     for _, _, mult in GLITCH_SURGE_TABLE:
         fp, mx = surgePayout(mult, 28.3, 1.10)
         assert fp >= 0 and mx >= 0
-    # and a card that produced nothing gets nothing — there is nothing to amplify
-    fp, mx = surgePayout(5.0, 0.0, 0.0)
-    assert fp == 0 and mx == 0
 
 
 def testFpxSurgesAreDamped():

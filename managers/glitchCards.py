@@ -27,7 +27,7 @@ from typing import Dict, Optional, Tuple
 
 from constants import (GLITCH_CARDS_ENABLED, GLITCH_TRIGGER_BASE, GLITCH_EVENT_BOOST,
                        GLITCH_TRIGGER_CAP, GLITCH_DIAL_SHARE, GLITCH_SURGE_TABLE,
-                       GLITCH_FPX_DAMP)
+                       GLITCH_FPX_DAMP, GLITCH_SURGE_FLOOR_FP)
 from logger_config import get_logger
 
 logger = get_logger("floosball.glitchCards")
@@ -82,18 +82,26 @@ def rollSurge(userId: int, season: int, week: int, userCardId: int,
 def surgePayout(multiplier: float, cardFp: float, cardMultBonus: float) -> Tuple[float, float]:
     """The extra FP / FPx delta a surge adds, given what the card itself produced.
 
-    Returns (extraFp, extraMultDelta) — ADDITIVE, never replacing. A card that produced
-    nothing this week gets nothing extra: the surge scales the card's own output, so
-    there is nothing to amplify.
+    Returns (extraFp, extraMultDelta) — ADDITIVE, never replacing.
+
+    A card that produced nothing this week still pays a FLOOR. An earlier version returned
+    zero here, on the reasoning that the surge scales the card's own output so there was
+    nothing to amplify. That is tidy and wrong in practice: the FP power bar gates ~30% of
+    weeks, so roughly a third of triggers paid nothing and were indistinguishable from no
+    trigger at all. The reported symptom was seeing the glitch line every week and never a
+    score. A glitch happens TO the card; a quiet week should not silently cancel it.
 
     FPx is damped (`GLITCH_FPX_DAMP`) because an FP surge is a fixed amount while an FPx
     surge multiplies the whole lineup, so it grows with the rest of the hand — a strong
     hand should not also make the glitch stronger.
     """
-    extraFp = round(max(0.0, cardFp) * multiplier, 2)
     delta = max(0.0, (cardMultBonus or 0.0) - 1.0)
     extraMult = round(delta * multiplier * GLITCH_FPX_DAMP, 3)
-    return (extraFp, extraMult)
+    scaled = max(0.0, cardFp) * multiplier
+    if scaled <= 0 and extraMult <= 0:
+        # Nothing to scale — pay the floor so the trigger is visible.
+        return (round(GLITCH_SURGE_FLOOR_FP * multiplier, 2), 0.0)
+    return (round(scaled, 2), extraMult)
 
 
 def anomalyContextFor(playerIds, season: int, week: int) -> Dict[int, Tuple[str, Dict[str, int]]]:

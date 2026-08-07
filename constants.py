@@ -3031,13 +3031,22 @@ GLITCH_CARDS_ENABLED = True
 # 'awakened' keeps a real base deliberately: awakened players fire a power on only 37% of
 # their weeks, LESS often than glitching, so keying the card solely to power use would
 # make awakening quieten the card rather than upgrade it.
+# ⚠️ RAISED after live testing showed the bonus almost never paying. Two things compound
+# that the original numbers ignored:
+#   1. 85% of players have NO anomaly row at all and default to 'stable', so most glitched
+#      cards sat on the FLOOR rather than spread across the ladder;
+#   2. a trigger only pays if the card itself produced something that week (the surge
+#      scales the card's own output), and the FP power bar gates ~30% of weeks — so the
+#      effective rate was base x 0.70.
+# At the old 5% floor that was 3.5%, a median wait of TWENTY WEEKS to see one payout. The
+# ladder still orders the odds; the floor is simply no longer a punishment.
 GLITCH_TRIGGER_BASE = {
-    'stable':   0.05,
-    'stirring': 0.15,
-    'erratic':  0.25,
-    'rampant':  0.35,
-    'awakened': 0.30,
-    'cleansed': 0.05,
+    'stable':   0.16,
+    'stirring': 0.26,
+    'erratic':  0.36,
+    'rampant':  0.46,
+    'awakened': 0.40,
+    'cleansed': 0.16,
 }
 
 # Each anomaly event the player fired THIS WEEK raises the chance, escalating with the
@@ -3056,7 +3065,11 @@ GLITCH_TRIGGER_CAP = 0.90
 # at FULL strength overcorrects the other way: both terms rise together, pinning a rampant
 # card at the cap through a whole Criticality. This fraction splits the difference —
 # a live Criticality moves a rampant card 35% -> ~59% instead of 90%.
-GLITCH_DIAL_SHARE = 0.30
+# Lowered 0.30 -> 0.20 when the bases were raised. The two multiply: at a 0.46 rampant
+# base a 0.30 share reached 1.01 during a live Criticality and clamped to the 0.90 cap,
+# which is the exact pinning this fraction exists to prevent — a card that is reliably on
+# is not wild magic. At 0.20 a Criticality takes rampant to 0.83, still a visible lift.
+GLITCH_DIAL_SHARE = 0.20
 
 # Magnitude, rolled on a trigger. Multiplies the CARD'S OWN output, so a surge scales with
 # whatever it is attached to rather than being a flat FP number that trivialises metallic
@@ -3075,3 +3088,11 @@ GLITCH_SURGE_TABLE = [
 # A deeper cut (0.55) was tried and halves FPx everywhere, fixing a problem that does not
 # exist at normal lineup sizes.
 GLITCH_FPX_DAMP = 0.80
+
+# What a surge pays per 1.0 of multiplier when the card itself produced NOTHING that week.
+# Without this a trigger on a gated-out card pays zero, which is indistinguishable from no
+# trigger at all — the reported symptom was "I see the glitch line but never a score". A
+# glitch is supposed to be something happening TO the card, so it should not be silently
+# cancelled by the card having a quiet week. Deliberately modest: the surge still scales
+# the card's own output when there IS output, and this is only the fallback.
+GLITCH_SURGE_FLOOR_FP = 9.0
