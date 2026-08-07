@@ -19,6 +19,7 @@ from managers.cardEffectCalculator import CardCalcContext
 from managers.fantasyTracker import _dbStatsToCardFormat
 
 QB, RB, WR, TE, K = 1, 2, 3, 4, 5
+PID = 1   # the on-card player id used by _ctx
 
 
 def _ctx(stats, pid=1, streak=1):
@@ -221,6 +222,62 @@ def testEveryLadderCardNamesTheStatItReads():
         assert effect in LADDER_STAT_READS, f"{effect} has no stat line"
     line = ladderStatLine('getaway', MEAN['wr2'])
     assert 'YAC' in line, line
+
+
+def testThePassTdFamilyExists():
+    """Specced in docs/CARD_STAT_LADDER.md with full copy, but missing from the build
+    order — so it was never built and the QB ladder had no card on the headline QB stat,
+    while the doc's own summary table listed it as a family."""
+    for eff, tier, out in (("bombardier", "metallic", "fpx"),
+                           ("salvo", "holographic", "fp"),
+                           ("barrage", "prismatic", "fp")):
+        assert ce.EFFECT_EDITION_TIER.get(eff) == tier, eff
+        assert ce.EFFECT_OUTPUT_TYPE.get(eff) == out, eff
+        assert eff in ce.EFFECT_REGISTRY, eff
+        assert ce.effectValidPositions(eff) == {1}, f"{eff} must be QB-only"
+
+
+def testPassTdCardsAreSizedForAQbNotAReceiver():
+    """A QB throws ~1.02 TDs a game against a WR's 0.35. Reusing the receiving-TD rates
+    would have made every rung ~3x hot, which is the trap in cloning a family across
+    positions: the SHAPE transfers, the numbers do not."""
+    bomb = ce.buildEffectConfig("metallic", 82, QB, forceEffect="bombardier")["primary"]
+    pay = ce.buildEffectConfig("metallic", 82, WR, forceEffect="paydirt")["primary"]
+    assert bomb["perTdMult"] < pay["perTdMult"], "pass TDs are commoner, so worth less each"
+    # Salvo's bar is 3, not End Zone's 2: two passing TDs is an ordinary day (29% of
+    # games) while two receiving TDs is not (6%). Match the rarity, not the number.
+    assert ce.buildEffectConfig("holographic", 82, QB,
+                                forceEffect="salvo")["primary"]["threshold"] == 3
+
+
+def testBombardierCapsSoAHugeGameCannotRunAway():
+    cfg = ce.buildEffectConfig("metallic", 82, QB, forceEffect="bombardier")["primary"]
+    ctx = _ctx({"passing_stats": {"tds": 7}}, pid=PID)
+    r = ce.EFFECT_REGISTRY["bombardier"](cfg, ctx, PID, 1)
+    assert abs(r.multBonus - (1.0 + cfg["maxMult"])) < 1e-6, r.multBonus
+
+
+def testPassTdCardsPayNothingOnAScorelessWeek():
+    """43% of QB games have no passing TD, so the dead week is the common case."""
+    ctx = _ctx({"passing_stats": {"tds": 0}}, pid=PID)
+    for eff in ("bombardier", "salvo", "barrage"):
+        cfg = ce.buildEffectConfig(ce.EFFECT_EDITION_TIER[eff], 82, QB,
+                                   forceEffect=eff)["primary"]
+        r = ce.EFFECT_REGISTRY[eff](cfg, ctx, PID, 1)
+        assert not (r.fpBonus or 0) and not (r.multBonus or 0), eff
+
+
+def testBarrageOddsEscalatePerTouchdown():
+    cfg = ce.buildEffectConfig("prismatic", 82, QB, forceEffect="barrage")["primary"]
+    rates = []
+    for tds in (1, 2, 3):
+        hits = 0
+        for wk in range(150):
+            c = _ctx({"passing_stats": {"tds": tds}}, pid=PID); c.weekNumber = wk
+            if ce.EFFECT_REGISTRY["barrage"](cfg, c, PID, 1).chanceTriggered:
+                hits += 1
+        rates.append(hits / 150)
+    assert rates == sorted(rates) and rates[0] < rates[-1], rates
 
 
 def testEveryLadderEffectIsFullyRegistered():

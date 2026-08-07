@@ -126,6 +126,7 @@ EFFECT_CATEGORY = {
     "freight": "flat_fp", "grinder": "multiplier", "landslide": "streak",
     "pinpoint": "flat_fp", "coffin_corner": "multiplier", "undertaker": "streak",
     "paydirt": "multiplier", "end_zone": "flat_fp", "promised_land": "flat_fp",
+    "bombardier": "multiplier", "salvo": "flat_fp", "barrage": "flat_fp",
     # Diamond stat amplifiers — no own output, pre-pass mutates ctx stats
     "doubler": "cross",          # roster TDs counted 2x for other card effects
     "surveyor": "cross",         # roster yards counted 1.5x for other card effects
@@ -157,6 +158,7 @@ EFFECT_OUTPUT_TYPE = {
     "freight": "fp", "grinder": "fpx", "landslide": "fpx",
     "pinpoint": "fp", "coffin_corner": "fpx", "undertaker": "fpx",
     "paydirt": "fpx", "end_zone": "fp", "promised_land": "fp",
+    "bombardier": "fpx", "salvo": "fp", "barrage": "fp",
     "freebie": "fp", "entourage": "fp", "touchdown_pinata": "fp", "scrappy": "fp",
     "honor_roll": "fpx", "three_pointer": "fp", "garbage_time": "fp",
     "loyalty_bonus": "fp", "spotlight_moment": "fp", "ace_up_the_sleeve": "fp",
@@ -358,6 +360,7 @@ EFFECT_EDITION_TIER = {
     "freight": "metallic", "grinder": "holographic", "landslide": "prismatic",
     "pinpoint": "metallic", "coffin_corner": "holographic", "undertaker": "prismatic",
     "paydirt": "metallic", "end_zone": "holographic", "promised_land": "prismatic",
+    "bombardier": "metallic", "salvo": "holographic", "barrage": "prismatic",
 }
 
 
@@ -460,6 +463,7 @@ EFFECT_DISPLAY_NAMES = {
     "freight": "Freight", "grinder": "Grinder", "landslide": "Landslide",
     "pinpoint": "Pinpoint", "coffin_corner": "Coffin Corner", "undertaker": "Undertaker",
     "paydirt": "Paydirt", "end_zone": "End Zone", "promised_land": "Promised Land",
+    "bombardier": "Bombardier", "salvo": "Salvo", "barrage": "Barrage",
     # Flat FP (WR)
     "freebie": "Freebie",
     "entourage": "Entourage",
@@ -662,6 +666,9 @@ EFFECT_TAGLINES = {
     "paydirt": "Cash in",
     "end_zone": "Where it counts",
     "promised_land": "Getting there",
+    "bombardier": "Target acquired",
+    "salvo": "All at once",
+    "barrage": "Keep firing",
     # Flat FP (WR)
     "freebie": "Free real estate",
     "entourage": "Seeing stars",
@@ -849,6 +856,9 @@ EFFECT_TOOLTIPS = {
     "paydirt": "Cross the line, collect. FPx for every receiving touchdown.",
     "end_zone": "One is good. Two is somebody else's problem. FP on every receiving TD, with a bonus at two.",
     "promised_land": "FP on every receiving TD, and each one raises the odds the next pays out.",
+    "bombardier": "Precision from altitude. FPx for every passing touchdown.",
+    "salvo": "One is a shot. Three is a salvo. FP on every passing TD, with a bonus at three.",
+    "barrage": "FP on every passing TD, and each one raises the odds the next pays out.",
     # Flat FP (WR)
     "freebie": "It's free. Bonus FP every week.",
     "entourage": "Seeing stars. Bonus FP for each high-rated player on your roster.",
@@ -1036,6 +1046,9 @@ EFFECT_DETAIL_TEMPLATES = {
     "paydirt": "+{perTdMult} FPx for every receiving TD by this player",
     "end_zone": "+{perTdFP} FP per receiving TD, +{bonusFP} bonus at {threshold}+",
     "promised_land": "+{perTdFP} FP per receiving TD, plus escalating odds at {bonusFP} FP on each one",
+    "bombardier": "+{perTdMult} FPx for every passing TD by this player",
+    "salvo": "+{perTdFP} FP per passing TD, +{bonusFP} bonus at {threshold}+",
+    "barrage": "+{perTdFP} FP per passing TD, plus escalating odds at {bonusFP} FP on each one",
     # Flat FP (WR)
     "freebie": "+{baseFP} FP per week",
     "entourage": "+{perPlayerFP} FP for every roster player with {minStars}★+",
@@ -1327,6 +1340,7 @@ POSITION_EXCLUSIVE_POOLS = {
     1: ["gunslinger", "air_raid", "stack", "backfield_buddies",
         "slipstream", "updraft", "stratosphere", "marksman", "dead_eye",
         "cadence", "rhythm", "clockwork", "altitude", "haymaker",
+        "bombardier", "salvo", "barrage",
         "crescendo", "traverse"],
     2: ["workhorse", "expedition", "stampede", "goal_line_vulture",
         "freight", "grinder", "landslide",
@@ -1631,7 +1645,6 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale, position=N
 # exactly the drift that left Safety Blanket paying 5.3/reception and Possession 2.7.
 _LADDER_VOLUMES = {
     "recYards":  {3: 83.5, 4: 59.0},
-    "yac":       {2: 87.5},
     "puntsIn20": {5: 2.03},
     "recTds":    {3: 0.40, 4: 0.26},
     "receptions": {3: 9.35, 4: 8.22},
@@ -1644,6 +1657,9 @@ _LADDER_VOLUMES = {
     "rushTds":   {2: 0.69},
     "yac":       {3: 23.0, 4: 17.6},
     "yac2":      {2: 87.5},   # yards after contact (RB), distinct from receiving YAC
+    # QBs throw ~1 TD a game, so unlike receiving TDs this is not a rare event: 43% of
+    # QB games are scoreless but 29% are multi-TD. Measured over 736 QB games.
+    "passTds":   {1: 1.02},
     "targets":   {3: 9.9, 4: 8.7},
     # Return yards go to whichever skill player returns; ~2.5 returns a game at ~9 yards.
     "returnYards": {2: 23.0, 3: 23.0},
@@ -1776,7 +1792,7 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
     if effectName == "frontier":
         return {"perYardFP": _ladderFpRate("recYards", position, 83.5, 0.004, rn)}
     if effectName == "freight":
-        return {"perYardFP": _ladderFpRate("yac", position, 87.5, 0.004, rn)}
+        return {"perYardFP": _ladderFpRate("yac2", position, 87.5, 0.004, rn)}
     if effectName == "pinpoint":
         return {"perPuntFP": _ladderFpRate("puntsIn20", position, 2.03, 0.004, rn)}
     # ── Stat ladder: holographic / prismatic FP rungs ──
@@ -1793,6 +1809,20 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         return {"perTdFP": round(_LADDER_FP_ANCHOR / vol * 0.70, 1),
                 "bonusFP": round(_LADDER_FP_ANCHOR * 2.4, 1),
                 "baseChance": 14, "chanceStep": 12, "isChanceEffect": True}
+    if effectName == "salvo":
+        # Measured 15.7 FP/week against End Zone's 15.0 — the 0.55 coefficient is lower
+        # than End Zone's 0.62 precisely because pass TDs are ~3x more common.
+        vol = _ladderVolume("passTds", position, 1.02)
+        return {"perTdFP": round(_LADDER_FP_ANCHOR / vol * 0.55, 1),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 0.55, 1), "threshold": 3}
+    if effectName == "barrage":
+        # 19.5 FP/week against Promised Land's 19.4, but with 40% of the payout in the
+        # jackpot rather than 18% — more rolls at longer odds, which is the shape a
+        # prismatic chance card should have.
+        vol = _ladderVolume("passTds", position, 1.02)
+        return {"perTdFP": round(_LADDER_FP_ANCHOR / vol * 0.45, 1),
+                "bonusFP": round(_LADDER_FP_ANCHOR * 2.75, 1),
+                "baseChance": 8, "chanceStep": 6, "isChanceEffect": True}
     if effectName == "freebie":
         return {"baseFP": round((48 + rn * 1.02) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "entourage":
@@ -2032,12 +2062,12 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
         # Contact yards are ~80% of rush yards league-wide, so "over half" is the norm,
         # not an achievement. The bar sits above it.
         return {"rewardType": "mult",
-                "per50Mult": _ladderFpxRate("yac", position, 87.5, 50),
+                "per50Mult": _ladderFpxRate("yac2", position, 87.5, 50),
                 "ratioMult": round(_LADDER_FPX_TARGET * 0.60, 2),
                 "ratioBar": 0.88}
     if effectName == "landslide":
         return {"rewardType": "mult",
-                "per50Mult": round(_ladderFpxRate("yac", position, 87.5, 50) * 0.85, 2),
+                "per50Mult": round(_ladderFpxRate("yac2", position, 87.5, 50) * 0.85, 2),
                 "growthPerTick": 0.03, "threshold": 100, "isStreak": True}
     if effectName == "coffin_corner":
         # ~1 punt a week is downed inside the 10, so paying per inside-10 punt fires every
@@ -2054,6 +2084,13 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
                 "perPuntMult": round(_ladderFpxRate("puntsIn20", position, 2.03) * 0.85, 2),
                 "growthPerTick": 0.05,
                 "threshold": _streakBar("puntsIn20", position, 2.03), "isStreak": True}
+    if effectName == "bombardier":
+        # Unlike Paydirt this CAN be sized off the target, because ~1 TD a game is a
+        # number QBs actually post. Rate x volume lands the mean on the FPx target and the
+        # cap bites at three TDs, which happens in 10.5% of QB games.
+        return {"rewardType": "mult",
+                "perTdMult": _LADDER_FPX_TARGET,
+                "maxMult": round(_LADDER_FPX_TARGET * 3.0, 2)}
     if effectName == "paydirt":
         # ⚠️ Size per SCORING EVENT, not per mean. Sizing an FPx rate off a 0.26 TD/game
         # average produced 0.38 per TD, because the maths assumes you can receive 0.26 of a
@@ -5483,6 +5520,80 @@ def _computePromisedLand(primary, ctx, cardPlayerId, eqId):
                         equation=f"+{base} FP. {tds} TD rolled, none hit")
 
 
+# ── Pass TDs: Bombardier -> Salvo -> Barrage ──
+# Structurally the receiving-TD family pointed at the QB, but sized quite differently: a QB
+# throws ~1.02 TDs a game against a WR's 0.35, so this is a REGULAR stat wearing a lumpy
+# stat's shape. Paydirt has to price per scoring event because 0.35 is an average nobody
+# posts; Bombardier can be sized against the ordinary FPx target and still spike.
+
+
+def _computeBombardier(primary, ctx, cardPlayerId, eqId):
+    """FPx for every passing TD by this player, capped."""
+    per = primary.get("perTdMult", 0.10)
+    cap = primary.get("maxMult", 0.30)
+    tds = _ladderStat(ctx, cardPlayerId, "passing_stats", "tds")
+    if tds <= 0:
+        return EffectResult(equation="no passing TDs")
+    delta = min(cap, per * tds)
+    capped = " (max)" if per * tds > cap else ""
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({tds} pass TD){capped}")
+
+
+def _computeSalvo(primary, ctx, cardPlayerId, eqId):
+    """FP per passing TD, with a bonus once a third one lands.
+
+    The bar is 3 rather than End Zone's 2 because two passing TDs is an ordinary QB day
+    (29% of games) while two receiving TDs is not (6%). Matching the NUMBER would have
+    made the bonus routine; matching the RARITY is what keeps it a bonus.
+    """
+    per = primary.get("perTdFP", 14.0)
+    bonus = primary.get("bonusFP", 14.3)
+    threshold = primary.get("threshold", 3)
+    tds = _ladderStat(ctx, cardPlayerId, "passing_stats", "tds")
+    total = per * tds + (bonus if tds >= threshold else 0)
+    tail = f", +{bonus} at {threshold}+" if tds >= threshold else ""
+    return EffectResult(fpBonus=round(total, 1),
+                        equation=f"{per}/TD x {tds}{tail}")
+
+
+def _computeBarrage(primary, ctx, cardPlayerId, eqId):
+    """FP per passing TD, each one raising the odds of a jackpot.
+
+    Same escalating shape as Promised Land, but the opening odds and step are LOWER
+    because a QB gets more rolls: at Promised Land's 14/+12 the extra volume compounds to
+    a 52% richer card. Lowering the odds instead of the jackpot keeps the payout worth
+    chasing, which is the whole point of a chance card.
+    """
+    from managers.cardEffectCalculator import _chanceRoll
+    per = primary.get("perTdFP", 11.5)
+    bonus = primary.get("bonusFP", 71.5)
+    baseChance = primary.get("baseChance", 8)
+    step = primary.get("chanceStep", 6)
+    rawTds = _ladderStat(ctx, cardPlayerId, "passing_stats", "tds")
+    base = round(per * rawTds, 1)
+    if rawTds <= 0:
+        return EffectResult(equation="no passing TDs")
+    # The projection path feeds PER-GAME AVERAGES, so this arrives fractional there.
+    tds = max(1, int(round(rawTds)))
+    if getattr(ctx, "gamesActive", False):
+        live = min(0.97, (baseChance + max(0, tds - 1) * step) / 100.0
+                   + getattr(ctx, "chanceBonus", 0.0))
+        return EffectResult(fpBonus=base, chanceThreshold=live,
+                            equation=_chanceEq(live, 0, live, False, f"+{bonus} FP",
+                                               f"{tds} pass TD", ctx, f"+{base} FP"))
+    rng = _chanceRoll(ctx, eqId)
+    for i in range(tds):
+        odds = min(0.97, (baseChance + i * step) / 100.0
+                   + getattr(ctx, "chanceBonus", 0.0))
+        if rng.random() < odds:
+            return EffectResult(fpBonus=round(base + bonus, 1), chanceTriggered=True,
+                                chanceThreshold=odds,
+                                equation=f"+{base} FP. {odds:.0%} on TD {i + 1} hit, +{bonus} FP")
+    return EffectResult(fpBonus=base,
+                        equation=f"+{base} FP. {tds} TD rolled, none hit")
+
+
 # ── Pass yards: Slipstream -> Updraft -> Stratosphere ──
 def _computeSlipstream(primary, ctx, cardPlayerId, eqId):
     """FPx per 100 passing yards by this player."""
@@ -5774,6 +5885,9 @@ LADDER_STAT_READS = {
     "paydirt":       ("receiving_stats", "rcvTds", "rec TD"),
     "end_zone":      ("receiving_stats", "rcvTds", "rec TD"),
     "promised_land": ("receiving_stats", "rcvTds", "rec TD"),
+    "bombardier":    ("passing_stats", "tds", "pass TD"),
+    "salvo":         ("passing_stats", "tds", "pass TD"),
+    "barrage":       ("passing_stats", "tds", "pass TD"),
     "possession":    ("receiving_stats", "receptions", "rec"),
     "safety_blanket": ("receiving_stats", "receptions", "rec"),
     "custody":       ("receiving_stats", "receptions", "rec"),
@@ -5863,6 +5977,7 @@ EFFECT_REGISTRY = {
     "undertaker": _computeUndertaker,
     "paydirt": _computePaydirt, "end_zone": _computeEndZone,
     "promised_land": _computePromisedLand,
+    "bombardier": _computeBombardier, "salvo": _computeSalvo, "barrage": _computeBarrage,
     # Flat FP (WR)
     "freebie": _computeFreebie,
     "entourage": _computeEntourage,

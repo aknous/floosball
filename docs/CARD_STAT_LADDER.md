@@ -752,10 +752,10 @@ stat that separates a receiver's contribution from the quality of throw they wer
 
 | family / motif | metallic — per stat | holographic — + conditional bonus | prismatic — + streak or chance |
 |---|---|---|---|
-| **completions** — timekeeping | *Cadence* **FP** per completion | *Rhythm* **FPx** per completion, more past 20 | *Clockwork* **FP** per completion + streak at 25+ |
+| **completions** — timekeeping | *Cadence* **FP** per completion | *Rhythm* **FPx** per completion, more past 20 | *Clockwork* **FPx** per completion + streak at 25+ |
 | **pass yards** — flight | *Slipstream* **FPx** per 100 yards | *Updraft* **FP** per yard, + bonus at 200/300/400 | *Stratosphere* **FPx** per 100 + streak at 300 |
 | **pass TDs** — ordnance | *Bombardier* **FPx** per pass TD | *Salvo* **FP** per TD, + bonus at 3+ | *Barrage* **FP** per TD + escalating odds |
-| **throw quality** — marksmanship | **Gunslinger** **FP** per good throw *(re-pointed)* | *Marksman* **FPx** per good throw, + bonus on a clean sheet | *Dead Eye* **FP** per good throw + clean-sheet streak |
+| **throw quality** — marksmanship | **Gunslinger** **FP** per good throw *(re-pointed)* | *Marksman* **FPx** per good throw, + bonus on a clean sheet | *Dead Eye* **FPx** per good throw + clean-sheet streak |
 
 One-offs: *Attention* **FPx** (targets), *Altitude* (holo, aDOT above 8), *Haymaker*
 (holo, pass yards + bonus per 20+ throw), **Air Raid** (shipped, Floobits on pass TDs).
@@ -765,10 +765,10 @@ Blocked: throw quality needs the new `goodThrows` counter.
 
 | family / motif | metallic — per stat | holographic — + conditional bonus | prismatic — + streak or chance |
 |---|---|---|---|
-| **carries** — labour | **Workhorse** **FP** per carry | *Beast of Burden* **FPx** per carry, more past 25 | *Iron Man* **FP** per carry + streak at 20 |
-| **rush yards** — journey | **Expedition** **FP** per yard | **Trailblazer** **FPx** per yard, + bonus on the big game *(was Stampede)* | *Odyssey* **FP** per yard + streak at 100 |
+| **carries** — labour | **Workhorse** **FP** per carry | *Beast of Burden* **FPx** per carry, more past 25 | *Iron Man* **FPx** per carry + streak at 20 |
+| **rush yards** — journey | **Expedition** **FP** per yard | **Trailblazer** **FPx** per yard, + bonus on the big game *(was Stampede)* | *Odyssey* **FPx** per yard + streak at 100 |
 | **rush TDs** — force | *Battering Ram* **FPx** per rush TD | **Lead Blocker** **FP** per rush TD, + bonus | — |
-| **yards after contact** — mass | *Freight* **FP** per contact yard | *Grinder* **FPx** per contact yard, + bonus past half | *Landslide* **FP** per contact yard + streak at 100 |
+| **yards after contact** — mass | *Freight* **FP** per contact yard | *Grinder* **FPx** per contact yard, + bonus past half | *Landslide* **FPx** per contact yard + streak at 100 |
 
 One-offs: *Breakaway* (holo, rush yards + bonus per 20+ run), *Houdini* (prismatic, chance
 filling from broken tackles), **Goal Line Vulture** (shipped, Floobits on rush TDs).
@@ -779,10 +779,10 @@ Yards after contact only became a real stat this session (80% of rush yards, 87.
 
 | family / motif | metallic — per stat | holographic — + conditional bonus | prismatic — + streak or chance |
 |---|---|---|---|
-| **receptions** — custody | **Possession** (WR) · **Safety Blanket** (TE) **FP** per catch | *Custody* **FPx** per catch, more past 8 | *Tenure* **FP** per catch + streak at 8 |
-| **receiving yards** — territory | *Frontier* **FP** per yard | *Territory* **FPx** per yard, + bonus at 75/125/175 | *Dominion* **FP** per yard + streak at 100 |
+| **receptions** — custody | **Possession** (WR) · **Safety Blanket** (TE) **FP** per catch | *Custody* **FPx** per catch, more past 8 | *Tenure* **FPx** per catch + streak at 8 |
+| **receiving yards** — territory | *Frontier* **FP** per yard | *Territory* **FPx** per yard, + bonus at 75/125/175 | *Dominion* **FPx** per yard + streak at 100 |
 | **receiving TDs** — the end zone | *Paydirt* **FPx** per rec TD | *End Zone* **FP** per TD, + bonus at 2+ | *Promised Land* **FP** per TD + escalating odds |
-| **YAC** — escape | **Slippery** **FP** per YAC yard | **Jailbreak** **FPx** per YAC yard, + bonus | *Getaway* **FP** per YAC yard + streak at 40 |
+| **YAC** — escape | **Slippery** **FP** per YAC yard | **Jailbreak** **FP** per YAC yard, + bonus | *Getaway* **FPx** per YAC yard + streak at 40 |
 
 One-offs: **Trebuchet** (shipped, longest catch), *Highpoint* (holo, receptions + bonus per
 contested catch), *Custodian* (prismatic, receptions + bonus per bailout), **Industrious**
@@ -795,7 +795,7 @@ stat in the game, and no card below prismatic today.
 
 | family / motif | metallic — per stat | holographic — + conditional bonus | prismatic — + streak or chance |
 |---|---|---|---|
-| **punting** — burial | *Pinpoint* **FP** per punt inside the 20 | *Coffin Corner* **FPx** per pin, + bonus inside the 10 | *Undertaker* **FP** per pin + multi-pin streak |
+| **punting** — burial | *Pinpoint* **FP** per punt inside the 20 | *Coffin Corner* **FPx** per pin, + bonus inside the 10 | *Undertaker* **FPx** per pin + multi-pin streak |
 | **returns** — the runback | *Runback* **FP** per return yard | — | *House Call* **FP** per return yard + odds on a return TD |
 
 **Field goal cards are KEPT** (owner call 2026-08-06). The kicker carries six of them —
@@ -810,6 +810,13 @@ became measurable this session.
 
 ## Build order
 
+0. **Pass TDs — Bombardier / Salvo / Barrage** (built 2026-08-07). Specced in the table
+   above with full copy, but omitted from this list in the first draft and so never built,
+   leaving the QB ladder with no card on the headline QB stat. Sized off a measured 1.02
+   pass TDs per QB game (736 games): unlike receiving TDs at 0.35 this is NOT a rare event,
+   so Bombardier prices against the ordinary FPx target instead of per scoring event, and
+   Salvo's bar is 3 rather than End Zone's 2 because two passing TDs is an ordinary day
+   (29% of games) where two receiving TDs is not (6%). Match the RARITY, not the number.
 1. **Widen `_dbStatsToCardFormat`** — 15 of 92 stat keys reach the card layer and
    `returning_stats` is not a parameter at all. Everything is blocked on this.
 2. **Add the `goodThrows` counter**, calibrated to ~1/3 of throws (~12-14/game).
@@ -825,7 +832,7 @@ became measurable this session.
    percentile curve per tier rather than the mean alone; `simcheck_effect_spread.py`
    already reports p10/p90 per card.
 
-Counts: **12 families + 11 one-offs, ~31 new cards** including the FPx siblings.
+Counts: **13 families + 11 one-offs, ~34 new cards** including the FPx siblings.
 Three shipped Floobits cards (Air Raid, Goal Line Vulture, Industrious) moved OUT of
 families into the one-off pool; no new cards were needed to replace them, because the
 TD families take FPx at metallic under rule 2 regardless.
