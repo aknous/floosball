@@ -4,7 +4,9 @@ import random
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from logger_config import get_logger
-from managers.cardEffects import buildEffectConfig as _buildEffectConfig, getEffectOutputType, effectValidPositions as _effectValidPositions
+from managers.cardEffects import (buildEffectConfig as _buildEffectConfig, getEffectOutputType,
+                                  effectValidPositions as _effectValidPositions,
+                                  effectPoolFor as _effectPoolFor)
 
 logger = get_logger("floosball.cardManager")
 
@@ -511,6 +513,62 @@ class CardManager:
     def __init__(self, serviceContainer):
         self.serviceContainer = serviceContainer
 
+    @staticmethod
+    def _effectDealer(edition: str):
+        """Deal effects for one EDITION instead of rolling each template independently.
+
+        `buildEffectConfig` picks with `random.choice`, independently per template. That
+        is the wrong tool twice over, and both symptoms were reported together:
+
+          - COVERAGE. Supply is thin at the top. Prismatic RB is 8 templates against 27
+            eligible effects, so any one had a 74% chance of not existing AT ALL that
+            season (diamond TE: 92%). Measured on a live season, 31 of 143 effects had no
+            template anywhere — which is how a card can be built, seeded, and still be
+            unobtainable in packs or the shop.
+          - DUPLICATES. The same independence clusters the winners: 27 effects held 5+
+            templates while 38 held exactly one. That is what makes packs feel like they
+            keep handing you the same few effects.
+
+        Dealing from a shuffled deck fixes both: every effect is handed out once before
+        any repeats, so counts differ by at most one and nothing is starved or cloned.
+
+        ⚠️ The deck is per EDITION, not per (edition, position) — that distinction is the
+        whole fix. Dealing per bucket only redistributes within it, and a bucket like
+        prismatic QB has 10 templates for 26 effects, so 16 must be absent however you
+        deal (measured: absence only fell 34 -> 22). Pooling the edition's five position
+        buckets gives prismatic 64 templates against 26 effects, enough to cover every
+        one. A position-exclusive effect is still limited to its own position's slots,
+        which is a genuine supply floor rather than a sampling artefact.
+
+        Returns a callable taking a position and yielding the next effect valid there, or
+        None for the base edition, which is the no-effect floor print.
+        """
+        import random as _r
+        if edition == 'base':
+            return lambda position: None
+
+        validCache = {pos: set(_effectPoolFor(edition, pos)) for pos in (1, 2, 3, 4, 5)}
+        everything = sorted(set().union(*validCache.values())) if validCache else []
+        if not everything:
+            return lambda position: None
+        state = {'deck': []}
+
+        def _next(position):
+            valid = validCache.get(position) or set()
+            if not valid:
+                return None
+            # Two passes: search the deck, refill once if it holds nothing for this
+            # position, search again. A refill contains every effect, so the second pass
+            # cannot fail while `valid` is non-empty.
+            for _ in range(2):
+                for i in range(len(state['deck']) - 1, -1, -1):
+                    if state['deck'][i] in valid:
+                        return state['deck'].pop(i)
+                state['deck'] = everything[:]
+                _r.shuffle(state['deck'])
+            return _r.choice(sorted(valid))
+        return _next
+
     def generateSeasonTemplates(
         self, session, seasonNumber: int,
         mvpPlayerId: Optional[int] = None,
@@ -548,6 +606,8 @@ class CardManager:
         apIds = allProPlayerIds or set()
 
         templates: List[CardTemplate] = []
+        # One dealer per edition; it pools that edition's five position buckets.
+        dealers: dict = {}
 
         for player in playerManager.activePlayers:
             # Cards are for rostered players only — exclude every off-roster
@@ -591,8 +651,12 @@ class CardManager:
                 )
 
                 # Pass classification so a Champion card mints a lower (on-card) gate threshold.
+                # The effect is DEALT rather than rolled — see _effectDealer.
+                if edition not in dealers:
+                    dealers[edition] = self._effectDealer(edition)
                 effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId,
-                                                  classification=classification)
+                                                  classification=classification,
+                                                  forceEffect=dealers[edition](positionValue))
                 rarityWeight = computeRarityWeight(edition, rating)
                 sellValue = getSellValue(edition, isActive=True)
 
@@ -643,6 +707,7 @@ class CardManager:
         }
 
         templates: List[CardTemplate] = []
+        dealers: dict = {}
 
         for player in playerManager.activePlayers:
             if player.id in existingPlayerIds:
@@ -677,7 +742,10 @@ class CardManager:
                 if rating < threshold:
                     continue
 
-                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId)
+                if edition not in dealers:
+                    dealers[edition] = self._effectDealer(edition)
+                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId,
+                                                  forceEffect=dealers[edition](positionValue))
                 rarityWeight = computeRarityWeight(edition, rating)
                 sellValue = getSellValue(edition, isActive=True)
 
@@ -1700,9 +1768,13 @@ class CardManager:
         # These packs explicitly promise classification breadth (one card
         # per qualifying player), so dedup by player_id.
         dedupByPlayer = getattr(packType, 'theme_type', None) in ('champion', 'allpro')
-        # Starter pack: no duplicate effectNames so new users can equip
-        # every starter card without hitting the no-duplicate-effects rule.
-        dedupByEffect = (packType.name == 'starter')
+        # EVERY pack avoids repeating an effect, not just the starter. Opening a pack and
+        # getting the same effect two or three times is the single most reported
+        # frustration with packs, and it is not what a pack is for: you buy one to see
+        # what is in the pool, and a repeat spends a slot telling you nothing. The pool
+        # can no longer satisfy it (a themed pack over a thin position, say) and the
+        # dedup falls through to whatever is left, so this can never return short.
+        dedupByEffect = True
 
         # Starter pack: hand a full ONE-PER-POSITION lineup (QB/RB/WR/TE/K) with
         # distinct players and effects, so a new user can equip the entire pack as a
@@ -1720,15 +1792,29 @@ class CardManager:
                 guaranteedDraw = self._weightedDraw(
                     guaranteedPool, packWeights, count=1
                 )
+                # The rest of the pack must also avoid the guaranteed card's effect —
+                # this branch used to drop to a plain weighted draw, so the pack most
+                # likely to repeat itself was the one you paid extra for.
                 excludedPlayerIds = (
                     {t.player_id for t in guaranteedDraw} if dedupByPlayer else set()
                 )
-                restPool = [t for t in pool if t.player_id not in excludedPlayerIds]
+                guaranteedEffects = {
+                    (getattr(t, 'effect_config', None) or {}).get('effectName')
+                    for t in guaranteedDraw
+                } - {None, ''}
+                restPool = [
+                    t for t in pool
+                    if t.player_id not in excludedPlayerIds
+                    and (getattr(t, 'effect_config', None) or {}).get('effectName')
+                    not in guaranteedEffects
+                ]
+                # Never let filtering empty the pool — a short pack is worse than a repeat.
+                if not restPool:
+                    restPool = pool
                 rest = self._weightedDrawDedup(
                     restPool, packWeights, count=max(0, count - 1),
                     dedupByPlayer=dedupByPlayer,
-                ) if dedupByPlayer else self._weightedDraw(
-                    pool, packWeights, count=max(0, count - 1),
+                    dedupByEffect=dedupByEffect,
                 )
                 return guaranteedDraw + rest
             # Fallback to unconstrained draw if no eligible templates exist
@@ -2469,7 +2555,11 @@ class CardManager:
             while len(picked) < count and poolCopy and attempts < maxAttempts:
                 attempts += 1
                 choice = random.choices(poolCopy, weights=weightsCopy, k=1)[0]
-                effectName = (choice.effect_config or {}).get('effect') if choice.effect_config else None
+                # KEY BUG: this read 'effect', but the config key is 'effectName' (the
+                # FACILITY_CATALOG schema uses 'effect' — easy to cross over). It always
+                # came back None, so seenEffects never filled and the shop's duplicate
+                # guard below has never once run.
+                effectName = (choice.effect_config or {}).get('effectName') if choice.effect_config else None
                 idx = poolCopy.index(choice)
                 if effectName and effectName in seenEffects:
                     # Duplicate effect — remove from pool and skip

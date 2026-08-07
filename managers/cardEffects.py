@@ -2609,6 +2609,20 @@ _ALL_IN_STUD_LINE = {1: 22, 2: 22, 3: 20, 4: 14, 5: 15}
 
 # ─── Config Builder ──────────────────────────────────────────────────────────
 
+def effectPoolFor(edition: str, position: int) -> list:
+    """Every effect mintable at this edition for this position.
+
+    The ONE definition of the mint pool. buildEffectConfig draws from it, and
+    cardManager's season dealer deals from it — if those two ever disagreed, the dealer
+    would hand out effects the roller would never pick, which is the drift that makes a
+    card exist in the registry and never in the game.
+    """
+    excluded = POSITION_EXCLUDED_EFFECTS.get(position, set())
+    pool = [n for n in SHARED_EFFECT_POOL if n not in excluded]
+    pool += POSITION_EXCLUSIVE_POOLS.get(position, [])
+    return [n for n in pool if EFFECT_EDITION_TIER.get(n) == edition]
+
+
 def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=None,
                       forceEffect: str = None, forceCategory: str = None,
                       classification: str = None) -> dict:
@@ -2632,12 +2646,7 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
         }
 
     # Pool selection: shared + position exclusive, minus excluded, filtered by edition tier
-    excluded = POSITION_EXCLUDED_EFFECTS.get(position, set())
-    pool = [n for n in SHARED_EFFECT_POOL if n not in excluded]
-    pool += POSITION_EXCLUSIVE_POOLS.get(position, [])
-
-    # Filter to only effects that belong to this edition tier
-    pool = [n for n in pool if EFFECT_EDITION_TIER.get(n) == edition]
+    pool = effectPoolFor(edition, position)
 
     if forceEffect:
         effectName = forceEffect
