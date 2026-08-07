@@ -1966,8 +1966,10 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
                 "per50Mult": round(_ladderFpxRate("rushYards", position, 110.5, 50) * 0.85, 2),
                 "growthPerTick": 0.03, "threshold": 100, "isStreak": True}
     if effectName == "battering_ram":
+        # See paydirt — same per-event sizing, and a cap so a three-TD game cannot run away.
         return {"rewardType": "mult",
-                "perTdMult": _ladderFpxRate("rushTds", position, 0.69)}
+                "perTdMult": _LADDER_FPX_TARGET * 1.2,
+                "maxMult": round(_LADDER_FPX_TARGET * 3.0, 2)}
     if effectName == "custody":
         vol = _ladderVolume("receptions", position, 9.35)
         return {"rewardType": "mult",
@@ -2042,8 +2044,15 @@ def _buildMultiplierParams(effectName, playerRating, editionScale, position=None
                 "growthPerTick": 0.05,
                 "threshold": _streakBar("puntsIn20", position, 2.03), "isStreak": True}
     if effectName == "paydirt":
+        # ⚠️ Size per SCORING EVENT, not per mean. Sizing an FPx rate off a 0.26 TD/game
+        # average produced 0.38 per TD, because the maths assumes you can receive 0.26 of a
+        # touchdown. You cannot — you get 0, 1 or 2, so the card paid nothing most weeks and
+        # +0.76 FPx on a 2-TD week, which is ~190 FP on a normal lineup against a 26 FP
+        # anchor. Lumpy stats take FPx to smooth their DEAD weeks (rule 2); that does not
+        # license pricing the live ones off an average nobody ever posts.
         return {"rewardType": "mult",
-                "perTdMult": _ladderFpxRate("recTds", position, 0.40)}
+                "perTdMult": _LADDER_FPX_TARGET * 1.2,
+                "maxMult": round(_LADDER_FPX_TARGET * 3.0, 2)}
     """FPx (multiplier) card parameter builder.
 
     Numeric constants represent the post-Balatro (3×) deltas; `_BAL_FPX_MULT`
@@ -5395,13 +5404,16 @@ def _computeUndertaker(primary, ctx, cardPlayerId, eqId):
 
 # ── Receiving TDs: Paydirt -> End Zone -> Promised Land ──
 def _computePaydirt(primary, ctx, cardPlayerId, eqId):
-    """FPx for every receiving TD by this player."""
-    per = primary.get("perTdMult", 0.25)
+    """FPx for every receiving TD by this player, capped."""
+    per = primary.get("perTdMult", 0.12)
+    cap = primary.get("maxMult", 0.30)
     tds = _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvTds")
     if tds <= 0:
         return EffectResult(equation="no receiving TDs")
-    return EffectResult(multBonus=round(1.0 + per * tds, 3),
-                        equation=f"+{per * tds:.2f} FPx ({tds} rec TD)")
+    delta = min(cap, per * tds)
+    capped = " (max)" if per * tds > cap else ""
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({tds} rec TD){capped}")
 
 
 def _computeEndZone(primary, ctx, cardPlayerId, eqId):
@@ -5587,12 +5599,15 @@ def _computeOdyssey(primary, ctx, cardPlayerId, eqId):
 
 # ── Rush TDs ──
 def _computeBatteringRam(primary, ctx, cardPlayerId, eqId):
-    per = primary.get("perTdMult", 0.14)
+    per = primary.get("perTdMult", 0.12)
+    cap = primary.get("maxMult", 0.30)
     tds = _ladderStat(ctx, cardPlayerId, "rushing_stats", "runTds")
     if tds <= 0:
         return EffectResult(equation="no rushing TDs")
-    return EffectResult(multBonus=round(1.0 + per * tds, 3),
-                        equation=f"+{per * tds:.2f} FPx ({tds} rush TD)")
+    delta = min(cap, per * tds)
+    capped = " (max)" if per * tds > cap else ""
+    return EffectResult(multBonus=round(1.0 + delta, 3),
+                        equation=f"+{delta:.2f} FPx ({tds} rush TD){capped}")
 
 
 # ── Receptions: Possession / Safety Blanket -> Custody -> Tenure ──

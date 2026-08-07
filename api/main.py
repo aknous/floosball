@@ -7864,32 +7864,11 @@ def _getPlayerLiveFantasyPoints(player) -> float:
     return sd.get('fantasyPoints', 0) + player.gameStatsDict.get('fantasyPoints', 0)
 
 
-def _liveStatsToDbFormat(gameStatsDict: dict) -> dict:
-    """Translate a live gameStatsDict to DB-style weekPlayerStats format."""
-    passing = gameStatsDict.get("passing", {})
-    rushing = gameStatsDict.get("rushing", {})
-    receiving = gameStatsDict.get("receiving", {})
-    kicking = gameStatsDict.get("kicking", {})
-    return {
-        "fantasyPoints": gameStatsDict.get("fantasyPoints", 0),
-        "passing_stats": {
-            "passYards": passing.get("yards", 0),
-            "tds": passing.get("tds", 0),
-        },
-        "rushing_stats": {
-            "runYards": rushing.get("yards", 0),
-            "runTds": rushing.get("tds", 0),
-        },
-        "receiving_stats": {
-            "rcvYards": receiving.get("yards", 0),
-            "rcvTds": receiving.get("tds", 0),
-        },
-        "kicking_stats": {
-            "fgs": kicking.get("fgs", 0),
-            "fgYards": kicking.get("fgYards", 0),
-            "longest": kicking.get("longest", 0),
-        },
-    }
+# NOTE: a duplicate `_liveStatsToDbFormat` lived here and was DEAD — nothing in this
+# module called it. It was also stale: it predated the card stat surface widening, so it
+# carried no receptions, targets, comp or att, and any card routed through it would have
+# read 0 for those. Removed rather than fixed; `managers.fantasyTracker` owns the one
+# real converter (`_buildCardStatFormat`), which both live and DB paths share.
 
 
 def _computeLiveWeekCardBonuses(session, rosters, rostersByUser) -> dict:
