@@ -2354,6 +2354,16 @@ class SeasonManager:
                             "chanceTriggered": b.chanceTriggered,
                             "streakActive": b.streakActive,
                             "streakCount": b.streakCount,
+                            # Glitch (docs/GLITCH_CARDS.md). Without these the line item
+                            # rendered live and then VANISHED the moment the week banked,
+                            # because the stored breakdown is what every later read uses.
+                            "glitched": getattr(b, "glitched", False),
+                            "glitchChance": getattr(b, "glitchChance", 0.0),
+                            "glitchTriggered": getattr(b, "glitchTriggered", False),
+                            "glitchOutcome": getattr(b, "glitchOutcome", None),
+                            "glitchFp": getattr(b, "glitchFp", 0.0),
+                            "glitchMultDelta": getattr(b, "glitchMultDelta", 0.0),
+                            "glitchReadable": getattr(b, "glitchReadable", False),
                         } for b in result.cardBreakdowns]
                         storedJson = _json.dumps({
                             "breakdowns": breakdownDicts,
