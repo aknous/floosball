@@ -51,6 +51,7 @@ from constants import (
     MOMENTUM_FG_MISSED, MOMENTUM_FG_MADE, MOMENTUM_SACK, MOMENTUM_BIG_PLAY_BONUS,
     MOMENTUM_PUNT,
     WPA_PASS_QB_SHARE, WPA_DROP_RECEIVER_SHARE, DEF_PLAYMAKER_BONUS,
+    TD_DRAIN_MIN_SECONDS, TD_DRAIN_MAX_YARDS,
 )
 
 # Import TimingManager for game-level timing control
@@ -1572,6 +1573,54 @@ class Game:
             return 0.5
         return max(0.0, min(1.0, (coach.clockManagement - 60) / 40))
 
+    def _isTdDrainMode(self) -> bool:
+        """True when the offense is about to score a TD that WINS, and should not do it yet.
+
+        The touchdown twin of `_isFgDrainMode`, which only covers a deficit of 0-3 (the
+        band where a kick settles it). Down 4-8 at the goal line had no equivalent, so the
+        offense hurried: measured at 1st-and-goal from the 3, down 5 with 0:55 left, it
+        chose a 12-second huddle — scoring in seconds and handing the opponent ~45 seconds
+        plus their timeouts to kick a winning field goal.
+
+        Scoring is not the goal; scoring LAST is. Every second left on the clock after a
+        go-ahead touchdown is a second for the reply, so the clock should be bled first and
+        the score taken as late as the downs allow.
+
+        Conditions are deliberately tight, because draining when you might NOT score is how
+        you lose a game you had won:
+          - goal to go and close in, so a score is near-certain rather than hoped for;
+          - 1st or 2nd down, i.e. at least two cracks left after this snap;
+          - enough clock that a full drained play clock still leaves a snap behind it;
+          - a deficit a single touchdown actually erases. Down 9+ needs two scores, so the
+            clock is the enemy and hurrying is right.
+
+        Down 7 and 8 are included even though a touchdown only TIES: a tie sends the game
+        to overtime, and leaving the opponent time lets them win it in regulation instead.
+        """
+        if self.currentQuarter < 4:
+            return False
+        secs = self._offenseEffectiveSecs()
+        # Above the window the clock is not yet the deciding factor; below it there is no
+        # room to drain and still snap the ball.
+        if secs > 90 or secs < TD_DRAIN_MIN_SECONDS:
+            return False
+        isHome = (self.offensiveTeam is self.homeTeam)
+        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        _fd = self._frameDecisionDiff()
+        if _fd is not None:
+            scoreDiff = _fd
+        # Down by more than a kick (else _isFgDrainMode owns it) but within one score.
+        if not (-self._maxPossession() <= scoreDiff < -self._fgValue()):
+            return False
+        if self._isGarbageTime(scoreDiff):
+            return False
+        # Near-certain score, with downs in hand. Proximity plus spare downs is the real
+        # condition — an explicit goal-to-go test was tried and cut, because 2nd-and-1 from
+        # the 3 is not technically goal-to-go and is exactly as good a position to hold.
+        if self.yardsToEndzone > TD_DRAIN_MAX_YARDS:
+            return False
+        return self.down <= 2
+
     def _isFgDrainMode(self) -> bool:
         """True when the offense should drain clock to set up an end-of-game FG.
         Late Q2/Q4, scoring within 3 (trailing or tied), in chip-shot FG range.
@@ -2154,7 +2203,9 @@ class Game:
             return False
         # Suppress sideline targeting when setting up an end-of-game FG —
         # we WANT the clock running so the FG ends the game with no time left.
-        if self._isFgDrainMode():
+        # Same for a go-ahead TD being held back: an out-of-bounds catch stops the clock,
+        # which is exactly what the drain is trying to avoid.
+        if self._isFgDrainMode() or self._isTdDrainMode():
             return False
 
         clockIQ = self._coachClockIQ(coach)
@@ -3424,6 +3475,14 @@ class Game:
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
         # moving. Avoid downfield passes (incomplete = clock stop). Runs AFTER the
         # drive-clock bias so end-of-GAME clock-kill still overrides a drive-clock chunk push.
+        # Holding a go-ahead TD at the goal line: same in-bounds bias, but milder. The FG
+        # drain can lean almost entirely on runs because a kick ends it from where it
+        # stands; here the ball still has to cross the line, so the pass has to stay live.
+        if self._isTdDrainMode():
+            weights['run'] = weights.get('run', 0) * 2.0
+            weights['medium'] = weights.get('medium', 0) * 0.5
+            weights['long'] = weights.get('long', 0) * 0.25
+            weights['deep'] = weights.get('deep', 0) * 0.1
         if self._isFgDrainMode():
             weights['run'] = weights.get('run', 0) * 3.0
             weights['short'] = weights.get('short', 0) * 1.0
@@ -4095,6 +4154,10 @@ class Game:
         # points before its drive ends on the clock, no matter the shared game clock.
         if self._chessClockLow(100):
             return True
+        # Sitting on the goal line waiting to score last is the OPPOSITE of a two-minute
+        # drill, even though the score and clock look like one.
+        if self._isTdDrainMode():
+            return False
         # Frames: the current frame (mini-game) is ending and we're NOT ahead in it — push
         # to win/tie the frame before the break, like a 2-minute drill. In the final frame a
         # frame lead that only ties the match reads as behind (points tiebreak) → still push.
@@ -10463,6 +10526,11 @@ class Game:
             if not self._isGarbageTime(_fdiff):
                 return ('hurryUp', 12)                # behind/tied → race to win the frame
 
+        # About to score a go-ahead TD from the goal line: bleed the clock first so the
+        # opponent has no time to answer. Must precede the trailing hurry-up below, which
+        # would otherwise race to score early and hand the game back.
+        if self._isTdDrainMode():
+            return ('burnClock', 40)
         if (q >= 4) and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0 and not garbageTime:
             return ('hurryUp', 12)  # Q4/OT trailing or tied under 2:00
         if q == 2 and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0:

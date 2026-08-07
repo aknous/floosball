@@ -3021,6 +3021,18 @@ OFFSEASON_SNAPSHOT_EXCLUDE_TABLES = {
 # A card marked during a Criticality. Each week it rolls ONCE for an extra payout on
 # top of whatever it already does. It never degrades the printed effect and is never
 # taken away — the locked no-wipe constraint names collections as never at risk.
+# ─── Holding a go-ahead touchdown (Game._isTdDrainMode) ─────────────────────
+# Scoring is not the goal late in a one-score game; scoring LAST is. An offense at the
+# goal line, down 4-8 with under a minute, used to hurry — measured at 1st-and-goal from
+# the 3 down 5 with 0:55, it took a 12-second huddle and handed the opponent ~45 seconds
+# plus timeouts for a winning kick. `_isFgDrainMode` had covered the same idea for a
+# deficit of 0-3 all along; this is the touchdown band it never reached.
+#
+# Both numbers are safety rails, not flavour: draining when you might NOT score is how a
+# won game gets lost.
+TD_DRAIN_MIN_SECONDS = 25   # below this there is no room to drain AND still snap the ball
+TD_DRAIN_MAX_YARDS = 5      # close enough that the score is near-certain, not hoped for
+
 GLITCH_CARDS_ENABLED = True
 
 # Trigger base, by the on-card player's position on the attention ladder. Chosen over an
