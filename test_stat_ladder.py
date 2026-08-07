@@ -181,6 +181,48 @@ def testStampedeDisplaysAsTrailblazer():
     assert ce.EFFECT_DISPLAY_NAMES['stampede'] == 'Trailblazer'
 
 
+def testRatesDoNotRenderAbsurdPrecision():
+    """A rate is user-facing text. "+13.935 FP per punt downed inside the 20" reads as a
+    bug even though the arithmetic is fine — three decimals is noise on a big per-unit
+    number, though a per-yard rate genuinely needs them."""
+    for effect, pos in (('pinpoint', K), ('three_pointer', K), ('possession', WR),
+                        ('cadence', QB), ('frontier', WR), ('freight', RB)):
+        cfg = ce.buildEffectConfig(ce.EFFECT_EDITION_TIER[effect], 82, pos,
+                                   forceEffect=effect)
+        for key, val in cfg['primary'].items():
+            if not isinstance(val, float):
+                continue
+            decimals = len(str(val).split('.')[-1]) if '.' in str(val) else 0
+            if val >= 10:
+                assert decimals <= 1, f"{effect}.{key} = {val}"
+            elif val >= 1:
+                assert decimals <= 2, f"{effect}.{key} = {val}"
+
+
+def testStreakRungsAreCategorisedAsStreaks():
+    """The UI labels a card from its CATEGORY, and the breakdown only fills
+    streakActive/streakCount when category == 'streak'. These carried 'multiplier' for
+    param dispatch, so they behaved as streaks and never said so."""
+    for effect in ('dominion', 'landslide', 'undertaker', 'stratosphere', 'dead_eye',
+                   'clockwork', 'iron_man', 'odyssey', 'tenure', 'getaway'):
+        assert ce.EFFECT_CATEGORY.get(effect) == 'streak', effect
+        assert effect in ce.STREAK_CONFIGS, effect
+        pos = sorted(ce.effectValidPositions(effect))[0]
+        cfg = ce.buildEffectConfig(ce.EFFECT_EDITION_TIER[effect], 82, pos,
+                                   forceEffect=effect)
+        assert cfg['primary'], f"{effect} lost its params to the category change"
+
+
+def testEveryLadderCardNamesTheStatItReads():
+    """A card paying on YAC showing "3 rec / 32 yd / 0 TD" hides the only number that
+    explains the payout, which makes a working card look broken."""
+    from managers.cardEffects import LADDER_STAT_READS, ladderStatLine
+    for effect in ALL_LADDER:
+        assert effect in LADDER_STAT_READS, f"{effect} has no stat line"
+    line = ladderStatLine('getaway', MEAN['wr2'])
+    assert 'YAC' in line, line
+
+
 def testEveryLadderEffectIsFullyRegistered():
     for e in ALL_LADDER:
         assert e in ce.EFFECT_REGISTRY, f"{e} missing from EFFECT_REGISTRY"

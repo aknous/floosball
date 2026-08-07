@@ -112,19 +112,19 @@ EFFECT_CATEGORY = {
     "cornerstone": "multiplier", # FPx per roster player who is #1 at their position
     # Stat ladder families — the compute functions read the card player directly, so
     # category only drives param-builder dispatch and output typing.
-    "frontier": "flat_fp", "territory": "multiplier", "dominion": "multiplier",
-    "slipstream": "multiplier", "updraft": "flat_fp", "stratosphere": "multiplier",
-    "marksman": "multiplier", "dead_eye": "multiplier",
-    "cadence": "flat_fp", "rhythm": "multiplier", "clockwork": "multiplier",
-    "beast_of_burden": "multiplier", "iron_man": "multiplier",
-    "odyssey": "multiplier", "battering_ram": "multiplier",
-    "custody": "multiplier", "tenure": "multiplier", "getaway": "multiplier",
+    "frontier": "flat_fp", "territory": "multiplier", "dominion": "streak",
+    "slipstream": "multiplier", "updraft": "flat_fp", "stratosphere": "streak",
+    "marksman": "multiplier", "dead_eye": "streak",
+    "cadence": "flat_fp", "rhythm": "multiplier", "clockwork": "streak",
+    "beast_of_burden": "multiplier", "iron_man": "streak",
+    "odyssey": "streak", "battering_ram": "multiplier",
+    "custody": "multiplier", "tenure": "streak", "getaway": "streak",
     "runback": "flat_fp", "house_call": "flat_fp",
     "attention": "multiplier", "altitude": "flat_fp", "haymaker": "flat_fp",
     "highpoint": "flat_fp", "breakaway": "flat_fp",
     "houdini": "flat_fp", "custodian": "flat_fp",
-    "freight": "flat_fp", "grinder": "multiplier", "landslide": "multiplier",
-    "pinpoint": "flat_fp", "coffin_corner": "multiplier", "undertaker": "multiplier",
+    "freight": "flat_fp", "grinder": "multiplier", "landslide": "streak",
+    "pinpoint": "flat_fp", "coffin_corner": "multiplier", "undertaker": "streak",
     "paydirt": "multiplier", "end_zone": "flat_fp", "promised_land": "flat_fp",
     # Diamond stat amplifiers — no own output, pre-pass mutates ctx stats
     "doubler": "cross",          # roster TDs counted 2x for other card effects
@@ -1701,9 +1701,20 @@ def _ladderVolume(stat, position, fallback):
 
 
 def _ladderFpRate(stat, position, fallback, ratingScale=0.0, rn=0.0):
-    """Flat FP per unit, sized so a typical week lands on the anchor."""
+    """Flat FP per unit, sized so a typical week lands on the anchor.
+
+    Precision scales with MAGNITUDE. A rate is user-facing text, and "13.935 FP per punt
+    downed inside the 20" reads as a bug even though it is arithmetically fine — three
+    decimals is noise on a big per-unit number. A per-yard rate genuinely needs them,
+    because 0.34 and 0.339 are meaningfully different across 100 yards.
+    """
     vol = _ladderVolume(stat, position, fallback)
-    return round((_LADDER_FP_ANCHOR / vol) * (1 + ratingScale * rn), 3)
+    val = (_LADDER_FP_ANCHOR / vol) * (1 + ratingScale * rn)
+    if val >= 10:
+        return round(val, 1)
+    if val >= 1:
+        return round(val, 2)
+    return round(val, 3)
 
 
 def _ladderFpxRate(stat, position, fallback, unit=1):
@@ -2449,6 +2460,14 @@ _PARAM_BUILDERS = {
 # Effects whose handler lives in a different builder than their EFFECT_CATEGORY
 # would dispatch to. Overrides category-based dispatch for param building only.
 _EFFECT_BUILDER_OVERRIDES = {
+    # Stat-ladder prismatic rungs. Their CATEGORY is 'streak' so the UI labels them as
+    # streak cards and the breakdown fills streakActive/streakCount, but their params are
+    # FPx-shaped, so dispatch goes to the multiplier builder.
+    "dominion": _buildMultiplierParams, "landslide": _buildMultiplierParams,
+    "undertaker": _buildMultiplierParams, "stratosphere": _buildMultiplierParams,
+    "dead_eye": _buildMultiplierParams, "clockwork": _buildMultiplierParams,
+    "iron_man": _buildMultiplierParams, "odyssey": _buildMultiplierParams,
+    "tenure": _buildMultiplierParams, "getaway": _buildMultiplierParams,
     # flat_fp effects with handlers in _buildMultiplierParams
     "babysitter": _buildMultiplierParams,
     "martyr": _buildMultiplierParams,
@@ -5741,6 +5760,84 @@ def _computeHoudini(primary, ctx, cardPlayerId, eqId):
     return EffectResult(fpBonus=base, chanceThreshold=odds,
                         equation=f"+{base} FP. {odds:.0%} ({breaks} broken) missed")
 
+
+
+# ─── Stat Ladder: what each card READS ───────────────────────────────────────
+# (statGroup, key, label). Drives the breakdown's stat line so a card that pays on YAC
+# shows YAC rather than a generic receptions/yards/TD summary — otherwise the number
+# driving the payout is the one number not on screen, which makes a correct card look
+# broken. Keep in step with the compute functions; they are the source of truth.
+LADDER_STAT_READS = {
+    "frontier":      ("receiving_stats", "rcvYards", "rec yds"),
+    "territory":     ("receiving_stats", "rcvYards", "rec yds"),
+    "dominion":      ("receiving_stats", "rcvYards", "rec yds"),
+    "paydirt":       ("receiving_stats", "rcvTds", "rec TD"),
+    "end_zone":      ("receiving_stats", "rcvTds", "rec TD"),
+    "promised_land": ("receiving_stats", "rcvTds", "rec TD"),
+    "possession":    ("receiving_stats", "receptions", "rec"),
+    "safety_blanket": ("receiving_stats", "receptions", "rec"),
+    "custody":       ("receiving_stats", "receptions", "rec"),
+    "tenure":        ("receiving_stats", "receptions", "rec"),
+    "highpoint":     ("receiving_stats", "contestedCatches", "contested"),
+    "custodian":     ("receiving_stats", "bailouts", "bailouts"),
+    "attention":     ("receiving_stats", "targets", "targets"),
+    "slippery":      ("receiving_stats", "yac", "YAC"),
+    "jailbreak":     ("receiving_stats", "yac", "YAC"),
+    "getaway":       ("receiving_stats", "yac", "YAC"),
+    "freight":       ("rushing_stats", "yardsAfterContact", "yds after contact"),
+    "grinder":       ("rushing_stats", "yardsAfterContact", "yds after contact"),
+    "landslide":     ("rushing_stats", "yardsAfterContact", "yds after contact"),
+    "workhorse":     ("rushing_stats", "carries", "carries"),
+    "beast_of_burden": ("rushing_stats", "carries", "carries"),
+    "iron_man":      ("rushing_stats", "carries", "carries"),
+    "expedition":    ("rushing_stats", "runYards", "rush yds"),
+    "stampede":      ("rushing_stats", "runYards", "rush yds"),
+    "odyssey":       ("rushing_stats", "runYards", "rush yds"),
+    "battering_ram": ("rushing_stats", "runTds", "rush TD"),
+    "breakaway":     ("rushing_stats", "twentyPlus", "20+ runs"),
+    "houdini":       ("rushing_stats", "brokenTackles", "broken tackles"),
+    "slipstream":    ("passing_stats", "passYards", "pass yds"),
+    "updraft":       ("passing_stats", "passYards", "pass yds"),
+    "stratosphere":  ("passing_stats", "passYards", "pass yds"),
+    "gunslinger":    ("passing_stats", "goodThrows", "well-placed"),
+    "marksman":      ("passing_stats", "goodThrows", "well-placed"),
+    "dead_eye":      ("passing_stats", "goodThrows", "well-placed"),
+    "cadence":       ("passing_stats", "comp", "completions"),
+    "rhythm":        ("passing_stats", "comp", "completions"),
+    "clockwork":     ("passing_stats", "comp", "completions"),
+    "haymaker":      ("passing_stats", "twentyPlus", "20+ throws"),
+    # Derived: aDOT is airYardsSum/throws, so it is computed in ladderStatLine rather
+    # than read straight off a key.
+    "altitude":      ("passing_stats", "__adot__", "aDOT"),
+    "pinpoint":      ("kicking_stats", "puntsInside20", "inside the 20"),
+    "coffin_corner": ("kicking_stats", "puntsInside20", "inside the 20"),
+    "undertaker":    ("kicking_stats", "puntsInside20", "inside the 20"),
+    "runback":       ("returning_stats", "puntReturnYards", "return yds"),
+    "house_call":    ("returning_stats", "puntReturnYards", "return yds"),
+}
+
+
+def ladderStatLine(effectName: str, playerStats: dict) -> str:
+    """"<value> <label>" for a ladder card, or "" when it is not one.
+
+    Returns a line even at zero — "0 YAC" is the answer to "why did this pay nothing",
+    and hiding it is what makes a quiet week look like a bug.
+    """
+    read = LADDER_STAT_READS.get(effectName)
+    if not read or not isinstance(playerStats, dict):
+        return ""
+    group, key, label = read
+    sub = playerStats.get(group)
+    if not isinstance(sub, dict):
+        return f"0 {label}"
+    if key == "__adot__":
+        throws = sub.get("throws", 0) or 0
+        val = round((sub.get("airYardsSum", 0) or 0) / throws, 1) if throws else 0
+    else:
+        val = sub.get(key, 0)
+    if isinstance(val, float):
+        val = round(val, 1)
+    return f"{val} {label}"
 
 # ─── Effect Registry ─────────────────────────────────────────────────────────
 

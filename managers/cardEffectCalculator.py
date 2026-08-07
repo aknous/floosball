@@ -324,6 +324,17 @@ def _buildPlayerStatLine(effectName: str, cardPlayerId: int, ctx) -> str:
     (see _ROSTER_SCOPED_STAT_LINE) keep the old lookup of whoever occupies the
     card's position, combining WR1+WR2 for pos 3.
     """
+    # Stat-ladder cards report THE STAT THEY READ, not a generic summary. A card paying
+    # on YAC showing "3 rec · 32 yd · 0 TD" hides the only number that explains the
+    # payout, which makes a working card look broken.
+    try:
+        from managers.cardEffects import ladderStatLine
+        line = ladderStatLine(effectName, (ctx.weekPlayerStats or {}).get(cardPlayerId, {}))
+        if line:
+            return line
+    except Exception:
+        pass
+
     if effectName not in _ROSTER_POSITION_EFFECTS:
         return ""
 

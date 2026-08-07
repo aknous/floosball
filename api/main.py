@@ -9181,11 +9181,24 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         result = []
         for eq in equipped:
             cardData = cardManager.serializeCard(eq.user_card, currentSeason)
+            template = eq.user_card.card_template
+            # The card BACK shows the depicted player's season stat line, and
+            # serializeCard does not attach it — the pack-reveal and collection paths
+            # each add it themselves. Without this every equipped card's back read
+            # "No stats recorded yet", which is exactly the season a fantasy player
+            # most wants to see.
+            try:
+                _ps = cardManager.buildPlayerSeasonStats(
+                    session, template.player_id, template.season_created, template.position,
+                ) if template.player_id else None
+                if _ps:
+                    cardData["playerStats"] = _ps
+            except Exception:
+                pass
             _gf = glitchFlags.get(eq.user_card_id)
             if _gf:
                 cardData["glitchAwakened"] = _gf["awakened"]
                 cardData["glitchSurged"] = _gf["surged"]
-            template = eq.user_card.card_template
             # All-Pro cards carry a swap-grant state per equipped instance:
             # True = grant unused (refundable on unequip), False = grant used.
             # Non-All-Pro cards return None (UI shows the badge normally).
