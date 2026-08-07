@@ -2,11 +2,13 @@
 
 > Living list of features targeted for the next season cutover. **Keep this updated as features land** — move items to "Shipped" with the commit/version, and link each in-flight item to its design doc. Owner-curated.
 
-_Last updated: 2026-07-31_
+_Last updated: 2026-08-07_
 
-> ⚠️ This file went 11 days stale and said nothing about the Autonomous Front Office, which
-> was the only thing being built. **The AFO is the live tracker for that work**
-> (`docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md`) — Parts A–E and Part F wave 1 are shipped.
+> ⚠️ This file has gone stale before — it once went 11 days saying nothing about the
+> Autonomous Front Office while that was the only thing being built. **Verify status
+> against code, never against this file or a `*_PLAN.md` header.** Both have misled in both
+> directions: plans citing code that does not exist, and headers claiming "not built" for
+> things that shipped under a different name.
 
 > ⏱ **A season is ONE REAL WEEK.** Mon–Thu = the 28 regular-season weeks, Friday =
 > playoffs, Saturday = offseason. So "next season" is next Monday, a 2-season median
@@ -38,80 +40,137 @@ What the game is for. Check features against this before building them.
   → This vetoed the 498b→498c letter-burn as a mechanic (it implied a restart). The lore survives
   as the Cores' own fear — motive for the opponent, never a thing that happens to your league.
 
-## Planned
+## The list (owner, 2026-08-07)
 
-### User progression — Renown ⬅ next big thing (owner, 2026-07-31)
-Account-level standing every system feeds; the fix for a terminal loop where all effort
-converts to a consumable currency and nothing persists.
-- **Plan:** `docs/RENOWN_PROGRESSION_PLAN.md` — **specced against 15 seasons of real data
-  2026-07-31**, zero code.
-- **Scope decided:** retention-led, v1 = ledger + source formula + backfill + career ranks +
-  one cosmetic surface. Ships the cutover **after** next.
-- **Why it moved up:** engaged users fell 28 → 14 over 15 seasons, and median career length
-  is **2 seasons** (63% gone by season 3). The churn window is seasons 1–3, not 15.
+Eleven items for the next cutover, in the owner's order. Each is annotated with what
+already exists in the code, because several are further along (or further behind) than
+they read. **Verify status against code, not against this file or a `*_PLAN.md` header** —
+both have misled before, in both directions.
 
-### Smaller next-season items (owner, 2026-08-01)
-Four unrelated asks, each checked against the code so scoping starts from facts.
+### 1. Finalize new team colors and icons
 
-**QB sneaks + sneak-look trick plays.** ✅ **SHIPPED 2026-08-01** (`b0407c8`, defensive response `2fb0d1b`; regression `test_qb_sneak.py`). Original note follows. 3rd/4th-and-short and goal-line: the QB sneaks for the
-yard, defense stacks to stop it. Plus a fake — show the sneak, then a quick pass or a pitch to the
-RB around the end.
-- Doesn't exist. `grep sneak` finds only PBP text for an end run and a Cores line.
-- **Foundations are unusually good.** `docs/PLAYBOOK_PLAN.md` shipped run concepts with deception
-  + execution rolls and defensive counter-adaptation, plus trick plays (flea flicker / statue /
-  reverse) as rare called shots — a sneak is a new short-yardage concept in that frame, and the
-  sneak-look fake is exactly the existing trick-play pattern. `_fourthDownCaller` already owns the
-  4th-and-short decision, and QB-as-runner plumbing exists from QB scrambles (`_resolveQbScramble`
-  flips `playType=Run`, `runner=passer` and reuses the run-crediting tail).
-- `test_play_calling.py:171` already has a case labelled *"3rd & 2 (QB sneak range)"* — the
-  concept was anticipated and never built.
+Further along than "needs finalizing". The heraldic pattern set was already extended
+24 → 32 at expansion, and a render of all 32 with colours stripped confirms **32 distinct
+marks, no duplicates** (`avatar_generator._generateMarbleSvg`). Marks are generated from
+each club's two colours + a pattern keyed to `(teamId - 1) % 32`.
 
-**Penalties, driven by low `discipline`.** Owner has held off because penalties feel unfun; the
-condition is that they stay rare and land well.
-- **The box score is already built for it and hardcoded to zero**: `floosball_game.py:1152-1153`
-  carries `'penalties': 0, # TODO: Track penalties` and `'penaltyYards': 0`.
-- `discipline` is a live attribute (0-100) already doing real work — it feeds the mental model
-  (`MENTAL_FROZEN_K`, `MENTAL_GUNSLINGER_K`) and playbook concept execution
-  (`'exec': {'power': 0.6, 'discipline': 0.4}`). So the driver exists and is already balanced
-  against.
-- Design risk to respect: frequency and *timing*. A penalty that erases a good play is the unfun
-  part, not the penalty itself.
+What actually needs a decision is **contrast**, and it is mostly NOT the new clubs:
 
-**Weather + stadium-specific environment.** Long-held; partially built and never finished.
-- **`feature/stadium-quirks` exists with 596 lines** across 4 commits: `data/templates/
-  stadium_quirks.yaml` (443 lines — named quirks, taglines, flavor lines, venue-style stadium
-  names with a Cores-reconstruction framing) and `managers/stadiumQuirkManager.py` (153 lines —
-  loader, per-team effect lookup, flavor-line picker, API serializer).
-- Ten effect keys are defined: `passAccuracy`, `runYardage`, `fgAccuracy`, `fumbleRate`,
-  `sackRate`, `deepPassChance`, `paceMod`, `roadDiscipline`, `homeBoost`, `clutchVariance`.
-- ⚠️ **It is a scaffold only — nothing is wired into the sim.** No file outside the manager
-  references it. Finishing it is the wiring, not the data.
-- Two connections worth noting: **`roadDiscipline` is already a quirk effect**, so a hostile venue
-  raising road-team penalties links this to the penalties item; and the branch **names every
-  stadium**, which un-mocks the team page's stadium cell (built 2026-07-31 against a placeholder,
-  with `stadium_name` listed as a needed backend field).
+| club | primary vs secondary | |
+|---|---|---|
+| San Diego Sand Dollars | **1.0:1** | luminance-identical — the pattern vanishes, the mark is a flat disc |
+| Colorado Oysters | 1.4:1 | |
+| Anaheim Rhyme | 1.4:1 | |
+| Seattle Cranes | 1.7:1 | |
+| St. Louis Arches (new) | 2.2:1 | grey on red, muddy at the 20px standings size |
 
-**Postseason shop access + collection-only cards.**
-- `_isShopOpen()` closes the shop the moment week 28's games finish, through playoffs and offseason.
-- ⚠️ **The backend gate is not enforced.** `_requireShopOpen()` is defined at `api/main.py:9620`
-  and **never called** — no endpoint uses it. Enforcement is frontend-only (`CardShop.tsx` disables
-  the buttons off the `shopOpen` flag). So opening the postseason shop is largely a frontend +
-  policy change, and the latent inconsistency should be resolved either way.
-- **Collection-only cards** (not for fantasy) have partial precedent: the `standard` edition is
-  already a no-effect floor print (`effectName:'none'`). But `CardTemplate.player_id` is
-  `nullable=False`, so every card is currently a player card — a true non-fantasy collectible
-  needs that relaxed or a different notion of what a card can depict.
+The other seven new clubs run 3.2–5.3:1 and are fine. ⚠️ `logoInvert` exists for exactly
+this kind of fix, but it only swaps which colour paints field vs figure — it cannot help a
+pair with equal luminance, which needs a colour CHANGED rather than reordered.
 
-### New prognostication feature — Survivor
-A survivor-style contest layer on top of pick-em (last-one-standing elimination), part of the broader prognosticator progression direction.
-- **Plan:** `docs/PICKEM_DEPTH_PLAN.md` — **not on disk**; a revert deleted it along with
-  its code. Read it with `git show 2a37f2f:docs/PICKEM_DEPTH_PLAN.md`. Restore it to disk
-  if Survivor gets picked up.
-- **Status:** designed, not built. The general progression layer it was meant to plug into
-  is now `docs/RENOWN_PROGRESSION_PLAN.md`; Survivor is explicitly out of Renown v1.
+Also worth knowing: pattern **23 has no explicit branch**. It falls through to the `else`
+(a "pale", single vertical band). Output is still unique because nothing else draws a
+pale, but it is implicit rather than intended, and it is Georgia Classics that gets it.
 
-### Idea (undefined) — Awakened / glitched player cards
-Tie the anomaly/awakening theme into the card system: when a player awakens (or during a Criticality), some special card variant of them exists. Not yet specced — what it is, how you get one, what it does, cosmetic vs mechanical. Flesh out before building.
+### 2. New dashboard page
+
+Design to come from the Claude design tool (owner).
+
+### 3. Renown system for users
+
+Spec is done and grounded: `docs/RENOWN_PROGRESSION_PLAN.md`, specced against 15 seasons
+of real data 2026-07-31. **Zero code.** v1 scope is foundation + career ranks.
+
+⚠️ Renown **supersedes** the earlier achievement-derived progression model — settled by
+owner, do not re-litigate. But that model was BUILT and then pulled for timing, not on
+design grounds, so there is salvage: `2a37f2f` has `managers/progressionManager.py` (172
+lines) and `GET /api/profile/{userId?}` with no schema changes. Worth reading before
+starting from scratch.
+
+Retention data point from the spec: churn is seasons 1-3, not season 15. Build for the
+early game.
+
+### 4. Profile page for users
+
+Pairs with 3 — `GET /api/profile/{userId?}` exists in the pulled commit `2a37f2f` and is
+cherry-pickable. Decide whether the profile is Renown's surface or a separate page that
+Renown feeds.
+
+### 5. Let users set their own username
+
+Partly built, and the gap is not where it looks. `POST /api/users/me/username` already
+accepts an **arbitrary string** — it is not restricted to the generated candidates from
+`GET /api/users/me/username-options`. The real limits are:
+
+- **once only** — it hard-rejects when `username is not None`, so there is no rename path;
+- **no validation** — no length, charset or profanity rules, only a uniqueness check;
+- the frontend may only surface the generated options.
+
+So the work is a rename path (cost? cooldown? free first change?), input rules, and UI.
+`POST /api/admin/users/{userId}/reroll-username` exists as an admin escape hatch today.
+
+### 6. Games grid page
+
+Like the current dashboard but games only. Shares the schedule/day model with the pick-em
+whole-day view (`GET /api/pickem/day` already returns every slot of the current calendar
+day with games and picks).
+
+### 7. Update the game modal
+
+Social posts in the style of the new team page, plus Cores interactions.
+`GET /api/cores/conversation` already serves ambient banter and can force a data-aware
+beat (`?event=observe`), which reads real teams and scores. ⚠️ That endpoint is the ONLY
+place raw anomaly numbers are allowed to surface — the public feed and header stay
+number-free. Keep that line if Cores chatter goes in the modal.
+
+### 8. New standings page — divisions + playoff race in one place
+
+Design to come from the owner.
+
+Divisions are real but derived, not configured: `seasonManager._generateDivisionalSchedule`
+splits each league in half at schedule generation and stamps `team.division` as
+`"{League} East"` / `"{League} West"` — so 2 leagues × 2 divisions = 4. There is no
+divisions table and no constant; the names come from that string.
+
+⚠️ **Verify the playoff rule before designing the race view.** `_applyDivisionSeeding`
+guarantees a division winner qualifies even on a record that would not have made it, which
+is exactly the kind of thing a "playoff race" UI has to model. CLAUDE.md still documents
+the 24-team rule (top 6 per league, top 2 get a bye); confirm what 32 clubs actually do.
+
+### 9. Prognostication evolution
+
+⚠️ `docs/PICKEM_DEPTH_PLAN.md` **does not exist on disk** — the reverts deleted it.
+Recover from `2a37f2f` / `891517f` before planning, or the earlier thinking is lost.
+
+Related but distinct: the preseason prediction model (run N sims at season start → average
+wins + title odds → a "favorites" board). POC exists at `docs/SEASON12_PREDICTIONS.md`.
+
+### 10. Prod fresh start that keeps some history
+
+**The item with real risk — do this deliberately, not at the cutover.**
+
+`clear_db()` preserves exactly four tables: `users`, `beta_allowlist`, `app_settings`,
+`unused_names`. Everything else is DROPPED and recreated, which on a fresh start means
+losing: `Record`, `Championship`, `Season`, `SeasonRecapEvent`, `PlayerSeasonStats`,
+`PlayerCareerStats`, `TeamSeasonStats`, `PlayerRatingHistory`, and the Hall of Fame (which
+lives on `players.is_hof` / `players.hof_season`, and the players table goes).
+
+Open questions to settle first:
+- **What counts as history worth keeping?** Records and championships are league-level and
+  survivable. The Hall of Fame is harder: it is attached to player rows that will not exist
+  in the new league, so it needs either a denormalized archive table or an accepted break.
+- **Do old records stay comparable?** The league goes 24 → 32 clubs and 28 weeks stays,
+  but a rebalanced sim means a preserved record may be unbeatable or trivial.
+- Whichever way it goes, it needs a migration path, not a flag — and per standing rule,
+  **never `FRESH_START` in prod** (it survives restarts and would wipe on outage recovery).
+  The one-shot `touch /data/.fresh` flag file is the supported route.
+
+### 11. Deeper player data page
+
+**Not a priority** (owner). Worth noting the data is already there and unused: the
+advanced metrics (`yardsAfterContact`, `brokenTackles`, `contestedCatches`, `bailouts`,
+`goodThrows`, `airYardsSum`, returning stats) all persist in the JSON blobs and mostly have
+no UI.
 
 ## Backlog (owner notes, unspecced — 2026-07-02)
 Rough capture; each needs a design pass before building.
