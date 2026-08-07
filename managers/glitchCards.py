@@ -213,3 +213,59 @@ def markCardsForCriticality(session, season: int, week: int) -> int:
         session.rollback()
         logger.error(f"Failed to mark glitch cards for S{season}W{week}: {e}")
         return 0
+
+
+def displayFlagsFor(session, equipped, season: int, week: int) -> Dict[int, Dict[str, bool]]:
+    """{userCardId: {"awakened": bool, "surged": bool}} for a user's equipped cards.
+
+    The two flags the card's VISUAL treatment needs, which the card row itself cannot
+    know: whether the depicted player is awakened (the treatment converges on gold), and
+    whether this card's glitch actually fired in the settled week (the one moment the card
+    is allowed to move).
+
+    Computed server-side because the lineup view has no access to score breakdowns — it
+    renders from the equipped-cards endpoint alone. Batched for the same reason
+    `anomalyContextFor` is: this runs on every lineup render.
+
+    `surged` reads the BANKED breakdown, so it is only ever true for a settled week. A
+    live week has not resolved, which is correct — the burst belongs to the resolution.
+    """
+    out: Dict[int, Dict[str, bool]] = {}
+    glitched = [eq for eq in equipped
+                if getattr(getattr(eq, 'user_card', None), 'glitched', False)]
+    if not glitched:
+        return out
+    for eq in glitched:
+        out[eq.user_card_id] = {"awakened": False, "surged": False}
+
+    # awakened — one query for every depicted player
+    try:
+        from database.models import AnomalyState
+        byPlayer = {eq.user_card.card_template.player_id: eq.user_card_id
+                    for eq in glitched}
+        rows = session.query(AnomalyState.player_id, AnomalyState.state).filter(
+            AnomalyState.player_id.in_(list(byPlayer)), AnomalyState.season == season)
+        for pid, state in rows:
+            if state == 'awakened' and pid in byPlayer:
+                out[byPlayer[pid]]["awakened"] = True
+    except Exception as e:
+        logger.debug("glitch: awakened flag lookup failed: %s", e)
+
+    # surged — did this card's glitch fire in the settled week
+    try:
+        import json as _json
+        from database.models import WeeklyCardBonus
+        row = (session.query(WeeklyCardBonus)
+               .filter_by(user_id=glitched[0].user_id, season=season, week=week)
+               .first())
+        if row and row.breakdowns_json:
+            bySlot = {eq.slot_number: eq.user_card_id for eq in glitched}
+            for bd in (_json.loads(row.breakdowns_json) or []):
+                if not bd.get('glitchTriggered'):
+                    continue
+                ucId = bySlot.get(bd.get('slotNumber'))
+                if ucId in out:
+                    out[ucId]["surged"] = True
+    except Exception as e:
+        logger.debug("glitch: surge flag lookup failed: %s", e)
+    return out

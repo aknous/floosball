@@ -9189,9 +9189,23 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         # rows). The match multiplier itself is removed in Phase 4.
         rosterPlayerIds = {eq.user_card.card_template.player_id for eq in equipped}
 
+        # Glitch display flags (docs/GLITCH_CARDS.md). The lineup renders from this
+        # endpoint alone and has no score breakdowns, so the two flags its VISUAL
+        # treatment needs are resolved here: whether the depicted player is awakened, and
+        # whether this card's glitch fired in the settled week.
+        try:
+            from managers.glitchCards import displayFlagsFor
+            glitchFlags = displayFlagsFor(session, equipped, currentSeason, currentWeek)
+        except Exception:
+            glitchFlags = {}
+
         result = []
         for eq in equipped:
             cardData = cardManager.serializeCard(eq.user_card, currentSeason)
+            _gf = glitchFlags.get(eq.user_card_id)
+            if _gf:
+                cardData["glitchAwakened"] = _gf["awakened"]
+                cardData["glitchSurged"] = _gf["surged"]
             template = eq.user_card.card_template
             # All-Pro cards carry a swap-grant state per equipped instance:
             # True = grant unused (refundable on unequip), False = grant used.
