@@ -2250,7 +2250,7 @@ class Game:
         self._callTimeout(isHome)
 
     def _checkDefensiveTimeout(self):
-        """Defense calls timeout to stop the clock when trailing and the offense is milking clock.
+        """Defense calls timeout to stop the clock when the clock is not actually its friend.
 
         Q4/OT: triggers up to 5 min out with urgency scaling; under 2 min uses original high-urgency logic.
         Q2: triggers under 60 sec (moderate, end-of-half is less critical).
@@ -2268,11 +2268,23 @@ class Game:
         defIsHome = (self.defensiveTeam == self.homeTeam)
         defScore = self.homeScore if defIsHome else self.awayScore
         offScore = self.awayScore if defIsHome else self.homeScore
-        # Q4/OT: only a trailing defense burns timeouts (a leading/tied defense
-        # wants the clock to run out). Q2: any team stops the clock to get the
-        # ball back and try to score before the half, regardless of score.
+        # Q4/OT: a trailing defense burns timeouts to get the ball back. A leading or
+        # tied one normally wants the clock to run out — UNLESS the lead is about to
+        # evaporate anyway.
+        #
+        # ⚠️ That exception is the whole point of this branch. Observed live: a defense up
+        # 3 let the offense milk the clock from inside field-goal range and kick with 0:07
+        # left, holding three timeouts the entire time. The drain was free for the offense
+        # because the leader "was winning" and this returned immediately. But the leader
+        # was not winning by the time it mattered — the kick tied it, and the timeouts it
+        # saved bought nothing. Stopping the clock there costs a timeout it has no other
+        # use for and buys a possession to win in regulation instead of a coin-flip OT.
+        #
+        # Q2: any team stops the clock to get the ball back before the half, regardless of
+        # score, so the exception is not needed there.
         if (self.currentQuarter == 4 or self.currentQuarter >= 5) and defScore >= offScore:
-            return
+            if not self._leadIsAboutToEvaporate(defScore - offScore):
+                return
         deficit = offScore - defScore
         # Don't waste timeouts in an unwinnable game
         defScoreDiff = defScore - offScore  # negative when trailing
@@ -2340,6 +2352,34 @@ class Game:
             return 0
         from constants import AWAKENED_FG_MAX_YARDS
         return max(kicker.maxFgDistance, AWAKENED_FG_MAX_YARDS) - self.gameRules.fgSnapDistance
+
+    def _leadIsAboutToEvaporate(self, lead: int) -> bool:
+        """Is the offense already close enough that one kick erases this lead?
+
+        The case a "leading team runs the clock down" rule gets wrong. Draining is only
+        good for the leader while the lead SURVIVES the drive. Once the offense is inside
+        field-goal range with a lead of 3 or less, the most likely end of the possession is
+        a kick that ties it or wins it — so every second the leader lets tick away is a
+        second off its OWN answer, not the opponent's chance.
+
+        Bounded deliberately at a 3-point lead. At 4+ a field goal leaves the leader still
+        ahead, so the clock genuinely is their friend and the opponent needs a touchdown
+        they may not get; burning timeouts there is the "no coach does that" case this
+        function's caller already guards against elsewhere. Tied counts: a kick puts the
+        offense ahead with no time for a reply, which is the same problem.
+        """
+        if lead < 0 or lead > 3:
+            return False
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        if kicker is None:
+            return False
+        # Same range basis the offense's own kick decision uses, including a charged
+        # awakened kicker (who makes it from anywhere, so the whole field is in range).
+        if self._awakenedReadyFor(kicker, 'kick'):
+            maxFg = self._chargedKickerMaxFg(kicker)
+        else:
+            maxFg = kicker.maxFgDistance - self.gameRules.fgSnapDistance
+        return self.yardsToEndzone <= maxFg
 
     def fgMakeProbability(self, kicker, fgDist) -> float:
         """Pre-pressure FG make probability. THE single source of truth, shared by
