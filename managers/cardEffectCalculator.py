@@ -1306,8 +1306,12 @@ def _applyGlitchSurges(breakdowns: List[CardBreakdown], equippedCards, ctx) -> N
         b.glitched = True
         b.glitchChance = round(chance, 3)
         b.glitchReadable = (state == 'awakened')
-        if getattr(ctx, 'gamesActive', False):
-            continue   # unresolved while the week is still running
+        # Unresolved while the week is still running AND in any projection. gamesActive
+        # alone is not enough: a projection has gamesActive False, so guarding on it only
+        # would RESOLVE a week that has not happened and show a settled payout in the
+        # forward-looking panel. The roll depends on anomaly events that have not fired.
+        if getattr(ctx, 'gamesActive', False) or getattr(ctx, 'isProjection', False):
+            continue
         triggered, outcome, mult = rollSurge(
             getattr(ctx, 'userId', 0) or 0, season, week, userCardId, chance)
         if not triggered:
