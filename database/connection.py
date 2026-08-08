@@ -193,10 +193,16 @@ def _runPendingMigrations():
 
         # Cores exchange threading on persisted league-news items, so multi-Core
         # conversations group under one header on refresh (not just live).
+        # `team_id` and `stats_json` arrived with the front-page news feed: team events
+        # (clinch / elimination / upset) need a crest to link, and a LEAD item needs its
+        # four supporting numbers. An item with no stats_json is row-only, which is also
+        # how the feed decides what is allowed to lead.
         for col, colDef in [
             ("exchange_id", "VARCHAR(40)"),
             ("turn_index", "INTEGER"),
             ("turn_count", "INTEGER"),
+            ("team_id", "INTEGER"),
+            ("stats_json", "TEXT"),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE league_news_items ADD COLUMN {col} {colDef}"))

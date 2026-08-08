@@ -1269,6 +1269,44 @@ def _maybeFireWarning(state: LeagueAnomalyState,
         f"{len(entries)} turn(s))"
     )
     _broadcastCoreEntries(entries, session=session, seasonNumber=state.season, week=week)
+    _publishCriticalityNews(session, state, week, milestone)
+
+
+def _publishCriticalityNews(session: Optional[Session], state: LeagueAnomalyState,
+                            week: Optional[int], milestone: str) -> None:
+    """A plain, non-Cores news line when the instability crosses a threshold.
+
+    The Cores narrate the same moment in character, and those lines go to the feed too —
+    but they are voice, not report. This is the flat statement a reader scanning the feed
+    can act on, and it is deliberately NUMBER-FREE for the same reason the public status
+    endpoint is: the band is the information, and a raw aggregate would turn the season's
+    dread into a progress bar.
+    """
+    lines = {
+        'warning_low': 'Instability is building faster than the Cores can clear it',
+        'warning_high': 'The Cores are struggling to hold the simulation together',
+        'criticality': 'Containment has failed. The league is running unsupervised',
+        'suppression': 'The Cores forced the anomaly back. The simulation is quiet again',
+    }
+    text = lines.get(milestone)
+    if not text or session is None:
+        return
+    try:
+        from league_news import publish
+        publish(
+            session,
+            season=state.season,
+            week=int(week or 0),
+            category='criticality',
+            eventType=milestone,
+            text=text,
+            # The Cores entries broadcast alongside this already; a second push would
+            # double the beat in the live feed.
+            broadcast=False,
+            commit=False,
+        )
+    except Exception as e:
+        logger.debug(f"Criticality news skipped: {e}")
 
 
 # ─── Reset + purge ──────────────────────────────────────────────────────────
@@ -1572,6 +1610,7 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
 
     # Broadcast to the league news feed.
     _broadcastCoreEntries(entries, session=session, seasonNumber=state.season, week=currentWeek)
+    _publishCriticalityNews(session, state, currentWeek, 'criticality')
 
 
 def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
@@ -1673,6 +1712,7 @@ def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
     )
 
     _broadcastCoreEntries(entries, session=session, seasonNumber=state.season, week=currentWeek)
+    _publishCriticalityNews(session, state, currentWeek, 'suppression')
 
 
 def _broadcastCoreNews(news: Optional[Dict], session: Optional[Session] = None,

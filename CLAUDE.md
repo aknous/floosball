@@ -68,6 +68,9 @@ floosball_player.py               # Player class + position/defensive/mental att
 floosball_team.py                 # Team class, rosterDict, ratings, ELO, pressure/streak state
 floosball_coach.py                # Coach class (8 attributes)
 standings_view.py                 # Standings board: seeds, games back, form, movement (see Standings Board)
+league_news.py                    # ONE publisher for the persisted news feed (see League News Feed)
+front_page.py                     # Reads that feed, picks a lead, caps per category
+featured_games.py                 # isFeatured rule (elite matchup / bubble battle), shared
 rating_cache.py                   # Rating-calc cache. Effectively DEAD — see Open Questions
 avatar_generator.py               # SVG team/league avatar generation + disk caching
 ```
@@ -123,6 +126,17 @@ The board answers three questions off one payload — who leads each division, w
 - **`gamesBackFrom(cutTeam, team)`** is signed from the club ON the cut: negative = ahead, `0` = holding the last spot, positive = chasing. Half-games are real.
 - **`buildFormAndMovement`** rebuilds `last5` / `streak` ("W3") / `rankLastWeek` from the games table. ⚠️ Its cutoff is the **newest week holding a final game, read off the rows** — NOT `seasonManager.currentWeek`. The live board only reflects finals, so cutting at `currentWeek` includes every game already on screen and the movement column comes back **all zeroes** (it did); `currentWeek` is separately known-stale. `rankChange` compares **rank BY RECORD**, not display row — a rival winning its division reshuffles seeds around a club that never moved.
 - Row fields: `division`, `divisionRecord`/`divisionWins`/`divisionLosses`, `leagueRecord`/`leagueWins`/`leagueLosses`, `seed`, `seedKind` (`division`|`wildcard`|null), `gamesBack`, `rankLastWeek`, `rankChange`, `streak` (string; the signed counter moved to `streakCount`), `last5`. League objects also carry `divisions: [{name, teamIds}]` in the owner's **config order** (`seasonManager._divisionNames`), so the four blocks don't reshuffle as results land. Regression: `test_standings_view.py`.
+
+### League News Feed (`league_news.py`, `front_page.py`, `GET /api/front-page/news`)
+**PERSISTED and cumulative.** An item is published the moment it happens, by whichever system it happened in, via `league_news.publish()`. It does **not** clear at the week rollover; it is fixed-length, and stories fall off because the reader asked for N of them.
+- ⚠️ The first build GENERATED the feed from current state per request. That meant a clinch stopped being news the instant the standings moved past it, nothing from week 9 survived into week 10, and the feed reset weekly. Don't go back to that.
+- ⚠️ Persisting at every `leagueHighlights.insert` site was considered and rejected — **89 call sites**, overwhelmingly play highlights rather than news.
+- **Publishers**: clinch / elimination (`seasonManager._publishTeamNews`); record broken, upset, big individual game (`seasonManager._publishGameNews`, off both the regular-season and playoff completion paths); criticality threshold crossings (`anomalyManager._publishCriticalityNews`); rule changes and anomaly transitions and Cores lines (already persisted, unchanged).
+- ⚠️ **Nothing here may break a game.** `_publishGameNews` wraps its ENTIRE body, not just the inner checks: the first version read `self.currentWeek` (which lives on the **Season**, not the manager — the manager only grows one during the playoffs) above the inner try blocks, and the AttributeError raised straight out of `_simulateGame`, failing every game in the slate.
+- **Record breaks** are detected by diffing a flattened snapshot of the records tree either side of `checkPlayerGameRecords`, NOT by instrumenting the dozens of `if stat > record` sites — a new record type can't silently skip the feed. Only a real break publishes (`previous > 0`), or a fresh league fires all ~60 records on its first game.
+- ⚠️ **Big-game thresholds are set from THIS SIM's measured distribution (~p99 of non-zero player-games), not real-world intuition.** NFL-shaped numbers put 3 sacks at 5.6% of every player-game and big games alone filled the feed. Measured p50/p90/p99 over 9,401 lines is recorded in `seasonManager.BIG_GAME_TESTS` — re-measure if scoring moves.
+- **Reading** (`front_page.buildLeagueNews`): newest first, no week or season filter. The LEAD is the highest-priority item that carries a four-number strip and is under `LEAD_MAX_AGE_HOURS` (72); Cores lines never lead. Rows are capped at `room // 3` per category and the cap is **hard** — a first pass topped back up from the overflow, which undid it entirely. A six-row feed showing three kinds of news beats a nine-row feed showing one. Regression: `test_front_page_news.py`.
+- `LeagueNewsItem` gained `team_id` and `stats_json` (model + **inline migration**).
 
 ### Offseason Flow (`seasonManager._handleOffseason`)
 Phased, resumable (each phase gated by a completion marker in `simulation_state.offseason_completed_steps`). `_offseasonFlowPhase` values: `post_bowl → frontoffice → rookie_draft → pre_fa → fa_draft → training → None`.

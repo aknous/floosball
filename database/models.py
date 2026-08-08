@@ -2548,6 +2548,13 @@ class LeagueNewsItem(Base):
     exchange_id: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     turn_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     turn_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Attribution (team events: a clinch, an elimination, an upset) so the feed can show
+    # the crest and link the row.
+    team_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # The four supporting numbers a LEAD item renders, as JSON
+    # `[{label, value, positive?}]`. Only items worth leading with carry it; a row-only
+    # item leaves it null, which is also how the feed decides what can lead.
+    stats_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (

@@ -3130,3 +3130,10 @@ GLITCH_FPX_DAMP = 0.80
 # cancelled by the card having a quiet week. Deliberately modest: the surge still scales
 # the card's own output when there IS output, and this is only the fallback.
 GLITCH_SURGE_FLOOR_FP = 11.0
+
+
+# ── League news feed ─────────────────────────────────────────────────────────
+# ELO gap at which beating a club becomes an upset worth publishing. Set from the
+# rating-to-win-probability curve: 120 points is roughly a 33% underdog, which is the
+# point where a neutral watcher would call the result surprising rather than close.
+UPSET_NEWS_ELO_GAP = 120

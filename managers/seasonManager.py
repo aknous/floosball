@@ -1153,9 +1153,12 @@ class SeasonManager:
                     })
                 await broadcaster.broadcast_season_event(StandingsEvent.standingsUpdate(standings=standingsData))
 
-            # Check for records
+            # Check for records. Snapshot first so a break can be diffed out and
+            # published to the news feed.
+            _recordsBefore = self._snapshotRecords()
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
+            self._publishGameNews(gameInstance, _recordsBefore)
 
             # Resolve pick-em picks for this game immediately
             if gameIndex >= 0 and getattr(gameInstance, 'winningTeam', None):
@@ -3936,6 +3939,255 @@ class SeasonManager:
             f"= {len(schedule)} weeks")
         return schedule
 
+    # A single game line worth a news item on its own.
+    #
+    # ⚠️ Thresholds are set from THIS SIM's measured distribution, at roughly the 99th
+    # percentile of non-zero player-games, NOT from real-world intuition. The first pass
+    # used NFL-shaped numbers and 3 sacks caught 5.6% of every player-game in the league —
+    # big games alone filled the entire feed and pushed clinches, upsets and records off
+    # it. Measured over 9,401 player-game lines (p50 / p90 / p99):
+    #
+    #   passing yards   220 / 332 / 425      rushing yards  71 / 169 / 271
+    #   passing TDs       1 /   3 /   5      rushing TDs     1 /   2 /   4
+    #   receiving yards  58 / 126 / 192      sacks           1 /   4 /   9
+    #   receiving TDs     1 /   2 /   3      FGs made        2 /   4 /   6
+    #
+    # At ~420 player-lines a week that lands around four big games per week, which is a
+    # feed item rather than a flood. Re-measure if the engine's scoring moves.
+    BIG_GAME_TESTS = [
+        ('passing', 'yards', 425, '{name} threw for {value} yards'),
+        ('passing', 'tds', 5, '{name} threw {value} touchdown passes'),
+        ('rushing', 'yards', 270, '{name} ran for {value} yards'),
+        ('rushing', 'tds', 4, '{name} ran in {value} touchdowns'),
+        ('receiving', 'yards', 190, '{name} caught {value} yards'),
+        ('receiving', 'tds', 3, '{name} caught {value} touchdowns'),
+        ('defense', 'sacks', 9, '{name} recorded {value} sacks'),
+        ('defense', 'ints', 2, '{name} picked off {value} passes'),
+        ('kicking', 'fgs', 6, '{name} made {value} field goals'),
+    ]
+
+    # The four numbers a big-game item leads with — the player's line in whichever group
+    # triggered it, so the strip explains the headline rather than repeating it.
+    BIG_GAME_STRIP = {
+        'passing': [('YARDS', 'yards'), ('TOUCHDOWNS', 'tds'), ('COMPLETIONS', 'comp'), ('ATTEMPTS', 'att')],
+        'rushing': [('YARDS', 'yards'), ('TOUCHDOWNS', 'tds'), ('CARRIES', 'carries'), ('LONGEST', 'longest')],
+        'receiving': [('YARDS', 'yards'), ('TOUCHDOWNS', 'tds'), ('CATCHES', 'receptions'), ('TARGETS', 'targets')],
+        'defense': [('SACKS', 'sacks'), ('TACKLES', 'tackles'), ('INTERCEPTIONS', 'ints'), ('TFL', 'tfl')],
+        'kicking': [('MADE', 'fgs'), ('ATTEMPTS', 'fgAtt'), ('LONGEST', 'longest'), ('POINTS', 'pts')],
+    }
+
+    # Readable names for the record tree's leaf keys. Without these a headline reads
+    # "set the game wr record at 51", because the leaf under `players.fantasy.game` is a
+    # POSITION, not a stat.
+    RECORD_SCOPES = {'game': 'single-game', 'season': 'season', 'career': 'career', 'allTime': 'all-time'}
+    RECORD_STATS = {
+        'yards': 'yards', 'tds': 'touchdowns', 'comps': 'completions',
+        'ints': 'interceptions', 'fumbles': 'fumbles', 'receptions': 'receptions',
+        'fgs': 'field goals', 'fgYards': 'field goal distance', 'pts': 'points',
+        'wins': 'wins', 'losses': 'losses', 'titles': 'titles',
+        'leagueTitles': 'league titles', 'regSeasonTitles': 'regular-season titles',
+        'fumRec': 'fumble recoveries', 'elo': 'ELO',
+    }
+    RECORD_GROUPS = {'passing': 'passing', 'rushing': 'rushing', 'receiving': 'receiving', 'kicking': 'kicking'}
+
+    def _recordLabel(self, path: str) -> Optional[str]:
+        """`players.receiving.game.yards` -> `single-game receiving yards`."""
+        parts = path.split('.')
+        if parts[0] == 'players' and len(parts) == 4:
+            _, group, scope, leaf = parts
+            scopeLabel = self.RECORD_SCOPES.get(scope, scope)
+            if group == 'fantasy':
+                # The leaf here is a position, and the stat is always fantasy points.
+                return f'{scopeLabel} fantasy points by a {leaf.upper()}'
+            statLabel = self.RECORD_STATS.get(leaf)
+            groupLabel = self.RECORD_GROUPS.get(group, group)
+            if not statLabel:
+                return None
+            # "receiving receptions" is a stutter; the group is implied by the stat.
+            if leaf in ('receptions', 'fgs', 'fgYards'):
+                return f'{scopeLabel} {statLabel}'
+            return f'{scopeLabel} {groupLabel} {statLabel}'
+        if parts[0] == 'team' and len(parts) == 3:
+            _, scope, leaf = parts
+            statLabel = self.RECORD_STATS.get(leaf)
+            if not statLabel:
+                return None
+            return f'{self.RECORD_SCOPES.get(scope, scope)} team {statLabel}'
+        return None
+
+    def _snapshotRecords(self) -> Dict[str, Any]:
+        """Flatten the records tree to `{path: value}` so a break can be diffed generically.
+
+        Deliberately NOT instrumented at each comparison site: the record checks are dozens
+        of near-identical `if stat > record` blocks spread over five methods, and a new
+        record type added later would silently skip the feed. A before/after diff cannot
+        drift.
+        """
+        flat: Dict[str, Any] = {}
+
+        def walk(node, path):
+            if isinstance(node, dict):
+                if 'value' in node and not isinstance(node.get('value'), dict):
+                    flat[path] = (node.get('value'), node.get('name'), node.get('id'))
+                    return
+                for key, child in node.items():
+                    walk(child, f'{path}.{key}' if path else key)
+
+        try:
+            walk(self.recordsManager.getRecords(), '')
+        except Exception as e:
+            logger.debug(f"Record snapshot skipped: {e}")
+        return flat
+
+    def _publishGameNews(self, game, recordsBefore: Optional[Dict[str, Any]] = None) -> None:
+        """Publish everything a finished game just made newsworthy.
+
+        Three independent checks — a record broken, an upset, a big individual game — each
+        wrapped so that a failure in one cannot lose the others.
+
+        ⚠️ The WHOLE body is wrapped as well, and that is not belt-and-braces. This hangs
+        off the game-completion path, and the first version computed the season and week
+        above the inner try blocks — one wrong attribute name there raised straight out of
+        `_simulateGame` and every game in the slate failed to simulate. Nothing about
+        publishing a news item is worth a game, so nothing here is allowed to escape.
+        """
+        try:
+            self._publishGameNewsInner(game, recordsBefore)
+        except Exception as e:
+            logger.debug(f"Game news skipped: {e}")
+
+    def _publishGameNewsInner(self, game, recordsBefore: Optional[Dict[str, Any]] = None) -> None:
+        from league_news import publish, stat
+        from constants import UPSET_NEWS_ELO_GAP
+
+        # `currentWeek` lives on the SEASON, not the manager. The manager grows a
+        # `currentWeek` attribute lazily during the playoffs and has none at all during the
+        # regular season, so reading it here is an AttributeError for 28 weeks of every
+        # 32 — which is exactly how this broke.
+        season = getattr(self.currentSeason, 'seasonNumber', 0) or 0
+        week = getattr(self.currentSeason, 'currentWeek', 0) or 0
+
+        def emit(**kwargs):
+            try:
+                publish(self.db_session, season=season, week=week, **kwargs)
+            except Exception as e:
+                logger.debug(f"Game news publish skipped: {e}")
+
+        # ── A record fell ────────────────────────────────────────────────────
+        if recordsBefore:
+            try:
+                for path, (value, name, holderId) in self._snapshotRecords().items():
+                    previous = recordsBefore.get(path)
+                    if previous is None or previous[0] == value or not name:
+                        continue
+                    # ⚠️ Only a genuine BREAK. Every record starts at 0, so on a fresh
+                    # league the very first game sets all sixty of them at once and the
+                    # feed becomes a wall of "record set" items for one player.
+                    if not previous[0]:
+                        continue
+                    label = self._recordLabel(path)
+                    if not label:
+                        continue
+                    emit(category='record', eventType=path,
+                         text=f'{name} set the {label} record at {round(value)}',
+                         playerId=holderId if path.startswith('players.') else None,
+                         playerName=name if path.startswith('players.') else None)
+            except Exception as e:
+                logger.debug(f"Record news skipped: {e}")
+
+        # ── An upset ─────────────────────────────────────────────────────────
+        # Judged on PRE-GAME ELO, captured before the result moved it. Reading the live
+        # elo here would compare the teams after the win had already been priced in.
+        try:
+            winner = getattr(game, 'winningTeam', None)
+            loser = getattr(game, 'losingTeam', None)
+            if winner is not None and loser is not None:
+                homeIsWinner = winner is game.homeTeam
+                winnerElo = getattr(game, '_preGameHomeElo' if homeIsWinner else '_preGameAwayElo', 1500)
+                loserElo = getattr(game, '_preGameAwayElo' if homeIsWinner else '_preGameHomeElo', 1500)
+                gap = (loserElo or 1500) - (winnerElo or 1500)
+                if gap >= UPSET_NEWS_ELO_GAP:
+                    winnerScore = game.homeScore if homeIsWinner else game.awayScore
+                    loserScore = game.awayScore if homeIsWinner else game.homeScore
+                    emit(category='upset', eventType='upset',
+                         text=f'{winner.city} {winner.name} upset {loser.city} {loser.name}',
+                         teamId=winner.id,
+                         stats=[
+                             stat('FINAL', f'{round(winnerScore)}-{round(loserScore)}'),
+                             stat('ELO GAP', f'-{round(gap)}'),
+                             stat('WINNER ELO', round(winnerElo or 1500)),
+                             stat('LOSER ELO', round(loserElo or 1500)),
+                         ])
+        except Exception as e:
+            logger.debug(f"Upset news skipped: {e}")
+
+        # ── A big individual game ────────────────────────────────────────────
+        # One item per player at most. A back who runs for 180 and three scores is one
+        # story, not two, and firing both would let a single game flood the feed.
+        try:
+            for team in (game.homeTeam, game.awayTeam):
+                for player in (getattr(team, 'rosterDict', {}) or {}).values():
+                    if not player or not hasattr(player, 'gameStatsDict'):
+                        continue
+                    for group, key, threshold, template in self.BIG_GAME_TESTS:
+                        line = player.gameStatsDict.get(group, {}) or {}
+                        value = line.get(key, 0) or 0
+                        if value < threshold:
+                            continue
+                        # The strip is the player's line in the group that triggered the
+                        # item, so it explains the headline instead of repeating it.
+                        strip = [
+                            stat(label, round(line.get(field, 0) or 0))
+                            for label, field in self.BIG_GAME_STRIP.get(group, [])
+                        ]
+                        emit(category='big_game', eventType=f'{group}.{key}',
+                             text=template.format(name=player.name, value=round(value)),
+                             playerId=player.id, playerName=player.name, teamId=team.id,
+                             stats=strip if len(strip) == 4 else None)
+                        break
+        except Exception as e:
+            logger.debug(f"Big-game news skipped: {e}")
+
+    def _publishTeamNews(self, category: str, text: str, team, lead: bool = False) -> None:
+        """Persist a team event to the league-news feed.
+
+        `lead=True` attaches the four-number strip that makes an item eligible to lead the
+        front page. A clinch gets one; an elimination deliberately does not — a losing
+        record, no seed and a negative differential is four numbers that say nothing, and
+        it is the wrong thing to headline a page with.
+        """
+        try:
+            from league_news import publish, stat
+            stats = None
+            if lead:
+                s = getattr(team, 'seasonTeamStats', {}) or {}
+                wins = s.get('wins', 0) or 0
+                losses = s.get('losses', 0) or 0
+                streak = s.get('streak', 0) or 0
+                diff = round(s.get('scoreDiff', 0) or 0)
+                stats = [
+                    stat('RECORD', f'{wins}-{losses}'),
+                    stat('STREAK', f'W{streak}' if streak > 0 else f'L{abs(streak)}' if streak else '-',
+                         positive=streak > 0),
+                    stat('POINTS FOR', round((s.get('Offense', {}) or {}).get('pts', 0) or 0)),
+                    stat('POINT DIFF', f'+{diff}' if diff > 0 else str(diff), positive=diff > 0),
+                ]
+            publish(
+                self.db_session,
+                season=getattr(self.currentSeason, 'seasonNumber', 0) or 0,
+                # On the season, not the manager — see `_publishGameNewsInner`.
+                week=getattr(self.currentSeason, 'currentWeek', 0) or 0,
+                category=category,
+                text=text,
+                teamId=team.id,
+                stats=stats,
+                # The surrounding code already broadcasts this line itself; publishing
+                # would send it twice.
+                broadcast=False,
+            )
+        except Exception as e:
+            logger.debug(f"Team news publish skipped ({category}): {e}")
+
     def _applyDivisionSeeding(self, qualifiers, league):
         """Division winners take the top seeds, the wildcards by record behind them.
 
@@ -4412,6 +4664,7 @@ class SeasonManager:
                             season=self.currentSeason.seasonNumber)
                         _clinchText = '{0} {1} have clinched a playoff berth'.format(team.city, team.name)
                         self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _clinchText}})
+                        self._publishTeamNews('clinched', _clinchText, team, lead=True)
                         if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                             await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_clinchText))
 
@@ -4424,6 +4677,7 @@ class SeasonManager:
                 if not resuming:
                     _elimText = '{0} {1} have faded from playoff contention'.format(team.city, team.name)
                     self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _elimText}})
+                    self._publishTeamNews('eliminated', _elimText, team)
                     if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                         await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_elimText))
 
@@ -4920,9 +5174,12 @@ class SeasonManager:
                     getattr(gameInstance, 'preGameAwayWinProbability', None)
                 )
 
-            # Check for records
+            # Check for records. Snapshot first so a break can be diffed out and
+            # published to the news feed.
+            _recordsBefore = self._snapshotRecords()
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
+            self._publishGameNews(gameInstance, _recordsBefore)
 
             # Resolve pick-em picks for this playoff game
             if gameIndex >= 0 and getattr(gameInstance, 'winningTeam', None):

@@ -2317,42 +2317,12 @@ async def get_current_games(response: Response):
         if not displayGames:
             return []
         
-        # Compute isFeatured for each game: elite matchup (both ELO >= 1570)
-        # OR playoff bubble battle (both teams near the 6-spot cutline, late season only)
-        PLAYOFF_SPOTS = 6
-        ELITE_ELO = 1570
-        BUBBLE_WEEK_MIN = 18  # bubble battle only meaningful in the final stretch
-        currentWeek = getattr(current_season, 'currentWeek', 0)
-        isRegularSeason = isinstance(currentWeek, int) and 1 <= currentWeek <= 28
-        lateRegularSeason = isRegularSeason and currentWeek >= BUBBLE_WEEK_MIN
-
-        teamLeaguePos = {}   # {team_id: 1-indexed position in their league}
-        teamLeagueName = {}  # {team_id: league name} for same-league check
-        for league in floosball_app.leagueManager.leagues:
-            sortedTeams = sorted(league.teamList,
-                                 key=lambda t: (-t.seasonTeamStats['wins'], t.seasonTeamStats['losses']))
-            for pos, team in enumerate(sortedTeams, 1):
-                teamLeaguePos[team.id] = pos
-                teamLeagueName[team.id] = league.name
-
-        for game in displayGames:
-            # All playoff games are inherently featured — skip the designation
-            if getattr(game, 'gameType', '') == 'playoff':
-                game.isFeatured = False
-                continue
-            homeElo = getattr(game, 'homeTeamElo', getattr(game.homeTeam, 'elo', 1500))
-            awayElo = getattr(game, 'awayTeamElo', getattr(game.awayTeam, 'elo', 1500))
-            homePos = teamLeaguePos.get(game.homeTeam.id, 99)
-            awayPos = teamLeaguePos.get(game.awayTeam.id, 99)
-            eliteMatchup = isRegularSeason and homeElo >= ELITE_ELO and awayElo >= ELITE_ELO
-            sameLeague = (teamLeagueName.get(game.homeTeam.id) is not None
-                          and teamLeagueName.get(game.homeTeam.id) == teamLeagueName.get(game.awayTeam.id))
-            bothInHunt = (not getattr(game.homeTeam, 'eliminated', False)
-                          and not getattr(game.awayTeam, 'eliminated', False))
-            bubbleBattle = (lateRegularSeason and sameLeague and bothInHunt
-                            and (PLAYOFF_SPOTS - 2) <= homePos <= (PLAYOFF_SPOTS + 3)
-                            and (PLAYOFF_SPOTS - 2) <= awayPos <= (PLAYOFF_SPOTS + 3))
-            game.isFeatured = eliteMatchup or bubbleBattle
+        # Which games are featured (elite matchup / late-season bubble battle). The rule
+        # lives in featured_games so the board's chip and anything else that asks cannot
+        # drift — and so the cutline follows league size instead of a hardcoded 6.
+        from featured_games import markFeatured
+        markFeatured(floosball_app, displayGames,
+                     currentWeek=getattr(current_season, 'currentWeek', 0))
 
         game_list = []
         for game in displayGames:
@@ -4208,7 +4178,8 @@ async def get_reigning_champion(response: Response):
 # ============================================================================
 
 _VALID_STAT_CATEGORIES = {
-    'fantasy_points', 'passing_yards', 'passing_tds', 'rushing_yards', 'rushing_tds',
+    'fantasy_points', 'passing_yards', 'passing_tds', 'completions',
+    'rushing_yards', 'rushing_tds',
     'receiving_yards', 'receiving_tds', 'receptions', 'fg_made', 'fg_pct',
     'performance_rating',
     'def_sacks', 'def_ints', 'def_tackles', 'def_tfl', 'def_forced_fumbles', 'def_pass_breakups',
@@ -4387,6 +4358,7 @@ async def get_stat_leaders(
                 return sd.get('fantasyPoints', 0) + player.gameStatsDict.get('fantasyPoints', 0)
             if cat == 'passing_yards':    return sd.get('passing', {}).get('yards', 0)
             if cat == 'passing_tds':      return sd.get('passing', {}).get('tds', 0)
+            if cat == 'completions':      return sd.get('passing', {}).get('comp', 0)
             if cat == 'rushing_yards':    return sd.get('rushing', {}).get('yards', 0)
             if cat == 'rushing_tds':      return sd.get('rushing', {}).get('tds', 0)
             if cat == 'receiving_yards':  return sd.get('receiving', {}).get('yards', 0)
