@@ -43,7 +43,7 @@ managers/
   timingManager.py                # 12 timing modes (delays, scheduling, broadcasting toggles)
   playerManager.py                # Player generation, contracts, free agency / FA draft, training, stats
   teamManager.py                  # Team rosters, ratings, ELO, coach hire/fire, coach candidates
-  leagueManager.py                # League structure (2 leagues × 12 teams), divisions
+  leagueManager.py                # League structure (2 leagues × 16 teams), divisions
   recordManager.py                # Historical records
   personalityManager.py           # Player personalities, quotes, moods (YAML-templated)
   personalityReactionEngine.py    # In-game personality reactions / sideline cutaways
@@ -96,14 +96,18 @@ avatar_generator.py               # SVG team/league avatar generation + disk cac
 > `catchup` = delays during catch-up; `fast-catchup` = no delays during catch-up. (Earlier docs had these reversed.)
 
 ### Season Structure (`seasonManager.py`)
-- **24 teams**, 2 leagues × 12. Regular season = `((12-1)×2) + (12/2)` = **28 weeks**.
+- **32 teams**, 2 leagues × 16, each league split into **4 divisions of 4** — 8 divisions total (owner, 2026-08-07; was 2 divisions of 8). Regular season = **28 weeks**.
+- **Division names come from `config.json`'s `divisions` map** (`{leagueName: [4 names]}`), owner-curated like team names. `seasonManager._divisionNames` falls back to compass points if the key is missing, so a config without it still yields a division-shaped league rather than silently dropping to the flat round-robin. Assignment is **positional** — within a league, config-order teams 0-3 are the first division, 4-7 the second, and so on — mirroring how leagues themselves split by config order, so the owner controls division membership purely by ordering.
+- **The 28-week divisional schedule** (`_generateDivisionalSchedule`): **12** division rivals (3 opponents × 4, two full home-and-away rounds) + **12** the rest of your league (once each) + **4** one interleague division = 28. Replaces the old 14/8/6 split, which only worked when a division held 8 clubs. Division share is 43% (was 50%). The second division double-round is placed **LAST**, so the whole final game day is against the clubs you are racing for the division title. Every club in your own league is played at least once — the wider-interleague alternative was rejected because it could only draw 10 of the other league's 16, which diverges strength of schedule. Verified: 28 games per club, **exactly 14 home each**, all 32 clubs playing every week. Regression: `test_divisional_schedule.py`.
+- ⚠️ **`_crossDivisionWeeks` had a live home/away bug** fixed alongside this: the opponent index is `j = (i + r) % n`, and a mod-n shift preserves parity, so deciding home/away on `(i + r) % 2` meant division B only ever hosted when `j` was ODD — **every even-indexed club in B got zero home games** across the whole cross-division block, in the shipped 8-club format as well. Home/away now alternates on the ROUND, which is index-independent.
 - **League assignment**: at boot `leagueManager.createLeagues` splits teams into the two leagues by **config order** (first 12 → league 0, next 12 → league 1) — the DB `team.league_id` is a mirror it overwrites each boot, NOT authoritative. **Exception**: a saved `league_alignment` app_setting (JSON `{leagueName: [teamId,…]}`) overrides that split (`_applyPersistedAlignment`) so a realignment survives restarts/deploys. **One-time competitive realignment** (`leagueManager.realignByRecentPerformance`, fired once by `seasonManager._maybeRealignLeagues` at a genuine new-season boundary before schedule generation): ranks all teams by combined win% over the last `LEAGUE_REALIGN_WINDOW_SEASONS` (2) completed seasons and serpentine-splits them (rank 1→A, 2→B, 3→B, 4→A, …) so neither league stays perpetually stronger. Gated by the `league_realigned` app_setting (never re-runs; stays unstamped if there's no season history yet, retrying next boundary). Validated: even split (each league ~0.50 avg win%, full talent spread).
 - **4 game days** per "week index block" (days 0–3 from the season start anchor = Mon–Thu), 7 rounds per day, games on the hour 12:00–18:00 ET. Playoffs are day 4 (**Friday**); offseason drafts follow.
 - Season start anchor: SCHEDULED → next Monday 04:00 ET; CATCHUP/FAST_CATCHUP → last Monday 04:00 ET.
 - **Week rollover**: 15 min before game time for intra-day transitions; **8 hours early** (prior evening) for cross-day boundaries (week indices 8/15/22) so the next slate is visible the night before.
 
 ### Playoffs
-- Top half of each league qualify (6/league = **12 teams**); top 2 per league get a **round-1 bye**.
+- Top half of each league qualify (**8/league = 16 teams** at 32 clubs); a power-of-two field means no byes. With 4 divisions a league's 8 qualifiers are the 4 division winners plus 4 wildcards.
+- ⚠️ `_applyDivisionSeeding` was hardcoded to `len(divs) != 2` and would have silently dropped every division winner's guaranteed seed once the league moved to 4 divisions, falling back to plain record order. Now `< 2`.
 - **Re-seeds every round** by (winPerc, scoreDiff) — highest plays lowest. Not a fixed bracket.
 - 4 rounds, named `Playoffs Round 1` (wk 29) → `Playoffs Round 2` (wk 30) → `League Championship` (wk 31) → `Floos Bowl` (wk 32). Rounds 1–3 are within-league; the Floos Bowl is the cross-league final.
 

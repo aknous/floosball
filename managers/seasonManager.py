@@ -3745,13 +3745,36 @@ class SeasonManager:
 
         return schedule
     
-    def _assignDivisions(self) -> bool:
-        """Split each league in half into two fixed divisions, stamped on the teams.
+    DIVISIONS_PER_LEAGUE = 4
 
-        Returns True when the league is division-shaped (two leagues, even split, at
-        least 4 clubs a side). Divisions are positional and therefore STABLE for a
-        given league alignment — which is the point: a rivalry needs the same
-        opponents every season, so nothing here is allowed to reshuffle annually.
+    def _divisionNames(self, leagueName: str) -> List[str]:
+        """Division names for a league, from config.json's `divisions` map.
+
+        Config-driven because the owner names these (2026-08-07), the same way team names
+        and colours are owned there. Falls back to compass points so a config without the
+        key still produces a division-shaped league rather than silently dropping to the
+        flat round-robin.
+        """
+        try:
+            from config_manager import get_config
+            names = (get_config().get("divisions") or {}).get(leagueName)
+            if names and len(names) >= self.DIVISIONS_PER_LEAGUE:
+                return list(names)[:self.DIVISIONS_PER_LEAGUE]
+        except Exception:
+            pass
+        return [f"{leagueName} {d}" for d in ("North", "South", "East", "West")]
+
+    def _assignDivisions(self) -> bool:
+        """Split each league into four fixed divisions, stamped on the teams.
+
+        Returns True when the league is division-shaped: two leagues of equal size that
+        divide evenly into `DIVISIONS_PER_LEAGUE`. Assignment is POSITIONAL and therefore
+        stable for a given alignment — which is the point: a rivalry needs the same
+        opponents every season, so nothing here reshuffles annually. It also mirrors how
+        leagues themselves are split, by config order, so the owner controls which clubs
+        share a division purely by their order in config.json.
+
+        Was 2 divisions of 8; now 4 of 4 (owner, 2026-08-07).
         """
         lgs = getattr(self.leagueManager, 'leagues', None) or []
         if len(lgs) != 2:
@@ -3760,45 +3783,61 @@ class SeasonManager:
         if len(sizes) != 1:
             return False
         n = sizes.pop()
-        if n < 8 or n % 2:
+        per = self.DIVISIONS_PER_LEAGUE
+        if n < per * 2 or n % per:
             return False
-        half = n // 2
+        size = n // per
         for league in lgs:
+            names = self._divisionNames(league.name)
             for i, team in enumerate(league.teamList):
-                team.division = f"{league.name} {'East' if i < half else 'West'}"
+                team.division = names[min(i // size, per - 1)]
         return True
 
     def _crossDivisionWeeks(self, divA, divB) -> List[List[tuple]]:
         """Every club in one division plays every club in the other exactly once.
-        n divisions of n teams -> n rounds, each a full slate."""
+        n divisions of n teams -> n rounds, each a full slate.
+
+        ⚠️ Home/away alternates by ROUND, not by `(i + r)`. The obvious-looking
+        `if (i + r) % 2` is broken and was live: the opponent index is `j = (i + r) % n`,
+        and a mod-n shift preserves parity, so "A hosts when (i+r) is even" means B only
+        ever hosts when j is ODD. Half of division B — every even-indexed club — got ZERO
+        home games in the entire cross-division block, in the shipped 8-club format as
+        well as this one. Alternating on `r` gives each side exactly n/2 home rounds and
+        does not correlate with either index.
+        """
         n = len(divA)
         weeks = []
         for r in range(n):
             games = []
+            aHosts = (r % 2 == 0)
             for i in range(n):
                 j = (i + r) % n
-                if (i + r) % 2 == 0:
-                    games.append((divA[i], divB[j]))
-                else:
-                    games.append((divB[j], divA[i]))
+                games.append((divA[i], divB[j]) if aHosts else (divB[j], divA[i]))
             weeks.append(games)
         return weeks
 
     def _generateDivisionalSchedule(self) -> Optional[List[List[tuple]]]:
-        """The 28-week divisional season for a 32-club, 4-division league.
+        """The 28-week divisional season for a 32-club league of 8 four-team divisions.
 
-            14  division rivals, home and away  (7 opponents x 2)
-             8  the other division in your league, once each
-             6  interleague
+            12  division rivals, twice home and away  (3 opponents x 4)
+            12  the rest of your league, once each    (12 opponents x 1)
+             4  one interleague division              (4 opponents x 1)
             --
             28  weeks -> exactly the 4 game days x 7 hourly slots the calendar has
 
-        Ordering is deliberate and is the whole point of the format: the second
-        division round-robin is placed LAST, so weeks 22-28 — the entire final game
-        day — are against the seven clubs you are racing for the division title.
+        Replaces the 14/8/6 split that worked when a division held 8 clubs. With only 3
+        rivals, a single home-and-away round is 6 games, so the rivalry weight had to come
+        from playing them TWICE over (owner call 2026-08-07, "rivalry-heavy"). Division
+        share lands at 43% against the old format's 50%, and every club in your league is
+        still played at least once — which the wider-interleague alternative could not
+        promise, since it would have drawn only 10 of the other league's 16.
 
-        Returns None when the league is not division-shaped, so the caller falls
-        back to the original round-robin.
+        Ordering is deliberate and is the whole point of the format: the second division
+        double-round is placed LAST, so the entire final game day is against the three
+        clubs you are racing for the division title.
+
+        Returns None when the league is not division-shaped, so the caller falls back to
+        the original round-robin.
         """
         import copy
         import random
@@ -3806,26 +3845,17 @@ class SeasonManager:
             return None
         lgs = self.leagueManager.leagues
         perLeague = len(lgs[0].teamList)
-        half = perLeague // 2
-        if perLeague != 16:
-            return None      # the 14/8/6 split only lands on 28 for 16-a-side
+        per = self.DIVISIONS_PER_LEAGUE
+        size = perLeague // per
+        if perLeague != 32 // 2 or size != 4:
+            return None      # the 12/12/4 split only lands on 28 for four-club divisions
 
-        divisions = []
-        for league in lgs:
-            divisions.append((league.teamList[:half], league.teamList[half:]))
-
-        # --- division round-robins: _generateIntraleagueGames returns the first pass
-        # followed by its mirror, so the halves split cleanly into the two blocks.
-        firstPass, mirrorPass = [], []
-        for divA, divB in divisions:
-            for div in (divA, divB):
-                rr = self._generateIntraleagueGames(copy.copy(div))
-                mid = len(rr) // 2
-                firstPass.append(rr[:mid])
-                mirrorPass.append(rr[mid:])
+        # Divisions in config order, per league.
+        divsByLeague = [[lg.teamList[i * size:(i + 1) * size] for i in range(per)]
+                        for lg in lgs]
 
         def merge(blocks):
-            """blocks: list of per-division week-lists -> combined weekly slates."""
+            """blocks: list of per-group week-lists -> combined weekly slates."""
             out = []
             for w in range(len(blocks[0])):
                 week = []
@@ -3834,25 +3864,45 @@ class SeasonManager:
                 out.append(week)
             return out
 
-        divFirst = merge(firstPass)      # 7 weeks
-        divMirror = merge(mirrorPass)    # 7 weeks
+        # --- division: a home-and-away round robin is 6 weeks for 4 clubs; run it twice.
+        # _generateIntraleagueGames returns the first pass followed by its mirror.
+        divRounds = [[], []]
+        for divs in divsByLeague:
+            for div in divs:
+                rr = self._generateIntraleagueGames(copy.copy(div))
+                divRounds[0].append(rr)
+        divFirst = merge(divRounds[0])          # 6 weeks
+        divSecond = merge(divRounds[0])         # the same 6 fixtures again, reordered below
 
-        # --- cross-division, within each league: 8 weeks
-        crossBlocks = [self._crossDivisionWeeks(divA, divB) for divA, divB in divisions]
-        cross = merge(crossBlocks)
+        # --- cross-division inside each league: every club meets the 12 outside its
+        # division once. Six division pairings organise into THREE rounds of two
+        # simultaneous pairings, so the whole league plays every week:
+        #     round 1  (1v2) (3v4)      round 2  (1v3) (2v4)      round 3  (1v4) (2v3)
+        # Each round is `size` weeks, so 3 x 4 = 12.
+        PAIRINGS = (((0, 1), (2, 3)), ((0, 2), (1, 3)), ((0, 3), (1, 2)))
+        crossBlocks = []
+        for a, b in (p for rnd in PAIRINGS for p in rnd):
+            for divs in divsByLeague:
+                crossBlocks.append(self._crossDivisionWeeks(divs[a], divs[b]))
+        # Two pairings per league run concurrently, so merge them four at a time
+        # (2 pairings x 2 leagues) into one 4-week round.
+        cross = []
+        for i in range(0, len(crossBlocks), 4):
+            cross.extend(merge(crossBlocks[i:i + 4]))
 
-        # --- interleague: the existing generator yields perLeague/2 weeks; take 6
-        inter = self._generateInterleagueGames(
-            copy.copy(lgs[0].teamList), copy.copy(lgs[1].teamList))
-        inter = inter[:6]
+        # --- interleague: pair division i of one league with division i of the other,
+        # so each club draws exactly one opposing division.
+        interBlocks = [self._crossDivisionWeeks(divsByLeague[0][i], divsByLeague[1][i])
+                       for i in range(per)]
+        inter = merge(interBlocks)              # 4 weeks
 
-        # Shuffle WITHIN each block so the run of weeks isn't identical every season,
-        # but never across blocks — the block order is the format.
-        for block in (divFirst, cross, inter, divMirror):
+        # Shuffle WITHIN each block so the run of weeks isn't identical every season, but
+        # never across blocks — the block order is the format.
+        for block in (divFirst, cross, inter, divSecond):
             random.shuffle(block)
 
-        schedule = divFirst + cross + inter + divMirror
-        expected = 7 + 8 + 6 + 7
+        schedule = divFirst + cross + inter + divSecond
+        expected = 6 + 12 + 4 + 6
         if len(schedule) != expected:
             logger.error(
                 f"Divisional schedule built {len(schedule)} weeks, expected {expected} "
@@ -3860,11 +3910,12 @@ class SeasonManager:
             return None
         logger.info(
             f"Divisional schedule: {len(divFirst)} division + {len(cross)} cross-division "
-            f"+ {len(inter)} interleague + {len(divMirror)} division (run-in) = {len(schedule)} weeks")
+            f"+ {len(inter)} interleague + {len(divSecond)} division (run-in) "
+            f"= {len(schedule)} weeks")
         return schedule
 
     def _applyDivisionSeeding(self, qualifiers, league):
-        """Division winners to seeds 1-2, everyone else by record behind them.
+        """Division winners take the top seeds, everyone else by record behind them.
 
         A division winner is the best record inside its own division across the WHOLE
         league (not just among qualifiers) — a club can win a weak division without
@@ -3876,7 +3927,9 @@ class SeasonManager:
             d = getattr(team, 'division', None)
             if d:
                 divs.setdefault(d, []).append(team)
-        if len(divs) != 2:
+        # Was hardcoded to 2. With four divisions a `!= 2` check silently dropped every
+        # division winner's guaranteed seed and fell back to plain record order.
+        if len(divs) < 2:
             return self._seedTeams(qualifiers)
         winners = []
         for d, members in divs.items():
