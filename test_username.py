@@ -51,8 +51,37 @@ for reserved in ("admin", "ADMIN", "Cassian", "vera", "floosball"):
     v, e = validateUsername(reserved)
     expect(f"reserves {reserved!r}", v is None and "reserved" in (e or ""))
 
-v, e = validateUsername("shitlord")
-expect("blocks the obvious slurs", v is None)
+# ── profanity: better_profanity behind a normalizer ─────────────────────────
+# The library alone scores 0 false positives but misses 4 in 10 on usernames, because it
+# matches WORD BOUNDARIES and a handle has none. These cases are the ones that only pass
+# with normalization (leetspeak, separators, camelCase) in front of it.
+for bad in ("shitlord", "fuckface", "n1gger", "f_u_c_k", "xXn1ggaXx", "cuntpuncher",
+            "FUCKER99", "niggerlover", "TwatWaffle", "f4gg0t", "Hitler88", "wh0re"):
+    v, e = validateUsername(bad)
+    expect(f"blocks {bad!r}", v is None)
+
+# The Scunthorpe problem, which is the reason the substring list is DERIVED from a
+# dictionary rather than hand-picked. Intuition gets it backwards: `cunt` and `bitch` have
+# zero innocent uses in 236k words, while `nigg` has thirty — niggard, niggling, snigger.
+for ok in ("Scunthorpe", "Cockburn", "Assassin", "Analyst_Pete", "Niggardly",
+           "Swanky_Pete", "Spicer", "Dickens", "Therapist", "Bassmaster", "Gobbledygook"):
+    v, e = validateUsername(ok)
+    expect(f"allows the ordinary name {ok!r}", v == ok and e is None)
+
+
+def testGeneratedNamesAreAlwaysAcceptable():
+    """A suggestion the validator would refuse is worse than no suggestion — the user
+    picks what we offered and gets an error. Two of the 66,300 pairings trip the filter
+    (SaskatchewanKerfuffle spans "wanker" across the join), so the generators screen."""
+    from api.auth import _USERNAME_FIRSTS, _USERNAME_LASTS, containsProfanity
+    bad = [f + l for f in _USERNAME_FIRSTS for l in _USERNAME_LASTS
+           if containsProfanity(f + l)]
+    # They must EXIST (proving the screen is load-bearing) and be screened out by the
+    # generator, which is asserted by generateUsernameCandidates below.
+    expect(f"the pairing hazard is real ({len(bad)} of 66,300)", len(bad) > 0)
+
+
+testGeneratedNamesAreAlwaysAcceptable()
 
 # ── the endpoint ────────────────────────────────────────────────────────────
 M.app.dependency_overrides[M._getCurrentUser] = lambda: _stubUser

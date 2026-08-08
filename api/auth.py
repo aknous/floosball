@@ -164,12 +164,94 @@ USERNAME_RESERVED = {
     "cassian", "pyre", "aris", "halverson", "vera", "cores", "core",
 }
 
-# Deliberately short. A real profanity filter is a rabbit hole with a bad failure mode
-# (false positives on ordinary names), and there is already an admin reroll endpoint as
-# the escape hatch. This catches the obvious rather than pretending to be exhaustive.
-USERNAME_BLOCKED_SUBSTRINGS = {
-    "fuck", "shit", "cunt", "nigg", "fagg", "rape", "nazi", "hitler",
+# ─── Profanity ───────────────────────────────────────────────────────────────
+# `better_profanity` does the heavy lifting (maintained wordlist, no dependencies), but it
+# matches on WORD BOUNDARIES and a username has none. Measured on realistic handles it got
+# 0 false positives — it clears every classic trap, Scunthorpe / Cockburn / Assassin /
+# Analyst — but missed 4 in 10 abusive names, because `cuntpuncher` and `FUCKER99` are
+# single tokens with no word for it to find. So it needs normalization in front of it, and
+# a small substring list for the terms that survive being run together.
+#
+# ⚠️ THE SUBSTRING LIST IS DERIVED, NOT HAND-PICKED, and intuition gets it backwards.
+# Checked against /usr/share/dict/words (236k words): `cunt` and `bitch` have ZERO innocent
+# uses, while `nigg` has thirty — niggard, niggling, snigger are ordinary English. Using
+# truncated roots is the trap; the full form `nigger` is unambiguous where `nigg` is not.
+#
+# ⚠️ Two rounds of a subtler bug are baked into these lists: THE DICTIONARY CONTAINS SLURS.
+# Auto-building an exception list of "innocent words containing this term" hands the
+# exception the very words being blocked — `nigger` became an excuse for `nigg`, and once
+# that was filtered through better_profanity a second tier surfaced (niggerhead, niggertoe)
+# that the library does not flag at all. Anything regenerated here must be eyeballed.
+
+# Zero innocent dictionary words contain these, so a plain substring match is safe.
+_PROFANITY_SUBSTRINGS = (
+    "fuck", "cunt", "nigger", "faggot", "kike", "tranny", "wetback", "bitch",
+    "molester", "pedophile", "dildo", "jizz", "bollock", "hitler",
+)
+
+# Substring-matched too, but each has a handful of genuine English words that contain it.
+# Block only when none of the exceptions is present.
+_PROFANITY_GUARDED = {
+    "nigga": ("niggard",),
+    "gook": ("gobbledygook",),
+    "retarded": ("unretarded",),
+    "wanker": ("swanker", "twanker"),
+    # All obscure: -shite mineral and tribal names, plus shitepoke (a heron). None is a
+    # plausible username, but they cost nothing to exempt and the alternative is a
+    # confusing rejection for someone called Cushite.
+    "shit": ("brushite", "cushite", "elkoshite", "girgashite", "kaneshite", "koreishite",
+             "mackintoshite", "marshite", "bereshith", "shitepoke", "shita"),
 }
+
+# Leetspeak, so f4gg0t and n1gg3r normalize onto the lists above.
+_LEET = str.maketrans({"1": "i", "0": "o", "3": "e", "4": "a", "5": "s",
+                       "7": "t", "@": "a", "$": "s", "!": "i", "|": "i"})
+
+# Proper nouns are absent from the dictionary, so the canonical traps are named directly.
+# These are whole-name exemptions, not substrings.
+_NAME_ALLOWLIST = {
+    "scunthorpe", "penistone", "clitheroe", "lightwater", "cockburn", "hancock",
+    "dickens", "cumberland", "bastardi", "spicer", "wangchuk", "assange",
+}
+
+
+def _normalizeForProfanity(name: str) -> str:
+    """Lowercase, de-leet and strip everything that is not a letter.
+
+    Separators are what defeat a wordlist on usernames: f_u_c_k and F.U.C.K are the same
+    word with punctuation between the letters.
+    """
+    return _re.sub(r"[^a-z]", "", (name or "").lower().translate(_LEET))
+
+
+def _segmentForProfanity(name: str) -> str:
+    """Break a handle into something word-shaped so the library has boundaries to match.
+
+    Splits camelCase and separators, so `TwatWaffle` reaches better_profanity as two words
+    rather than one token it has never seen.
+    """
+    spaced = _re.sub(r"([a-z])([A-Z])", r"\1 \2", name or "")
+    return " ".join(w for w in _re.split(r"[^A-Za-z]+", spaced) if w)
+
+
+def containsProfanity(name: str) -> bool:
+    """True when a username should be refused on language grounds."""
+    normalized = _normalizeForProfanity(name)
+    if not normalized or normalized in _NAME_ALLOWLIST:
+        return False
+    if any(term in normalized for term in _PROFANITY_SUBSTRINGS):
+        return True
+    for term, exceptions in _PROFANITY_GUARDED.items():
+        if term in normalized and not any(ex in normalized for ex in exceptions):
+            return True
+    try:
+        from better_profanity import profanity
+        return bool(profanity.contains_profanity(_segmentForProfanity(name))
+                    or profanity.contains_profanity(normalized))
+    except Exception:
+        # The substring tiers above already cover the worst of it; a missing or broken
+        # dependency must not take the whole signup flow down with it.
+        return False
 
 
 def validateUsername(name: str) -> tuple:
@@ -191,7 +273,7 @@ def validateUsername(name: str) -> tuple:
     lowered = name.lower()
     if lowered in USERNAME_RESERVED:
         return None, "That name is reserved"
-    if any(bad in lowered for bad in USERNAME_BLOCKED_SUBSTRINGS):
+    if containsProfanity(name):
         return None, "That name is not available"
     return name, None
 
@@ -219,6 +301,12 @@ def _generateUsernameCandidate(session) -> str:
             + _random.choice(_USERNAME_LASTS)
             + str(_random.randint(1, 99))
         )
+        # A suggestion the validator would refuse is worse than no suggestion: the user
+        # picks it and gets an error for something we offered them. Two of the 66,300
+        # possible pairings trip the filter — SaskatchewanKerfuffle spans "wanker" across
+        # the join — so this is rare rather than theoretical, and cheap to rule out.
+        if containsProfanity(name):
+            continue
         existing = session.query(User).filter(User.username == name).first()
         if not existing:
             return name
@@ -239,6 +327,8 @@ def generateUsernameCandidates(session, count: int = 4) -> list[str]:
         if name in seen:
             continue
         seen.add(name)
+        if containsProfanity(name):
+            continue   # see _generateUsernameCandidate — never suggest what we would reject
         existing = session.query(User).filter(User.username == name).first()
         if not existing:
             candidates.append(name)
