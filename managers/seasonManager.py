@@ -3373,6 +3373,20 @@ class SeasonManager:
             return False
 
         teamById = {t.id: t for t in teamManager.teams}
+
+        # ⚠️ Reset every team's schedule before refilling it. The loop below APPENDS each
+        # game to `homeTeam.schedule` / `awayTeam.schedule`, and the only two places that
+        # clear those lists are new-season paths (`teamManager` season roll-over and
+        # `clearTeamSeasonStats`) — neither of which runs on a RESUME. So every restart
+        # that resumed an existing season stacked another full copy of the season onto each
+        # team, and a team page showed 56 weeks after one restart, 84 after two.
+        #
+        # `currentSeason.schedule` was never affected because it is ASSIGNED at the end of
+        # this function rather than appended to, which is why the games table and the
+        # league schedule both stayed at 28 weeks while team pages did not.
+        for team in teamManager.teams:
+            team.schedule = []
+
         now = datetime.datetime.utcnow()
         weekMap: Dict[int, Dict] = {}  # 1-indexed week → {startTime, games}
 

@@ -194,7 +194,7 @@
     },
     {
       "city": "Anchorage",
-      "name": "Truckers",
+      "name": "Midnights",
       "abbr": "ANC",
       "color": "#455A64",
       "secondaryColor": "#FF7043",
@@ -202,7 +202,7 @@
     },
     {
       "city": "Miami",
-      "name": "Neon",
+      "name": "Jetskis",
       "abbr": "MIA",
       "color": "#FF00B8",
       "secondaryColor": "#00FFFF",
@@ -242,7 +242,7 @@
     },
     {
       "city": "Toronto",
-      "name": "Imaginaries",
+      "name": "Raccoons",
       "abbr": "TOR",
       "color": "#FF6F00",
       "secondaryColor": "#1A237E",
@@ -290,7 +290,7 @@
     },
     {
       "city": "Salt Lake City",
-      "name": "Funk",
+      "name": "Sodas",
       "abbr": "SLC",
       "color": "#00897B",
       "secondaryColor": "#FFFFFF",
