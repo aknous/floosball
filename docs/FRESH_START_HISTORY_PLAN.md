@@ -49,6 +49,18 @@ Of 426 names on player rows and not in the pool:
 Sixteen, not four hundred. Still worth running: those are the fan-submitted ones, the only
 names with a story attached, and nothing would have reported their loss.
 
+**Fixed permanently, so this is the last reset that needs the harvest.** Approved names now
+get a durable copy in `curated_names` (new table, in `preserveTables`), merged back into the
+pool on boot by `_seedCuratedNames` exactly as config is merged by `_seedUnusedNames`.
+`_acceptNamesIntoPool` records both the admin box and Discord approvals, tagged by source.
+The harvest tool backfills the 16 existing orphans on `--apply`.
+
+⚠️ **Writing approved names back to `config.json` would NOT have worked** and is the
+obvious wrong fix. config.json is read from a relative path, so the container copy is
+`/app/config.json` — only `/data` is a Fly volume. The write survives until the next deploy
+and then vanishes, which is worse than no fix because it looks like one. Verified end to
+end: simulated wipe → boot re-seed → the fan-submitted names are back in the pool.
+
 `tools_harvest_names.py` returns them and drops the 43 pooled + 35 held lineage variants
 (owner: keep the names, not the Jr artifacts).
 

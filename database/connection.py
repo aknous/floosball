@@ -60,6 +60,7 @@ def init_db():
     _seedBetaAllowlist()
     _seedAchievements()
     _seedUnusedNames()
+    _seedCuratedNames()
     logger.info(f"Database initialized at {DB_PATH}")
 
 
@@ -460,6 +461,20 @@ def _runPendingMigrations():
             ))
             conn.commit()
             logger.info("  Migration: created play_reactions table")
+        except Exception:
+            conn.rollback()
+
+        # Permanent record of admin/Discord-approved names. See CuratedName: config.json
+        # cannot hold these because the container copy is ephemeral.
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS curated_names (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(120) NOT NULL UNIQUE,
+                    source VARCHAR(20),
+                    created_at DATETIME
+                )"""))
+            conn.commit()
         except Exception:
             conn.rollback()
 
@@ -2578,8 +2593,10 @@ def clear_db():
     # ids restart from 1, so preserving them would reattach a 15-season record to whichever
     # rookie inherited the id rather than saving anything. See
     # docs/FRESH_START_HISTORY_PLAN.md.
+    # curated_names is the durable home for admin/Discord names — config.json re-seeds
+    # itself on boot, but names added after the seed have no other permanent store.
     preserveTables = {"users", "beta_allowlist", "app_settings", "unused_names",
-                      "league_archive"}
+                      "league_archive", "curated_names"}
 
     # Drop all non-preserved tables (reverse dependency order), then recreate
     tablesToDrop = [t for t in reversed(Base.metadata.sorted_tables)
@@ -2613,6 +2630,7 @@ def clear_db():
     _seedBetaAllowlist()
     _seedAchievements()
     _seedUnusedNames()
+    _seedCuratedNames()
 
 
 def _seedPackTypes():
@@ -3118,6 +3136,44 @@ def _seedBetaAllowlist():
         session.commit()
     except Exception:
         session.rollback()
+    finally:
+        session.close()
+
+
+def _seedCuratedNames():
+    """Merge admin/Discord-approved names back into the usable pool.
+
+    The exact counterpart of `_seedUnusedNames`, which does this for config.json. Config
+    gets that for free because it is a file that ships with the code; names added after the
+    seed have no such home — see CuratedName for why config.json cannot be written to in
+    prod. Without this, a fan-submitted name is removed from `unused_names` the moment it
+    is drawn onto a player, and then dies with that player row at the next reset.
+
+    Same filter as the config path: skip anything already pooled or held by a live player
+    or coach, so a name in active use is not re-pooled and drawn twice.
+    """
+    from database.models import UnusedName, CuratedName, Coach, Player
+    session = SessionLocal()
+    try:
+        curated = [row.name for row in session.query(CuratedName.name).all()]
+        if not curated:
+            return
+        existing = {row.name for row in session.query(UnusedName.name).all()}
+        inUse = {c.name for c in session.query(Coach.name).all() if c.name}
+        inUse |= {p.name for p in session.query(Player.name).all() if p.name}
+        added = 0
+        for name in curated:
+            if name in existing or name in inUse:
+                continue
+            session.add(UnusedName(name=name))
+            existing.add(name)
+            added += 1
+        if added:
+            session.commit()
+            logger.info(f"  Restored {added} curated name(s) to the pool")
+    except Exception as e:
+        session.rollback()
+        logger.warning(f"  Could not merge curated names: {e}")
     finally:
         session.close()
 

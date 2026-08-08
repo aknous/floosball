@@ -915,6 +915,33 @@ class SupporterDividend(Base):
     )
 
 
+class CuratedName(Base):
+    """Every name added AFTER the config seed — admin box or approved Discord /name.
+
+    ⚠️ THIS EXISTS BECAUSE config.json CANNOT BE THE STORE. `_seedUnusedNames` re-merges
+    config.json's players list on every boot, which is why config-origin names survive a
+    fresh start for free. The obvious fix for admin additions — write them back to
+    config.json too — does not work in prod: config.json is read from a relative path, so
+    in the container it is `/app/config.json`, and only `/data` is on a volume. Writes
+    would survive until the next deploy and then vanish, which is worse than not fixing it
+    because it looks fixed.
+
+    So the durable store is this table, on the volume and in clear_db's preserveTables.
+    `_seedCuratedNames` merges it back into the pool on boot, exactly as config is merged.
+
+    A name lives here permanently, even once it has been drawn onto a player. That is the
+    whole point: `unused_names` loses a name the moment it is assigned, so before this the
+    only copy of a fan-submitted name was the player row it landed on — and that row is
+    dropped by every reset. Measured at 16 such names on the prod snapshot.
+    """
+    __tablename__ = "curated_names"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # admin | discord
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class LeagueArchive(Base):
     """One row per completed season, surviving every fresh start.
 

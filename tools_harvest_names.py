@@ -103,6 +103,31 @@ after = len(have) - (len(variantsInPool) if DROP_VARIANTS else 0) + len(harveste
 print(f"\n  pool after                {after}")
 
 if APPLY:
+    # Backfill curated_names with anything config.json cannot restore. Going forward
+    # _acceptNamesIntoPool records these at approval time, but names approved BEFORE that
+    # existed only on a player row — this is their one chance to get a durable home.
+    try:
+        import json as _json, os as _os
+        cfg = set()
+        if _os.path.exists('config.json'):
+            cfg = {n.lower() for n in _json.load(open('config.json')).get('players', [])}
+        conn.execute("""CREATE TABLE IF NOT EXISTS curated_names (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(120) NOT NULL UNIQUE,
+            source VARCHAR(20), created_at DATETIME)""")
+        known = {r[0] for r in conn.execute("select name from curated_names")}
+        orphans = [n for n in harvested if n.lower() not in cfg and n not in known]
+        if orphans:
+            from datetime import datetime as _dt
+            conn.executemany(
+                "insert or ignore into curated_names (name, source, created_at) values (?,?,?)",
+                [(n, 'backfill', _dt.utcnow()) for n in orphans])
+            print(f"\n  curated_names backfilled with {len(orphans)} name(s) that "
+                  f"config.json cannot restore")
+            for n in orphans[:8]:
+                print(f"      * {n}")
+    except Exception as e:
+        print(f"\n  (curated_names backfill skipped: {e})")
+
     if DROP_VARIANTS:
         for n in variantsInPool:
             conn.execute("delete from unused_names where name=?", (n,))

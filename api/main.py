@@ -4707,7 +4707,7 @@ def _checkAdminAuth(
     raise HTTPException(status_code=403, detail="Forbidden")
 
 
-def _acceptNamesIntoPool(pm, names: list) -> dict:
+def _acceptNamesIntoPool(pm, names: list, source: str = "admin") -> dict:
     """Vet a batch of names and add the survivors to the unused-name pool.
 
     Shared by the direct admin add and the approval of a Discord submission, so a name
@@ -4743,9 +4743,41 @@ def _acceptNamesIntoPool(pm, names: list) -> dict:
         if getattr(pm, 'name_repo', None):
             pm.name_repo.add_names_batch(accepted)
             pm.db_session.commit()
+        _recordCuratedNames(pm, accepted, source)
 
     return {"accepted": accepted, "rejectedInUse": rejectedInUse,
             "duplicatesInBatch": duplicatesInBatch}
+
+
+def _recordCuratedNames(pm, names: list, source: str = "admin") -> None:
+    """Keep a PERMANENT copy of an approved name, separate from the usable pool.
+
+    `unused_names` is a working set: a name leaves it the moment it is drawn onto a player,
+    and after that the only copy is the player row — which every fresh start drops. Config
+    names survive because `_seedUnusedNames` re-merges config.json on boot; names added
+    after the seed had nothing equivalent, so 16 fan-submitted names on the prod snapshot
+    existed in exactly one place and would have gone silently.
+
+    ⚠️ Writing them back to config.json instead does NOT work in prod. config.json is read
+    from a relative path, so the container copy is `/app/config.json` and only `/data` is a
+    volume — the write would survive until the next deploy and then vanish, which is worse
+    than no fix because it looks like one.
+
+    Best-effort: never let bookkeeping fail the actual add.
+    """
+    try:
+        from database.models import CuratedName
+        session = getattr(pm, 'db_session', None)
+        if session is None:
+            return
+        existing = {r[0] for r in session.query(CuratedName.name).all()}
+        fresh = [n for n in names if n not in existing]
+        for n in fresh:
+            session.add(CuratedName(name=n, source=source))
+        if fresh:
+            session.commit()
+    except Exception as e:
+        logger.warning(f"Could not record curated names: {e}")
 
 
 @app.post("/api/admin/names")
@@ -12990,7 +13022,7 @@ async def admin_review_name_submissions(payload: Dict[str, Any],
             return {"approved": 0, "rejected": len(rows), "unavailable": []}
 
         pm = floosball_app.playerManager
-        result = _acceptNamesIntoPool(pm, [r.name for r in rows])
+        result = _acceptNamesIntoPool(pm, [r.name for r in rows], source="discord")
         acceptedSet = {n.lower() for n in result["accepted"]}
         approved, unavailable = 0, []
         for r in rows:
