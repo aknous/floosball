@@ -25,6 +25,13 @@ teamStatsDict = {
                     'divWins': 0,
                     'divLosses': 0,
                     'divTies': 0,
+                    # Record against clubs in your own LEAGUE (24 of the 28 games). The
+                    # wildcard tiebreaker: two clubs from different divisions cannot be
+                    # compared on division record, because they played different
+                    # opponents — league record is the widest basis they share.
+                    'lgWins': 0,
+                    'lgLosses': 0,
+                    'lgTies': 0,
                     'streak': 0,
                     'peakStreak': 0,
                     'scoreDiff': 0,

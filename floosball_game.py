@@ -8272,19 +8272,33 @@ class Game:
             hDiv = getattr(self.homeTeam, 'division', None)
             aDiv = getattr(self.awayTeam, 'division', None)
             isDivisionGame = bool(hDiv) and hDiv == aDiv
+            # ⚠️ `team.league` is the league NAME (a string), set by leagueManager — not a
+            # league object. Reaching for `.name` on it silently yields None and every
+            # game reads as non-league.
+            hLg = getattr(self.homeTeam, 'league', None)
+            aLg = getattr(self.awayTeam, 'league', None)
+            # A division game is by definition intra-league, so it counts for both. That
+            # matters when league identity is not resolvable from the team object: the
+            # division check still keeps the league record correct for 12 of 28 games.
+            isLeagueGame = isDivisionGame or (bool(hLg) and hLg == aLg)
             if _side != 'tie':  # No ties in season standings (frames: by frames won)
-                self.winningTeam.seasonTeamStats['wins'] += 1
-                self.losingTeam.seasonTeamStats['losses'] += 1
+                w, l = self.winningTeam.seasonTeamStats, self.losingTeam.seasonTeamStats
+                w['wins'] += 1
+                l['losses'] += 1
                 if isDivisionGame:
-                    w, l = self.winningTeam.seasonTeamStats, self.losingTeam.seasonTeamStats
                     w['divWins'] = w.get('divWins', 0) + 1
                     l['divLosses'] = l.get('divLosses', 0) + 1
+                if isLeagueGame:
+                    w['lgWins'] = w.get('lgWins', 0) + 1
+                    l['lgLosses'] = l.get('lgLosses', 0) + 1
             else:  # Tie game - both teams get a tie
-                self.homeTeam.seasonTeamStats['ties'] = self.homeTeam.seasonTeamStats.get('ties', 0) + 1
-                self.awayTeam.seasonTeamStats['ties'] = self.awayTeam.seasonTeamStats.get('ties', 0) + 1
-                if isDivisionGame:
-                    for t in (self.homeTeam, self.awayTeam):
-                        t.seasonTeamStats['divTies'] = t.seasonTeamStats.get('divTies', 0) + 1
+                for t in (self.homeTeam, self.awayTeam):
+                    st = t.seasonTeamStats
+                    st['ties'] = st.get('ties', 0) + 1
+                    if isDivisionGame:
+                        st['divTies'] = st.get('divTies', 0) + 1
+                    if isLeagueGame:
+                        st['lgTies'] = st.get('lgTies', 0) + 1
 
         
         self.status = GameStatus.Final

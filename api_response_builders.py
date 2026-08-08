@@ -879,6 +879,10 @@ class LeagueResponseBuilder(ResponseBuilder):
                 'divisionRecord': f"{_dw}-{_dl}" + (f"-{_dt}" if _dt else ""),
                 'divisionWins': _dw,
                 'divisionLosses': _dl,
+                # League record decides WILDCARD ties, so the board needs it for the same
+                # reason it needs division record: to explain its own ordering.
+                'leagueRecord': (f"{_st.get('lgWins', 0) or 0}-{_st.get('lgLosses', 0) or 0}"
+                                 + (f"-{_st.get('lgTies', 0)}" if _st.get('lgTies', 0) else "")),
             })
             team_standings.append(team_dict)
 
