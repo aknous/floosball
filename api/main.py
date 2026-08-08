@@ -3360,23 +3360,37 @@ async def get_standings(response: Response):
     try:
         standings_list = []
 
-        # Head-to-head game results for the tiebreaker, built once.
+        # Head-to-head results (for the tiebreaker) and the form/movement rebuild both
+        # read the same games table, so they share one session.
         from seeding import buildH2HGames
+        from standings_view import buildFormAndMovement
         from database.connection import get_session
         sm = floosball_app.seasonManager
         season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        leagues = floosball_app.leagueManager.leagues
+        teamsByLeague = {league.name: league.teamList for league in leagues}
         _session = get_session()
         try:
             h2h = buildH2HGames(_session, season)
+            form = buildFormAndMovement(_session, season, teamsByLeague)
         finally:
             _session.close()
 
-        for league in floosball_app.leagueManager.leagues:
-            league_dict = {
+        for league in leagues:
+            # Divisions come back in the owner's config order, not whatever order the
+            # record sort happened to leave the teams in — the board renders four fixed
+            # blocks per league and they should not reshuffle as results land.
+            try:
+                divisionOrder = sm._divisionNames(league.name) if sm else None
+            except Exception:
+                divisionOrder = None
+            built = LeagueResponseBuilder.buildStandingsResponse(
+                league.teamList, h2h, form, divisionOrder)
+            standings_list.append({
                 'name': league.name,
-                'standings': LeagueResponseBuilder.buildStandingsResponse(league.teamList, h2h)['standings']
-            }
-            standings_list.append(league_dict)
+                'divisions': built['divisions'],
+                'standings': built['standings'],
+            })
 
         return standings_list
     

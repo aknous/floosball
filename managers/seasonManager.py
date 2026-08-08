@@ -3937,36 +3937,34 @@ class SeasonManager:
         return schedule
 
     def _applyDivisionSeeding(self, qualifiers, league):
-        """Division winners take the top seeds, everyone else by record behind them.
+        """Division winners take the top seeds, the wildcards by record behind them.
 
         A division winner is the best record inside its own division across the WHOLE
-        league (not just among qualifiers) — a club can win a weak division without
-        being top-4 overall, and it should still get the seed. Falls back to plain
-        record order when the league has no divisions stamped.
+        league (not just among qualifiers) — a club can win a weak division without being
+        top-half overall, and it should still get the seed. Falls back to plain record
+        order when the league has no divisions stamped.
+
+        Delegates to `standings_view.seedLeague`, which is also what the standings board
+        renders, so the projected seeds a fan reads all season cannot contradict the field
+        that actually gets built.
+
+        ⚠️ This used to swap each missing winner in by dropping the LAST qualifier, which
+        dropped the previously-swapped winner when a second one was missing: the field
+        came back one club short of the winners it claimed to contain, so `len(field)`
+        landed on 9 instead of 8 and the power-of-two check silently handed out byes.
+        Building the field from winners + wildcards makes the size structural.
         """
-        divs = {}
-        for team in league.teamList:
-            d = getattr(team, 'division', None)
-            if d:
-                divs.setdefault(d, []).append(team)
-        # Was hardcoded to 2. With four divisions a `!= 2` check silently dropped every
-        # division winner's guaranteed seed and fell back to plain record order.
-        if len(divs) < 2:
+        from seeding import buildH2HGames
+        from standings_view import seedLeague
+        season = self.currentSeason.seasonNumber if self.currentSeason else 0
+        try:
+            h2h = buildH2HGames(self.db_session, season)
+        except Exception:
+            h2h = []
+        seeded = seedLeague(list(league.teamList), h2h)
+        if not seeded['seeds']:
             return self._seedTeams(qualifiers)
-        winners = []
-        for d, members in divs.items():
-            ranked = self._seedTeams(list(members))
-            if ranked:
-                winners.append(ranked[0])
-        winners = self._seedTeams(winners)
-        qualifying = set(id(t) for t in qualifiers)
-        # A division winner always qualifies, even if their record would not have.
-        for w in winners:
-            if id(w) not in qualifying:
-                qualifiers = list(qualifiers)[:-1] + [w]
-                qualifying = set(id(t) for t in qualifiers)
-        rest = self._seedTeams([t for t in qualifiers if all(id(t) != id(w) for w in winners)])
-        return winners + rest
+        return [t for t in seeded['ordered'] if t.id in seeded['seeds']]
 
     def _fixBackToBackMatchups(self, schedule: List[List[tuple]]) -> List[List[tuple]]:
         """Eliminate consecutive weeks where the same two teams play each other.
@@ -4288,13 +4286,19 @@ class SeasonManager:
             playoffsNonByeTeamList = []
             league.teamList[:] = self._seedTeams(league.teamList)
 
-            playoffTeamsList.extend(league.teamList[:int(len(league.teamList)/2)])
-            nonPlayoffTeamList.extend(league.teamList[int(len(league.teamList)/2):])
+            # Division winners take the top seeds. Winning the division is the prize; it
+            # buys a favourable matchup, not a free round. Ordered between themselves by
+            # record, then the wildcards by record behind them.
+            playoffTeamsList[:] = self._applyDivisionSeeding(
+                league.teamList[:int(len(league.teamList) / 2)], league)
 
-            # Division winners take seeds 1 and 2. Winning the division is the prize;
-            # it buys a favourable matchup, not a free round. Ordered between
-            # themselves by record, then the rest of the field by record behind them.
-            playoffTeamsList[:] = self._applyDivisionSeeding(playoffTeamsList, league)
+            # ⚠️ The eliminated set is the complement of the ACTUAL field, not the bottom
+            # half by record. A division winner can finish outside the top half — at four
+            # clubs per division that is routine, not a corner case — and taking the
+            # record slice here marked that club eliminated and dropped it into the FA
+            # draft order while it was still alive in the bracket.
+            _qualified = {id(t) for t in playoffTeamsList}
+            nonPlayoffTeamList.extend([t for t in league.teamList if id(t) not in _qualified])
 
             # A power-of-two field needs no byes — every club plays every round.
             # At 8 qualifiers (16-club leagues) that removes the structural advantage
