@@ -6,9 +6,23 @@ back — retirement returns a *variant* ("Name Jr.", then III, IV...) via
 `seasonManager._recyclePlayerName`, not the original. So every name currently attached to a
 living player exists only on a `players` row, and `players` is dropped.
 
-Measured on the prod snapshot: 401 base names sat on player rows and nowhere else. Those
-include every name submitted through Discord `/name` or added by an admin that has since
-been assigned to somebody. They would have been lost silently.
+⚠️ MOST of those come back on their own, and the first version of this docstring said
+otherwise. `_seedUnusedNames` runs on EVERY boot and re-merges `config.json`'s 789-name
+players list, skipping anything already pooled or held by a live player. After a wipe there
+are no live players, so every config name is restored automatically.
+
+What config cannot restore is a name added AFTER the seed — through the admin box or
+Discord `/name` — because `_acceptNamesIntoPool` writes to the DB pool, not to config.json.
+If such a name has since been assigned to a player it exists in exactly one place: that
+player's row.
+
+Measured on the prod snapshot, of 426 names on player rows and not in the pool:
+    385  also in config.json      -> restored automatically, no action needed
+     25  lineage variants         -> deliberately dropped (owner)
+     16  REAL, unrecoverable      -> Leggy Bogard, Wet Kevin, Savvy Cabbages, ...
+
+Sixteen, not four hundred. Still worth running: they are the fan-submitted ones, they are
+the only names with a story attached, and nothing would have reported their loss.
 
 This harvests them back, and while it is there it drops the lineage variants (owner,
 2026-08-07: keep the names, not the Jr artifacts) — those are bookkeeping from a league

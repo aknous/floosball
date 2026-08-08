@@ -28,13 +28,29 @@ returned — retirement adds a *variant* ("Name Jr.", then III, IV...) via
 `seasonManager._recyclePlayerName`, not the original. So every name attached to a player
 exists only on a `players` row, and `players` is dropped.
 
-Measured on the prod snapshot: **401 base names sat on player rows and nowhere else**,
-including every name submitted through Discord `/name` or added by an admin that had since
-been assigned to somebody. Preserving `unused_names` alone would have lost all of them
-silently, and nothing would have reported it.
+⚠️ **Corrected 2026-08-07** (owner: "don't names get added to config.json?"). The first
+pass here claimed 401 names were at risk. Most are not. `_seedUnusedNames` runs on EVERY
+boot and re-merges `config.json`'s 789-name players list, skipping anything already pooled
+or held by a live player — and after a wipe there are no live players, so config restores
+itself automatically.
 
-`tools_harvest_names.py` returns them, and drops the 43 pooled + 35 held lineage variants
-(owner, 2026-08-07: keep the names, not the Jr artifacts). Pool goes 353 → 711.
+What config **cannot** restore is a name added after the seed, via the admin box or Discord
+`/name`: `_acceptNamesIntoPool` writes to the DB pool, not to config.json. Once such a name
+is assigned to a player it exists in exactly one place — that player's row.
+
+Of 426 names on player rows and not in the pool:
+
+| | |
+|---|---|
+| 385 | also in `config.json` → restored automatically |
+| 25 | lineage variants → deliberately dropped |
+| **16** | **real and unrecoverable** — Leggy Bogard, Wet Kevin, Savvy Cabbages, … |
+
+Sixteen, not four hundred. Still worth running: those are the fan-submitted ones, the only
+names with a story attached, and nothing would have reported their loss.
+
+`tools_harvest_names.py` returns them and drops the 43 pooled + 35 held lineage variants
+(owner: keep the names, not the Jr artifacts).
 
 Curiosity worth not "fixing": the suffix-stripping path recovers zero extra names, because
 `players` KEEPS retired rows, so the original is still there under its own name and is
