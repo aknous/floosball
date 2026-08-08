@@ -18,6 +18,13 @@ teamStatsDict = {
                     'wins': 0,
                     'losses': 0,
                     'winPerc': 0,
+                    # Record against clubs in your OWN division. The first playoff
+                    # tiebreaker after win% (owner, 2026-08-07) and the number a division
+                    # race is actually decided on — 12 of the 28 games are division games,
+                    # so it separates clubs that a raw score differential would not.
+                    'divWins': 0,
+                    'divLosses': 0,
+                    'divTies': 0,
                     'streak': 0,
                     'peakStreak': 0,
                     'scoreDiff': 0,

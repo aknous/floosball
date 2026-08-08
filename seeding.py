@@ -4,12 +4,19 @@ A single source of truth so the standings board can never diverge from how the
 playoffs actually seed. Tiebreaker chain, best team first:
 
   1. win percentage
-  2. score differential (full season)
-  3. head-to-head point differential among the EXACT set of tied teams
+  2. DIVISION win percentage (owner, 2026-08-07)
+  3. score differential (full season)
+  4. head-to-head point differential among the EXACT set of tied teams
      (a mini round-robin — sums each tied team's point diff in regular-season
      games vs the OTHER tied teams; works for 2 or 3+ tied teams)
-  4. points for (total points scored)
-  5. points against (fewer is better)
+  5. points for (total points scored)
+  6. points against (fewer is better)
+
+⚠️ Division record is the strongest signal for clubs in the SAME division — 12 of the
+28 games are division games, and those clubs played the identical division slate. Across
+divisions it is weaker, because two clubs' division records come from different opponents.
+It is applied uniformly anyway (that is what was asked for), so read a cross-division tie
+broken this way as rougher than a within-division one.
 
 Ties that survive all of these keep their prior (stable) order.
 
@@ -22,9 +29,28 @@ a list of (home_team_id, away_team_id, home_score, away_score).
 REGULAR_SEASON_WEEKS = 28  # playoffs are weeks 29+; H2H excludes them
 
 
+def _divisionWinPerc(team):
+    """Win rate inside the club's own division, 0.0 when it has played none.
+
+    A RATE rather than raw wins: clubs can reach the tiebreaker having played a different
+    number of division games (a mid-season standings read, or an abandoned fixture), and
+    raw wins would quietly reward whoever had played more of them.
+    """
+    s = getattr(team, 'seasonTeamStats', {}) or {}
+    w = s.get('divWins', 0) or 0
+    l = s.get('divLosses', 0) or 0
+    t = s.get('divTies', 0) or 0
+    played = w + l + t
+    if not played:
+        return 0.0
+    return round((w + 0.5 * t) / played, 4)
+
+
 def _baseKey(team):
     s = getattr(team, 'seasonTeamStats', {}) or {}
-    return (s.get('winPerc', 0) or 0, s.get('scoreDiff', 0) or 0)
+    return (s.get('winPerc', 0) or 0,
+            _divisionWinPerc(team),
+            s.get('scoreDiff', 0) or 0)
 
 
 def _pointsFor(team):

@@ -1205,6 +1205,18 @@ class SeasonManager:
                             game.losingTeam.seasonTeamStats.setdefault('losses', 0)
                             game.winningTeam.seasonTeamStats['wins'] += 1
                             game.losingTeam.seasonTeamStats['losses'] += 1
+                        # Division record has to survive the recovery path too, or a
+                        # crashed division game silently drops out of the first playoff
+                        # tiebreaker while still counting in the overall record.
+                        _hd = getattr(game.homeTeam, 'division', None)
+                        if _hd and _hd == getattr(game.awayTeam, 'division', None):
+                            if tiedAtCrash:
+                                for _t in (game.homeTeam, game.awayTeam):
+                                    _t.seasonTeamStats['divTies'] = _t.seasonTeamStats.get('divTies', 0) + 1
+                            else:
+                                _w, _l = game.winningTeam.seasonTeamStats, game.losingTeam.seasonTeamStats
+                                _w['divWins'] = _w.get('divWins', 0) + 1
+                                _l['divLosses'] = _l.get('divLosses', 0) + 1
                     self._updateTeamRecords(game)
                 except Exception as recordErr:
                     logger.warning(f"Failed to update records after game error recovery: {recordErr}")

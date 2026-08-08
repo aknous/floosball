@@ -848,10 +848,10 @@ class LeagueResponseBuilder(ResponseBuilder):
         """Build league standings response.
 
         Ordered by the SAME tiebreaker chain the playoffs seed on (win% →
-        score differential → head-to-head point diff → points-for →
-        points-against) via seeding.orderTeams, so the board can't show an
-        order that doesn't match how playoffs would actually seed. `h2hGames`
-        (from seeding.buildH2HGames) is only consulted inside a real tie.
+        DIVISION record → score differential → head-to-head point diff →
+        points-for → points-against) via seeding.orderTeams, so the board can't
+        show an order that doesn't match how playoffs would actually seed.
+        `h2hGames` (from seeding.buildH2HGames) is only consulted inside a real tie.
         """
         from seeding import orderTeams
         orderedTeams = orderTeams(list(teams), h2hGames or [])
@@ -863,11 +863,22 @@ class LeagueResponseBuilder(ResponseBuilder):
             # belongs on the board. Also include points for/against.
             scoreDiff = team.seasonTeamStats.get('scoreDiff', 0)
             pointsFor = (team.seasonTeamStats.get('Offense', {}) or {}).get('pts', 0)
+            # Division and its record: the division is how the new board groups clubs,
+            # and the record is the FIRST tiebreaker after win%, so a board that hides it
+            # cannot explain its own ordering.
+            _st = team.seasonTeamStats
+            _dw = _st.get('divWins', 0) or 0
+            _dl = _st.get('divLosses', 0) or 0
+            _dt = _st.get('divTies', 0) or 0
             team_dict.update({
                 'scoreDiff': cleanScore(scoreDiff),
                 'pointsFor': cleanScore(pointsFor),
                 'pointsAgainst': cleanScore(pointsFor - scoreDiff),
-                'streak': team.seasonTeamStats.get('streak', 0),
+                'streak': _st.get('streak', 0),
+                'division': getattr(team, 'division', None),
+                'divisionRecord': f"{_dw}-{_dl}" + (f"-{_dt}" if _dt else ""),
+                'divisionWins': _dw,
+                'divisionLosses': _dl,
             })
             team_standings.append(team_dict)
 

@@ -8265,12 +8265,26 @@ class Game:
             }})
 
         if self.isRegularSeasonGame:
+            # A division game only counts as one if BOTH clubs carry the same division.
+            # `division` is None until _assignDivisions has stamped it (and stays None on a
+            # league that is not division-shaped), so the None == None case must not read
+            # as a match or every game in a flat league would count as divisional.
+            hDiv = getattr(self.homeTeam, 'division', None)
+            aDiv = getattr(self.awayTeam, 'division', None)
+            isDivisionGame = bool(hDiv) and hDiv == aDiv
             if _side != 'tie':  # No ties in season standings (frames: by frames won)
                 self.winningTeam.seasonTeamStats['wins'] += 1
                 self.losingTeam.seasonTeamStats['losses'] += 1
+                if isDivisionGame:
+                    w, l = self.winningTeam.seasonTeamStats, self.losingTeam.seasonTeamStats
+                    w['divWins'] = w.get('divWins', 0) + 1
+                    l['divLosses'] = l.get('divLosses', 0) + 1
             else:  # Tie game - both teams get a tie
                 self.homeTeam.seasonTeamStats['ties'] = self.homeTeam.seasonTeamStats.get('ties', 0) + 1
                 self.awayTeam.seasonTeamStats['ties'] = self.awayTeam.seasonTeamStats.get('ties', 0) + 1
+                if isDivisionGame:
+                    for t in (self.homeTeam, self.awayTeam):
+                        t.seasonTeamStats['divTies'] = t.seasonTeamStats.get('divTies', 0) + 1
 
         
         self.status = GameStatus.Final
