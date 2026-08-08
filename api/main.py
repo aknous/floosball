@@ -4550,6 +4550,46 @@ def _hofInducteeDict(player, teamMgr, pm, records=None, positiveKeys=None, seaso
     }
 
 
+@app.get("/api/league-archive")
+def get_league_archive():
+    """Completed seasons from previous incarnations of the league.
+
+    The only history that survives a fresh start. Everything else is dropped and its ids
+    restart from 1 — see docs/FRESH_START_HISTORY_PLAN.md for why preserving the ORIGINAL
+    tables would reattach history to unrelated players rather than save it.
+
+    Newest era first, newest season first within an era. Empty until
+    tools_archive_seasons.py has been run against a league that is about to be reset.
+    """
+    from database.connection import get_session
+    from database.models import LeagueArchive
+    import json as _json
+
+    session = get_session()
+    try:
+        rows = (session.query(LeagueArchive)
+                .order_by(LeagueArchive.era.desc(), LeagueArchive.season.desc()).all())
+        eras: Dict[int, Dict[str, Any]] = {}
+        for r in rows:
+            era = eras.setdefault(r.era, {"era": r.era, "label": r.era_label, "seasons": []})
+            try:
+                leagues = _json.loads(r.league_champions) if r.league_champions else []
+            except Exception:
+                leagues = []
+            era["seasons"].append({
+                "season": r.season,
+                "champion": r.champion,
+                "leagueChampions": leagues,
+                "mvp": r.mvp,
+            })
+        out = list(eras.values())
+        for e in out:
+            e["seasonCount"] = len(e["seasons"])
+        return build_success_response({"eras": out})
+    finally:
+        session.close()
+
+
 @app.get("/api/hall-of-fame", response_model=Dict[str, Any])
 async def get_hall_of_fame(response: Response):
     """Enriched Hall of Fame inductees for the plaque gallery — each with every

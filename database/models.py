@@ -915,6 +915,37 @@ class SupporterDividend(Base):
     )
 
 
+class LeagueArchive(Base):
+    """One row per completed season, surviving every fresh start.
+
+    ⚠️ DELIBERATELY HAS NO FOREIGN KEYS, and that is the entire point. The existing history
+    tables store `player_id` / `team_id` and no names — `records` has no player_name column
+    at all — while ids restart from 1 on a wipe. Preserving those tables across a reset
+    would not save the history, it would silently REATTACH it: a 15-season passing record
+    would land on whichever rookie inherited id 292, and every championship would be
+    credited to an unrelated club. So the archive stores resolved NAMES, and nothing that
+    can be re-pointed.
+
+    Kept deliberately light (owner, 2026-08-07): who won, and who was MVP. Not records, not
+    the Hall of Fame, not user progress.
+
+    `era` groups seasons that shared a league. Era 1 is the 24-club league, seasons 1-15.
+    A future reset appends the next era rather than overwriting.
+    """
+    __tablename__ = "league_archive"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    era: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    era_label: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    champion: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    league_champions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    mvp: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("era", "season", name="uq_archive_era_season"),)
+
+
 class Championship(Base):
     """Championship table - tracks team championships by season and type."""
     __tablename__ = "championships"

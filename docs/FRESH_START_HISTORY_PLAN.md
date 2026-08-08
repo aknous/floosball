@@ -3,8 +3,20 @@
 **Next-season item 10.** Owner intent: restart the simulation totally fresh for the 32-club
 expansion, but not lose everything.
 
-**Status:** analysed 2026-08-07 against `data/floosball_prod_latest.db` (15 seasons, 170
-users). Needs an owner decision on three points, marked ❓ below. No code written yet.
+**Status:** ✅ **BUILT 2026-08-07.** Scope settled by the owner the same day: *"losing user
+progress is fine. I'm not looking to save too much. just light data like who won the
+floosbowl each season."*
+
+So the shipped scope is one row per completed season — champion, league champions, MVP —
+and nothing else. Sections B and C below are recorded as the analysis that led here, not as
+work outstanding. The three ❓ decisions are moot under this scope: user progress is not
+preserved, records are not carried forward, and the Hall of Fame is not archived.
+
+  `database/models.py`          LeagueArchive (no foreign keys, by design)
+  `database/connection.py`      inline migration + added to preserveTables
+  `tools_archive_seasons.py`    dry-run by default; --apply writes
+  `GET /api/league-archive`     grouped by era, newest first
+  `test_league_archive.py`      18 assertions
 
 ## What a fresh start does today
 

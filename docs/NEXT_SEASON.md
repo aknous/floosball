@@ -159,6 +159,13 @@ wins + title odds → a "favorites" board). POC exists at `docs/SEASON12_PREDICT
 
 ### 10. Prod fresh start that keeps some history
 
+✅ **BUILT 2026-08-07** — see `docs/FRESH_START_HISTORY_PLAN.md`. Scope settled to "light
+data": one archived row per season (champion, league champions, MVP). User progress, records
+and the Hall of Fame are deliberately NOT preserved (owner call).
+
+⚠️ **`tools_archive_seasons.py --apply` must be run against prod BEFORE the wipe.** It is
+the last moment the old league is readable, and the archive is the only thing that survives.
+
 **The item with real risk — do this deliberately, not at the cutover.**
 
 `clear_db()` preserves exactly four tables: `users`, `beta_allowlist`, `app_settings`,

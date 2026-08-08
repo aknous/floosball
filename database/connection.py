@@ -463,6 +463,24 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # The cross-reset season archive. Must exist before any wipe can populate it.
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS league_archive (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    era INTEGER NOT NULL DEFAULT 1,
+                    era_label VARCHAR(80),
+                    season INTEGER NOT NULL,
+                    champion VARCHAR(120),
+                    league_champions TEXT,
+                    mvp VARCHAR(120),
+                    created_at DATETIME,
+                    UNIQUE(era, season)
+                )"""))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
         # One-change-per-season username renames. Inline migration because alembic is not
         # run on deploy — this is what actually lands the column on the prod DB.
         try:
@@ -2554,7 +2572,14 @@ def clear_db():
     # admins can add to from the dashboard; that curation should not be
     # wiped by a fresh start. New names from config.json are merged in
     # on every boot via _seedUnusedNames().
-    preserveTables = {"users", "beta_allowlist", "app_settings", "unused_names"}
+    # ⚠️ league_archive is the ONLY history that survives a wipe, and it survives because
+    # it holds resolved NAMES with no foreign keys. The other history tables must NOT be
+    # added here: `records` and `championships` store player_id/team_id with no names, and
+    # ids restart from 1, so preserving them would reattach a 15-season record to whichever
+    # rookie inherited the id rather than saving anything. See
+    # docs/FRESH_START_HISTORY_PLAN.md.
+    preserveTables = {"users", "beta_allowlist", "app_settings", "unused_names",
+                      "league_archive"}
 
     # Drop all non-preserved tables (reverse dependency order), then recreate
     tablesToDrop = [t for t in reversed(Base.metadata.sorted_tables)
