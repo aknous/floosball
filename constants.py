@@ -3033,6 +3033,13 @@ OFFSEASON_SNAPSHOT_EXCLUDE_TABLES = {
 TD_DRAIN_MIN_SECONDS = 25   # below this there is no room to drain AND still snap the ball
 TD_DRAIN_MAX_YARDS = 5      # close enough that the score is near-certain, not hoped for
 
+# How close the offense must be before the DEFENSE treats a touchdown as the expected end
+# of the drive and starts stopping the clock (Game._leadIsAboutToEvaporate). Wider than
+# TD_DRAIN_MAX_YARDS on purpose: the offense only drains once a score is near-certain, but
+# a defense that waits for that same certainty has already lost the clock it was trying to
+# save. This is a threat, not a bet.
+LEAD_THREAT_TD_YARDS = 10
+
 GLITCH_CARDS_ENABLED = True
 
 # Trigger base, by the on-card player's position on the attention ladder. Chosen over an

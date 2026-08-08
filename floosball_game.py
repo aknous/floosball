@@ -51,7 +51,7 @@ from constants import (
     MOMENTUM_FG_MISSED, MOMENTUM_FG_MADE, MOMENTUM_SACK, MOMENTUM_BIG_PLAY_BONUS,
     MOMENTUM_PUNT,
     WPA_PASS_QB_SHARE, WPA_DROP_RECEIVER_SHARE, DEF_PLAYMAKER_BONUS,
-    TD_DRAIN_MIN_SECONDS, TD_DRAIN_MAX_YARDS,
+    TD_DRAIN_MIN_SECONDS, TD_DRAIN_MAX_YARDS, LEAD_THREAT_TD_YARDS,
 )
 
 # Import TimingManager for game-level timing control
@@ -2405,21 +2405,44 @@ class Game:
         return max(kicker.maxFgDistance, AWAKENED_FG_MAX_YARDS) - self.gameRules.fgSnapDistance
 
     def _leadIsAboutToEvaporate(self, lead: int) -> bool:
-        """Is the offense already close enough that one kick erases this lead?
+        """Is the offense already close enough that its likely score erases this lead?
 
         The case a "leading team runs the clock down" rule gets wrong. Draining is only
-        good for the leader while the lead SURVIVES the drive. Once the offense is inside
-        field-goal range with a lead of 3 or less, the most likely end of the possession is
-        a kick that ties it or wins it — so every second the leader lets tick away is a
-        second off its OWN answer, not the opponent's chance.
+        good for the leader while the lead SURVIVES the drive. Once the offense is close
+        enough that the expected end of the possession wipes the lead out, every second the
+        leader lets tick away is a second off its OWN answer, not the opponent's chance.
 
-        Bounded deliberately at a 3-point lead. At 4+ a field goal leaves the leader still
-        ahead, so the clock genuinely is their friend and the opponent needs a touchdown
-        they may not get; burning timeouts there is the "no coach does that" case this
-        function's caller already guards against elsewhere. Tied counts: a kick puts the
-        offense ahead with no time for a reply, which is the same problem.
+        TWO LIMBS, because there are two ways to score:
+
+          - a KICK erases a lead of 3 or less, from anywhere in field-goal range;
+          - a TOUCHDOWN erases up to a full possession, but only from close in.
+
+        The second limb exists because the first one alone left a hole the width of the
+        red zone: up 5 with the opponent on your 3 and a minute left, a field goal does not
+        help them so limb one says the clock is your friend — but they are not kicking, they
+        are scoring a touchdown to go ahead, and you will need time to answer. That is the
+        mirror of `_isTdDrainMode` on the offense's side, which holds exactly that score
+        back; without this the defense cannot respond to it at all.
+
+        `LEAD_THREAT_TD_YARDS` (10) is deliberately wider than the offense's own
+        `TD_DRAIN_MAX_YARDS` (5). The offense only starts draining once its score is
+        near-certain; a defense that waits for the same certainty has already lost the
+        clock it was trying to save. It is reacting to a threat, not betting on one.
+
+        Beyond a full possession the lead survives any single score, so the clock genuinely
+        IS the leader's friend and burning timeouts is the "no coach does that" case the
+        caller guards against elsewhere. Tied counts in both limbs: a score puts the offense
+        ahead with no time for a reply, which is the same problem seen a step earlier.
         """
-        if lead < 0 or lead > 3:
+        if lead < 0 or lead > self._maxPossession():
+            return False
+
+        # Limb 2 — a touchdown from close range erases anything up to a full possession.
+        if self.yardsToEndzone <= LEAD_THREAT_TD_YARDS:
+            return True
+
+        # Limb 1 — a kick, which only helps them if it ties or wins.
+        if lead > self._fgValue():
             return False
         kicker = self.offensiveTeam.rosterDict.get('k')
         if kicker is None:

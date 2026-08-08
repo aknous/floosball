@@ -37,6 +37,7 @@ class Rules:
 
 class StubGame:
     _checkDefensiveTimeout = fg.Game._checkDefensiveTimeout
+    _fgValue = fg.Game._fgValue
     _leadIsAboutToEvaporate = fg.Game._leadIsAboutToEvaporate
     _isGarbageTime = fg.Game._isGarbageTime
     _coachClockIQ = fg.Game._coachClockIQ
@@ -67,7 +68,7 @@ class StubGame:
         pass
 
     def _maxLadderPoints(self):
-        return 0
+        return 2   # the real default two-point conversion
 
     def _awakenedReadyFor(self, player, kind):
         return False
@@ -104,9 +105,26 @@ expect(f"up 3, offense in FG range, 0:50 left -> stops the clock ({r:.0%})", r >
 r = calls(defScore=17, offScore=17, yardsToEndzone=30, secs=50)
 expect(f"TIED with the offense in range -> also stops the clock ({r:.0%})", r > 0.4,)
 
+# ── the touchdown limb: a red-zone threat erases more than a kick can ──────
+# Without this the defence had a hole the width of the red zone. Up 5 with the opponent on
+# the 3, a FG does not help them, so the kick limb says "clock is your friend" — but they
+# are not kicking, they are scoring to go ahead. This is the mirror of _isTdDrainMode,
+# which holds exactly that score back; without it the defence cannot answer that play.
+r = calls(defScore=19, offScore=14, yardsToEndzone=3, secs=50)
+expect(f"up 5, opponent on the 3 -> stops the clock ({r:.0%})", r > 0.4)
+
+r = calls(defScore=21, offScore=14, yardsToEndzone=3, secs=50)
+expect(f"up 7 on the 3: a TD still ties, so the clock is not safe ({r:.0%})", r > 0.4)
+
+r = calls(defScore=23, offScore=14, yardsToEndzone=3, secs=50)
+expect(f"up 9: beyond one possession, the lead survives any single score ({r:.0%})", r == 0)
+
+r = calls(defScore=19, offScore=14, yardsToEndzone=35, secs=50)
+expect(f"up 5 but they are on the 35 — a TD there is a hope, not a threat ({r:.0%})", r == 0)
+
 # ── where the old reasoning is still right ─────────────────────────────────
 r = calls(defScore=21, offScore=14, yardsToEndzone=30, secs=50)
-expect(f"up 7: a FG leaves them ahead, so the clock IS their friend ({r:.0%})", r == 0)
+expect(f"up 7 at midfield range: a FG leaves them ahead, clock IS their friend ({r:.0%})", r == 0)
 
 r = calls(defScore=17, offScore=14, yardsToEndzone=75, secs=50)
 expect(f"up 3 but the offense is 75 out, nowhere near range ({r:.0%})", r == 0)
