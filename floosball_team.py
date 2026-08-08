@@ -12,6 +12,7 @@ teamStatsDict = {
                     'elo': 0,
                     'overallRating': 0,
                     'madePlayoffs': False,
+                    'divisionChamp': False,
                     'leagueChamp': False,
                     'floosbowlChamp': False,
                     'topSeed': False,
@@ -128,6 +129,8 @@ class Team:
         # Game._applyFormOffset, persisted to teams.form_offset so a mid-season
         # restart doesn't reset everyone to flat.
         self.formOffset = 0.0
+        # Division titles, same shape as the league/Floos Bowl lists ('Season N').
+        self.divisionTitles = []
         self.leagueChampionships = []
         self.floosbowlChampionships = []
         self.topSeeds = []

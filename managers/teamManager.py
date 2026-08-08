@@ -225,6 +225,7 @@ class TeamManager:
 
             # Historical stats (stored as JSON in database)
             team.allTimeTeamStats = db_team.all_time_stats or {}
+            team.divisionTitles = db_team.division_titles or []
             team.leagueChampionships = db_team.league_championships or []
             team.floosbowlChampionships = db_team.floosbowl_championships or []
             team.regularSeasonChampions = db_team.top_seeds or []  # top_seeds = regular season champions
@@ -283,6 +284,7 @@ class TeamManager:
         
         # Historical stats
         newTeam.allTimeTeamStats = teamData['allTimeTeamStats']
+        newTeam.divisionTitles = teamData.get('divisionTitles', [])
         newTeam.leagueChampionships = teamData['leagueChampionships']
         newTeam.floosbowlChampionships = teamData['floosbowlChampionships']
         newTeam.topSeeds = teamData.get('topSeeds', teamData.get('regularSeasonChampions', []))
@@ -530,6 +532,7 @@ class TeamManager:
 
             # Historical stats (stored as JSON)
             db_team.all_time_stats = team.allTimeTeamStats
+            db_team.division_titles = getattr(team, 'divisionTitles', []) or []
             db_team.league_championships = team.leagueChampionships
             db_team.floosbowl_championships = team.floosbowlChampionships
             db_team.top_seeds = team.topSeeds
@@ -589,6 +592,7 @@ class TeamManager:
             'allTimeTeamStats': team.allTimeTeamStats,
             'floosbowlChampionships': team.floosbowlChampionships,
             'topSeeds': team.topSeeds,
+            'divisionTitles': getattr(team, 'divisionTitles', []) or [],
             'leagueChampionships': team.leagueChampionships,
             'playoffAppearances': team.playoffAppearances,
             'gmScore': team.gmScore,

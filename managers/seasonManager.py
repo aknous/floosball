@@ -4346,6 +4346,36 @@ class SeasonManager:
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                     await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_topSeedText))
 
+            season_str_div = 'Season {}'.format(self.currentSeason.seasonNumber)
+
+            # ── Division titles ──
+            # Awarded here rather than with the playoff seeds because a division winner is
+            # the best record INSIDE its division across the whole league, which
+            # _applyDivisionSeeding already computes — a club can win a weak division
+            # without being top-4 overall, and it has still won it.
+            divisions: Dict[str, list] = {}
+            for _t in league.teamList:
+                _d = getattr(_t, 'division', None)
+                if _d:
+                    divisions.setdefault(_d, []).append(_t)
+            for _divName, _members in divisions.items():
+                _ranked = self._seedTeams(list(_members))
+                if not _ranked:
+                    continue
+                _winner = _ranked[0]
+                _winner.seasonTeamStats['divisionChamp'] = True
+                if not hasattr(_winner, 'divisionTitles'):
+                    _winner.divisionTitles = []
+                if season_str_div not in _winner.divisionTitles:
+                    _winner.divisionTitles.append(season_str_div)
+                if not resuming:
+                    _divText = '{0} {1} win the {2}!'.format(
+                        _winner.city, _winner.name, _divName)
+                    self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _divText}})
+                    if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                        await broadcaster.broadcast_season_event(
+                            LeagueNewsEvent.leagueNews(_divText))
+
             playoffTeams[league.name] = playoffTeamsList.copy()
             playoffsByeTeams[league.name] = playoffsByeTeamList.copy()
             playoffsNonByeTeams[league.name] = playoffsNonByeTeamList.copy()
@@ -11048,65 +11078,30 @@ class SeasonManager:
             if not teamManager:
                 return
             
+            # One loop over (attribute, championship_type) instead of four near-identical
+            # blocks — the copy-paste version is where a new title type gets half-added.
+            TITLE_KINDS = (
+                ('topSeeds', 'regular_season'),
+                ('divisionTitles', 'division'),
+                ('leagueChampionships', 'league'),
+                ('floosbowlChampionships', 'floosbowl'),
+            )
             for team in teamManager.teams:
-                # Save top seeds
-                if hasattr(team, 'topSeeds') and team.topSeeds:
-                    for season_str in team.topSeeds:
-                        season_num = int(season_str.replace('Season ', ''))
-                        
-                        # Check if already exists
+                for attr, kind in TITLE_KINDS:
+                    for season_str in (getattr(team, attr, None) or []):
+                        try:
+                            season_num = int(str(season_str).replace('Season ', ''))
+                        except ValueError:
+                            continue
                         existing = self.db_session.query(DBChampionship).filter_by(
-                            team_id=team.id,
-                            season=season_num,
-                            championship_type='regular_season'
+                            team_id=team.id, season=season_num, championship_type=kind,
                         ).first()
-                        
                         if not existing:
-                            championship = DBChampionship(
-                                team_id=team.id,
-                                season=season_num,
-                                championship_type='regular_season'
-                            )
-                            self.db_session.add(championship)
-                
-                # Save league championships (Floosbowl finalists)
-                if hasattr(team, 'leagueChampionships') and team.leagueChampionships:
-                    for season_str in team.leagueChampionships:
-                        season_num = int(season_str.replace('Season ', ''))
-                        
-                        existing = self.db_session.query(DBChampionship).filter_by(
-                            team_id=team.id,
-                            season=season_num,
-                            championship_type='league'
-                        ).first()
-                        
-                        if not existing:
-                            championship = DBChampionship(
-                                team_id=team.id,
-                                season=season_num,
-                                championship_type='league'
-                            )
-                            self.db_session.add(championship)
-                
-                # Save Floosbowl championships (winners only)
-                if hasattr(team, 'floosbowlChampionships') and team.floosbowlChampionships:
-                    for season_str in team.floosbowlChampionships:
-                        season_num = int(season_str.replace('Season ', ''))
-                        
-                        existing = self.db_session.query(DBChampionship).filter_by(
-                            team_id=team.id,
-                            season=season_num,
-                            championship_type='floosbowl'
-                        ).first()
-                        
-                        if not existing:
-                            championship = DBChampionship(
-                                team_id=team.id,
-                                season=season_num,
-                                championship_type='floosbowl'
-                            )
-                            self.db_session.add(championship)
-            
+                            self.db_session.add(DBChampionship(
+                                team_id=team.id, season=season_num,
+                                championship_type=kind,
+                            ))
+
             self.db_session.commit()
             logger.info(f"Saved championships for season {self.currentSeason.seasonNumber}")
             

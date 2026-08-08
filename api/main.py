@@ -580,6 +580,8 @@ async def get_team(team_id: int, response: Response):
         team_dict = TeamResponseBuilder.buildTeamWithRatings(team)
         team_dict['abbr'] = getattr(team, 'abbr', team.name[:3].upper())
         team_dict['league'] = team.league
+        team_dict['division'] = getattr(team, 'division', None)
+        team_dict['divisionTitles'] = getattr(team, 'divisionTitles', []) or []
         team_dict['leagueChampionships'] = team.leagueChampionships
         team_dict['regularSeasonChampions'] = getattr(team, 'regularSeasonChampions', [])
         team_dict['floosbowlChampionships'] = team.floosbowlChampionships

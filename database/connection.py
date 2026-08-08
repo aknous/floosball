@@ -464,6 +464,14 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Division titles on teams (8 divisions, owner 2026-08-07).
+        try:
+            conn.execute(text("ALTER TABLE teams ADD COLUMN division_titles JSON"))
+            conn.commit()
+            logger.info("  Migration: added teams.division_titles")
+        except Exception:
+            conn.rollback()
+
         # Permanent record of admin/Discord-approved names. See CuratedName: config.json
         # cannot hold these because the container copy is ephemeral.
         try:

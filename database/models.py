@@ -82,6 +82,8 @@ class Team(Base):
     league_championships: Mapped[Optional[list]] = mapped_column(JSON)
     floosbowl_championships: Mapped[Optional[list]] = mapped_column(JSON)
     top_seeds: Mapped[Optional[list]] = mapped_column(JSON)
+    # Division titles ('Season N'), same shape as the other title lists.
+    division_titles: Mapped[Optional[list]] = mapped_column(JSON)
     playoff_appearances: Mapped[Optional[int]] = mapped_column(Integer, default=0)
     roster_history: Mapped[Optional[dict]] = mapped_column(JSON)
     # Single source of truth for "which coach does this team have".
