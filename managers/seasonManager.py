@@ -4112,16 +4112,16 @@ class SeasonManager:
                     if not label:
                         continue
                     isPlayer = path.startswith('players.')
-                    # A TEAM record's holder is one of the two clubs that just played, so
-                    # the crest is resolvable right here. Player records get their team
-                    # filled in at read time from the player row (front_page).
-                    teamId = None
-                    if not isPlayer:
-                        teamId = next((t.id for t in (game.homeTeam, game.awayTeam)
-                                       if getattr(t, 'name', None) == name), None)
+                    # ⚠️ `holderId` IS the team id on a team record — `_checkTeamGameRecord`
+                    # stores `id: team.id` right alongside the name. An earlier version
+                    # ignored that and matched the record's name against `team.name`, which
+                    # never hit: the record stores "Cleveland Rocks" (city + name) while
+                    # `team.name` is just "Rocks", so every team record shipped without a
+                    # crest. Player records get their team filled in at read time instead,
+                    # from the player row (front_page).
                     emit(category='record', eventType=path,
                          text=f'{name} set the {label} record at {round(value)}',
-                         teamId=teamId,
+                         teamId=None if isPlayer else holderId,
                          playerId=holderId if isPlayer else None,
                          playerName=name if isPlayer else None)
             except Exception as e:
