@@ -3158,6 +3158,29 @@ async def get_league_news_recent(
         raise HTTPException(status_code=500, detail="Failed to fetch league news")
 
 
+@app.get("/api/front-page/news")
+async def get_front_page_news(response: Response, limit: int = Query(default=8, ge=1, le=20)):
+    """League news for the front page: one lead item plus the rows behind it.
+
+    Generated from stored fields rather than read from a log — see `front_page.py` for
+    why. Every headline is a single templated clause and the lead's supporting content is
+    four numbers, never prose.
+    """
+    response.headers["Cache-Control"] = "public, max-age=20"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from front_page import buildLeagueNews
+    session = get_session()
+    try:
+        return build_success_response(buildLeagueNews(floosball_app, session, limit))
+    except Exception as e:
+        logger.exception(f"Failed to build front-page news: {e}")
+        raise HTTPException(status_code=500, detail="Failed to build front-page news")
+    finally:
+        session.close()
+
+
 @app.get("/api/highlights", response_model=List[Dict[str, Any]])
 async def get_highlights(response: Response, limit: int = Query(default=20, ge=1, le=100)):
     """
