@@ -110,6 +110,25 @@ def _headToHeadDiff(group, h2hGames):
     return diff
 
 
+def buildH2HGames(session, season):
+    """Final regular-season head-to-head games for `season`, as
+    (home_team_id, away_team_id, home_score, away_score) tuples. Playoff weeks
+    (29+) are excluded so postseason results don't skew the tiebreaker."""
+    from database.models import Game
+    rows = (
+        session.query(
+            Game.home_team_id, Game.away_team_id, Game.home_score, Game.away_score,
+        )
+        .filter(
+            Game.season == season,
+            Game.status == 'final',
+            Game.week <= REGULAR_SEASON_WEEKS,
+        )
+        .all()
+    )
+    return [(r[0], r[1], r[2] or 0, r[3] or 0) for r in rows]
+
+
 def orderTeams(teams, h2hGames=None):
     """Teams ordered best-first by the full tiebreaker chain (see module docstring)."""
     h2hGames = h2hGames or []
