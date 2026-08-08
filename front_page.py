@@ -75,6 +75,32 @@ def _rowsToItems(rows) -> List[Dict[str, Any]]:
     return items
 
 
+def _fillTeamFromPlayer(session, items: List[Dict[str, Any]]) -> None:
+    """Give player-attributed items their player's team, so the feed can show a crest.
+
+    Records and anomaly transitions know who the player is but not who they play for —
+    the publisher is inside the player's own system and has no team to hand. Rather than
+    teaching each of those publishers to resolve a team, the gap is closed once here, in
+    one bulk query, which also covers any future player-attributed category for free.
+    """
+    needy = [i for i in items if i.get('playerId') and not i.get('teamId')]
+    if not needy:
+        return
+    try:
+        from database.models import Player
+        rows = (
+            session.query(Player.id, Player.team_id)
+            .filter(Player.id.in_({i['playerId'] for i in needy}))
+            .all()
+        )
+        teamByPlayer = {pid: tid for pid, tid in rows}
+        for item in needy:
+            item['teamId'] = teamByPlayer.get(item['playerId'])
+    except Exception as e:
+        # A crest is decoration; losing it must not cost the feed.
+        logger.debug(f"Could not resolve teams for news items: {e}")
+
+
 def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
     """One lead item plus the rows behind it, newest first.
 
@@ -96,6 +122,7 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
     items = _rowsToItems(rows)
     if not items:
         return {'lead': None, 'items': []}
+    _fillTeamFromPlayer(session, items)
 
     priority = {c: i for i, c in enumerate(CATEGORY_PRIORITY)}
     cutoff = datetime.utcnow() - timedelta(hours=LEAD_MAX_AGE_HOURS)

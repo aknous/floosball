@@ -4111,10 +4111,19 @@ class SeasonManager:
                     label = self._recordLabel(path)
                     if not label:
                         continue
+                    isPlayer = path.startswith('players.')
+                    # A TEAM record's holder is one of the two clubs that just played, so
+                    # the crest is resolvable right here. Player records get their team
+                    # filled in at read time from the player row (front_page).
+                    teamId = None
+                    if not isPlayer:
+                        teamId = next((t.id for t in (game.homeTeam, game.awayTeam)
+                                       if getattr(t, 'name', None) == name), None)
                     emit(category='record', eventType=path,
                          text=f'{name} set the {label} record at {round(value)}',
-                         playerId=holderId if path.startswith('players.') else None,
-                         playerName=name if path.startswith('players.') else None)
+                         teamId=teamId,
+                         playerId=holderId if isPlayer else None,
+                         playerName=name if isPlayer else None)
             except Exception as e:
                 logger.debug(f"Record news skipped: {e}")
 
