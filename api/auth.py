@@ -2,6 +2,8 @@
 
 import os
 import random as _random
+import re as _re
+from sqlalchemy import func as _func
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
@@ -141,6 +143,72 @@ _USERNAME_LASTS = [
     "Suplex", "Powerbomb", "Bodyslam", "Headlock", "Pinkerton",
     "Spectacles", "Hollyhock", "Pickleweed", "Bumblefiddle", "Periwinkle",
 ]
+
+
+# ─── User-chosen usernames ───────────────────────────────────────────────────
+# Until now the only route to a username was picking one of four GENERATED candidates.
+# The endpoint always accepted an arbitrary string — it was the frontend that only offered
+# the picker — so opening it up is mostly about the rules that were never written.
+
+USERNAME_MIN_LEN = 3
+USERNAME_MAX_LEN = 20
+_USERNAME_RE = _re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+# Names nobody may take. Impersonation is the point: a user called "Cassian" posting in a
+# feed that also carries real Cores lines is indistinguishable from the Core itself, and
+# the same goes for anything that reads as staff.
+USERNAME_RESERVED = {
+    "admin", "administrator", "moderator", "mod", "staff", "system", "root",
+    "floosball", "official", "support", "help", "null", "undefined", "anonymous",
+    # The Cores (coresManager) — they speak in the same feeds users do.
+    "cassian", "pyre", "aris", "halverson", "vera", "cores", "core",
+}
+
+# Deliberately short. A real profanity filter is a rabbit hole with a bad failure mode
+# (false positives on ordinary names), and there is already an admin reroll endpoint as
+# the escape hatch. This catches the obvious rather than pretending to be exhaustive.
+USERNAME_BLOCKED_SUBSTRINGS = {
+    "fuck", "shit", "cunt", "nigg", "fagg", "rape", "nazi", "hitler",
+}
+
+
+def validateUsername(name: str) -> tuple:
+    """(cleanedName, errorMessage). errorMessage is None when the name is acceptable.
+
+    Rules are deliberately narrow — letters, digits and underscores, starting with a
+    letter. Anything wider (spaces, punctuation, unicode lookalikes) invites impersonation
+    of other users and renders unpredictably in the places a name appears.
+    """
+    name = (name or "").strip()
+    if not name:
+        return None, "Username is required"
+    if len(name) < USERNAME_MIN_LEN:
+        return None, f"Username must be at least {USERNAME_MIN_LEN} characters"
+    if len(name) > USERNAME_MAX_LEN:
+        return None, f"Username must be {USERNAME_MAX_LEN} characters or fewer"
+    if not _USERNAME_RE.match(name):
+        return None, "Use letters, numbers and underscores, starting with a letter"
+    lowered = name.lower()
+    if lowered in USERNAME_RESERVED:
+        return None, "That name is reserved"
+    if any(bad in lowered for bad in USERNAME_BLOCKED_SUBSTRINGS):
+        return None, "That name is not available"
+    return name, None
+
+
+def usernameTaken(session, name: str, excludeUserId: int = None) -> bool:
+    """Case-INSENSITIVE uniqueness.
+
+    The column's unique constraint is case-sensitive, so without this "Andrew" and
+    "andrew" are two different accounts — which is an impersonation route, not a
+    convenience. Checked in Python rather than with a functional index so it behaves the
+    same on the SQLite prod DB as it does locally.
+    """
+    lowered = (name or "").lower()
+    q = session.query(User).filter(_func.lower(User.username) == lowered)
+    if excludeUserId is not None:
+        q = q.filter(User.id != excludeUserId)
+    return q.first() is not None
 
 
 def _generateUsernameCandidate(session) -> str:

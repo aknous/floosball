@@ -7367,6 +7367,10 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "favoriteTeamId": user.favorite_team_id,
             "pendingFavoriteTeamId": user.pending_favorite_team_id,
             "favoriteTeamLockedSeason": user.favorite_team_locked_season,
+            # Renames are one per season (see set_username). Surfaced so the UI can
+            # disable the control and say why, rather than letting the user type a name
+            # and discover the limit from a 429.
+            "canChangeUsername": _canChangeUsername(user),
             "floobits": currency.balance if currency else 0,
             "hasCompletedOnboarding": user.has_completed_onboarding,
             "emailOptOut": user.email_opt_out,
@@ -7466,28 +7470,67 @@ def get_username_options(user: _User = Depends(_getCurrentUser)):
         session.close()
 
 
+def _canChangeUsername(user) -> bool:
+    """Has this user got a rename available this season?
+
+    True when they have never set a name (the first pick is not a change) or when their
+    last change was in an earlier season.
+    """
+    if getattr(user, 'username', None) is None:
+        return True
+    currentSeason = 0
+    if floosball_app is not None and floosball_app.seasonManager.currentSeason:
+        currentSeason = floosball_app.seasonManager.currentSeason.seasonNumber
+    return getattr(user, 'username_changed_season', None) != currentSeason
+
+
 @app.post("/api/users/me/username")
 def set_username(payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
-    """Set the current user's username (only if not already set)."""
+    """Set or CHANGE the current user's username.
+
+    The endpoint always accepted an arbitrary string — it was the frontend that only ever
+    offered four generated candidates — so what was actually missing were the rules:
+    format validation, case-insensitive uniqueness, and any way to change a name at all.
+
+    Renames are one per season, mirroring `favorite_team_locked_season`. A season is one
+    real week, so that is a genuine ability to change rather than a formality, while still
+    stopping someone churning names to shed a reputation between games. The FIRST pick
+    does not count as a change.
+    """
     from database.connection import get_session
-    chosen = payload.get("username", "").strip()
-    if not chosen:
-        raise HTTPException(status_code=400, detail="Username is required")
+    from api.auth import validateUsername, usernameTaken
+
+    chosen, err = validateUsername(payload.get("username", ""))
+    if err:
+        raise HTTPException(status_code=400, detail=err)
 
     session = get_session()
     try:
         dbUser = session.get(_User, user.id)
-        if dbUser.username is not None:
-            raise HTTPException(status_code=400, detail="Username already set")
+        isRename = dbUser.username is not None
+        currentSeason = 0
+        if floosball_app is not None and floosball_app.seasonManager.currentSeason:
+            currentSeason = floosball_app.seasonManager.currentSeason.seasonNumber
 
-        # Check uniqueness
-        existing = session.query(_User).filter(_User.username == chosen).first()
-        if existing:
-            raise HTTPException(status_code=409, detail="Username already taken")
+        if isRename:
+            if dbUser.username == chosen:
+                return {"ok": True, "username": chosen, "changed": False}
+            if dbUser.username_changed_season == currentSeason:
+                raise HTTPException(
+                    status_code=429,
+                    detail="You have already changed your name this season. You can change it again next season.",
+                )
+
+        # Case-insensitive: the column's unique constraint is case-SENSITIVE, so without
+        # this "Andrew" and "andrew" are two accounts, which is an impersonation route.
+        if usernameTaken(session, chosen, excludeUserId=dbUser.id):
+            raise HTTPException(status_code=409, detail="That name is already taken")
 
         dbUser.username = chosen
+        if isRename:
+            dbUser.username_changed_season = currentSeason
         session.commit()
-        return {"ok": True, "username": chosen}
+        return {"ok": True, "username": chosen, "changed": isRename}
     except HTTPException:
         raise
     except Exception as e:

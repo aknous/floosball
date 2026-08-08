@@ -1060,6 +1060,10 @@ class User(Base):
     favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     pending_favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     favorite_team_locked_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Season a user last CHANGED their username. Mirrors favorite_team_locked_season:
+    # one change per season, so a rename is possible without letting someone churn names
+    # to dodge a reputation. NULL = never changed (the original pick does not count).
+    username_changed_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     auto_fill_roster: Mapped[bool] = mapped_column(Boolean, default=True)
     has_completed_onboarding: Mapped[bool] = mapped_column(Boolean, default=False)
     email_opt_out: Mapped[bool] = mapped_column(Boolean, default=False)

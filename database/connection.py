@@ -463,6 +463,15 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # One-change-per-season username renames. Inline migration because alembic is not
+        # run on deploy — this is what actually lands the column on the prod DB.
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN username_changed_season INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added users.username_changed_season")
+        except Exception:
+            conn.rollback()
+
         # Discord linking columns (v0.9)
         # Note: SQLite doesn't support UNIQUE in ALTER TABLE ADD COLUMN,
         # so we add the column first, then create a unique index separately.
