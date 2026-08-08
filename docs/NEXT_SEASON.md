@@ -81,6 +81,9 @@ Design to come from the Claude design tool (owner).
 Spec is done and grounded: `docs/RENOWN_PROGRESSION_PLAN.md`, specced against 15 seasons
 of real data 2026-07-31. **Zero code.** v1 scope is foundation + career ranks.
 
+The superseded model's code and design are now readable at `docs/recovered/` (see item 9)
+rather than only in a git commit.
+
 ⚠️ Renown **supersedes** the earlier achievement-derived progression model — settled by
 owner, do not re-litigate. But that model was BUILT and then pulled for timing, not on
 design grounds, so there is salvage: `2a37f2f` has `managers/progressionManager.py` (172
@@ -139,8 +142,17 @@ the 24-team rule (top 6 per league, top 2 get a bye); confirm what 32 clubs actu
 
 ### 9. Prognostication evolution
 
-⚠️ `docs/PICKEM_DEPTH_PLAN.md` **does not exist on disk** — the reverts deleted it.
-Recover from `2a37f2f` / `891517f` before planning, or the earlier thinking is lost.
+✅ **Recovered 2026-08-07** to `docs/recovered/PICKEM_DEPTH_PLAN.md`. It was deleted by
+`54a6275`, the revert of the progression commit, and nothing noticed because a missing
+markdown file breaks no build. Filed under `recovered/` rather than restored in place, so
+it is unambiguous that it is history rather than live design — it predates the
+fantasy/cards fusion, the autonomous front office and the 24 → 32 expansion.
+
+Its useful core: depth should come from **skill, progression and story, not staking**
+(owner ruled out confidence wagering, parlays, over/unders, spreads and margin lines), and
+it must stay compatible with setting a whole day of picks at once. It also notes the real
+strategy that already exists but is invisible — backing live underdogs early is a genuine
+EV edge that nothing in the UI tells you about.
 
 Related but distinct: the preseason prediction model (run N sims at season start → average
 wins + title odds → a "favorites" board). POC exists at `docs/SEASON12_PREDICTIONS.md`.
