@@ -163,6 +163,12 @@ wins + title odds → a "favorites" board). POC exists at `docs/SEASON12_PREDICT
 data": one archived row per season (champion, league champions, MVP). User progress, records
 and the Hall of Fame are deliberately NOT preserved (owner call).
 
+⚠️ **TWO scripts must be run against prod BEFORE the wipe** — `tools_archive_seasons.py
+--apply` and `tools_harvest_names.py --apply`. The second is the non-obvious one: preserving
+`unused_names` does NOT preserve the name pool, because a name leaves the pool when a player
+is created and only a "Jr." variant ever returns. 401 submitted names lived only on player
+rows.
+
 ⚠️ **`tools_archive_seasons.py --apply` must be run against prod BEFORE the wipe.** It is
 the last moment the old league is readable, and the archive is the only thing that survives.
 

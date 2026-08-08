@@ -17,6 +17,29 @@ preserved, records are not carried forward, and the Hall of Fame is not archived
   `tools_archive_seasons.py`    dry-run by default; --apply writes
   `GET /api/league-archive`     grouped by era, newest first
   `test_league_archive.py`      18 assertions
+  `tools_harvest_names.py`      returns player names to the pool, drops lineage variants
+  `test_name_harvest.py`        10 assertions
+
+## ⚠️ The name pool is NOT as safe as it looks
+
+`unused_names` is preserved by `clear_db`, so the pool appears to survive. It does not, in
+the way that matters. A name is REMOVED from the pool when a player is created and never
+returned — retirement adds a *variant* ("Name Jr.", then III, IV...) via
+`seasonManager._recyclePlayerName`, not the original. So every name attached to a player
+exists only on a `players` row, and `players` is dropped.
+
+Measured on the prod snapshot: **401 base names sat on player rows and nowhere else**,
+including every name submitted through Discord `/name` or added by an admin that had since
+been assigned to somebody. Preserving `unused_names` alone would have lost all of them
+silently, and nothing would have reported it.
+
+`tools_harvest_names.py` returns them, and drops the 43 pooled + 35 held lineage variants
+(owner, 2026-08-07: keep the names, not the Jr artifacts). Pool goes 353 → 711.
+
+Curiosity worth not "fixing": the suffix-stripping path recovers zero extra names, because
+`players` KEEPS retired rows, so the original is still there under its own name and is
+harvested directly. Verified — "Chick Neriardi" (Retired) and "Chick Neriardi Jr."
+(Veteran3) are both rows.
 
 ## What a fresh start does today
 
