@@ -242,6 +242,10 @@ class TeamResponseBuilder(ResponseBuilder):
         return {
             'name': team.name,
             'city': team.city,
+            # The abbreviation was missing here while the game payload carried it, so any
+            # surface built off the TEAM dict (the standings board's wildcard track, its
+            # division-leader chip) rendered a blank where the abbr should be.
+            'abbr': getattr(team, 'abbr', None) or team.name[:3].upper(),
             'color': team.color,
             'secondaryColor': getattr(team, 'secondaryColor', team.color),
             'tertiaryColor': getattr(team, 'tertiaryColor', team.color),

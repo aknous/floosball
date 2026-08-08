@@ -222,6 +222,9 @@ class TeamManager:
             # Where the club sits in its hot/cold arc — restored so a mid-season
             # restart doesn't flatten every team back to neutral form.
             team.formOffset = getattr(db_team, 'form_offset', 0.0) or 0.0
+            # Division membership survives a restart. Without this, a mid-season deploy
+            # silently un-divisions the whole league.
+            team.division = getattr(db_team, 'division', None)
 
             # Historical stats (stored as JSON in database)
             team.allTimeTeamStats = db_team.all_time_stats or {}
@@ -529,6 +532,7 @@ class TeamManager:
             db_team.defense_tier = team.defenseOverallTier
             db_team.defense_season_performance = team.defenseSeasonPerformanceRating
             db_team.form_offset = getattr(team, 'formOffset', 0.0) or 0.0
+            db_team.division = getattr(team, 'division', None)
 
             # Historical stats (stored as JSON)
             db_team.all_time_stats = team.allTimeTeamStats

@@ -3816,6 +3816,15 @@ class SeasonManager:
             names = self._divisionNames(league.name)
             for i, team in enumerate(league.teamList):
                 team.division = names[min(i // size, per - 1)]
+        # Persist immediately. This only runs at schedule generation, so if the stamp is
+        # not written now the next restart finds an un-divisioned league and nothing
+        # re-runs to fix it until the following season.
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager:
+                teamManager.saveTeamData()
+        except Exception as e:
+            logger.warning(f"Could not persist division assignment: {e}")
         return True
 
     def _crossDivisionWeeks(self, divA, divB) -> List[List[tuple]]:

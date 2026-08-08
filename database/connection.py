@@ -211,6 +211,15 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()
 
+        # Division membership. In-memory only until now, so a restart mid-season dropped
+        # every club out of its division (see the model comment).
+        try:
+            conn.execute(text("ALTER TABLE teams ADD COLUMN division VARCHAR(50)"))
+            conn.commit()
+            logger.info("  Migration: added teams.division")
+        except Exception:
+            conn.rollback()
+
         # Hall of Fame flag (v0.17). Without this, the in-memory hallOfFame
         # list resets on every restart and the HoF tab goes empty until brand-
         # new retirees get inducted. Stored on the player row so the load path

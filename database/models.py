@@ -59,6 +59,12 @@ class Team(Base):
     defense_rating: Mapped[int] = mapped_column(Integer)
     overall_rating: Mapped[int] = mapped_column(Integer)
     league_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("leagues.id"))
+    # Which of its league's four divisions this club plays in. ⚠️ This was in-memory only
+    # (stamped by seasonManager._assignDivisions at schedule generation), so EVERY restart
+    # wiped it: the standings board lost its DIVISION column and By Division view,
+    # _applyDivisionSeeding fell back to plain record order and division winners lost their
+    # guaranteed top-four seeds, and the division-title award had nothing to award off.
+    division: Mapped[Optional[str]] = mapped_column(String(50))
     gm_score: Mapped[Optional[int]] = mapped_column(Integer)
     # Continuous form offset (roughly ±FORM_MAX) — where the club currently sits
     # in its own hot/cold arc. Updated weekly by the form oscillation layer;
