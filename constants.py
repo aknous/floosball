@@ -1380,7 +1380,7 @@ ATTITUDE_DRIFT_MAGNITUDE = 1.5    # win/loss drift multiplier on |winPct-0.5| (d
 
 # ---- Roster Supply Floor ----
 # After retirements are known, guarantee the league has enough living players at
-# EACH position to fill every roster slot (24 teams × {QB1,RB1,WR2,TE1,K1}),
+# EACH position to fill every roster slot (numTeams × {QB1,RB1,WR2,TE1,K1}; 32 clubs today),
 # else a position run (many retirements at one spot + a thin rookie class) could
 # leave slots permanently empty. The supply check (playerManager.ensurePositionSupply)
 # tops up only the per-position deficit into the FA pool — a no-op in the normal
@@ -1690,7 +1690,7 @@ FO_SCOUT_FACILITY_ENABLED = True
 # by treasury. Keyed on service time instead, a 95-rated second-year player will
 # sign anywhere, and what a rich club buys is veterans, not talent.
 #
-# Measured against the live league (24 teams): Appeal min 4, p25 4, median 11,
+# Measured against the live league when it held 24 teams: Appeal min 4, p25 4, median 11,
 # p75 17, max 20. The curve is set against those numbers, not a 0-25 ideal.
 #
 #   rookie      demand 0            -> signs anywhere
@@ -1755,7 +1755,7 @@ FO_CUT_MAX_PER_TEAM = 2
 
 # How deep into the FA pool a team should look when judging its own incumbent.
 # Benchmarking every team against the single league-best free agent is wrong:
-# all 24 teams would conclude their starter is replaceable, yet only one can
+# every club would conclude their starter is replaceable, yet only one can
 # actually sign that player, so the whole league sheds its incumbents. Instead
 # each team looks at the free agent it can expect to still be there at ITS slot
 # in the worst-first FA order. Not every team ahead takes the same position, so

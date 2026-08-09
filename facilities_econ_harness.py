@@ -34,7 +34,7 @@ _spec = importlib.util.spec_from_file_location("facilitiesManager", "managers/fa
 FM = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(FM)
 
 KEYS = list(FACILITY_CATALOG.keys())
-NUM_TEAMS = 24
+NUM_TEAMS = 32   # 2 leagues x 16. Was 24 before the expansion.
 SEASONS = 30
 MAX_TOTAL = FACILITY_MAX_LEVEL * len(KEYS)     # 25
 SUSTAIN_FRAC = 0.55                             # a team won't commit > this fraction of income to upkeep

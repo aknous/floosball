@@ -1067,7 +1067,7 @@ class TeamManager:
         """Get team by ID via an O(1) id->team index.
 
         Called heavily when building standings/snapshots/favorite-team data;
-        the index is rebuilt only when the team count changes (24 teams,
+        the index is rebuilt only when the team count changes (32 teams,
         effectively never mid-season)."""
         count = len(self.teams)
         if getattr(self, '_teamByIdCount', None) != count or not hasattr(self, '_teamById'):

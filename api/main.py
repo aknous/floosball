@@ -1249,15 +1249,21 @@ async def get_player(player_id: int, response: Response):
                 # Look up team name/color
                 rowTeamName = 'FA'
                 rowTeamColor = '#94a3b8'
+                rowTeamAbbr = None
                 if row.team_id:
                     dbTeam = dbSession.get(DBTeam, row.team_id)
                     if dbTeam:
                         rowTeamName = dbTeam.name
                         rowTeamColor = dbTeam.color or '#94a3b8'
+                        rowTeamAbbr = dbTeam.abbr
                 pastEntry = {
                     'season': row.season,
                     'team': rowTeamName,
                     'color': rowTeamColor,
+                    # The career table shows a crest and an abbreviation per row,
+                    # so the club a season was played for reads at a glance.
+                    'teamId': row.team_id,
+                    'teamAbbr': rowTeamAbbr,
                     'gp': row.games_played or 0,
                     'fantasyPoints': row.fantasy_points or 0,
                     'passing': row.passing_stats or {},
@@ -1287,6 +1293,8 @@ async def get_player(player_id: int, response: Response):
             currentSeasonEntry['season'] = currentSeasonNum
             currentSeasonEntry['team'] = teamName
             currentSeasonEntry['color'] = teamColor
+            currentSeasonEntry['teamId'] = team.id if hasTeamObj else None
+            currentSeasonEntry['teamAbbr'] = getattr(team, 'abbr', None) if hasTeamObj else None
             currentSeasonEntry['gp'] = player.gamesPlayed
             # The live season's ratings come off the player object — they are
             # recomputed weekly and only reach the DB on the next save.
