@@ -13642,6 +13642,81 @@ async def admin_list_name_submissions(status: str = Query('pending'),
         session.close()
 
 
+# ⚠️ How a hand-written row is told apart from a system-published one.
+#
+# `event_type` is stamped with this on everything the admin portal writes, and nothing
+# else ever uses the value. It matters because posting AS A CORE produces a row in the
+# `cores` category that is otherwise identical in shape to the thousands the sim writes
+# itself — without a marker, the management list would offer an admin a delete button for
+# the Cores' own chatter, and "only announcements" would stop being enforceable the moment
+# the first Core post existed.
+ADMIN_POST_EVENT_TYPE = 'admin_post'
+
+
+def _isHandWritten():
+    """SQLAlchemy filter for rows written from the admin portal."""
+    from database.models import LeagueNewsItem
+    return LeagueNewsItem.event_type == ADMIN_POST_EVENT_TYPE
+
+
+def _rowIsHandWritten(row) -> bool:
+    return getattr(row, 'event_type', None) == ADMIN_POST_EVENT_TYPE
+
+
+_ANNOUNCEMENT_CORES = {'cassian', 'pyre', 'aris', 'halverson', 'vera'}
+
+
+def _announcementVoice(postAs: str, icon: str, teamId):
+    """Resolve who a hand-written item is FROM → (category, teamId, core, displayName).
+
+    Two genuinely different things, which is why this returns a category:
+
+      * A LEAGUE announcement is category `announcement` — a written notice, rendered
+        as one, with an optional crest or the league mark beside it.
+      * Posting AS A CORE is category `cores`. It is not an announcement wearing a Core's
+        icon; it is a line in that Core's voice, and the feed already knows how to render
+        those — the display name is folded into the text ("Vera: ..."), the row takes the
+        Core's own colour, and it threads with the sim's own Cores lines. Borrowing the
+        icon alone would have looked right and read wrong.
+
+    ⚠️ The league MARK (as opposed to a league announcement's default dot) rides in the
+    `core` column as the sentinel 'league'. That column means "who is speaking", which the
+    league legitimately is, and the alternative was a migration for one bit. Decoded here
+    and in LeagueNews.tsx, nowhere else. A fourth icon source should get a real column.
+    """
+    import league_news
+    postAs = (postAs or 'league').strip().lower()
+    if postAs in _ANNOUNCEMENT_CORES:
+        return 'cores', None, postAs, postAs.capitalize()
+    if postAs not in ('league', '', 'none'):
+        raise HTTPException(400, f"Cannot post as '{postAs}'")
+    teamId, core, display = _announcementIcon(icon, teamId)
+    return league_news.ANNOUNCEMENT, teamId, core, display
+
+
+def _announcementIcon(icon: str, teamId):
+    """Resolve an announcement's icon choice to (teamId, core, coreDisplayName).
+
+    ⚠️ The league mark rides in the `core` column as the sentinel 'league'. That column
+    means "who is speaking", which the league legitimately is, and the alternative was a
+    migration for one bit of information. Decoded here and in LeagueNews.tsx, nowhere
+    else. If a fourth icon source ever appears, give it a real column — two sentinels is
+    where this stops being defensible.
+    """
+    icon = (icon or 'none').strip().lower()
+    if icon == 'league':
+        return None, 'league', 'The League'
+    if icon in _ANNOUNCEMENT_CORES:
+        return None, icon, icon.capitalize()
+    if icon == 'team':
+        if teamId is None:
+            raise HTTPException(400, "Pick a club, or choose a different icon")
+        return teamId, None, None
+    if icon != 'none':
+        raise HTTPException(400, f"Unknown icon '{icon}'")
+    return None, None, None
+
+
 @app.post("/api/admin/league-news")
 async def admin_post_league_news(payload: Dict[str, Any],
                                  _auth: None = Depends(_checkAdminAuth)):
@@ -13663,18 +13738,30 @@ async def admin_post_league_news(payload: Dict[str, Any],
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
 
-    text = str(payload.get("text") or "").strip()
+    # Headline, then optional prose beneath it.
+    #
+    # ⚠️ league_news.py's own rule is "every headline is ONE templated clause, no
+    # second sentence" — but that rule is about AUTOMATED copy, and says so: nothing
+    # in the sim writes at that level and an automated version never would. A
+    # hand-written announcement is exactly the case it excludes, so it gets both.
+    text = str(payload.get("headline") or payload.get("text") or "").strip()
     if not text:
-        raise HTTPException(400, "An announcement needs some text")
-    if len(text) > 280:
-        raise HTTPException(400, "Keep it to 280 characters — every other row in the feed is one clause")
+        raise HTTPException(400, "An announcement needs a headline")
+    if len(text) > 160:
+        raise HTTPException(400, "Keep the headline under 160 characters — it sits on one line in the feed")
 
-    # Optional: attach a club, so the row can carry its crest like any other.
+    body = str(payload.get("body") or "").strip() or None
+    if body and len(body) > 1200:
+        raise HTTPException(400, "Body is limited to 1200 characters")
+
+    # Who the row is FROM: a club's crest, the league mark, or one of the Cores.
     teamId = payload.get("teamId")
     try:
         teamId = int(teamId) if teamId not in (None, "", "null") else None
     except (TypeError, ValueError):
         raise HTTPException(400, "teamId must be a number")
+    category, teamId, core, coreDisplayName = _announcementVoice(
+        payload.get("postAs"), payload.get("icon"), teamId)
 
     sm = floosball_app.seasonManager if floosball_app else None
     season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
@@ -13686,9 +13773,14 @@ async def admin_post_league_news(payload: Dict[str, Any],
             session,
             season=season,
             week=week,
-            category=league_news.ANNOUNCEMENT,
+            category=category,
+            eventType=ADMIN_POST_EVENT_TYPE,
             text=text,
+            body=body,
             teamId=teamId,
+            core=core,
+            coreDisplayName=coreDisplayName,
+            pinned=bool(payload.get("pinned")),
             # Above anything a game can produce, so a posted notice takes the lead
             # slot it was written to occupy. `LEAD_WITHOUT_STATS` covers the
             # announcement category, so it can lead with no stat strip.
@@ -13696,6 +13788,124 @@ async def admin_post_league_news(payload: Dict[str, Any],
         )
         return build_success_response({"published": True, "season": season, "week": week},
                                       message="Posted to the league news")
+    finally:
+        session.close()
+
+
+@app.get("/api/admin/league-news")
+async def admin_list_league_news(limit: int = 25, _auth: None = Depends(_checkAdminAuth)):
+    """Announcements posted so far, newest first, with their pin state.
+
+    Announcements ONLY. The feed carries thousands of system-published rows and none of
+    them are editable — listing them here would offer an admin a delete button for a
+    clinch, which is a rewrite of history rather than a correction of their own copy.
+    """
+    from database.connection import get_session
+    from database.models import LeagueNewsItem
+    import league_news
+
+    session = get_session()
+    try:
+        # ⚠️ Hand-written CORES rows are listed too — an admin posting as a Core must
+        # be able to edit or delete it. They are told apart from the sim's own Cores
+        # chatter by `body` or `pinned`, which nothing automatic ever sets.
+        rows = (session.query(LeagueNewsItem)
+                .filter(_isHandWritten())
+                .order_by(LeagueNewsItem.created_at.desc(), LeagueNewsItem.id.desc())
+                .limit(max(1, min(int(limit or 25), 100)))
+                .all())
+        return build_success_response({"items": [{
+            "id": r.id,
+            "headline": r.text,
+            "body": getattr(r, 'body', None),
+            "pinned": bool(getattr(r, 'pinned', False)),
+            "teamId": r.team_id,
+            "core": r.core,
+            "season": r.season,
+            "week": r.week,
+            "createdAt": r.created_at.isoformat() if r.created_at else None,
+        } for r in rows]})
+    finally:
+        session.close()
+
+
+@app.patch("/api/admin/league-news/{itemId}")
+async def admin_edit_league_news(itemId: int, payload: Dict[str, Any],
+                                 _auth: None = Depends(_checkAdminAuth)):
+    """Edit an announcement in place — headline, body, icon, or pin state.
+
+    Every field is OPTIONAL and only applied when present, so a pin toggle does not have
+    to resend the copy and an edit does not have to restate the pin. Season and week are
+    never touched: the row keeps the moment it was published, which is what the feed
+    orders by.
+
+    ⚠️ Announcements only. A system-published row is a record of something that happened
+    and is not an admin's copy to rewrite.
+    """
+    from database.connection import get_session
+    from database.models import LeagueNewsItem
+    import league_news
+
+    session = get_session()
+    try:
+        row = session.query(LeagueNewsItem).filter(LeagueNewsItem.id == itemId).first()
+        if row is None:
+            raise HTTPException(404, f"No news item {itemId}")
+        if not _rowIsHandWritten(row):
+            raise HTTPException(400, "Only hand-written announcements can be edited")
+
+        if "headline" in payload:
+            headline = str(payload.get("headline") or "").strip()
+            if not headline:
+                raise HTTPException(400, "An announcement needs a headline")
+            if len(headline) > 160:
+                raise HTTPException(400, "Keep the headline under 160 characters")
+            row.text = headline
+
+        if "body" in payload:
+            body = str(payload.get("body") or "").strip() or None
+            if body and len(body) > 1200:
+                raise HTTPException(400, "Body is limited to 1200 characters")
+            row.body = body
+
+        if "icon" in payload or "postAs" in payload:
+            teamId = payload.get("teamId")
+            try:
+                teamId = int(teamId) if teamId not in (None, "", "null") else None
+            except (TypeError, ValueError):
+                raise HTTPException(400, "teamId must be a number")
+            (row.category, row.team_id, row.core,
+             row.core_display_name) = _announcementVoice(
+                payload.get("postAs"), payload.get("icon"), teamId)
+
+        if "pinned" in payload:
+            row.pinned = bool(payload.get("pinned"))
+
+        session.commit()
+        return build_success_response({
+            "id": row.id, "pinned": bool(row.pinned),
+        }, message="Announcement updated")
+    finally:
+        session.close()
+
+
+@app.delete("/api/admin/league-news/{itemId}")
+async def admin_delete_league_news(itemId: int, _auth: None = Depends(_checkAdminAuth)):
+    """Remove an announcement. Announcements only — see the edit endpoint."""
+    from database.connection import get_session
+    from database.models import LeagueNewsItem
+    import league_news
+
+    session = get_session()
+    try:
+        row = session.query(LeagueNewsItem).filter(LeagueNewsItem.id == itemId).first()
+        if row is None:
+            raise HTTPException(404, f"No news item {itemId}")
+        if not _rowIsHandWritten(row):
+            raise HTTPException(400, "Only hand-written announcements can be deleted")
+        session.delete(row)
+        session.commit()
+        return build_success_response({"deleted": itemId}, message="Announcement removed")
     finally:
         session.close()
 

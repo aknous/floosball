@@ -2589,6 +2589,23 @@ class LeagueNewsItem(Base):
     # against a 190 bar and an upset with a 148-point Elo gap against a 120 bar are both
     # ~1.24, and both are "about a quarter past the bar".
     lead_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Held at the top of the feed until an admin releases it.
+    #
+    # ⚠️ Pinning is what makes an announcement DURABLE. Without it a notice is subject to
+    # the same erosion as everything else: the reader fetches the newest ~40 rows, and a
+    # busy slate publishes enough clinches, records and Cores lines to push a notice out
+    # of that window within a day. A pinned row is fetched separately, so it survives the
+    # window entirely, and it ignores the lead's age cutoff.
+    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Optional second paragraph, for HAND-WRITTEN items only.
+    #
+    # ⚠️ `text` is deliberately one clause for everything this file's own rules cover:
+    # "Every headline is ONE templated clause. No analysis, no second sentence." That
+    # rule is about AUTOMATED copy — nothing in the sim writes at that level and an
+    # automated version never would. An admin announcement is the case it was excluding,
+    # so it gets a headline in `text` and the prose here. NULL for every published item.
+    body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Exchange threading — set when this item is one turn of a multi-Core
     # conversation, so the feed can group the turns under a single header on
     # refresh (not just live over WS).

@@ -59,6 +59,8 @@ def publish(
     week: int,
     category: str,
     text: str,
+    body: Optional[str] = None,
+    pinned: bool = False,
     eventType: Optional[str] = None,
     teamId: Optional[int] = None,
     playerId: Optional[int] = None,
@@ -92,6 +94,8 @@ def publish(
             category=category,
             event_type=eventType,
             text=text,
+            body=body,
+            pinned=bool(pinned),
             team_id=teamId,
             player_id=playerId,
             player_name=playerName,
@@ -123,6 +127,8 @@ def publish(
             return
         event = LeagueNewsEvent.leagueNews(text=text)
         event['category'] = category
+        if body:
+            event['body'] = body
         if eventType:
             event['eventType'] = eventType
         # `broadcast_sync('season', ...)` is the sim-thread-safe path — the async

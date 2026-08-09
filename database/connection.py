@@ -1514,6 +1514,24 @@ def _runPendingMigrations():
             logger.info("  Migration: added games.team_stats")
         except Exception:
             conn.rollback()
+        # Body prose for hand-written league-news announcements. NULL for every
+        # system-published item, which is all of them before this column existed.
+        try:
+            conn.execute(text("ALTER TABLE league_news_items ADD COLUMN body TEXT"))
+            conn.commit()
+            logger.info("  Migration: added league_news_items.body")
+        except Exception:
+            conn.rollback()
+        # Pinned announcements are fetched outside the feed's newest-N window, so a
+        # notice can outlive a busy slate. Defaulted at the column so existing rows
+        # read as unpinned rather than NULL.
+        try:
+            conn.execute(text(
+                "ALTER TABLE league_news_items ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added league_news_items.pinned")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 

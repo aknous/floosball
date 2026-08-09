@@ -71,6 +71,11 @@ LEAD_WITHOUT_STATS = {'rules', 'criticality', 'announcement'}
 # nine announcements has made the feed nine announcements, which is their call to make.
 ANNOUNCEMENT_CATEGORIES = {'announcement'}
 
+# How many pinned items may be held above the feed at once. A ceiling rather than a
+# policy: pinning everything is the same as pinning nothing, and an admin who wants a
+# tenth notice up there almost certainly meant to unpin one first.
+PINNED_MAX = 5
+
 # The feed is Cores/meta-simulation centric (owner, 2026-08-08), so these categories get a
 # bigger share of the visible rows than the league's own results do.
 #
@@ -113,6 +118,10 @@ def _rowsToItems(rows) -> List[Dict[str, Any]]:
             'turnIndex': r.turn_index,
             'rawText': r.text or '',
             'text': text,
+            'pinned': bool(getattr(r, 'pinned', False)),
+            # Prose beneath the headline. Hand-written items only — NULL everywhere else,
+            # and the reader renders nothing rather than an empty paragraph.
+            'body': getattr(r, 'body', None) or None,
             'week': r.week,
             'season': r.season,
             'teamId': r.team_id,
@@ -215,6 +224,26 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
         .limit(max(limit * 4, 40))
         .all()
     )
+
+    # ⚠️ PINNED rows are fetched SEPARATELY, outside that window. That is the entire
+    # point of pinning: the window above is the newest ~40 items, and a busy slate
+    # publishes enough clinches, records and Cores lines to push a notice out of it
+    # within a day. Merged by id so a pinned row that IS still in the window is not
+    # duplicated.
+    try:
+        pinnedRows = (
+            session.query(LeagueNewsItem)
+            .filter(LeagueNewsItem.pinned.is_(True))
+            .order_by(LeagueNewsItem.created_at.desc(), LeagueNewsItem.id.desc())
+            .limit(PINNED_MAX)
+            .all()
+        )
+        seen = {r.id for r in rows}
+        rows = [r for r in pinnedRows if r.id not in seen] + rows
+    except Exception as e:
+        # A DB that predates the column must still serve the feed.
+        logger.debug(f"Pinned news lookup skipped: {e}")
+
     items = _groupExchanges(_rowsToItems(rows))
     if not items:
         return {'lead': None, 'items': []}
@@ -227,6 +256,12 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
         # Three cells, not four. A record's whole story is old mark / new mark / gap, and
         # the lead strip flexes to whatever it is handed. Requiring exactly four locked
         # every one of them out of the headline.
+        # ⚠️ PINNED is checked FIRST, ahead of NEVER_LEAD and the age cutoff. Those
+        # rules exist to stop the sim promoting the wrong thing automatically; an admin
+        # pinning a row is a person saying "this, at the top", and a Cores line normally
+        # being voice-not-report is not a reason to overrule them. Nothing pins itself.
+        if item.get('pinned'):
+            return True
         if item['rawCategory'] in NEVER_LEAD:
             return False
         if (item['rawCategory'] not in LEAD_WITHOUT_STATS
@@ -265,7 +300,10 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
         # a new one instead of being permanently unleadable.
         weight = weightById.get(item['id'])
         weight = 1.0 if weight is None else weight
-        return (-bucket, -weight, priority.get(item['rawCategory'], len(CATEGORY_PRIORITY)))
+        # Pinned first, ahead of recency — that is what "pinned" means. Among several
+        # pinned items the newest leads, which the bucket below already handles.
+        return (0 if item.get('pinned') else 1,
+                -bucket, -weight, priority.get(item['rawCategory'], len(CATEGORY_PRIORITY)))
 
     candidates = [i for i in items if leadable(i)]
     lead = min(candidates, key=leadKey, default=None)
@@ -306,7 +344,7 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
                 break
             if item is lead:
                 continue
-            if item['rawCategory'] in ANNOUNCEMENT_CATEGORIES:
+            if item.get('pinned') or item['rawCategory'] in ANNOUNCEMENT_CATEGORIES:
                 allowed = allowance
             elif item['rawCategory'] in META_CATEGORIES:
                 allowed = metaCap
@@ -323,14 +361,19 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
 
     order = {id(item): i for i, item in enumerate(items)}
     # Announcements first and uncapped — see ANNOUNCEMENT_CATEGORIES.
+    # Pinned rows and announcements share the reserved pass. A pinned CORES post is
+    # still a hand-placed item, so capping it under metaCap alongside the sim's own
+    # chatter would quietly undo the pin.
+    reserved = lambda i: i.get('pinned') or i['rawCategory'] in ANNOUNCEMENT_CATEGORIES
     announcementRows = take(
-        [i for i in items if i['rawCategory'] in ANNOUNCEMENT_CATEGORIES], room)
+        sorted([i for i in items if reserved(i)], key=lambda i: 0 if i.get('pinned') else 1),
+        room)
     remaining = room - len(announcementRows)
-    metaRows = take([i for i in items if i['rawCategory'] in META_CATEGORIES],
+    metaRows = take([i for i in items
+                     if i['rawCategory'] in META_CATEGORIES and not reserved(i)],
                     min(metaCap, remaining))
     leagueRows = take([i for i in items
-                       if i['rawCategory'] not in META_CATEGORIES
-                       and i['rawCategory'] not in ANNOUNCEMENT_CATEGORIES],
+                       if i['rawCategory'] not in META_CATEGORIES and not reserved(i)],
                       remaining - len(metaRows))
     rowItems = sorted(announcementRows + metaRows + leagueRows, key=lambda i: order[id(i)])
 
