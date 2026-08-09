@@ -254,6 +254,32 @@ def containsProfanity(name: str) -> bool:
         return False
 
 
+# Fast membership for the generated-name check below. Built once — `_USERNAME_LASTS` is
+# 260 entries and the check runs on every username submission.
+_USERNAME_LASTS_SET = set(_USERNAME_LASTS)
+# What the generator emits: a first, a last, and randint(1, 99) — so no leading zero.
+_GENERATED_NAME_RE = _re.compile(r"^([A-Za-z]+)([1-9][0-9]?)$")
+
+
+def isGeneratedUsername(name: str) -> bool:
+    """True when `name` is one this server could have produced itself.
+
+    Verified against the generator's OWN vocabulary rather than taken on trust from the
+    client, so it cannot be used to smuggle an over-long custom name past the limit.
+
+    Worst case is one pass over the 255 firsts, and only for names that already look like
+    `WordWord42`.
+    """
+    match = _GENERATED_NAME_RE.match((name or "").strip())
+    if not match:
+        return False
+    stem = match.group(1)
+    for first in _USERNAME_FIRSTS:
+        if stem.startswith(first) and stem[len(first):] in _USERNAME_LASTS_SET:
+            return True
+    return False
+
+
 def validateUsername(name: str) -> tuple:
     """(cleanedName, errorMessage). errorMessage is None when the name is acceptable.
 
@@ -266,7 +292,14 @@ def validateUsername(name: str) -> tuple:
         return None, "Username is required"
     if len(name) < USERNAME_MIN_LEN:
         return None, f"Username must be at least {USERNAME_MIN_LEN} characters"
-    if len(name) > USERNAME_MAX_LEN:
+    # ⚠️ The cap applies to names a USER made up, not to ones we offered them. The
+    # generator pairs 255 firsts with 260 lasts and adds up to two digits, and 14,786 of
+    # those 66,300 pairings run past 20 characters — so 22% of two-digit suggestions were
+    # names the app proposed and then refused, with no way for the user to tell which.
+    # `_generateUsernameCandidate` already carries the rule ("a suggestion the validator
+    # would refuse is worse than no suggestion") and screens for profanity; length was
+    # simply missed. The longest pairing is 28 characters against a 50-character column.
+    if len(name) > USERNAME_MAX_LEN and not isGeneratedUsername(name):
         return None, f"Username must be {USERNAME_MAX_LEN} characters or fewer"
     if not _USERNAME_RE.match(name):
         return None, "Use letters, numbers and underscores, starting with a letter"
