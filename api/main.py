@@ -13642,6 +13642,64 @@ async def admin_list_name_submissions(status: str = Query('pending'),
         session.close()
 
 
+@app.post("/api/admin/league-news")
+async def admin_post_league_news(payload: Dict[str, Any],
+                                 _auth: None = Depends(_checkAdminAuth)):
+    """Publish a hand-written item to the league news feed.
+
+    Every other item in that feed is published BY a system AT the moment its event
+    happened. This is the one with a human author, which is why it gets its own
+    category (`announcement`) rather than borrowing one: a reader should be able to
+    tell a written notice from a reported result, and downstream the category is what
+    exempts it from the per-category caps that would otherwise drop it.
+
+    Season and week are stamped from the sim rather than accepted from the caller —
+    the feed is ordered by publication time and a wrong week would misfile the item
+    against every other row around it.
+    """
+    import league_news
+    from database.connection import get_session
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "An announcement needs some text")
+    if len(text) > 280:
+        raise HTTPException(400, "Keep it to 280 characters — every other row in the feed is one clause")
+
+    # Optional: attach a club, so the row can carry its crest like any other.
+    teamId = payload.get("teamId")
+    try:
+        teamId = int(teamId) if teamId not in (None, "", "null") else None
+    except (TypeError, ValueError):
+        raise HTTPException(400, "teamId must be a number")
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+
+    session = get_session()
+    try:
+        league_news.publish(
+            session,
+            season=season,
+            week=week,
+            category=league_news.ANNOUNCEMENT,
+            text=text,
+            teamId=teamId,
+            # Above anything a game can produce, so a posted notice takes the lead
+            # slot it was written to occupy. `LEAD_WITHOUT_STATS` covers the
+            # announcement category, so it can lead with no stat strip.
+            leadWeight=float(payload.get("leadWeight") or 100.0),
+        )
+        return build_success_response({"published": True, "season": season, "week": week},
+                                      message="Posted to the league news")
+    finally:
+        session.close()
+
+
 @app.post("/api/admin/names/submissions/review")
 async def admin_review_name_submissions(payload: Dict[str, Any],
                                         _auth: None = Depends(_checkAdminAuth)):

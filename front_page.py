@@ -23,6 +23,7 @@ logger = logging.getLogger('floosball.frontPage')
 # Ordered by how much a fan cares. Decides which of the eligible items leads, and breaks
 # ties between items published in the same tick.
 CATEGORY_PRIORITY = [
+    'announcement',
     'criticality',
     'record',
     'clinched',
@@ -62,7 +63,13 @@ NEVER_LEAD = {'cores', 'schedule'}
 # surface for the anomaly is deliberately number-free, so that it reads as a mood rather
 # than a progress bar. The raw aggregate and threshold live only in the debug endpoint and
 # the ephemeral control room.
-LEAD_WITHOUT_STATS = {'rules', 'criticality'}
+LEAD_WITHOUT_STATS = {'rules', 'criticality', 'announcement'}
+
+# An announcement is written by a person who chose to write it, so it is RESERVED ahead of
+# everything else — a cap that can drop it defeats the point of having posted it. Taken in
+# its own pass before meta and league rows, and deliberately uncapped: an admin posting
+# nine announcements has made the feed nine announcements, which is their call to make.
+ANNOUNCEMENT_CATEGORIES = {'announcement'}
 
 # The feed is Cores/meta-simulation centric (owner, 2026-08-08), so these categories get a
 # bigger share of the visible rows than the league's own results do.
@@ -299,7 +306,9 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
                 break
             if item is lead:
                 continue
-            if item['rawCategory'] in META_CATEGORIES:
+            if item['rawCategory'] in ANNOUNCEMENT_CATEGORIES:
+                allowed = allowance
+            elif item['rawCategory'] in META_CATEGORIES:
                 allowed = metaCap
             elif item['rawCategory'] in NOTICE_CATEGORIES:
                 allowed = NOTICE_CAP
@@ -313,10 +322,16 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
         return picked
 
     order = {id(item): i for i, item in enumerate(items)}
+    # Announcements first and uncapped — see ANNOUNCEMENT_CATEGORIES.
+    announcementRows = take(
+        [i for i in items if i['rawCategory'] in ANNOUNCEMENT_CATEGORIES], room)
+    remaining = room - len(announcementRows)
     metaRows = take([i for i in items if i['rawCategory'] in META_CATEGORIES],
-                    min(metaCap, room))
-    leagueRows = take([i for i in items if i['rawCategory'] not in META_CATEGORIES],
-                      room - len(metaRows))
-    rowItems = sorted(metaRows + leagueRows, key=lambda i: order[id(i)])
+                    min(metaCap, remaining))
+    leagueRows = take([i for i in items
+                       if i['rawCategory'] not in META_CATEGORIES
+                       and i['rawCategory'] not in ANNOUNCEMENT_CATEGORIES],
+                      remaining - len(metaRows))
+    rowItems = sorted(announcementRows + metaRows + leagueRows, key=lambda i: order[id(i)])
 
     return {'lead': lead, 'items': rowItems}

@@ -38,6 +38,10 @@ RULES = 'rules'
 ANOMALY = 'anomaly_transition'
 CORES = 'cores'
 SIGNING = 'signing'
+# An item written by a person, from the admin portal. Everything else in this file is
+# published BY a system AT the moment its event happened; this is the one category with a
+# human author, which is why it is never subject to the per-category caps downstream.
+ANNOUNCEMENT = 'announcement'
 
 
 def stat(label: str, value: Any, positive: Optional[bool] = None) -> Dict[str, Any]:
