@@ -96,8 +96,27 @@ out = build([
 ])
 expect("a stale item cannot lead", out['lead'] and out['lead']['text'] == 'fresh')
 
-out = build([Row('clinched', 'a clinch', stats=FOUR), Row('big_game', 'a big game', stats=FOUR)])
-expect("the higher-priority category leads", out['lead'] and out['lead']['text'] == 'a clinch')
+# Published in the same breath (a clinch and a big game off the same finished game), so
+# importance decides rather than which one's timestamp happened to land a millisecond later.
+out = build([Row('big_game', 'a big game', stats=FOUR, ageHours=1),
+             Row('clinched', 'a clinch', stats=FOUR, ageHours=1)])
+expect("within one moment, priority decides", out['lead'] and out['lead']['text'] == 'a clinch')
+out = build([Row('clinched', 'a clinch', stats=FOUR, ageHours=1),
+             Row('big_game', 'a big game', stats=FOUR, ageHours=1)])
+expect("...regardless of which was written first", out['lead'] and out['lead']['text'] == 'a clinch')
+
+# The bug this replaced: only three categories carry a strip, a clinch happens once a
+# season, and `upset` statically outranked `big_game` — so the headline was an upset
+# essentially every time anyone looked.
+out = build([Row('upset', 'an older upset', stats=FOUR, ageHours=6),
+             Row('big_game', 'a newer big game', stats=FOUR, ageHours=1)])
+expect("a NEWER lower-priority item beats an older higher-priority one",
+       out['lead'] and out['lead']['text'] == 'a newer big game')
+
+out = build([Row('big_game', 'an older big game', stats=FOUR, ageHours=6),
+             Row('upset', 'a newer upset', stats=FOUR, ageHours=1)])
+expect("...and it works the other way round too, so the lead actually varies",
+       out['lead'] and out['lead']['text'] == 'a newer upset')
 
 out = build([Row('cores', 'Vera muses', stats=FOUR), Row('upset', 'an upset', stats=FOUR)])
 expect("a Cores line never leads, even carrying a strip", out['lead'] and out['lead']['text'] == 'an upset')

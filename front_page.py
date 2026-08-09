@@ -43,6 +43,10 @@ CATEGORY_PRIORITY = [
 # three-week-old clinch because nothing since carried four numbers reads as a stuck page.
 LEAD_MAX_AGE_HOURS = 72
 
+# Items published within this window of each other count as "the same moment" for the
+# purpose of choosing a lead, so importance ranks them rather than millisecond arrival.
+LEAD_RECENCY_BUCKET_SECONDS = 60
+
 # Categories that are context rather than report. They belong in the feed, but a Core
 # musing and "week 4 begins" are not headlines, so they never lead even if they somehow
 # carried stats.
@@ -135,12 +139,29 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
         row = next((r for r in rows if r.id == item['id']), None)
         return row is None or row.created_at is None or row.created_at >= cutoff
 
+    # ⚠️ The lead is the most RECENT eligible item, with priority only breaking ties among
+    # items published in the same moment.
+    #
+    # Ranking by priority alone looked reasonable and produced a stuck page: only three
+    # categories carry a four-number strip (clinched, upset, big_game), a clinch happens
+    # once a season near the end, and `upset` statically outranks `big_game` — so the
+    # headline was an upset essentially every time anyone looked. A headline slot is a
+    # "what just happened" slot, so recency has to drive it; priority is the tiebreak, not
+    # the sort.
+    # Recency is BUCKETED to the minute before priority is applied. Raw timestamps are
+    # microsecond-precise, so a straight recency sort would let whichever game happened to
+    # finish a few milliseconds later take the headline — which is arbitrary, and would
+    # mean a clinch published in the same breath as a big game loses to it. Bucketing lets
+    # importance decide within a moment and recency decide across moments.
+    createdById = {r.id: r.created_at for r in rows}
+
+    def leadKey(item):
+        at = createdById.get(item['id'])
+        bucket = int(at.timestamp() // LEAD_RECENCY_BUCKET_SECONDS) if at else 0
+        return (-bucket, priority.get(item['rawCategory'], len(CATEGORY_PRIORITY)))
+
     candidates = [i for i in items if leadable(i)]
-    lead = min(
-        candidates,
-        key=lambda i: priority.get(i['rawCategory'], len(CATEGORY_PRIORITY)),
-        default=None,
-    )
+    lead = min(candidates, key=leadKey, default=None)
 
     # Rows stay in publication order — the feed reads as a timeline, and reordering it by
     # category would make a quiet week look reshuffled every refresh.
