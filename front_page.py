@@ -35,6 +35,7 @@ CATEGORY_PRIORITY = [
     'signing',
     'milestone',
     'injury',
+    'schedule',
     'cores',
 ]
 
@@ -42,9 +43,10 @@ CATEGORY_PRIORITY = [
 # three-week-old clinch because nothing since carried four numbers reads as a stuck page.
 LEAD_MAX_AGE_HOURS = 72
 
-# Categories that are voice rather than report. They belong in the feed, but a Core musing
-# is not a headline, so they never lead even if they somehow carried stats.
-NEVER_LEAD = {'cores'}
+# Categories that are context rather than report. They belong in the feed, but a Core
+# musing and "week 4 begins" are not headlines, so they never lead even if they somehow
+# carried stats.
+NEVER_LEAD = {'cores', 'schedule'}
 
 
 def _rowsToItems(rows) -> List[Dict[str, Any]]:

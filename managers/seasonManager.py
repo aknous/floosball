@@ -389,6 +389,16 @@ class SeasonManager:
 
         logger.info(f"Season {seasonNumber} initialized with {len(self.currentSeason.schedule)} games")
 
+        # The season opening belongs in the news feed as well as on the wire. Without it a
+        # brand-new league has an empty feed until the first game finishes, which reads as
+        # broken rather than as "nothing has happened yet".
+        self._publishScheduleNews(
+            'season_start',
+            f'Season {seasonNumber} is under way',
+            week=1,
+            season=seasonNumber,
+        )
+
         # Broadcast season_start so connected frontends update immediately
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
             seasonStartEvent = SeasonEvent.seasonStart(
@@ -703,6 +713,11 @@ class SeasonManager:
                     nextGameStartTime=nextStartIso,
                 )
                 broadcaster.broadcast_sync('season', week_event)
+                self._publishScheduleNews(
+                    'week_start',
+                    f'{self.currentSeason.currentWeekText} begins, '
+                    f'{len(week.get("games", []))} games on the slate',
+                )
 
             # Resolve duplicate-effect equipped sets that pre-date the
             # no-duplicate rule. Modifies the just-completed week's
@@ -4179,6 +4194,34 @@ class SeasonManager:
                         break
         except Exception as e:
             logger.debug(f"Big-game news skipped: {e}")
+
+    def _publishScheduleNews(self, eventType: str, text: str,
+                             week: Optional[int] = None,
+                             season: Optional[int] = None) -> None:
+        """A schedule beat — a season opening, a week starting — in the news feed.
+
+        Its own category so the feed can colour it apart from results, and it deliberately
+        carries no stats: a slate that has not been played has no numbers worth a headline,
+        and this should never take the lead slot from an actual result.
+
+        Wrapped whole, like every other publisher hanging off the sim loop: nothing about a
+        news item is worth interrupting a season roll-over for.
+        """
+        try:
+            from league_news import publish
+            publish(
+                self.db_session,
+                season=season if season is not None else getattr(self.currentSeason, 'seasonNumber', 0) or 0,
+                week=week if week is not None else getattr(self.currentSeason, 'currentWeek', 0) or 0,
+                category='schedule',
+                eventType=eventType,
+                text=text,
+                # The surrounding code broadcasts its own season/week event; a second push
+                # would double the beat in the live feed.
+                broadcast=False,
+            )
+        except Exception as e:
+            logger.debug(f"Schedule news skipped ({eventType}): {e}")
 
     def _publishTeamNews(self, category: str, text: str, team, lead: bool = False) -> None:
         """Persist a team event to the league-news feed.
