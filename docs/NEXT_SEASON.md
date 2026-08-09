@@ -230,6 +230,62 @@ catch so those attributes matter everywhere (`c2ef406`, `db7b522`). Plus a pre-s
 that gives `defensiveMind` its first per-play job and gives the fakes something real to fool
 (`4515ce9`, `b041642`). Regressions `test_runner_moves.py` / `test_presnap_read.py`.
 
+## IN FLIGHT — frontend batch (handoff note, 2026-08-09)
+
+Written as a handoff because the work spans more than one sitting. **Verify against code,
+not against this note** — same rule as the rest of this file.
+
+### Done and committed
+
+| | where |
+| --- | --- |
+| Nav icons — Fantasy takes the star, Achievements a trophy from `react-icons` | frontend `dfd1585` |
+| All 32 crests + league logo regenerated as svg AND png | frontend `dfd1585` |
+| Box score served for finished games; DB fallback when a game is not in memory | backend `852d4c5` |
+| Quarter line actually written | backend `852d4c5` |
+| Playoff history per club, derived | backend `852d4c5` |
+| `isAwakened` on the player payload | backend `f316df5` |
+
+⚠️ **The crest directory was 24 clubs at the old colours.** The browser serves STATIC files
+from `floosball-react/public/avatars/{teamId}.png` — not the API — so clubs 25-32 had no
+crest at all and everything else was stale. Regenerate from `config.json` after any colour
+or mark change; the API endpoint is not what the app uses.
+
+### Still to build — three handoffs in `floosball-react/`
+
+`design_handoff_player_profile` (337 lines) · `design_handoff_stats_page` (472) ·
+`design_handoff_game_page` (503, replaces the game modal).
+
+Do the game page LAST: it is the one that wants the box-score work above.
+
+**Decisions already made, so they are not re-litigated:**
+- **Player profile: build option `1a` (Standing), not `1b` (Banner).** They are explicitly
+  not mergeable. 1a's flat panels match the front page / standings / game board already
+  shipped; 1b's team-colour gradient hero is a departure. One component to swap if the
+  owner prefers 1b.
+- **The profile's data contract needs NOTHING more.** The README asks for two additions;
+  `isAwakened` shipped, and per-season `defense` was **already** in `stats[]`
+  (`api/main.py`, `row.defense_stats`). Do not rebuild it.
+
+**⚠️ The game page must be checked in ALL SEVEN formats** (owner). A format changes what a
+period, a clock and a score mean, so the page cannot be signed off on standard alone. Use
+`tools_force_format.py` — formats are otherwise only reachable by winning a Cores rule vote.
+
+### Testing gotchas that cost real time
+
+- **Kill port 8000 before starting a sim.** A readiness poll happily succeeds against a
+  STALE server still holding the port, and then you are reading one database while the sim
+  writes another. This produced a completely bogus "no games played" result once.
+- **`GET /api/standings` returns a BARE LIST**, not the `{success, data}` envelope. Several
+  endpoints do this — check before assuming.
+- **`GET /api/rules` carries `gameFormat` twice** — once under `rules`, once under
+  `defaults`. Reading the last match reports `standard` and looks like the override failed.
+- **A fresh DB means the full onboarding flow every time** (name → 5 info steps → team).
+  Clicking `Next` faster than React re-renders used to white-screen the whole app; that is
+  fixed (the step index is clamped) but the flow still has to be walked.
+- **The username generator can offer names it would reject** — fixed, but the generated
+  list is where that class of bug shows up first.
+
 ## Bugs / smaller fixes
 - **League scoring sits ~27.5 in a fresh sim vs the ~36 documented in CLAUDE.md** ⚠️ OPEN — measured
   repeatedly on 2026-08-01 and unchanged by any of that day's work. Either the parity package's
