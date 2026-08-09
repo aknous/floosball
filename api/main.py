@@ -1288,6 +1288,23 @@ async def get_player(player_id: int, response: Response):
             player_dict['stats'] = allSeasons
         player_dict['allTimeStats'] = player.careerStatsDict
 
+        # Has this player ever awakened? The profile shows a badge and nothing else — no
+        # power name, no charge state — so a boolean is the whole contract. Read across
+        # ALL seasons rather than the current one: awakening is part of who a player has
+        # been, and a profile is a career page.
+        try:
+            from database.connection import get_session as _gs
+            from database.models import AnomalyState as _AS
+            _s = _gs()
+            try:
+                player_dict.setdefault('attributes', {})['isAwakened'] = bool(
+                    _s.query(_AS.player_id).filter_by(player_id=player.id, state='awakened').first())
+            finally:
+                _s.close()
+        except Exception:
+            # A missing table or a fresh DB must not cost the page its stats.
+            player_dict.setdefault('attributes', {})['isAwakened'] = False
+
         # Personality quotes — latest one for the hover tooltip,
         # full list shown on the player profile page via /quotes endpoint.
         pm = floosball_app.personalityManager
