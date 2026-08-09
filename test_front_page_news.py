@@ -29,7 +29,7 @@ def expect(d, c):
 
 class Row:
     _n = 0
-    def __init__(self, category, text, stats=None, ageHours=0, week=10, season=3):
+    def __init__(self, category, text, stats=None, ageHours=0, week=10, season=3, weight=None):
         Row._n += 1
         self.id = Row._n
         self.category = category
@@ -40,6 +40,7 @@ class Row:
         self.player_id = None
         self.core_display_name = 'Vera' if category == 'cores' else None
         self.stats_json = json.dumps(stats) if stats else None
+        self.lead_weight = weight
         self.created_at = datetime.utcnow() - timedelta(hours=ageHours)
 
 
@@ -86,9 +87,15 @@ out = build([Row('big_game', 'no strip'), Row('upset', 'has a strip', stats=FOUR
 expect("an item with four numbers leads", out['lead'] and out['lead']['text'] == 'has a strip')
 expect("...and is not repeated as a row", all(i['text'] != 'has a strip' for i in out['items']))
 
-out = build([Row('big_game', 'no strip at all'), Row('upset', 'three only', stats=FOUR[:3])])
-expect("nothing leads when no item carries a full strip", out['lead'] is None)
+out = build([Row('big_game', 'no strip at all'), Row('upset', 'two only', stats=FOUR[:2])])
+expect("nothing leads when no item carries enough numbers", out['lead'] is None)
 expect("...and every item falls through to the rows", len(out['items']) == 2)
+
+# A record's strip is three cells — old mark, new mark, gap — and requiring four locked
+# every record out of the headline, which is a third of the interesting news in the feed.
+out = build([Row('big_game', 'a big game', stats=FOUR), Row('record', 'a record fell', stats=FOUR[:3], weight=9.0)])
+expect("three numbers is enough to lead, so records can headline",
+       out['lead'] and out['lead']['text'] == 'a record fell')
 
 out = build([
     Row('upset', 'stale', stats=FOUR, ageHours=front_page.LEAD_MAX_AGE_HOURS + 5),
@@ -120,6 +127,32 @@ expect("...and it works the other way round too, so the lead actually varies",
 
 out = build([Row('cores', 'Vera muses', stats=FOUR), Row('upset', 'an upset', stats=FOUR)])
 expect("a Cores line never leads, even carrying a strip", out['lead'] and out['lead']['text'] == 'an upset')
+
+print("\nSize decides inside a moment, not category")
+# MEASURED over 546 real rows: ranking a simultaneous slate by a static category ladder
+# gave `upset` 87% of reader views on 24% of the eligible items, and left `big_game` at
+# 8% on 76% of them. A slate resolves in one instant, so the ladder was the sort.
+out = build([Row('upset', 'a routine upset', stats=FOUR, weight=1.02),
+             Row('big_game', 'a monstrous game', stats=FOUR, weight=2.40)])
+expect("a huge big game beats a marginal upset, despite ranking below it",
+       out['lead'] and out['lead']['text'] == 'a monstrous game')
+
+out = build([Row('upset', 'a stunning upset', stats=FOUR, weight=2.40),
+             Row('big_game', 'a routine big game', stats=FOUR, weight=1.02)])
+expect("...and the reverse, so the headline actually turns over",
+       out['lead'] and out['lead']['text'] == 'a stunning upset')
+
+# Prod rows written before lead_weight existed carry none. Treating those as zero would
+# make every one of them permanently unleadable.
+out = build([Row('upset', 'an old row, no weight', stats=FOUR),
+             Row('big_game', 'a weak new one', stats=FOUR, weight=0.4)])
+expect("a weightless legacy row still ranks, at its own threshold",
+       out['lead'] and out['lead']['text'] == 'an old row, no weight')
+
+# Weight decides WITHIN a moment; it must never let an old story outrank a new one.
+out = build([Row('upset', 'huge but stale', stats=FOUR, weight=9.0, ageHours=30),
+             Row('big_game', 'small but now', stats=FOUR, weight=1.01, ageHours=0)])
+expect("recency still outranks size across moments", out['lead'] and out['lead']['text'] == 'small but now')
 
 print("\nShape")
 out = build([Row('upset', 'lead', stats=FOUR)] + [Row('record', f'r{i}') for i in range(9)], limit=10)

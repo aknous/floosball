@@ -716,7 +716,7 @@ class SeasonManager:
                 self._publishScheduleNews(
                     'week_start',
                     f'{self.currentSeason.currentWeekText} begins, '
-                    f'{len(week.get("games", []))} games on the slate',
+                    f'{len(week.get("games", []))} games scheduled',
                 )
 
             # Resolve duplicate-effect equipped sets that pre-date the
@@ -3997,8 +3997,8 @@ class SeasonManager:
         ('passing', 'tds', 5, '{name} threw {value} touchdown passes'),
         ('rushing', 'yards', 270, '{name} ran for {value} yards'),
         ('rushing', 'tds', 4, '{name} ran in {value} touchdowns'),
-        ('receiving', 'yards', 190, '{name} caught {value} yards'),
-        ('receiving', 'tds', 3, '{name} caught {value} touchdowns'),
+        ('receiving', 'yards', 190, '{name} went for {value} receiving yards'),
+        ('receiving', 'tds', 3, '{name} had {value} receiving touchdowns'),
         ('defense', 'sacks', 9, '{name} recorded {value} sacks'),
         ('defense', 'ints', 2, '{name} picked off {value} passes'),
         ('kicking', 'fgs', 6, '{name} made {value} field goals'),
@@ -4014,6 +4014,31 @@ class SeasonManager:
         'kicking': [('MADE', 'fgs'), ('ATTEMPTS', 'fgAtt'), ('LONGEST', 'longest'), ('POINTS', 'pts')],
     }
 
+    # ⚠️ "How far past its own bar" is only comparable BETWEEN categories if each bar sits
+    # at a comparable point in its own distribution — and they do not. The big-game
+    # thresholds are p99 of this sim's measured player-game distribution, so a typical
+    # qualifying big game clears its bar by 2%. `UPSET_NEWS_ELO_GAP` (120) is a far lower
+    # bar, so a typical qualifying upset clears it by 50%. Shipping the raw ratio left
+    # upsets taking 56-78% of measured headlines — the same bug the weighting was built to
+    # fix, only smaller.
+    #
+    # Dividing by the MEDIAN qualifying event of each category fixes the footing: 1.0 means
+    # "a typical one of these", whatever these are, so the headline goes to whatever was
+    # most exceptional FOR ITS KIND. Measured over 528 feed rows of a fast sim — top
+    # category share 55.7% -> 34.0%, big games 8.6% -> 33.5%. Re-measure if a threshold
+    # moves. A category absent here divides by 1.0, which is what keeps a clinch's
+    # deliberate 3.0 intact: clinching is rare and is meant to take its week.
+    LEAD_WEIGHT_REFERENCE = {'upset': 1.50, 'big_game': 1.02, 'record': 1.06}
+
+    def _leadWeight(self, category: str, raw: float) -> float:
+        """A raw past-the-bar ratio, put on a footing comparable across categories."""
+        return raw / self.LEAD_WEIGHT_REFERENCE.get(category, 1.0)
+
+    # A record's weight in the headline race is scaled by how hard it was to take. All
+    # four scopes fire off the same game, and a career mark falling should not lose the
+    # front page to the single-game mark that caused it.
+    RECORD_SCOPE_WEIGHT = {'game': 1.0, 'season': 1.2, 'career': 1.45, 'allTime': 1.7}
+
     # Readable names for the record tree's leaf keys. Without these a headline reads
     # "set the game wr record at 51", because the leaf under `players.fantasy.game` is a
     # POSITION, not a stat.
@@ -4027,6 +4052,21 @@ class SeasonManager:
         'fumRec': 'fumble recoveries', 'elo': 'ELO',
     }
     RECORD_GROUPS = {'passing': 'passing', 'rushing': 'rushing', 'receiving': 'receiving', 'kicking': 'kicking'}
+
+    def _recordScope(self, path: str) -> str:
+        """Which scope a record path belongs to — `players.receiving.game.yards` -> `game`.
+
+        Mirrors `_recordLabel`'s parsing on purpose: the scope sits at a DIFFERENT index
+        for player records (`players.group.scope.leaf`) than for team ones
+        (`team.scope.leaf`), so reaching for a fixed position gets the leaf instead and
+        every record silently weighs the same.
+        """
+        parts = path.split('.')
+        if parts[0] == 'players' and len(parts) == 4:
+            return parts[2]
+        if parts[0] == 'team' and len(parts) == 3:
+            return parts[1]
+        return 'game'
 
     def _recordLabel(self, path: str) -> Optional[str]:
         """`players.receiving.game.yards` -> `single-game receiving yards`."""
@@ -4127,6 +4167,20 @@ class SeasonManager:
                     if not label:
                         continue
                     isPlayer = path.startswith('players.')
+                    # A record now carries a strip, so it can headline. Three numbers,
+                    # not four: the old mark, the new one, and the gap between them is
+                    # the whole story of a record falling, and the lead strip flexes to
+                    # however many cells it is given. Weighted by how comprehensively the
+                    # old mark was beaten, scaled by how hard the record was to take —
+                    # an all-time mark falling is a bigger story than a single-game one.
+                    prevValue = previous[0]
+                    margin = value - prevValue
+                    scope = self._recordScope(path)
+                    recordStats = [
+                        stat('NEW', round(value), positive=True),
+                        stat('PREVIOUS', round(prevValue)),
+                        stat('BEATEN BY', f'+{round(margin)}', positive=margin > 0),
+                    ]
                     # ⚠️ `holderId` IS the team id on a team record — `_checkTeamGameRecord`
                     # stores `id: team.id` right alongside the name. An earlier version
                     # ignored that and matched the record's name against `team.name`, which
@@ -4138,7 +4192,11 @@ class SeasonManager:
                          text=f'{name} set the {label} record at {round(value)}',
                          teamId=None if isPlayer else holderId,
                          playerId=holderId if isPlayer else None,
-                         playerName=name if isPlayer else None)
+                         playerName=name if isPlayer else None,
+                         stats=recordStats,
+                         leadWeight=self._leadWeight(
+                             'record',
+                             (value / prevValue) * self.RECORD_SCOPE_WEIGHT.get(scope, 1.0)))
             except Exception as e:
                 logger.debug(f"Record news skipped: {e}")
 
@@ -4164,7 +4222,8 @@ class SeasonManager:
                              stat('ELO GAP', f'-{round(gap)}'),
                              stat('WINNER ELO', round(winnerElo or 1500)),
                              stat('LOSER ELO', round(loserElo or 1500)),
-                         ])
+                         ],
+                         leadWeight=self._leadWeight('upset', gap / UPSET_NEWS_ELO_GAP))
         except Exception as e:
             logger.debug(f"Upset news skipped: {e}")
 
@@ -4190,7 +4249,9 @@ class SeasonManager:
                         emit(category='big_game', eventType=f'{group}.{key}',
                              text=template.format(name=player.name, value=round(value)),
                              playerId=player.id, playerName=player.name, teamId=team.id,
-                             stats=strip if len(strip) == 4 else None)
+                             stats=strip if len(strip) == 4 else None,
+                             leadWeight=self._leadWeight(
+                                 'big_game', value / threshold if threshold else 1.0))
                         break
         except Exception as e:
             logger.debug(f"Big-game news skipped: {e}")
@@ -4256,6 +4317,10 @@ class SeasonManager:
                 text=text,
                 teamId=team.id,
                 stats=stats,
+                # Clinching happens once a season per club. Weighted above anything a
+                # single game can produce so it takes the headline of the week it lands
+                # in rather than losing to whichever receiver had a big afternoon.
+                leadWeight=3.0 if lead else None,
                 # The surrounding code already broadcasts this line itself; publishing
                 # would send it twice.
                 broadcast=False,

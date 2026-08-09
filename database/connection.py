@@ -203,6 +203,7 @@ def _runPendingMigrations():
             ("turn_count", "INTEGER"),
             ("team_id", "INTEGER"),
             ("stats_json", "TEXT"),
+            ("lead_weight", "FLOAT"),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE league_news_items ADD COLUMN {col} {colDef}"))
