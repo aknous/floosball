@@ -3137,3 +3137,20 @@ GLITCH_SURGE_FLOOR_FP = 11.0
 # rating-to-win-probability curve: 120 points is roughly a 33% underdog, which is the
 # point where a neutral watcher would call the result surprising rather than close.
 UPSET_NEWS_ELO_GAP = 120
+
+# ── What the league news feed is FOR (owner, 2026-08-08) ────────────────────
+# The feed is Cores/meta-simulation centric, not a box score. An individual player's big
+# afternoon is not news here — it is on the Players page and the game board, and when it
+# was in the feed it WAS the feed (measured: 48% of all rows, and with the per-category
+# display cap that meant every visible row was box score).
+#
+# The machinery stays behind this flag rather than being deleted: `BIG_GAME_TESTS` records
+# the measured p99 of this sim's player-game distribution, which is expensive to rederive
+# and is the reference for any future "notable performance" surface.
+BIG_GAME_NEWS_ENABLED = False
+
+# How often the Cores speak into the feed, in week slots (a slot is one slate of games).
+# Reactions are tied to results, so they land every slate; ambient banter has no
+# triggering event and lands rarely enough to stay a pleasure rather than noise.
+CORES_GAME_NEWS_EVERY_WEEKS = 1
+CORES_AMBIENT_NEWS_EVERY_WEEKS = 3

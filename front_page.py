@@ -54,6 +54,30 @@ LEAD_MIN_STATS = 3
 # carried stats.
 NEVER_LEAD = {'cores', 'schedule'}
 
+# Categories allowed to take the headline with NO number strip (owner, 2026-08-08). A rule
+# changing, or the instability crossing a threshold, is the most important thing that can
+# happen in this league, and neither is a thing you put four numbers under.
+#
+# ⚠️ For criticality a strip would be actively wrong, not merely absent: every public
+# surface for the anomaly is deliberately number-free, so that it reads as a mood rather
+# than a progress bar. The raw aggregate and threshold live only in the debug endpoint and
+# the ephemeral control room.
+LEAD_WITHOUT_STATS = {'rules', 'criticality'}
+
+# The feed is Cores/meta-simulation centric (owner, 2026-08-08), so these categories get a
+# bigger share of the visible rows than the league's own results do.
+#
+# The size is not arbitrary: a Cores exchange is 2-4 turns and each turn is its own row, so
+# a cap of three routinely cut a conversation off mid-argument. This is the smallest cap
+# that lets a whole exchange land.
+META_CATEGORIES = {'cores', 'criticality', 'rules', 'anomaly_transition'}
+
+# The opposite end: a routine notice that is worth ONE row and no more. "Week 12 begins,
+# 16 games scheduled" is a marker, not a story, and three of them stacked is the same
+# filler the big-game items used to be — with those gone, these expanded to fill the gap.
+NOTICE_CATEGORIES = {'schedule'}
+NOTICE_CAP = 1
+
 
 def _rowsToItems(rows) -> List[Dict[str, Any]]:
     items = []
@@ -72,6 +96,15 @@ def _rowsToItems(rows) -> List[Dict[str, Any]]:
             'id': r.id,
             'category': (r.category or '').upper().replace('_', ' '),
             'rawCategory': r.category,
+            # Which Core spoke, so the feed can show their icon rather than a generic
+            # dot. The display name is already folded into `text`; this is the key.
+            'core': r.core,
+            'coreDisplayName': r.core_display_name,
+            # Threading. A Cores exchange is persisted one row per turn; these are what
+            # let the reader put the conversation back together.
+            'exchangeId': r.exchange_id,
+            'turnIndex': r.turn_index,
+            'rawText': r.text or '',
             'text': text,
             'week': r.week,
             'season': r.season,
@@ -81,6 +114,54 @@ def _rowsToItems(rows) -> List[Dict[str, Any]]:
             'at': r.created_at.isoformat() + 'Z' if r.created_at else None,
         })
     return items
+
+
+def _groupExchanges(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Fold a multi-turn Cores exchange into ONE entry, its turns in spoken order.
+
+    ⚠️ Without this the feed reads a conversation BACKWARDS. Rows come newest-first, and
+    each turn of an exchange is its own row published milliseconds apart — so the reply
+    lands above the line it is replying to, and a four-turn argument runs in reverse.
+
+    The grouped entry sits where its NEWEST turn sat, so the conversation still lands in
+    the right place on the timeline, and it counts as a SINGLE row against the caps
+    downstream — otherwise one exchange eats the whole meta allowance.
+
+    An exchange split across the fetch window keeps whatever turns it has; sorting by
+    `turnIndex` means a partial conversation still reads forwards.
+    """
+    grouped: List[Dict[str, Any]] = []
+    byExchange: Dict[str, Dict[str, Any]] = {}
+    for item in items:
+        exchangeId = item.get('exchangeId')
+        if not exchangeId:
+            grouped.append(item)
+            continue
+        entry = byExchange.get(exchangeId)
+        if entry is None:
+            entry = dict(item)
+            entry['_turnRows'] = [item]
+            byExchange[exchangeId] = entry
+            grouped.append(entry)
+        else:
+            entry['_turnRows'].append(item)
+
+    for entry in grouped:
+        rows = entry.pop('_turnRows', None)
+        if not rows:
+            continue
+        rows.sort(key=lambda t: t.get('turnIndex') if t.get('turnIndex') is not None else 0)
+        entry['turns'] = [{
+            'core': t.get('core'),
+            'coreDisplayName': t.get('coreDisplayName'),
+            'text': t.get('rawText') or t.get('text') or '',
+        } for t in rows]
+        # `text` stays populated with the opening line so anything reading the flat field
+        # still gets something sensible rather than an empty row.
+        entry['text'] = rows[0].get('text') or entry.get('text') or ''
+        entry['core'] = rows[0].get('core')
+        entry['coreDisplayName'] = rows[0].get('coreDisplayName')
+    return grouped
 
 
 def _fillTeamFromPlayer(session, items: List[Dict[str, Any]]) -> None:
@@ -127,7 +208,7 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
         .limit(max(limit * 4, 40))
         .all()
     )
-    items = _rowsToItems(rows)
+    items = _groupExchanges(_rowsToItems(rows))
     if not items:
         return {'lead': None, 'items': []}
     _fillTeamFromPlayer(session, items)
@@ -139,7 +220,10 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
         # Three cells, not four. A record's whole story is old mark / new mark / gap, and
         # the lead strip flexes to whatever it is handed. Requiring exactly four locked
         # every one of them out of the headline.
-        if len(item['stats']) < LEAD_MIN_STATS or item['rawCategory'] in NEVER_LEAD:
+        if item['rawCategory'] in NEVER_LEAD:
+            return False
+        if (item['rawCategory'] not in LEAD_WITHOUT_STATS
+                and len(item['stats']) < LEAD_MIN_STATS):
             return False
         row = next((r for r in rows if r.id == item['id']), None)
         return row is None or row.created_at is None or row.created_at >= cutoff
@@ -194,15 +278,45 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
     # nine-row feed that shows one.
     room = limit - 1 if lead else limit
     cap = max(2, room // 3)
-    perCategory: Dict[str, int] = {}
-    rowItems: List[Dict[str, Any]] = []
-    for item in items:
-        if item is lead or len(rowItems) >= room:
-            continue
-        count = perCategory.get(item['rawCategory'], 0)
-        if count >= cap:
-            continue
-        perCategory[item['rawCategory']] = count + 1
-        rowItems.append(item)
+    # One Cores exchange is now ONE row but several lines tall, so the allowance is
+    # smaller than it was when each turn cost a row of its own.
+    metaCap = max(2, room // 4)
+
+    # ⚠️ Meta rows are RESERVED, not merely capped. A cap is only a ceiling, and the feed
+    # is read newest-first — so a burst of same-moment events (a playoff week fires a
+    # dozen clinches and eliminations at once) fills the room before the Cores are
+    # reached, and the meta share collapses to whatever the burst left over. Observed
+    # exactly that: two Cores rows out of nine on a clinch week.
+    #
+    # Two passes, then back into publication order for display. Taking meta first is what
+    # makes the share a floor; re-sorting afterwards is what keeps the feed reading as a
+    # timeline rather than as two stacked blocks.
+    def take(pool, allowance):
+        picked: List[Dict[str, Any]] = []
+        perCategory: Dict[str, int] = {}
+        for item in pool:
+            if len(picked) >= allowance:
+                break
+            if item is lead:
+                continue
+            if item['rawCategory'] in META_CATEGORIES:
+                allowed = metaCap
+            elif item['rawCategory'] in NOTICE_CATEGORIES:
+                allowed = NOTICE_CAP
+            else:
+                allowed = cap
+            count = perCategory.get(item['rawCategory'], 0)
+            if count >= allowed:
+                continue
+            perCategory[item['rawCategory']] = count + 1
+            picked.append(item)
+        return picked
+
+    order = {id(item): i for i, item in enumerate(items)}
+    metaRows = take([i for i in items if i['rawCategory'] in META_CATEGORIES],
+                    min(metaCap, room))
+    leagueRows = take([i for i in items if i['rawCategory'] not in META_CATEGORIES],
+                      room - len(metaRows))
+    rowItems = sorted(metaRows + leagueRows, key=lambda i: order[id(i)])
 
     return {'lead': lead, 'items': rowItems}

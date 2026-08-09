@@ -1517,6 +1517,10 @@ class SeasonManager:
         except Exception as e:
             logger.error(f"Failed to unlock equipped cards for week {week}: {e}")
 
+        # The Cores narrate the slate that just finished. Before the week_end broadcast so
+        # a client refreshing off that event already has the lines.
+        self._publishCoresWeekNews(week)
+
         # Broadcast week_end event so frontend can refresh card state
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
             nextStart = self.getNextGameStartTime(week)
@@ -4136,7 +4140,7 @@ class SeasonManager:
 
     def _publishGameNewsInner(self, game, recordsBefore: Optional[Dict[str, Any]] = None) -> None:
         from league_news import publish, stat
-        from constants import UPSET_NEWS_ELO_GAP
+        from constants import UPSET_NEWS_ELO_GAP, BIG_GAME_NEWS_ENABLED
 
         # `currentWeek` lives on the SEASON, not the manager. The manager grows a
         # `currentWeek` attribute lazily during the playoffs and has none at all during the
@@ -4215,7 +4219,7 @@ class SeasonManager:
                     winnerScore = game.homeScore if homeIsWinner else game.awayScore
                     loserScore = game.awayScore if homeIsWinner else game.homeScore
                     emit(category='upset', eventType='upset',
-                         text=f'{winner.city} {winner.name} upset {loser.city} {loser.name}',
+                         text=f'{winner.city} {winner.name} have upset the {loser.city} {loser.name}',
                          teamId=winner.id,
                          stats=[
                              stat('FINAL', f'{round(winnerScore)}-{round(loserScore)}'),
@@ -4228,8 +4232,14 @@ class SeasonManager:
             logger.debug(f"Upset news skipped: {e}")
 
         # ── A big individual game ────────────────────────────────────────────
-        # One item per player at most. A back who runs for 180 and three scores is one
-        # story, not two, and firing both would let a single game flood the feed.
+        # OFF by default — see `BIG_GAME_NEWS_ENABLED`. The feed is about the league and
+        # the simulation running it, not about who had a good afternoon; measured, these
+        # were 48% of all rows and crowded everything else off the visible feed.
+        #
+        # One item per player at most when enabled. A back who runs for 180 and three
+        # scores is one story, not two, and firing both would let a single game flood it.
+        if not BIG_GAME_NEWS_ENABLED:
+            return
         try:
             for team in (game.homeTeam, game.awayTeam):
                 for player in (getattr(team, 'rosterDict', {}) or {}).values():
@@ -4255,6 +4265,94 @@ class SeasonManager:
                         break
         except Exception as e:
             logger.debug(f"Big-game news skipped: {e}")
+
+    def _publishCoresWeekNews(self, week: int) -> None:
+        """The Cores react to the slate that just finished, and now and then just talk.
+
+        This is what the feed is mostly FOR (owner, 2026-08-08): the league told by the
+        things running it, rather than a list of who gained the most yards. Both pools
+        already existed and were reachable only from the ephemeral control-room endpoint,
+        so the Cores were characters nobody met unless they went looking.
+
+        ⚠️ Reactions come from `gameResultExchange`, which references TEAMS AND SCORES —
+        fine here. The `observation` beats do NOT go in the feed: those quote the raw
+        aggregate and threshold, and the public surfaces stay number-free so the anomaly
+        reads as a mood rather than a progress bar.
+
+        ⚠️ Wrapped whole, like `_publishGameNews`. Nothing about narrating a week may
+        break the week.
+        """
+        try:
+            from constants import CORES_GAME_NEWS_EVERY_WEEKS, CORES_AMBIENT_NEWS_EVERY_WEEKS
+            from managers.coresManager import gameResultEntriesFor, entriesForEvent
+            from league_news import publish
+
+            season = getattr(self.currentSeason, 'seasonNumber', 0) or 0
+            entries = []
+
+            if CORES_GAME_NEWS_EVERY_WEEKS and week % CORES_GAME_NEWS_EVERY_WEEKS == 0:
+                games = self._coresGameDigest()
+                if games:
+                    entries.extend(gameResultEntriesFor(games) or [])
+
+            # Untethered banter — world-building, bickering, the lore they invented. No
+            # triggering event, which is the point: the simulation is inhabited whether or
+            # not anything happened.
+            if CORES_AMBIENT_NEWS_EVERY_WEEKS and week % CORES_AMBIENT_NEWS_EVERY_WEEKS == 0:
+                entries.extend(entriesForEvent('idle') or [])
+
+            for entry in entries:
+                publish(
+                    self.db_session,
+                    season=season, week=week,
+                    category='cores',
+                    eventType=entry.get('eventType'),
+                    text=entry.get('text', ''),
+                    core=entry.get('core'),
+                    coreDisplayName=entry.get('coreDisplayName'),
+                    exchangeId=entry.get('exchangeId'),
+                    turnIndex=entry.get('turnIndex'),
+                    turnCount=entry.get('turnCount'),
+                )
+        except Exception as e:
+            logger.debug(f"Cores week news skipped: {e}")
+
+    def _coresGameDigest(self):
+        """The week's finals, shaped the way `gameResultExchange` reads them.
+
+        Built from the games already in memory rather than re-queried — this runs on the
+        sim thread at week end, and the season object is holding them anyway.
+        """
+        from constants import UPSET_NEWS_ELO_GAP
+        games = (getattr(self.currentSeason, 'completedWeekGames', None)
+                 or getattr(self.currentSeason, 'activeGames', None) or [])
+        out = []
+        for g in games:
+            try:
+                home, away = g.homeTeam, g.awayTeam
+                if home is None or away is None or g.homeScore == g.awayScore:
+                    continue   # a tie has no winner to name, and the pools all name one
+                homeWon = g.homeScore > g.awayScore
+                if homeWon:
+                    winner, loser, ws, ls = home, away, g.homeScore, g.awayScore
+                else:
+                    winner, loser, ws, ls = away, home, g.awayScore, g.homeScore
+                # Judged on PRE-game Elo, captured before the result moved it — the same
+                # basis and the same bar the upset news item uses, so the Cores and the
+                # feed cannot disagree about what counted as an upset.
+                winnerElo = getattr(g, '_preGameHomeElo' if homeWon else '_preGameAwayElo', 1500) or 1500
+                loserElo = getattr(g, '_preGameAwayElo' if homeWon else '_preGameHomeElo', 1500) or 1500
+                out.append({
+                    'winner': winner.name, 'loser': loser.name,
+                    'winnerScore': ws, 'loserScore': ls,
+                    'margin': ws - ls, 'total': ws + ls,
+                    'overtime': bool(getattr(g, 'isOvertime', False)),
+                    'upset': loserElo - winnerElo >= UPSET_NEWS_ELO_GAP,
+                    'week': getattr(self.currentSeason, 'currentWeek', 0) or 0,
+                })
+            except Exception:
+                continue
+        return out
 
     def _publishScheduleNews(self, eventType: str, text: str,
                              week: Optional[int] = None,

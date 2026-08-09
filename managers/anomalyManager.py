@@ -1298,6 +1298,9 @@ def _publishCriticalityNews(session: Optional[Session], state: LeagueAnomalyStat
             season=state.season,
             week=int(week or 0),
             category='criticality',
+            # Above anything a game can produce (a clinch is 3.0). The instability
+            # crossing a threshold is the headline of whatever moment it lands in.
+            lead_weight=12.0,
             eventType=milestone,
             text=text,
             # The Cores entries broadcast alongside this already; a second push would

@@ -29,7 +29,8 @@ def expect(d, c):
 
 class Row:
     _n = 0
-    def __init__(self, category, text, stats=None, ageHours=0, week=10, season=3, weight=None):
+    def __init__(self, category, text, stats=None, ageHours=0, week=10, season=3, weight=None,
+                 core=None, exchangeId=None, turnIndex=None):
         Row._n += 1
         self.id = Row._n
         self.category = category
@@ -38,7 +39,11 @@ class Row:
         self.season = season
         self.team_id = None
         self.player_id = None
-        self.core_display_name = 'Vera' if category == 'cores' else None
+        self.core = core or ('vera' if category == 'cores' else None)
+        self.core_display_name = (core.title() if core
+                                  else ('Vera' if category == 'cores' else None))
+        self.exchange_id = exchangeId
+        self.turn_index = turnIndex
         self.stats_json = json.dumps(stats) if stats else None
         self.lead_weight = weight
         self.created_at = datetime.utcnow() - timedelta(hours=ageHours)
@@ -153,6 +158,82 @@ expect("a weightless legacy row still ranks, at its own threshold",
 out = build([Row('upset', 'huge but stale', stats=FOUR, weight=9.0, ageHours=30),
              Row('big_game', 'small but now', stats=FOUR, weight=1.01, ageHours=0)])
 expect("recency still outranks size across moments", out['lead'] and out['lead']['text'] == 'small but now')
+
+print("\nThe things that matter most lead without numbers")
+# A rule changing, or the instability crossing a threshold, is the biggest thing that can
+# happen here. Neither is a thing you put four numbers under, and for criticality a strip
+# would be actively wrong — every public anomaly surface is deliberately number-free.
+out = build([Row('rules', 'The conversion ladder is in effect', weight=8.0),
+             Row('upset', 'an upset', stats=FOUR, weight=1.0)])
+expect("a rule change leads with no strip at all", out['lead'] and out['lead']['text'] == 'The conversion ladder is in effect')
+
+out = build([Row('criticality', 'Something is wrong with the league', weight=12.0),
+             Row('rules', 'a rule changed', weight=8.0),
+             Row('clinched', 'a clinch', stats=FOUR, weight=3.0)])
+expect("a threshold crossing outranks both", out['lead'] and out['lead']['text'] == 'Something is wrong with the league')
+
+out = build([Row('big_game', 'a stripless big game'), Row('record', 'a stripless record')])
+expect("every OTHER category still needs its numbers to lead", out['lead'] is None)
+
+print("\nMeta rows are reserved, not merely capped")
+# A cap is only a ceiling, and the feed reads newest-first — so a burst of same-moment
+# events (a playoff week fires a dozen clinches and eliminations at once) fills the room
+# before the Cores are reached. Observed exactly that: two Cores rows out of nine.
+burst = [Row('eliminated', f'elim {i}') for i in range(8)]
+burst += [Row('upset', f'upset {i}', stats=FOUR) for i in range(8)]
+burst += [Row('cores', f'Vera muses {i}') for i in range(4)]
+out = build(burst, limit=10)
+coresRows = [i for i in out['items'] if i['rawCategory'] == 'cores']
+# Two, not more: `metaCap` is sized for exchanges, and an exchange is one row several
+# lines tall. These fixture rows are solo lines, so they each cost a row of their own.
+expect("the Cores survive a burst of league events", len(coresRows) >= 2)
+expect("...and the rest of the feed still fills up", len(out['items']) >= 6)
+
+# Reserving must not reorder the feed into two stacked blocks. The rows the fake hands
+# back are already in feed order, so the check is that the output preserves it — not that
+# ids descend, which is an artifact of how this fixture numbers its rows.
+feedOrder = {r.id: n for n, r in enumerate(burst)}
+positions = [feedOrder[i['id']] for i in out['items']]
+expect("rows still read as a timeline, not as two stacked blocks",
+       positions == sorted(positions))
+
+print("\nA Cores exchange is ONE entry, and reads forwards")
+# ⚠️ The feed is newest-first and each turn of an exchange is its own row published
+# milliseconds apart — so without grouping, the reply renders ABOVE the line it answers
+# and a four-turn argument runs backwards.
+turns = [
+    Row('cores', 'okay good. i was worried for the quarterback.', core='pyre', exchangeId='x1', turnIndex=3),
+    Row('cores', 'No, Pyre. It does not have four backs.', core='vera', exchangeId='x1', turnIndex=2),
+    Row('cores', '...wait. does it have four backs?', core='pyre', exchangeId='x1', turnIndex=1),
+    Row('cores', 'A quarterback has four backs.', core='halverson', exchangeId='x1', turnIndex=0),
+]
+out = build(turns, limit=10)
+coresEntries = [i for i in out['items'] if i['rawCategory'] == 'cores']
+expect("four turns collapse into a single entry", len(coresEntries) == 1)
+entry = coresEntries[0]
+expect("...carrying all four turns", len(entry.get('turns') or []) == 4)
+expect("...in SPOKEN order, not feed order",
+       [t['text'] for t in entry['turns']] == [
+           'A quarterback has four backs.',
+           '...wait. does it have four backs?',
+           'No, Pyre. It does not have four backs.',
+           'okay good. i was worried for the quarterback.'])
+expect("each turn keeps its own speaker, so an exchange is not one voice",
+       [t['core'] for t in entry['turns']] == ['halverson', 'pyre', 'vera', 'pyre'])
+expect("turn text carries NO inline speaker prefix (the name is drawn separately)",
+       all(not t['text'].startswith(f"{t['coreDisplayName']}:") for t in entry['turns']))
+
+# One exchange costs ONE row, so it cannot eat the whole meta allowance.
+mixed = turns + [Row('upset', f'upset {i}', stats=FOUR) for i in range(6)]
+out = build(mixed, limit=10)
+expect("an exchange counts as a single row against the caps",
+       len([i for i in out['items'] if i['rawCategory'] == 'cores']) == 1)
+expect("...leaving room for the rest of the feed",
+       len([i for i in out['items'] if i['rawCategory'] == 'upset']) >= 2)
+
+# A solo Core line has no exchange id and must still render.
+out = build([Row('cores', 'Vera muses alone')], limit=10)
+expect("a solo Cores line survives grouping untouched", len(out['items']) == 1)
 
 print("\nShape")
 out = build([Row('upset', 'lead', stats=FOUR)] + [Row('record', f'r{i}') for i in range(9)], limit=10)

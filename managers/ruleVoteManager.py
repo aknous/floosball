@@ -599,8 +599,11 @@ class RuleVoteManager:
         'cores' lines), so a rule change is actually visible there."""
         try:
             from database.models import LeagueNewsItem
+            # Weighted to take the headline of its moment — a rule actually changing
+            # outranks any single result. See front_page.LEAD_WITHOUT_STATS.
             session.add(LeagueNewsItem(season=season, week=week, category='rules',
-                                       event_type='rule_change', text=text))
+                                       event_type='rule_change', text=text,
+                                       lead_weight=8.0))
             session.commit()
         except Exception as e:
             session.rollback()

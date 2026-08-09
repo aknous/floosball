@@ -64,6 +64,9 @@ def publish(
     core: Optional[str] = None,
     coreDisplayName: Optional[str] = None,
     anomalyState: Optional[str] = None,
+    exchangeId: Optional[str] = None,
+    turnIndex: Optional[int] = None,
+    turnCount: Optional[int] = None,
     commit: bool = True,
     broadcast: bool = True,
 ) -> None:
@@ -93,6 +96,9 @@ def publish(
             core=core,
             core_display_name=coreDisplayName,
             anomaly_state=anomalyState,
+            exchange_id=exchangeId,
+            turn_index=turnIndex,
+            turn_count=turnCount,
         ))
         if commit:
             session.commit()
