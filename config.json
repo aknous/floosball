@@ -26,16 +26,16 @@
   ],
   "divisions": {
     "Corduroy League": [
-      "Division 1",
-      "Division 2",
-      "Division 3",
-      "Division 4"
+      "Twill",
+      "Denim",
+      "Herringbone",
+      "Tweed"
     ],
     "Flannel League": [
-      "Division 5",
-      "Division 6",
-      "Division 7",
-      "Division 8"
+      "Gingham",
+      "Houndstooth",
+      "Chambray",
+      "Paisley"
     ]
   },
   "teams": [
@@ -108,8 +108,8 @@
       "city": "Minnesota",
       "name": "Pops",
       "abbr": "MIN",
-      "color": "#582C83",
-      "secondaryColor": "#FF6EC7",
+      "color": "#EFE04A",
+      "secondaryColor": "#2E9E3F",
       "tertiaryColor": "#6A3494"
     },
     {
@@ -140,8 +140,8 @@
       "city": "New Orleans",
       "name": "Tuesdays",
       "abbr": "NOR",
-      "color": "#1A237E",
-      "secondaryColor": "#CFD8DC",
+      "color": "#6B297F",
+      "secondaryColor": "#546DFF",
       "tertiaryColor": "#283593"
     },
     {
@@ -196,8 +196,8 @@
       "city": "Anchorage",
       "name": "Midnights",
       "abbr": "ANC",
-      "color": "#455A64",
-      "secondaryColor": "#FF7043",
+      "color": "#319B87",
+      "secondaryColor": "#232BC7",
       "tertiaryColor": "#546E7A"
     },
     {
@@ -236,56 +236,56 @@
       "city": "Los Angeles",
       "name": "Extras",
       "abbr": "LAE",
-      "color": "#00838F",
-      "secondaryColor": "#FFD600",
+      "color": "#EDE7DA",
+      "secondaryColor": "#5C2016",
       "tertiaryColor": "#0097A7"
     },
     {
       "city": "Toronto",
       "name": "Raccoons",
       "abbr": "TOR",
-      "color": "#FF6F00",
-      "secondaryColor": "#1A237E",
+      "color": "#1E5B2A",
+      "secondaryColor": "#EFE4CE",
       "tertiaryColor": "#FF8F00"
     },
     {
       "city": "Montreal",
       "name": "Curd",
       "abbr": "MON",
-      "color": "#4A148C",
-      "secondaryColor": "#00C853",
+      "color": "#F0E4B0",
+      "secondaryColor": "#7A4B12",
       "tertiaryColor": "#6A1B9A"
     },
     {
       "city": "Seoul",
       "name": "Trains",
       "abbr": "SEO",
-      "color": "#90A4AE",
-      "secondaryColor": "#C62828",
+      "color": "#E9E3D3",
+      "secondaryColor": "#2F6C70",
       "tertiaryColor": "#B0BEC5"
     },
     {
       "city": "Hamburg",
       "name": "Grillmeisters",
       "abbr": "HAM",
-      "color": "#F9A825",
-      "secondaryColor": "#00695C",
+      "color": "#E8B22A",
+      "secondaryColor": "#3D2A16",
       "tertiaryColor": "#FBC02D"
     },
     {
       "city": "Mexico City",
       "name": "Exoticos",
       "abbr": "MEX",
-      "color": "#8D6E63",
-      "secondaryColor": "#ECEFF1",
+      "color": "#FF9DC3",
+      "secondaryColor": "#1BA563",
       "tertiaryColor": "#A1887F"
     },
     {
       "city": "Buffalo",
       "name": "Buffalo",
       "abbr": "BUF",
-      "color": "#0288D1",
-      "secondaryColor": "#ECEFF1",
+      "color": "#1097BF",
+      "secondaryColor": "#F4E3C8",
       "tertiaryColor": "#4FC3F7"
     },
     {
@@ -1087,5 +1087,43 @@
     "Gooder Cadwell",
     "Scrapmetal Meringue",
     "Jason Waterfalls"
-  ]
+  ],
+  "teamDistribution": {
+    "Corduroy League": [
+      "Strangers",
+      "Normals",
+      "Broads",
+      "Monuments",
+      "Melons",
+      "Rocks",
+      "Beans",
+      "Caddies",
+      "Pops",
+      "Sodas",
+      "Slippers",
+      "Wafflecones",
+      "Dry Heat",
+      "Residents",
+      "Sand Dollars",
+      "Oysters"
+    ],
+    "Flannel League": [
+      "Cranes",
+      "Pinecones",
+      "Phones",
+      "Extras",
+      "Jetskis",
+      "Bees",
+      "Classics",
+      "Tuesdays",
+      "Raccoons",
+      "Curd",
+      "Buffalo",
+      "Midnights",
+      "Grillmeisters",
+      "Trains",
+      "Exoticos",
+      "Rhyme"
+    ]
+  }
 }
