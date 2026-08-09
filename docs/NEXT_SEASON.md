@@ -251,12 +251,61 @@ from `floosball-react/public/avatars/{teamId}.png` — not the API — so clubs 
 crest at all and everything else was stale. Regenerate from `config.json` after any colour
 or mark change; the API endpoint is not what the app uses.
 
-### Still to build — three handoffs in `floosball-react/`
+⚠️ **And the code had its own copy of that stale count.** `boardPieces.CREST_MAX_ID` was
+still `24`, so the eight expansion clubs drew a dashed placeholder on the board, the
+standings and everywhere else a crest appears — while their artwork sat on disk unused.
+Fixed to 32 (frontend `dbdd11c`). The league is **32 clubs**; a literal 24 anywhere is stale,
+and the ones that still *behaved* were two analysis harnesses (backend `ac6e650`).
 
-`design_handoff_player_profile` (337 lines) · `design_handoff_stats_page` (472) ·
-`design_handoff_game_page` (503, replaces the game modal).
+### The three handoffs — ALL BUILT (2026-08-09)
 
-Do the game page LAST: it is the one that wants the box-score work above.
+| Handoff | Where |
+| --- | --- |
+| Player profile, option `1a` | frontend `dbdd11c` · backend `9396990`/`ac6e650` |
+| Stats page — players + teams, one shell | frontend `aa19722` · backend same |
+| Game page — the modal becomes a route | frontend `6d6a7ad`/`9f9c4f3` |
+
+**Backend that had to come with them:**
+- **`player_season_stats.performance_rating` / `.defensive_performance_rating`** (model +
+  inline migration + save path + API row). Performance ratings are percentile-of-production
+  against that season's pool, computed live every week and never stored — so once the pool
+  moved on the reading was gone and a past season could say what a player did but not how
+  well it went. Nullable, because 0 means "not calculated yet" and would read as a terrible
+  year on every season predating the columns. **Not backfillable.**
+- **`GET /api/stats/players`** — a season or a career, per-game or total, by position
+  (offensive slot or the defensive one that player also fills) and status, with facet counts.
+  ⚠️ **Two sources on purpose**: the CURRENT season is read from memory (the only place a
+  game in progress exists), past seasons and careers from the DB. Reading the DB for the live
+  season shows a table lagging the scoreboard by however long since the last save.
+- **`GET /api/stats/teams`** — mostly a read of `team_season_stats`, but a club's GIVEAWAYS
+  and SACKS ALLOWED are not on its own row: the sim credits a turnover to the defence that
+  forced it, so the surrendering side only exists as a join back through `games`. ⚠️ That
+  join is **REGULAR SEASON ONLY** — sweeping up the playoffs subtracts four games of
+  giveaways from twenty-eight games of takeaways and reports a margin belonging to neither.
+- Per-season `teamId`/`teamAbbr` on the player profile's career rows.
+
+**Columns the designs asked for that are NOT built**, because the sim does not record them
+and the handoffs' own rule is to hide a column rather than ship a table of zeros:
+receiver `AIR`/`SEP` (computed per play, discarded after broadcast — only the QB's air-yards
+sum is banked), defender `FR`/`TD`, and team `1ST/G`, `3RD%`, `PEN`, `TOP`.
+
+**`GameModalNew` gained a `layout` prop rather than being forked** — the field SVG, WP chart,
+replay, play rows, insights and box score are identical in both, and a copy would drift.
+⚠️ On the route only the two SCORE ROWS are hidden, not the whole scores block: the frames
+and innings line scores live in there, and hiding the block takes the line score away from
+the two formats that have no quarter breakdown.
+
+**Verified in all seven formats** via `tools_force_format.py` — standard, target, play limit,
+chess clock, innings, frames, bust. ⚠️ **Getting a stable window is the hard part**: `fast`
+and `turbo` roll the week faster than a page can load, and a game that leaves the current
+round leaves `GamesContext` with it. What works is `playoff-test` (instant regular season,
+compressed playoffs) plus fetching the current game id and navigating **in one browser call**;
+two calls and the round has already moved. Harness: `$CLAUDE_JOB_DIR/tmp/format_run.sh`.
+
+**Still open on the game page** (design specced, not built): the Bleachers composer's
+play-specific option group (the `On that play` lines), fan posts merged into the same
+reverse-chronological list as the two player voices, and the Compare view the stats page's
+button opens onto. The composer currently reuses `TeamFeed` for the viewer's own club.
 
 **Decisions already made, so they are not re-litigated:**
 - **Player profile: build option `1a` (Standing), not `1b` (Banner).** They are explicitly
