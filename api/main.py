@@ -4535,6 +4535,431 @@ async def get_stat_leaders(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============================================================================
+# REST API - THE STATS PAGE
+# ============================================================================
+#
+# Two endpoints behind one page. They exist because the old players list could
+# only ever answer "the current season, offense only": it read live memory, so
+# there was nowhere to ask about season 3, nowhere to ask about a career, and
+# no defensive line at all even though the sim has recorded one all along.
+#
+# ⚠️ Two sources, on purpose. The CURRENT season is read from memory, because
+# that is the only place a game in progress exists. Past seasons and careers
+# are read from `player_season_stats`. Reading the DB for the live season would
+# show a table that lags the scoreboard by however long it has been since the
+# last save.
+
+# Offensive slot -> the defensive slot that player also fills.
+_DEF_SLOT_FOR = {'QB': 'S', 'RB': 'LB', 'WR': 'CB', 'TE': 'DE'}
+_DEFENSIVE_POSITIONS = {'S', 'LB', 'CB', 'DE'}
+_PLAYER_STATUSES = ('active', 'fa', 'prospects', 'retired', 'followed')
+
+# The blobs a stat row is assembled from, and their empty shape.
+_STAT_GROUPS = ('passing', 'rushing', 'receiving', 'kicking', 'defense', 'returning')
+
+
+def _sumStatBlobs(blobs: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Add season blobs together into one career blob.
+
+    Counting stats sum. Rates cannot — a career completion percentage is not the
+    mean of each season's, it is the career completions over the career attempts
+    — so every rate is recomputed at the end from its own components, and
+    `longest` takes a max rather than a total.
+    """
+    out = {group: {} for group in _STAT_GROUPS}
+    maxKeys = {'longest', 'puntLongest'}
+    rateKeys = {'compPerc', 'ypc', 'rcvPerc', 'ypr', 'fgPerc', 'xpPerc',
+                'fg20to40perc', 'fg40to50perc', 'fgOver50perc', 'fgUnder20perc'}
+    for blob in blobs:
+        for group in _STAT_GROUPS:
+            source = blob.get(group) or {}
+            target = out[group]
+            for key, value in source.items():
+                if key in rateKeys or not isinstance(value, (int, float)):
+                    continue
+                if key in maxKeys:
+                    target[key] = max(target.get(key, 0), value)
+                else:
+                    target[key] = target.get(key, 0) + value
+
+    def rate(numerator, denominator, scale=100.0, digits=1):
+        return round(numerator / denominator * scale, digits) if denominator else 0.0
+
+    p, r, rcv, k = out['passing'], out['rushing'], out['receiving'], out['kicking']
+    p['compPerc'] = rate(p.get('comp', 0), p.get('att', 0))
+    p['ypc'] = rate(p.get('yards', 0), p.get('att', 0), scale=1.0)
+    r['ypc'] = rate(r.get('yards', 0), r.get('carries', 0), scale=1.0)
+    rcv['rcvPerc'] = rate(rcv.get('receptions', 0), rcv.get('targets', 0))
+    rcv['ypr'] = rate(rcv.get('yards', 0), rcv.get('receptions', 0), scale=1.0)
+    k['fgPerc'] = rate(k.get('fgs', 0), k.get('fgAtt', 0))
+    k['xpPerc'] = rate(k.get('xps', 0), k.get('xpAtt', 0))
+    return out
+
+
+def _perGame(blobs: Dict[str, Dict[str, Any]], games: int) -> Dict[str, Dict[str, Any]]:
+    """Divide counting stats by games played, leaving rates and bests alone."""
+    if games <= 0:
+        return blobs
+    keep = {'compPerc', 'ypc', 'rcvPerc', 'ypr', 'fgPerc', 'xpPerc', 'longest', 'puntLongest',
+            'fg20to40perc', 'fg40to50perc', 'fgOver50perc', 'fgUnder20perc'}
+    return {
+        group: {
+            key: (value if key in keep else round(value / games, 1))
+            for key, value in stats.items()
+        }
+        for group, stats in blobs.items()
+    }
+
+
+def _statsPlayerRow(player, blobs, games, fantasyPoints, wpa, perf, defPerf,
+                    teamId, teamAbbr, teamColor, status, seasons=None) -> Dict[str, Any]:
+    """One row of the stats table, whatever season or scope produced it."""
+    from api_response_builders import PlayerResponseBuilder
+    position = player.position.name if hasattr(player.position, 'name') else str(player.position)
+    rating = getattr(player, 'playerRating', 0) or 0
+    return {
+        'id': player.id,
+        'name': player.name,
+        'position': position,
+        'defensivePosition': _DEF_SLOT_FOR.get(position),
+        'teamId': teamId,
+        'teamAbbr': teamAbbr,
+        'teamColor': teamColor,
+        'status': status,
+        'playerRating': rating,
+        'ratingStars': PlayerResponseBuilder.calculateStarRating(rating),
+        'gamesPlayed': games,
+        'seasonsPlayed': seasons,
+        'fantasyPoints': round(fantasyPoints or 0, 1),
+        'passing': blobs.get('passing') or {},
+        'rushing': blobs.get('rushing') or {},
+        'receiving': blobs.get('receiving') or {},
+        'kicking': blobs.get('kicking') or {},
+        'defense': blobs.get('defense') or {},
+        'returning': blobs.get('returning') or {},
+        'impact': {
+            # None rather than 0 wherever a reading was never taken — the table
+            # prints a dash for None and a dash is honest. A 0 in a dense table
+            # reads as "measured, and bad".
+            'performanceRating': perf,
+            'defensiveRating': defPerf,
+            'wpa': round(wpa, 2) if wpa is not None else None,
+        },
+    }
+
+
+def _playerStatus(player, playerManager) -> str:
+    if getattr(player, 'is_prospect', False):
+        return 'prospect'
+    from floosball_player import PlayerServiceTime as _PST
+    if getattr(player, 'serviceTime', None) == _PST.Retired:
+        return 'retired'
+    team = getattr(player, 'team', None)
+    return 'active' if (team is not None and not isinstance(team, str)) else 'fa'
+
+
+@app.get("/api/stats/players", response_model=Dict[str, Any])
+async def get_stats_players(
+    response: Response,
+    season: str = Query(default="current"),
+    per: str = Query(default="total"),
+    position: str = Query(default="ALL"),
+    status: str = Query(default="active"),
+    search: str = Query(default=""),
+    user: Optional[_User] = Depends(_getOptionalUser),
+):
+    """Every player's line for one season, or for a whole career.
+
+    Sorting and paging are deliberately left to the client: the whole league is
+    a few hundred rows, the page sorts on columns it already holds, and paging
+    server-side would mean re-sorting there on every header click.
+    """
+    response.headers["Cache-Control"] = "no-store" if status == 'followed' else "public, max-age=60"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    positionFilter = (position or 'ALL').upper()
+    if positionFilter not in _VALID_POSITIONS and positionFilter not in _DEFENSIVE_POSITIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown position {position}")
+    if status not in _PLAYER_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Unknown status {status}")
+    if status == 'followed' and user is None:
+        raise HTTPException(status_code=401, detail="Sign in to view followed players")
+
+    pm = floosball_app.playerManager
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+
+    scopeIsCareer = (season or '').lower() == 'career'
+    seasonNumber = currentSeason
+    if not scopeIsCareer and season not in ('current', '', None):
+        try:
+            seasonNumber = int(season)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Unknown season {season}")
+
+    try:
+        followedIds = set()
+        if status == 'followed':
+            from database.models import FollowedPlayer
+            from database.connection import get_session as _gs
+            _s = _gs()
+            try:
+                followedIds = {r[0] for r in _s.query(FollowedPlayer.player_id).filter_by(user_id=user.id).all()}
+            finally:
+                _s.close()
+
+        # Every player the page could show, across pools, deduped.
+        pools = list(pm.activePlayers) + list(pm.freeAgents) + list(pm.retiredPlayers)
+        byId = {}
+        for p in pools:
+            byId.setdefault(p.id, p)
+
+        def matchesPosition(player) -> bool:
+            if positionFilter == 'ALL':
+                return True
+            slot = player.position.name if hasattr(player.position, 'name') else str(player.position)
+            if positionFilter in _DEFENSIVE_POSITIONS:
+                return _DEF_SLOT_FOR.get(slot) == positionFilter
+            return slot == positionFilter
+
+        needle = (search or '').strip().lower()
+        candidates = [p for p in byId.values() if matchesPosition(p)
+                      and (not needle or needle in (p.name or '').lower())]
+
+        # Facet counts answer "how many of THESE would each status show", so they
+        # are computed after the position and search filters and before status.
+        facets = {key: 0 for key in _PLAYER_STATUSES}
+        for p in candidates:
+            facets[{'prospect': 'prospects', 'retired': 'retired',
+                    'active': 'active', 'fa': 'fa'}[_playerStatus(p, pm)]] += 1
+            if p.id in followedIds:
+                facets['followed'] += 1
+
+        if status == 'followed':
+            selected = [p for p in candidates if p.id in followedIds]
+        else:
+            wanted = {'active': 'active', 'fa': 'fa', 'prospects': 'prospect', 'retired': 'retired'}[status]
+            selected = [p for p in candidates if _playerStatus(p, pm) == wanted]
+
+        rows = []
+        liveSeason = (not scopeIsCareer and seasonNumber == currentSeason)
+
+        if liveSeason:
+            # From memory: the only place a game in progress exists.
+            for p in selected:
+                team = getattr(p, 'team', None)
+                hasTeam = team is not None and not isinstance(team, str)
+                sd = p.seasonStatsDict or {}
+                gd = p.gameStatsDict or {}
+                blobs = {g: dict(sd.get(g) or {}) for g in _STAT_GROUPS}
+                perf = getattr(p, 'seasonPerformanceRating', 0) or 0
+                defPerf = getattr(p, 'seasonDefensivePerformanceRating', 0) or 0
+                rows.append(_statsPlayerRow(
+                    p, blobs, getattr(p, 'gamesPlayed', 0),
+                    (sd.get('fantasyPoints', 0) or 0) + (gd.get('fantasyPoints', 0) or 0),
+                    getattr(p, 'seasonWpa', None),
+                    perf or None, defPerf or None,
+                    team.id if hasTeam else None,
+                    getattr(team, 'abbr', None) if hasTeam else None,
+                    getattr(team, 'color', None) if hasTeam else None,
+                    _playerStatus(p, pm),
+                    seasons=getattr(p, 'seasonsPlayed', None),
+                ))
+        else:
+            from database.connection import get_session as _gs
+            from database.models import PlayerSeasonStats as _PSS, Team as _T
+            _s = _gs()
+            try:
+                teamsById = {t.id: t for t in _s.query(_T).all()}
+                query = _s.query(_PSS).filter(_PSS.player_id.in_(list(byId.keys())),
+                                              _PSS.games_played > 0)
+                if not scopeIsCareer:
+                    query = query.filter(_PSS.season == seasonNumber)
+                bySeasonRows: Dict[int, List[Any]] = {}
+                for row in query.all():
+                    bySeasonRows.setdefault(row.player_id, []).append(row)
+            finally:
+                _s.close()
+
+            selectedIds = {p.id for p in selected}
+            for playerId, statRows in bySeasonRows.items():
+                if playerId not in selectedIds:
+                    continue
+                p = byId[playerId]
+                statRows.sort(key=lambda r: r.season)
+                blobList = [{
+                    'passing': r.passing_stats or {}, 'rushing': r.rushing_stats or {},
+                    'receiving': r.receiving_stats or {}, 'kicking': r.kicking_stats or {},
+                    'defense': r.defense_stats or {}, 'returning': r.returning_stats or {},
+                } for r in statRows]
+                blobs = _sumStatBlobs(blobList) if len(blobList) > 1 else {
+                    g: dict(blobList[0].get(g) or {}) for g in _STAT_GROUPS
+                }
+                games = sum(r.games_played or 0 for r in statRows)
+                points = sum(r.fantasy_points or 0 for r in statRows)
+                wpa = sum(r.wpa or 0.0 for r in statRows)
+                # A career performance rating is an AVERAGE of the seasons that
+                # have one — each is a percentile against its own season's pool,
+                # so they do not add up to anything.
+                rated = [r.performance_rating for r in statRows if r.performance_rating]
+                defRated = [r.defensive_performance_rating for r in statRows if r.defensive_performance_rating]
+                if scopeIsCareer and per == 'game':
+                    blobs = _perGame(blobs, games)
+                    points = points / games if games else 0
+                last = statRows[-1]
+                team = teamsById.get(last.team_id)
+                rows.append(_statsPlayerRow(
+                    # gamesPlayed always means games. Career mode shows a SEASONS
+                    # column instead, and it reads `seasonsPlayed` — overloading
+                    # one field to mean two things is how a column silently lies.
+                    p, blobs, games,
+                    points, wpa,
+                    round(sum(rated) / len(rated)) if rated else None,
+                    round(sum(defRated) / len(defRated)) if defRated else None,
+                    last.team_id, getattr(team, 'abbr', None), getattr(team, 'color', None),
+                    _playerStatus(p, pm),
+                    seasons=len(statRows),
+                ))
+
+        return build_success_response({
+            'rows': rows,
+            'total': len(rows),
+            'facets': facets,
+            'season': 'career' if scopeIsCareer else seasonNumber,
+            'currentSeason': currentSeason,
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting player stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/teams", response_model=Dict[str, Any])
+async def get_stats_teams(
+    response: Response,
+    season: str = Query(default="current"),
+    per: str = Query(default="game"),
+):
+    """Every club's offensive and defensive line for a season.
+
+    ⚠️ A club's GIVEAWAYS and SACKS ALLOWED are the opponent's takeaways and
+    sacks — the sim records a turnover against the defence that forced it, so
+    the surrendering side only exists as a join back through the games table.
+    Turnover margin needs both halves and cannot be read off one club's row.
+    """
+    response.headers["Cache-Control"] = "public, max-age=60"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+    seasonNumber = currentSeason
+    if season not in ('current', '', None):
+        try:
+            seasonNumber = int(season)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Unknown season {season}")
+
+    try:
+        from database.connection import get_session as _gs
+        from database.models import TeamSeasonStats as _TSS, Team as _T, Game as _G
+        _s = _gs()
+        try:
+            teams = {t.id: t for t in _s.query(_T).all()}
+            statRows = _s.query(_TSS).filter(_TSS.season == seasonNumber).all()
+
+            # The surrendered side of turnovers and sacks, per club.
+            #
+            # ⚠️ REGULAR SEASON ONLY. `team_season_stats` is regular-season, so a
+            # join that swept up the playoffs too would subtract four games of
+            # giveaways from twenty-eight games of takeaways and report a
+            # turnover margin that belongs to neither.
+            blank = {'turnovers': 0, 'sacksAllowed': 0, 'played': 0}
+            given = {tid: dict(blank) for tid in teams}
+            games = _s.query(_G).filter(_G.season == seasonNumber,
+                                        _G.status == 'final',
+                                        _G.is_playoff == False).all()  # noqa: E712
+            for g in games:
+                # A takeaway BY the home defence is a giveaway BY the away club.
+                given.setdefault(g.away_team_id, dict(blank))
+                given.setdefault(g.home_team_id, dict(blank))
+                given[g.away_team_id]['turnovers'] += (g.home_ints or 0) + (g.home_fum_rec or 0)
+                given[g.away_team_id]['sacksAllowed'] += (g.home_sacks or 0)
+                given[g.away_team_id]['played'] += 1
+                given[g.home_team_id]['turnovers'] += (g.away_ints or 0) + (g.away_fum_rec or 0)
+                given[g.home_team_id]['sacksAllowed'] += (g.away_sacks or 0)
+                given[g.home_team_id]['played'] += 1
+        finally:
+            _s.close()
+
+        rows = []
+        for row in statRows:
+            team = teams.get(row.team_id)
+            if team is None:
+                continue
+            offense = row.offense_stats or {}
+            defense = row.defense_stats or {}
+            surrendered = given.get(row.team_id, dict(blank))
+            # Counted off the schedule, not wins+losses — the season row has no
+            # ties column, so a drawn game would vanish from games played.
+            played = surrendered['played'] or ((row.wins or 0) + (row.losses or 0))
+            takeaways = (defense.get('ints', 0) or 0) + (defense.get('fumRec', 0) or 0)
+
+            def rate(total, perGameValue):
+                """The blob already carries per-game averages; totals are the raw sums."""
+                return perGameValue if per == 'game' else total
+
+            rows.append({
+                'teamId': row.team_id,
+                'name': f"{team.city} {team.name}".strip() if getattr(team, 'city', None) else team.name,
+                'abbr': team.abbr,
+                'color': team.color,
+                'gamesPlayed': played,
+                'wins': row.wins or 0,
+                'losses': row.losses or 0,
+                'offense': {
+                    'pointsFor': row.points or 0,
+                    'points': rate(row.points or 0, offense.get('avgPts', 0)),
+                    'totalYards': rate(offense.get('totalYards', 0), offense.get('avgYards', 0)),
+                    'passYards': rate(offense.get('passYards', 0), offense.get('avgPassYards', 0)),
+                    'rushYards': rate(offense.get('runYards', 0), offense.get('avgRunYards', 0)),
+                    'touchdowns': rate(offense.get('tds', 0), offense.get('avgTds', 0)),
+                    'fieldGoals': rate(offense.get('fgs', 0), offense.get('avgFgs', 0)),
+                    'turnovers': surrendered['turnovers'],
+                    'sacksAllowed': surrendered['sacksAllowed'],
+                },
+                'defense': {
+                    'pointsAgainst': row.points_allowed or 0,
+                    'pointsAllowed': rate(row.points_allowed or 0, defense.get('avgPtsAlwd', 0)),
+                    'yardsAllowed': rate(defense.get('totalYardsAlwd', 0), defense.get('avgYardsAlwd', 0)),
+                    'passYardsAllowed': rate(defense.get('passYardsAlwd', 0), defense.get('avgPassYardsAlwd', 0)),
+                    'rushYardsAllowed': rate(defense.get('runYardsAlwd', 0), defense.get('avgRunYardsAlwd', 0)),
+                    'sacks': defense.get('sacks', 0),
+                    'ints': defense.get('ints', 0),
+                    'fumbleRecoveries': defense.get('fumRec', 0),
+                    'takeaways': takeaways,
+                    'turnoverMargin': takeaways - surrendered['turnovers'],
+                },
+                'differential': row.score_differential or 0,
+            })
+
+        return build_success_response({
+            'rows': rows,
+            'season': seasonNumber,
+            'currentSeason': currentSeason,
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting team stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 _HOF_SCOPE_LABEL = {'career': 'Career', 'season': 'Season', 'game': 'Game'}
 _HOF_SCOPE_ORDER = {'career': 0, 'season': 1, 'game': 2}
 
