@@ -34794,3 +34794,172 @@ Shutting down API server...
 2026-08-09 16:20:34 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
 2026-08-09 16:22:16 - floosball.config - INFO - Cached configuration from config.json
 2026-08-09 16:22:18 - floosball.backup - INFO - DB backup written: data/backups/floosball_20260809_162218.db (2.2MB)
+2026-08-09 16:27:16 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 16:29:25 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:29:25 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:29:26 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 16:32:16 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 16:37:46 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 16:38:45 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 5)
+2026-08-09 16:38:47 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:38:47 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:39:50 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:39:50 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:39:51 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 16:40:29 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 5)
+2026-08-09 16:40:29 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:40:29 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:41:48 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:41:48 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:41:49 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 16:42:01 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:42:01 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:42:01 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 16:42:51 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 16:47:07 - floosball.playerManager - INFO - Calculating performance ratings for week 1
+2026-08-09 16:47:07 - floosball.playerManager - INFO - Performance ratings calculated for week 1
+2026-08-09 16:47:07 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2026-08-09 16:47:07 - floosball.seasonManager - INFO - Saved team season stats for season 1
+2026-08-09 16:47:07 - floosball.playerManager - INFO - Saving player data to database
+2026-08-09 16:47:08 - floosball.playerManager - INFO - Saved 192 players to database (192 active, 0 retired)
+2026-08-09 16:47:08 - floosball.playerManager - INFO - Team assignment stats: 192 with teams, 0 free agents, 0 retired, 0 null teams, 0 errors
+2026-08-09 16:47:08 - floosball.seasonManager - INFO - Showcase dividends paid to 0 users (S1 wk1)
+2026-08-09 16:47:08 - floosball.supporter - INFO - Supporter accrual s1 w1: 1/1 fans credited
+2026-08-09 16:47:08 - floosball.seasonManager - INFO - Pick-em resolved for S1W1: 0 users
+2026-08-09 16:47:08 - floosball.seasonManager - INFO - Unlocked equipped cards for week 1
+2026-08-09 16:47:08 - floosball.timingManager - INFO - sequential mode: post-week delay 120.0s
+2026-08-09 16:47:53 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 16:48:50 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:48:50 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:48:50 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:48:50 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:49:06 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 3)
+2026-08-09 16:49:06 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 16:49:08 - floosball.seasonManager - INFO - Simulating Week 2 in sequential mode
+2026-08-09 16:49:08 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: amplify
+2026-08-09 16:49:08 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: fortunate
+2026-08-09 16:49:08 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: amplify
+2026-08-09 16:49:08 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: frenzy
+2026-08-09 16:49:08 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: ironclad
+2026-08-09 16:49:08 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: steady
+2026-08-09 16:49:08 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: payday
+2026-08-09 16:49:08 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: longshot
+2026-08-09 16:49:08 - floosball.timingManager - INFO - sequential mode: week setup delay 30.0s
+2026-08-09 16:49:36 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:49:36 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:49:36 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:49:36 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:49:38 - floosball.anomaly - INFO - Anomaly weekly tick complete — season 1, week 2
+2026-08-09 16:49:38 - floosball.seasonManager - INFO - Memory cleanup: cleared play-by-play data from 16 completed games
+2026-08-09 16:49:38 - floosball.timingManager - INFO - sequential mode: games start delay 30.0s
+2026-08-09 16:49:45 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 3)
+2026-08-09 16:49:45 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 16:49:55 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:49:55 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:49:55 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 16:50:06 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:50:06 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:50:07 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 16:51:34 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:51:34 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:51:35 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 16:51:55 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 5)
+2026-08-09 16:51:57 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:51:57 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:52:04 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 5)
+2026-08-09 16:52:06 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:52:06 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:52:07 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:52:07 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:52:08 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 16:52:53 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 16:54:43 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:54:43 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 16:54:44 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 16:57:53 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 16:58:41 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 5)
+2026-08-09 16:58:43 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 16:58:43 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 17:02:53 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:07:53 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:12:53 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:17:53 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:18:15 - floosball.playerManager - INFO - Calculating performance ratings for week 2
+2026-08-09 17:18:15 - floosball.playerManager - INFO - Performance ratings calculated for week 2
+2026-08-09 17:18:15 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2026-08-09 17:18:15 - floosball.seasonManager - INFO - Saved team season stats for season 1
+2026-08-09 17:18:15 - floosball.playerManager - INFO - Saving player data to database
+2026-08-09 17:18:16 - floosball.playerManager - INFO - Saved 192 players to database (192 active, 0 retired)
+2026-08-09 17:18:16 - floosball.playerManager - INFO - Team assignment stats: 192 with teams, 0 free agents, 0 retired, 0 null teams, 0 errors
+2026-08-09 17:18:16 - floosball.seasonManager - INFO - Showcase dividends paid to 0 users (S1 wk2)
+2026-08-09 17:18:16 - floosball.supporter - INFO - Supporter accrual s1 w2: 1/1 fans credited
+2026-08-09 17:18:16 - floosball.seasonManager - INFO - Pick-em resolved for S1W2: 0 users
+2026-08-09 17:18:16 - floosball.seasonManager - INFO - Unlocked equipped cards for week 2
+2026-08-09 17:18:16 - floosball.timingManager - INFO - sequential mode: post-week delay 120.0s
+2026-08-09 17:20:16 - floosball.seasonManager - INFO - Simulating Week 3 in sequential mode
+2026-08-09 17:20:16 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: frenzy
+2026-08-09 17:20:16 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: fortunate
+2026-08-09 17:20:16 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: amplify
+2026-08-09 17:20:16 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: frenzy
+2026-08-09 17:20:16 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: ironclad
+2026-08-09 17:20:16 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: steady
+2026-08-09 17:20:16 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: payday
+2026-08-09 17:20:16 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: longshot
+2026-08-09 17:20:16 - floosball.timingManager - INFO - sequential mode: week setup delay 30.0s
+2026-08-09 17:20:46 - floosball.anomaly - INFO - Anomaly weekly tick complete — season 1, week 3
+2026-08-09 17:20:46 - floosball.seasonManager - INFO - Memory cleanup: cleared play-by-play data from 16 completed games
+2026-08-09 17:20:46 - floosball.timingManager - INFO - sequential mode: games start delay 30.0s
+2026-08-09 17:23:14 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:28:14 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:33:14 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:38:14 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:43:44 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:48:44 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:49:11 - floosball.playerManager - INFO - Calculating performance ratings for week 3
+2026-08-09 17:49:11 - floosball.playerManager - INFO - Performance ratings calculated for week 3
+2026-08-09 17:49:11 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2026-08-09 17:49:11 - floosball.seasonManager - INFO - Saved team season stats for season 1
+2026-08-09 17:49:11 - floosball.playerManager - INFO - Saving player data to database
+2026-08-09 17:49:12 - floosball.playerManager - INFO - Saved 192 players to database (192 active, 0 retired)
+2026-08-09 17:49:12 - floosball.playerManager - INFO - Team assignment stats: 192 with teams, 0 free agents, 0 retired, 0 null teams, 0 errors
+2026-08-09 17:49:12 - floosball.seasonManager - INFO - Showcase dividends paid to 0 users (S1 wk3)
+2026-08-09 17:49:12 - floosball.supporter - INFO - Supporter accrual s1 w3: 1/1 fans credited
+2026-08-09 17:49:12 - floosball.seasonManager - INFO - Pick-em resolved for S1W3: 0 users
+2026-08-09 17:49:12 - floosball.seasonManager - INFO - Unlocked equipped cards for week 3
+2026-08-09 17:49:12 - floosball.timingManager - INFO - sequential mode: post-week delay 120.0s
+2026-08-09 17:49:29 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 17:49:29 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 17:49:29 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 17:51:12 - floosball.seasonManager - INFO - Simulating Week 4 in sequential mode
+2026-08-09 17:51:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: ironclad
+2026-08-09 17:51:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: fortunate
+2026-08-09 17:51:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: amplify
+2026-08-09 17:51:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: frenzy
+2026-08-09 17:51:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: ironclad
+2026-08-09 17:51:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: steady
+2026-08-09 17:51:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: payday
+2026-08-09 17:51:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: longshot
+2026-08-09 17:51:12 - floosball.timingManager - INFO - sequential mode: week setup delay 30.0s
+2026-08-09 17:51:42 - floosball.anomaly - INFO - Anomaly weekly tick complete — season 1, week 4
+2026-08-09 17:51:42 - floosball.seasonManager - INFO - Memory cleanup: cleared play-by-play data from 16 completed games
+2026-08-09 17:51:42 - floosball.timingManager - INFO - sequential mode: games start delay 30.0s
+2026-08-09 17:53:46 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:56:33 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 17:56:33 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 17:56:34 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 4)
+2026-08-09 17:58:21 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 5)
+2026-08-09 17:58:30 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 17:58:30 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 17:58:38 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 5)
+2026-08-09 17:58:39 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-09 17:58:39 - floosball.api - INFO - Client disconnected from season updates
+2026-08-09 17:58:53 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 17:59:48 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: fortunate
+2026-08-09 17:59:48 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: amplify
+2026-08-09 17:59:48 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: frenzy
+2026-08-09 17:59:48 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: ironclad
+2026-08-09 17:59:48 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: steady
+2026-08-09 17:59:48 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: payday
+2026-08-09 17:59:48 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: longshot
+2026-08-09 18:03:53 - floosball.config - INFO - Cached configuration from config.json
+2026-08-09 18:04:30 - floosball.websocket - INFO - WebSocket ConnectionManager initialized

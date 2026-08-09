@@ -2606,6 +2606,35 @@ class SeasonManager:
         except Exception:
             logger.debug("Could not serialize format state for game", exc_info=True)
 
+    def _applyTeamStatsToRow(self, dbRow, game) -> None:
+        """Persist the full per-team box score, so a finished game can say HOW it was won.
+
+        The dedicated home_/away_ columns cover yards, TDs, FGs, sacks, ints and fumble
+        recoveries. They do NOT cover first downs or third/fourth-down conversions, and
+        those cannot be rebuilt from `game_player_stats` afterwards — a first down is a
+        team event, not a player one. Persisted as the same `team` block the live
+        broadcast sends, so the reader on the other side is the shape the frontend
+        already understands.
+
+        Play-by-play is deliberately still NOT persisted (owner): the feed is far larger
+        than these totals and stays in memory only.
+        """
+        try:
+            snapshot = game._buildGameStatsSnapshot()
+            if not snapshot:
+                return
+            payload = {
+                side: (snapshot.get(side) or {}).get('team')
+                for side in ('home', 'away')
+            }
+            # Both sides or neither — a half-written box score reads as a real one.
+            if not payload['home'] or not payload['away']:
+                return
+            import json
+            dbRow.team_stats = json.dumps(payload)
+        except Exception:
+            logger.debug("Could not serialize team stats for game", exc_info=True)
+
     def _applyGameStatsToRow(self, dbRow, gameStatsDict: dict) -> None:
         """Copy team stat totals from gameDict['gameStats'] into a DB Game row."""
         if not gameStatsDict:
@@ -3039,6 +3068,7 @@ class SeasonManager:
                         setattr(db_game, f'{_tgt}_score_ot', getattr(game, f'{_side}ScoreOT', 0) or 0)
                     self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
                     self._applyFormatStateToRow(db_game, game)
+                    self._applyTeamStatsToRow(db_game, game)
                     self.db_session.flush()
                     playerStats = self._extractPlayerStatsFromGame(game)
                     if playerStats:
@@ -3074,6 +3104,7 @@ class SeasonManager:
             
             self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
             self._applyFormatStateToRow(db_game, game)
+            self._applyTeamStatsToRow(db_game, game)
             self.game_repo.save(db_game)
             self.db_session.flush()  # Get the ID
 

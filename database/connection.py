@@ -1504,6 +1504,16 @@ def _runPendingMigrations():
             logger.info("  Migration: added games.format_state")
         except Exception:
             conn.rollback()
+        # Full per-team box score at completion as JSON. The dedicated home_/away_ stat
+        # columns miss first downs and third/fourth-down conversions, which are TEAM
+        # events and so are not recoverable from game_player_stats. NULL for anything
+        # already final — those totals only lived on the live game object.
+        try:
+            conn.execute(text("ALTER TABLE games ADD COLUMN team_stats TEXT"))
+            conn.commit()
+            logger.info("  Migration: added games.team_stats")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 

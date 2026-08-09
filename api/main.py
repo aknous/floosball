@@ -130,6 +130,29 @@ def _framesFromFormatState(formatStateJson):
     return None
 
 
+def _teamStatsFromRow(raw):
+    """Parse a persisted games.team_stats blob into the `{home, away}` shape the client
+    already understands (the same one the live broadcast sends).
+
+    ⚠️ Returns None for anything finished before the column existed. NULL there means
+    "never recorded", NOT "all zeros" — those totals only ever lived on the live game
+    object. Callers must OMIT the key rather than emit an empty block, or a card will
+    report that a game had no first downs when in truth nobody wrote them down.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    home, away = parsed.get('home'), parsed.get('away')
+    if not isinstance(home, dict) or not isinstance(away, dict):
+        return None
+    return {'home': {'team': home}, 'away': {'team': away}}
+
+
 def _framesWinnerSide(frames, homePoints, awayPoints):
     """Who won a frames match: 'home' | 'away' | 'tie'. Most frames won; a frames tie
     falls to the total-points tiebreak (mirrors FramesFormat.winnerSide)."""
@@ -2546,6 +2569,10 @@ async def get_week_games(week: int, response: Response):
             homeTeam = _teamObj(g.home_team_id)
             awayTeam = _teamObj(g.away_team_id)
             winner = homeTeam['name'] if homeWon else (awayTeam['name'] if awayWon else None)
+            # The persisted box score, when there is one. Games that finished before the
+            # column existed simply have no `gameStats` key — see _teamStatsFromRow: the
+            # card must be able to tell "not recorded" from "nothing happened".
+            teamStats = _teamStatsFromRow(getattr(g, 'team_stats', None))
             entry = {
                 'id': str(g.id),
                 'seasonNumber': g.season,
@@ -2573,6 +2600,10 @@ async def get_week_games(week: int, response: Response):
                 'isUpsetAlert': False,
                 'isFeatured': False,
             }
+            # Omitted, not emptied, when the game predates the column — a card that
+            # cannot tell those apart will print "0 first downs" about a real game.
+            if teamStats:
+                entry['gameStats'] = teamStats
             # Frames block (frames won, tiebreak, per-frame line) so the card shows the
             # match result, not the point total. GameCard keys off frames.active.
             if frames:
@@ -2663,6 +2694,17 @@ async def get_game_by_id(game_id: int, response: Response):
             if archived is None:
                 raise HTTPException(status_code=404, detail=f"Game {game_id} not found")
             archived['boxScore'] = buildBoxScore(_s, game_id)
+            # Team totals. buildBoxScore rebuilds the PLAYER lines from game_player_stats,
+            # but first downs and third/fourth-down conversions are team events with no
+            # player row to sum, so they come from the persisted blob or not at all.
+            try:
+                from database.models import Game as _DBGameTS
+                _tsRow = _s.query(_DBGameTS.team_stats).filter(_DBGameTS.id == game_id).first()
+                _ts = _teamStatsFromRow(_tsRow[0] if _tsRow else None)
+                if _ts:
+                    archived['gameStats'] = _ts
+            except Exception:
+                pass
             return archived
 
         game_dict = GameResponseBuilder.buildGameWithProbabilities(game)
@@ -2677,6 +2719,20 @@ async def get_game_by_id(game_id: int, response: Response):
             game_dict['boxScore'] = buildBoxScore(_gs(), game_id)
         except Exception:
             game_dict['boxScore'] = None
+
+        # Team totals: the live object first (it is current), the persisted blob when the
+        # game has been memory-cleaned but its row is still in the schedule.
+        if not (game_dict.get('gameStats') or {}).get('home'):
+            try:
+                from database.connection import get_session as _gsTS
+                from database.models import Game as _DBGameTS
+                _tsRow = _gsTS().query(_DBGameTS.team_stats).filter(
+                    _DBGameTS.id == game_id).first()
+                _ts = _teamStatsFromRow(_tsRow[0] if _tsRow else None)
+                if _ts:
+                    game_dict['gameStats'] = _ts
+            except Exception:
+                pass
 
         # Add current game state fields
         game_dict['startTime'] = game.startTime.replace(tzinfo=timezone.utc).timestamp()

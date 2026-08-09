@@ -780,6 +780,24 @@ class Game(Base):
     # column existed (the state is gone — not backfillable).
     format_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # The full per-team box score at completion, as JSON: `{'home': {...}, 'away': {...}}`,
+    # exactly the `team` block `_buildGameStatsSnapshot` broadcasts live.
+    #
+    # ⚠️ The dedicated home_/away_ columns above are NOT enough and are NOT superseded.
+    # They cover yards, TDs, FGs, sacks, ints and fumble recoveries — but first downs,
+    # third- and fourth-down conversions and attempts, completions, attempts and carries
+    # have no column and are not derivable from `game_player_stats` either (a first down
+    # is a team event, not a player one). Without this a finished game could report its
+    # score and nothing about how it was reached.
+    #
+    # A blob on the existing row rather than a `game_team_stats` table: this is display
+    # data, never aggregated over (season totals have their own table), so a join buys
+    # nothing and a second row per game costs more space than the JSON does.
+    #
+    # NULL for anything finished before this column existed — those totals only ever
+    # lived in the live game object, so there is nothing to backfill from.
+    team_stats: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Relationships
     home_team: Mapped["Team"] = relationship("Team", foreign_keys=[home_team_id], back_populates="home_games")
     away_team: Mapped["Team"] = relationship("Team", foreign_keys=[away_team_id], back_populates="away_games")
