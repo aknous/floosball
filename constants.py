@@ -1546,9 +1546,9 @@ GAME_FEED_CATALOG = {
     'take_it':        ('Take this one',                'Get up',      1),
     'all_night':      ('We do this all night',         'Get up',      1),
     # -- the defence
-    'get_a_stop':     ('Get a stop',                   'Defence',     1),
-    'hold_them':      ('Hold them here',               'Defence',     1),
-    'wall_up':        ('Wall up',                      'Defence',     1),
+    'get_a_stop':     ('Get a stop',                   'Defense',     1),
+    'hold_them':      ('Hold them here',               'Defense',     1),
+    'wall_up':        ('Wall up',                      'Defense',     1),
     # -- approval of what just happened
     'thats_the_play': ("That's the play",              'Yes',         1),
     'about_time':     ('About time',                   'Yes',         0),
