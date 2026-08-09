@@ -1265,6 +1265,11 @@ async def get_player(player_id: int, response: Response):
                     'receiving': row.receiving_stats or {},
                     'kicking': row.kicking_stats or {},
                     'defense': row.defense_stats or {},
+                    # How the season went. Null for seasons that ended before
+                    # the column existed — the profile shows a dash there
+                    # rather than inventing a number.
+                    'performanceRating': row.performance_rating,
+                    'defensivePerformanceRating': row.defensive_performance_rating,
                 }
                 allSeasons.append(pastEntry)
             dbSession.close()
@@ -1283,6 +1288,12 @@ async def get_player(player_id: int, response: Response):
             currentSeasonEntry['team'] = teamName
             currentSeasonEntry['color'] = teamColor
             currentSeasonEntry['gp'] = player.gamesPlayed
+            # The live season's ratings come off the player object — they are
+            # recomputed weekly and only reach the DB on the next save.
+            for key, attr in (('performanceRating', 'seasonPerformanceRating'),
+                              ('defensivePerformanceRating', 'seasonDefensivePerformanceRating')):
+                live = getattr(player, attr, 0) or 0
+                currentSeasonEntry[key] = int(live) if live > 0 else None
             player_dict['stats'] = [currentSeasonEntry] + allSeasons
         else:
             player_dict['stats'] = allSeasons

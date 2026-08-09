@@ -22,6 +22,22 @@ except ImportError:
 
 logger = get_logger("floosball.playerManager")
 
+
+def _perfRating(player, attr: str) -> Optional[int]:
+    """A season performance rating worth writing down, or None.
+
+    The ratings are percentile-of-production and start every season at 0, so a
+    0 means "not calculated yet", not "was terrible". Storing that would erase
+    the reading a moment before it was taken.
+    """
+    value = getattr(player, attr, 0) or 0
+    try:
+        value = int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 class PlayerManager:
     """Manages player lifecycle, lists, and organization"""
     
@@ -1920,6 +1936,9 @@ class PlayerManager:
                                     def_wpa=float(getattr(player, 'seasonDefWpa', 0.0)),
                                     wpa_snaps=int(getattr(player, 'seasonWpaSnaps', 0)),
                                     def_snaps=int(getattr(player, 'seasonDefWpaSnaps', 0)),
+                                    # How the season went, kept so a past season can still say so.
+                                    performance_rating=_perfRating(player, 'seasonPerformanceRating'),
+                                    defensive_performance_rating=_perfRating(player, 'seasonDefensivePerformanceRating'),
                                     # JSON for detailed stats
                                     passing_stats=season_dict.get('passing'),
                                     rushing_stats=season_dict.get('rushing'),
@@ -1955,6 +1974,15 @@ class PlayerManager:
                                 db_season_stats.def_wpa = float(getattr(player, 'seasonDefWpa', 0.0))
                                 db_season_stats.wpa_snaps = int(getattr(player, 'seasonWpaSnaps', 0))
                                 db_season_stats.def_snaps = int(getattr(player, 'seasonDefWpaSnaps', 0))
+                                # Only ever move these forward off a real reading — the ratings
+                                # are recomputed weekly and are 0 until the first calc of a new
+                                # season, which would otherwise wipe the season just finished.
+                                _perf = _perfRating(player, 'seasonPerformanceRating')
+                                if _perf is not None:
+                                    db_season_stats.performance_rating = _perf
+                                _defPerf = _perfRating(player, 'seasonDefensivePerformanceRating')
+                                if _defPerf is not None:
+                                    db_season_stats.defensive_performance_rating = _defPerf
                                 # Update JSON — wrap with dict() AND use
                                 # flag_modified() because the in-memory dict
                                 # we mutate IS the same object SQLAlchemy

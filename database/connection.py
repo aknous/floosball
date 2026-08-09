@@ -713,6 +713,9 @@ def _runPendingMigrations():
                 ('tackles', 'INTEGER DEFAULT 0'),
                 ('wpa', 'REAL DEFAULT 0'), ('def_wpa', 'REAL DEFAULT 0'),
                 ('wpa_snaps', 'INTEGER DEFAULT 0'), ('def_snaps', 'INTEGER DEFAULT 0'),
+                # Nullable on purpose: 0 would read as "played terribly" on
+                # every season that predates the column.
+                ('performance_rating', 'INTEGER'), ('defensive_performance_rating', 'INTEGER'),
             ]),
             ('player_career_stats', [
                 ('passing_yards', 'INTEGER DEFAULT 0'), ('passing_tds', 'INTEGER DEFAULT 0'),

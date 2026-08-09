@@ -440,6 +440,16 @@ class PlayerSeasonStats(Base):
     def_wpa: Mapped[float] = mapped_column(Float, default=0.0)
     wpa_snaps: Mapped[int] = mapped_column(Integer, default=0)
     def_snaps: Mapped[int] = mapped_column(Integer, default=0)
+    # How the player actually PERFORMED that season, 0-100, as opposed to how
+    # good he was rated. Computed live every week by
+    # playerManager.calculatePerformanceRatings as a percentile of production
+    # against that season's pool, and until now never written down — so a past
+    # season had no way to say how the year went. Percentiles cannot be
+    # rederived later (the pool has moved on), which is why these are stored
+    # rather than recomputed. NULL for seasons that ended before the columns
+    # existed; not backfillable.
+    performance_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    defensive_performance_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Stats stored as JSON for flexibility (detailed breakdown)
     passing_stats: Mapped[Optional[dict]] = mapped_column(JSON)
