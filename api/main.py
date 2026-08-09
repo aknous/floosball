@@ -12088,6 +12088,92 @@ def get_feed_catalog():
     })
 
 
+@app.get("/api/games/{gameId}/feed/catalog")
+def get_game_feed_catalog():
+    """What a fan can shout AT a game, grouped by heading.
+
+    A separate catalog from the club one: those lines are about a season and
+    read as nonsense shouted at a single snap.
+    """
+    from constants import GAME_FEED_CATALOG, FEED_MAX_POSTS_PER_WINDOW, FEED_RATE_WINDOW_HOURS
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for key, (text, group, valence) in GAME_FEED_CATALOG.items():
+        grouped.setdefault(group, []).append(
+            {'key': key, 'text': text, 'valence': valence})
+    return build_success_response({
+        'groups': [{'label': label, 'options': options} for label, options in grouped.items()],
+        'rateLimit': {'perWindow': FEED_MAX_POSTS_PER_WINDOW,
+                      'windowHours': FEED_RATE_WINDOW_HOURS},
+    })
+
+
+@app.post("/api/games/{gameId}/feed")
+def post_to_game_feed(gameId: int, req: _FeedPostRequest,
+                      user: _User = Depends(_getCurrentUser)):
+    """Shout at a game. Filed under your own club's stand, scoped to this match."""
+    from constants import FEED_ENABLED
+    if not FEED_ENABLED:
+        raise HTTPException(400, "The feed is not enabled")
+    teamId = getattr(user, 'favorite_team_id', None)
+    if not teamId:
+        raise HTTPException(400, "Pick a club before you shout at a game")
+    from database.connection import get_session
+    from database.repositories.feed_repository import FeedError
+    session = get_session()
+    try:
+        repo = _feedRepo(session)
+        try:
+            repo.addPost(user.id, teamId, req.postKey, None, gameId=gameId)
+        except FeedError as e:
+            raise HTTPException(400, str(e))
+        session.commit()
+        return build_success_response({
+            'gameId': gameId,
+            'postsRemaining': repo.remainingPosts(user.id),
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/games/{gameId}/feed")
+def get_game_feed(gameId: int, limit: int = 50,
+                  user: Optional[_User] = Depends(_getOptionalUser)):
+    """Everything shouted at this game, from both stands, newest first."""
+    from database.connection import get_session
+    from database.models import Team as _T, User as _U
+    from database.repositories.feed_repository import renderPost, catalogEntry
+    session = get_session()
+    try:
+        repo = _feedRepo(session)
+        posts = []
+        teamCache: Dict[int, Any] = {}
+        for post in repo.getGameFeed(gameId, limit):
+            if post.team_id not in teamCache:
+                teamCache[post.team_id] = session.get(_T, post.team_id)
+            team = teamCache[post.team_id]
+            poster = session.get(_U, post.user_id)
+            entry = catalogEntry(post.post_key)
+            posts.append({
+                'id': post.id,
+                'postKey': post.post_key,
+                'text': renderPost(post.post_key),
+                'valence': entry[2] if entry else 0,
+                'teamId': post.team_id,
+                'teamAbbr': getattr(team, 'abbr', None),
+                'teamColor': getattr(team, 'color', None),
+                'username': getattr(poster, 'username', None),
+                'isMine': bool(user and post.user_id == user.id),
+                'createdAt': post.created_at.isoformat() if post.created_at else None,
+            })
+        return build_success_response({
+            'gameId': gameId,
+            'posts': posts,
+            'postsRemaining': repo.remainingPosts(user.id) if user else None,
+        })
+    finally:
+        session.close()
+
+
 @app.post("/api/teams/{teamId}/feed")
 def post_to_team_feed(teamId: int, req: _FeedPostRequest,
                       user: _User = Depends(_getCurrentUser)):

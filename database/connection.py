@@ -717,6 +717,10 @@ def _runPendingMigrations():
                 # every season that predates the column.
                 ('performance_rating', 'INTEGER'), ('defensive_performance_rating', 'INTEGER'),
             ]),
+            ('team_feed_posts', [
+                # Nullable: a team-page post belongs to no game.
+                ('game_id', 'INTEGER'),
+            ]),
             ('player_career_stats', [
                 ('passing_yards', 'INTEGER DEFAULT 0'), ('passing_tds', 'INTEGER DEFAULT 0'),
                 ('passing_ints', 'INTEGER DEFAULT 0'),

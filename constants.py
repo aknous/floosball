@@ -1526,6 +1526,44 @@ FEED_POST_CATALOG = {
     'enough':        ('Enough excuses',               'gm',     -1),
 }
 
+# ---- The Bleachers: what a fan can shout AT A GAME ----
+#
+# Separate from FEED_POST_CATALOG on purpose. Those lines are about a CLUB over a
+# season ("This is our season", "Same story every season") and read as nonsense
+# shouted at a single snap. These are about a night: the run of play, the call
+# that just happened, the scoreboard.
+#
+# Same contract as the club catalog — key -> (text, group, valence) — so text is
+# never user-supplied and there is no moderation surface. Group is the heading
+# the composer files it under.
+#
+# Naming follows the house rule: durable idiom, nothing that will read as dated.
+# No slang, no chants that belong to a real club.
+GAME_FEED_CATALOG = {
+    # -- willing them on
+    'lets_go':        ("Let's go!",                    'Get up',      1),
+    'right_here':     ('Right here, right now',        'Get up',      1),
+    'take_it':        ('Take this one',                'Get up',      1),
+    'all_night':      ('We do this all night',         'Get up',      1),
+    # -- the defence
+    'get_a_stop':     ('Get a stop',                   'Defence',     1),
+    'hold_them':      ('Hold them here',               'Defence',     1),
+    'wall_up':        ('Wall up',                      'Defence',     1),
+    # -- approval of what just happened
+    'thats_the_play': ("That's the play",              'Yes',         1),
+    'about_time':     ('About time',                   'Yes',         0),
+    'keep_it_going':  ('Keep it going',                'Yes',         1),
+    # -- displeasure
+    'wake_up':        ('Wake up',                      'Not good',   -1),
+    'this_hurts':     ('This one hurts',               'Not good',   -1),
+    'not_like_this':  ('Not like this',                'Not good',   -1),
+    'we_had_that':    ('We had that',                  'Not good',   -1),
+    # -- the state of the game
+    'still_in_it':    ("We're still in it",            'The score',   1),
+    'long_way':       ('Long way to go',               'The score',   0),
+    'nervous':        ('This is unbearable',           'The score',   0),
+}
+
 # Which star ratings generate a post, and of which flavour. A 3 says nothing —
 # a shrug isn't worth a post, and the feed stays signal.
 FEED_AUTOPOST_BY_RATING = {5: 1, 4: 1, 3: None, 2: -1, 1: -1}
