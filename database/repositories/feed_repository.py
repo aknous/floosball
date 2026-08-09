@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from database.models import TeamFeedPost
 from constants import (
-    FEED_POST_CATALOG, FEED_POST_TTL_HOURS,
+    FEED_POST_CATALOG, GAME_FEED_CATALOG, FEED_POST_TTL_HOURS,
     FEED_MAX_POSTS_PER_WINDOW, FEED_RATE_WINDOW_HOURS,
 )
 
