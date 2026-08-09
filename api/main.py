@@ -893,6 +893,34 @@ async def avatar_options(team_id: int):
     )
 
 
+@app.get("/api/teams/{team_id}/playoff-history", response_model=Dict[str, Any])
+def get_team_playoff_history(team_id: int):
+    """Every postseason run this club has had, newest first.
+
+    Derived from `games` rather than stored, so it answers for seasons that predate this
+    endpoint — which is the whole point. A club that made the playoffs four times in
+    seventeen seasons could previously only see the one it won, because the League
+    Champions badge was the only durable record of a run.
+    """
+    from database.connection import get_session
+    from playoff_history import buildPlayoffHistory, summarize
+    session = get_session()
+    history = buildPlayoffHistory(session, team_id)
+    seasonsPlayed = None
+    try:
+        from database.models import Game
+        seasonsPlayed = session.query(Game.season).filter(
+            (Game.home_team_id == team_id) | (Game.away_team_id == team_id),
+            Game.status == 'final').distinct().count()
+    except Exception:
+        pass
+    return build_success_response({
+        'teamId': team_id,
+        'summary': summarize(history, seasonsPlayed),
+        'seasons': history,
+    })
+
+
 @app.get("/api/teams/{team_id}/avatar")
 async def get_team_avatar(team_id: int, size: int = Query(default=32, ge=16, le=1024), format: str = Query(default="svg", regex="^(svg|png)$")):
     """
@@ -2588,11 +2616,32 @@ async def get_game_by_id(game_id: int, response: Response):
                 if game:
                     break
         
+        # Not in memory. A finished game still has everything a reader wants sitting in
+        # the database, so rebuild it from there rather than 404ing — that path is what
+        # makes a game from earlier in the season reachable at all after a restart.
         if game is None:
-            raise HTTPException(status_code=404, detail=f"Game {game_id} not found")
-        
+            from database.connection import get_session as _gs
+            from game_box_score import buildFinishedGame, buildBoxScore
+            _s = _gs()
+            archived = buildFinishedGame(_s, game_id)
+            if archived is None:
+                raise HTTPException(status_code=404, detail=f"Game {game_id} not found")
+            archived['boxScore'] = buildBoxScore(_s, game_id)
+            return archived
+
         game_dict = GameResponseBuilder.buildGameWithProbabilities(game)
         
+        # ⚠️ The per-player line rides the `game_state` WebSocket on the live in-memory
+        # roster objects, so a game that has left the stream had no source for it at all —
+        # the rows were in `game_player_stats` the whole time, just never read. This is
+        # what lets a fan look at what happened in a game from earlier in the season.
+        try:
+            from database.connection import get_session as _gs
+            from game_box_score import buildBoxScore
+            game_dict['boxScore'] = buildBoxScore(_gs(), game_id)
+        except Exception:
+            game_dict['boxScore'] = None
+
         # Add current game state fields
         game_dict['startTime'] = game.startTime.replace(tzinfo=timezone.utc).timestamp()
         game_dict['status'] = game.status.name

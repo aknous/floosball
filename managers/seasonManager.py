@@ -3027,18 +3027,16 @@ class SeasonManager:
                     db_game.is_playoff = game.isPlayoff if hasattr(game, 'isPlayoff') else False
                     db_game.playoff_round = getattr(game, 'playoffRound', None)
                     db_game.total_plays = game.totalPlays if hasattr(game, 'totalPlays') else None
-                    if hasattr(game, 'homeScoresByQuarter') and game.homeScoresByQuarter:
-                        if len(game.homeScoresByQuarter) > 0: db_game.home_score_q1 = game.homeScoresByQuarter[0]
-                        if len(game.homeScoresByQuarter) > 1: db_game.home_score_q2 = game.homeScoresByQuarter[1]
-                        if len(game.homeScoresByQuarter) > 2: db_game.home_score_q3 = game.homeScoresByQuarter[2]
-                        if len(game.homeScoresByQuarter) > 3: db_game.home_score_q4 = game.homeScoresByQuarter[3]
-                        if len(game.homeScoresByQuarter) > 4: db_game.home_score_ot = sum(game.homeScoresByQuarter[4:])
-                    if hasattr(game, 'awayScoresByQuarter') and game.awayScoresByQuarter:
-                        if len(game.awayScoresByQuarter) > 0: db_game.away_score_q1 = game.awayScoresByQuarter[0]
-                        if len(game.awayScoresByQuarter) > 1: db_game.away_score_q2 = game.awayScoresByQuarter[1]
-                        if len(game.awayScoresByQuarter) > 2: db_game.away_score_q3 = game.awayScoresByQuarter[2]
-                        if len(game.awayScoresByQuarter) > 3: db_game.away_score_q4 = game.awayScoresByQuarter[3]
-                        if len(game.awayScoresByQuarter) > 4: db_game.away_score_ot = sum(game.awayScoresByQuarter[4:])
+                    # ⚠️ The quarter line comes off `homeScoreQ1..Q4` / `homeScoreOT`, which is what the
+                    # engine actually accumulates (`floosball_game` ~:12308). This used to read a
+                    # `homeScoresByQuarter` LIST that has never existed on the game object, so the
+                    # `hasattr` guard was always False and every quarter column stayed 0 — measured at
+                    # 0 of 783 finished games. Nothing errored, which is why it survived.
+                    for _side, _tgt in (('home', 'home'), ('away', 'away')):
+                        for _q in ('q1', 'q2', 'q3', 'q4'):
+                            setattr(db_game, f'{_tgt}_score_{_q}',
+                                    getattr(game, f'{_side}Score{_q.upper()}', 0) or 0)
+                        setattr(db_game, f'{_tgt}_score_ot', getattr(game, f'{_side}ScoreOT', 0) or 0)
                     self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
                     self._applyFormatStateToRow(db_game, game)
                     self.db_session.flush()
@@ -3066,29 +3064,13 @@ class SeasonManager:
             )
             
             # Save quarter scores if available
-            if hasattr(game, 'homeScoresByQuarter') and game.homeScoresByQuarter:
-                if len(game.homeScoresByQuarter) > 0:
-                    db_game.home_score_q1 = game.homeScoresByQuarter[0]
-                if len(game.homeScoresByQuarter) > 1:
-                    db_game.home_score_q2 = game.homeScoresByQuarter[1]
-                if len(game.homeScoresByQuarter) > 2:
-                    db_game.home_score_q3 = game.homeScoresByQuarter[2]
-                if len(game.homeScoresByQuarter) > 3:
-                    db_game.home_score_q4 = game.homeScoresByQuarter[3]
-                if len(game.homeScoresByQuarter) > 4:
-                    db_game.home_score_ot = sum(game.homeScoresByQuarter[4:])
-            
-            if hasattr(game, 'awayScoresByQuarter') and game.awayScoresByQuarter:
-                if len(game.awayScoresByQuarter) > 0:
-                    db_game.away_score_q1 = game.awayScoresByQuarter[0]
-                if len(game.awayScoresByQuarter) > 1:
-                    db_game.away_score_q2 = game.awayScoresByQuarter[1]
-                if len(game.awayScoresByQuarter) > 2:
-                    db_game.away_score_q3 = game.awayScoresByQuarter[2]
-                if len(game.awayScoresByQuarter) > 3:
-                    db_game.away_score_q4 = game.awayScoresByQuarter[3]
-                if len(game.awayScoresByQuarter) > 4:
-                    db_game.away_score_ot = sum(game.awayScoresByQuarter[4:])
+            # Same fix as the UPDATE path above: read the attributes the engine really
+            # keeps, not a list that has never existed.
+            for _side in ('home', 'away'):
+                for _q in ('q1', 'q2', 'q3', 'q4'):
+                    setattr(db_game, f'{_side}_score_{_q}',
+                            getattr(game, f'{_side}Score{_q.upper()}', 0) or 0)
+                setattr(db_game, f'{_side}_score_ot', getattr(game, f'{_side}ScoreOT', 0) or 0)
             
             self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
             self._applyFormatStateToRow(db_game, game)
