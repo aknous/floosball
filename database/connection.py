@@ -1,6 +1,7 @@
 """Database connection and session management."""
 
 import os
+import re as _re
 from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
@@ -59,6 +60,8 @@ def init_db():
     _seedPackTypes()
     _seedBetaAllowlist()
     _seedAchievements()
+    _collapseLiveGenerationalNames()
+    _normalizeNamePool()
     _seedUnusedNames()
     _seedCuratedNames()
     logger.info(f"Database initialized at {DB_PATH}")
@@ -2721,6 +2724,9 @@ def clear_db():
     _seedPackTypes()
     _seedBetaAllowlist()
     _seedAchievements()
+    # ⚠️ Every player and coach was just dropped, so any generational variant left in
+    # the preserved pool has no parent anywhere and never will. Collapse before seeding.
+    _normalizeNamePool(resetLadders=True)
     _seedUnusedNames()
     _seedCuratedNames()
 
@@ -3277,6 +3283,214 @@ def _seedCuratedNames():
         session.close()
 
 
+# The generational ladder from seasonManager._recyclePlayerName:
+#     Base -> Jr. -> III -> IV -> V -> VI -> VII -> VIII -> IX -> X -> XI
+# Longest-first so "VIII" is not eaten as "V" followed by a stranded "III".
+_NAME_SUFFIXES = ('Jr.', 'VIII', 'XII', 'XI', 'IX', 'VII', 'VI', 'IV', 'III', 'II', 'X', 'V')
+# app_setting key for the one-shot live-name collapse below.
+_COLLAPSE_MARKER = 'generational_names_collapsed'
+_NAME_SUFFIX_RE = _re.compile(
+    r'\s+(' + '|'.join(_re.escape(s) for s in _NAME_SUFFIXES) + r')$'
+)
+
+
+def baseName(name: str) -> str:
+    """Reduce a player/coach name to the base form of its lineage.
+
+    "Freed Marinara Jr." and "Freed Marinara III" are the SAME pooled name at
+    different points in its life, not three names. Repeated until it stops
+    shrinking because the ladder can stack in stored data ("Foo Jr. III").
+    """
+    previous = None
+    while previous != name:
+        previous = name
+        name = _NAME_SUFFIX_RE.sub('', name).strip()
+    return name
+
+
+def _collapseLiveGenerationalNames():
+    """ONE-SHOT: drop the generational suffix from players and coaches wearing one.
+
+    ⚠️ THIS RUNS EXACTLY ONCE, EVER, and it has to. A player named "Bob Jr." is
+    normally CORRECT — the ladder exists so a newcomer can debut as the next
+    generation of a name the league remembers. Collapsing on every boot would
+    delete that feature outright. The marker is the whole safety mechanism.
+
+    It exists because the fork documented on `_seedUnusedNames` seeded orphaned
+    variants into the pool, and player generation then drew them: production came
+    out of its season-1 wipe with ten players and a coach carrying a "Jr." whose
+    father had never played a down in that league.
+
+    ⚠️ WHEN THE BASE IS ALREADY WORN by another live player or coach, the junior
+    gets a FRESH NAME FROM THE POOL instead. That collision is not a rare edge — it
+    is the fork's own signature, both forms of a lineage generated into the same
+    league, and production has three. Collapsing there would put two identical
+    names on the field, so the junior is reassigned (owner, 2026-08-10: the league
+    is new, so no history is attached to the name being replaced). The replacement
+    must be BASE-FORM and an unused lineage: this runs before `_normalizeNamePool`,
+    so the pool can still be holding the orphaned variants that caused all this.
+    If the pool cannot supply one, the name is left alone rather than blanked.
+
+    ⚠️ MUST RUN BEFORE PLAYERS LOAD. `savePlayerData` writes `db_player.name` from
+    the in-memory Player on every week and season boundary, so a rename applied to
+    a running league is silently overwritten by the next save. init_db() is called
+    at run_api.py:358, before floosballApplication builds its managers, which is
+    what makes the new name the one the sim picks up.
+    """
+    from database.models import UnusedName, Coach, Player, AppSetting
+    session = SessionLocal()
+    try:
+        marker = session.query(AppSetting).filter(AppSetting.key == _COLLAPSE_MARKER).first()
+        if marker is not None:
+            return
+        players = session.query(Player).all()
+        coaches = session.query(Coach).all()
+        live = {p.name for p in players if p.name} | {c.name for c in coaches if c.name}
+
+        def drawReplacement():
+            """First pooled name that is base-form and whose lineage is free."""
+            for candidate in session.query(UnusedName).order_by(UnusedName.id).all():
+                pooled = candidate.name or ''
+                if not pooled or _NAME_SUFFIX_RE.search(pooled):
+                    continue
+                if pooled in live:
+                    continue
+                session.delete(candidate)
+                return pooled
+            return None
+
+        renamed, reassigned, skipped = [], [], []
+        for row in list(players) + list(coaches):
+            name = row.name or ''
+            if not _NAME_SUFFIX_RE.search(name):
+                continue
+            lineage = baseName(name)
+            if not lineage:
+                continue
+            if lineage in live:
+                replacement = drawReplacement()
+                if replacement is None:
+                    skipped.append(name)
+                    continue
+                reassigned.append((name, replacement))
+                live.discard(name)
+                live.add(replacement)
+                row.name = replacement
+                continue
+            renamed.append((name, lineage))
+            live.discard(name)
+            live.add(lineage)
+            row.name = lineage
+            # The pool copy is now a duplicate of a name on the field.
+            # _normalizeNamePool runs next and would catch it anyway; doing it here
+            # keeps the two consistent inside one transaction.
+            for dupe in session.query(UnusedName).filter(UnusedName.name == lineage).all():
+                session.delete(dupe)
+
+        session.add(AppSetting(key=_COLLAPSE_MARKER,
+                               value=str(len(renamed) + len(reassigned))))
+        session.commit()
+        if renamed:
+            logger.info(f"Collapsed {len(renamed)} generational name(s) on live players/coaches:")
+            for was, now in sorted(renamed):
+                logger.info(f"    {was} -> {now}")
+        if reassigned:
+            logger.info(
+                f"Reassigned {len(reassigned)} name(s) whose base was already on the field:")
+            for was, now in sorted(reassigned):
+                logger.info(f"    {was} -> {now}")
+        if skipped:
+            logger.warning(
+                f"Left {len(skipped)} generational name(s) alone — the base was taken and "
+                f"the pool had no replacement: {', '.join(sorted(skipped))}"
+            )
+    except Exception as exc:
+        session.rollback()
+        logger.warning(f"Failed to collapse live generational names: {exc}")
+    finally:
+        session.close()
+
+
+def _normalizeNamePool(resetLadders: bool = False):
+    """Drop pooled names that duplicate a lineage already in circulation.
+
+    ⚠️ THE INVARIANT IS ONE FORM OF A LINEAGE AT A TIME. A name goes up a rung
+    precisely BECAUSE its previous holder is gone (`_recyclePlayerName` runs at
+    retirement), so a base and its Junior are never both live. When they are, one
+    of them is an artefact:
+
+      * `clear_db()` preserves `unused_names` but drops every player and coach, so
+        a variant left in the pool has no parent anywhere and never will — a
+        Junior with no father.
+      * `_seedUnusedNames` compared EXACT strings, so a pool holding "Bob Jr."
+        looked to config's "Bob" like a name it had never seen, and re-seeded the
+        base on EVERY boot. That one is the bigger source: it forks a lineage on a
+        perfectly healthy long-running database, not just after a wipe.
+
+    Measured on the season-1 production database: 712 pooled names of which 39
+    were variants, 32 with the base also pooled and the other 7 with the base worn
+    by a player or coach.
+
+    Deletes the VARIANT and keeps the base — an orphaned Junior is the row that
+    reads wrong. A variant whose base is genuinely absent is a legitimate recycled
+    name and is left alone, which is what makes this safe to run on every boot
+    rather than needing a one-shot marker.
+
+    `resetLadders` collapses those survivors back to the base form too, and is for
+    `clear_db()` ALONE. It is safe there and only there: the wipe has just dropped
+    every player and coach, so no lineage has a living member and no variant can
+    still be pointing at a real parent. Without it a wiped league keeps circulating
+    Juniors whose father never existed in it.
+    """
+    from database.models import UnusedName, Coach, Player
+    session = SessionLocal()
+    try:
+        rows = session.query(UnusedName).order_by(UnusedName.id).all()
+        if not rows:
+            return
+        inUse = {baseName(n) for (n,) in session.query(Player.name).all() if n}
+        inUse |= {baseName(n) for (n,) in session.query(Coach.name).all() if n}
+
+        seen = set()
+        # Base-form rows first, so a variant is always judged against every base
+        # in the pool rather than against whatever happened to sort ahead of it.
+        ordered = sorted(rows, key=lambda r: _NAME_SUFFIX_RE.search(r.name or '') is not None)
+        removed = []
+        collapsed = []
+        for row in ordered:
+            lineage = baseName(row.name or '')
+            if not lineage:
+                continue
+            if lineage in seen or lineage in inUse:
+                # A second form of a lineage that is already accounted for. The
+                # tie between two variants of an absent base is arbitrary (id
+                # order) — that case only arises from the artefacts above.
+                removed.append(row.name)
+                session.delete(row)
+                continue
+            seen.add(lineage)
+            if resetLadders and row.name != lineage:
+                collapsed.append(row.name)
+                row.name = lineage
+        if removed or collapsed:
+            session.commit()
+            if removed:
+                logger.info(
+                    f"Name pool: dropped {len(removed)} duplicate lineage name(s) "
+                    f"(e.g. {', '.join(sorted(removed)[:3])})"
+                )
+            if collapsed:
+                logger.info(
+                    f"Name pool: collapsed {len(collapsed)} orphaned generational "
+                    f"name(s) to base (e.g. {', '.join(sorted(collapsed)[:3])})"
+                )
+    except Exception as exc:
+        session.rollback()
+        logger.warning(f"Failed to normalize unused_names: {exc}")
+    finally:
+        session.close()
+
+
 def _seedUnusedNames():
     """Merge player/coach names from config.json into the unused_names table.
 
@@ -3286,6 +3500,15 @@ def _seedUnusedNames():
     player slot get silently re-seeded on every boot, leaving the pool
     polluted with names the runtime defensive filter then has to scrub at
     every draw.
+
+    ⚠️ THE COMPARISON IS BY LINEAGE, NOT BY EXACT STRING. It used to be exact,
+    and that quietly forked a lineage every time one advanced a rung: once
+    `_recyclePlayerName` had turned a retiree into "Bob Jr.", config's "Bob"
+    matched nothing in the pool and was re-seeded on the NEXT BOOT, so the
+    father and the son both sat in the pool waiting to debut. Repeat per
+    restart and per generation. A name goes up a rung precisely because its
+    holder is gone, so at most one form of a lineage should be in circulation
+    at a time. `_normalizeNamePool` clears up the duplicates already made.
 
     Runs on every startup so new names added to config.json get picked up
     without wiping admin-curated additions. The unused_names table is
@@ -3302,20 +3525,21 @@ def _seedUnusedNames():
         return
     session = SessionLocal()
     try:
-        existing = {row.name for row in session.query(UnusedName.name).all()}
-        activeCoachNames = {c.name for c in session.query(Coach.name).all() if c.name}
-        activePlayerNames = {p.name for p in session.query(Player.name).all() if p.name}
+        existing = {baseName(row.name) for row in session.query(UnusedName.name).all()}
+        activeCoachNames = {baseName(c.name) for c in session.query(Coach.name).all() if c.name}
+        activePlayerNames = {baseName(p.name) for p in session.query(Player.name).all() if p.name}
         inUse = activeCoachNames | activePlayerNames
         added = 0
         skipped = 0
         for name in names:
-            if name in existing:
+            lineage = baseName(name)
+            if lineage in existing:
                 continue
-            if name in inUse:
+            if lineage in inUse:
                 skipped += 1
                 continue
             session.add(UnusedName(name=name))
-            existing.add(name)
+            existing.add(lineage)
             added += 1
         if added or skipped:
             session.commit()

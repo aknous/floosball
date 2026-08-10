@@ -34,6 +34,19 @@ generational variants of names config already had.
 Coaches draw from the SAME pool as players (`_seedUnusedNames` filters against both
 tables), so a coach's name is a pooled name and belongs here too.
 
+⚠️ `pending_names` has to be read as well. A recycled variant does not go straight
+back into `unused_names` — it is held there for NAME_REUSE_DELAY_SEASONS so a
+familiar name does not reappear the very next season. That table is NOT in
+`clear_db`'s preserve list, so a fresh start drops it outright, and a name sitting
+out its hold at the moment of the wipe would vanish without this. Nothing is lost by
+dropping the table itself once the base is recovered: a held variant reduces to a
+base config already ships, which is the whole point of reducing.
+
+The same ladder is mirrored in `database.connection.baseName`, which enforces the
+one-form-per-lineage invariant at runtime. This script stays standalone (it must run
+against an arbitrary database file without booting the app), so the two are separate
+copies on purpose — change them together.
+
 There is no fallback name generator to worry about: the draw returns None when the
 pool runs dry rather than inventing anything, so every name in a database came from
 the pool or from a human.
@@ -93,6 +106,8 @@ def collect(dbPath: str) -> dict:
         # The durable home for admin additions in newer code. Absent on older
         # deployments, which is exactly why the tables above have to be read too.
         'curated_names': column('curated_names'),
+        # Recycled names serving their reuse hold. Dropped by a fresh start.
+        'pending_names': column('pending_names'),
     }
     conn.close()
     return found
