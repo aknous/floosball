@@ -10,7 +10,8 @@ helpers below wrap it for live use. See docs/MARKETS_FACILITIES_PLAN.md §3/§5.
 from logging import getLogger
 from constants import (FACILITY_CATALOG, FACILITY_MAX_LEVEL,
                        FACILITY_UPGRADE_COST_SHARES, FACILITY_UPKEEP_SHARES,
-                       FACILITY_DECAY_LEVELS, APPEAL_LEVEL_WEIGHTS)
+                       FACILITY_DECAY_LEVELS, APPEAL_LEVEL_WEIGHTS,
+                       FACILITY_SHARE_UNIT_FLOOR)
 
 logger = getLogger("floosball.facilities")
 
@@ -135,21 +136,38 @@ def resolveSeasonEnd(facilities: list, projects: list, treasury: int,
 
 # ─── DB-bound helpers (live use) ─────────────────────────────────────────────
 
-def computeShareUnit(session, lastSeason: int, numTeams: int = 24) -> float:
+def computeShareUnit(session, lastSeason: int, numTeams: int = None) -> float:
     """1 share = (total Floobits DISTRIBUTED to users last season) / numTeams.
     Distributed = sum of POSITIVE currency grants (the faucet); excludes spends.
-    Returns 0.0 if no data (e.g. fresh league) — costs then read as 0 (inert)."""
+
+    ⚠️ NEVER RETURNS ZERO. It used to, whenever there was no previous season, and the
+    docstring called the result "inert" — but a zero share unit does not disable the
+    facility economy, it makes it FREE. Season 1 showed 0F upkeep and 0F to build, and
+    every team could max every facility for nothing. `FACILITY_SHARE_UNIT_FLOOR` is the
+    floor a league runs on until it has a season of its own to price against.
+
+    ⚠️ The team count is COUNTED, not assumed. It defaulted to 24 and no caller ever
+    passed it, so after the league grew to 32 every share was 33% too large and every
+    facility 33% too expensive.
+    """
     from sqlalchemy import text
-    if lastSeason is None or lastSeason < 1:
-        return 0.0
-    try:
-        total = session.execute(text(
-            "SELECT COALESCE(SUM(amount), 0) FROM currency_transactions "
-            "WHERE season = :s AND amount > 0"), {'s': lastSeason}).scalar() or 0
-        return float(total) / max(1, numTeams)
-    except Exception as e:
-        logger.warning(f"computeShareUnit failed: {e}")
-        return 0.0
+    if numTeams is None:
+        try:
+            numTeams = session.execute(text("SELECT COUNT(*) FROM teams")).scalar() or 0
+        except Exception:
+            numTeams = 0
+    numTeams = max(1, int(numTeams or 0))
+
+    total = 0
+    if lastSeason is not None and lastSeason >= 1:
+        try:
+            total = session.execute(text(
+                "SELECT COALESCE(SUM(amount), 0) FROM currency_transactions "
+                "WHERE season = :s AND amount > 0"), {'s': lastSeason}).scalar() or 0
+        except Exception as e:
+            logger.warning(f"computeShareUnit failed: {e}")
+            total = 0
+    return max(FACILITY_SHARE_UNIT_FLOOR, float(total) / numTeams)
 
 
 def getTreasury(session, teamId: int) -> int:
