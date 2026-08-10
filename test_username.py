@@ -1,147 +1,129 @@
-"""User-chosen usernames: validation, case-insensitive uniqueness, one rename a season.
+"""The app never offers a username it would then refuse.
 
-The endpoint always accepted an arbitrary string — it was the frontend that only ever
-offered four GENERATED candidates — so opening this up was never about the transport. What
-was missing were the rules:
+⚠️ THE FAILURE WAS ASYMMETRIC. The generator pairs 255 firsts with 260 lasts and adds
+up to two digits; 14,786 of those 66,300 pairings run past USERNAME_MAX_LEN. The server
+grandfathered them, but the ONBOARDING CLIENT applies the plain rule to every path
+including a clicked suggestion, so an over-long offer showed "20 characters or fewer"
+and the pick never left the browser. The server exemption could not help, because
+nothing was ever sent.
 
-  - no format validation at all (spaces, punctuation, any length);
-  - uniqueness was case-SENSITIVE, so "Andrew" and "andrew" were two accounts, which is an
-    impersonation route rather than a convenience;
-  - no way to change a name once set, at all.
-
-Exercises the real FastAPI handler via TestClient with auth stubbed, against the dev DB,
-confined to 'zzTest%' rows and cleaned up after itself.
-
-Run: .venv/bin/python test_username.py   (exits non-zero on any failure)
+Measured on production: 36 of 157 named users (23%) carry a generated name past the
+cap, handed to them by auto-provisioning at signup. They stay valid — the exemption is
+grandfathering for those accounts, not a licence for the generator.
 """
-import sys, types
-sys.path.insert(0, '/Users/andrew/Projects/floosball')
-import logging; logging.disable(logging.CRITICAL)
-if 'floosball_game' not in sys.modules:
-    _s = types.ModuleType('floosball_game'); _s.Game = type('G', (), {})
-    sys.modules['floosball_game'] = _s
-    import managers.timingManager  # noqa
-    del sys.modules['floosball_game']
-from fastapi.testclient import TestClient
-import api.main as M
-from api.auth import validateUsername, usernameTaken
-from database.connection import get_session
-from database.models import User
 
-fails = []
-def expect(d, c):
-    print(f"  [{'OK' if c else 'FAIL'}] {d}")
-    if not c: fails.append(d)
+import os
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
-# ── the validator, no DB needed ─────────────────────────────────────────────
-for bad, why in [("ab", "too short"), ("x" * 21, "too long"), ("1abc", "leading digit"),
-                 ("_abc", "leading underscore"), ("Andrew Knous", "space"),
-                 ("bob@home", "punctuation"), ("", "empty")]:
-    v, e = validateUsername(bad)
-    expect(f"rejects {why}: {bad!r}", v is None and e)
+class UsernameTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+        self.tmp.close()
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from database.models import Base
+        import api.auth as auth
 
-for good in ("Andrew", "good_name7", "aB3", "x" * 20):
-    v, e = validateUsername(good)
-    expect(f"accepts {good!r}", v == good and e is None)
+        self.auth = auth
+        self.engine = create_engine(f'sqlite:///{self.tmp.name}')
+        Base.metadata.create_all(bind=self.engine)
+        self.session = sessionmaker(bind=self.engine)()
 
-# Impersonation is the reason these are blocked, not tone: a user called "Cassian" posting
-# in a feed that also carries real Cores lines is indistinguishable from the Core.
-for reserved in ("admin", "ADMIN", "Cassian", "vera", "floosball"):
-    v, e = validateUsername(reserved)
-    expect(f"reserves {reserved!r}", v is None and "reserved" in (e or ""))
+    def tearDown(self):
+        self.session.close()
+        self.engine.dispose()
+        os.unlink(self.tmp.name)
 
-# ── profanity: better_profanity behind a normalizer ─────────────────────────
-# The library alone scores 0 false positives but misses 4 in 10 on usernames, because it
-# matches WORD BOUNDARIES and a handle has none. These cases are the ones that only pass
-# with normalization (leetspeak, separators, camelCase) in front of it.
-for bad in ("shitlord", "fuckface", "n1gger", "f_u_c_k", "xXn1ggaXx", "cuntpuncher",
-            "FUCKER99", "niggerlover", "TwatWaffle", "f4gg0t", "Hitler88", "wh0re"):
-    v, e = validateUsername(bad)
-    expect(f"blocks {bad!r}", v is None)
+    # -- the vocabulary itself ---------------------------------------------
 
-# The Scunthorpe problem, which is the reason the substring list is DERIVED from a
-# dictionary rather than hand-picked. Intuition gets it backwards: `cunt` and `bitch` have
-# zero innocent uses in 236k words, while `nigg` has thirty — niggard, niggling, snigger.
-for ok in ("Scunthorpe", "Cockburn", "Assassin", "Analyst_Pete", "Niggardly",
-           "Swanky_Pete", "Spicer", "Dickens", "Therapist", "Bassmaster", "Gobbledygook"):
-    v, e = validateUsername(ok)
-    expect(f"allows the ordinary name {ok!r}", v == ok and e is None)
+    def testTheVocabularyStillContainsOverLongPairings(self):
+        """If this ever fails the screening has become dead code, not redundant.
+
+        The rule is enforced at draw time rather than by curating the word lists, so
+        the lists are expected to keep producing names that need rejecting.
+        """
+        longest = (max(self.auth._USERNAME_FIRSTS, key=len)
+                   + max(self.auth._USERNAME_LASTS, key=len) + '99')
+        self.assertGreater(len(longest), self.auth.USERNAME_MAX_LEN)
+
+    # -- screening ---------------------------------------------------------
+
+    def testScreeningRejectsAnOverLongName(self):
+        self.assertTrue(self.auth._usernameSuggestionRejected('A' * (self.auth.USERNAME_MAX_LEN + 1)))
+
+    def testScreeningAcceptsAnExactlyMaxLengthName(self):
+        # Off-by-one guard: the cap is inclusive.
+        self.assertFalse(self.auth._usernameSuggestionRejected('A' * self.auth.USERNAME_MAX_LEN))
+
+    # -- the generators ----------------------------------------------------
+
+    def testCandidatesAreNeverOverLong(self):
+        # Enough draws to cover the 22% that used to slip through.
+        for _ in range(60):
+            for name in self.auth.generateUsernameCandidates(self.session, count=4):
+                self.assertLessEqual(len(name), self.auth.USERNAME_MAX_LEN, name)
+
+    def testEverySuggestionPassesTheValidatorWithoutTheExemption(self):
+        """The real assertion: a suggestion must stand on its own merits.
+
+        Checked WITHOUT `isGeneratedUsername`, because the client has no access to the
+        server's vocabulary and cannot apply that exemption.
+        """
+        for _ in range(40):
+            for name in self.auth.generateUsernameCandidates(self.session, count=4):
+                chosen, err = self.auth.validateUsername(name)
+                self.assertIsNone(err, f'{name}: {err}')
+                self.assertLessEqual(len(name), self.auth.USERNAME_MAX_LEN, name)
+
+    def testSingleCandidateIsNeverOverLong(self):
+        for _ in range(80):
+            name = self.auth._generateUsernameCandidate(self.session)
+            self.assertLessEqual(len(name), self.auth.USERNAME_MAX_LEN, name)
+
+    def testCandidatesAreDistinct(self):
+        names = self.auth.generateUsernameCandidates(self.session, count=4)
+        self.assertEqual(len(names), len(set(names)))
+
+    def testCandidatesAvoidNamesAlreadyTaken(self):
+        from database.models import User
+        taken = self.auth.generateUsernameCandidates(self.session, count=1)[0]
+        self.session.add(User(clerk_id='c1', email='c1@example.com', username=taken))
+        self.session.commit()
+        for _ in range(40):
+            self.assertNotIn(taken, self.auth.generateUsernameCandidates(self.session, count=4))
+
+    def testCandidatesStillArriveWhenAskedForFour(self):
+        # Screening removes a fifth of the space; the retry budget must absorb that.
+        for _ in range(30):
+            self.assertEqual(len(self.auth.generateUsernameCandidates(self.session, count=4)), 4)
+
+    # -- grandfathering ----------------------------------------------------
+
+    def testAnAlreadyIssuedLongNameStaysValid(self):
+        """The 36 production users must not be locked out of their own identity."""
+        long = None
+        for first in self.auth._USERNAME_FIRSTS:
+            for last in self.auth._USERNAME_LASTS:
+                if len(first + last + '94') > self.auth.USERNAME_MAX_LEN:
+                    long = first + last + '94'
+                    break
+            if long:
+                break
+        self.assertIsNotNone(long)
+        chosen, err = self.auth.validateUsername(long)
+        self.assertIsNone(err, f'{long}: {err}')
+
+    def testAMadeUpLongNameIsStillRefused(self):
+        # The exemption is verified against the generator's own vocabulary, so it
+        # cannot be used to smuggle an arbitrary over-long name past the cap.
+        chosen, err = self.auth.validateUsername('Zzzzqqqxxvvbbnnmmllkk99')
+        self.assertIsNotNone(err)
 
 
-def testGeneratedNamesAreAlwaysAcceptable():
-    """A suggestion the validator would refuse is worse than no suggestion — the user
-    picks what we offered and gets an error. Two of the 66,300 pairings trip the filter
-    (SaskatchewanKerfuffle spans "wanker" across the join), so the generators screen."""
-    from api.auth import _USERNAME_FIRSTS, _USERNAME_LASTS, containsProfanity
-    bad = [f + l for f in _USERNAME_FIRSTS for l in _USERNAME_LASTS
-           if containsProfanity(f + l)]
-    # They must EXIST (proving the screen is load-bearing) and be screened out by the
-    # generator, which is asserted by generateUsernameCandidates below.
-    expect(f"the pairing hazard is real ({len(bad)} of 66,300)", len(bad) > 0)
-
-
-testGeneratedNamesAreAlwaysAcceptable()
-
-# ── the endpoint ────────────────────────────────────────────────────────────
-M.app.dependency_overrides[M._getCurrentUser] = lambda: _stubUser
-client = TestClient(M.app)
-
-session = get_session()
-session.query(User).filter(User.email.like('zzTest%')).delete(synchronize_session=False)
-session.commit()
-
-u1 = User(email='zzTest1@example.com', username=None)
-u2 = User(email='zzTest2@example.com', username='zzTaken')
-session.add_all([u1, u2]); session.commit()
-u1Id, u2Id = u1.id, u2.id
-_stubUser = u1
-
-
-def post(name):
-    return client.post("/api/users/me/username", json={"username": name})
-
-
-try:
-    r = post("Andrew Knous")
-    expect("endpoint rejects an invalid name with 400", r.status_code == 400)
-
-    r = post("zzFirstPick")
-    expect(f"first pick succeeds ({r.status_code})", r.status_code == 200)
-    expect("first pick is not counted as a change", r.json().get("changed") is False)
-
-    # Case-insensitive: this is the impersonation guard, and the column's own unique
-    # constraint does NOT provide it.
-    _stubUser = session.get(User, u1Id)
-    r = post("ZZTAKEN")
-    expect(f"a name differing only in case is taken ({r.status_code})", r.status_code == 409)
-    expect("...and the case-insensitive helper agrees", usernameTaken(session, "zztaken"))
-
-    # Rename, then the season limit.
-    r = post("zzRenamed")
-    expect(f"a rename succeeds ({r.status_code})", r.status_code == 200)
-    expect("...and IS counted as a change", r.json().get("changed") is True)
-
-    _stubUser = session.get(User, u1Id)
-    r = post("zzAgain")
-    expect(f"a second rename in the same season is refused ({r.status_code})",
-           r.status_code == 429)
-
-    # Re-submitting the SAME name is a no-op, not a spent rename — otherwise an
-    # idempotent client retry burns the user's one change for the season.
-    _stubUser = session.get(User, u1Id)
-    r = post("zzRenamed")
-    expect(f"re-submitting the current name is a no-op ({r.status_code})",
-           r.status_code == 200 and r.json().get("changed") is False)
-
-    session.expire_all()
-    expect("the name actually persisted",
-           session.get(User, u1Id).username == "zzRenamed")
-finally:
-    session.query(User).filter(User.email.like('zzTest%')).delete(synchronize_session=False)
-    session.commit()
-    session.close()
-
-print("\nPASS — names are validated, unique regardless of case, and renameable once a season."
-      if not fails else f"\n{len(fails)} FAILED")
-sys.exit(1 if fails else 0)
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

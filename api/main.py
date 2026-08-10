@@ -8166,21 +8166,27 @@ def set_username(payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)
     from database.connection import get_session
     from api.auth import validateUsername, usernameTaken
 
-    chosen, err = validateUsername(payload.get("username", ""))
-    if err:
-        raise HTTPException(status_code=400, detail=err)
-
     session = get_session()
     try:
         dbUser = session.get(_User, user.id)
+        # ⚠️ Resubmitting the name you already have is a no-op, and it has to short-
+        # circuit BEFORE validation. Auto-provisioning handed 36 production users a
+        # generated name past the length cap; they are grandfathered by
+        # `validateUsername`, but any future tightening of the rules would otherwise
+        # turn "save" on an unchanged form into an error about their own name.
+        if dbUser.username is not None and dbUser.username == (payload.get("username") or "").strip():
+            return {"ok": True, "username": dbUser.username, "changed": False}
+
+        chosen, err = validateUsername(payload.get("username", ""))
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+
         isRename = dbUser.username is not None
         currentSeason = 0
         if floosball_app is not None and floosball_app.seasonManager.currentSeason:
             currentSeason = floosball_app.seasonManager.currentSeason.seasonNumber
 
         if isRename:
-            if dbUser.username == chosen:
-                return {"ok": True, "username": chosen, "changed": False}
             if dbUser.username_changed_season == currentSeason:
                 raise HTTPException(
                     status_code=429,

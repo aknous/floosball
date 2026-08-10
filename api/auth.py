@@ -292,13 +292,17 @@ def validateUsername(name: str) -> tuple:
         return None, "Username is required"
     if len(name) < USERNAME_MIN_LEN:
         return None, f"Username must be at least {USERNAME_MIN_LEN} characters"
-    # ⚠️ The cap applies to names a USER made up, not to ones we offered them. The
-    # generator pairs 255 firsts with 260 lasts and adds up to two digits, and 14,786 of
-    # those 66,300 pairings run past 20 characters — so 22% of two-digit suggestions were
-    # names the app proposed and then refused, with no way for the user to tell which.
-    # `_generateUsernameCandidate` already carries the rule ("a suggestion the validator
-    # would refuse is worse than no suggestion") and screens for profanity; length was
-    # simply missed. The longest pairing is 28 characters against a 50-character column.
+    # ⚠️ THIS EXEMPTION IS GRANDFATHERING, NOT A LICENCE. The generator used to produce
+    # names past the cap — 14,786 of its 66,300 pairings do — and auto-provisioning
+    # handed them out at signup, so 36 of production's 157 named users (23%) carry one
+    # they never chose. Rejecting those names now would lock a fifth of the user base out
+    # of their own identity, so a name this server could have produced stays valid.
+    #
+    # It is NOT the fix for the generator. `_usernameSuggestionRejected` now screens
+    # length at the source, so nothing new arrives over the cap; the exemption only ever
+    # covers what was already handed out. It also never worked as a fix, because the
+    # onboarding client applies the plain rule to a clicked suggestion and the request
+    # never reached this function.
     if len(name) > USERNAME_MAX_LEN and not isGeneratedUsername(name):
         return None, f"Username must be {USERNAME_MAX_LEN} characters or fewer"
     if not _USERNAME_RE.match(name):
@@ -326,48 +330,65 @@ def usernameTaken(session, name: str, excludeUserId: int = None) -> bool:
     return q.first() is not None
 
 
-def _generateUsernameCandidate(session) -> str:
-    """Generate a single unique random username like 'CrispyKerfuffle42'."""
-    for _ in range(50):
-        name = (
-            _random.choice(_USERNAME_FIRSTS)
-            + _random.choice(_USERNAME_LASTS)
-            + str(_random.randint(1, 99))
-        )
-        # A suggestion the validator would refuse is worse than no suggestion: the user
-        # picks it and gets an error for something we offered them. Two of the 66,300
-        # possible pairings trip the filter — SaskatchewanKerfuffle spans "wanker" across
-        # the join — so this is rare rather than theoretical, and cheap to rule out.
-        if containsProfanity(name):
-            continue
-        existing = session.query(User).filter(User.username == name).first()
-        if not existing:
-            return name
-    # Extremely unlikely fallback
-    return "Player" + str(_random.randint(10000, 99999))
+def _usernameSuggestionRejected(name: str) -> bool:
+    """Would we refuse a name we just offered? Then do not offer it.
+
+    ⚠️ ONE FUNCTION, DELIBERATELY. The two generators below used to carry their own
+    copies of this screening, and that is exactly how the length rule went missing:
+    profanity was added to both, length to neither, so 22% of suggestions were names
+    the app proposed and the app then rejected.
+
+    * PROFANITY — two of the 66,300 pairings trip the filter (SaskatchewanKerfuffle
+      spans "wanker" across the join), so rare rather than theoretical.
+    * LENGTH — 14,786 of the 66,300 pairings run past USERNAME_MAX_LEN. The server
+      grandfathers those (see `validateUsername`), but the ONBOARDING CLIENT applies
+      the plain rule to every path including a clicked suggestion, so an over-long
+      offer showed "20 characters or fewer" and the pick never left the browser. The
+      server exemption could not help: nothing was ever sent.
+    """
+    return len(name) > USERNAME_MAX_LEN or containsProfanity(name)
+
+
+def _rollUsername() -> str:
+    """One raw pairing from the vocabulary. Not screened, not checked for uniqueness."""
+    return (
+        _random.choice(_USERNAME_FIRSTS)
+        + _random.choice(_USERNAME_LASTS)
+        + str(_random.randint(1, 99))
+    )
 
 
 def generateUsernameCandidates(session, count: int = 4) -> list[str]:
-    """Generate multiple unique username candidates, each verified against the DB."""
+    """Unique username candidates like 'CrispyKerfuffle42', each verified against the DB.
+
+    THE single implementation — `_generateUsernameCandidate` delegates here rather than
+    keeping a second copy of the rules. Roughly a fifth of pairings are screened out, so
+    the retry budget is generous rather than tight.
+    """
     candidates = []
     seen = set()
-    for _ in range(count * 10):  # generous retry budget
-        name = (
-            _random.choice(_USERNAME_FIRSTS)
-            + _random.choice(_USERNAME_LASTS)
-            + str(_random.randint(1, 99))
-        )
+    for _ in range(count * 20):
+        name = _rollUsername()
         if name in seen:
             continue
         seen.add(name)
-        if containsProfanity(name):
-            continue   # see _generateUsernameCandidate — never suggest what we would reject
-        existing = session.query(User).filter(User.username == name).first()
-        if not existing:
-            candidates.append(name)
-            if len(candidates) >= count:
-                break
+        if _usernameSuggestionRejected(name):
+            continue
+        if session.query(User).filter(User.username == name).first():
+            continue
+        candidates.append(name)
+        if len(candidates) >= count:
+            break
     return candidates
+
+
+def _generateUsernameCandidate(session) -> str:
+    """A single unique username, for auto-provisioning and the admin re-roll."""
+    candidates = generateUsernameCandidates(session, count=1)
+    if candidates:
+        return candidates[0]
+    # Extremely unlikely fallback
+    return "Player" + str(_random.randint(10000, 99999))
 
 
 STARTER_FLOOBITS = 100
