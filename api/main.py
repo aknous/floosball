@@ -5586,214 +5586,6 @@ async def request_beta_access(payload: Dict[str, Any]):
         session.close()
 
 
-@app.get("/api/admin/beta/allowlist")
-async def admin_get_beta_allowlist(_auth: None = Depends(_checkAdminAuth)):
-    """List all emails on the beta allowlist."""
-
-    from database.connection import get_session
-    from database.models import BetaAllowlist
-    session = get_session()
-    try:
-        entries = session.query(BetaAllowlist).order_by(BetaAllowlist.added_at.desc()).all()
-        return {
-            "emails": [
-                {
-                    "email": e.email,
-                    "addedAt": e.added_at.isoformat() + 'Z' if e.added_at else None,
-                }
-                for e in entries
-            ]
-        }
-    finally:
-        session.close()
-
-
-@app.post("/api/admin/beta/allowlist")
-async def admin_add_beta_emails(payload: Dict[str, Any], _auth: None = Depends(_checkAdminAuth)):
-    """Add email(s) to beta allowlist."""
-
-    rawEmails = payload.get("emails", [])
-    if isinstance(rawEmails, str):
-        rawEmails = [e.strip() for e in rawEmails.split(",") if e.strip()]
-    if not rawEmails:
-        raise HTTPException(status_code=400, detail="No emails provided")
-
-    from database.connection import get_session
-    from database.models import BetaAllowlist
-
-    session = get_session()
-    added = []
-    try:
-        for email in rawEmails:
-            email = email.lower().strip()
-            existing = session.query(BetaAllowlist).filter_by(email=email).first()
-            if existing:
-                continue
-
-            entry = BetaAllowlist(email=email)
-            session.add(entry)
-            added.append(email)
-
-        session.commit()
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        session.close()
-
-    return {"added": added, "count": len(added)}
-
-
-@app.delete("/api/admin/beta/allowlist/{email}")
-async def admin_remove_beta_email(email: str, _auth: None = Depends(_checkAdminAuth)):
-    """Remove an email from beta allowlist."""
-
-    from database.connection import get_session
-    from database.models import BetaAllowlist
-
-    email = email.lower().strip()
-
-    session = get_session()
-    try:
-        entry = session.query(BetaAllowlist).filter_by(email=email).first()
-        if not entry:
-            raise HTTPException(status_code=404, detail="Email not found in allowlist")
-
-        session.delete(entry)
-        session.commit()
-    except HTTPException:
-        raise
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        session.close()
-
-    return {"removed": email}
-
-
-@app.get("/api/admin/beta/requests")
-async def admin_get_beta_requests(_auth: None = Depends(_checkAdminAuth)):
-    """List pending beta access requests."""
-
-    from database.connection import get_session
-    from database.models import BetaAccessRequest
-
-    session = get_session()
-    try:
-        requests = session.query(BetaAccessRequest).filter_by(
-            status='pending'
-        ).order_by(BetaAccessRequest.requested_at.asc()).all()
-        return {
-            "requests": [
-                {
-                    "id": r.id,
-                    "email": r.email,
-                    "status": r.status,
-                    "requestedAt": r.requested_at.isoformat() + 'Z' if r.requested_at else None,
-                }
-                for r in requests
-            ]
-        }
-    finally:
-        session.close()
-
-
-@app.post("/api/admin/beta/requests/{requestId}/approve")
-async def admin_approve_beta_request(requestId: int, _auth: None = Depends(_checkAdminAuth)):
-    """Approve a beta access request — adds email to allowlist and sends notification."""
-
-    from database.connection import get_session
-    from database.models import BetaAccessRequest, BetaAllowlist
-    from managers.emailManager import sendAccessApprovedEmail
-
-    session = get_session()
-    try:
-        request = session.query(BetaAccessRequest).filter_by(id=requestId).first()
-        if not request:
-            raise HTTPException(status_code=404, detail="Request not found")
-        if request.status != 'pending':
-            raise HTTPException(status_code=400, detail=f"Request already {request.status}")
-
-        request.status = 'approved'
-        request.reviewed_at = datetime.utcnow()
-
-        # Add to allowlist if not already there
-        if not session.query(BetaAllowlist).filter_by(email=request.email).first():
-            session.add(BetaAllowlist(email=request.email))
-
-        session.commit()
-        logger.info(f"Beta access approved for {request.email}")
-
-        # Send notification email (non-blocking, failures are logged)
-        sendAccessApprovedEmail(request.email)
-
-        return {"email": request.email, "status": "approved"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        session.close()
-
-
-@app.post("/api/admin/beta/requests/{requestId}/deny")
-async def admin_deny_beta_request(requestId: int, _auth: None = Depends(_checkAdminAuth)):
-    """Deny a beta access request."""
-
-    from database.connection import get_session
-    from database.models import BetaAccessRequest
-
-    session = get_session()
-    try:
-        request = session.query(BetaAccessRequest).filter_by(id=requestId).first()
-        if not request:
-            raise HTTPException(status_code=404, detail="Request not found")
-        if request.status != 'pending':
-            raise HTTPException(status_code=400, detail=f"Request already {request.status}")
-
-        request.status = 'denied'
-        request.reviewed_at = datetime.utcnow()
-        session.commit()
-        logger.info(f"Beta access denied for {request.email}")
-
-        return {"email": request.email, "status": "denied"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        session.close()
-
-
-@app.get("/api/admin/beta/access-mode")
-async def admin_get_access_mode(_auth: None = Depends(_checkAdminAuth)):
-    """Get current access mode."""
-
-    try:
-        from config_manager import get_config
-        mode = get_config().get("accessMode", "request")
-    except Exception:
-        mode = "request"
-    return {"mode": mode}
-
-
-@app.post("/api/admin/beta/access-mode")
-async def admin_set_access_mode(payload: Dict[str, Any],
-                                _auth: None = Depends(_checkAdminAuth)):
-    """Toggle access mode between 'request' and 'waitlist'."""
-
-    mode = payload.get("mode", "").lower().strip()
-    if mode not in ("request", "waitlist"):
-        raise HTTPException(status_code=400, detail="Mode must be 'request' or 'waitlist'")
-    from config_manager import save_config_value
-    save_config_value(mode, "accessMode")
-    logger.info(f"Access mode changed to '{mode}'")
-    return {"mode": mode}
-
-
 @app.get("/api/admin/users")
 def admin_list_users(q: Optional[str] = Query(default=None),
                      sort: Optional[str] = Query(default=None),
@@ -5802,7 +5594,7 @@ def admin_list_users(q: Optional[str] = Query(default=None),
     """List registered users, optionally filtered by search query."""
 
     from database.connection import get_session
-    from database.models import User, UserCurrency, Team, BetaAllowlist, BetaAccessRequest
+    from database.models import User, UserCurrency, Team
 
     session = get_session()
     try:
@@ -5838,28 +5630,10 @@ def admin_list_users(q: Optional[str] = Query(default=None),
         teamIds = {u.favorite_team_id for u in users if u.favorite_team_id}
         teams = {t.id: t for t in session.query(Team).filter(Team.id.in_(teamIds)).all()} if teamIds else {}
 
-        # Batch-load beta status: allowlist + requests
-        userEmails = [u.email.lower().strip() for u in users]
-        allowedEmails = set()
-        requestStatuses = {}
-        if userEmails:
-            from sqlalchemy import func
-            for row in session.query(BetaAllowlist.email).all():
-                allowedEmails.add(row.email.lower().strip())
-            for row in session.query(BetaAccessRequest.email, BetaAccessRequest.status).all():
-                requestStatuses[row.email.lower().strip()] = row.status
-
         result = []
         for u in users:
             currency = currencies.get(u.id)
             favTeam = teams.get(u.favorite_team_id) if u.favorite_team_id else None
-            email = u.email.lower().strip()
-            if email in allowedEmails:
-                betaStatus = "approved"
-            elif email in requestStatuses:
-                betaStatus = requestStatuses[email]  # pending or denied
-            else:
-                betaStatus = "no_request"
             result.append({
                 "id": u.id,
                 "email": u.email,
@@ -5873,7 +5647,6 @@ def admin_list_users(q: Optional[str] = Query(default=None),
                 "createdAt": u.created_at.isoformat() + 'Z' if u.created_at else None,
                 "isActive": u.is_active,
                 "lastLoginAt": u.last_login_at.isoformat() + 'Z' if u.last_login_at else None,
-                "betaStatus": betaStatus,
                 "isAdmin": getattr(u, 'is_admin', False),
             })
         return build_success_response({"users": result, "total": len(result)})
@@ -6532,7 +6305,7 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
         User, UserCurrency, CurrencyTransaction, CardTemplate, UserCard,
         EquippedCard, PackOpening, PackType, FantasyRoster,
         PickEmPick, TeamFunding, Team, Player,
-        BetaAccessRequest, BetaAllowlist, CardUpgradeLog,
+        CardUpgradeLog,
     )
     from sqlalchemy import func, case
     from datetime import timedelta
@@ -6738,18 +6511,6 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
             CurrencyTransaction.transaction_type.in_(CONTRIBUTION_TX_TYPES),
         ).scalar()
 
-        # Beta funnel: users who signed up but never requested access
-        allUserEmails = set(
-            e.lower().strip() for (e,) in session.query(User.email).all()
-        )
-        requestedEmails = set(
-            e.lower().strip() for (e,) in session.query(BetaAccessRequest.email).all()
-        )
-        allowedEmails = set(
-            e.lower().strip() for (e,) in session.query(BetaAllowlist.email).all()
-        )
-        signupOnlyCount = len(allUserEmails - requestedEmails - allowedEmails)
-
         # Churn risk — onboarded users inactive 14+ days
         fourteenDaysAgo = now - timedelta(days=14)
         churnRiskCount = session.query(func.count(User.id)).filter(
@@ -6875,7 +6636,6 @@ async def admin_analytics(_auth: None = Depends(_checkAdminAuth)):
                     "pickEm": usersWithPicks,
                     "funding": usersWhoFunded,
                 },
-                "signupOnly": signupOnlyCount,
                 "churnRiskCount": churnRiskCount,
                 "dailyActiveUsers": dailyActiveUsers,
                 "onboardingFunnel": {
@@ -10346,10 +10106,10 @@ def setEquippedCards(
         if req.cards:
             from managers import achievementManager as _am
             _am.onCardEquipped(session, user.id)
-            # Fusion: equipping IS setting your fantasy lineup, so the onboarding
-            # "roster set" hook now fires here (migrated from the retired
-            # /api/fantasy/roster PUT).
-            _am.onFantasyRosterSet(session, user.id)
+            # ⚠️ `onFantasyRosterSet` (Field General) used to fire on the NEXT LINE, off
+            # this same condition. Since the fusion, equipping IS setting your lineup, so
+            # the two were one act awarding two badges and two lots of floobits from one
+            # click. Field General is retired and its hook is gone.
             # Gilded — a FULL lineup of Prismatic/Diamond cards. ⚠️ The floor was 5,
             # which was a full equipped set before the fusion; the lineup now has six
             # base slots (QB/RB/WR1/WR2/TE/K), so 5 let one slot sit empty and still

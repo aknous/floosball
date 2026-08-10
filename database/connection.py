@@ -2796,8 +2796,15 @@ def _seedAchievements():
             {"key": "pack_popper", "name": "Pack Popper", "category": "onboarding", "scope": "once", "sort_order": 30, "target": 1,
              "description": "Open your first card pack.",
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
+            # ⚠️ RETIRED: the fantasy/cards fusion made "set your first fantasy roster"
+            # and "equip your first card" the SAME act. Both hooks fired back to back
+            # off one `if req.cards` in the equip handler, so nobody could ever hold one
+            # without the other and a single click popped two toasts. Deck Builder is
+            # the survivor because it describes what actually happens now; there is no
+            # separate fantasy roster to set. Retired rather than deleted so the people
+            # who earned it keep it (see achievements.retired).
             {"key": "field_general", "name": "Field General", "category": "onboarding", "scope": "once", "sort_order": 40, "target": 1,
-             "description": "Set your first fantasy roster.",
+             "description": "Set your first fantasy roster.", "retired": True,
              "reward_config": {"floobits": 25, "packs": [], "powerups": [], "deferred": False}},
             {"key": "deck_builder", "name": "Deck Builder", "category": "onboarding", "scope": "once", "sort_order": 50, "target": 1,
              "description": "Equip your first card.",
