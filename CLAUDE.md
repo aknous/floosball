@@ -20,6 +20,8 @@ API docs at `http://localhost:8000/docs`. Frontend repo at `../floosball-react/`
 
 ## Naming Philosophy
 Mix of formal, pop-culture, and humor. No trendy internet slang. One-word names preferred; should sound good with suffixes (e.g. "-Pack"). Pack tiers use formal style. Card effects and achievement names can be playful (e.g. "Fat Cat", "Home Alone", "Scorched Earth"). Test: would the name feel dated in 20 years? If yes, skip it.
+- ⚠️ **`"Firstname Lastname"` in `config.json`'s player pool is INTENTIONAL** (owner, 2026-08-09) — it is the joke, not a placeholder left in by accident. It reads like an un-substituted template, so it gets flagged as a bug on sight; it is not one. Leave it in the pool.
+- **The player-name pool is `config.json`'s `players` array**, and it is the only name source a fresh database has. Names added later (admin portal, Discord `/name`) live in the DB — see `tools_migrate_names.py`, which folds a live database's names back into config before a fresh start. ⚠️ Reduce to the BASE name first: `seasonManager._recyclePlayerName` walks a retiring player's name up a ladder (Base → Jr. → III → IV → …) and returns the variant to the pool, so a DB holding "Freed Marinara Jr." is the same pooled name as config's "Freed Marinara". Seeding variants starts the pool partway up the ladder. Coaches draw from the SAME pool as players.
 
 ## Architecture
 
