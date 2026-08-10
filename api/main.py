@@ -4549,21 +4549,7 @@ async def get_stat_leaders(
             filtered = [p for p in filtered if getattr(p, 'seasonPerformanceRating', 0) > 0 and getattr(p, 'gamesPlayed', 0) >= 1]
         filtered.sort(key=lambda p: extractStat(p, category), reverse=True)
 
-        # Awakened players (persistent L4 signature power) — one bulk query, for a blue name-glow.
-        awakenedIds = set()
-        try:
-            from database.connection import get_session as _gs
-            from database.models import AnomalyState as _AS
-            _sm = floosball_app.seasonManager
-            _seasonNum = _sm.currentSeason.seasonNumber if _sm and _sm.currentSeason else 0
-            _s = _gs()
-            try:
-                awakenedIds = {r.player_id for r in
-                               _s.query(_AS.player_id).filter_by(season=_seasonNum, state='awakened').all()}
-            finally:
-                _s.close()
-        except Exception:
-            awakenedIds = set()
+        awakenedIds = _awakenedPlayerIds()
 
         leaders = []
         for rank, player in enumerate(filtered[:limit], 1):
@@ -4685,8 +4671,35 @@ def _perGame(blobs: Dict[str, Dict[str, Any]], games: int) -> Dict[str, Dict[str
     }
 
 
+def _awakenedPlayerIds() -> set:
+    """Player ids currently AWAKENED, in one bulk query, for the blue name-glow.
+
+    Every surface that lists players wants the same answer, and the glow is only
+    honest if they all agree — a leader board that glows and a stats table that does
+    not reads as a bug in whichever one the reader trusts less. Season-scoped, because
+    awakening is a state a player is in NOW, not a career honour.
+
+    Returns an empty set on any failure: a missing glow is a much smaller problem than
+    a 500 on the stats page.
+    """
+    try:
+        from database.connection import get_session as _gs
+        from database.models import AnomalyState as _AS
+        _sm = floosball_app.seasonManager if floosball_app else None
+        _seasonNum = _sm.currentSeason.seasonNumber if _sm and _sm.currentSeason else 0
+        _s = _gs()
+        try:
+            return {r.player_id for r in
+                    _s.query(_AS.player_id).filter_by(season=_seasonNum, state='awakened').all()}
+        finally:
+            _s.close()
+    except Exception:
+        return set()
+
+
 def _statsPlayerRow(player, blobs, games, fantasyPoints, wpa, perf, defPerf,
-                    teamId, teamAbbr, teamColor, status, seasons=None) -> Dict[str, Any]:
+                    teamId, teamAbbr, teamColor, status, seasons=None,
+                    awakened=False) -> Dict[str, Any]:
     """One row of the stats table, whatever season or scope produced it."""
     from api_response_builders import PlayerResponseBuilder
     position = player.position.name if hasattr(player.position, 'name') else str(player.position)
@@ -4704,6 +4717,8 @@ def _statsPlayerRow(player, blobs, games, fantasyPoints, wpa, perf, defPerf,
         'ratingStars': PlayerResponseBuilder.calculateStarRating(rating),
         'gamesPlayed': games,
         'seasonsPlayed': seasons,
+        # Drives the blue name-glow, same as /api/stats/leaders.
+        'awakened': awakened,
         'fantasyPoints': round(fantasyPoints or 0, 1),
         'passing': blobs.get('passing') or {},
         'rushing': blobs.get('rushing') or {},
@@ -4783,6 +4798,10 @@ async def get_stats_players(
             finally:
                 _s.close()
 
+        # One lookup for the whole page, shared with /api/stats/leaders so the two
+        # surfaces cannot disagree about who is glowing.
+        awakenedIds = _awakenedPlayerIds()
+
         # Every player the page could show, across pools, deduped.
         pools = list(pm.activePlayers) + list(pm.freeAgents) + list(pm.retiredPlayers)
         byId = {}
@@ -4839,6 +4858,7 @@ async def get_stats_players(
                     getattr(team, 'color', None) if hasTeam else None,
                     _playerStatus(p, pm),
                     seasons=getattr(p, 'seasonsPlayed', None),
+                    awakened=p.id in awakenedIds,
                 ))
         else:
             from database.connection import get_session as _gs
@@ -4894,6 +4914,7 @@ async def get_stats_players(
                     last.team_id, getattr(team, 'abbr', None), getattr(team, 'color', None),
                     _playerStatus(p, pm),
                     seasons=len(statRows),
+                    awakened=p.id in awakenedIds,
                 ))
 
         return build_success_response({
