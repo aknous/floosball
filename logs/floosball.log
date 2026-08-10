@@ -51735,3 +51735,11 @@ Shutting down API server...
 2026-08-10 10:08:51 - floosball.database - INFO -     Lime Warfield Jr. -> Johnny Goodensmith
 2026-08-10 10:08:51 - floosball.database - INFO -     Straycat Doughty Jr. -> Cleat Jenkins
 2026-08-10 10:08:51 - floosball.database - INFO - Seeded 3 new names from config into unused_names pool (skipped 224 already in use by coaches/players)
+2026-08-10 10:22:12 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:22:18 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:23:11 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:23:23 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:26:17 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:26:33 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:27:07 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:27:20 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
