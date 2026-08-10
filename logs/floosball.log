@@ -51743,3 +51743,41 @@ Shutting down API server...
 2026-08-10 10:26:33 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
 2026-08-10 10:27:07 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
 2026-08-10 10:27:20 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:37:14 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:37:25 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:39:56 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:39:58 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 10:40:03 - floosball.database - INFO - Name pool: dropped 1 duplicate lineage name(s) (e.g. Acid Del Mar Jr.)
+2026-08-10 10:40:03 - floosball.database - INFO - Collapsed 1 generational name(s) on live players/coaches:
+2026-08-10 10:40:03 - floosball.database - INFO -     Sarasota Speedrun Jr. -> Sarasota Speedrun
+2026-08-10 10:40:03 - floosball.database - INFO - Collapsed 1 generational name(s) on live players/coaches:
+2026-08-10 10:40:03 - floosball.database - INFO -     Freed Marinara Jr. -> Freed Marinara
+2026-08-10 10:40:03 - floosball.database - WARNING - Left 1 generational name(s) alone — the base was taken and the pool had no replacement: Mochi Pushpin Jr.
+2026-08-10 10:40:04 - floosball.database - INFO - Reassigned 1 name(s) whose base was already on the field:
+2026-08-10 10:40:04 - floosball.database - INFO -     Mochi Pushpin Jr. -> Elvis Amigo
+2026-08-10 10:40:04 - floosball.database - INFO - Reassigned 1 name(s) whose base was already on the field:
+2026-08-10 10:40:04 - floosball.database - INFO -     Sarasota Speedrun Jr. -> Elvis Amigo
+2026-08-10 10:40:04 - floosball.database - INFO - Collapsed 1 generational name(s) on live players/coaches:
+2026-08-10 10:40:04 - floosball.database - INFO -     Freed Marinara Jr. -> Freed Marinara
+2026-08-10 10:40:05 - floosball.database - INFO - Collapsed 1 generational name(s) on live players/coaches:
+2026-08-10 10:40:05 - floosball.database - INFO -     Freed Marinara Jr. -> Freed Marinara
+2026-08-10 10:40:05 - floosball.database - INFO - Collapsed 1 generational name(s) on live players/coaches:
+2026-08-10 10:40:05 - floosball.database - INFO -     Bob Vance Jr. -> Bob Vance
+2026-08-10 10:40:05 - floosball.database - INFO - Reassigned 1 name(s) whose base was already on the field:
+2026-08-10 10:40:05 - floosball.database - INFO -     Bob Vance III -> Elvis Amigo
+2026-08-10 10:40:05 - floosball.database - INFO - Name pool: dropped 3 duplicate lineage name(s) (e.g. Bob Vance III, Bob Vance IV, Bob Vance Jr.)
+2026-08-10 10:40:05 - floosball.database - INFO - Name pool: dropped 1 duplicate lineage name(s) (e.g. Bob Vance)
+2026-08-10 10:40:05 - floosball.database - INFO - Name pool: dropped 1 duplicate lineage name(s) (e.g. Acid Del Mar Jr.)
+2026-08-10 10:40:05 - floosball.database - INFO - Name pool: dropped 1 duplicate lineage name(s) (e.g. Basil Paracelsus Jr.)
+2026-08-10 10:40:06 - floosball.database - INFO - Name pool: dropped 1 duplicate lineage name(s) (e.g. Acid Del Mar Jr.)
+2026-08-10 10:40:06 - floosball.database - INFO - Name pool: collapsed 2 orphaned generational name(s) to base (e.g. Acid Del Mar Jr., Cheshire Spacious III)
+2026-08-10 10:40:06 - floosball.database - INFO - Name pool: dropped 1 duplicate lineage name(s) (e.g. Acid Del Mar Jr.)
+2026-08-10 10:40:06 - floosball.database - INFO - Reassigned 1 name(s) whose base was already on the field:
+2026-08-10 10:40:06 - floosball.database - INFO -     Mochi Pushpin Jr. -> Elvis Amigo
+2026-08-10 10:40:06 - floosball.database - INFO - Reassigned 1 name(s) whose base was already on the field:
+2026-08-10 10:40:06 - floosball.database - INFO -     Mochi Pushpin Jr. -> Elvis Amigo
+2026-08-10 10:40:07 - floosball.database - INFO - Name pool: dropped 1 duplicate lineage name(s) (e.g. Acid Del Mar Jr.)
+2026-08-10 10:40:07 - floosball.database - INFO - Seeded 1 new names from config into unused_names pool (skipped 1 already in use by coaches/players)
+2026-08-10 10:40:07 - floosball.database - INFO - Seeded 1 new names from config into unused_names pool
+2026-08-10 10:40:07 - floosball.database - INFO - Seeded 1 new names from config into unused_names pool
+2026-08-10 10:40:07 - floosball.database - INFO - Seeded 2 new names from config into unused_names pool

@@ -8036,6 +8036,10 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             # disable the control and say why, rather than letting the user type a name
             # and discover the limit from a 429.
             "canChangeUsername": _canChangeUsername(user),
+            # Whether a club switch made right now lands immediately or is booked for
+            # next season. Same reasoning as canChangeUsername: the UI should be able to
+            # say which it will be BEFORE the click, not report it afterwards.
+            "canChangeFavoriteTeam": _favoriteTeamWindowOpen(session),
             "floobits": currency.balance if currency else 0,
             "hasCompletedOnboarding": user.has_completed_onboarding,
             "emailOptOut": user.email_opt_out,
@@ -8267,6 +8271,11 @@ def get_favorite_team(user: _User = Depends(_getCurrentUser)):
             pendingTeam = session.get(_Team, user.pending_favorite_team_id)
             if pendingTeam:
                 result["pendingTeam"] = {"id": pendingTeam.id, "name": pendingTeam.name, "city": pendingTeam.city, "abbr": pendingTeam.abbr, "color": pendingTeam.color}
+        # Whether a switch made right now would take effect immediately. Without this the
+        # UI can only find out by trying, and "your change starts next season" is the
+        # kind of thing a reader wants to know BEFORE they click.
+        if result:
+            result["canChangeNow"] = _favoriteTeamWindowOpen(session)
         return result or None
     finally:
         session.close()
@@ -8284,6 +8293,36 @@ def _isOffseason() -> bool:
     if sm.currentSeason is None:
         return True
     return sm.currentSeason.currentWeekText == 'Offseason'
+
+def _favoriteTeamWindowOpen(session) -> bool:
+    """Can a fan still switch clubs with the change taking effect NOW?
+
+    Open through the offseason and right up to the moment WEEK 1 KICKS OFF; closed for
+    the rest of the season (owner, 2026-08-10). Before that first snap nothing has
+    happened yet, so a switch costs the league nothing; after it, picking up a winner
+    mid-run is exactly the bandwagon the lock exists to prevent.
+
+    ⚠️ Deliberately NOT keyed on `currentSeason.currentWeek`. That value is known to go
+    stale (it is written on the season row and read back), and a stale week here fails
+    OPEN — it would hand out mid-season switches all year. The two signals used instead
+    both describe what has actually happened: `_areGamesStarted()` for a slate in flight
+    (in-memory, and it already carries exactly this "not just Scheduled" meaning for the
+    card lock), and a single lookup for any FINAL game this season, which covers every
+    week after the first without needing to know which week it is.
+    """
+    if _isOffseason():
+        return True
+    if _areGamesStarted():
+        return False
+    seasonNum = _getCurrentSeasonNumber()
+    if seasonNum is None:
+        return True
+    from database.models import Game as _GameRow
+    played = (session.query(_GameRow.id)
+              .filter(_GameRow.season == seasonNum, _GameRow.status == 'final')
+              .first())
+    return played is None
+
 
 def _getCurrentSeasonNumber() -> Optional[int]:
     """Get the current season number from the season manager."""
@@ -8314,38 +8353,46 @@ def set_favorite_team(req: FavoriteTeamRequest, user: _User = Depends(_getCurren
             if dbUser.pending_favorite_team_id is not None:
                 dbUser.pending_favorite_team_id = None
                 session.commit()
-            return {"favoriteTeamId": req.teamId, "isPending": False, "favoriteTeamLockedSeason": dbUser.favorite_team_locked_season}
+            return {"favoriteTeamId": req.teamId, "isPending": False,
+                    "favoriteTeamLockedSeason": dbUser.favorite_team_locked_season,
+                    "canChangeNow": _favoriteTeamWindowOpen(session)}
 
-        if offseason or dbUser.favorite_team_id is None:
-            # Offseason or first-time pick: apply immediately
-            wasFirstTime = dbUser.favorite_team_id is None
+        # ⚠️ A FIRST pick always lands immediately, window or no window. Someone who
+        # signs up in week 9 is choosing a club, not switching one, and deferring it
+        # would leave them with no team for the rest of the season — no crest, no
+        # Supporter income, and a Front Office page about nobody.
+        wasFirstTime = dbUser.favorite_team_id is None
+        if wasFirstTime or _favoriteTeamWindowOpen(session):
             if not wasFirstTime:
-                # Switching teams — soft-reset Supporter loyalty tenure so a
+                # Switching clubs — soft-reset Supporter loyalty tenure so a
                 # switch is a setback, not a clean slate (anti-bandwagon).
                 from managers.supporterManager import onFavoriteTeamChange
                 onFavoriteTeamChange(dbUser)
             dbUser.favorite_team_id = req.teamId
             dbUser.pending_favorite_team_id = None
             if currentSeasonNum is not None and not offseason:
+                # Doubles as the Supporter tenure signal (supporterManager estimates
+                # seasons-backed from it), so it is written whenever a club is taken up
+                # DURING a season, not merely when a change is spent.
                 dbUser.favorite_team_locked_season = currentSeasonNum
             if wasFirstTime:
                 from managers import achievementManager as _am
                 _am.onFavoriteTeamChosen(session, user.id)
             session.commit()
-            return {"favoriteTeamId": req.teamId, "isPending": False, "favoriteTeamLockedSeason": dbUser.favorite_team_locked_season}
+            return {"favoriteTeamId": req.teamId, "isPending": False,
+                    "favoriteTeamLockedSeason": dbUser.favorite_team_locked_season,
+                    "canChangeNow": True}
 
-        # Mid-season with existing favorite: set as pending
-        if currentSeasonNum is not None and dbUser.favorite_team_locked_season == currentSeasonNum:
-            # Already changed once this season — update pending
-            dbUser.pending_favorite_team_id = req.teamId
-            session.commit()
-            return {"favoriteTeamId": dbUser.favorite_team_id, "pendingFavoriteTeamId": req.teamId, "isPending": True}
-
-        # First change this season: lock current and set pending
-        dbUser.favorite_team_locked_season = currentSeasonNum
+        # Week 1 has kicked off: the switch is booked for next season instead.
+        #
+        # ⚠️ There is no longer a one-change-per-season budget. The gate is purely the
+        # window, so `favorite_team_locked_season` is no longer consulted here — it used
+        # to mean both "already switched this season" and "season this club was taken
+        # up", and only the second meaning survives (Supporter reads it).
         dbUser.pending_favorite_team_id = req.teamId
         session.commit()
-        return {"favoriteTeamId": dbUser.favorite_team_id, "pendingFavoriteTeamId": req.teamId, "isPending": True}
+        return {"favoriteTeamId": dbUser.favorite_team_id, "pendingFavoriteTeamId": req.teamId,
+                "isPending": True, "canChangeNow": False}
     except HTTPException:
         raise
     except Exception as e:
