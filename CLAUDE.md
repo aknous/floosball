@@ -293,6 +293,12 @@ Tracked in `ShopPurchase` with `expires_at_week`. Display names differ from slug
 - **Still live for fans**: the FA *window* (`_openFaVotingWindowMidSeason`) is now **informational only** — it drives a Front Office UI panel of projected free agents (`faWindowOpen`/`faPool`), but nothing it collects feeds the draft.
 - ⚠️ **The `tribune` and `mutineer` secrets are RETIRED**, not merely stale: both keyed off the binding fan-vote system this rework deleted, and neither has a trigger anywhere in the code. See the Achievements section for the retire mechanism.
 
+### Facilities Economy (`facilitiesManager.py`)
+Share-denominated costs: **1 share = last season's total Floobit grants to users ÷ the team count**, and `FACILITY_UPGRADE_COST_SHARES` / `FACILITY_UPKEEP_SHARES` are fractions of it, so a build costs a slice of what the league actually earned.
+- ⚠️ **`computeShareUnit` NEVER RETURNS ZERO** (2026-08-10). It used to whenever there was no previous season, and the docstring called that "inert" — but a zero share unit does not disable the economy, it makes it **FREE**: season 1 showed **0F upkeep and 0F to build**, so every team could max every facility for nothing. `FACILITY_SHARE_UNIT_FLOOR` (300.0) is what a league runs on until it has a season of its own to price against. Chosen against real numbers: prod's season 1 was already yielding ~359/share part-way through. At the floor: L1 build 15F, L5 build 255F, L5 hold 120F/season.
+- ⚠️ **The team count is COUNTED, not assumed.** `numTeams` defaulted to **24** and no caller ever passed it, so after the league grew to 32 every share came out **33% too large** and every facility 33% too expensive. It now reads `COUNT(*) FROM teams`.
+- ⚠️ **`currency_transactions.season` is NULLABLE and a lot of prod rows have it NULL** — measured 2026-08-10: **25,175F across 383 grants** unattributed against 11,496F stamped to season 1. Those grants count toward NO season's share unit, so the faucet total this reads is an undercount. Not yet chased down. Regression: `test_facility_costs.py`.
+
 ### Team Funding (`TeamFunding` model)
 - `FUNDING_BASELINE_PER_TEAM=200F` granted each season; users contribute directly (`POST /api/teams/{id}/contribute`) or via passive end-of-season `team_funding_pct` (default 25%). `FUNDING_DECAY_RATE=0.5` carries 50% into next season.
 - Self-scaling tiers by fair-share ratio (effective vs league average): `MEGA_MARKET ≥2.0×`, `LARGE_MARKET ≥1.15×`, `MID_MARKET ≥0.85×`, `SMALL_MARKET <0.85×`. Tier drives dev bonus, morale, and fatigue reduction.

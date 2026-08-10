@@ -1317,6 +1317,17 @@ FACILITY_UPGRADE_COST_SHARES = [0.0, 0.05, 0.10, 0.20, 0.42, 0.85]  # cost to re
 FACILITY_UPKEEP_SHARES       = [0.0, 0.005, 0.015, 0.045, 0.115, 0.400]  # upkeep to hold level i
 # A facility that ends the season with upkeep unmet slips this many levels.
 FACILITY_DECAY_LEVELS = 1
+# ⚠️ FLOOR UNDER THE SHARE UNIT. A share is a team's cut of LAST season's Floobit
+# faucet, so a league with no last season priced everything at zero: season 1 showed
+# 0F upkeep and 0F to build anything, and every facility could be maxed for nothing.
+# The old code called that "inert", which it is not — free is not the same as disabled.
+#
+# 300 is chosen against real numbers rather than invented: production's season 1 was
+# already yielding ~359 per share PART-WAY through, so this sits just under a genuine
+# season and reads as a modest one rather than a fake one. It gives a level-1 upgrade
+# 15F, a max-level build 255F, and a max-level hold 120F a season — small enough that a
+# new league can get moving, big enough that building means spending.
+FACILITY_SHARE_UNIT_FLOOR = 300.0
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
