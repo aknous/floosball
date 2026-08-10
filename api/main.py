@@ -12371,6 +12371,10 @@ def _buildPickemMatchup(liveGame, gameIndex: int) -> dict:
         "homeTeam": {
             "id": liveGame.homeTeam.id,
             "name": liveGame.homeTeam.name,
+            # The picker prints "Washington / Monuments" over two lines — a three-letter
+            # code is the least distinguishable way to render a club on a board of
+            # sixteen, and the city is what makes the name recognisable.
+            "city": liveGame.homeTeam.city,
             "abbr": liveGame.homeTeam.abbr,
             "color": liveGame.homeTeam.color,
             "record": f"{liveGame.homeTeam.seasonTeamStats.get('wins', 0)}-{liveGame.homeTeam.seasonTeamStats.get('losses', 0)}",
@@ -12379,6 +12383,7 @@ def _buildPickemMatchup(liveGame, gameIndex: int) -> dict:
         "awayTeam": {
             "id": liveGame.awayTeam.id,
             "name": liveGame.awayTeam.name,
+            "city": liveGame.awayTeam.city,
             "abbr": liveGame.awayTeam.abbr,
             "color": liveGame.awayTeam.color,
             "record": f"{liveGame.awayTeam.seasonTeamStats.get('wins', 0)}-{liveGame.awayTeam.seasonTeamStats.get('losses', 0)}",
@@ -12460,6 +12465,7 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
                 "homeTeam": {
                     "id": liveGame.homeTeam.id,
                     "name": liveGame.homeTeam.name,
+                    "city": liveGame.homeTeam.city,
                     "abbr": liveGame.homeTeam.abbr,
                     "color": liveGame.homeTeam.color,
                     "record": f"{liveGame.homeTeam.seasonTeamStats.get('wins', 0)}-{liveGame.homeTeam.seasonTeamStats.get('losses', 0)}",
@@ -12468,6 +12474,7 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
                 "awayTeam": {
                     "id": liveGame.awayTeam.id,
                     "name": liveGame.awayTeam.name,
+                    "city": liveGame.awayTeam.city,
                     "abbr": liveGame.awayTeam.abbr,
                     "color": liveGame.awayTeam.color,
                     "record": f"{liveGame.awayTeam.seasonTeamStats.get('wins', 0)}-{liveGame.awayTeam.seasonTeamStats.get('losses', 0)}",
@@ -12540,6 +12547,7 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
                 "homeTeam": {
                     "id": liveGame.homeTeam.id,
                     "name": liveGame.homeTeam.name,
+                    "city": liveGame.homeTeam.city,
                     "abbr": liveGame.homeTeam.abbr,
                     "color": liveGame.homeTeam.color,
                     "record": f"{liveGame.homeTeam.seasonTeamStats.get('wins', 0)}-{liveGame.homeTeam.seasonTeamStats.get('losses', 0)}",
@@ -12548,6 +12556,7 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
                 "awayTeam": {
                     "id": liveGame.awayTeam.id,
                     "name": liveGame.awayTeam.name,
+                    "city": liveGame.awayTeam.city,
                     "abbr": liveGame.awayTeam.abbr,
                     "color": liveGame.awayTeam.color,
                     "record": f"{liveGame.awayTeam.seasonTeamStats.get('wins', 0)}-{liveGame.awayTeam.seasonTeamStats.get('losses', 0)}",
