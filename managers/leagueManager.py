@@ -166,14 +166,47 @@ class LeagueManager:
             self._distributeEvenly()
     
     def _distributeByConfig(self, distribution: Dict[str, List[str]]) -> None:
-        """Distribute teams based on configuration mapping"""
+        """Distribute teams based on configuration mapping.
+
+        ⚠️ A name in `teamDistribution` that matches no club used to be SILENTLY
+        SKIPPED. That is how a one-word rename in `teams` (Wafflecones -> Waffles,
+        not mirrored here) produced a 15-club league, and an odd league splits 8/7
+        in `_generateInterleagueGames`, which then dies on `group2Weeks[7]` with a
+        bare IndexError 1,200 lines and one call stack away from the actual cause.
+
+        Every failure is logged where it happens now, and the RESULT is checked:
+        the thing that actually breaks the schedule is a club that ended up in no
+        league at all, which no per-name check would have caught on its own (a
+        duplicate entry hides a missing one in the totals).
+        """
+        placed = set()
         for leagueName, teamNames in distribution.items():
             league = self.getLeagueByName(leagueName)
-            if league:
-                for teamName in teamNames:
-                    team = self._findTeamByName(teamName)
-                    if team:
-                        league.addTeam(team)
+            if league is None:
+                logger.error(
+                    f"teamDistribution names a league that does not exist: '{leagueName}'. "
+                    f"Its {len(teamNames)} clubs will not be placed.")
+                continue
+            for teamName in teamNames:
+                team = self._findTeamByName(teamName)
+                if team is None:
+                    logger.error(
+                        f"teamDistribution lists '{teamName}' under {leagueName}, but no club "
+                        f"has that name. Check it against the `teams` array — a rename in one "
+                        f"place and not the other leaves a league short and breaks scheduling.")
+                    continue
+                league.addTeam(team)
+                placed.add(team.id)
+
+        missing = [t for t in self.teams if t.id not in placed]
+        if missing:
+            logger.error(
+                f"{len(missing)} club(s) are in `teams` but were placed in NO league: "
+                f"{', '.join(t.name for t in missing)}. Leagues are now uneven and the "
+                f"schedule cannot be generated correctly.")
+        sizes = {lg.name: len(lg.teamList) for lg in self.leagues}
+        if len(set(sizes.values())) > 1:
+            logger.error(f"Leagues are uneven after distribution: {sizes}")
     
     def _distributeEvenly(self) -> None:
         """Distribute teams evenly across all leagues"""

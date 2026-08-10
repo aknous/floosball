@@ -4544,7 +4544,23 @@ class SeasonManager:
         league1Group2Teams = []
         league2Group1Teams = []
         league2Group2Teams = []
-        
+
+        # ⚠️ This routine assumes both leagues are the SAME size and that size is
+        # EVEN. The split below walks `range(len(teamList))` and sends the first half
+        # to group 1 — at an odd count that is 8 and 7, so `group2Weeks` comes back
+        # one week short and the combine step dies on `group2Weeks[x]` with a bare
+        # IndexError that says nothing about why.
+        #
+        # It happened for real: a club renamed in config's `teams` but not in
+        # `teamDistribution` was silently dropped, leaving a 15-club league. Fail here,
+        # naming the sizes, rather than 40 lines later naming an index.
+        sizeA, sizeB = len(league1), len(league2)
+        if sizeA != sizeB or sizeA % 2 != 0:
+            raise ValueError(
+                f"Interleague scheduling needs two equal, even-sized leagues; got "
+                f"{sizeA} and {sizeB}. A club is probably missing from a league — check "
+                f"config.json's `teamDistribution` names against its `teams` array.")
+
         # Split leagues into groups
         for x in range(len(self.leagueManager.leagues[0].teamList)):
             if x < (len(self.leagueManager.leagues[0].teamList) / 2):
