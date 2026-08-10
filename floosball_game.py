@@ -7643,6 +7643,7 @@ class Game:
                     kicker = self.offensiveTeam.rosterDict['k']
                     if kicker is None:
                         logging.error(f"Team {self.offensiveTeam.name} has no kicker - using default punt distance")
+                    from constants import PUNT_TOUCHBACK_TO
                     puntDistance, puntType, puntResult = self.resolvePunt(
                         kicker, self.yardsToEndzone)
                     # Where the ball actually came down, as yards from the RECEIVING
@@ -7782,7 +7783,18 @@ class Game:
 
                     # Final spot = where it was caught, ADVANCED by the return
                     # (away from the receiving team's own goal line).
-                    newYards = 100 - min(99, max(1, landing + puntReturn))
+                    #
+                    # ⚠️ A TOUCHBACK IS SPOTTED, NOT CAUGHT. `landing` is forced to 0
+                    # above as the sentinel for "it went into the end zone", which is
+                    # honest for the arc the field graphic draws but is not a place the
+                    # ball is ever put down. Run through the arithmetic below, 0 met
+                    # `max(1, ...)` and became 1, so the receiving team took over on
+                    # their own ONE while the play-by-play correctly read "touchback".
+                    # The spot is the rule's, not the flight's.
+                    if puntResult == 'touchback':
+                        newYards = 100 - PUNT_TOUCHBACK_TO
+                    else:
+                        newYards = 100 - min(99, max(1, landing + puntReturn))
                     
                     # Consume time for punt (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.Punt, False)
@@ -8379,6 +8391,21 @@ class Game:
                         _wtName = getattr(_wt, 'abbr', None) or getattr(_wt, 'name', 'The winner')
                         _hi, _lo = max(self.homeScore, self.awayScore), min(self.homeScore, self.awayScore)
                         _tiebreakNote = f"{_wtName} win on points {_cleanNum(_hi)}-{_cleanNum(_lo)}"
+                elif getattr(_fmt, 'key', '') == 'chess_clock':
+                    # ⚠️ The "ran out of time" line existed only as a `gameFeed` entry,
+                    # which the REST feed serves and the socket never carries — so a
+                    # reader watching live saw the whistle with no reason for it, and a
+                    # chess game can end mid-quarter with the clock reading well above
+                    # 0:00. It is the same kind of fact as the frames points tiebreak,
+                    # so it travels the same way rather than growing a second channel.
+                    try:
+                        if (self.losingTeam is not None
+                                and _fmt._lockedOut(self, self.losingTeam)):
+                            _lt = (getattr(self.losingTeam, 'abbr', None)
+                                   or getattr(self.losingTeam, 'name', 'The loser'))
+                            _tiebreakNote = f"{_lt} ran out of time"
+                    except Exception:
+                        pass
 
             # Broadcast game end with stats
             event = GameEvent.gameEnd(

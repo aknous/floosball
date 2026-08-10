@@ -84,6 +84,11 @@ PINNED_MAX = 5
 # that lets a whole exchange land.
 META_CATEGORIES = {'cores', 'criticality', 'rules', 'anomaly_transition'}
 
+# How many meta rows to pull from outside the newest-N window. Generous enough that a
+# week of awakenings all reach the feed, bounded so a quiet league does not serve a
+# month of old Cores chatter.
+META_FETCH_MAX = 40
+
 # The opposite end: a routine notice that is worth ONE row and no more. "Week 12 begins,
 # 16 games scheduled" is a marker, not a story, and three of them stacked is the same
 # filler the big-game items used to be — with those gone, these expanded to fill the gap.
@@ -243,6 +248,35 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
     except Exception as e:
         # A DB that predates the column must still serve the feed.
         logger.debug(f"Pinned news lookup skipped: {e}")
+
+    # ⚠️ META rows are fetched OUTSIDE the window too, for the same reason pinned ones
+    # are. The reservation further down cannot save a category that never reached it:
+    # the window above is a flat newest-N, so a category that publishes in bulk starves
+    # the others BEFORE any cap or reserve runs.
+    #
+    # Measured on the season-1 production database: `record` was 93 of 131 rows (71%),
+    # the newest 40 came back 34 record and 6 cores, and all NINE anomaly-transition
+    # rows sat outside at ranks 43, 44, 48, 81, 82, 86, 122, 123, 124. Ten players had
+    # awakened and not one awakening was reachable in the feed.
+    #
+    # This is the same failure `BIG_GAME_NEWS_ENABLED` was switched off for — that
+    # category was 48% of all rows and the visible feed became entirely box score.
+    # Records took its place. Turning a category off is a blunt fix; guaranteeing the
+    # quiet ones a route into the window is the general one.
+    try:
+        metaRows = (
+            session.query(LeagueNewsItem)
+            .filter(LeagueNewsItem.category.in_(tuple(META_CATEGORIES)))
+            .order_by(LeagueNewsItem.created_at.desc(), LeagueNewsItem.id.desc())
+            .limit(META_FETCH_MAX)
+            .all()
+        )
+        seen = {r.id for r in rows}
+        # Appended, not prepended: they take their real place in publication order once
+        # the rows are sorted. Reaching the window is the point, not jumping the queue.
+        rows = rows + [r for r in metaRows if r.id not in seen]
+    except Exception as e:
+        logger.debug(f"Meta news lookup skipped: {e}")
 
     items = _groupExchanges(_rowsToItems(rows))
     if not items:

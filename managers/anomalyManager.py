@@ -321,6 +321,21 @@ WARNING_HIGH_THRESHOLD = 0.65  # 65% — pointed, escalating warning
 # the feed with the same handful of repeated transition lines.
 MAX_TRANSITION_NEWS_PER_TICK = 3
 
+# ⚠️ NEWS SIGNIFICANCE IS NOT LADDER POSITION, and conflating the two lost most of the
+# events worth reading. `_STATE_RANK` orders the ladder for DIRECTION — `cleansed` is
+# -1 because being pulled back is a move DOWN — and the narrator was sorting by it, so
+# a cleansing ranked below `stable` and could not win a slot in any tick where anything
+# else happened. Awakening and cleansing are precisely the two rungs that mean
+# something; the intermediate ones are texture.
+_NEWS_SIGNIFICANCE = {'awakened': 4, 'cleansed': 4, 'rampant': 2, 'erratic': 1, 'stirring': 1}
+
+# The rungs that are never dropped, however busy the week. Measured on the season-1
+# production database: 10 players had awakened and only 4 awakenings reached the feed,
+# because a tick that awakens more than MAX_TRANSITION_NEWS_PER_TICK players silently
+# discarded the rest. An awakening is the event the whole anomaly system builds toward
+# and it cannot be rationed.
+_ALWAYS_NARRATED = frozenset({'awakened', 'cleansed'})
+
 # Per-state ominous feed lines, broadcast when a player crosses to that
 # state for the first time this season. No context, no documentation —
 # just a line in the feed that something is happening to that player.
@@ -982,11 +997,16 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
         # still recorded in the DB above). Prefer higher states (awakened >
         # rampant > ...) and pick distinct line text so a big week does not
         # spam the feed with the same repeated transition lines.
-        ranked = sorted(
-            transitionEvents,
-            key=lambda e: _STATE_RANK.get(e[1], 0),
+        # Every awakening and cleansing is narrated; the quieter rungs share what is
+        # left of the per-tick allowance so a busy week still does not read as a wall
+        # of "X is stirring."
+        headline = [e for e in transitionEvents if e[1] in _ALWAYS_NARRATED]
+        rest = sorted(
+            (e for e in transitionEvents if e[1] not in _ALWAYS_NARRATED),
+            key=lambda e: _NEWS_SIGNIFICANCE.get(e[1], 0),
             reverse=True,
-        )[:MAX_TRANSITION_NEWS_PER_TICK]
+        )[:max(0, MAX_TRANSITION_NEWS_PER_TICK - len(headline))]
+        ranked = headline + rest
         playerIds = [pid for pid, _ in ranked]
         playerNames = {
             p.id: p.name for p in
@@ -1010,8 +1030,8 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
                                        session=session, seasonNumber=seasonNumber)
 
             # The Cores react BY NAME to the two rungs that actually mean something —
-            # a player awakening, or one being pulled back. `ranked` is ordered by
-            # significance, so the first one reached is the one worth the conversation.
+            # a player awakening, or one being pulled back. `ranked` leads with exactly
+            # those, so the first one reached is the one worth the conversation.
             if not coresSpokenFor and targetState in ('awakened', 'cleansed'):
                 try:
                     from managers.coresManager import awakeningEntriesFor
