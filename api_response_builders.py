@@ -45,6 +45,12 @@ class ResponseBuilder:
             return round((numerator / denominator) * PERCENTAGE_MULTIPLIER)
         return 0
 
+# Where COMPLACENT hands over from the pedigree path to the record path. Before this
+# many games a strong record is not yet a record — it is a small sample — so only
+# pedigree (top-10% ELO) can raise the state; after it, only the record can.
+COMPLACENT_HANDOVER_GAMES = 8
+
+
 class TeamResponseBuilder(ResponseBuilder):
     """Builder for team-related API responses"""
 
@@ -178,8 +184,21 @@ class TeamResponseBuilder(ResponseBuilder):
         # fires at 0.70 winPct (was 0.75) with vuln >= 0.06 (was 0.08).
         # Rubber-band tilt — COMPLACENT catches more dominant teams more
         # often so the drag bites the runaway leaders earlier.
-        pedigreeFire = isPedigreed and games < 8 and avgVuln >= 0.06
-        recordFire = (winPct >= 0.70 and avgVuln >= 0.06 and streak <= 2)
+        #
+        # ⚠️ THE TWO PATHS PARTITION THE SEASON — pedigree BEFORE the handover,
+        # record AFTER — and the record path had no games floor at all, so both ran
+        # from week 1 and `winPct >= 0.70` was satisfied by a 1-0 record. Measured on
+        # production one game into a season: 12 of the 16 winners came back
+        # COMPLACENT, 38% of the league, which is every division's leaders wearing
+        # "Winning, but cracking" off a single result. A team that has won its only
+        # game has nothing banked to coast on, which is the whole premise of the
+        # state ("They built up wins and feel untouchable").
+        #
+        # One constant for both sides so they cannot drift apart and reopen the gap.
+        pedigreeFire = (isPedigreed and games < COMPLACENT_HANDOVER_GAMES
+                        and avgVuln >= 0.06)
+        recordFire = (games >= COMPLACENT_HANDOVER_GAMES and winPct >= 0.70
+                      and avgVuln >= 0.06 and streak <= 2)
         if pedigreeFire or recordFire:
             return 'COMPLACENT'
 
