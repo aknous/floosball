@@ -12322,6 +12322,22 @@ def cast_hof_vote(req: _HofVoteRequest, user: _User = Depends(_getCurrentUser)):
 # ============================================================================
 
 
+def _pickemPickable(statusVal) -> bool:
+    """A pick is open until the game KICKS OFF (owner, 2026-08-10).
+
+    ⚠️ It used to stay open until FINAL, which is why the timing multiplier exists: a
+    pick made in Q3 was worth 40% of a pre-game one. Now that a reader can take a whole
+    day's slate in advance, picking a game already in progress is watching the result
+    arrive and calling it a prediction, so kickoff is the line.
+
+    Every new pick is therefore made pre-game and carries the full 1.0 timing
+    multiplier. The multiplier survives in stored picks and in history — picks made
+    under the old rule keep what they earned — but nothing new can be worth less than
+    full for being late.
+    """
+    return statusVal not in (2, 3)   # 2 = Active, 3 = Final
+
+
 def _buildPickemMatchup(liveGame, gameIndex: int) -> dict:
     """Build a single pick-em matchup dict (teams, pickability, multipliers)
     from a live/scheduled game object. Shared by the per-slot and whole-day
@@ -12333,17 +12349,10 @@ def _buildPickemMatchup(liveGame, gameIndex: int) -> dict:
     homeElo = getattr(liveGame.homeTeam, 'elo', 1500)
     awayElo = getattr(liveGame.awayTeam, 'elo', 1500)
 
-    if statusVal == 3:  # Final
-        pickable = False
-        currentMultiplier = 0.0
-    elif statusVal == 2:  # Active
-        pickable = True
-        quarter = getattr(liveGame, 'currentQuarter', 1)
-        homeWinProb = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
-        currentMultiplier = calculateCertaintyMultiplier(quarter, homeWinProb)
-    else:  # Scheduled / pre-game
-        pickable = True
-        currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+    pickable = _pickemPickable(statusVal)
+    # Every pickable game is pre-game now, so the timing multiplier is always full.
+    # A started game reports 0 so nothing downstream advertises points it cannot pay.
+    currentMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0) if pickable else 0.0
 
     if statusVal == 2:
         liveWp = (getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0) / 100.0
@@ -12668,37 +12677,28 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
         liveGame = activeGames[gameIndex] if activeGames and gameIndex < len(activeGames) else game
         totalGames = len(scheduleGames)
 
-    # Per-game lock: only Final games are unpickable
+    # Per-game lock: a pick closes at KICKOFF, not at the final whistle.
     rawStatus = getattr(liveGame, 'status', None)
     statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
-    if statusVal == 3:  # Final
-        raise HTTPException(409, "This game has ended — pick cannot be changed")
+    if not _pickemPickable(statusVal):
+        raise HTTPException(409, "This game has started — picks are closed")
 
     # Determine timing multiplier based on game quarter
     homeTeamId = liveGame.homeTeam.id
     awayTeamId = liveGame.awayTeam.id
     isPreGame = (statusVal != 2)
 
-    if statusVal == 2:  # Active
-        quarter = getattr(liveGame, 'currentQuarter', 1)
-        homeWinProb = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
-        pointsMultiplier = calculateCertaintyMultiplier(quarter, homeWinProb)
-    else:
-        # Scheduled (pre-game) — full multiplier
-        pointsMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+    # Pre-game by definition — the guard above rejects anything that has kicked off.
+    pointsMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
 
     # Win-prob multiplier: underdogs get bonus, favorites get penalty
     homeElo = getattr(liveGame.homeTeam, 'elo', 1500)
     awayElo = getattr(liveGame.awayTeam, 'elo', 1500)
     pickedIsHome = (pickedTeamId == homeTeamId)
 
-    if statusVal == 2:  # Active — use live win probability
-        homeWinProbLive = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
-        pickedWp = (homeWinProbLive / 100.0) if pickedIsHome else (1.0 - homeWinProbLive / 100.0)
-        underdogMultiplier = calculateWinProbMultiplier(pickedWp)
-    else:
-        # Pre-game — use ELO
-        underdogMultiplier = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
+    # Pre-game by definition, so the underdog multiplier comes from ELO rather than a
+    # live win probability. The live branch went with the kickoff lock.
+    underdogMultiplier = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
 
     if pickedTeamId not in (homeTeamId, awayTeamId):
         raise HTTPException(400, "pickedTeamId must be home or away team")
@@ -12935,8 +12935,8 @@ def submit_pickem_picks(body: dict, user: _User = Depends(_getCurrentUser)):
 
             rawStatus = getattr(liveGame, 'status', None)
             statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
-            if statusVal == 3:  # Final — locked
-                skipped.append({"week": w, "gameIndex": gameIndex, "reason": "final"})
+            if not _pickemPickable(statusVal):
+                skipped.append({"week": w, "gameIndex": gameIndex, "reason": "started"})
                 continue
 
             homeTeamId = liveGame.homeTeam.id
@@ -12946,17 +12946,11 @@ def submit_pickem_picks(body: dict, user: _User = Depends(_getCurrentUser)):
                 continue
 
             pickedIsHome = (pickedTeamId == homeTeamId)
-            if statusVal == 2:  # Active — live quarter + win prob
-                quarter = getattr(liveGame, 'currentQuarter', 1)
-                homeWinProb = getattr(liveGame, 'homeTeamWinProbability', 50.0) or 50.0
-                pointsMultiplier = calculateCertaintyMultiplier(quarter, homeWinProb)
-                pickedWp = (homeWinProb / 100.0) if pickedIsHome else (1.0 - homeWinProb / 100.0)
-                underdogMultiplier = calculateWinProbMultiplier(pickedWp)
-            else:  # Pre-game — full timing multiplier + ELO underdog
-                pointsMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
-                homeElo = getattr(liveGame.homeTeam, 'elo', 1500)
-                awayElo = getattr(liveGame.awayTeam, 'elo', 1500)
-                underdogMultiplier = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
+            # Pre-game by definition — anything started was skipped above.
+            pointsMultiplier = PICKEM_QUARTER_MULTIPLIERS.get(0, 1.0)
+            homeElo = getattr(liveGame.homeTeam, 'elo', 1500)
+            awayElo = getattr(liveGame.awayTeam, 'elo', 1500)
+            underdogMultiplier = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
 
             pickemRepo.submitPick(
                 user.id, seasonNum, w, gameIndex,
