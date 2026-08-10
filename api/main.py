@@ -2683,6 +2683,22 @@ async def get_game_by_id(game_id: int, response: Response):
                 if game:
                     break
         
+        # ⚠️ An in-memory game that is FINAL but never actually PLAYED here is a shell.
+        # `_loadScheduleFromDatabase` reconstructs a Game object for every week on a
+        # restart, including the ones already in the books, and those carry the score and
+        # nothing else — no quarter breakdown, no team totals, no player lines. Preferring
+        # them over the database meant that after any restart every past game rendered a
+        # box score of zeros, while the row in `games` held the real numbers all along.
+        #
+        # `totalPlays` is the tell: the engine increments it per play, so a game this
+        # process actually simulated has one and a rehydrated shell does not.
+        _st = getattr(game, 'status', None)
+        _isFinal = (getattr(_st, 'value', None) == 3
+                    or getattr(_st, 'name', None) == 'Final'
+                    or _st == 'Final')
+        if game is not None and _isFinal and not getattr(game, 'totalPlays', 0):
+            game = None
+
         # Not in memory. A finished game still has everything a reader wants sitting in
         # the database, so rebuild it from there rather than 404ing — that path is what
         # makes a game from earlier in the season reachable at all after a restart.
