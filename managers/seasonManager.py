@@ -3792,6 +3792,28 @@ class SeasonManager:
         if divisional is not None:
             return divisional
 
+        # ⚠️ SAY SO. The fallback is a double round-robin plus interleague, which for two
+        # 16-club leagues is a THIRTY-EIGHT week season — ten weeks past the 28 the
+        # calendar, the playoff weeks (29+) and every downstream week check assume. It
+        # used to happen in silence, so a league that was briefly mis-shaped (one club
+        # renamed in `teams` but not in `teamDistribution`, which is exactly what
+        # happened on 2026-08-09) generated a 38-week schedule, persisted it, and nobody
+        # noticed until week 31 arrived with a full 16-game slate and no playoffs.
+        #
+        # A club count that SHOULD be divisional is a misconfiguration, not a format
+        # choice, so it is logged at ERROR with the shape that caused it.
+        try:
+            sizes = [len(l.teamList) for l in self.leagueManager.leagues]
+        except Exception:
+            sizes = []
+        logger.error(
+            "SCHEDULE: the divisional format did NOT apply — falling back to the "
+            f"round-robin. League sizes {sizes} (need exactly two leagues of 16 that "
+            f"divide into {self.DIVISIONS_PER_LEAGUE} divisions). The fallback runs far "
+            "past 28 weeks, so playoffs will not start on time. Check config.json's "
+            "teamDistribution covers every club in `teams`."
+        )
+
         # Generate different types of games
         league1Games = self._generateIntraleagueGames(league1Teams)
         league2Games = self._generateIntraleagueGames(league2Teams)
