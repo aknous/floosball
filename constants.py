@@ -1461,8 +1461,20 @@ SENTIMENT_BOARD_SIZE = 10
 FEED_ENABLED = True
 
 # Rate limit: posts should feel cheap and loud, but bounded.
-FEED_MAX_POSTS_PER_WINDOW = 10
+#
+# ⚠️ Two limiters, and the COOLDOWN is the one that normally bites (owner, 2026-08-09).
+# A flat 10-an-hour cap was the wrong shape for a live game: a fan watching a whole
+# match is exactly the fan who wants to shout at it, and they ran out partway through
+# and then sat silent through the finish. What the cap was really protecting against is
+# a burst — twenty posts in ten seconds — which a few seconds between posts stops just
+# as well while leaving someone who reacts to every drive completely unblocked.
+#
+# The hourly cap stays as a runaway backstop, raised to a level a real fan will not
+# reach in one sitting. At a 10s cooldown the theoretical hour is 360 posts, so 90 is
+# still a genuine ceiling without being the thing anyone runs into.
+FEED_MAX_POSTS_PER_WINDOW = 90
 FEED_RATE_WINDOW_HOURS = 1
+FEED_POST_COOLDOWN_SECONDS = 10
 
 # How long a post stays in the feed / counts toward the pulse. Ephemeral by
 # design — the pulse is "how the fanbase feels RIGHT NOW", not a permanent record.

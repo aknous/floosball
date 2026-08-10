@@ -23,6 +23,7 @@ from database.models import TeamFeedPost
 from constants import (
     FEED_POST_CATALOG, GAME_FEED_CATALOG, FEED_POST_TTL_HOURS,
     FEED_MAX_POSTS_PER_WINDOW, FEED_RATE_WINDOW_HOURS,
+    FEED_POST_COOLDOWN_SECONDS,
 )
 
 
@@ -91,6 +92,12 @@ class FeedRepository:
         if targetPlayerId:
             raise FeedError("general posts do not take a target")
 
+        # ⚠️ Cooldown FIRST. It is the limiter a fan actually meets, so it should be
+        # the message they get; falling through to the hourly cap's wording would tell
+        # someone who posted two seconds ago that they are out of posts for the hour.
+        wait = self.cooldownRemaining(userId)
+        if wait > 0:
+            raise FeedError(f"take a breath — {wait}s")
         if self.remainingPosts(userId) <= 0:
             raise FeedError(
                 f"post limit reached ({FEED_MAX_POSTS_PER_WINDOW} per "
@@ -103,6 +110,25 @@ class FeedRepository:
             created_at=self.now())
         self.session.add(post)
         return post
+
+    def cooldownRemaining(self, userId: int) -> int:
+        """Whole seconds until this fan may post again, 0 if they may post now.
+
+        Rounded UP, so a client counting down from this never offers the button a
+        moment before the server will accept it. Auto posts are excluded for the same
+        reason they do not count against the hourly cap — rating your roster should
+        not lock you out of shouting at the game.
+        """
+        if FEED_POST_COOLDOWN_SECONDS <= 0:
+            return 0
+        last = (self.session.query(func.max(TeamFeedPost.created_at))
+                .filter(TeamFeedPost.user_id == userId,
+                        TeamFeedPost.is_auto == False)   # noqa: E712
+                .scalar())
+        if last is None:
+            return 0
+        elapsed = (self.now() - last).total_seconds()
+        return max(0, int(-(-(FEED_POST_COOLDOWN_SECONDS - elapsed) // 1)))
 
     def remainingPosts(self, userId: int) -> int:
         """Posts this fan has left in the current rate window."""

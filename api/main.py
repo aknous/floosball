@@ -12194,6 +12194,7 @@ def post_to_game_feed(gameId: int, req: _FeedPostRequest,
         return build_success_response({
             'gameId': gameId,
             'postsRemaining': repo.remainingPosts(user.id),
+            'cooldownSeconds': repo.cooldownRemaining(user.id),
         })
     finally:
         session.close()
@@ -12233,6 +12234,7 @@ def get_game_feed(gameId: int, limit: int = 50,
             'gameId': gameId,
             'posts': posts,
             'postsRemaining': repo.remainingPosts(user.id) if user else None,
+            'cooldownSeconds': repo.cooldownRemaining(user.id) if user else None,
         })
     finally:
         session.close()
@@ -12259,6 +12261,7 @@ def post_to_team_feed(teamId: int, req: _FeedPostRequest,
         return build_success_response({
             'teamId': teamId,
             'postsRemaining': repo.remainingPosts(user.id),
+            'cooldownSeconds': repo.cooldownRemaining(user.id),
         })
     finally:
         session.close()
@@ -12319,6 +12322,7 @@ def get_team_feed(teamId: int, limit: int = 50,
             'teamId': teamId,
             'posts': posts,
             'postsRemaining': repo.remainingPosts(user.id) if user else None,
+            'cooldownSeconds': repo.cooldownRemaining(user.id) if user else None,
         })
     finally:
         session.close()
