@@ -4153,7 +4153,7 @@ class SeasonManager:
 
     def _publishGameNewsInner(self, game, recordsBefore: Optional[Dict[str, Any]] = None) -> None:
         from league_news import publish, stat
-        from constants import UPSET_NEWS_ELO_GAP, BIG_GAME_NEWS_ENABLED
+        from constants import UPSET_NEWS_ELO_GAP, UPSET_MIN_WEEK, BIG_GAME_NEWS_ENABLED
 
         # `currentWeek` lives on the SEASON, not the manager. The manager grows a
         # `currentWeek` attribute lazily during the playoffs and has none at all during the
@@ -4220,6 +4220,12 @@ class SeasonManager:
         # ── An upset ─────────────────────────────────────────────────────────
         # Judged on PRE-GAME ELO, captured before the result moved it. Reading the live
         # elo here would compare the teams after the win had already been priced in.
+        #
+        # ⚠️ And not before `UPSET_MIN_WEEK`. ELO regresses halfway to 1500 at every
+        # season reset, so a 120-point gap in the opening weeks is mostly last season's
+        # residue rather than this season's form — the feed was calling results
+        # surprising off a number the league had not yet earned. Playoff weeks are 29+
+        # and clear the bar on their own.
         try:
             winner = getattr(game, 'winningTeam', None)
             loser = getattr(game, 'losingTeam', None)
@@ -4228,7 +4234,7 @@ class SeasonManager:
                 winnerElo = getattr(game, '_preGameHomeElo' if homeIsWinner else '_preGameAwayElo', 1500)
                 loserElo = getattr(game, '_preGameAwayElo' if homeIsWinner else '_preGameHomeElo', 1500)
                 gap = (loserElo or 1500) - (winnerElo or 1500)
-                if gap >= UPSET_NEWS_ELO_GAP:
+                if gap >= UPSET_NEWS_ELO_GAP and week >= UPSET_MIN_WEEK:
                     winnerScore = game.homeScore if homeIsWinner else game.awayScore
                     loserScore = game.awayScore if homeIsWinner else game.homeScore
                     emit(category='upset', eventType='upset',

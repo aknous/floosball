@@ -10199,8 +10199,24 @@ class Game:
                     return i < numPlayoffSpots
             return False
 
+        # ⚠️ And not before the ELO has settled. The pre-game win probability this reads
+        # is an ELO prior, and ELO regresses halfway to 1500 at every season reset, so
+        # in the opening weeks a "35% underdog" is mostly last season's residue. Without
+        # the gate the board opened every season labelling games upsets off a number that
+        # had not yet been earned. `self.week` is 0-indexed (the createSchedule
+        # convention), so it is converted here the same way the Criticality lookup is.
+        #
+        # ⚠️ A PLAYOFF game never sets `.week` at all — `seasonManager` stamps `gameType`
+        # and `playoffRound` on it and nothing else — so reading the week alone would
+        # score every postseason game as week 1 and suppress the badge in the four weeks
+        # it matters most. By then the ELO is as settled as it is ever going to be.
+        from constants import UPSET_MIN_WEEK
+        isPlayoff = (getattr(self, 'gameType', None) == 'playoff'
+                     or getattr(self, 'playoffRound', None))
+        eloHasSettled = bool(isPlayoff) or ((self.week or 0) + 1) >= UPSET_MIN_WEEK
+
         isUpsetAlert = False
-        if hasattr(self, 'preGameHomeWinProbability') and self.currentQuarter >= 2:
+        if eloHasSettled and hasattr(self, 'preGameHomeWinProbability') and self.currentQuarter >= 2:
             preGameHomeWp = self.preGameHomeWinProbability  # 0-1 decimal
             if preGameHomeWp < 0.35 and newHomeWp >= 65.0 and teamInPlayoffSpot(self.awayTeam):
                 isUpsetAlert = True

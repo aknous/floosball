@@ -3176,6 +3176,16 @@ GLITCH_SURGE_FLOOR_FP = 11.0
 # point where a neutral watcher would call the result surprising rather than close.
 UPSET_NEWS_ELO_GAP = 120
 
+# ⚠️ Nothing is called an upset until the ELO has settled (owner, 2026-08-09). Every
+# club's ELO REGRESSES HALFWAY TO 1500 at the season reset (`teamManager.updateEloRatings`),
+# so the opening weeks of EVERY season — not just the league's first — price the whole
+# league as roughly average, and a 120-point gap there is as likely to be last season's
+# residue as this season's form. A quarter of the way in is where the games played
+# outweigh the carried prior. 1-indexed, and the first week with a full quarter of
+# results behind it, so at 28 weeks that is week 8. Gates BOTH the live UPSET badge
+# (`floosball_game`) and the feed's upset story (`seasonManager._publishGameNewsInner`).
+UPSET_MIN_WEEK = 8
+
 # ── What the league news feed is FOR (owner, 2026-08-08) ────────────────────
 # The feed is Cores/meta-simulation centric, not a box score. An individual player's big
 # afternoon is not news here — it is on the Players page and the game board, and when it
