@@ -38220,3 +38220,31 @@ Shutting down API server...
 2026-08-10 00:27:38 - floosball.anomaly - INFO - Anomaly weekly tick complete — season 1, week 1
 2026-08-10 00:27:38 - floosball.timingManager - INFO - sequential mode: games start delay 30.0s
 2026-08-10 00:28:08 - floosball.rulevote - INFO - Rule vote RESOLVE (change): S1 day 0 winner=gf_frames_6 applied=True tiebroken=False tally={'gf_frames_6': 1}
+2026-08-10 00:29:15 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 3)
+2026-08-10 00:29:16 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 00:29:16 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 00:31:18 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 00:31:18 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 00:31:25 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 2)
+2026-08-10 00:31:25 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 00:31:25 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 00:31:35 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 2)
+2026-08-10 00:31:35 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 00:31:35 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 00:31:47 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 2)
+2026-08-10 00:32:06 - floosball.config - INFO - Cached configuration from config.json
+2026-08-10 00:32:08 - floosball.backup - INFO - DB backup written: data/backups/floosball_20260810_003208.db (2.2MB)
+2026-08-10 00:32:29 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 3)
+2026-08-10 00:32:30 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 00:32:30 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 00:36:03 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 00:36:03 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 00:36:10 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 2)
+2026-08-10 00:36:37 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 3)
+2026-08-10 00:36:38 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 00:36:38 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 00:37:08 - floosball.config - INFO - Cached configuration from config.json
+2026-08-10 00:38:42 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 00:38:42 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 00:38:43 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 2)
+2026-08-10 00:41:06 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
