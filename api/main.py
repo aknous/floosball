@@ -32,7 +32,8 @@ import floosball_game as FloosGame
 # Auth deps used by handlers defined early in the file (e.g. /api/players
 # with the 'followed' status filter). Later sections re-import these
 # closer to their use; that's fine — module-level imports are idempotent.
-from api.auth import getOptionalUser as _getOptionalUser, getCurrentUser as _getCurrentUser
+from api.auth import (getOptionalUser as _getOptionalUser, getCurrentUser as _getCurrentUser,
+                      isGeneratedUsername as _isGeneratedUsername)
 from database.models import User as _User
 
 logger = get_logger("floosball.api")
@@ -8036,6 +8037,13 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             # disable the control and say why, rather than letting the user type a name
             # and discover the limit from a 429.
             "canChangeUsername": _canChangeUsername(user),
+            # Auto-provisioning hands out a username at signup, so a first-run reader
+            # already HAS one before they are asked to choose. Onboarding says so, and
+            # it needs to know whether the name is one we assigned or one they picked
+            # (they may have chosen already and come back to a reloaded modal).
+            # `isGeneratedUsername` verifies against the generator's own vocabulary
+            # rather than guessing from the shape.
+            "usernameIsGenerated": bool(user.username) and _isGeneratedUsername(user.username),
             # Whether a club switch made right now lands immediately or is booked for
             # next season. Same reasoning as canChangeUsername: the UI should be able to
             # say which it will be BEFORE the click, not report it afterwards.
