@@ -3568,7 +3568,31 @@ class SeasonManager:
         if leagueTeamCount == 0:
             return
 
-        expectedWeeks = int(((leagueTeamCount - 1) * 2) + (leagueTeamCount / 2))
+        # ⚠️ The season's ACTUAL length, not a formula — and this is the bug that kept
+        # putting 38 weeks on a 28-week season.
+        #
+        # This was a second copy of the pre-divisional round-robin formula
+        # `((teamsPerLeague - 1) * 2) + teamsPerLeague / 2`, which is 38 for two leagues
+        # of 16. So the divisional generator would correctly build 28 weeks, and then on
+        # the NEXT restart this repair decided weeks 29-38 were missing and FABRICATED
+        # ten weeks of random pairings to fill them. Observed in the log as
+        # "Detected 10 missing week(s): [29 ... 38]" after a clean 28-week generation,
+        # every restart, on a fresh database.
+        #
+        # A repair tool that invents fixtures must take its idea of the season from the
+        # schedule that was actually built. The in-memory schedule is the authority; the
+        # highest week already persisted is the fallback for a load that happens before
+        # it is populated. Only when there is neither does it fall back to counting a
+        # round-robin, and even then it can only ever fill gaps BELOW what exists.
+        expectedWeeks = len(getattr(self.currentSeason, 'schedule', None) or [])
+        if not expectedWeeks:
+            try:
+                expectedWeeks = max((r.week for r in self.game_repo.get_by_season_ordered(seasonNumber)
+                                     if not getattr(r, 'is_playoff', False)), default=0)
+            except Exception:
+                expectedWeeks = 0
+        if not expectedWeeks:
+            expectedWeeks = int(((leagueTeamCount - 1) * 2) + (leagueTeamCount / 2))
         expectedGamesPerWeek = leagueTeamCount // 2
 
         import random
