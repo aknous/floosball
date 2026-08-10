@@ -13,6 +13,14 @@ import os
 logger = logging.getLogger(__name__)
 
 
+# Owner picks that override the sequential `(teamId - 1) % 32` assignment.
+#   9 Minnesota Pops -> 54 (three-point). The three roundels at 8 were meant to read as
+#   soda bubbles and did not.
+CLUB_PATTERN_OVERRIDES = {
+    9: 54,
+}
+
+
 class AvatarGenerator:
     """Generates and caches team avatars as SVG with disk persistence"""
     
@@ -194,7 +202,12 @@ class AvatarGenerator:
         # Choose pattern sequentially based on team ID, or fallback to hash.
         # 32 patterns for 32 clubs — one each, no repeats. At 24 the league outgrew the
         # set on expansion and team IDs 25-32 silently drew the same marks as 1-8.
-        if patternIndex is not None:
+        if patternIndex is None and teamId is not None and teamId in CLUB_PATTERN_OVERRIDES:
+            # An owner's pick. Club assignment is `(teamId - 1) % 32`, which cannot reach
+            # anything in the 32+ palette, and moving a pattern's body into a club's slot
+            # would renumber marks that other clubs already wear. This map is the seam.
+            patternType = CLUB_PATTERN_OVERRIDES[teamId]
+        elif patternIndex is not None:
             # Explicit override. Needed because club assignment is `(teamId - 1) % 32`,
             # which cannot reach the fountain variations at 32-35 — they exist as a palette
             # to pick from, and only render when one is moved into a club's own slot.
@@ -822,6 +835,34 @@ class AvatarGenerator:
                 wedges += (f'<polygon points="{half},{half} {p0[0]:.1f},{p0[1]:.1f} '
                            f'{p1[0]:.1f},{p1[1]:.1f}" fill="#{c2}"/>')
             content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>{wedges}'''
+
+        elif patternType == 54:
+            # Three-point - a pall inverted with its arms at a true 120 degrees, so it sits
+            # symmetric about the centre rather than reaching for the corners.
+            #
+            # A peace sign is FOUR arms from the centre (up, down, down-left, down-right);
+            # take the straight-down one out and this is what is left. It is also the
+            # arrangement on the Mercedes badge, the whole difference there being the ring
+            # drawn around it — deliberately omitted, since the ring is what makes it read
+            # as a car badge rather than as heraldry.
+            #
+            # ⚠️ NOT `per pall` (27 and 46, which the set already carries twice over). Those
+            # DIVIDE the field three ways along a Y; this lays a BAND over it, so the field
+            # reads around the charge. Different silhouette entirely.
+            #
+            # Drawn broad on purpose. At the narrow weight the ordinary is normally given,
+            # the arms close up to hairlines by the 20px the feed rows use.
+            import math as _math
+            _armW = size * 0.24
+            _R = half * 1.45          # past the box; the circular clip cuts each arm at the rim
+            _d = ' '.join(
+                f'M {half:.1f},{half:.1f} '
+                f'L {half + _R * _math.sin(_math.radians(a)):.1f},'
+                f'{half - _R * _math.cos(_math.radians(a)):.1f}'
+                for a in (0, 120, 240))
+            content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>
+                <path d="{_d}" stroke="#{c2}" stroke-width="{_armW:.2f}" fill="none"
+                      stroke-linecap="butt"/>'''
 
         else:
             # Unreachable at 32 clubs (patternType is always 0-31 and every value now has a
