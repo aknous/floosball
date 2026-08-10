@@ -1054,7 +1054,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "entourage": "+{perPlayerFP} FP for every roster player with {minStars}★+",
     "touchdown_pinata": "+{perTdFP} FP for every TD your roster scores",
     "scrappy": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. Trigger odds fill from this player's FP plus each {maxStars}★-or-lower roster player.",
-    "honor_roll": "+FPx once this player reaches {fpThreshold} FP, growing with every point past it — the full +{maxDelta} FPx at double that.",
+    "honor_roll": "+FPx once this player reaches {fpThreshold} FP, growing with every point past it. The full +{maxDelta} FPx lands at double that.",
     "three_pointer": "+{perFgFP} FP for every FG this player makes",
     "garbage_time": "+{perPlayerFP} FP for every roster player with 0 TDs",
     "loyalty_bonus": "+{perStreakFP} FP per win in your favorite team's win streak",
