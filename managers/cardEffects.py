@@ -864,7 +864,7 @@ EFFECT_TOOLTIPS = {
     "entourage": "Seeing stars. Bonus FP for each high-rated player on your roster.",
     "touchdown_pinata": "Every house call fills the piñata. Bonus FP per roster TD.",
     "scrappy": "Somebody has to believe in them. Guaranteed FP floor plus a chance at enhanced FP. The trigger bar fills from this player's own FP and from each low-rated player on your roster.",
-    "honor_roll": "Make the grade. FPx when this player clears the bar, growing the further past it they go.",
+    "honor_roll": "Make the grade. FPx that grows with every point past the bar, reaching full at double it. A bare pass is worth almost nothing.",
     "three_pointer": "Three points for them, bonus for you. FP for every kicker FG.",
     "garbage_time": "Hey, they showed up. Bonus FP for each roster player who doesn't score a TD.",
     "loyalty_bonus": "Bandwagoning encouraged. Bonus FP based on your favorite team's win streak.",
@@ -1054,7 +1054,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "entourage": "+{perPlayerFP} FP for every roster player with {minStars}★+",
     "touchdown_pinata": "+{perTdFP} FP for every TD your roster scores",
     "scrappy": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. Trigger odds fill from this player's FP plus each {maxStars}★-or-lower roster player.",
-    "honor_roll": "+FPx when this player clears {fpThreshold}+ FP this week, up to +{maxDelta} FPx on a big game.",
+    "honor_roll": "+FPx once this player reaches {fpThreshold} FP, growing with every point past it — the full +{maxDelta} FPx at double that.",
     "three_pointer": "+{perFgFP} FP for every FG this player makes",
     "garbage_time": "+{perPlayerFP} FP for every roster player with 0 TDs",
     "loyalty_bonus": "+{perStreakFP} FP per win in your favorite team's win streak",
@@ -2811,6 +2811,16 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     gate = buildGateSpec(effectName, position, classification, edition)
     if gate:
         config["gate"] = gate
+        # ⚠️ HONOR ROLL'S RAMP STARTS WHERE ITS BAR FILLS (owner, 2026-08-10). It used
+        # a hardcoded fpThreshold of 15 while the bar unlocked at the gate's own
+        # position- and edition-scaled figure — 9 FP for a metallic QB. So the card sat
+        # there full, green and reading as ACTIVE while paying +0.00 FPx across a
+        # six-point dead band, which is the same "it says it is on and it is not"
+        # contradiction the power bar exists to avoid. Syncing them also makes the
+        # threshold scale by position and rarity like every other bar, instead of
+        # asking a kicker and a quarterback for the same 15 FP.
+        if effectName == "honor_roll" and gate.get("threshold"):
+            config["primary"]["fpThreshold"] = gate["threshold"]
         # Surface the gate as its OWN field (frontend renders it on its own line, a
         # distinct requirement from the effect detail). Not appended to the detail
         # string. Fall back to it as the detail only if there's no effect detail.
@@ -3052,7 +3062,12 @@ def _computeScrappy(primary, ctx, cardPlayerId, eqId):
 
 def _computeHonorRoll(primary, ctx, cardPlayerId, eqId):
     """FPx bonus when THIS player clears the FP threshold (re-based off the roster).
-    The mult ramps with how far past the threshold they went, capped at maxMult."""
+
+    The mult RAMPS from zero at the threshold to maxMult at double it, so the payout
+    scales with how big the game was rather than switching on flat. `fpThreshold` is the
+    card's own power-bar threshold (synced in buildEffectConfig), so the ramp begins at
+    exactly the point the bar fills — a card that reads ACTIVE is always earning.
+    """
     threshold = primary.get("fpThreshold", 15)
     maxMult = primary.get("maxMult", 1.30)
     playerFP = (ctx.weekPlayerStats or {}).get(cardPlayerId, {}).get("fantasyPoints", 0) or 0
