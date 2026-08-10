@@ -993,6 +993,10 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
             session.query(Player).filter(Player.id.in_(playerIds)).all()
         }
         usedLines: set = set()
+        # ⚠️ At most ONE Cores conversation per tick, for the most significant crossing.
+        # The flavour line below already fires per player; a full exchange for each of
+        # them would bury a busy week's feed under the Cores talking to themselves.
+        coresSpokenFor: bool = False
         for playerId, targetState in ranked:
             playerName = playerNames.get(playerId)
             if not playerName:
@@ -1004,6 +1008,20 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
             line = template.format(player=playerName)
             _broadcastStateTransition(playerId, playerName, targetState, line, week,
                                        session=session, seasonNumber=seasonNumber)
+
+            # The Cores react BY NAME to the two rungs that actually mean something —
+            # a player awakening, or one being pulled back. `ranked` is ordered by
+            # significance, so the first one reached is the one worth the conversation.
+            if not coresSpokenFor and targetState in ('awakened', 'cleansed'):
+                try:
+                    from managers.coresManager import awakeningEntriesFor
+                    entries = awakeningEntriesFor(playerName, targetState)
+                    if entries:
+                        _broadcastCoreEntries(entries, session=session,
+                                              seasonNumber=seasonNumber, week=week)
+                        coresSpokenFor = True
+                except Exception as e:
+                    logger.debug(f"Cores awakening beat skipped: {e}")
 
 
 def _broadcastStateTransition(playerId: int, playerName: str, state: str,
@@ -1320,9 +1338,14 @@ def _publishCriticalityNews(session: Optional[Session], state: LeagueAnomalyStat
             season=state.season,
             week=int(week or 0),
             category='criticality',
+            # ⚠️ `leadWeight`, not `lead_weight`. `publish` takes camelCase kwargs, so
+            # the snake_case spelling raised TypeError on EVERY call — and the whole
+            # body is wrapped in `except Exception`, so it failed silently. Criticality
+            # and suppression have therefore never once reached the feed: 17 seasons of
+            # the production database hold zero rows in this category.
             # Above anything a game can produce (a clinch is 3.0). The instability
             # crossing a threshold is the headline of whatever moment it lands in.
-            lead_weight=12.0,
+            leadWeight=12.0,
             eventType=milestone,
             text=text,
             # The Cores entries broadcast alongside this already; a second push would
