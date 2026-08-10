@@ -150,46 +150,11 @@ class RatingCalculationCache:
 # Global cache instance
 rating_cache = RatingCalculationCache()
 
-class CachedRatingMixin:
-    """Mixin to add caching to rating calculations"""
-    
-    def get_cached_skill_rating(self) -> float:
-        """Get cached skill rating or calculate and cache if needed"""
-        cache_key = f"{self.__class__.__name__}_{id(self)}_skill"
-        
-        cached_rating = rating_cache.get_cached_rating(cache_key, self.attributes)
-        if cached_rating is not None:
-            return cached_rating
-        
-        # Calculate rating (this logic will vary by position)
-        rating = self._calculate_skill_rating()
-        rating_cache.cache_rating(cache_key, rating, self.attributes)
-        return rating
-    
-    def get_cached_overall_rating(self) -> float:
-        """Get cached overall rating or calculate and cache if needed"""
-        cache_key = f"{self.__class__.__name__}_{id(self)}_overall"
-        
-        cached_rating = rating_cache.get_cached_rating(cache_key, self.attributes)
-        if cached_rating is not None:
-            return cached_rating
-        
-        # Use cached skill rating for overall calculation
-        skill_rating = self.get_cached_skill_rating()
-        rating = round(((skill_rating*2) + (self.attributes.playMakingAbility*1.5) + (self.attributes.xFactor*1.5))/5)
-        rating_cache.cache_rating(cache_key, rating, self.attributes)
-        return rating
-    
-    def invalidate_rating_cache(self):
-        """Invalidate this object's cached ratings"""
-        skill_key = f"{self.__class__.__name__}_{id(self)}_skill"
-        overall_key = f"{self.__class__.__name__}_{id(self)}_overall"
-        rating_cache.invalidate_cache(skill_key)
-        rating_cache.invalidate_cache(overall_key)
-    
-    def _calculate_skill_rating(self) -> float:
-        """Override this in subclasses with position-specific logic"""
-        raise NotImplementedError("Subclasses must implement _calculate_skill_rating")
+# CachedRatingMixin lived here and was removed. PlayerQB was its only consumer, and its
+# overall-rating formula (skill*2 + playMaking*1.5 + xFactor*1.5) disagreed with the
+# skill*3 + playMaking + xFactor form every position — QB included — actually plays at,
+# so a QB's stored profile rating was not the rating the sim used. Positions now compute
+# their own ratings directly in floosball_player.py.
 
 def log_cache_stats():
     """Log current cache statistics"""

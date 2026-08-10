@@ -1,3 +1,8 @@
+# Env-override helper — several balance levers below can be A/B'd from the
+# environment without editing this file. Imported here so every such lever,
+# wherever it sits in the file, can read it.
+import os as _os
+
 # Game Constants
 GAME_MAX_PLAYS = 132
 PLAYS_TO_FOURTH_QUARTER = 100
@@ -249,6 +254,20 @@ DEF_BOX_WEIGHTS = {
 MOMENTUM_DECAY_RATE = 0.03              # Per-play decay toward neutral
 MOMENTUM_BLOWOUT_DECAY_RATE = 0.08     # Accelerated decay in blowouts (22+ diff)
 MOMENTUM_MIDGAP_DECAY_RATE = 0.05      # Moderate decay (15-21 diff)
+# Per-game decay pulling persistent confidence/determination back toward neutral.
+# The streak boost in Player.postgameChanges accumulates with nothing pulling it
+# back, so a club on a run reaches the +-5 ceiling in ~20 games and stays pinned,
+# while a bad start digs a hole the roster can't climb out of. Decay gives a streak
+# a real but FADING lift: steady state is roughly meanBoost / (1 - decay), so 0.90
+# settles a sustained run near +1.25 instead of pinning at +5. 1.0 disables.
+# Measured on fresh 32-club leagues, 24 seasons per arm, against a no-loop control:
+#   0.95 -> 23% of the available drop in win std dev (too weak to bother with)
+#   0.90 -> 86% of it, and 101% of the drop in 3+ season contender runs
+# 0.90 therefore captures nearly all the dispersion benefit while a streak still
+# means something. Title concentration only improves part-way at either value,
+# which points at roster quality rather than morale for the rest.
+CONFIDENCE_DECAY_PER_GAME = 0.90
+
 MOMENTUM_CASCADE_STEP = 0.15           # Multiplier increase per consecutive streak event
 MOMENTUM_MAX_CASCADE = 1.6             # Max cascade multiplier (streak of 5)
 MOMENTUM_MAX_STREAK = 5                # Max consecutive streak count
@@ -870,6 +889,360 @@ FORM_STATE_RATING_MULT = {
     'UNKNOWN':     1.00,
 }
 
+# ---- Team Form Oscillation ----
+# A continuous per-team form multiplier so clubs run hot and cold ACROSS a season
+# instead of playing at one fixed level all year. Before it existed, the sd of a
+# club's wins across the four game days was 1.06 against a coin-flip line of 1.32
+# — team form varied LESS than chance, and a season was legible from game one
+# (corr(day-1 wins, final wins) = +0.750).
+#
+# THE KEY MEASUREMENT (FLOOS_FORM_FORCE, 16,128 team-games): a ±10% roster-wide
+# rating multiplier is worth ±4.5 wins over a 28-game season — 1.619 win
+# probability per 1.0 of multiplier. The transfer is STEEP. Measure this before
+# tuning any rating-multiplier layer; it is easy to assume a lever is weak when
+# what is actually happening is that its value never sits near its clamp.
+#
+# WHY MOMENTUM AND NOT MEAN REVERSION. The layer was first built mean-reverting
+# (deviation from your own level pulls you back). It moved form variance 1.06 ->
+# 1.11 and no amount of amplitude helped, because the failure is structural: an
+# arc IS a sustained multi-week deviation, and negative feedback exists precisely
+# to cancel sustained deviation. Momentum — a run feeds itself, bounded by an
+# unconditional weekly FORM_DECAY rather than by a restoring force — is what
+# actually produces arcs, and the decay keeps it from running away (measured
+# win-sd is unchanged vs the reverting design).
+#
+# MEASURED (8 fresh 32-club leagues x 5 seasons per arm, ~1,275 team-seasons):
+#
+#   arm                        form var   flat (<1.0)   win spread   corr(day1,final)
+#   control (no form)             1.06       45%           22.3          +0.750
+#   mean-reverting (as specced)   1.11       39%           22.0          +0.752
+#   momentum                      1.36       25%           21.5          +0.593
+#   momentum + parity package     1.46       18%           19.4          +0.502
+#
+# Momentum clears the 1.32 coin-flip line, which was the plan's own bar for real
+# oscillation. The plan's 1.6-1.9 target is retired as unreachable: at 7 games a
+# block, binomial noise alone has sd 1.32 and dominates, so 1.75 would need a club
+# to genuinely become a different-quality team for seven straight weeks.
+#
+# It does NOT replace FORM_STATE_RATING_MULT above, which stays the discrete
+# badge/flavour layer with every positive state pinned at 1.00.
+#
+# Env switches for A/B sweeps (unset = shipped): FLOOS_FORM=off, FLOOS_FORM_FEEDBACK,
+# FLOOS_FORM_PULL / _REVERSION / _NOISE / _MAX / _DECAY, FLOOS_FORM_PLAYOFFS=off,
+# FLOOS_FORM_PLAYOFF_SCALE, and FLOOS_FORM_FORCE for the transfer calibration.
+FORM_OSCILLATION_ENABLED = _os.environ.get('FLOOS_FORM') != 'off'
+# Calibration only: pin even-id teams at +this and odd-id at -this all season, so
+# the win-rate gap between the halves measures the rating-multiplier -> win-
+# probability transfer directly. 0 = off (normal play). See Game._applyFormOffset.
+FORM_FORCE = float(_os.environ.get('FLOOS_FORM_FORCE', '0'))
+
+# Calibration only: multiply ONE roster slot's in-game attributes up on even-id
+# teams and down on odd-id teams, to measure that position's CAUSAL impact on
+# winning. Correlation between a position's rating and team wins cannot separate
+# "this position barely matters" from "this rating poorly summarises the position";
+# forcing the attributes directly can. 0 = off. See Game._applyPositionForce.
+POSITION_FORCE = float(_os.environ.get('FLOOS_POS_FORCE', '0'))
+POSITION_FORCE_SLOT = _os.environ.get('FLOOS_POS_SLOT', 'qb')
+
+# ---- Kicking: field goals ----
+# FG success used to key off the kicker's OVERALL rating, which is
+# (legStrength+accuracy)/2 * 3/5 + playMaking/5 + xFactor/5 -- so leg strength was
+# ~30% of success and playmaking/xFactor together were 40%, neither of which
+# should decide whether a kick goes through the uprights.
+#
+# The model now matches how kicking actually works: LEG STRENGTH sets RANGE (it
+# already drives maxFgDistance), ACCURACY decides whether it is on line, and the
+# existing pressure layer handles nerve. The margin term is the important part --
+# what matters is not raw leg but how much leg you have TO SPARE at this distance.
+# A kick at the edge of a kicker's range is a very different proposition from the
+# same distance for someone with 10 yards in hand, which is why most kickers can
+# hit 50-55 and only the elite-elite convert from 60+.
+FG_CURVE_CENTER = 58.0      # distance at which the raw curve sits at 50%
+FG_CURVE_SLOPE = 0.14       # how sharply make% falls with distance
+FG_SKILL_BASE = 0.90        # multiplier at a neutral (80 accuracy, comfortable range) kick
+FG_ACCURACY_WEIGHT = 0.30   # primary driver: (accuracy-80)/20 scaled by this
+FG_MARGIN_WEIGHT = 0.26     # how much spare leg matters
+FG_MARGIN_SCALE = 12.0      # yards of spare leg for a full +1 margin term
+FG_MARGIN_FLOOR = -1.4      # at/over the range limit, the penalty bottoms out here
+FG_MARGIN_CEILING = 0.35    # plenty of leg helps, but only so much -- accuracy still rules
+
+# ---- Kicking: punts ----
+# Punts were `randint(70*legStrength/100 - 20, 70*legStrength/100)` and nothing
+# else: no accuracy, no placement, no touchback risk, no reason to punt any
+# differently from your own 5 than from midfield. Leg strength is the RIGHT lever
+# for a punt (unlike a field goal) -- but distance alone is not the whole job.
+#
+# Four types, chosen by field position and situation:
+#   boomer  deep in your own end -- flip the field, low and long. Pure leg.
+#   standard
+#   pin     from around midfield -- shorter, higher, aim to down it inside the 20.
+#   coffin  the audacious one -- aim at the sideline inside the 10. Big reward,
+#           and a miss is a touchback that gives back ~20 yards of it.
+#
+# Ability is ACCURACY; willingness to try the coffin corner comes from _flair
+# (creativity + xFactor), the same three-part model the sim uses for runner moves
+# and diving catches.
+PUNT_TYPES_ENABLED = _os.environ.get('FLOOS_PUNT_TYPES') != 'off'
+# legStrength * this = a punter's ceiling. Raised from 0.70 when the shank and the
+# missed-pin outcomes landed: those are correct behaviour, but they cost ~2.5 yards
+# of league gross average, so the base kick has to absorb them.
+PUNT_MAX_YARDS_PER_LEG = 0.755
+PUNT_BOOMER_YTE = 65            # own end: at/beyond this yards-to-endzone, boom it
+PUNT_PIN_YTE = 58               # inside this, placement starts to matter
+PUNT_COFFIN_MAX_YTE = 52        # coffin corner only makes sense this close in
+PUNT_COFFIN_MIN_YTE = 38
+PUNT_COFFIN_ELECT_BASE = 0.10   # baseline willingness to try it...
+PUNT_COFFIN_ELECT_FLAIR = 0.45  # ...scaled by flair
+PUNT_ACCURACY_PIVOT = 80.0
+# Placement success: chance of downing it inside the 20 on a pin, or inside the 10
+# on a coffin corner. Accuracy-driven, and a coffin miss is a touchback.
+# The inside-20 rate is GEOMETRIC, not placement-driven: halving these barely moved
+# it (52% -> 53%), because a 46-yard punt from your own 35 lands inside the 20 no
+# matter how it was struck. What was actually missing was the RETURN -- see below.
+PUNT_PIN_BASE = 0.48
+PUNT_PIN_ACC_K = 0.32
+PUNT_COFFIN_BASE = 0.34
+PUNT_COFFIN_ACC_K = 0.40
+PUNT_COFFIN_TOUCHBACK = 0.30    # a missed coffin corner sails through
+# A missed PIN has degrees too -- it either sails too deep (touchback) or comes up
+# short and hands the opponent a returnable ball around their own 25-30. Before
+# this a failed pin silently landed at its distance draw, i.e. it was still a good
+# punt: only the coffin corner had any downside, which is backwards.
+PUNT_PIN_TOODEEP = 0.22         # share of missed pins that sail through
+PUNT_PIN_SHORT_MIN = 17         # a pin that comes up short lands out this far
+PUNT_PIN_SHORT_MAX = 25
+# THE SHANK. Nothing modelled a punt simply coming off the foot badly, on ANY punt
+# type -- so a routine punt could never cost you field position. Accuracy prevents
+# it; it cancels whatever placement was intended.
+PUNT_SHANK_BASE = 0.038         # ~4% of punts, in line with real sub-30-yard punts
+PUNT_SHANK_ACC_K = 0.050        # accuracy swing
+PUNT_SHANK_MIN = 14
+PUNT_SHANK_MAX = 30
+PUNT_TOUCHBACK_TO = 20          # touchback spots the ball here
+# Punt clock. A punt burned only 4-6s (snap to kick) -- but the ball hangs and the
+# return takes time, so the live-ball portion is far longer than that. The clock
+# still STOPS after a punt regardless of whether the returner was tackled in
+# bounds, because a punt is a change of possession.
+PUNT_HANG_SECONDS = (3, 5)      # snap-to-catch hang on top of the kick itself
+PUNT_RETURN_SECS_PER_YARD = 0.32
+# Punt returns. Without these, gross average IS net average and the ball is downed
+# inside the 20 on ~52% of punts against a real ~35%. Real football nets ~41 off a
+# ~46 gross, and that missing ~5 yards is most of the difference. The returner is
+# the receiving team's WR1 (the sim's WR->CB mapping makes them the coverage-unit
+# athlete); speed and agility drive it.
+PUNT_RETURN_ENABLED = _os.environ.get('FLOOS_PUNT_RETURNS') != 'off'
+PUNT_RETURN_BASE = 7.0          # mean return yards at a neutral (80/80) returner
+PUNT_RETURN_SPREAD = 4.5
+PUNT_RETURN_ATTR_K = 6.0        # speed/agility swing on the mean
+PUNT_RETURN_BREAK_CHANCE = 0.045    # a return that genuinely breaks open
+PUNT_RETURN_BREAK_MEAN = 22.0
+# The returner is whichever of WR1/WR2/RB is the most explosive (speed+agility) --
+# a real team puts its best athlete back there, not a fixed slot.
+# FAIR CATCH is a DECISION, not a distance rule: the returner weighs how deep he
+# is and how fast the coverage is on him, with instinct deciding how well he reads
+# it. A short, high (pin/coffin) punt hangs longer, so coverage arrives sooner.
+PUNT_FAIRCATCH_BASE = 0.20          # baseline waving it off on a returnable ball
+PUNT_FAIRCATCH_DEEP_INSIDE = 10     # this close to his own goal, almost always fair
+PUNT_FAIRCATCH_HANG_BONUS = 0.34    # pin/coffin punts hang -> far likelier fair catch
+PUNT_FAIRCATCH_INSTINCT_K = 0.22    # instinct shifts the read either way
+# A MUFF is the swing play punting has and the sim did not model at all. Hands and
+# focus prevent it; a hanging punt with coverage bearing down causes it.
+PUNT_MUFF_BASE = 0.018
+PUNT_MUFF_HANG_K = 0.020            # extra risk on a high, short punt
+PUNT_MUFF_ATTR_K = 0.022            # hands/focus swing
+PUNT_MUFF_RECOVER_KICKING = 0.50    # who comes up with a muffed ball
+
+# ---- Passing: pressure and depth ----
+# Sack rate was ~0.33 per team per game against a real-world ~2.4. Two
+# multiplicative suppressors: the base rate at an even matchup was half of
+# reality, and 45% of would-be sacks were dumped to the RB before a sack could
+# register. A pass rush that never gets home also inflates completion % and
+# attempts, so this distorts the whole passing picture, not just the sack column.
+# NOTE this is a CURVE parameter, not the realized rate. Protection systematically
+# outweighs the rush here (qbProtection = mobility + blocking*4), so the typical
+# rushDifferential is negative and the logistic lands well below this number. 14.0
+# yields ~6.0% of dropbacks, i.e. a real-world 2.48 sacks per team per game.
+SACK_BASE_RATE = float(_os.environ.get('FLOOS_SACK_BASE', '14.0'))  # curve param, not the rate
+SACK_PROB_CAP = float(_os.environ.get('FLOOS_SACK_CAP', '30'))      # ceiling on a normal dropback
+# Air-yard means per pass tier. The old bands were compressed -- "medium" at 6.5
+# air yards is really a short throw -- which held league aDOT at 6.29 against a
+# real-world ~7.8 and made every completion tiny.
+PASS_DEPTH_MEANS = {
+    'short': float(_os.environ.get('FLOOS_DEPTH_SHORT', '3.35')),
+    'medium': float(_os.environ.get('FLOOS_DEPTH_MEDIUM', '8.25')),
+    'long': float(_os.environ.get('FLOOS_DEPTH_LONG', '17.0')),
+    'deep': float(_os.environ.get('FLOOS_DEPTH_DEEP', '27.0')),
+}
+
+# YAC shape. The sim is dink-and-dunk: it throws MORE than real football and
+# completes MORE, but each completion is tiny (Y/C 8.3 vs ~11.2, YAC 33% vs ~50%).
+# Two suppressors -- a receiver slips the first tackler only ~25-35% of the time
+# (YAC_GATE_A_BASE / _CAP), and YAC_THROW_MULT then cuts everything again by 0.75
+# for an average 66.6 throw. Fixing this ALONE would overshoot yards and scoring,
+# so it is paired with fewer attempts (see FIRST_DOWN_RUN_WEIGHT) to keep total
+# yardage flat: the same yards from fewer, longer completions.
+# Per-tier YAC ceilings. These were nearly FLAT across tiers -- a short pass had
+# almost the same explosive ceiling as a deep one (housecall mean 12 vs 14) -- so
+# most big pass plays were short throws with a long run after, and a called "long"
+# play could travel 10 yards through the air and still be the shorter gain. Big
+# plays should come from genuine downfield throws. Tightening the short tiers and
+# lengthening the deep air bands REDISTRIBUTES yardage rather than adding it.
+YAC_TIER_CAPS = {
+    'short':  {'pass': int(_os.environ.get('FLOOS_YACC_S_P', '4')),
+               'bFail': int(_os.environ.get('FLOOS_YACC_S_B', '5')),
+               'house': int(_os.environ.get('FLOOS_YACC_S_H', '7'))},
+    'medium': {'pass': int(_os.environ.get('FLOOS_YACC_M_P', '6')),
+               'bFail': int(_os.environ.get('FLOOS_YACC_M_B', '8')),
+               'house': int(_os.environ.get('FLOOS_YACC_M_H', '10'))},
+    'long':   {'pass': 6, 'bFail': 12, 'house': 14},
+    'deep':   {'pass': 6, 'bFail': 15, 'house': 14},
+}
+YAC_GATE_A_BASE = float(_os.environ.get('FLOOS_YAC_BASE', '22'))
+YAC_GATE_A_CAP = float(_os.environ.get('FLOOS_YAC_CAP', '45'))
+YAC_GATE_A_FAIL_CAP = int(_os.environ.get('FLOOS_YAC_FAILCAP', '3'))
+# throwQuality -> YAC multiplier. Average league throw quality is ~66.6, so the
+# 60-79 band is the one that matters most for league-wide YAC.
+YAC_THROW_MULT = {
+    'elite': float(_os.environ.get('FLOOS_YACM_ELITE', '1.0')),   # >= 80
+    'good': float(_os.environ.get('FLOOS_YACM_GOOD', '0.75')),    # 60-79
+    'poor': float(_os.environ.get('FLOOS_YACM_POOR', '0.45')),    # 40-59
+    'bad': float(_os.environ.get('FLOOS_YACM_BAD', '0.20')),      # < 40
+}
+# 1st-down run weight -- the single biggest lever on the league pass/run split
+# (most plays happen on 1st down). 50 = the balanced base; raising it cuts pass
+# attempts, which is what makes room for longer completions without inflating
+# total yardage.
+FIRST_DOWN_RUN_WEIGHT = float(_os.environ.get('FLOOS_FD_RUN', '50'))
+
+# ---- Run Gate Model (three stages with carrier momentum) ----
+# A carry is three contests: the line, the second level, the open field. What
+# makes them mean something is that the runner's STATE carries between them --
+# how you cleared one gate sets your odds at the next.
+#   clean     : untouched, at full speed  -> edge to the runner
+#   contacted : broke a tackle, slowed    -> roughly even, slight edge defender
+#   fought    : forced through a plugged gap -> at a disadvantage
+# At each contact the runner either powers through or elects a move; flair
+# (creativity + xFactor) decides whether he tries something, the move's own
+# physical attribute decides whether it works. See Game._resolveRunGates.
+RUN_GATE_MODEL_V2 = _os.environ.get('FLOOS_RUN_GATES') != 'off'
+RUN_GAP_OPEN = 74          # gap quality at/above this: clean release, no tackle attempt
+RUN_GAP_PLUGGED = 38       # below this the gap is closed and the defender has the edge
+# Winning the contact AT THE LINE is common -- it is "did I get past the front",
+# not "did I break a tackle". Breaking one DOWNFIELD is genuinely rare, so it gets
+# its own much lower base; without that split every run promoted to the open field
+# and league ypc ran to 9.6.
+RUN_CONTACT_BASE = 46      # line, partially open gap: roughly even, slight runner edge
+RUN_CONTACT_PLUGGED = 16   # line, closed gap: only a genuinely elite back busts through
+RUN_BREAK_BASE = 18       # second level / open field: an actual broken tackle
+RUN_BLITZ_EDGE = 14        # blitzing LB is out of the run fit: easier clean second level
+RUN_CONTACT_SWING = 0.30   # rating points -> percentage points in a contact contest
+RUN_MOVE_ELECT_BASE = 0.18 # baseline chance of trying a move instead of lowering a shoulder
+RUN_MOVE_ELECT_FLAIR = 0.55  # ...scaled by flair, so flashy backs try things plodders don't
+RUN_MOVE_BONUS = 5         # a move that lands beats the tackler by this much
+# Entry-state modifier on the gate-2 / gate-3 roll. The negatives are deliberately
+# steep: breaking a tackle should keep a run ALIVE, not routinely convert it into a
+# housecall. Without that, every broken tackle cascaded to the open field.
+RUN_STATE_EDGE = {
+    'clean': 9,            # full speed, hard to square up
+    'contacted': -6,       # broke one but lost his legs
+    'fought': -10,         # squeezed through a pile, no momentum at all
+}
+RUN_MAX_BREAKS = 2         # tackles a carrier may break on one carry
+RUN_SECOND_BREAK_PENALTY = 18  # ...and the second is this much harder
+
+# ---- Advanced Metrics ----
+# Thresholds for the derived per-play metrics. These describe how a play is
+# CLASSIFIED for the box score; they do not feed resolution.
+BAD_THROW_THRESHOLD = 45        # throwQuality below this counts as a bad throw
+# throwQuality at or above this counts as a GOOD throw — a genuinely well-placed ball,
+# the stat the throw-quality card family keys off. The bad-throw bar cannot serve: only
+# 4.1% of throws fall under 45, so "not bad" is 96% of throws and triggers nothing.
+# Calibrated to land near a third of throws (~12-14 a game) so it has card-trigger volume
+# comparable to receptions. Measured over 1,502 QB games on a fresh sim: at 78 the rate was
+# 29.3% (11.1/game, slightly tight); at 76 it is 35.0% (13.4/game, p90 28, max 50), which
+# is the target band. Do not reuse BAD_THROW_THRESHOLD's mirror for this — only 3-4% of
+# throws fall below 45, so "not bad" is ~96% of throws and triggers nothing.
+GOOD_THROW_THRESHOLD = 76
+CONTESTED_OPENNESS_THRESHOLD = 40  # receiver openness below this counts as contested
+# A dropped pass is mostly on the receiver, but drop probability scales with how
+# poorly the ball was placed (dropProb derives from un-secured contact, which is
+# throw-driven), so the QB keeps a share of the negative swing.
+WPA_DROP_RECEIVER_SHARE = 0.7
+
+# ---- Leading-Team Ease-Off ----
+# The sim modelled the trailing team giving up (_isGarbageTime) but never the
+# LEADING team easing off, so a club building a blowout pressed at full intensity
+# for four quarters and the trailing side often finished with nothing. Real teams
+# rush three and keep everything in front once the result is settled — that soft
+# coverage is why a blowout still usually has the loser scoring at least once.
+# Applied to the leading team's effective run D, pass D and pass rush in the
+# second half when they are up more than two scores (Game.leadEaseOffFactor).
+# NOTE this is DEFENSE-only. The leading offense is affected separately, and only
+# through play-CALLING (the Q3 drain + Q4 lead-protection floor in
+# _applySituationalMods lean run and suppress deep/long) — its execution quality is
+# untouched, i.e. a leading team still runs the ball just as well, it runs it more.
+# WHO eases off is coach-scaled: 0.5*(1-aggressiveness) + 0.5*clockManagement maps
+# to a 0.4x (killer, keeps his foot down) .. 1.6x (professional, calls off the dogs)
+# multiplier on the ease-off, centred at 1.0 for a neutral coach so league-average
+# behaviour stays the measured one and the spread is character.
+LEAD_EASE_OFF_ENABLED = _os.environ.get('FLOOS_LEAD_EASE') != 'off'
+LEAD_EASE_OFF_MAX = float(_os.environ.get('FLOOS_LEAD_EASE_MAX', '0.15'))
+
+# ---- Defensive Modifiers ----
+# Whether the pre-game modifier chain reaches the DEFENSE. Team defense ratings
+# are derived from PROFILE attributes at roster setup and never recomputed, and
+# the per-defender lookups in runPlay/passPlay read `.attributes` as well — so
+# without this, league compression, fatigue, funding morale, team disposition and
+# form oscillation were all offense-only. A cold team still defended at full
+# strength, and a stacked roster's defensive edge was never compressed at all.
+# FLOOS_DEF_MODS=off reverts to the old offense-only behaviour.
+# MEASURED (8 leagues x 5 seasons/arm): switching this ON made parity WORSE, not
+# better. Win spread barely moved (22.3 -> 21.9) but the playoffs got far more
+# deterministic — champions with the league's best record went 28% -> 45%, and the
+# Cinderella rate (champion from outside the top 8 by record) collapsed 12% -> 5%.
+# Compression does shrink defensive talent gaps, but the same change also hands the
+# confidence / disposition / funding-morale boosts to defenders, and those all
+# correlate with already being good, which more than cancels it. So this ships OFF:
+# the offense-only behaviour is now a documented deliberate choice rather than an
+# accident. FLOOS_DEF_MODS=on to re-enable (and re-measure before trusting it).
+DEFENSE_MODIFIERS_ENABLED = _os.environ.get('FLOOS_DEF_MODS') != 'off'
+# 'momentum'  — a run feeds itself and a slump deepens, bounded by FORM_DECAY.
+#               The only shape measured to actually sustain a season arc.
+# 'reverting' — the originally specced negative feedback. Stable, and measured to
+#               CANCEL arcs: it exists to erase sustained deviation, which is
+#               exactly what an arc is. Kept for A/B, not recommended.
+FORM_FEEDBACK = _os.environ.get('FLOOS_FORM_FEEDBACK', 'momentum')
+# Unconditional weekly decay on the offset. This is what bounds momentum — a club
+# cannot stay lifted without continuing to over-perform, so positive feedback
+# cannot run away. Measured: win-sd is unchanged vs the reverting design.
+FORM_DECAY = float(_os.environ.get('FLOOS_FORM_DECAY', '0.80'))
+# Whether form carries into the playoffs. The offset stops UPDATING at the end of
+# the regular season either way, so ON means a club takes whatever arc it ended on
+# into the bracket — peaking at the right time is the canonical Cinderella story,
+# and the alternative is that a late surge evaporates exactly when it matters.
+FORM_PLAYOFFS_ENABLED = _os.environ.get('FLOOS_FORM_PLAYOFFS') != 'off'
+# How much of the offset carries into the bracket. Full weight measured out at 40%
+# of champions coming from outside the top 8 by record (and the best record winning
+# only 8% of the time), which reads as the regular season not mattering; zero
+# weight goes the other way at 8% / 35%. This scales between those two endpoints.
+FORM_PLAYOFF_SCALE = float(_os.environ.get('FLOOS_FORM_PLAYOFF_SCALE', '0.5'))
+# Asymmetry on the DOWN side only. Measured: the form layer causes essentially the
+# whole shutout increase (7.0% -> 10.2% of team-games) while leaving mean scoring
+# untouched (30.4 -> 30.2) — it is pure tail-widening, and the bottom tail is a
+# slumping club getting blanked. Damping the negative half keeps the arcs (which
+# are driven by the swing, not by the depth of the trough) while pulling the bad
+# tail back in. 1.0 = symmetric.
+FORM_DOWNSIDE_SCALE = float(_os.environ.get('FLOOS_FORM_DOWNSIDE', '0.6'))
+FORM_WINDOW = 4        # games in the "recent form" window
+FORM_PULL = float(_os.environ.get('FLOOS_FORM_PULL', '0.50'))   # how hard a deviation from your own baseline pulls back
+# How fast formOffset chases its target each week (0-1). Doubles as the layer's
+# MEMORY: a high value makes the offset flicker week to week and average out
+# inside a game day, contributing nothing at the block scale form is measured on.
+# Keep it slow enough that a hot spell lasts a few weeks.
+FORM_REVERSION = float(_os.environ.get('FLOOS_FORM_REVERSION', '0.45'))
+FORM_NOISE = float(_os.environ.get('FLOOS_FORM_NOISE', '0.050'))  # weekly gaussian wobble — the un-earned part of a slump
+FORM_MAX = float(_os.environ.get('FLOOS_FORM_MAX', '0.14'))     # clamp on the multiplier; ±10% ≈ ±7-8 rating points
+
 # ---- Prospect Pipeline ----
 # Prospects are drafted rookies stashed on the team's pipeline (not roster-eligible).
 # They develop each offseason via offseasonTraining(), same as active players, and
@@ -1007,7 +1380,7 @@ ATTITUDE_DRIFT_MAGNITUDE = 1.5    # win/loss drift multiplier on |winPct-0.5| (d
 
 # ---- Roster Supply Floor ----
 # After retirements are known, guarantee the league has enough living players at
-# EACH position to fill every roster slot (24 teams × {QB1,RB1,WR2,TE1,K1}),
+# EACH position to fill every roster slot (numTeams × {QB1,RB1,WR2,TE1,K1}; 32 clubs today),
 # else a position run (many retirements at one spot + a thin rookie class) could
 # leave slots permanently empty. The supply check (playerManager.ensurePositionSupply)
 # tops up only the per-position deficit into the FA pool — a no-op in the normal
@@ -1036,11 +1409,14 @@ LEAGUE_REALIGN_WINDOW_SEASONS = 2
 #  - Re-sign count limit: a team may re-sign at most RESIGN_LIMIT_PER_OFFSEASON
 #    players in a single offseason; the rest of its expiring players walk. Forces
 #    an annual "who do we protect?" decision.
-RESIGN_ONCE_ENABLED = True
+# Env overrides so the retention levers can be A/B'd without editing this file.
+# FLOOS_RETENTION=off disables both. Default (unset) = the shipped behaviour.
+_RETENTION_OFF = _os.environ.get('FLOOS_RETENTION') == 'off'
+RESIGN_ONCE_ENABLED = not _RETENTION_OFF
 RESIGN_ONCE_LIMIT = 1             # re-signs allowed with the SAME team before a forced walk
                                   # (1 = a player stays ~2 contracts / 4-5 yrs, then walks —
                                   # this is the real dynasty-breaker; 2 let a 6-peat re-emerge)
-RESIGN_LIMIT_ENABLED = True
+RESIGN_LIMIT_ENABLED = not _RETENTION_OFF
 RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
 
 # ---- Fan sentiment (AFO plan Part D) ----
@@ -1085,8 +1461,20 @@ SENTIMENT_BOARD_SIZE = 10
 FEED_ENABLED = True
 
 # Rate limit: posts should feel cheap and loud, but bounded.
-FEED_MAX_POSTS_PER_WINDOW = 10
+#
+# ⚠️ Two limiters, and the COOLDOWN is the one that normally bites (owner, 2026-08-09).
+# A flat 10-an-hour cap was the wrong shape for a live game: a fan watching a whole
+# match is exactly the fan who wants to shout at it, and they ran out partway through
+# and then sat silent through the finish. What the cap was really protecting against is
+# a burst — twenty posts in ten seconds — which a few seconds between posts stops just
+# as well while leaving someone who reacts to every drive completely unblocked.
+#
+# The hourly cap stays as a runaway backstop, raised to a level a real fan will not
+# reach in one sitting. At a 10s cooldown the theoretical hour is 360 posts, so 90 is
+# still a genuine ceiling without being the thing anyone runs into.
+FEED_MAX_POSTS_PER_WINDOW = 90
 FEED_RATE_WINDOW_HOURS = 1
+FEED_POST_COOLDOWN_SECONDS = 10
 
 # How long a post stays in the feed / counts toward the pulse. Ephemeral by
 # design — the pulse is "how the fanbase feels RIGHT NOW", not a permanent record.
@@ -1148,6 +1536,44 @@ FEED_POST_CATALOG = {
     'fire_the_gm':   ('Fire the GM',                  'gm',     -1),
     'lost_the_room': ('{name} has lost the room',     'gm',     -1),
     'enough':        ('Enough excuses',               'gm',     -1),
+}
+
+# ---- The Bleachers: what a fan can shout AT A GAME ----
+#
+# Separate from FEED_POST_CATALOG on purpose. Those lines are about a CLUB over a
+# season ("This is our season", "Same story every season") and read as nonsense
+# shouted at a single snap. These are about a night: the run of play, the call
+# that just happened, the scoreboard.
+#
+# Same contract as the club catalog — key -> (text, group, valence) — so text is
+# never user-supplied and there is no moderation surface. Group is the heading
+# the composer files it under.
+#
+# Naming follows the house rule: durable idiom, nothing that will read as dated.
+# No slang, no chants that belong to a real club.
+GAME_FEED_CATALOG = {
+    # -- willing them on
+    'lets_go':        ("Let's go!",                    'Get up',      1),
+    'right_here':     ('Right here, right now',        'Get up',      1),
+    'take_it':        ('Take this one',                'Get up',      1),
+    'all_night':      ('We do this all night',         'Get up',      1),
+    # -- the defence
+    'get_a_stop':     ('Get a stop',                   'Defense',     1),
+    'hold_them':      ('Hold them here',               'Defense',     1),
+    'wall_up':        ('Wall up',                      'Defense',     1),
+    # -- approval of what just happened
+    'thats_the_play': ("That's the play",              'Yes',         1),
+    'about_time':     ('About time',                   'Yes',         0),
+    'keep_it_going':  ('Keep it going',                'Yes',         1),
+    # -- displeasure
+    'wake_up':        ('Wake up',                      'Not good',   -1),
+    'this_hurts':     ('This one hurts',               'Not good',   -1),
+    'not_like_this':  ('Not like this',                'Not good',   -1),
+    'we_had_that':    ('We had that',                  'Not good',   -1),
+    # -- the state of the game
+    'still_in_it':    ("We're still in it",            'The score',   1),
+    'long_way':       ('Long way to go',               'The score',   0),
+    'nervous':        ('This is unbearable',           'The score',   0),
 }
 
 # Which star ratings generate a post, and of which flavour. A 3 says nothing —
@@ -1314,7 +1740,7 @@ FO_SCOUT_FACILITY_ENABLED = True
 # by treasury. Keyed on service time instead, a 95-rated second-year player will
 # sign anywhere, and what a rich club buys is veterans, not talent.
 #
-# Measured against the live league (24 teams): Appeal min 4, p25 4, median 11,
+# Measured against the live league when it held 24 teams: Appeal min 4, p25 4, median 11,
 # p75 17, max 20. The curve is set against those numbers, not a 0-25 ideal.
 #
 #   rookie      demand 0            -> signs anywhere
@@ -1379,7 +1805,7 @@ FO_CUT_MAX_PER_TEAM = 2
 
 # How deep into the FA pool a team should look when judging its own incumbent.
 # Benchmarking every team against the single league-best free agent is wrong:
-# all 24 teams would conclude their starter is replaceable, yet only one can
+# every club would conclude their starter is replaceable, yet only one can
 # actually sign that player, so the whole league sheds its incumbents. Instead
 # each team looks at the free agent it can expect to still be there at ITS slot
 # in the worst-first FA order. Not every team ahead takes the same position, so
@@ -1894,7 +2320,7 @@ MENTAL_FLOOR_RATIO = 0.85           # 15% max aggregate reduction from baseline
 # auto-win gap without erasing skill order. Profile ratings stay
 # untouched; only `gameAttributes` is compressed. Set factor=1.0 to
 # disable.
-LEAGUE_COMPRESSION_FACTOR = 0.7     # 1.0 = no compression, 0.5 = aggressive
+LEAGUE_COMPRESSION_FACTOR = float(_os.environ.get('FLOOS_COMPRESSION', '0.45'))  # 1.0 = none, 0.5 = aggressive
 # Center of the compression curve — this is the effective baseline every player
 # plays at, so it also sets the league's overall scoring level (higher = more
 # offense). Raised 80 -> 84 to recover the scoring the attribute remap cost:
@@ -2032,7 +2458,7 @@ PUNT_BLOCK_CHANCE = 0.1    # % of punts blocked (punts are far more frequent tha
 # so pass-catching backs get realistic receiving production. Keep volume modest (a
 # few catches a game). Flip RB_CHECKDOWN_ENABLED to disable.
 RB_CHECKDOWN_ENABLED = True
-RB_CHECKDOWN_PRESSURE_CHANCE = 45   # % of would-be sacks dumped to the RB instead
+RB_CHECKDOWN_PRESSURE_CHANCE = float(_os.environ.get('FLOOS_CHECKDOWN', '12'))   # % of would-be sacks dumped to the RB instead
 RB_CHECKDOWN_OPEN_CHANCE = 55       # % of "no one open" dropbacks checked down to the RB
 RB_CHECKDOWN_BASE_YAC = 3.5         # mean YAC on a dump-off at RB speed pivot 78
 RB_CHECKDOWN_YAC_PER_SPEED = 0.12   # mean YAC added per RB speed point above 78
@@ -2640,3 +3066,151 @@ OFFSEASON_SNAPSHOT_EXCLUDE_TABLES = {
     'pick_em_picks',        # weekly pick-em selections
     'games',                # game records
 }
+
+# ─── Glitch Cards (docs/GLITCH_CARDS.md) ─────────────────────────────────────
+# A card marked during a Criticality. Each week it rolls ONCE for an extra payout on
+# top of whatever it already does. It never degrades the printed effect and is never
+# taken away — the locked no-wipe constraint names collections as never at risk.
+# ─── Holding a go-ahead touchdown (Game._isTdDrainMode) ─────────────────────
+# Scoring is not the goal late in a one-score game; scoring LAST is. An offense at the
+# goal line, down 4-8 with under a minute, used to hurry — measured at 1st-and-goal from
+# the 3 down 5 with 0:55, it took a 12-second huddle and handed the opponent ~45 seconds
+# plus timeouts for a winning kick. `_isFgDrainMode` had covered the same idea for a
+# deficit of 0-3 all along; this is the touchdown band it never reached.
+#
+# Both numbers are safety rails, not flavour: draining when you might NOT score is how a
+# won game gets lost.
+TD_DRAIN_MIN_SECONDS = 25   # below this there is no room to drain AND still snap the ball
+TD_DRAIN_MAX_YARDS = 5      # close enough that the score is near-certain, not hoped for
+
+# How close the offense must be before the DEFENSE treats a touchdown as the expected end
+# of the drive and starts stopping the clock (Game._leadIsAboutToEvaporate). Wider than
+# TD_DRAIN_MAX_YARDS on purpose: the offense only drains once a score is near-certain, but
+# a defense that waits for that same certainty has already lost the clock it was trying to
+# save. This is a threat, not a bet.
+LEAD_THREAT_TD_YARDS = 10
+
+GLITCH_CARDS_ENABLED = True
+
+# Trigger base, by the on-card player's position on the attention ladder. Chosen over an
+# event-led design (much lower bases, events doing the work) because 89% of player-weeks
+# contain NO anomaly event at all — a low base would leave a glitched card dormant most
+# weeks at current volumes, and the event rate for a larger user base is unknowable from
+# the one league that exists. This degrades gracefully if events stay rare.
+# 'awakened' keeps a real base deliberately: awakened players fire a power on only 37% of
+# their weeks, LESS often than glitching, so keying the card solely to power use would
+# make awakening quieten the card rather than upgrade it.
+# ⚠️ RAISED after live testing showed the bonus almost never paying. Two things compound
+# that the original numbers ignored:
+#   1. 85% of players have NO anomaly row at all and default to 'stable', so most glitched
+#      cards sat on the FLOOR rather than spread across the ladder;
+#   2. a trigger only pays if the card itself produced something that week (the surge
+#      scales the card's own output), and the FP power bar gates ~30% of weeks — so the
+#      effective rate was base x 0.70.
+# At the old 5% floor that was 3.5%, a median wait of TWENTY WEEKS to see one payout. The
+# ladder still orders the odds; the floor is simply no longer a punishment.
+# ⚠️ RAISED AGAIN (owner, 2026-08-07: "needs to trigger more"). Measured before: a blended
+# 20.8% a week, i.e. a glitched card sat dormant for nearly FIVE weeks at a time. The lift
+# has to come from the BOTTOM of the ladder, not the top: 85% of players are 'stable', so
+# that one number sets the realized rate almost by itself, while the top is boxed in by the
+# cap (rampant already reaches 0.83 of a 0.90 cap during a live Criticality — see
+# GLITCH_DIAL_SHARE). Raising the floor to 0.28 takes the blended rate to ~31%, about once
+# every three weeks.
+# The cost is honest: the ladder's spread compresses from 0.16-0.46 to 0.28-0.46, so WHERE a
+# player sits matters less than it did. That is the trade for the common case not being
+# dormant, and it is the ceiling — not the design — that forces it.
+GLITCH_TRIGGER_BASE = {
+    'stable':   0.28,
+    'stirring': 0.35,
+    'erratic':  0.41,
+    'rampant':  0.46,
+    'awakened': 0.43,
+    'cleansed': 0.28,
+}
+
+# Each anomaly event the player fired THIS WEEK raises the chance, escalating with the
+# level of the anomaly. Stacks per event. A week where something actually happened roughly
+# doubles the chance (rampant 35% -> 69%).
+GLITCH_EVENT_BOOST = {
+    'micro':       0.15,   # cosmetic flicker, generic
+    'personality': 0.25,   # glitch keyed to who they are
+    'signature':   0.40,   # an actual L4 power, real mechanical effect
+}
+GLITCH_TRIGGER_CAP = 0.90
+
+# The instability dial (anomalyManager.getCriticalityMultiplier) already lifts a glitched
+# card INDIRECTLY — a hot league fires more events. But only from ~37% to ~45%, so the
+# event people spent a season building toward barely shows. Applying the dial to the base
+# at FULL strength overcorrects the other way: both terms rise together, pinning a rampant
+# card at the cap through a whole Criticality. This fraction splits the difference —
+# a live Criticality moves a rampant card 35% -> ~59% instead of 90%.
+# Lowered 0.30 -> 0.20 when the bases were raised. The two multiply: at a 0.46 rampant
+# base a 0.30 share reached 1.01 during a live Criticality and clamped to the 0.90 cap,
+# which is the exact pinning this fraction exists to prevent — a card that is reliably on
+# is not wild magic. At 0.20 a Criticality takes rampant to 0.83, still a visible lift.
+GLITCH_DIAL_SHARE = 0.20
+
+# Magnitude, rolled on a trigger. Multiplies the CARD'S OWN output, so a surge scales with
+# whatever it is attached to rather than being a flat FP number that trivialises metallic
+# and vanishes on diamond. (weight, multiplier)
+# Rebalanced upward with the trigger rate (owner, 2026-08-07: rewards "slightly better").
+# EV moves 1.367x -> 1.603x of the card's own output. Weight shifts from the flicker tier
+# into cascade/runaway as well as the multipliers rising, so the improvement lands on the
+# MEMORABLE outcomes rather than making the small one less small — a glitch should be worth
+# noticing when it hits, which is what a rare, cultivated card is for.
+GLITCH_SURGE_TABLE = [
+    ('flicker', 34, 0.40),
+    ('surge',   34, 1.10),
+    ('cascade', 23, 2.60),
+    ('runaway',  9, 5.50),
+]
+
+# An FP surge is a FIXED amount; an FPx surge multiplies the whole lineup, so it grows with
+# the rest of the hand. At the ~250 lineup the ladder is anchored to an undamped FPx surge
+# is actually slightly WEAKER (0.88x) — the imbalance only appears in rich hands, reaching
+# 1.59x at 450. 0.80 holds parity through a typical hand and clips only the top end.
+# A deeper cut (0.55) was tried and halves FPx everywhere, fixing a problem that does not
+# exist at normal lineup sizes.
+GLITCH_FPX_DAMP = 0.80
+
+# What a surge pays per 1.0 of multiplier when the card itself produced NOTHING that week.
+# Without this a trigger on a gated-out card pays zero, which is indistinguishable from no
+# trigger at all — the reported symptom was "I see the glitch line but never a score". A
+# glitch is supposed to be something happening TO the card, so it should not be silently
+# cancelled by the card having a quiet week. Deliberately modest: the surge still scales
+# the card's own output when there IS output, and this is only the fallback.
+GLITCH_SURGE_FLOOR_FP = 11.0
+
+
+# ── League news feed ─────────────────────────────────────────────────────────
+# ELO gap at which beating a club becomes an upset worth publishing. Set from the
+# rating-to-win-probability curve: 120 points is roughly a 33% underdog, which is the
+# point where a neutral watcher would call the result surprising rather than close.
+UPSET_NEWS_ELO_GAP = 120
+
+# ⚠️ Nothing is called an upset until the ELO has settled (owner, 2026-08-09). Every
+# club's ELO REGRESSES HALFWAY TO 1500 at the season reset (`teamManager.updateEloRatings`),
+# so the opening weeks of EVERY season — not just the league's first — price the whole
+# league as roughly average, and a 120-point gap there is as likely to be last season's
+# residue as this season's form. A quarter of the way in is where the games played
+# outweigh the carried prior. 1-indexed, and the first week with a full quarter of
+# results behind it, so at 28 weeks that is week 8. Gates BOTH the live UPSET badge
+# (`floosball_game`) and the feed's upset story (`seasonManager._publishGameNewsInner`).
+UPSET_MIN_WEEK = 8
+
+# ── What the league news feed is FOR (owner, 2026-08-08) ────────────────────
+# The feed is Cores/meta-simulation centric, not a box score. An individual player's big
+# afternoon is not news here — it is on the Players page and the game board, and when it
+# was in the feed it WAS the feed (measured: 48% of all rows, and with the per-category
+# display cap that meant every visible row was box score).
+#
+# The machinery stays behind this flag rather than being deleted: `BIG_GAME_TESTS` records
+# the measured p99 of this sim's player-game distribution, which is expensive to rederive
+# and is the reference for any future "notable performance" surface.
+BIG_GAME_NEWS_ENABLED = False
+
+# How often the Cores speak into the feed, in week slots (a slot is one slate of games).
+# Reactions are tied to results, so they land every slate; ambient banter has no
+# triggering event and lands rarely enough to stay a pleasure rather than noise.
+CORES_GAME_NEWS_EVERY_WEEKS = 1
+CORES_AMBIENT_NEWS_EVERY_WEEKS = 3

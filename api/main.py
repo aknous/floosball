@@ -130,6 +130,29 @@ def _framesFromFormatState(formatStateJson):
     return None
 
 
+def _teamStatsFromRow(raw):
+    """Parse a persisted games.team_stats blob into the `{home, away}` shape the client
+    already understands (the same one the live broadcast sends).
+
+    ⚠️ Returns None for anything finished before the column existed. NULL there means
+    "never recorded", NOT "all zeros" — those totals only ever lived on the live game
+    object. Callers must OMIT the key rather than emit an empty block, or a card will
+    report that a game had no first downs when in truth nobody wrote them down.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    home, away = parsed.get('home'), parsed.get('away')
+    if not isinstance(home, dict) or not isinstance(away, dict):
+        return None
+    return {'home': {'team': home}, 'away': {'team': away}}
+
+
 def _framesWinnerSide(frames, homePoints, awayPoints):
     """Who won a frames match: 'home' | 'away' | 'tie'. Most frames won; a frames tie
     falls to the total-points tiebreak (mirrors FramesFormat.winnerSide)."""
@@ -580,6 +603,8 @@ async def get_team(team_id: int, response: Response):
         team_dict = TeamResponseBuilder.buildTeamWithRatings(team)
         team_dict['abbr'] = getattr(team, 'abbr', team.name[:3].upper())
         team_dict['league'] = team.league
+        team_dict['division'] = getattr(team, 'division', None)
+        team_dict['divisionTitles'] = getattr(team, 'divisionTitles', []) or []
         team_dict['leagueChampionships'] = team.leagueChampionships
         team_dict['regularSeasonChampions'] = getattr(team, 'regularSeasonChampions', [])
         team_dict['floosbowlChampionships'] = team.floosbowlChampionships
@@ -891,6 +916,34 @@ async def avatar_options(team_id: int):
     )
 
 
+@app.get("/api/teams/{team_id}/playoff-history", response_model=Dict[str, Any])
+def get_team_playoff_history(team_id: int):
+    """Every postseason run this club has had, newest first.
+
+    Derived from `games` rather than stored, so it answers for seasons that predate this
+    endpoint — which is the whole point. A club that made the playoffs four times in
+    seventeen seasons could previously only see the one it won, because the League
+    Champions badge was the only durable record of a run.
+    """
+    from database.connection import get_session
+    from playoff_history import buildPlayoffHistory, summarize
+    session = get_session()
+    history = buildPlayoffHistory(session, team_id)
+    seasonsPlayed = None
+    try:
+        from database.models import Game
+        seasonsPlayed = session.query(Game.season).filter(
+            (Game.home_team_id == team_id) | (Game.away_team_id == team_id),
+            Game.status == 'final').distinct().count()
+    except Exception:
+        pass
+    return build_success_response({
+        'teamId': team_id,
+        'summary': summarize(history, seasonsPlayed),
+        'seasons': history,
+    })
+
+
 @app.get("/api/teams/{team_id}/avatar")
 async def get_team_avatar(team_id: int, size: int = Query(default=32, ge=16, le=1024), format: str = Query(default="svg", regex="^(svg|png)$")):
     """
@@ -914,6 +967,7 @@ async def get_team_avatar(team_id: int, size: int = Query(default=32, ge=16, le=
         primaryColor = team.color
         secondaryColor = getattr(team, 'secondaryColor', team.color)
         tertiaryColor = getattr(team, 'tertiaryColor', team.color)
+        logoInvert = bool(getattr(team, 'logoInvert', False))
 
         cacheHeaders = {
             "Cache-Control": "public, max-age=86400, immutable",
@@ -924,13 +978,13 @@ async def get_team_avatar(team_id: int, size: int = Query(default=32, ge=16, le=
 
         if format == "png":
             pngBytes = avatarGen.getPng(
-                team.name, primaryColor, secondaryColor, tertiaryColor, size, team.id
+                team.name, primaryColor, secondaryColor, tertiaryColor, size, team.id, logoInvert
             )
             return Response(content=pngBytes, media_type="image/png", headers=cacheHeaders)
 
         # Default: SVG
         svg = avatarGen.generateTeamAvatar(
-            team.name, primaryColor, secondaryColor, tertiaryColor, size, team.id
+            team.name, primaryColor, secondaryColor, tertiaryColor, size, team.id, logoInvert
         )
         return Response(content=svg, media_type="image/svg+xml", headers=cacheHeaders)
     
@@ -1218,15 +1272,21 @@ async def get_player(player_id: int, response: Response):
                 # Look up team name/color
                 rowTeamName = 'FA'
                 rowTeamColor = '#94a3b8'
+                rowTeamAbbr = None
                 if row.team_id:
                     dbTeam = dbSession.get(DBTeam, row.team_id)
                     if dbTeam:
                         rowTeamName = dbTeam.name
                         rowTeamColor = dbTeam.color or '#94a3b8'
+                        rowTeamAbbr = dbTeam.abbr
                 pastEntry = {
                     'season': row.season,
                     'team': rowTeamName,
                     'color': rowTeamColor,
+                    # The career table shows a crest and an abbreviation per row,
+                    # so the club a season was played for reads at a glance.
+                    'teamId': row.team_id,
+                    'teamAbbr': rowTeamAbbr,
                     'gp': row.games_played or 0,
                     'fantasyPoints': row.fantasy_points or 0,
                     'passing': row.passing_stats or {},
@@ -1234,6 +1294,11 @@ async def get_player(player_id: int, response: Response):
                     'receiving': row.receiving_stats or {},
                     'kicking': row.kicking_stats or {},
                     'defense': row.defense_stats or {},
+                    # How the season went. Null for seasons that ended before
+                    # the column existed — the profile shows a dash there
+                    # rather than inventing a number.
+                    'performanceRating': row.performance_rating,
+                    'defensivePerformanceRating': row.defensive_performance_rating,
                 }
                 allSeasons.append(pastEntry)
             dbSession.close()
@@ -1251,11 +1316,36 @@ async def get_player(player_id: int, response: Response):
             currentSeasonEntry['season'] = currentSeasonNum
             currentSeasonEntry['team'] = teamName
             currentSeasonEntry['color'] = teamColor
+            currentSeasonEntry['teamId'] = team.id if hasTeamObj else None
+            currentSeasonEntry['teamAbbr'] = getattr(team, 'abbr', None) if hasTeamObj else None
             currentSeasonEntry['gp'] = player.gamesPlayed
+            # The live season's ratings come off the player object — they are
+            # recomputed weekly and only reach the DB on the next save.
+            for key, attr in (('performanceRating', 'seasonPerformanceRating'),
+                              ('defensivePerformanceRating', 'seasonDefensivePerformanceRating')):
+                live = getattr(player, attr, 0) or 0
+                currentSeasonEntry[key] = int(live) if live > 0 else None
             player_dict['stats'] = [currentSeasonEntry] + allSeasons
         else:
             player_dict['stats'] = allSeasons
         player_dict['allTimeStats'] = player.careerStatsDict
+
+        # Has this player ever awakened? The profile shows a badge and nothing else — no
+        # power name, no charge state — so a boolean is the whole contract. Read across
+        # ALL seasons rather than the current one: awakening is part of who a player has
+        # been, and a profile is a career page.
+        try:
+            from database.connection import get_session as _gs
+            from database.models import AnomalyState as _AS
+            _s = _gs()
+            try:
+                player_dict.setdefault('attributes', {})['isAwakened'] = bool(
+                    _s.query(_AS.player_id).filter_by(player_id=player.id, state='awakened').first())
+            finally:
+                _s.close()
+        except Exception:
+            # A missing table or a fresh DB must not cost the page its stats.
+            player_dict.setdefault('attributes', {})['isAwakened'] = False
 
         # Personality quotes — latest one for the hover tooltip,
         # full list shown on the player profile page via /quotes endpoint.
@@ -2314,42 +2404,12 @@ async def get_current_games(response: Response):
         if not displayGames:
             return []
         
-        # Compute isFeatured for each game: elite matchup (both ELO >= 1570)
-        # OR playoff bubble battle (both teams near the 6-spot cutline, late season only)
-        PLAYOFF_SPOTS = 6
-        ELITE_ELO = 1570
-        BUBBLE_WEEK_MIN = 18  # bubble battle only meaningful in the final stretch
-        currentWeek = getattr(current_season, 'currentWeek', 0)
-        isRegularSeason = isinstance(currentWeek, int) and 1 <= currentWeek <= 28
-        lateRegularSeason = isRegularSeason and currentWeek >= BUBBLE_WEEK_MIN
-
-        teamLeaguePos = {}   # {team_id: 1-indexed position in their league}
-        teamLeagueName = {}  # {team_id: league name} for same-league check
-        for league in floosball_app.leagueManager.leagues:
-            sortedTeams = sorted(league.teamList,
-                                 key=lambda t: (-t.seasonTeamStats['wins'], t.seasonTeamStats['losses']))
-            for pos, team in enumerate(sortedTeams, 1):
-                teamLeaguePos[team.id] = pos
-                teamLeagueName[team.id] = league.name
-
-        for game in displayGames:
-            # All playoff games are inherently featured — skip the designation
-            if getattr(game, 'gameType', '') == 'playoff':
-                game.isFeatured = False
-                continue
-            homeElo = getattr(game, 'homeTeamElo', getattr(game.homeTeam, 'elo', 1500))
-            awayElo = getattr(game, 'awayTeamElo', getattr(game.awayTeam, 'elo', 1500))
-            homePos = teamLeaguePos.get(game.homeTeam.id, 99)
-            awayPos = teamLeaguePos.get(game.awayTeam.id, 99)
-            eliteMatchup = isRegularSeason and homeElo >= ELITE_ELO and awayElo >= ELITE_ELO
-            sameLeague = (teamLeagueName.get(game.homeTeam.id) is not None
-                          and teamLeagueName.get(game.homeTeam.id) == teamLeagueName.get(game.awayTeam.id))
-            bothInHunt = (not getattr(game.homeTeam, 'eliminated', False)
-                          and not getattr(game.awayTeam, 'eliminated', False))
-            bubbleBattle = (lateRegularSeason and sameLeague and bothInHunt
-                            and (PLAYOFF_SPOTS - 2) <= homePos <= (PLAYOFF_SPOTS + 3)
-                            and (PLAYOFF_SPOTS - 2) <= awayPos <= (PLAYOFF_SPOTS + 3))
-            game.isFeatured = eliteMatchup or bubbleBattle
+        # Which games are featured (elite matchup / late-season bubble battle). The rule
+        # lives in featured_games so the board's chip and anything else that asks cannot
+        # drift — and so the cutline follows league size instead of a hardcoded 6.
+        from featured_games import markFeatured
+        markFeatured(floosball_app, displayGames,
+                     currentWeek=getattr(current_season, 'currentWeek', 0))
 
         game_list = []
         for game in displayGames:
@@ -2509,6 +2569,10 @@ async def get_week_games(week: int, response: Response):
             homeTeam = _teamObj(g.home_team_id)
             awayTeam = _teamObj(g.away_team_id)
             winner = homeTeam['name'] if homeWon else (awayTeam['name'] if awayWon else None)
+            # The persisted box score, when there is one. Games that finished before the
+            # column existed simply have no `gameStats` key — see _teamStatsFromRow: the
+            # card must be able to tell "not recorded" from "nothing happened".
+            teamStats = _teamStatsFromRow(getattr(g, 'team_stats', None))
             entry = {
                 'id': str(g.id),
                 'seasonNumber': g.season,
@@ -2536,6 +2600,10 @@ async def get_week_games(week: int, response: Response):
                 'isUpsetAlert': False,
                 'isFeatured': False,
             }
+            # Omitted, not emptied, when the game predates the column — a card that
+            # cannot tell those apart will print "0 first downs" about a real game.
+            if teamStats:
+                entry['gameStats'] = teamStats
             # Frames block (frames won, tiebreak, per-frame line) so the card shows the
             # match result, not the point total. GameCard keys off frames.active.
             if frames:
@@ -2615,11 +2683,73 @@ async def get_game_by_id(game_id: int, response: Response):
                 if game:
                     break
         
+        # ⚠️ An in-memory game that is FINAL but never actually PLAYED here is a shell.
+        # `_loadScheduleFromDatabase` reconstructs a Game object for every week on a
+        # restart, including the ones already in the books, and those carry the score and
+        # nothing else — no quarter breakdown, no team totals, no player lines. Preferring
+        # them over the database meant that after any restart every past game rendered a
+        # box score of zeros, while the row in `games` held the real numbers all along.
+        #
+        # `totalPlays` is the tell: the engine increments it per play, so a game this
+        # process actually simulated has one and a rehydrated shell does not.
+        _st = getattr(game, 'status', None)
+        _isFinal = (getattr(_st, 'value', None) == 3
+                    or getattr(_st, 'name', None) == 'Final'
+                    or _st == 'Final')
+        if game is not None and _isFinal and not getattr(game, 'totalPlays', 0):
+            game = None
+
+        # Not in memory. A finished game still has everything a reader wants sitting in
+        # the database, so rebuild it from there rather than 404ing — that path is what
+        # makes a game from earlier in the season reachable at all after a restart.
         if game is None:
-            raise HTTPException(status_code=404, detail=f"Game {game_id} not found")
-        
+            from database.connection import get_session as _gs
+            from game_box_score import buildFinishedGame, buildBoxScore
+            _s = _gs()
+            archived = buildFinishedGame(_s, game_id)
+            if archived is None:
+                raise HTTPException(status_code=404, detail=f"Game {game_id} not found")
+            archived['boxScore'] = buildBoxScore(_s, game_id)
+            # Team totals. buildBoxScore rebuilds the PLAYER lines from game_player_stats,
+            # but first downs and third/fourth-down conversions are team events with no
+            # player row to sum, so they come from the persisted blob or not at all.
+            try:
+                from database.models import Game as _DBGameTS
+                _tsRow = _s.query(_DBGameTS.team_stats).filter(_DBGameTS.id == game_id).first()
+                _ts = _teamStatsFromRow(_tsRow[0] if _tsRow else None)
+                if _ts:
+                    archived['gameStats'] = _ts
+            except Exception:
+                pass
+            return archived
+
         game_dict = GameResponseBuilder.buildGameWithProbabilities(game)
         
+        # ⚠️ The per-player line rides the `game_state` WebSocket on the live in-memory
+        # roster objects, so a game that has left the stream had no source for it at all —
+        # the rows were in `game_player_stats` the whole time, just never read. This is
+        # what lets a fan look at what happened in a game from earlier in the season.
+        try:
+            from database.connection import get_session as _gs
+            from game_box_score import buildBoxScore
+            game_dict['boxScore'] = buildBoxScore(_gs(), game_id)
+        except Exception:
+            game_dict['boxScore'] = None
+
+        # Team totals: the live object first (it is current), the persisted blob when the
+        # game has been memory-cleaned but its row is still in the schedule.
+        if not (game_dict.get('gameStats') or {}).get('home'):
+            try:
+                from database.connection import get_session as _gsTS
+                from database.models import Game as _DBGameTS
+                _tsRow = _gsTS().query(_DBGameTS.team_stats).filter(
+                    _DBGameTS.id == game_id).first()
+                _ts = _teamStatsFromRow(_tsRow[0] if _tsRow else None)
+                if _ts:
+                    game_dict['gameStats'] = _ts
+            except Exception:
+                pass
+
         # Add current game state fields
         game_dict['startTime'] = game.startTime.replace(tzinfo=timezone.utc).timestamp()
         game_dict['status'] = game.status.name
@@ -3155,6 +3285,29 @@ async def get_league_news_recent(
         raise HTTPException(status_code=500, detail="Failed to fetch league news")
 
 
+@app.get("/api/front-page/news")
+async def get_front_page_news(response: Response, limit: int = Query(default=8, ge=1, le=20)):
+    """League news for the front page: one lead item plus the rows behind it.
+
+    Generated from stored fields rather than read from a log — see `front_page.py` for
+    why. Every headline is a single templated clause and the lead's supporting content is
+    four numbers, never prose.
+    """
+    response.headers["Cache-Control"] = "public, max-age=20"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from front_page import buildLeagueNews
+    session = get_session()
+    try:
+        return build_success_response(buildLeagueNews(floosball_app, session, limit))
+    except Exception as e:
+        logger.exception(f"Failed to build front-page news: {e}")
+        raise HTTPException(status_code=500, detail="Failed to build front-page news")
+    finally:
+        session.close()
+
+
 @app.get("/api/highlights", response_model=List[Dict[str, Any]])
 async def get_highlights(response: Response, limit: int = Query(default=20, ge=1, le=100)):
     """
@@ -3357,23 +3510,37 @@ async def get_standings(response: Response):
     try:
         standings_list = []
 
-        # Head-to-head game results for the tiebreaker, built once.
+        # Head-to-head results (for the tiebreaker) and the form/movement rebuild both
+        # read the same games table, so they share one session.
         from seeding import buildH2HGames
+        from standings_view import buildFormAndMovement
         from database.connection import get_session
         sm = floosball_app.seasonManager
         season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        leagues = floosball_app.leagueManager.leagues
+        teamsByLeague = {league.name: league.teamList for league in leagues}
         _session = get_session()
         try:
             h2h = buildH2HGames(_session, season)
+            form = buildFormAndMovement(_session, season, teamsByLeague)
         finally:
             _session.close()
 
-        for league in floosball_app.leagueManager.leagues:
-            league_dict = {
+        for league in leagues:
+            # Divisions come back in the owner's config order, not whatever order the
+            # record sort happened to leave the teams in — the board renders four fixed
+            # blocks per league and they should not reshuffle as results land.
+            try:
+                divisionOrder = sm._divisionNames(league.name) if sm else None
+            except Exception:
+                divisionOrder = None
+            built = LeagueResponseBuilder.buildStandingsResponse(
+                league.teamList, h2h, form, divisionOrder)
+            standings_list.append({
                 'name': league.name,
-                'standings': LeagueResponseBuilder.buildStandingsResponse(league.teamList, h2h)['standings']
-            }
-            standings_list.append(league_dict)
+                'divisions': built['divisions'],
+                'standings': built['standings'],
+            })
 
         return standings_list
     
@@ -4168,7 +4335,8 @@ async def get_reigning_champion(response: Response):
 # ============================================================================
 
 _VALID_STAT_CATEGORIES = {
-    'fantasy_points', 'passing_yards', 'passing_tds', 'rushing_yards', 'rushing_tds',
+    'fantasy_points', 'passing_yards', 'passing_tds', 'completions',
+    'rushing_yards', 'rushing_tds',
     'receiving_yards', 'receiving_tds', 'receptions', 'fg_made', 'fg_pct',
     'performance_rating',
     'def_sacks', 'def_ints', 'def_tackles', 'def_tfl', 'def_forced_fumbles', 'def_pass_breakups',
@@ -4347,6 +4515,7 @@ async def get_stat_leaders(
                 return sd.get('fantasyPoints', 0) + player.gameStatsDict.get('fantasyPoints', 0)
             if cat == 'passing_yards':    return sd.get('passing', {}).get('yards', 0)
             if cat == 'passing_tds':      return sd.get('passing', {}).get('tds', 0)
+            if cat == 'completions':      return sd.get('passing', {}).get('comp', 0)
             if cat == 'rushing_yards':    return sd.get('rushing', {}).get('yards', 0)
             if cat == 'rushing_tds':      return sd.get('rushing', {}).get('tds', 0)
             if cat == 'receiving_yards':  return sd.get('receiving', {}).get('yards', 0)
@@ -4435,6 +4604,431 @@ async def get_stat_leaders(
 
     except Exception as e:
         logger.error(f"Error getting stat leaders: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# REST API - THE STATS PAGE
+# ============================================================================
+#
+# Two endpoints behind one page. They exist because the old players list could
+# only ever answer "the current season, offense only": it read live memory, so
+# there was nowhere to ask about season 3, nowhere to ask about a career, and
+# no defensive line at all even though the sim has recorded one all along.
+#
+# ⚠️ Two sources, on purpose. The CURRENT season is read from memory, because
+# that is the only place a game in progress exists. Past seasons and careers
+# are read from `player_season_stats`. Reading the DB for the live season would
+# show a table that lags the scoreboard by however long it has been since the
+# last save.
+
+# Offensive slot -> the defensive slot that player also fills.
+_DEF_SLOT_FOR = {'QB': 'S', 'RB': 'LB', 'WR': 'CB', 'TE': 'DE'}
+_DEFENSIVE_POSITIONS = {'S', 'LB', 'CB', 'DE'}
+_PLAYER_STATUSES = ('active', 'fa', 'prospects', 'retired', 'followed')
+
+# The blobs a stat row is assembled from, and their empty shape.
+_STAT_GROUPS = ('passing', 'rushing', 'receiving', 'kicking', 'defense', 'returning')
+
+
+def _sumStatBlobs(blobs: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Add season blobs together into one career blob.
+
+    Counting stats sum. Rates cannot — a career completion percentage is not the
+    mean of each season's, it is the career completions over the career attempts
+    — so every rate is recomputed at the end from its own components, and
+    `longest` takes a max rather than a total.
+    """
+    out = {group: {} for group in _STAT_GROUPS}
+    maxKeys = {'longest', 'puntLongest'}
+    rateKeys = {'compPerc', 'ypc', 'rcvPerc', 'ypr', 'fgPerc', 'xpPerc',
+                'fg20to40perc', 'fg40to50perc', 'fgOver50perc', 'fgUnder20perc'}
+    for blob in blobs:
+        for group in _STAT_GROUPS:
+            source = blob.get(group) or {}
+            target = out[group]
+            for key, value in source.items():
+                if key in rateKeys or not isinstance(value, (int, float)):
+                    continue
+                if key in maxKeys:
+                    target[key] = max(target.get(key, 0), value)
+                else:
+                    target[key] = target.get(key, 0) + value
+
+    def rate(numerator, denominator, scale=100.0, digits=1):
+        return round(numerator / denominator * scale, digits) if denominator else 0.0
+
+    p, r, rcv, k = out['passing'], out['rushing'], out['receiving'], out['kicking']
+    p['compPerc'] = rate(p.get('comp', 0), p.get('att', 0))
+    p['ypc'] = rate(p.get('yards', 0), p.get('att', 0), scale=1.0)
+    r['ypc'] = rate(r.get('yards', 0), r.get('carries', 0), scale=1.0)
+    rcv['rcvPerc'] = rate(rcv.get('receptions', 0), rcv.get('targets', 0))
+    rcv['ypr'] = rate(rcv.get('yards', 0), rcv.get('receptions', 0), scale=1.0)
+    k['fgPerc'] = rate(k.get('fgs', 0), k.get('fgAtt', 0))
+    k['xpPerc'] = rate(k.get('xps', 0), k.get('xpAtt', 0))
+    return out
+
+
+def _perGame(blobs: Dict[str, Dict[str, Any]], games: int) -> Dict[str, Dict[str, Any]]:
+    """Divide counting stats by games played, leaving rates and bests alone."""
+    if games <= 0:
+        return blobs
+    keep = {'compPerc', 'ypc', 'rcvPerc', 'ypr', 'fgPerc', 'xpPerc', 'longest', 'puntLongest',
+            'fg20to40perc', 'fg40to50perc', 'fgOver50perc', 'fgUnder20perc'}
+    return {
+        group: {
+            key: (value if key in keep else round(value / games, 1))
+            for key, value in stats.items()
+        }
+        for group, stats in blobs.items()
+    }
+
+
+def _statsPlayerRow(player, blobs, games, fantasyPoints, wpa, perf, defPerf,
+                    teamId, teamAbbr, teamColor, status, seasons=None) -> Dict[str, Any]:
+    """One row of the stats table, whatever season or scope produced it."""
+    from api_response_builders import PlayerResponseBuilder
+    position = player.position.name if hasattr(player.position, 'name') else str(player.position)
+    rating = getattr(player, 'playerRating', 0) or 0
+    return {
+        'id': player.id,
+        'name': player.name,
+        'position': position,
+        'defensivePosition': _DEF_SLOT_FOR.get(position),
+        'teamId': teamId,
+        'teamAbbr': teamAbbr,
+        'teamColor': teamColor,
+        'status': status,
+        'playerRating': rating,
+        'ratingStars': PlayerResponseBuilder.calculateStarRating(rating),
+        'gamesPlayed': games,
+        'seasonsPlayed': seasons,
+        'fantasyPoints': round(fantasyPoints or 0, 1),
+        'passing': blobs.get('passing') or {},
+        'rushing': blobs.get('rushing') or {},
+        'receiving': blobs.get('receiving') or {},
+        'kicking': blobs.get('kicking') or {},
+        'defense': blobs.get('defense') or {},
+        'returning': blobs.get('returning') or {},
+        'impact': {
+            # None rather than 0 wherever a reading was never taken — the table
+            # prints a dash for None and a dash is honest. A 0 in a dense table
+            # reads as "measured, and bad".
+            'performanceRating': perf,
+            'defensiveRating': defPerf,
+            'wpa': round(wpa, 2) if wpa is not None else None,
+        },
+    }
+
+
+def _playerStatus(player, playerManager) -> str:
+    if getattr(player, 'is_prospect', False):
+        return 'prospect'
+    from floosball_player import PlayerServiceTime as _PST
+    if getattr(player, 'serviceTime', None) == _PST.Retired:
+        return 'retired'
+    team = getattr(player, 'team', None)
+    return 'active' if (team is not None and not isinstance(team, str)) else 'fa'
+
+
+@app.get("/api/stats/players", response_model=Dict[str, Any])
+async def get_stats_players(
+    response: Response,
+    season: str = Query(default="current"),
+    per: str = Query(default="total"),
+    position: str = Query(default="ALL"),
+    status: str = Query(default="active"),
+    search: str = Query(default=""),
+    user: Optional[_User] = Depends(_getOptionalUser),
+):
+    """Every player's line for one season, or for a whole career.
+
+    Sorting and paging are deliberately left to the client: the whole league is
+    a few hundred rows, the page sorts on columns it already holds, and paging
+    server-side would mean re-sorting there on every header click.
+    """
+    response.headers["Cache-Control"] = "no-store" if status == 'followed' else "public, max-age=60"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    positionFilter = (position or 'ALL').upper()
+    if positionFilter not in _VALID_POSITIONS and positionFilter not in _DEFENSIVE_POSITIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown position {position}")
+    if status not in _PLAYER_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Unknown status {status}")
+    if status == 'followed' and user is None:
+        raise HTTPException(status_code=401, detail="Sign in to view followed players")
+
+    pm = floosball_app.playerManager
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+
+    scopeIsCareer = (season or '').lower() == 'career'
+    seasonNumber = currentSeason
+    if not scopeIsCareer and season not in ('current', '', None):
+        try:
+            seasonNumber = int(season)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Unknown season {season}")
+
+    try:
+        followedIds = set()
+        if status == 'followed':
+            from database.models import FollowedPlayer
+            from database.connection import get_session as _gs
+            _s = _gs()
+            try:
+                followedIds = {r[0] for r in _s.query(FollowedPlayer.player_id).filter_by(user_id=user.id).all()}
+            finally:
+                _s.close()
+
+        # Every player the page could show, across pools, deduped.
+        pools = list(pm.activePlayers) + list(pm.freeAgents) + list(pm.retiredPlayers)
+        byId = {}
+        for p in pools:
+            byId.setdefault(p.id, p)
+
+        def matchesPosition(player) -> bool:
+            if positionFilter == 'ALL':
+                return True
+            slot = player.position.name if hasattr(player.position, 'name') else str(player.position)
+            if positionFilter in _DEFENSIVE_POSITIONS:
+                return _DEF_SLOT_FOR.get(slot) == positionFilter
+            return slot == positionFilter
+
+        needle = (search or '').strip().lower()
+        candidates = [p for p in byId.values() if matchesPosition(p)
+                      and (not needle or needle in (p.name or '').lower())]
+
+        # Facet counts answer "how many of THESE would each status show", so they
+        # are computed after the position and search filters and before status.
+        facets = {key: 0 for key in _PLAYER_STATUSES}
+        for p in candidates:
+            facets[{'prospect': 'prospects', 'retired': 'retired',
+                    'active': 'active', 'fa': 'fa'}[_playerStatus(p, pm)]] += 1
+            if p.id in followedIds:
+                facets['followed'] += 1
+
+        if status == 'followed':
+            selected = [p for p in candidates if p.id in followedIds]
+        else:
+            wanted = {'active': 'active', 'fa': 'fa', 'prospects': 'prospect', 'retired': 'retired'}[status]
+            selected = [p for p in candidates if _playerStatus(p, pm) == wanted]
+
+        rows = []
+        liveSeason = (not scopeIsCareer and seasonNumber == currentSeason)
+
+        if liveSeason:
+            # From memory: the only place a game in progress exists.
+            for p in selected:
+                team = getattr(p, 'team', None)
+                hasTeam = team is not None and not isinstance(team, str)
+                sd = p.seasonStatsDict or {}
+                gd = p.gameStatsDict or {}
+                blobs = {g: dict(sd.get(g) or {}) for g in _STAT_GROUPS}
+                perf = getattr(p, 'seasonPerformanceRating', 0) or 0
+                defPerf = getattr(p, 'seasonDefensivePerformanceRating', 0) or 0
+                rows.append(_statsPlayerRow(
+                    p, blobs, getattr(p, 'gamesPlayed', 0),
+                    (sd.get('fantasyPoints', 0) or 0) + (gd.get('fantasyPoints', 0) or 0),
+                    getattr(p, 'seasonWpa', None),
+                    perf or None, defPerf or None,
+                    team.id if hasTeam else None,
+                    getattr(team, 'abbr', None) if hasTeam else None,
+                    getattr(team, 'color', None) if hasTeam else None,
+                    _playerStatus(p, pm),
+                    seasons=getattr(p, 'seasonsPlayed', None),
+                ))
+        else:
+            from database.connection import get_session as _gs
+            from database.models import PlayerSeasonStats as _PSS, Team as _T
+            _s = _gs()
+            try:
+                teamsById = {t.id: t for t in _s.query(_T).all()}
+                query = _s.query(_PSS).filter(_PSS.player_id.in_(list(byId.keys())),
+                                              _PSS.games_played > 0)
+                if not scopeIsCareer:
+                    query = query.filter(_PSS.season == seasonNumber)
+                bySeasonRows: Dict[int, List[Any]] = {}
+                for row in query.all():
+                    bySeasonRows.setdefault(row.player_id, []).append(row)
+            finally:
+                _s.close()
+
+            selectedIds = {p.id for p in selected}
+            for playerId, statRows in bySeasonRows.items():
+                if playerId not in selectedIds:
+                    continue
+                p = byId[playerId]
+                statRows.sort(key=lambda r: r.season)
+                blobList = [{
+                    'passing': r.passing_stats or {}, 'rushing': r.rushing_stats or {},
+                    'receiving': r.receiving_stats or {}, 'kicking': r.kicking_stats or {},
+                    'defense': r.defense_stats or {}, 'returning': r.returning_stats or {},
+                } for r in statRows]
+                blobs = _sumStatBlobs(blobList) if len(blobList) > 1 else {
+                    g: dict(blobList[0].get(g) or {}) for g in _STAT_GROUPS
+                }
+                games = sum(r.games_played or 0 for r in statRows)
+                points = sum(r.fantasy_points or 0 for r in statRows)
+                wpa = sum(r.wpa or 0.0 for r in statRows)
+                # A career performance rating is an AVERAGE of the seasons that
+                # have one — each is a percentile against its own season's pool,
+                # so they do not add up to anything.
+                rated = [r.performance_rating for r in statRows if r.performance_rating]
+                defRated = [r.defensive_performance_rating for r in statRows if r.defensive_performance_rating]
+                if scopeIsCareer and per == 'game':
+                    blobs = _perGame(blobs, games)
+                    points = points / games if games else 0
+                last = statRows[-1]
+                team = teamsById.get(last.team_id)
+                rows.append(_statsPlayerRow(
+                    # gamesPlayed always means games. Career mode shows a SEASONS
+                    # column instead, and it reads `seasonsPlayed` — overloading
+                    # one field to mean two things is how a column silently lies.
+                    p, blobs, games,
+                    points, wpa,
+                    round(sum(rated) / len(rated)) if rated else None,
+                    round(sum(defRated) / len(defRated)) if defRated else None,
+                    last.team_id, getattr(team, 'abbr', None), getattr(team, 'color', None),
+                    _playerStatus(p, pm),
+                    seasons=len(statRows),
+                ))
+
+        return build_success_response({
+            'rows': rows,
+            'total': len(rows),
+            'facets': facets,
+            'season': 'career' if scopeIsCareer else seasonNumber,
+            'currentSeason': currentSeason,
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting player stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/teams", response_model=Dict[str, Any])
+async def get_stats_teams(
+    response: Response,
+    season: str = Query(default="current"),
+    per: str = Query(default="game"),
+):
+    """Every club's offensive and defensive line for a season.
+
+    ⚠️ A club's GIVEAWAYS and SACKS ALLOWED are the opponent's takeaways and
+    sacks — the sim records a turnover against the defence that forced it, so
+    the surrendering side only exists as a join back through the games table.
+    Turnover margin needs both halves and cannot be read off one club's row.
+    """
+    response.headers["Cache-Control"] = "public, max-age=60"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+
+    sm = floosball_app.seasonManager
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 1
+    seasonNumber = currentSeason
+    if season not in ('current', '', None):
+        try:
+            seasonNumber = int(season)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Unknown season {season}")
+
+    try:
+        from database.connection import get_session as _gs
+        from database.models import TeamSeasonStats as _TSS, Team as _T, Game as _G
+        _s = _gs()
+        try:
+            teams = {t.id: t for t in _s.query(_T).all()}
+            statRows = _s.query(_TSS).filter(_TSS.season == seasonNumber).all()
+
+            # The surrendered side of turnovers and sacks, per club.
+            #
+            # ⚠️ REGULAR SEASON ONLY. `team_season_stats` is regular-season, so a
+            # join that swept up the playoffs too would subtract four games of
+            # giveaways from twenty-eight games of takeaways and report a
+            # turnover margin that belongs to neither.
+            blank = {'turnovers': 0, 'sacksAllowed': 0, 'played': 0}
+            given = {tid: dict(blank) for tid in teams}
+            games = _s.query(_G).filter(_G.season == seasonNumber,
+                                        _G.status == 'final',
+                                        _G.is_playoff == False).all()  # noqa: E712
+            for g in games:
+                # A takeaway BY the home defence is a giveaway BY the away club.
+                given.setdefault(g.away_team_id, dict(blank))
+                given.setdefault(g.home_team_id, dict(blank))
+                given[g.away_team_id]['turnovers'] += (g.home_ints or 0) + (g.home_fum_rec or 0)
+                given[g.away_team_id]['sacksAllowed'] += (g.home_sacks or 0)
+                given[g.away_team_id]['played'] += 1
+                given[g.home_team_id]['turnovers'] += (g.away_ints or 0) + (g.away_fum_rec or 0)
+                given[g.home_team_id]['sacksAllowed'] += (g.away_sacks or 0)
+                given[g.home_team_id]['played'] += 1
+        finally:
+            _s.close()
+
+        rows = []
+        for row in statRows:
+            team = teams.get(row.team_id)
+            if team is None:
+                continue
+            offense = row.offense_stats or {}
+            defense = row.defense_stats or {}
+            surrendered = given.get(row.team_id, dict(blank))
+            # Counted off the schedule, not wins+losses — the season row has no
+            # ties column, so a drawn game would vanish from games played.
+            played = surrendered['played'] or ((row.wins or 0) + (row.losses or 0))
+            takeaways = (defense.get('ints', 0) or 0) + (defense.get('fumRec', 0) or 0)
+
+            def rate(total, perGameValue):
+                """The blob already carries per-game averages; totals are the raw sums."""
+                return perGameValue if per == 'game' else total
+
+            rows.append({
+                'teamId': row.team_id,
+                'name': f"{team.city} {team.name}".strip() if getattr(team, 'city', None) else team.name,
+                'abbr': team.abbr,
+                'color': team.color,
+                'gamesPlayed': played,
+                'wins': row.wins or 0,
+                'losses': row.losses or 0,
+                'offense': {
+                    'pointsFor': row.points or 0,
+                    'points': rate(row.points or 0, offense.get('avgPts', 0)),
+                    'totalYards': rate(offense.get('totalYards', 0), offense.get('avgYards', 0)),
+                    'passYards': rate(offense.get('passYards', 0), offense.get('avgPassYards', 0)),
+                    'rushYards': rate(offense.get('runYards', 0), offense.get('avgRunYards', 0)),
+                    'touchdowns': rate(offense.get('tds', 0), offense.get('avgTds', 0)),
+                    'fieldGoals': rate(offense.get('fgs', 0), offense.get('avgFgs', 0)),
+                    'turnovers': surrendered['turnovers'],
+                    'sacksAllowed': surrendered['sacksAllowed'],
+                },
+                'defense': {
+                    'pointsAgainst': row.points_allowed or 0,
+                    'pointsAllowed': rate(row.points_allowed or 0, defense.get('avgPtsAlwd', 0)),
+                    'yardsAllowed': rate(defense.get('totalYardsAlwd', 0), defense.get('avgYardsAlwd', 0)),
+                    'passYardsAllowed': rate(defense.get('passYardsAlwd', 0), defense.get('avgPassYardsAlwd', 0)),
+                    'rushYardsAllowed': rate(defense.get('runYardsAlwd', 0), defense.get('avgRunYardsAlwd', 0)),
+                    'sacks': defense.get('sacks', 0),
+                    'ints': defense.get('ints', 0),
+                    'fumbleRecoveries': defense.get('fumRec', 0),
+                    'takeaways': takeaways,
+                    'turnoverMargin': takeaways - surrendered['turnovers'],
+                },
+                'differential': row.score_differential or 0,
+            })
+
+        return build_success_response({
+            'rows': rows,
+            'season': seasonNumber,
+            'currentSeason': currentSeason,
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting team stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -4547,6 +5141,46 @@ def _hofInducteeDict(player, teamMgr, pm, records=None, positiveKeys=None, seaso
         },
         'recordsHeld': _recordsHeldByPlayer(player.id, records, positiveKeys),
     }
+
+
+@app.get("/api/league-archive")
+def get_league_archive():
+    """Completed seasons from previous incarnations of the league.
+
+    The only history that survives a fresh start. Everything else is dropped and its ids
+    restart from 1 — see docs/FRESH_START_HISTORY_PLAN.md for why preserving the ORIGINAL
+    tables would reattach history to unrelated players rather than save it.
+
+    Newest era first, newest season first within an era. Empty until
+    tools_archive_seasons.py has been run against a league that is about to be reset.
+    """
+    from database.connection import get_session
+    from database.models import LeagueArchive
+    import json as _json
+
+    session = get_session()
+    try:
+        rows = (session.query(LeagueArchive)
+                .order_by(LeagueArchive.era.desc(), LeagueArchive.season.desc()).all())
+        eras: Dict[int, Dict[str, Any]] = {}
+        for r in rows:
+            era = eras.setdefault(r.era, {"era": r.era, "label": r.era_label, "seasons": []})
+            try:
+                leagues = _json.loads(r.league_champions) if r.league_champions else []
+            except Exception:
+                leagues = []
+            era["seasons"].append({
+                "season": r.season,
+                "champion": r.champion,
+                "leagueChampions": leagues,
+                "mvp": r.mvp,
+            })
+        out = list(eras.values())
+        for e in out:
+            e["seasonCount"] = len(e["seasons"])
+        return build_success_response({"eras": out})
+    finally:
+        session.close()
 
 
 @app.get("/api/hall-of-fame", response_model=Dict[str, Any])
@@ -4666,7 +5300,7 @@ def _checkAdminAuth(
     raise HTTPException(status_code=403, detail="Forbidden")
 
 
-def _acceptNamesIntoPool(pm, names: list) -> dict:
+def _acceptNamesIntoPool(pm, names: list, source: str = "admin") -> dict:
     """Vet a batch of names and add the survivors to the unused-name pool.
 
     Shared by the direct admin add and the approval of a Discord submission, so a name
@@ -4702,9 +5336,41 @@ def _acceptNamesIntoPool(pm, names: list) -> dict:
         if getattr(pm, 'name_repo', None):
             pm.name_repo.add_names_batch(accepted)
             pm.db_session.commit()
+        _recordCuratedNames(pm, accepted, source)
 
     return {"accepted": accepted, "rejectedInUse": rejectedInUse,
             "duplicatesInBatch": duplicatesInBatch}
+
+
+def _recordCuratedNames(pm, names: list, source: str = "admin") -> None:
+    """Keep a PERMANENT copy of an approved name, separate from the usable pool.
+
+    `unused_names` is a working set: a name leaves it the moment it is drawn onto a player,
+    and after that the only copy is the player row — which every fresh start drops. Config
+    names survive because `_seedUnusedNames` re-merges config.json on boot; names added
+    after the seed had nothing equivalent, so 16 fan-submitted names on the prod snapshot
+    existed in exactly one place and would have gone silently.
+
+    ⚠️ Writing them back to config.json instead does NOT work in prod. config.json is read
+    from a relative path, so the container copy is `/app/config.json` and only `/data` is a
+    volume — the write would survive until the next deploy and then vanish, which is worse
+    than no fix because it looks like one.
+
+    Best-effort: never let bookkeeping fail the actual add.
+    """
+    try:
+        from database.models import CuratedName
+        session = getattr(pm, 'db_session', None)
+        if session is None:
+            return
+        existing = {r[0] for r in session.query(CuratedName.name).all()}
+        fresh = [n for n in names if n not in existing]
+        for n in fresh:
+            session.add(CuratedName(name=n, source=source))
+        if fresh:
+            session.commit()
+    except Exception as e:
+        logger.warning(f"Could not record curated names: {e}")
 
 
 @app.post("/api/admin/names")
@@ -5259,6 +5925,7 @@ def admin_card_options(_auth: None = Depends(_checkAdminAuth)):
     from managers.cardEffects import (
         SHARED_EFFECT_POOL, POSITION_EXCLUSIVE_POOLS,
         EFFECT_DISPLAY_NAMES, EFFECT_CATEGORY, EFFECT_EDITION_TIER,
+        effectValidPositions,
     )
     from managers.cardManager import EDITION_ORDER
     editions = list(EDITION_ORDER)
@@ -5275,7 +5942,11 @@ def admin_card_options(_auth: None = Depends(_checkAdminAuth)):
         cat = EFFECT_CATEGORY.get(name, "flat_fp")
         if cat not in effects:
             effects[cat] = []
-        effects[cat].append({"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name), "edition": EFFECT_EDITION_TIER.get(name, "metallic")})
+        # A shared effect reports all five positions and an exclusive one reports its own,
+        # so the UI can filter the player picker uniformly instead of letting the grant 400.
+        effects[cat].append({"name": name, "displayName": EFFECT_DISPLAY_NAMES.get(name, name),
+                             "edition": EFFECT_EDITION_TIER.get(name, "metallic"),
+                             "validPositions": sorted(effectValidPositions(name))})
     classifications = ["rookie", "mvp", "champion", "all_pro",
                         "mvp_champion", "all_pro_champion", "mvp_all_pro_champion"]
     return build_success_response({
@@ -5350,6 +6021,17 @@ def admin_grant_card(payload: Dict[str, Any],
         teamId = getattr(teamObj, 'id', None) if teamObj is not None else None
         return bool(teamId)
 
+    # A position-exclusive effect on the wrong player mints a PERMANENTLY DEAD card: it
+    # reads a stat that position never records, so it pays zero forever, and its detail
+    # line can carry an unresolved {placeholder} (which makes the calculator rebuild the
+    # stored params at score time). The transplant path has guarded this all along via
+    # effectValidPositions; the grant tool never did.
+    from managers.cardEffects import effectValidPositions, POSITION_LABELS
+    validPositions = effectValidPositions(effectName) if effectName else set()
+
+    def _posOf(p):
+        return p.position.value if hasattr(p.position, 'value') else p.position
+
     if playerId:
         playerObj = pm.getPlayerById(playerId)
         if playerObj is None:
@@ -5359,14 +6041,29 @@ def admin_grant_card(payload: Dict[str, Any],
                 status_code=400,
                 detail=f"Player {playerObj.name} is a prospect / upcoming rookie / unrostered — cards require a rostered player",
             )
+        if validPositions and _posOf(playerObj) not in validPositions:
+            allowed = ", ".join(POSITION_LABELS.get(v, str(v)) for v in sorted(validPositions))
+            raise HTTPException(
+                status_code=400,
+                detail=(f"{effectName} only works on {allowed}, and {playerObj.name} is a "
+                        f"{POSITION_LABELS.get(_posOf(playerObj), 'unknown')}. "
+                        f"The card would read a stat this player never records and score zero."),
+            )
     else:
-        # Pick a random player eligible for this edition's rating threshold
+        # Pick a random player eligible for this edition's rating threshold — and, when an
+        # effect is forced, only from the positions that effect can actually read.
         import random as _rand
         from managers.cardManager import EDITION_THRESHOLDS
         threshold = EDITION_THRESHOLDS.get(edition, 0)
         eligible = [p for p in pm.activePlayers
-                    if round(p.playerRating) >= threshold and _isCardEligiblePlayer(p)]
+                    if round(p.playerRating) >= threshold and _isCardEligiblePlayer(p)
+                    and (not validPositions or _posOf(p) in validPositions)]
         if not eligible:
+            if validPositions:
+                allowed = ", ".join(POSITION_LABELS.get(v, str(v)) for v in sorted(validPositions))
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No {allowed} rated high enough for a {edition} card")
             raise HTTPException(status_code=400, detail=f"No players eligible for {edition} edition")
         playerObj = _rand.choice(eligible)
         playerId = playerObj.id
@@ -6377,30 +7074,11 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         except Exception:
             pass
 
-    # Include resolved FA directives for user's favorite team (if any)
+    # Always empty now: this listed the players a user's favourite team was directed
+    # to sign by the sign_fa fan ballot. Binding fan votes went away with the
+    # autonomous Front Office, so `_gmFaDirectives` is never populated. Kept as a
+    # field so the response shape doesn't change under the frontend.
     faDirectives = []
-    if user and isOffseason:
-        try:
-            gmDirectives = getattr(pm, '_gmFaDirectives', {}) or {}
-            from database.models import User as _UserModel
-            session2 = get_session()
-            try:
-                dbUser2 = session2.query(_UserModel).filter_by(id=user.id).first()
-                favTeamId = dbUser2.favorite_team_id if dbUser2 else None
-            finally:
-                session2.close()
-            if favTeamId and favTeamId in gmDirectives:
-                faLookup = {p.id: p for p in pm.activePlayers}
-                for pid in gmDirectives[favTeamId]:
-                    p = faLookup.get(pid)
-                    if p:
-                        faDirectives.append({
-                            "id": p.id, "name": p.name,
-                            "position": p.position.name,
-                            "rating": round(p.playerRating, 1),
-                        })
-        except Exception:
-            pass
 
     draftComplete = len(draftOrder) > 0 and all(t.get("complete") for t in draftOrder)
     # GM vote resolutions for the Directives tab — survives refresh.
@@ -7354,6 +8032,10 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "favoriteTeamId": user.favorite_team_id,
             "pendingFavoriteTeamId": user.pending_favorite_team_id,
             "favoriteTeamLockedSeason": user.favorite_team_locked_season,
+            # Renames are one per season (see set_username). Surfaced so the UI can
+            # disable the control and say why, rather than letting the user type a name
+            # and discover the limit from a 429.
+            "canChangeUsername": _canChangeUsername(user),
             "floobits": currency.balance if currency else 0,
             "hasCompletedOnboarding": user.has_completed_onboarding,
             "emailOptOut": user.email_opt_out,
@@ -7361,6 +8043,7 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "emailSeasonReport": user.email_season_report,
             "teamFundingPct": 25 if getattr(user, 'team_funding_pct', 25) is None else user.team_funding_pct,
             "autoPickMode": getattr(user, 'auto_pick_mode', 'off') or 'off',
+            "autoPickNeverAgainstFavorite": bool(getattr(user, 'auto_pick_never_against_favorite', False)),
             "isAdmin": getattr(user, 'is_admin', False),
             "followedPlayerIds": followedPlayerIds,
         }
@@ -7453,28 +8136,67 @@ def get_username_options(user: _User = Depends(_getCurrentUser)):
         session.close()
 
 
+def _canChangeUsername(user) -> bool:
+    """Has this user got a rename available this season?
+
+    True when they have never set a name (the first pick is not a change) or when their
+    last change was in an earlier season.
+    """
+    if getattr(user, 'username', None) is None:
+        return True
+    currentSeason = 0
+    if floosball_app is not None and floosball_app.seasonManager.currentSeason:
+        currentSeason = floosball_app.seasonManager.currentSeason.seasonNumber
+    return getattr(user, 'username_changed_season', None) != currentSeason
+
+
 @app.post("/api/users/me/username")
 def set_username(payload: Dict[str, Any], user: _User = Depends(_getCurrentUser)):
-    """Set the current user's username (only if not already set)."""
+    """Set or CHANGE the current user's username.
+
+    The endpoint always accepted an arbitrary string — it was the frontend that only ever
+    offered four generated candidates — so what was actually missing were the rules:
+    format validation, case-insensitive uniqueness, and any way to change a name at all.
+
+    Renames are one per season, mirroring `favorite_team_locked_season`. A season is one
+    real week, so that is a genuine ability to change rather than a formality, while still
+    stopping someone churning names to shed a reputation between games. The FIRST pick
+    does not count as a change.
+    """
     from database.connection import get_session
-    chosen = payload.get("username", "").strip()
-    if not chosen:
-        raise HTTPException(status_code=400, detail="Username is required")
+    from api.auth import validateUsername, usernameTaken
+
+    chosen, err = validateUsername(payload.get("username", ""))
+    if err:
+        raise HTTPException(status_code=400, detail=err)
 
     session = get_session()
     try:
         dbUser = session.get(_User, user.id)
-        if dbUser.username is not None:
-            raise HTTPException(status_code=400, detail="Username already set")
+        isRename = dbUser.username is not None
+        currentSeason = 0
+        if floosball_app is not None and floosball_app.seasonManager.currentSeason:
+            currentSeason = floosball_app.seasonManager.currentSeason.seasonNumber
 
-        # Check uniqueness
-        existing = session.query(_User).filter(_User.username == chosen).first()
-        if existing:
-            raise HTTPException(status_code=409, detail="Username already taken")
+        if isRename:
+            if dbUser.username == chosen:
+                return {"ok": True, "username": chosen, "changed": False}
+            if dbUser.username_changed_season == currentSeason:
+                raise HTTPException(
+                    status_code=429,
+                    detail="You have already changed your name this season. You can change it again next season.",
+                )
+
+        # Case-insensitive: the column's unique constraint is case-SENSITIVE, so without
+        # this "Andrew" and "andrew" are two accounts, which is an impersonation route.
+        if usernameTaken(session, chosen, excludeUserId=dbUser.id):
+            raise HTTPException(status_code=409, detail="That name is already taken")
 
         dbUser.username = chosen
+        if isRename:
+            dbUser.username_changed_season = currentSeason
         session.commit()
-        return {"ok": True, "username": chosen}
+        return {"ok": True, "username": chosen, "changed": isRename}
     except HTTPException:
         raise
     except Exception as e:
@@ -7505,6 +8227,8 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
             if mode not in ("off", "favorites", "underdogs", "random"):
                 raise HTTPException(status_code=400, detail=f"Invalid autoPickMode: {mode}")
             dbUser.auto_pick_mode = mode
+        if "autoPickNeverAgainstFavorite" in payload:
+            dbUser.auto_pick_never_against_favorite = bool(payload["autoPickNeverAgainstFavorite"])
         session.commit()
         return {
             "ok": True,
@@ -7513,6 +8237,7 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
             "emailSeasonReport": dbUser.email_season_report,
             "teamFundingPct": dbUser.team_funding_pct,
             "autoPickMode": dbUser.auto_pick_mode,
+            "autoPickNeverAgainstFavorite": dbUser.auto_pick_never_against_favorite,
         }
     except Exception as e:
         session.rollback()
@@ -7882,32 +8607,11 @@ def _getPlayerLiveFantasyPoints(player) -> float:
     return sd.get('fantasyPoints', 0) + player.gameStatsDict.get('fantasyPoints', 0)
 
 
-def _liveStatsToDbFormat(gameStatsDict: dict) -> dict:
-    """Translate a live gameStatsDict to DB-style weekPlayerStats format."""
-    passing = gameStatsDict.get("passing", {})
-    rushing = gameStatsDict.get("rushing", {})
-    receiving = gameStatsDict.get("receiving", {})
-    kicking = gameStatsDict.get("kicking", {})
-    return {
-        "fantasyPoints": gameStatsDict.get("fantasyPoints", 0),
-        "passing_stats": {
-            "passYards": passing.get("yards", 0),
-            "tds": passing.get("tds", 0),
-        },
-        "rushing_stats": {
-            "runYards": rushing.get("yards", 0),
-            "runTds": rushing.get("tds", 0),
-        },
-        "receiving_stats": {
-            "rcvYards": receiving.get("yards", 0),
-            "rcvTds": receiving.get("tds", 0),
-        },
-        "kicking_stats": {
-            "fgs": kicking.get("fgs", 0),
-            "fgYards": kicking.get("fgYards", 0),
-            "longest": kicking.get("longest", 0),
-        },
-    }
+# NOTE: a duplicate `_liveStatsToDbFormat` lived here and was DEAD — nothing in this
+# module called it. It was also stale: it predated the card stat surface widening, so it
+# carried no receptions, targets, comp or att, and any card routed through it would have
+# read 0 for those. Removed rather than fixed; `managers.fantasyTracker` owns the one
+# real converter (`_buildCardStatFormat`), which both live and DB paths share.
 
 
 def _computeLiveWeekCardBonuses(session, rosters, rostersByUser) -> dict:
@@ -9207,10 +9911,37 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
         # rows). The match multiplier itself is removed in Phase 4.
         rosterPlayerIds = {eq.user_card.card_template.player_id for eq in equipped}
 
+        # Glitch display flags (docs/GLITCH_CARDS.md). The lineup renders from this
+        # endpoint alone and has no score breakdowns, so the two flags its VISUAL
+        # treatment needs are resolved here: whether the depicted player is awakened, and
+        # whether this card's glitch fired in the settled week.
+        try:
+            from managers.glitchCards import displayFlagsFor
+            glitchFlags = displayFlagsFor(session, equipped, currentSeason, currentWeek)
+        except Exception:
+            glitchFlags = {}
+
         result = []
         for eq in equipped:
             cardData = cardManager.serializeCard(eq.user_card, currentSeason)
             template = eq.user_card.card_template
+            # The card BACK shows the depicted player's season stat line, and
+            # serializeCard does not attach it — the pack-reveal and collection paths
+            # each add it themselves. Without this every equipped card's back read
+            # "No stats recorded yet", which is exactly the season a fantasy player
+            # most wants to see.
+            try:
+                _ps = cardManager.buildPlayerSeasonStats(
+                    session, template.player_id, template.season_created, template.position,
+                ) if template.player_id else None
+                if _ps:
+                    cardData["playerStats"] = _ps
+            except Exception:
+                pass
+            _gf = glitchFlags.get(eq.user_card_id)
+            if _gf:
+                cardData["glitchAwakened"] = _gf["awakened"]
+                cardData["glitchSurged"] = _gf["surged"]
             # All-Pro cards carry a swap-grant state per equipped instance:
             # True = grant unused (refundable on unequip), False = grant used.
             # Non-All-Pro cards return None (UI shows the badge normally).
@@ -9346,7 +10077,7 @@ def setEquippedCards(
     from database.models import FantasyRoster, EquippedCard, UserCard, CardTemplate
     from database.repositories.card_repositories import EquippedCardRepository
     from managers.cardManager import (
-        FUSION_ALL_SLOTS, FLEX_SLOT, SLOT_TO_ORDINAL, cardFitsSlot,
+        FUSION_ALL_SLOTS, FUSION_BASE_SLOTS, FLEX_SLOT, SLOT_TO_ORDINAL, cardFitsSlot,
     )
 
     sm = floosball_app.seasonManager if floosball_app else None
@@ -9558,9 +10289,12 @@ def setEquippedCards(
             # "roster set" hook now fires here (migrated from the retired
             # /api/fantasy/roster PUT).
             _am.onFantasyRosterSet(session, user.id)
-            # Gilded — full equipped set (5+ slots, no empties) of Prismatic/Diamond cards
+            # Gilded — a FULL lineup of Prismatic/Diamond cards. ⚠️ The floor was 5,
+            # which was a full equipped set before the fusion; the lineup now has six
+            # base slots (QB/RB/WR1/WR2/TE/K), so 5 let one slot sit empty and still
+            # called it a full set. Matched to the composition secrets below.
             GILDED_EDITIONS = {"prismatic", "diamond"}
-            if len(req.cards) >= 5:
+            if len(req.cards) >= len(FUSION_BASE_SLOTS):
                 allGilded = all(
                     (cardTemplates.get(c.userCardId) and cardTemplates[c.userCardId].edition in GILDED_EDITIONS)
                     for c in req.cards
@@ -9571,7 +10305,7 @@ def setEquippedCards(
             # Composition secrets — inspect the DEPICTED players of a full lineup
             # (all 6 base slots; FLEX optional). Migrated from the retired fantasy
             # PUT, now keyed off the equipped cards' players.
-            if len(req.cards) >= 6:
+            if len(req.cards) >= len(FUSION_BASE_SLOTS):
                 from database.models import Player
                 from api_response_builders import PlayerResponseBuilder
                 depictedIds = [cardTemplates[c.userCardId].player_id for c in req.cards]
@@ -9965,16 +10699,21 @@ def selectPack(req: SelectPackRequest, user: _User = Depends(_getCurrentUser)):
         _am.syncCuratorProgress(session, user.id, currentSeason)
         if any(c.get("edition") == "diamond" for c in (result.get("kept") or [])):
             _am.onDiamondOpened(session, user.id, currentSeason)
-        # Secret: Completist (all 4 editions of the same player this season)
+        # Secret: Completist (base + holographic + prismatic + diamond of one player).
+        # ⚠️ Filtered to COLLECTIBLE_EDITIONS rather than counting distinct editions
+        # outright — `standard` is the free no-effect floor print, so a bare "4 distinct"
+        # count completed on standard/base/holo/prismatic, with no diamond anywhere.
         try:
             from database.models import UserCard as _UC, CardTemplate as _CT
+            from managers.achievementManager import COLLECTIBLE_EDITIONS
             from sqlalchemy import func
             editionRows = (
                 session.query(_CT.player_id, func.count(func.distinct(_CT.edition)).label("editionCount"))
                 .join(_UC, _UC.card_template_id == _CT.id)
-                .filter(_UC.user_id == user.id, _CT.season_created == currentSeason)
+                .filter(_UC.user_id == user.id, _CT.season_created == currentSeason,
+                        _CT.edition.in_(list(COLLECTIBLE_EDITIONS)))
                 .group_by(_CT.player_id)
-                .having(func.count(func.distinct(_CT.edition)) >= 4)
+                .having(func.count(func.distinct(_CT.edition)) >= len(COLLECTIBLE_EDITIONS))
                 .first()
             )
             if editionRows:
@@ -11433,6 +12172,94 @@ def get_feed_catalog():
     })
 
 
+@app.get("/api/games/{gameId}/feed/catalog")
+def get_game_feed_catalog():
+    """What a fan can shout AT a game, grouped by heading.
+
+    A separate catalog from the club one: those lines are about a season and
+    read as nonsense shouted at a single snap.
+    """
+    from constants import GAME_FEED_CATALOG, FEED_MAX_POSTS_PER_WINDOW, FEED_RATE_WINDOW_HOURS
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for key, (text, group, valence) in GAME_FEED_CATALOG.items():
+        grouped.setdefault(group, []).append(
+            {'key': key, 'text': text, 'valence': valence})
+    return build_success_response({
+        'groups': [{'label': label, 'options': options} for label, options in grouped.items()],
+        'rateLimit': {'perWindow': FEED_MAX_POSTS_PER_WINDOW,
+                      'windowHours': FEED_RATE_WINDOW_HOURS},
+    })
+
+
+@app.post("/api/games/{gameId}/feed")
+def post_to_game_feed(gameId: int, req: _FeedPostRequest,
+                      user: _User = Depends(_getCurrentUser)):
+    """Shout at a game. Filed under your own club's stand, scoped to this match."""
+    from constants import FEED_ENABLED
+    if not FEED_ENABLED:
+        raise HTTPException(400, "The feed is not enabled")
+    teamId = getattr(user, 'favorite_team_id', None)
+    if not teamId:
+        raise HTTPException(400, "Pick a club before you shout at a game")
+    from database.connection import get_session
+    from database.repositories.feed_repository import FeedError
+    session = get_session()
+    try:
+        repo = _feedRepo(session)
+        try:
+            repo.addPost(user.id, teamId, req.postKey, None, gameId=gameId)
+        except FeedError as e:
+            raise HTTPException(400, str(e))
+        session.commit()
+        return build_success_response({
+            'gameId': gameId,
+            'postsRemaining': repo.remainingPosts(user.id),
+            'cooldownSeconds': repo.cooldownRemaining(user.id),
+        })
+    finally:
+        session.close()
+
+
+@app.get("/api/games/{gameId}/feed")
+def get_game_feed(gameId: int, limit: int = 50,
+                  user: Optional[_User] = Depends(_getOptionalUser)):
+    """Everything shouted at this game, from both stands, newest first."""
+    from database.connection import get_session
+    from database.models import Team as _T, User as _U
+    from database.repositories.feed_repository import renderPost, catalogEntry
+    session = get_session()
+    try:
+        repo = _feedRepo(session)
+        posts = []
+        teamCache: Dict[int, Any] = {}
+        for post in repo.getGameFeed(gameId, limit):
+            if post.team_id not in teamCache:
+                teamCache[post.team_id] = session.get(_T, post.team_id)
+            team = teamCache[post.team_id]
+            poster = session.get(_U, post.user_id)
+            entry = catalogEntry(post.post_key)
+            posts.append({
+                'id': post.id,
+                'postKey': post.post_key,
+                'text': renderPost(post.post_key),
+                'valence': entry[2] if entry else 0,
+                'teamId': post.team_id,
+                'teamAbbr': getattr(team, 'abbr', None),
+                'teamColor': getattr(team, 'color', None),
+                'username': getattr(poster, 'username', None),
+                'isMine': bool(user and post.user_id == user.id),
+                'createdAt': post.created_at.isoformat() if post.created_at else None,
+            })
+        return build_success_response({
+            'gameId': gameId,
+            'posts': posts,
+            'postsRemaining': repo.remainingPosts(user.id) if user else None,
+            'cooldownSeconds': repo.cooldownRemaining(user.id) if user else None,
+        })
+    finally:
+        session.close()
+
+
 @app.post("/api/teams/{teamId}/feed")
 def post_to_team_feed(teamId: int, req: _FeedPostRequest,
                       user: _User = Depends(_getCurrentUser)):
@@ -11454,6 +12281,7 @@ def post_to_team_feed(teamId: int, req: _FeedPostRequest,
         return build_success_response({
             'teamId': teamId,
             'postsRemaining': repo.remainingPosts(user.id),
+            'cooldownSeconds': repo.cooldownRemaining(user.id),
         })
     finally:
         session.close()
@@ -11514,6 +12342,7 @@ def get_team_feed(teamId: int, limit: int = 50,
             'teamId': teamId,
             'posts': posts,
             'postsRemaining': repo.remainingPosts(user.id) if user else None,
+            'cooldownSeconds': repo.cooldownRemaining(user.id) if user else None,
         })
     finally:
         session.close()
@@ -12845,6 +13674,274 @@ async def admin_list_name_submissions(status: str = Query('pending'),
         session.close()
 
 
+# ⚠️ How a hand-written row is told apart from a system-published one.
+#
+# `event_type` is stamped with this on everything the admin portal writes, and nothing
+# else ever uses the value. It matters because posting AS A CORE produces a row in the
+# `cores` category that is otherwise identical in shape to the thousands the sim writes
+# itself — without a marker, the management list would offer an admin a delete button for
+# the Cores' own chatter, and "only announcements" would stop being enforceable the moment
+# the first Core post existed.
+ADMIN_POST_EVENT_TYPE = 'admin_post'
+
+
+def _isHandWritten():
+    """SQLAlchemy filter for rows written from the admin portal."""
+    from database.models import LeagueNewsItem
+    return LeagueNewsItem.event_type == ADMIN_POST_EVENT_TYPE
+
+
+def _rowIsHandWritten(row) -> bool:
+    return getattr(row, 'event_type', None) == ADMIN_POST_EVENT_TYPE
+
+
+_ANNOUNCEMENT_CORES = {'cassian', 'pyre', 'aris', 'halverson', 'vera'}
+
+
+def _announcementVoice(postAs: str, icon: str, teamId):
+    """Resolve who a hand-written item is FROM → (category, teamId, core, displayName).
+
+    Two genuinely different things, which is why this returns a category:
+
+      * A LEAGUE announcement is category `announcement` — a written notice, rendered
+        as one, with an optional crest or the league mark beside it.
+      * Posting AS A CORE is category `cores`. It is not an announcement wearing a Core's
+        icon; it is a line in that Core's voice, and the feed already knows how to render
+        those — the display name is folded into the text ("Vera: ..."), the row takes the
+        Core's own colour, and it threads with the sim's own Cores lines. Borrowing the
+        icon alone would have looked right and read wrong.
+
+    ⚠️ The league MARK (as opposed to a league announcement's default dot) rides in the
+    `core` column as the sentinel 'league'. That column means "who is speaking", which the
+    league legitimately is, and the alternative was a migration for one bit. Decoded here
+    and in LeagueNews.tsx, nowhere else. A fourth icon source should get a real column.
+    """
+    import league_news
+    postAs = (postAs or 'league').strip().lower()
+    if postAs in _ANNOUNCEMENT_CORES:
+        return 'cores', None, postAs, postAs.capitalize()
+    if postAs not in ('league', '', 'none'):
+        raise HTTPException(400, f"Cannot post as '{postAs}'")
+    teamId, core, display = _announcementIcon(icon, teamId)
+    return league_news.ANNOUNCEMENT, teamId, core, display
+
+
+def _announcementIcon(icon: str, teamId):
+    """Resolve an announcement's icon choice to (teamId, core, coreDisplayName).
+
+    ⚠️ The league mark rides in the `core` column as the sentinel 'league'. That column
+    means "who is speaking", which the league legitimately is, and the alternative was a
+    migration for one bit of information. Decoded here and in LeagueNews.tsx, nowhere
+    else. If a fourth icon source ever appears, give it a real column — two sentinels is
+    where this stops being defensible.
+    """
+    icon = (icon or 'none').strip().lower()
+    if icon == 'league':
+        return None, 'league', 'The League'
+    if icon in _ANNOUNCEMENT_CORES:
+        return None, icon, icon.capitalize()
+    if icon == 'team':
+        if teamId is None:
+            raise HTTPException(400, "Pick a club, or choose a different icon")
+        return teamId, None, None
+    if icon != 'none':
+        raise HTTPException(400, f"Unknown icon '{icon}'")
+    return None, None, None
+
+
+@app.post("/api/admin/league-news")
+async def admin_post_league_news(payload: Dict[str, Any],
+                                 _auth: None = Depends(_checkAdminAuth)):
+    """Publish a hand-written item to the league news feed.
+
+    Every other item in that feed is published BY a system AT the moment its event
+    happened. This is the one with a human author, which is why it gets its own
+    category (`announcement`) rather than borrowing one: a reader should be able to
+    tell a written notice from a reported result, and downstream the category is what
+    exempts it from the per-category caps that would otherwise drop it.
+
+    Season and week are stamped from the sim rather than accepted from the caller —
+    the feed is ordered by publication time and a wrong week would misfile the item
+    against every other row around it.
+    """
+    import league_news
+    from database.connection import get_session
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    # Headline, then optional prose beneath it.
+    #
+    # ⚠️ league_news.py's own rule is "every headline is ONE templated clause, no
+    # second sentence" — but that rule is about AUTOMATED copy, and says so: nothing
+    # in the sim writes at that level and an automated version never would. A
+    # hand-written announcement is exactly the case it excludes, so it gets both.
+    text = str(payload.get("headline") or payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "An announcement needs a headline")
+    if len(text) > 160:
+        raise HTTPException(400, "Keep the headline under 160 characters — it sits on one line in the feed")
+
+    body = str(payload.get("body") or "").strip() or None
+    if body and len(body) > 1200:
+        raise HTTPException(400, "Body is limited to 1200 characters")
+
+    # Who the row is FROM: a club's crest, the league mark, or one of the Cores.
+    teamId = payload.get("teamId")
+    try:
+        teamId = int(teamId) if teamId not in (None, "", "null") else None
+    except (TypeError, ValueError):
+        raise HTTPException(400, "teamId must be a number")
+    category, teamId, core, coreDisplayName = _announcementVoice(
+        payload.get("postAs"), payload.get("icon"), teamId)
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+
+    session = get_session()
+    try:
+        league_news.publish(
+            session,
+            season=season,
+            week=week,
+            category=category,
+            eventType=ADMIN_POST_EVENT_TYPE,
+            text=text,
+            body=body,
+            teamId=teamId,
+            core=core,
+            coreDisplayName=coreDisplayName,
+            pinned=bool(payload.get("pinned")),
+            # Above anything a game can produce, so a posted notice takes the lead
+            # slot it was written to occupy. `LEAD_WITHOUT_STATS` covers the
+            # announcement category, so it can lead with no stat strip.
+            leadWeight=float(payload.get("leadWeight") or 100.0),
+        )
+        return build_success_response({"published": True, "season": season, "week": week},
+                                      message="Posted to the league news")
+    finally:
+        session.close()
+
+
+@app.get("/api/admin/league-news")
+async def admin_list_league_news(limit: int = 25, _auth: None = Depends(_checkAdminAuth)):
+    """Announcements posted so far, newest first, with their pin state.
+
+    Announcements ONLY. The feed carries thousands of system-published rows and none of
+    them are editable — listing them here would offer an admin a delete button for a
+    clinch, which is a rewrite of history rather than a correction of their own copy.
+    """
+    from database.connection import get_session
+    from database.models import LeagueNewsItem
+    import league_news
+
+    session = get_session()
+    try:
+        # ⚠️ Hand-written CORES rows are listed too — an admin posting as a Core must
+        # be able to edit or delete it. They are told apart from the sim's own Cores
+        # chatter by `body` or `pinned`, which nothing automatic ever sets.
+        rows = (session.query(LeagueNewsItem)
+                .filter(_isHandWritten())
+                .order_by(LeagueNewsItem.created_at.desc(), LeagueNewsItem.id.desc())
+                .limit(max(1, min(int(limit or 25), 100)))
+                .all())
+        return build_success_response({"items": [{
+            "id": r.id,
+            "headline": r.text,
+            "body": getattr(r, 'body', None),
+            "pinned": bool(getattr(r, 'pinned', False)),
+            "teamId": r.team_id,
+            "core": r.core,
+            "season": r.season,
+            "week": r.week,
+            "createdAt": r.created_at.isoformat() if r.created_at else None,
+        } for r in rows]})
+    finally:
+        session.close()
+
+
+@app.patch("/api/admin/league-news/{itemId}")
+async def admin_edit_league_news(itemId: int, payload: Dict[str, Any],
+                                 _auth: None = Depends(_checkAdminAuth)):
+    """Edit an announcement in place — headline, body, icon, or pin state.
+
+    Every field is OPTIONAL and only applied when present, so a pin toggle does not have
+    to resend the copy and an edit does not have to restate the pin. Season and week are
+    never touched: the row keeps the moment it was published, which is what the feed
+    orders by.
+
+    ⚠️ Announcements only. A system-published row is a record of something that happened
+    and is not an admin's copy to rewrite.
+    """
+    from database.connection import get_session
+    from database.models import LeagueNewsItem
+    import league_news
+
+    session = get_session()
+    try:
+        row = session.query(LeagueNewsItem).filter(LeagueNewsItem.id == itemId).first()
+        if row is None:
+            raise HTTPException(404, f"No news item {itemId}")
+        if not _rowIsHandWritten(row):
+            raise HTTPException(400, "Only hand-written announcements can be edited")
+
+        if "headline" in payload:
+            headline = str(payload.get("headline") or "").strip()
+            if not headline:
+                raise HTTPException(400, "An announcement needs a headline")
+            if len(headline) > 160:
+                raise HTTPException(400, "Keep the headline under 160 characters")
+            row.text = headline
+
+        if "body" in payload:
+            body = str(payload.get("body") or "").strip() or None
+            if body and len(body) > 1200:
+                raise HTTPException(400, "Body is limited to 1200 characters")
+            row.body = body
+
+        if "icon" in payload or "postAs" in payload:
+            teamId = payload.get("teamId")
+            try:
+                teamId = int(teamId) if teamId not in (None, "", "null") else None
+            except (TypeError, ValueError):
+                raise HTTPException(400, "teamId must be a number")
+            (row.category, row.team_id, row.core,
+             row.core_display_name) = _announcementVoice(
+                payload.get("postAs"), payload.get("icon"), teamId)
+
+        if "pinned" in payload:
+            row.pinned = bool(payload.get("pinned"))
+
+        session.commit()
+        return build_success_response({
+            "id": row.id, "pinned": bool(row.pinned),
+        }, message="Announcement updated")
+    finally:
+        session.close()
+
+
+@app.delete("/api/admin/league-news/{itemId}")
+async def admin_delete_league_news(itemId: int, _auth: None = Depends(_checkAdminAuth)):
+    """Remove an announcement. Announcements only — see the edit endpoint."""
+    from database.connection import get_session
+    from database.models import LeagueNewsItem
+    import league_news
+
+    session = get_session()
+    try:
+        row = session.query(LeagueNewsItem).filter(LeagueNewsItem.id == itemId).first()
+        if row is None:
+            raise HTTPException(404, f"No news item {itemId}")
+        if not _rowIsHandWritten(row):
+            raise HTTPException(400, "Only hand-written announcements can be deleted")
+        session.delete(row)
+        session.commit()
+        return build_success_response({"deleted": itemId}, message="Announcement removed")
+    finally:
+        session.close()
+
+
 @app.post("/api/admin/names/submissions/review")
 async def admin_review_name_submissions(payload: Dict[str, Any],
                                         _auth: None = Depends(_checkAdminAuth)):
@@ -12888,7 +13985,7 @@ async def admin_review_name_submissions(payload: Dict[str, Any],
             return {"approved": 0, "rejected": len(rows), "unavailable": []}
 
         pm = floosball_app.playerManager
-        result = _acceptNamesIntoPool(pm, [r.name for r in rows])
+        result = _acceptNamesIntoPool(pm, [r.name for r in rows], source="discord")
         acceptedSet = {n.lower() for n in result["accepted"]}
         approved, unavailable = 0, []
         for r in rows:

@@ -37,7 +37,7 @@ EDITION_WEIGHTS = {"base": 82, "holographic": 28, "prismatic": 5, "diamond": 1}
 _total = sum(EDITION_WEIGHTS.values())
 EDITION_P = [(e, w / _total) for e, w in EDITION_WEIGHTS.items()]
 
-NUM_TEAMS = 24
+NUM_TEAMS = 32   # 2 leagues x 16. Was 24 before the expansion.
 # Classification odds: mvp/champion/all_pro only on holo+; rookie on any.
 HOLO_CLASS_CHANCE = 0.15   # chance a holo+ card carries a marquee classification
 ROOKIE_CHANCE = 0.10       # chance any card is a rookie (if not already classified)

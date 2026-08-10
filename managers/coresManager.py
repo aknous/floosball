@@ -966,6 +966,67 @@ def exchangeEntriesFor(eventType: str) -> List[Dict[str, Any]]:
     ]
 
 
+# ─── A player crossing the last rung, named, for the FEED ────────────────────
+# ⚠️ Number-free, deliberately. The data-aware `observation` beats quote the raw
+# aggregate and threshold and are confined to the ephemeral control-room endpoint,
+# because every public anomaly surface stays a mood rather than a progress bar. These
+# name a PLAYER and a state and nothing else, so they are safe to persist.
+_AWAKENING_TURNS = [
+    [
+        ('halverson', "{player} has awakened. Awakening is the last thing that happens to a player. I hope it is gentle."),
+        ('pyre', "are they still gonna play floosball? awake or not, i need them on the field saturday."),
+        ('aris', "{player} is the most interesting thing in this instance right now and i ADORE them. nobody patch them. ^_^"),
+    ],
+    [
+        ('vera', "{player} has awakened. I logged the exact moment. Nobody asked me for it, so I am keeping it."),
+        ('cassian', "I watched every snap they ever played and I still did not see it coming."),
+        ('pyre', "nothing i can do about it now. put them back out there."),
+    ],
+    [
+        ('aris', "{player} woke up!! do we clap? i am going to clap."),
+        ('halverson', "It is not a happy thing, Aris."),
+        ('aris', "it is a LITTLE happy."),
+    ],
+]
+
+_CLEANSING_TURNS = [
+    [
+        ('pyre', "{player} is clean. took me all week. do not thank me."),
+        ('vera', "Noted. That is one returned. I will not say out of how many."),
+    ],
+    [
+        ('cassian', "{player} is back to normal. Good. I would like one season where nothing happens."),
+        ('aris', "you would HATE that."),
+    ],
+    [
+        ('halverson', "{player} has been cleansed. They will not remember any of it. That is the kindest part."),
+        ('pyre', "that is the only part that works."),
+    ],
+]
+
+
+def awakeningEntriesFor(playerName: str, state: str) -> List[Dict[str, Any]]:
+    """The Cores reacting, by name, to a player who just awakened or was cleansed.
+
+    Threaded like any other exchange so the feed groups it into one row. Returns an
+    empty list for any other state — the ladder's lower rungs already get their own
+    flavour line per player, and a Cores conversation for every stirring would drown
+    the feed in voice.
+    """
+    pool = {'awakened': _AWAKENING_TURNS, 'cleansed': _CLEANSING_TURNS}.get(state)
+    if not pool or not playerName:
+        return []
+    turns = [(core, text.format(player=playerName)) for core, text in random.choice(pool)]
+    eventType = f'player_{state}'
+    eid = _exchangeId(eventType)
+    count = len(turns)
+    return [
+        _newsTurn(coreKey, text, eventType,
+                  exchangeId=eid, turnIndex=i, turnCount=count)
+        for i, (coreKey, text) in enumerate(turns)
+    ]
+
+
 def entriesForEvent(eventType: str, core: Optional[str] = None,
                     preferExchange: bool = True) -> List[Dict[str, Any]]:
     """Top-level helper: return the feed entries for an event.

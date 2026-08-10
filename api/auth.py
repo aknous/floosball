@@ -2,6 +2,8 @@
 
 import os
 import random as _random
+import re as _re
+from sqlalchemy import func as _func
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
@@ -143,6 +145,187 @@ _USERNAME_LASTS = [
 ]
 
 
+# ─── User-chosen usernames ───────────────────────────────────────────────────
+# Until now the only route to a username was picking one of four GENERATED candidates.
+# The endpoint always accepted an arbitrary string — it was the frontend that only offered
+# the picker — so opening it up is mostly about the rules that were never written.
+
+USERNAME_MIN_LEN = 3
+USERNAME_MAX_LEN = 20
+_USERNAME_RE = _re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+# Names nobody may take. Impersonation is the point: a user called "Cassian" posting in a
+# feed that also carries real Cores lines is indistinguishable from the Core itself, and
+# the same goes for anything that reads as staff.
+USERNAME_RESERVED = {
+    "admin", "administrator", "moderator", "mod", "staff", "system", "root",
+    "floosball", "official", "support", "help", "null", "undefined", "anonymous",
+    # The Cores (coresManager) — they speak in the same feeds users do.
+    "cassian", "pyre", "aris", "halverson", "vera", "cores", "core",
+}
+
+# ─── Profanity ───────────────────────────────────────────────────────────────
+# `better_profanity` does the heavy lifting (maintained wordlist, no dependencies), but it
+# matches on WORD BOUNDARIES and a username has none. Measured on realistic handles it got
+# 0 false positives — it clears every classic trap, Scunthorpe / Cockburn / Assassin /
+# Analyst — but missed 4 in 10 abusive names, because `cuntpuncher` and `FUCKER99` are
+# single tokens with no word for it to find. So it needs normalization in front of it, and
+# a small substring list for the terms that survive being run together.
+#
+# ⚠️ THE SUBSTRING LIST IS DERIVED, NOT HAND-PICKED, and intuition gets it backwards.
+# Checked against /usr/share/dict/words (236k words): `cunt` and `bitch` have ZERO innocent
+# uses, while `nigg` has thirty — niggard, niggling, snigger are ordinary English. Using
+# truncated roots is the trap; the full form `nigger` is unambiguous where `nigg` is not.
+#
+# ⚠️ Two rounds of a subtler bug are baked into these lists: THE DICTIONARY CONTAINS SLURS.
+# Auto-building an exception list of "innocent words containing this term" hands the
+# exception the very words being blocked — `nigger` became an excuse for `nigg`, and once
+# that was filtered through better_profanity a second tier surfaced (niggerhead, niggertoe)
+# that the library does not flag at all. Anything regenerated here must be eyeballed.
+
+# Zero innocent dictionary words contain these, so a plain substring match is safe.
+_PROFANITY_SUBSTRINGS = (
+    "fuck", "cunt", "nigger", "faggot", "kike", "tranny", "wetback", "bitch",
+    "molester", "pedophile", "dildo", "jizz", "bollock", "hitler",
+)
+
+# Substring-matched too, but each has a handful of genuine English words that contain it.
+# Block only when none of the exceptions is present.
+_PROFANITY_GUARDED = {
+    "nigga": ("niggard",),
+    "gook": ("gobbledygook",),
+    "retarded": ("unretarded",),
+    "wanker": ("swanker", "twanker"),
+    # All obscure: -shite mineral and tribal names, plus shitepoke (a heron). None is a
+    # plausible username, but they cost nothing to exempt and the alternative is a
+    # confusing rejection for someone called Cushite.
+    "shit": ("brushite", "cushite", "elkoshite", "girgashite", "kaneshite", "koreishite",
+             "mackintoshite", "marshite", "bereshith", "shitepoke", "shita"),
+}
+
+# Leetspeak, so f4gg0t and n1gg3r normalize onto the lists above.
+_LEET = str.maketrans({"1": "i", "0": "o", "3": "e", "4": "a", "5": "s",
+                       "7": "t", "@": "a", "$": "s", "!": "i", "|": "i"})
+
+# Proper nouns are absent from the dictionary, so the canonical traps are named directly.
+# These are whole-name exemptions, not substrings.
+_NAME_ALLOWLIST = {
+    "scunthorpe", "penistone", "clitheroe", "lightwater", "cockburn", "hancock",
+    "dickens", "cumberland", "bastardi", "spicer", "wangchuk", "assange",
+}
+
+
+def _normalizeForProfanity(name: str) -> str:
+    """Lowercase, de-leet and strip everything that is not a letter.
+
+    Separators are what defeat a wordlist on usernames: f_u_c_k and F.U.C.K are the same
+    word with punctuation between the letters.
+    """
+    return _re.sub(r"[^a-z]", "", (name or "").lower().translate(_LEET))
+
+
+def _segmentForProfanity(name: str) -> str:
+    """Break a handle into something word-shaped so the library has boundaries to match.
+
+    Splits camelCase and separators, so `TwatWaffle` reaches better_profanity as two words
+    rather than one token it has never seen.
+    """
+    spaced = _re.sub(r"([a-z])([A-Z])", r"\1 \2", name or "")
+    return " ".join(w for w in _re.split(r"[^A-Za-z]+", spaced) if w)
+
+
+def containsProfanity(name: str) -> bool:
+    """True when a username should be refused on language grounds."""
+    normalized = _normalizeForProfanity(name)
+    if not normalized or normalized in _NAME_ALLOWLIST:
+        return False
+    if any(term in normalized for term in _PROFANITY_SUBSTRINGS):
+        return True
+    for term, exceptions in _PROFANITY_GUARDED.items():
+        if term in normalized and not any(ex in normalized for ex in exceptions):
+            return True
+    try:
+        from better_profanity import profanity
+        return bool(profanity.contains_profanity(_segmentForProfanity(name))
+                    or profanity.contains_profanity(normalized))
+    except Exception:
+        # The substring tiers above already cover the worst of it; a missing or broken
+        # dependency must not take the whole signup flow down with it.
+        return False
+
+
+# Fast membership for the generated-name check below. Built once — `_USERNAME_LASTS` is
+# 260 entries and the check runs on every username submission.
+_USERNAME_LASTS_SET = set(_USERNAME_LASTS)
+# What the generator emits: a first, a last, and randint(1, 99) — so no leading zero.
+_GENERATED_NAME_RE = _re.compile(r"^([A-Za-z]+)([1-9][0-9]?)$")
+
+
+def isGeneratedUsername(name: str) -> bool:
+    """True when `name` is one this server could have produced itself.
+
+    Verified against the generator's OWN vocabulary rather than taken on trust from the
+    client, so it cannot be used to smuggle an over-long custom name past the limit.
+
+    Worst case is one pass over the 255 firsts, and only for names that already look like
+    `WordWord42`.
+    """
+    match = _GENERATED_NAME_RE.match((name or "").strip())
+    if not match:
+        return False
+    stem = match.group(1)
+    for first in _USERNAME_FIRSTS:
+        if stem.startswith(first) and stem[len(first):] in _USERNAME_LASTS_SET:
+            return True
+    return False
+
+
+def validateUsername(name: str) -> tuple:
+    """(cleanedName, errorMessage). errorMessage is None when the name is acceptable.
+
+    Rules are deliberately narrow — letters, digits and underscores, starting with a
+    letter. Anything wider (spaces, punctuation, unicode lookalikes) invites impersonation
+    of other users and renders unpredictably in the places a name appears.
+    """
+    name = (name or "").strip()
+    if not name:
+        return None, "Username is required"
+    if len(name) < USERNAME_MIN_LEN:
+        return None, f"Username must be at least {USERNAME_MIN_LEN} characters"
+    # ⚠️ The cap applies to names a USER made up, not to ones we offered them. The
+    # generator pairs 255 firsts with 260 lasts and adds up to two digits, and 14,786 of
+    # those 66,300 pairings run past 20 characters — so 22% of two-digit suggestions were
+    # names the app proposed and then refused, with no way for the user to tell which.
+    # `_generateUsernameCandidate` already carries the rule ("a suggestion the validator
+    # would refuse is worse than no suggestion") and screens for profanity; length was
+    # simply missed. The longest pairing is 28 characters against a 50-character column.
+    if len(name) > USERNAME_MAX_LEN and not isGeneratedUsername(name):
+        return None, f"Username must be {USERNAME_MAX_LEN} characters or fewer"
+    if not _USERNAME_RE.match(name):
+        return None, "Use letters, numbers and underscores, starting with a letter"
+    lowered = name.lower()
+    if lowered in USERNAME_RESERVED:
+        return None, "That name is reserved"
+    if containsProfanity(name):
+        return None, "That name is not available"
+    return name, None
+
+
+def usernameTaken(session, name: str, excludeUserId: int = None) -> bool:
+    """Case-INSENSITIVE uniqueness.
+
+    The column's unique constraint is case-sensitive, so without this "Andrew" and
+    "andrew" are two different accounts — which is an impersonation route, not a
+    convenience. Checked in Python rather than with a functional index so it behaves the
+    same on the SQLite prod DB as it does locally.
+    """
+    lowered = (name or "").lower()
+    q = session.query(User).filter(_func.lower(User.username) == lowered)
+    if excludeUserId is not None:
+        q = q.filter(User.id != excludeUserId)
+    return q.first() is not None
+
+
 def _generateUsernameCandidate(session) -> str:
     """Generate a single unique random username like 'CrispyKerfuffle42'."""
     for _ in range(50):
@@ -151,6 +334,12 @@ def _generateUsernameCandidate(session) -> str:
             + _random.choice(_USERNAME_LASTS)
             + str(_random.randint(1, 99))
         )
+        # A suggestion the validator would refuse is worse than no suggestion: the user
+        # picks it and gets an error for something we offered them. Two of the 66,300
+        # possible pairings trip the filter — SaskatchewanKerfuffle spans "wanker" across
+        # the join — so this is rare rather than theoretical, and cheap to rule out.
+        if containsProfanity(name):
+            continue
         existing = session.query(User).filter(User.username == name).first()
         if not existing:
             return name
@@ -171,6 +360,8 @@ def generateUsernameCandidates(session, count: int = 4) -> list[str]:
         if name in seen:
             continue
         seen.add(name)
+        if containsProfanity(name):
+            continue   # see _generateUsernameCandidate — never suggest what we would reject
         existing = session.query(User).filter(User.username == name).first()
         if not existing:
             candidates.append(name)
@@ -396,10 +587,19 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
                 # thread just wrote.
                 from sqlalchemy.exc import IntegrityError
                 try:
+                    # ⚠️ A username is GENERATED here, not left null.
+                    #
+                    # It used to be None, and the only thing that ever filled it was the
+                    # onboarding modal's first step. With that modal gone (the closed beta
+                    # is over and the forced flow with it), a null would have followed the
+                    # user forever — every leaderboard row and feed post reading "someone".
+                    #
+                    # They can still choose their own: `POST /api/users/me/username` takes
+                    # a rename once per season, and the first pick does not count as one.
                     user = User(
                         clerk_id=clerkUserId,
                         email=email,
-                        username=None,
+                        username=_generateUsernameCandidate(session),
                         hashed_password="",
                     )
                     session.add(user)
@@ -474,6 +674,28 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
                     detail="Floosball is in closed beta. Your email is not on the allowlist.",
                 )
 
+        # ⚠️ HAND BACK A USABLE OBJECT.
+        #
+        # `session.commit()` above EXPIRES every attribute on the instance (SQLAlchemy's
+        # `expire_on_commit` defaults to True), and the `finally` below CLOSES the
+        # session. The User returned was therefore detached AND expired, so the first
+        # `user.id` in any endpoint tried to lazy-load from a dead session and raised
+        # DetachedInstanceError.
+        #
+        # It went unnoticed because the beta gate read `user.email` a few lines up, INSIDE
+        # the still-open session — that access quietly reloaded the expired row and left
+        # the instance populated. Turning the gate off (the closed beta is over) removed
+        # the accidental refresh and the latent bug surfaced immediately, on
+        # GET /api/games/{id}/rally.
+        #
+        # refresh() repopulates, expunge() detaches deliberately with the values intact.
+        try:
+            session.refresh(user)
+            session.expunge(user)
+        except Exception:
+            # A user we cannot refresh is still better returned than not — the endpoints
+            # that only read already-loaded fields will work.
+            pass
         return user
     except HTTPException:
         raise

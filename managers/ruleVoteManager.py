@@ -530,7 +530,8 @@ class RuleVoteManager:
                 if tiebroken:
                     newsText += " Aris broke a tie to decide it."
                 self._broadcastRuleChangeNews(
-                    newsText, session, season, self._weekForDay(window.day_index))
+                    newsText, session, season, self._weekForDay(window.day_index),
+                    core=window.core)
             logger.info(f"Rule vote RESOLVE (change): S{season} day {window.day_index} "
                         f"winner={winner} applied={applied} tiebroken={tiebroken} tally={tally}")
             if tiebroken:
@@ -592,27 +593,34 @@ class RuleVoteManager:
         except Exception as e:
             logger.warning(f"Rule vote broadcast ({eventType}) failed: {e}")
 
-    def _broadcastRuleChangeNews(self, text: str, session, season: int, week: int) -> None:
+    def _broadcastRuleChangeNews(self, text: str, session, season: int, week: int,
+                                 core: Optional[str] = None) -> None:
         """Persist + broadcast a factual rule-change headline to the league-news
         feed (category 'rules'). Distinct from the Cores banter: this is the plain
         'what changed' item that shows in the main HighlightFeed (which filters out
-        'cores' lines), so a rule change is actually visible there."""
+        'cores' lines), so a rule change is actually visible there.
+
+        ⚠️ It carries the CORE WHO RAN THE VOTE (`RuleVoteWindow.core` — Aris for a
+        change, Pyre for a revert), so the feed shows their glyph instead of a bare
+        coloured dot. `LeagueNews.mark()` draws a Core icon for any row with a `core`,
+        and `isCore` still requires `category === 'cores'`, so the row keeps the rules
+        rail, the rules tint and no speaker name — it is still a report, just one with
+        an author. A rule change was the only noteworthy-weight row in the feed with
+        nothing but a dot to identify it.
+
+        Goes through `league_news.publish` rather than hand-rolling the row and the
+        broadcast, which is what the rest of the feed does and what keeps the two in
+        step.
+        """
         try:
-            from database.models import LeagueNewsItem
-            session.add(LeagueNewsItem(season=season, week=week, category='rules',
-                                       event_type='rule_change', text=text))
-            session.commit()
+            from league_news import publish
+            from managers.coresManager import CORES
+            # Weighted to take the headline of its moment — a rule actually changing
+            # outranks any single result. See front_page.LEAD_WITHOUT_STATS.
+            publish(session, season=season, week=week, category='rules',
+                    eventType='rule_change', text=text, leadWeight=8.0,
+                    core=core or None,
+                    coreDisplayName=(CORES.get(core, {}).get('displayName')
+                                     if core else None))
         except Exception as e:
-            session.rollback()
-            logger.debug(f"Rule news persist skipped: {e}")
-        try:
-            from api.game_broadcaster import broadcaster
-            from api.event_models import LeagueNewsEvent
-            if broadcaster is None or not broadcaster.is_enabled():
-                return
-            event = LeagueNewsEvent.leagueNews(text=text)
-            event['category'] = 'rules'
-            event['eventType'] = 'rule_change'
-            broadcaster.broadcast_sync('season', event)
-        except Exception as e:
-            logger.debug(f"Rule news broadcast skipped: {e}")
+            logger.debug(f"Rule news publish skipped: {e}")

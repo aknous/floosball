@@ -1,6 +1,14 @@
 import enum
 from os import stat
 import math
+import os as _os
+_FREEZE_CONFIDENCE = _os.environ.get('FLOOS_FREEZE_CONFIDENCE') == '1'
+try:
+    from constants import CONFIDENCE_DECAY_PER_GAME as _CONF_DECAY_DEFAULT
+except Exception:
+    _CONF_DECAY_DEFAULT = 1.0
+# env override so the decay can be swept without editing constants between arms
+_CONF_DECAY = float(_os.environ.get('FLOOS_CONF_DECAY', _CONF_DECAY_DEFAULT))
 from random import randint
 from random_batch import batched_randint, batched_random
 import copy
@@ -11,7 +19,26 @@ from floosball_team import Team
 from constants import POTENTIAL_HEADROOM
 from stat_tracker import StatTracker
 from player_development import PlayerDevelopment
-from rating_cache import CachedRatingMixin
+
+def mergeStatDefaults(statsDict):
+    """Backfill stat keys a stored dict predates, in place, and return it.
+
+    Stats round-trip as JSON blobs, so a row written before a new advanced metric
+    existed comes back missing those keys. StatTracker.add_stat silently skips
+    unknown keys, so without this an existing player would never accumulate a
+    newly-added stat. Cheap, idempotent, safe to call on every load.
+    """
+    if not isinstance(statsDict, dict):
+        return statsDict
+    for group, defaults in playerStatsDict.items():
+        if not isinstance(defaults, dict):
+            continue
+        target = statsDict.get(group)
+        if isinstance(target, dict):
+            for key, val in defaults.items():
+                target.setdefault(key, val)
+    return statsDict
+
 
 class Position(enum.Enum):
     QB = 1
@@ -81,7 +108,15 @@ playerStatsDict =   {
                             'yards': 0, 
                             'ypc': 0, 
                             '20+': 0,
-                            'longest': 0
+                            'longest': 0,
+                            # --- Advanced. Raw counters; averages derived on read
+                            # (see ADVANCED_STAT_DEFAULTS / deriveAdvancedStats).
+                            'sacked': 0,          # sacks taken — was never recorded
+                            'throws': 0,          # balls actually released (excludes sacks)
+                            'throwQualitySum': 0, # / throws = avg throw quality
+                            'badThrows': 0,       # releases below BAD_THROW_THRESHOLD
+                            'goodThrows': 0,      # releases at or above GOOD_THROW_THRESHOLD
+                            'airYardsSum': 0,     # / throws = average depth of target
                         },
                         'rushing': {
                             'carries': 0,
@@ -90,7 +125,19 @@ playerStatsDict =   {
                             'tds': 0, 
                             'fumblesLost': 0, 
                             '20+': 0,
-                            'longest': 0
+                            'longest': 0,
+                            # --- Advanced. The run game already computes all of
+                            # this per play; none of it was being kept.
+                            # Yards earned AFTER the tackler engaged (runner move +
+                            # stretch). NOT the NFL stat -- the sim has no first-contact
+                            # point inside base yardage, so this is the extra-effort
+                            # portion only, ~4% of rush yards league-wide.
+                            'yardsAfterContact': 0,
+                            'brokenTackles': 0,      # successful stiff arm / spin / hurdle
+                            'moveAttempts': 0,       # moves tried, made or missed
+                            'stuffs': 0,             # carries for <= 0
+                            'tackleAttempts': 0,     # contacts faced
+                            'gapQualitySum': 0,      # / carries = avg blocking faced
                         },
                         'receiving': {
                             'receptions': 0,
@@ -103,7 +150,12 @@ playerStatsDict =   {
                             'tds': 0,
                             '20+': 0,
                             'longest': 0,
-                            'fumbles': 0
+                            'fumbles': 0,
+                            # --- Advanced. Separates the receiver's contribution
+                            # from the throw they were given.
+                            'contestedTargets': 0,  # targeted while covered
+                            'contestedCatches': 0,  # ...and caught it anyway
+                            'bailouts': 0,          # caught a ball below BAD_THROW_THRESHOLD
                         },
                         'kicking': {
                             'fgAtt': 0,
@@ -124,6 +176,22 @@ playerStatsDict =   {
                             'fgOver50att': 0,
                             'fgOver50': 0,
                             'fgOver50perc': 0,
+                            'longest': 0,
+                            # --- Punting
+                            'punts': 0,
+                            'puntYards': 0,
+                            'puntsInside20': 0,
+                            'puntsInside10': 0,
+                            'puntTouchbacks': 0,
+                            'puntLongest': 0,
+                            'puntReturnYards': 0,
+                        },
+                        'returning': {
+                            'puntReturns': 0,
+                            'puntReturnYards': 0,
+                            'puntReturnTds': 0,
+                            'fairCatches': 0,
+                            'muffs': 0,
                             'longest': 0
                         },
                         'defense': {
@@ -266,6 +334,9 @@ class Player:
         self.stat_tracker.game_stats_dict = self.gameStatsDict
 
     def postgameChanges(self, isRegularSeason: bool = True):
+        if _FREEZE_CONFIDENCE:
+            _preConf = self.attributes.confidenceModifier
+            _preDet = self.attributes.determinationModifier
         self.attributes.confidenceModifier = round((self.attributes.confidenceModifier + self.gameAttributes.confidenceModifier)/2, 3)
         self.attributes.determinationModifier = round((self.attributes.determinationModifier + self.gameAttributes.determinationModifier)/2, 3)
         # Games played tracks REGULAR SEASON only. Playoff games are display- and
@@ -331,6 +402,27 @@ class Player:
 
         self.updateRating()
 
+
+        # A/B harness: freeze the CROSS-GAME mental loop. Confidence and
+        # determination persist between games and are boosted by team win streaks,
+        # so a good team compounds: win -> confidence up -> play better -> win.
+        # Setting FLOOS_FREEZE_CONFIDENCE=1 zeroes the persistent state after every
+        # game, leaving in-game confidence intact but breaking the season-long
+        # feedback. Used to measure how much of the league's win spread this loop
+        # is responsible for. No effect unless the env var is set.
+        if _FREEZE_CONFIDENCE:
+            # Restore the PRE-GAME values rather than zeroing. Forcing 0 also moved the
+            # league's resting confidence (scoring fell 17%), which confounded the test:
+            # it measured "everyone worse" as well as "no compounding". Putting the
+            # snapshot back freezes the carryover at each player's own level, so the
+            # only thing removed is the drift.
+            self.attributes.confidenceModifier = _preConf
+            self.attributes.determinationModifier = _preDet
+        elif _CONF_DECAY < 1.0:
+            # Pull the persistent state back toward neutral every game. Applied AFTER
+            # the streak boost, so a run still lifts a club — it just stops ratcheting.
+            self.attributes.confidenceModifier = round(self.attributes.confidenceModifier * _CONF_DECAY, 3)
+            self.attributes.determinationModifier = round(self.attributes.determinationModifier * _CONF_DECAY, 3)
     def updateInGameRating(self):
         pass
 
@@ -464,6 +556,14 @@ class Player:
 
     def addReception(self, isRegularSeason):
         self.stat_tracker.add_reception(isRegularSeason)
+
+    def addAdvanced(self, category, key, amount=1, isRegularSeason=True):
+        """Record an advanced metric. Thin pass-through to the tracker's generic
+        add_stat so new metrics don't each need a bespoke method on Player."""
+        try:
+            self.stat_tracker.add_stat(category, key, amount, isRegularSeason)
+        except Exception:
+            pass  # a metric must never break play resolution
 
     def addPassDrop(self, isRegularSeason):
         self.stat_tracker.add_pass_drop(isRegularSeason)
@@ -1030,7 +1130,7 @@ class PlayerAttributes:
             value += randint(5, 5)
 
 
-class PlayerQB(Player, CachedRatingMixin):
+class PlayerQB(Player):
     def __init__(self, physicalSeed = None, mentalSeed = None):
         super().__init__()
         self.position = Position.QB
@@ -1057,33 +1157,14 @@ class PlayerQB(Player, CachedRatingMixin):
         if self.gameAttributes.overallRating > 100:
             self.gameAttributes.overallRating = 100
 
-    def _calculate_skill_rating(self) -> float:
-        """Calculate QB-specific skill rating"""
-        return round(((self.attributes.armStrength*1.2) + (self.attributes.accuracy*1.3) + (self.attributes.agility*.5))/3)
-
     def updateRating(self):
         self.attributes.calculateIntangibles()
         self.attributes.calculateSkills()
-
-        # Use cached calculations
-        self.attributes.skillRating = self.get_cached_skill_rating()
-        self.attributes.overallRating = self.get_cached_overall_rating()
+        self.attributes.skillRating = round(((self.attributes.armStrength*1.2) + (self.attributes.accuracy*1.3) + (self.attributes.agility*.5))/3)
+        self.attributes.overallRating = round(((self.attributes.skillRating*3) + (self.attributes.playMakingAbility) + (self.attributes.xFactor))/5)
         self.offensiveRating = self.attributes.overallRating
         self.defensiveRating = self.attributes.calculateDefensiveRating(self.position)
         self.playerRating = round((self.offensiveRating + self.defensiveRating) / 2)
-
-    def updateInGameRating(self):
-        # Invalidate cache when game attributes change
-        self.invalidate_rating_cache()
-        self.gameAttributes.calculateIntangibles()
-        self.gameAttributes.calculateSkills()
-
-        # For game ratings, we still calculate directly since they change frequently
-        self.gameAttributes.skillRating = round(((self.gameAttributes.armStrength*1.2) + (self.gameAttributes.accuracy*1.3) + (self.gameAttributes.agility*.5))/3)
-        self.gameAttributes.overallRating = round(((self.gameAttributes.skillRating*3) + (self.gameAttributes.playMakingAbility) + (self.gameAttributes.xFactor))/5)
-        if self.gameAttributes.overallRating > 100:
-            self.gameAttributes.overallRating = 100
-
 
     def offseasonTraining(self, coachDevRating: int = None, fundingDevBonus: int = 0):
         PlayerDevelopment.apply_offseason_training(self, "QB", coachDevRating=coachDevRating, fundingDevBonus=fundingDevBonus)

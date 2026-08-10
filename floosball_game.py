@@ -50,7 +50,8 @@ from constants import (
     MOMENTUM_TD, MOMENTUM_TURNOVER, MOMENTUM_SAFETY, MOMENTUM_TURNOVER_ON_DOWNS,
     MOMENTUM_FG_MISSED, MOMENTUM_FG_MADE, MOMENTUM_SACK, MOMENTUM_BIG_PLAY_BONUS,
     MOMENTUM_PUNT,
-    WPA_PASS_QB_SHARE, DEF_PLAYMAKER_BONUS,
+    WPA_PASS_QB_SHARE, WPA_DROP_RECEIVER_SHARE, DEF_PLAYMAKER_BONUS,
+    TD_DRAIN_MIN_SECONDS, TD_DRAIN_MAX_YARDS, LEAD_THREAT_TD_YARDS,
 )
 
 # Import TimingManager for game-level timing control
@@ -865,6 +866,44 @@ def returnMediumPassPlay():
 def returnLongPassPlay():
     return choice(['Play1', 'Play2', 'Play4', 'Play5', 'Play18', 'Play19', 'Play20'])
     
+def flairOf(player) -> float:
+    """0..1 — how likely this player is to TRY something audacious.
+
+    Built from creativity + xFactor, which were nearly inert in play resolution
+    before this (xFactor appeared in one QB-mobility calculation; creativity in two
+    concept exec weights). Flair never decides whether something WORKS — that's the
+    physical attribute — only whether it is attempted. Module-level because both
+    Game (punt-type selection) and Play (runner moves, diving catches) need it.
+    """
+    from constants import (FLAIR_PIVOT, FLAIR_RANGE, FLAIR_CREATIVITY_W,
+                           FLAIR_XFACTOR_W)
+    if player is None:
+        return 0.0
+    a = getattr(player, 'gameAttributes', None) or getattr(player, 'attributes', None)
+    if a is None:
+        return 0.0
+    cre = (getattr(a, 'creativity', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
+    xf = (getattr(a, 'xFactor', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
+    raw = cre * FLAIR_CREATIVITY_W + xf * FLAIR_XFACTOR_W    # ~-1..+1
+    return max(0.0, min(1.0, 0.5 + raw / 2.0))               # 0..1, 0.5 at neutral
+
+
+def _rnd(value) -> int:
+    """Unbiased round to int, replacing int() on every random yardage draw.
+
+    int() truncates TOWARD ZERO. That collapses every draw in the open interval
+    (-1, 1) to exactly 0 and shaves ~0.5 off every positive draw, which produced
+    two artefacts across the whole sim: an artificial spike of zero-yard plays
+    (P(<=0) on a lost line contact was 47% against the 20% the distribution
+    actually implies, driving a 28-31% RB stuff rate vs a real-world ~18%), and
+    every configured mean reading ~0.5 higher than it behaved -- which is why the
+    pass depth bands set to average 7.9 air yards measured 7.49.
+
+    Means downstream were retuned when this landed, so they now mean what they say.
+    """
+    return int(np.floor(value + 0.5))
+
+
 class Game:
     def __init__(self, homeTeam, awayTeam, timingManager=None, personalityManager=None, gameRules=None):
         self.id = None  # Integer ID assigned by SeasonManager
@@ -1534,6 +1573,54 @@ class Game:
             return 0.5
         return max(0.0, min(1.0, (coach.clockManagement - 60) / 40))
 
+    def _isTdDrainMode(self) -> bool:
+        """True when the offense is about to score a TD that WINS, and should not do it yet.
+
+        The touchdown twin of `_isFgDrainMode`, which only covers a deficit of 0-3 (the
+        band where a kick settles it). Down 4-8 at the goal line had no equivalent, so the
+        offense hurried: measured at 1st-and-goal from the 3, down 5 with 0:55 left, it
+        chose a 12-second huddle — scoring in seconds and handing the opponent ~45 seconds
+        plus their timeouts to kick a winning field goal.
+
+        Scoring is not the goal; scoring LAST is. Every second left on the clock after a
+        go-ahead touchdown is a second for the reply, so the clock should be bled first and
+        the score taken as late as the downs allow.
+
+        Conditions are deliberately tight, because draining when you might NOT score is how
+        you lose a game you had won:
+          - goal to go and close in, so a score is near-certain rather than hoped for;
+          - 1st or 2nd down, i.e. at least two cracks left after this snap;
+          - enough clock that a full drained play clock still leaves a snap behind it;
+          - a deficit a single touchdown actually erases. Down 9+ needs two scores, so the
+            clock is the enemy and hurrying is right.
+
+        Down 7 and 8 are included even though a touchdown only TIES: a tie sends the game
+        to overtime, and leaving the opponent time lets them win it in regulation instead.
+        """
+        if self.currentQuarter < 4:
+            return False
+        secs = self._offenseEffectiveSecs()
+        # Above the window the clock is not yet the deciding factor; below it there is no
+        # room to drain and still snap the ball.
+        if secs > 90 or secs < TD_DRAIN_MIN_SECONDS:
+            return False
+        isHome = (self.offensiveTeam is self.homeTeam)
+        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        _fd = self._frameDecisionDiff()
+        if _fd is not None:
+            scoreDiff = _fd
+        # Down by more than a kick (else _isFgDrainMode owns it) but within one score.
+        if not (-self._maxPossession() <= scoreDiff < -self._fgValue()):
+            return False
+        if self._isGarbageTime(scoreDiff):
+            return False
+        # Near-certain score, with downs in hand. Proximity plus spare downs is the real
+        # condition — an explicit goal-to-go test was tried and cut, because 2nd-and-1 from
+        # the 3 is not technically goal-to-go and is exactly as good a position to hold.
+        if self.yardsToEndzone > TD_DRAIN_MAX_YARDS:
+            return False
+        return self.down <= 2
+
     def _isFgDrainMode(self) -> bool:
         """True when the offense should drain clock to set up an end-of-game FG.
         Late Q2/Q4, scoring within 3 (trailing or tied), in chip-shot FG range.
@@ -1978,6 +2065,56 @@ class Game:
                 secs -= 18
         return plays
 
+    def leadEaseOffFactor(self) -> float:
+        """Multiplier on the DEFENSE's effective ratings when that defense's own
+        team is sitting on a big lead.
+
+        The sim already models the trailing team giving up (`_isGarbageTime` stops
+        them hurrying and spiking). It had no model of the LEADING team easing off,
+        so a club building a blowout kept pressing at full intensity for four
+        quarters — which is the main reason the trailing side so often finished
+        with nothing. Real teams rush three, keep everything in front and trade
+        yards for clock once the result is settled; that soft coverage is exactly
+        why a blowout still usually has the losing team scoring at least once.
+
+        Returns 1.0 (no ease-off) unless the defending team leads by more than two
+        scores in the second half. Ramps with lead size and quarter.
+        """
+        from constants import LEAD_EASE_OFF_ENABLED, LEAD_EASE_OFF_MAX
+        if not LEAD_EASE_OFF_ENABLED:
+            return 1.0
+        q = self.currentQuarter
+        if q < 3:
+            return 1.0  # a first-half lead is not safe enough to sit on
+        try:
+            defIsHome = (self.defensiveTeam == self.homeTeam)
+            defScore = self.homeScore if defIsHome else self.awayScore
+            offScore = self.awayScore if defIsHome else self.homeScore
+        except Exception:
+            return 1.0
+        lead = defScore - offScore
+        oneScore = self._oneScore()
+        if lead <= 2 * oneScore:
+            return 1.0
+        tier = 1.0 if lead > 3 * oneScore else 0.55
+        qScale = 0.6 if q == 3 else 1.0
+
+        # WHO eases off is a coaching trait, not a league-wide rule. A conservative
+        # coach with clock sense calls the dogs off and lets the other side have the
+        # underneath stuff; an aggressive one keeps his foot down and runs it up.
+        # Centred on 1.0 at a neutral coach so the league-average behaviour is the
+        # measured one, with the spread being the character.
+        coach = getattr(self.defensiveTeam, 'coach', None)
+        if coach:
+            def _norm(attr):
+                raw = (getattr(coach, attr, COACH_ATTR_NEUTRAL) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+                return max(0.0, min(1.0, (raw + 1.0) / 2.0))
+            restraint = 0.5 * (1.0 - _norm('aggressiveness')) + 0.5 * _norm('clockManagement')
+            coachScale = 0.4 + 1.2 * restraint          # 0.4 (killer) .. 1.6 (professional)
+        else:
+            coachScale = 1.0
+        return 1.0 - LEAD_EASE_OFF_MAX * tier * qScale * coachScale
+
     def _isGarbageTime(self, scoreDiff: int) -> bool:
         """Check if the deficit is too large to realistically overcome.
 
@@ -2066,7 +2203,9 @@ class Game:
             return False
         # Suppress sideline targeting when setting up an end-of-game FG —
         # we WANT the clock running so the FG ends the game with no time left.
-        if self._isFgDrainMode():
+        # Same for a go-ahead TD being held back: an out-of-bounds catch stops the clock,
+        # which is exactly what the drain is trying to avoid.
+        if self._isFgDrainMode() or self._isTdDrainMode():
             return False
 
         clockIQ = self._coachClockIQ(coach)
@@ -2162,7 +2301,7 @@ class Game:
         self._callTimeout(isHome)
 
     def _checkDefensiveTimeout(self):
-        """Defense calls timeout to stop the clock when trailing and the offense is milking clock.
+        """Defense calls timeout to stop the clock when the clock is not actually its friend.
 
         Q4/OT: triggers up to 5 min out with urgency scaling; under 2 min uses original high-urgency logic.
         Q2: triggers under 60 sec (moderate, end-of-half is less critical).
@@ -2180,11 +2319,23 @@ class Game:
         defIsHome = (self.defensiveTeam == self.homeTeam)
         defScore = self.homeScore if defIsHome else self.awayScore
         offScore = self.awayScore if defIsHome else self.homeScore
-        # Q4/OT: only a trailing defense burns timeouts (a leading/tied defense
-        # wants the clock to run out). Q2: any team stops the clock to get the
-        # ball back and try to score before the half, regardless of score.
+        # Q4/OT: a trailing defense burns timeouts to get the ball back. A leading or
+        # tied one normally wants the clock to run out — UNLESS the lead is about to
+        # evaporate anyway.
+        #
+        # ⚠️ That exception is the whole point of this branch. Observed live: a defense up
+        # 3 let the offense milk the clock from inside field-goal range and kick with 0:07
+        # left, holding three timeouts the entire time. The drain was free for the offense
+        # because the leader "was winning" and this returned immediately. But the leader
+        # was not winning by the time it mattered — the kick tied it, and the timeouts it
+        # saved bought nothing. Stopping the clock there costs a timeout it has no other
+        # use for and buys a possession to win in regulation instead of a coin-flip OT.
+        #
+        # Q2: any team stops the clock to get the ball back before the half, regardless of
+        # score, so the exception is not needed there.
         if (self.currentQuarter == 4 or self.currentQuarter >= 5) and defScore >= offScore:
-            return
+            if not self._leadIsAboutToEvaporate(defScore - offScore):
+                return
         deficit = offScore - defScore
         # Don't waste timeouts in an unwinnable game
         defScoreDiff = defScore - offScore  # negative when trailing
@@ -2253,18 +2404,90 @@ class Game:
         from constants import AWAKENED_FG_MAX_YARDS
         return max(kicker.maxFgDistance, AWAKENED_FG_MAX_YARDS) - self.gameRules.fgSnapDistance
 
+    def _leadIsAboutToEvaporate(self, lead: int) -> bool:
+        """Is the offense already close enough that its likely score erases this lead?
+
+        The case a "leading team runs the clock down" rule gets wrong. Draining is only
+        good for the leader while the lead SURVIVES the drive. Once the offense is close
+        enough that the expected end of the possession wipes the lead out, every second the
+        leader lets tick away is a second off its OWN answer, not the opponent's chance.
+
+        TWO LIMBS, because there are two ways to score:
+
+          - a KICK erases a lead of 3 or less, from anywhere in field-goal range;
+          - a TOUCHDOWN erases up to a full possession, but only from close in.
+
+        The second limb exists because the first one alone left a hole the width of the
+        red zone: up 5 with the opponent on your 3 and a minute left, a field goal does not
+        help them so limb one says the clock is your friend — but they are not kicking, they
+        are scoring a touchdown to go ahead, and you will need time to answer. That is the
+        mirror of `_isTdDrainMode` on the offense's side, which holds exactly that score
+        back; without this the defense cannot respond to it at all.
+
+        `LEAD_THREAT_TD_YARDS` (10) is deliberately wider than the offense's own
+        `TD_DRAIN_MAX_YARDS` (5). The offense only starts draining once its score is
+        near-certain; a defense that waits for the same certainty has already lost the
+        clock it was trying to save. It is reacting to a threat, not betting on one.
+
+        Beyond a full possession the lead survives any single score, so the clock genuinely
+        IS the leader's friend and burning timeouts is the "no coach does that" case the
+        caller guards against elsewhere. Tied counts in both limbs: a score puts the offense
+        ahead with no time for a reply, which is the same problem seen a step earlier.
+        """
+        if lead < 0 or lead > self._maxPossession():
+            return False
+
+        # Limb 2 — a touchdown from close range erases anything up to a full possession.
+        if self.yardsToEndzone <= LEAD_THREAT_TD_YARDS:
+            return True
+
+        # Limb 1 — a kick, which only helps them if it ties or wins.
+        if lead > self._fgValue():
+            return False
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        if kicker is None:
+            return False
+        # Same range basis the offense's own kick decision uses, including a charged
+        # awakened kicker (who makes it from anywhere, so the whole field is in range).
+        if self._awakenedReadyFor(kicker, 'kick'):
+            maxFg = self._chargedKickerMaxFg(kicker)
+        else:
+            maxFg = kicker.maxFgDistance - self.gameRules.fgSnapDistance
+        return self.yardsToEndzone <= maxFg
+
+    def fgMakeProbability(self, kicker, fgDist) -> float:
+        """Pre-pressure FG make probability. THE single source of truth, shared by
+        the coach's attempt decision and the kick resolution — they used to carry
+        duplicate copies of this formula and could drift apart.
+
+        Leg strength is NOT a success term here; it sets RANGE via maxFgDistance,
+        and enters only through the margin (how much leg is to spare at this
+        distance). Accuracy is the skill that decides whether the ball is on line.
+        """
+        from constants import (FG_SKILL_BASE, FG_ACCURACY_WEIGHT, FG_MARGIN_WEIGHT,
+                               FG_MARGIN_SCALE, FG_MARGIN_FLOOR, FG_MARGIN_CEILING,
+                               FG_CURVE_CENTER, FG_CURVE_SLOPE)
+        if not kicker:
+            return 0.0
+        # Centred at FG_CURVE_CENTER. The old centre of 52 with slope 0.18 put an
+        # average kicker at ~50% from 52 yards where real kickers are ~68%, so the
+        # distance curve was pessimistic before any skill term applied.
+        baseFgProb = 1 / (1 + math.exp(FG_CURVE_SLOPE * (fgDist - FG_CURVE_CENTER)))
+        a = getattr(kicker, 'gameAttributes', None) or kicker.attributes
+        accTerm = (getattr(a, 'accuracy', 80) - 80) / 20.0
+        margin = getattr(kicker, 'maxFgDistance', 55) - fgDist
+        marginTerm = max(FG_MARGIN_FLOOR, min(FG_MARGIN_CEILING, margin / FG_MARGIN_SCALE))
+        skill = FG_ACCURACY_WEIGHT * accTerm + FG_MARGIN_WEIGHT * marginTerm
+        fgProb = baseFgProb * max(0.05, FG_SKILL_BASE + skill)
+        if fgDist < 30:
+            fgProb = min(0.96, fgProb + 0.10)
+        return max(0.02, min(0.96, fgProb))
+
     def _estimateFgProbability(self):
         """Estimate FG make probability for the current field position and kicker."""
         kicker = self.offensiveTeam.rosterDict.get('k')
-        if not kicker:
-            return 0.0
         fgDist = self.yardsToEndzone + self.gameRules.fgSnapDistance
-        baseFgProb = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
-        normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
-        fgProb = baseFgProb * (0.52 + normalizedSkill * 0.85)
-        if fgDist < 30:
-            fgProb = min(0.96, fgProb + 0.10)
-        return max(0.05, min(0.96, fgProb))
+        return self.fgMakeProbability(kicker, fgDist)
 
     def _coachFgThreshold(self, coach):
         """Compute the minimum FG probability a coach requires before attempting.
@@ -3235,7 +3458,8 @@ class Game:
         if self.down == 1:
             # 1st down: balanced 50/50 base. Most plays happen here, so
             # this is the biggest lever on overall pass/run ratio.
-            return {'run': 50.0, 'short': 22.0, 'medium': 18.0, 'long': 8.0, 'deep': 2.0}
+            from constants import FIRST_DOWN_RUN_WEIGHT as _FDR
+            return {'run': _FDR, 'short': 22.0, 'medium': 18.0, 'long': 8.0, 'deep': 2.0}
         elif self.down == 2:
             if ytg <= 4:
                 # 2nd & short — run preferred (was already).
@@ -3274,6 +3498,14 @@ class Game:
         # Setting up end-of-game FG: bias toward in-bounds runs to keep clock
         # moving. Avoid downfield passes (incomplete = clock stop). Runs AFTER the
         # drive-clock bias so end-of-GAME clock-kill still overrides a drive-clock chunk push.
+        # Holding a go-ahead TD at the goal line: same in-bounds bias, but milder. The FG
+        # drain can lean almost entirely on runs because a kick ends it from where it
+        # stands; here the ball still has to cross the line, so the pass has to stay live.
+        if self._isTdDrainMode():
+            weights['run'] = weights.get('run', 0) * 2.0
+            weights['medium'] = weights.get('medium', 0) * 0.5
+            weights['long'] = weights.get('long', 0) * 0.25
+            weights['deep'] = weights.get('deep', 0) * 0.1
         if self._isFgDrainMode():
             weights['run'] = weights.get('run', 0) * 3.0
             weights['short'] = weights.get('short', 0) * 1.0
@@ -3514,6 +3746,16 @@ class Game:
         # (no clock-IQ scaling) so even a poor clock-manager stops firing deep.
         # Stacks on the mods above. Not Q2 — the half ends either way (handled
         # below); this is about protecting a lead, which only exists end-of-GAME.
+        if scoreDiff > 2 * self._oneScore() and q == 3:
+            # Q3 blowout: start draining early. The floor below was Q4-only, so a
+            # team building a rout in Q3 kept airing it out and ran the score up.
+            # Coach-scaled via _mul (unlike the Q4 floor, which is deliberately flat
+            # because NOBODY should be firing deep on a Q4 lead): draining in Q3 is
+            # still discretionary, so a sharp clock manager starts early and a poor
+            # one keeps swinging.
+            _mul('run',    1.35)
+            _mul('long',   0.7)
+            _mul('deep',   0.6)
         if scoreDiff > 0 and q >= 4:
             floorUrg = 1.0 if secs <= 120 else (0.6 if secs <= 300 else 0.25)
             _flat('run',    1 + 0.6 * floorUrg)
@@ -3935,6 +4177,10 @@ class Game:
         # points before its drive ends on the clock, no matter the shared game clock.
         if self._chessClockLow(100):
             return True
+        # Sitting on the goal line waiting to score last is the OPPOSITE of a two-minute
+        # drill, even though the score and clock look like one.
+        if self._isTdDrainMode():
+            return False
         # Frames: the current frame (mini-game) is ending and we're NOT ahead in it — push
         # to win/tie the frame before the break, like a 2-minute drill. In the final frame a
         # frame lead that only ties the match reads as behind (points tiebreak) → still push.
@@ -5808,7 +6054,7 @@ class Game:
                 text = ("{}'s punt is BLOCKED by {}!".format(punterName, blockerName)
                         if blockerName else "{}'s punt is BLOCKED!".format(punterName))
             else:
-                text = '{} punts'.format(punterName)
+                text = self._puntPlayText(punterName)
         elif self.play.playType is PlayType.Spike:
             qb = self.play.offense.rosterDict.get('qb')
             qbName = qb.name if qb else 'QB'
@@ -6663,12 +6909,32 @@ class Game:
         self._snapshotMentalPhase(self.homeTeam, 'afterDisposition')
         self._snapshotMentalPhase(self.awayTeam, 'afterDisposition')
 
+        # Continuous form oscillation — the club's current position in its own
+        # hot/cold arc. Runs after disposition so both form layers land on the
+        # same compounded stack and stay bounded by the soft floor below.
+        self._applyFormOffset(self.homeTeam)
+        self._applyFormOffset(self.awayTeam)
+
+        # Calibration only (POSITION_FORCE): boost one roster slot on half the
+        # league and cut it on the other half, to measure that position's causal
+        # impact on wins. No-op unless the env switch is set.
+        self._applyPositionForce(self.homeTeam)
+        self._applyPositionForce(self.awayTeam)
+
         # Enforce the soft floor — scale a player's attributes back up if
         # the compounded modifiers dropped their overall rating more than
         # MENTAL_FLOOR_RATIO permits. Preserves attribute *proportions*
         # so a power-back stays power-heavy, etc.
         self._enforceMentalSoftCap(self.homeTeam)
         self._enforceMentalSoftCap(self.awayTeam)
+
+        # Re-derive team defense from the modified copy. Team defense ratings are
+        # otherwise computed once at roster setup off untouched PROFILE attributes,
+        # which made every layer above — league compression, fatigue, funding
+        # morale, disposition, form — offense-only. A cold team still defended at
+        # full strength, and a stacked roster's defensive edge was never
+        # compressed. Runs last so it picks up the whole stack including the cap.
+        self._applyDefensiveModifiers()
         self._snapshotMentalPhase(self.homeTeam, 'afterCap')
         self._snapshotMentalPhase(self.awayTeam, 'afterCap')
 
@@ -7377,14 +7643,146 @@ class Game:
                     kicker = self.offensiveTeam.rosterDict['k']
                     if kicker is None:
                         logging.error(f"Team {self.offensiveTeam.name} has no kicker - using default punt distance")
-                    maxPuntYards = round(70*(kicker.attributes.legStrength/100)) if kicker else 45
-                    if maxPuntYards > self.yardsToEndzone:
-                        maxPuntYards = self.yardsToEndzone + 10
-                    puntDistance = randint((maxPuntYards-20), maxPuntYards)
-                    if puntDistance >= self.yardsToEndzone:
-                        puntDistance = self.yardsToEndzone - 20
+                    puntDistance, puntType, puntResult = self.resolvePunt(
+                        kicker, self.yardsToEndzone)
+                    # Where the ball actually came down, as yards from the RECEIVING
+                    # team's own goal line.
+                    landing = self.yardsToEndzone - puntDistance
+                    if puntResult == 'touchback':
+                        landing = 0
+                    ret = ({'action': 'fairCatch', 'returner': None, 'returnYards': 0,
+                            'muffRecoveredBy': None} if puntResult == 'touchback'
+                           else self._resolvePuntReturn(landing, puntType, self.defensiveTeam))
+                    puntReturn = int(ret.get('returnYards', 0) or 0)
+                    returner = ret.get('returner')
+                    action = ret.get('action')
+
+                    self.play.puntType = puntType
+                    self.play.puntResult = puntResult
+                    self.play.puntAction = action
+                    self.play.puntLanding = landing          # yards from receiving goal
+                    self.play.puntGross = puntDistance
+                    self.play.returner = returner
+                    self.play.returnYardage = puntReturn
+                    self.play.puntTouchback = (puntResult == 'touchback')
+                    self.play.puntMuffRecoveredBy = ret.get('muffRecoveredBy')
                     self.play.yardage = puntDistance
-                    newYards = 100 - (self.yardsToEndzone - puntDistance)
+
+                    # ── Kicker stats (gross; the return is charged separately) ──
+                    if kicker is not None:
+                        try:
+                            from stat_tracker import StatCategory as _SCK
+                            _rsk = self.isRegularSeasonGame
+                            kicker.addAdvanced(_SCK.KICKING, 'punts', 1, _rsk)
+                            kicker.addAdvanced(_SCK.KICKING, 'puntYards', puntDistance, _rsk)
+                            kicker.addAdvanced(_SCK.KICKING, 'puntReturnYards', puntReturn, _rsk)
+                            if puntResult == 'touchback':
+                                kicker.addAdvanced(_SCK.KICKING, 'puntTouchbacks', 1, _rsk)
+                            else:
+                                # `landing` is yards from the RECEIVING team's own
+                                # goal, so a return moves the ball AWAY from it —
+                                # the spot INCREASES. Subtracting drove the ball
+                                # backwards and pushed inside-20 to 62%.
+                                _spot = min(99, landing + puntReturn)
+                                if 0 < _spot <= 20:
+                                    kicker.addAdvanced(_SCK.KICKING, 'puntsInside20', 1, _rsk)
+                                    if _spot <= 10:
+                                        kicker.addAdvanced(_SCK.KICKING, 'puntsInside10', 1, _rsk)
+                            for _d in (kicker.gameStatsDict, kicker.seasonStatsDict,
+                                       kicker.careerStatsDict):
+                                _k = _d.get('kicking') if isinstance(_d, dict) else None
+                                if isinstance(_k, dict) and puntDistance > (_k.get('puntLongest', 0) or 0):
+                                    _k['puntLongest'] = puntDistance
+                        except Exception:
+                            pass
+
+                    # ── Returner stats — the returner previously got NOTHING; the
+                    #    yards were only ever charged against the kicker. ──
+                    if returner is not None:
+                        try:
+                            from stat_tracker import StatCategory as _SCR3
+                            _rsr3 = self.isRegularSeasonGame
+                            if action == 'fairCatch':
+                                returner.addAdvanced(_SCR3.RETURNING, 'fairCatches', 1, _rsr3)
+                            elif action == 'muff':
+                                returner.addAdvanced(_SCR3.RETURNING, 'muffs', 1, _rsr3)
+                            else:
+                                returner.addAdvanced(_SCR3.RETURNING, 'puntReturns', 1, _rsr3)
+                                returner.addAdvanced(_SCR3.RETURNING, 'puntReturnYards', puntReturn, _rsr3)
+                                if action == 'touchdown':
+                                    returner.addAdvanced(_SCR3.RETURNING, 'puntReturnTds', 1, _rsr3)
+                                for _d in (returner.gameStatsDict, returner.seasonStatsDict,
+                                           returner.careerStatsDict):
+                                    _r = _d.get('returning') if isinstance(_d, dict) else None
+                                    if isinstance(_r, dict) and puntReturn > (_r.get('longest', 0) or 0):
+                                        _r['longest'] = puntReturn
+                        except Exception:
+                            pass
+
+                    # Clock: the kick, plus hang time, plus however long the return
+                    # took. A punt is not a 5-second play.
+                    from constants import PUNT_HANG_SECONDS, PUNT_RETURN_SECS_PER_YARD
+                    playDuration = self.calculatePlayDuration(PlayType.Punt, False)
+                    playDuration += batched_randint(*PUNT_HANG_SECONDS)
+                    if action in ('return', 'touchdown'):
+                        playDuration += int(round(puntReturn * PUNT_RETURN_SECS_PER_YARD))
+                    self.consumeGameTime(playDuration)
+                    self.play.stampClock()
+                    self.checkTwoMinuteWarning()
+                    # A punt is a change of possession, so the clock stops
+                    # regardless of whether the returner was tackled in bounds.
+                    self.clockRunning = False
+
+                    # ── Muff: a live ball. The kicking team recovering it is the
+                    #    single biggest swing on a punt, and it did not exist before. ──
+                    if action == 'muff' and ret.get('muffRecoveredBy') == 'kicking':
+                        self.play.playResult = PlayResult.Fumble
+                        self.play.isFumbleLost = True
+                        self._applyMomentumEvent(MOMENTUM_TURNOVER, self.offensiveTeam)
+                        self.formatPlayText()
+                        self.gameFeed.insert(0, {'play': self.play})
+                        self.highlights.insert(0, {'play': self.play})
+                        self.leagueHighlights.insert(0, {'play': self.play})
+                        self.broadcastGameState(includeLastPlay=True)
+                        # Punting team keeps it where the muff happened.
+                        # Kicking team keeps it at the muff spot. `landing` is from
+                        # the RECEIVING team's goal, so in the punting team's own
+                        # attacking coordinates that is `landing` yards out.
+                        self.yardsToEndzone = max(1, landing)
+                        self.down = 1
+                        self.yardsToFirstDown = min(10, self.yardsToEndzone)
+                        lastPlayFormatted = True
+                        break
+
+                    # ── Return touchdown ──
+                    if action == 'touchdown':
+                        self._addScore(self.defensiveTeam, self.gameRules.touchdownPoints)
+                        self._applyMomentumEvent(MOMENTUM_TD, self.defensiveTeam)
+                        self.play.playResult = PlayResult.Touchdown
+                        self.play.isTd = True
+                        self.play.scoreChange = True
+                        self.play.homeTeamScore = self.homeScore
+                        self.play.awayTeamScore = self.awayScore
+                        self.formatPlayText()
+                        self.gameFeed.insert(0, {'play': self.play})
+                        self.highlights.insert(0, {'play': self.play})
+                        self.leagueHighlights.insert(0, {'play': self.play})
+                        if self.checkOvertimeEnd(defensiveScore=True):
+                            self.otSecondPossComplete = True
+                            self.broadcastGameState(includeLastPlay=True)
+                            lastPlayFormatted = True
+                            break
+                        self.broadcastGameState(includeLastPlay=True)
+                        self._attemptConversion(self.defensiveTeam, self.offensiveTeam,
+                                                trackPtsAllowed=False)
+                        self.turnover(self.defensiveTeam, self.offensiveTeam, 80)
+                        self._pendingPossessionChange = True
+                        lastPlayFormatted = True
+                        break
+
+                    # Final spot = where it was caught, ADVANCED by the return
+                    # (away from the receiving team's own goal line).
+                    newYards = 100 - min(99, max(1, landing + puntReturn))
                     
                     # Consume time for punt (always stops clock)
                     playDuration = self.calculatePlayDuration(PlayType.Punt, False)
@@ -7867,12 +8265,40 @@ class Game:
             }})
 
         if self.isRegularSeasonGame:
+            # A division game only counts as one if BOTH clubs carry the same division.
+            # `division` is None until _assignDivisions has stamped it (and stays None on a
+            # league that is not division-shaped), so the None == None case must not read
+            # as a match or every game in a flat league would count as divisional.
+            hDiv = getattr(self.homeTeam, 'division', None)
+            aDiv = getattr(self.awayTeam, 'division', None)
+            isDivisionGame = bool(hDiv) and hDiv == aDiv
+            # ⚠️ `team.league` is the league NAME (a string), set by leagueManager — not a
+            # league object. Reaching for `.name` on it silently yields None and every
+            # game reads as non-league.
+            hLg = getattr(self.homeTeam, 'league', None)
+            aLg = getattr(self.awayTeam, 'league', None)
+            # A division game is by definition intra-league, so it counts for both. That
+            # matters when league identity is not resolvable from the team object: the
+            # division check still keeps the league record correct for 12 of 28 games.
+            isLeagueGame = isDivisionGame or (bool(hLg) and hLg == aLg)
             if _side != 'tie':  # No ties in season standings (frames: by frames won)
-                self.winningTeam.seasonTeamStats['wins'] += 1
-                self.losingTeam.seasonTeamStats['losses'] += 1
+                w, l = self.winningTeam.seasonTeamStats, self.losingTeam.seasonTeamStats
+                w['wins'] += 1
+                l['losses'] += 1
+                if isDivisionGame:
+                    w['divWins'] = w.get('divWins', 0) + 1
+                    l['divLosses'] = l.get('divLosses', 0) + 1
+                if isLeagueGame:
+                    w['lgWins'] = w.get('lgWins', 0) + 1
+                    l['lgLosses'] = l.get('lgLosses', 0) + 1
             else:  # Tie game - both teams get a tie
-                self.homeTeam.seasonTeamStats['ties'] = self.homeTeam.seasonTeamStats.get('ties', 0) + 1
-                self.awayTeam.seasonTeamStats['ties'] = self.awayTeam.seasonTeamStats.get('ties', 0) + 1
+                for t in (self.homeTeam, self.awayTeam):
+                    st = t.seasonTeamStats
+                    st['ties'] = st.get('ties', 0) + 1
+                    if isDivisionGame:
+                        st['divTies'] = st.get('divTies', 0) + 1
+                    if isLeagueGame:
+                        st['lgTies'] = st.get('lgTies', 0) + 1
 
         
         self.status = GameStatus.Final
@@ -8533,6 +8959,99 @@ class Game:
                             max(RATING_SCALE_MIN, min(100, round(val * multiplier))))
             player.gameAttributes.calculateIntangibles()
             player.gameAttributes.calculateSkills()
+
+    def _applyDefensiveModifiers(self):
+        """Re-derive both teams' defense ratings from their live pre-game
+        attribute copy, so the pre-game chain reaches the defensive half.
+
+        Every modifier in that chain writes to `gameAttributes`, but the team
+        defense numbers (`defensePassCoverageRating` etc.) are derived from
+        PROFILE attributes at roster setup and never recomputed, and the
+        per-defender skill lookups in `runPlay`/`passPlay` read `.attributes`
+        too. Net effect without this: compression, fatigue, funding morale,
+        disposition and form were all offense-only.
+
+        Gated by DEFENSE_MODIFIERS_ENABLED — this changes the balance of every
+        game, so it is a deliberate switch rather than a silent fix.
+        """
+        from constants import DEFENSE_MODIFIERS_ENABLED
+        if not DEFENSE_MODIFIERS_ENABLED:
+            return
+        for team in (self.homeTeam, self.awayTeam):
+            try:
+                team.deriveDefenseFromRoster(useGameAttributes=True)
+            except Exception:
+                pass  # never break the game loop over a rating refresh
+
+    def _applyPositionForce(self, team):
+        """Calibration harness (FLOOS_POS_FORCE / FLOOS_POS_SLOT): multiply a single
+        roster slot's in-game attributes up on even-id teams and down on odd-id ones.
+
+        Correlation between a position's RATING and team wins cannot separate "this
+        position barely matters" from "this rating is a poor summary of the position".
+        Forcing the attributes directly measures the position's causal impact on
+        winning, independent of how well its rating describes it.
+
+        No-op unless POSITION_FORCE is non-zero.
+        """
+        from constants import POSITION_FORCE, POSITION_FORCE_SLOT
+        if not POSITION_FORCE:
+            return
+        player = (team.rosterDict or {}).get(POSITION_FORCE_SLOT)
+        if player is None or player.gameAttributes is None:
+            return
+        mult = 1.0 + (POSITION_FORCE if (team.id % 2 == 0) else -POSITION_FORCE)
+        from constants import RATING_SCALE_MIN
+        for attr in ('speed', 'hands', 'agility', 'power', 'armStrength',
+                     'accuracy', 'legStrength', 'reach',
+                     'focus', 'discipline', 'instinct'):
+            val = getattr(player.gameAttributes, attr, 0)
+            if val:
+                setattr(player.gameAttributes, attr,
+                        max(RATING_SCALE_MIN, min(100, round(val * mult))))
+        try:
+            player.gameAttributes.calculateIntangibles()
+            player.gameAttributes.calculateSkills()
+            player.updateInGameRating()
+        except Exception:
+            pass
+
+    def _applyFormOffset(self, team):
+        """Apply the club's continuous form offset — where it currently sits in
+        its own hot/cold arc. The offset itself is moved once a week by
+        seasonManager._updateTeamFormOffsets; this just cashes it in.
+
+        The offset stops UPDATING once the playoffs start. Whether it still
+        applies there is FORM_PLAYOFFS_ENABLED: ON means a club carries the arc
+        it ended the season on into the bracket, which is how a team peaking at
+        the right time turns into a Cinderella run. OFF freezes everyone back to
+        their true level for the bracket, which measurably makes the playoffs
+        more chalk.
+        """
+        from constants import (FORM_OSCILLATION_ENABLED, FORM_FORCE,
+                               FORM_PLAYOFFS_ENABLED, FORM_PLAYOFF_SCALE,
+                               FORM_DOWNSIDE_SCALE)
+        if not self.isRegularSeasonGame and not FORM_PLAYOFFS_ENABLED:
+            return
+        if FORM_FORCE:
+            # Calibration switch (FLOOS_FORM_FORCE): pin half the league at
+            # +FORM_FORCE and half at -FORM_FORCE for a whole season, so the
+            # win-rate split between the halves measures how much win
+            # probability a rating multiplier of that size actually buys.
+            offset = FORM_FORCE if (team.id % 2 == 0) else -FORM_FORCE
+        else:
+            if not FORM_OSCILLATION_ENABLED:
+                return
+            offset = getattr(team, 'formOffset', 0.0) or 0.0
+        if offset < 0:
+            # A slump should cost a club games, not blank it. See FORM_DOWNSIDE_SCALE.
+            offset *= FORM_DOWNSIDE_SCALE
+        if not self.isRegularSeasonGame:
+            offset *= FORM_PLAYOFF_SCALE
+        if not offset:
+            return
+        team._formOffsetApplied = offset
+        self._applyTeamRatingMult(team, 1.0 + offset)
 
     def _applyFormState(self, team):
         """Deprecated. Use _applyTeamDisposition (combines form + context
@@ -9406,6 +9925,16 @@ class Game:
             if getattr(play, 'isPassCompletion', False) and getattr(play, 'receiver', None) is not None:
                 creditOff(getattr(play, 'passer', None), offenseWpa * WPA_PASS_QB_SHARE)
                 creditOff(play.receiver, offenseWpa * (1.0 - WPA_PASS_QB_SHARE))
+            elif getattr(play, 'passIsDropped', False) and getattr(play, 'receiver', None) is not None:
+                # A DROP is the receiver's miss, not the passer's. Charging it
+                # entirely to the QB — as every incompletion used to be — made the
+                # metric structurally unfair to quarterbacks: they took 100% of
+                # every bad pass outcome but only WPA_PASS_QB_SHARE of the good
+                # ones, and that feeds the MVP ballot. The QB keeps a share because
+                # drop probability scales with how poorly the ball was placed.
+                creditOff(play.receiver, offenseWpa * WPA_DROP_RECEIVER_SHARE)
+                creditOff(getattr(play, 'passer', None),
+                          offenseWpa * (1.0 - WPA_DROP_RECEIVER_SHARE))
             else:
                 # incompletion / sack / throwaway → all on the QB
                 creditOff(getattr(play, 'passer', None), offenseWpa)
@@ -9670,8 +10199,24 @@ class Game:
                     return i < numPlayoffSpots
             return False
 
+        # ⚠️ And not before the ELO has settled. The pre-game win probability this reads
+        # is an ELO prior, and ELO regresses halfway to 1500 at every season reset, so
+        # in the opening weeks a "35% underdog" is mostly last season's residue. Without
+        # the gate the board opened every season labelling games upsets off a number that
+        # had not yet been earned. `self.week` is 0-indexed (the createSchedule
+        # convention), so it is converted here the same way the Criticality lookup is.
+        #
+        # ⚠️ A PLAYOFF game never sets `.week` at all — `seasonManager` stamps `gameType`
+        # and `playoffRound` on it and nothing else — so reading the week alone would
+        # score every postseason game as week 1 and suppress the badge in the four weeks
+        # it matters most. By then the ELO is as settled as it is ever going to be.
+        from constants import UPSET_MIN_WEEK
+        isPlayoff = (getattr(self, 'gameType', None) == 'playoff'
+                     or getattr(self, 'playoffRound', None))
+        eloHasSettled = bool(isPlayoff) or ((self.week or 0) + 1) >= UPSET_MIN_WEEK
+
         isUpsetAlert = False
-        if hasattr(self, 'preGameHomeWinProbability') and self.currentQuarter >= 2:
+        if eloHasSettled and hasattr(self, 'preGameHomeWinProbability') and self.currentQuarter >= 2:
             preGameHomeWp = self.preGameHomeWinProbability  # 0-1 decimal
             if preGameHomeWp < 0.35 and newHomeWp >= 65.0 and teamInPlayoffSpot(self.awayTeam):
                 isUpsetAlert = True
@@ -9698,6 +10243,13 @@ class Game:
                     'yardLine': getattr(playObj, 'yardLine', self.yardLine),
                     'playType': playObj.playType.name if hasattr(playObj, 'playType') and hasattr(playObj.playType, 'name') else 'Unknown',
                     'yardsGained': getattr(playObj, 'yardage', 0),
+                    'puntType': getattr(playObj, 'puntType', None),
+                    'puntAction': getattr(playObj, 'puntAction', None),
+                    'puntLanding': getattr(playObj, 'puntLanding', None),
+                    'puntGross': getattr(playObj, 'puntGross', None),
+                    'puntTouchback': getattr(playObj, 'puntTouchback', False),
+                    'returnYards': getattr(playObj, 'returnYardage', 0) or 0,
+                    'returnerName': getattr(getattr(playObj, 'returner', None), 'name', None),
                     'description': getattr(playObj, 'playText', ''),
                     'playResult': playObj.playResult.value if hasattr(playObj, 'playResult') and playObj.playResult else None,
                     'hoopPair': getattr(playObj, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
@@ -9755,6 +10307,19 @@ class Game:
                 'yardsGained': getattr(self.play, 'yardage', 0),
                 'description': getattr(self.play, 'playText', ''),
                 'playResult': self.play.playResult.value if hasattr(self.play, 'playResult') and self.play.playResult else None,
+                # ── Punt telemetry for the field graphic ──
+                # yardsGained on a punt is the GROSS kick, so the arc must be drawn
+                # to puntLanding and the RETURN drawn back from it as a separate
+                # leg. Without these the graphic drew one arc to the post-return
+                # spot, which is neither where the ball landed nor how it got there.
+                # All values are yards from the RECEIVING team's own goal line.
+                'puntType': getattr(self.play, 'puntType', None),
+                'puntAction': getattr(self.play, 'puntAction', None),   # fairCatch|return|muff|touchdown
+                'puntLanding': getattr(self.play, 'puntLanding', None),
+                'puntGross': getattr(self.play, 'puntGross', None),
+                'puntTouchback': getattr(self.play, 'puntTouchback', False),
+                'returnYards': getattr(self.play, 'returnYardage', 0) or 0,
+                'returnerName': (getattr(getattr(self.play, 'returner', None), 'name', None)),
                 'hoopPair': getattr(self.play, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                 'conversionPoints': getattr(self.play, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                 'isTouchdown': getattr(self.play, 'isTd', False),
@@ -10028,6 +10593,11 @@ class Game:
             if not self._isGarbageTime(_fdiff):
                 return ('hurryUp', 12)                # behind/tied → race to win the frame
 
+        # About to score a go-ahead TD from the goal line: bleed the clock first so the
+        # opponent has no time to answer. Must precede the trailing hurry-up below, which
+        # would otherwise race to score early and hand the game back.
+        if self._isTdDrainMode():
+            return ('burnClock', 40)
         if (q >= 4) and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0 and not garbageTime:
             return ('hurryUp', 12)  # Q4/OT trailing or tied under 2:00
         if q == 2 and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0:
@@ -10152,6 +10722,246 @@ class Game:
             return 4  # Snap to knee-down; play clock drain handled separately
 
         return 5  # Default
+
+    def resolvePunt(self, kicker, yardsToEndzone):
+        """Choose a punt type and resolve it. Returns (grossDistance, type, result).
+        The RETURN is resolved separately by _resolvePuntReturn.
+
+        Punting used to be one line -- a random draw inside a 20-yard band set by
+        leg strength -- so there was no reason to punt differently from your own 5
+        than from midfield, and accuracy did nothing. Leg strength IS the right
+        lever for a punt (unlike a field goal, where it only sets range), but
+        distance alone is not the job: from midfield the job is placement.
+
+        Ability is ACCURACY. Willingness to try the coffin corner comes from
+        _flair (creativity + xFactor) -- the same three-part model used for runner
+        moves and diving catches: flair decides whether you TRY something, the
+        physical attribute decides whether it WORKS.
+        """
+        from constants import (PUNT_TYPES_ENABLED, PUNT_MAX_YARDS_PER_LEG,
+                               PUNT_BOOMER_YTE, PUNT_PIN_YTE, PUNT_COFFIN_MAX_YTE,
+                               PUNT_COFFIN_MIN_YTE, PUNT_COFFIN_ELECT_BASE,
+                               PUNT_COFFIN_ELECT_FLAIR, PUNT_ACCURACY_PIVOT,
+                               PUNT_PIN_BASE, PUNT_PIN_ACC_K, PUNT_COFFIN_BASE,
+                               PUNT_COFFIN_ACC_K, PUNT_COFFIN_TOUCHBACK,
+                               PUNT_TOUCHBACK_TO)
+        leg = getattr(getattr(kicker, 'gameAttributes', None) or kicker.attributes,
+                      'legStrength', 70) if kicker else 70
+        acc = getattr(getattr(kicker, 'gameAttributes', None) or kicker.attributes,
+                      'accuracy', 75) if kicker else 75
+        ceiling = round(leg * PUNT_MAX_YARDS_PER_LEG)
+
+        if not PUNT_TYPES_ENABLED:
+            dist = batched_randint(max(1, ceiling - 20), max(2, ceiling))
+            return (dist, 'standard', None)
+
+        accEdge = (acc - PUNT_ACCURACY_PIVOT) / 20.0   # -1 .. +1
+
+        # ── Type selection ──
+        puntType = 'standard'
+        if yardsToEndzone >= PUNT_BOOMER_YTE:
+            puntType = 'boomer'          # own end -- just flip the field
+        elif PUNT_COFFIN_MIN_YTE <= yardsToEndzone <= PUNT_COFFIN_MAX_YTE:
+            elect = PUNT_COFFIN_ELECT_BASE + PUNT_COFFIN_ELECT_FLAIR * flairOf(kicker)
+            puntType = 'coffin' if _random.random() < elect else 'pin'
+        elif yardsToEndzone <= PUNT_PIN_YTE:
+            puntType = 'pin'
+
+        # ── Distance ──
+        if puntType == 'boomer':
+            dist = batched_randint(max(1, ceiling - 12), max(2, ceiling + 3))
+        elif puntType == 'pin':
+            # Shorter and higher: trades yards for hang time and placement.
+            target = yardsToEndzone - 12
+            dist = max(20, min(target + batched_randint(-4, 4), ceiling))
+        elif puntType == 'coffin':
+            target = yardsToEndzone - 7
+            dist = max(20, min(target + batched_randint(-3, 3), ceiling + 2))
+        else:
+            dist = batched_randint(max(1, ceiling - 18), max(2, ceiling))
+
+        # ── Shank ──
+        # A punt that simply comes off the foot badly. Applies to EVERY type,
+        # checked before placement because it cancels whatever was intended: no
+        # punt could previously cost a team field position through bad execution.
+        from constants import (PUNT_SHANK_BASE, PUNT_SHANK_ACC_K, PUNT_SHANK_MIN,
+                               PUNT_SHANK_MAX, PUNT_PIN_TOODEEP, PUNT_PIN_SHORT_MIN,
+                               PUNT_PIN_SHORT_MAX)
+        shankChance = max(0.004, PUNT_SHANK_BASE - PUNT_SHANK_ACC_K * accEdge)
+        if _random.random() < shankChance:
+            dist = min(batched_randint(PUNT_SHANK_MIN, PUNT_SHANK_MAX),
+                       max(1, yardsToEndzone - 1))
+            return (dist, puntType, 'shank')
+
+        # ── Placement outcome ──
+        result = None
+        landing = yardsToEndzone - dist          # yards from THEIR goal line
+        if puntType == 'coffin':
+            if _random.random() < max(0.05, min(0.92, PUNT_COFFIN_BASE + PUNT_COFFIN_ACC_K * accEdge)):
+                result = 'coffin'                 # pinned inside the 10
+                dist = yardsToEndzone - batched_randint(3, 9)
+            elif _random.random() < PUNT_COFFIN_TOUCHBACK:
+                result = 'touchback'              # sailed through -- gave the yards back
+                dist = yardsToEndzone - PUNT_TOUCHBACK_TO
+            else:
+                result = 'missed_coffin'
+                dist = yardsToEndzone - batched_randint(12, 22)
+        elif puntType == 'pin':
+            if _random.random() < max(0.05, min(0.90, PUNT_PIN_BASE + PUNT_PIN_ACC_K * accEdge)):
+                result = 'inside20'
+                dist = yardsToEndzone - batched_randint(6, 18)
+            elif _random.random() < PUNT_PIN_TOODEEP:
+                result = 'touchback'          # over-cooked it
+                dist = yardsToEndzone - PUNT_TOUCHBACK_TO
+            else:
+                # Came up short — a returnable ball around their own 25-30.
+                result = 'short_pin'
+                dist = yardsToEndzone - batched_randint(PUNT_PIN_SHORT_MIN,
+                                                        PUNT_PIN_SHORT_MAX)
+        elif landing <= 0:
+            # A boomer that outkicks the field is a touchback -- the cost of the big leg.
+            result = 'touchback'
+            dist = yardsToEndzone - PUNT_TOUCHBACK_TO
+
+        dist = max(15, min(dist, yardsToEndzone - 1))
+
+        dist = max(15, min(dist, yardsToEndzone - 1))
+        return (dist, puntType, result)
+
+    def _pickReturner(self, team):
+        """Most explosive man on the roster (speed + agility) — a real team puts its
+        best athlete back there rather than a fixed roster slot."""
+        cands = [team.rosterDict.get(k) for k in ('wr1', 'wr2', 'rb')]
+        cands = [p for p in cands if p is not None]
+        if not cands:
+            return None
+        def burst(p):
+            a = getattr(p, 'gameAttributes', None) or p.attributes
+            return (getattr(a, 'speed', 70) + getattr(a, 'agility', 70)) / 2
+        return max(cands, key=burst)
+
+    def _resolvePuntReturn(self, landing, puntType, receivingTeam):
+        """Resolve what the receiving team does with a punt.
+
+        Returns a dict: {'action', 'returner', 'returnYards', 'muffRecoveredBy'}
+        where action is 'fairCatch' | 'return' | 'muff' | 'touchdown'.
+
+        Fair catch is a DECISION, not a distance rule — the returner weighs how deep
+        he is against how quickly coverage is on him, with instinct deciding how well
+        he reads it. A pin or coffin punt is short and high, so it hangs: coverage
+        arrives sooner, fair catches go up and muffs get likelier. That is the
+        trade the punter is making when he gives up distance for placement.
+        """
+        from constants import (PUNT_RETURN_ENABLED, PUNT_RETURN_BASE, PUNT_RETURN_SPREAD,
+                               PUNT_RETURN_ATTR_K, PUNT_RETURN_BREAK_CHANCE,
+                               PUNT_RETURN_BREAK_MEAN, PUNT_FAIRCATCH_BASE,
+                               PUNT_FAIRCATCH_DEEP_INSIDE, PUNT_FAIRCATCH_HANG_BONUS,
+                               PUNT_FAIRCATCH_INSTINCT_K, PUNT_MUFF_BASE, PUNT_MUFF_HANG_K,
+                               PUNT_MUFF_ATTR_K, PUNT_MUFF_RECOVER_KICKING)
+        out = {'action': 'return', 'returner': None, 'returnYards': 0, 'muffRecoveredBy': None}
+        if not PUNT_RETURN_ENABLED:
+            return {'action': 'fairCatch', 'returner': None, 'returnYards': 0,
+                    'muffRecoveredBy': None}
+        returner = self._pickReturner(receivingTeam)
+        out['returner'] = returner
+        a = (getattr(returner, 'gameAttributes', None) or
+             getattr(returner, 'attributes', None)) if returner else None
+        hang = 1.0 if puntType in ('pin', 'coffin') else 0.0
+
+        # ── Muff: hands and focus prevent it, a hanging ball with coverage arriving
+        #    causes it. The swing play punting never had. ──
+        handsEdge = 0.0
+        if a is not None:
+            handsEdge = ((getattr(a, 'hands', 78) + getattr(a, 'focus', 80)) / 2 - 80) / 20.0
+        muffChance = max(0.0, PUNT_MUFF_BASE + PUNT_MUFF_HANG_K * hang - PUNT_MUFF_ATTR_K * handsEdge)
+        if _random.random() < muffChance:
+            out['action'] = 'muff'
+            out['muffRecoveredBy'] = ('kicking' if _random.random() < PUNT_MUFF_RECOVER_KICKING
+                                      else 'receiving')
+            return out
+
+        # ── Fair catch decision ──
+        instinct = 0.0
+        if a is not None:
+            instinct = (getattr(a, 'instinct', 80) - 80) / 20.0
+        fairChance = PUNT_FAIRCATCH_BASE + PUNT_FAIRCATCH_HANG_BONUS * hang
+        if landing <= PUNT_FAIRCATCH_DEEP_INSIDE:
+            fairChance += 0.55        # pinned deep: almost never worth running out
+        # A sharp returner both waves off the bad ones AND takes the ones with room,
+        # so instinct pushes the decision toward whichever is correct here.
+        fairChance += PUNT_FAIRCATCH_INSTINCT_K * instinct * (1.0 if hang or landing <= 20 else -1.0)
+        if _random.random() < max(0.0, min(0.95, fairChance)):
+            out['action'] = 'fairCatch'
+            return out
+
+        # ── The return ──
+        edge = 0.0
+        if a is not None:
+            edge = ((getattr(a, 'speed', 80) + getattr(a, 'agility', 80)) / 2 - 80) / 20.0
+        mean = PUNT_RETURN_BASE + PUNT_RETURN_ATTR_K * edge
+        breakChance = PUNT_RETURN_BREAK_CHANCE * (1.0 + max(0.0, edge))
+        if _random.random() < breakChance:
+            yards = _rnd(np.random.exponential(PUNT_RETURN_BREAK_MEAN)) + 10
+        else:
+            yards = max(0, _rnd(np.random.normal(mean, PUNT_RETURN_SPREAD)))
+        # `landing` is the returner's distance from HIS OWN goal line, so the field
+        # ahead of him is the whole rest of the field. Taking it to the house is
+        # possible — the old inline version capped it below that and made a punt
+        # return touchdown structurally impossible.
+        fieldAhead = 100 - landing
+        if yards >= fieldAhead:
+            out['action'] = 'touchdown'
+            out['returnYards'] = fieldAhead
+        else:
+            out['returnYards'] = max(0, yards)
+        return out
+
+    def _puntPlayText(self, punterName):
+        """Punt play-by-play: the kick, then what the receiving team did with it.
+
+        This used to read "X punts" and stop, so a fair catch, a touchback, a
+        40-yard return and a shank all produced identical text. Split out of
+        formatPlayText so it can be exercised on its own.
+        """
+        play = self.play
+        gross = getattr(play, 'puntGross', None) or getattr(play, 'yardage', 0) or 0
+        action = getattr(play, 'puntAction', None)
+        result = getattr(play, 'puntResult', None)
+        landing = getattr(play, 'puntLanding', None)
+        retYds = int(getattr(play, 'returnYardage', 0) or 0)
+        retName = getattr(getattr(play, 'returner', None), 'name', None)
+        base = '{} punts {} yards'.format(punterName, gross)
+
+        if result == 'shank':
+            return '{} shanks the punt, {} yards'.format(punterName, gross)
+        if getattr(play, 'puntTouchback', False):
+            return '{}, touchback'.format(base)
+        if action == 'touchdown' and retName:
+            return '{}, {} returns it {} yards for a TOUCHDOWN'.format(base, retName, retYds)
+        if action == 'muff':
+            muffer = retName or 'the returner'
+            if getattr(play, 'puntMuffRecoveredBy', None) == 'kicking':
+                return '{}, {} muffs it and {} recover'.format(
+                    base, muffer, getattr(play.offense, 'name', 'the kicking team'))
+            return '{}, {} muffs it but recovers'.format(base, muffer)
+
+        if action == 'return' and retName:
+            text = '{}, {} returns it {} yards'.format(base, retName, retYds)
+        elif action == 'fairCatch':
+            # A ball coming down inside the 10 is run down and downed by the
+            # coverage team, not waved off by a returner standing under it.
+            if landing is not None and landing <= 10:
+                return '{}, downed at the {}'.format(base, landing)
+            if retName and landing is not None:
+                text = '{}, fair catch by {} at the {}'.format(base, retName, landing)
+            elif retName:
+                text = '{}, fair catch by {}'.format(base, retName)
+            else:
+                text = base
+        else:
+            text = base
+
+        return text
 
     def _shouldOnsideKick(self) -> bool:
         """
@@ -10392,17 +11202,13 @@ class Game:
     def _estimateKickConversionProb(self, scoringTeam) -> float:
         """Make odds for the safe PAT kick (from the 15, like `_simulateExtraPointPlay`),
         so the last-chance chooser can weigh it against the go-for-it rungs on the same
-        scale. Mirrors `_estimateFgProbability`'s model at that fixed spot."""
+        scale. Shares Game.fgMakeProbability, so it cannot drift from the real kick."""
         kicker = scoringTeam.rosterDict.get('k')
         if not kicker:
             return 0.0
         fgDist = 15 + self.gameRules.fgSnapDistance
-        base = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
-        normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
-        prob = base * (0.52 + normalizedSkill * 0.85)
-        if fgDist < 30:
-            prob = min(0.96, prob + 0.10)
-        return max(0.05, min(0.96, prob))
+        # fgMakeProbability already applies the chip-shot bonus and the caps.
+        return self.fgMakeProbability(kicker, fgDist)
 
     def _lastChanceLeadConversion(self, scoringTeam, goRungs: list, fallback: dict) -> dict:
         """Innings, last try of the final at-bat, already AHEAD in the TOP half. Nothing is
@@ -10934,7 +11740,7 @@ class Game:
         if self.play.playType == PlayType.FieldGoal:
             return False
         if self.play.playType == PlayType.Punt:
-            return False
+            return False   # change of possession — clock stops either way
         if self.play.playType == PlayType.Spike:
             return False
         if self.play.scoreChange:
@@ -11343,19 +12149,11 @@ class Game:
                 # In FG range, WP should reflect the near-certainty of a made kick.
                 yte = self.yardsToEndzone
                 fgDist = yte + 17
-                # Estimate FG make probability using the SAME constants as fieldGoalTry()
-                # (slope 0.18, skill 0.52 + ×0.85, chip +0.10 under 30, cap 0.96) so OT-tied
-                # WP matches the kick the engine will actually roll.
-                baseFgProb = 1 / (1 + math.exp(0.18 * (fgDist - 52)))
+                # Shared with the kick the engine will actually roll — see
+                # Game.fgMakeProbability. These used to carry their own copy of the
+                # curve and silently drifted when the model changed.
                 kicker = self.offensiveTeam.rosterDict.get('k')
-                if kicker:
-                    normalizedSkill = (kicker.gameAttributes.overallRating - 50) / 50
-                    fgProb = baseFgProb * (0.52 + normalizedSkill * 0.85)
-                    if fgDist < 30:
-                        fgProb = min(0.96, fgProb + 0.10)
-                    fgProb = max(0.05, min(0.96, fgProb))
-                else:
-                    fgProb = baseFgProb
+                fgProb = self.fgMakeProbability(kicker, fgDist)
                 # Continuous scoring probability: union of two paths —
                 # FG probability (viable when in range, drops smoothly to
                 # ~0 outside of kicker range) and drive-TD probability
@@ -12199,21 +12997,12 @@ class Play():
         self.kicker.addFgAttempt(self.game.isRegularSeasonGame)
         yardsToFG = self.yardsToEndzone + 17
         self.fgDistance = yardsToFG
-        distanceFactor = 0.18   # Steeper drop-off with distance for realistic miss rates
-        skillFactor = 0.85      # Tighter kicker skill impact range
-
-        # Base probability uses sigmoid centered at 52 yards
-        baseProbability = round(1 / (1 + math.exp(distanceFactor * (self.fgDistance - 52))), 2)
-        normalizedSkill = (self.kicker.gameAttributes.overallRating - 50) / 50
-
-        # Base skill probability (no pressure)
-        probability = baseProbability * (0.52 + normalizedSkill * skillFactor)
-
-        # Bonus for chip shots (under 30 yards)
-        if self.fgDistance < 30:
-            probability = min(0.96, probability + 0.10)
-
-        probability = max(0.05, min(0.96, probability))
+        # Shared with the coach's attempt decision — see Game.fgMakeProbability.
+        probability = self.game.fgMakeProbability(self.kicker, self.fgDistance)
+        # Raw distance curve, kept for the insight panel so the box score can show
+        # how much of the outcome was distance vs kicker.
+        from constants import FG_CURVE_CENTER as _FGC, FG_CURVE_SLOPE as _FGS
+        baseProbability = 1 / (1 + math.exp(_FGS * (self.fgDistance - _FGC)))
 
         # ── Kicker Pressure System ──
         # FG attempts are uniquely high-pressure — apply a direct probability
@@ -12311,7 +13100,8 @@ class Play():
             'distance': yardsToFG,
             'baseProbability': round(baseProbability * 100, 1),
             'finalProbability': probability,
-            'kickerRating': self.kicker.gameAttributes.overallRating,
+            'kickerAccuracy': getattr(self.kicker.gameAttributes, 'accuracy', 0),
+            'kickerMaxFg': getattr(self.kicker, 'maxFgDistance', 0),
             'kickerName': self.kicker.name,
             'pressureAdj': self.keyPressureMod,
             'gamePressure': round(self.game.gamePressure),
@@ -12581,7 +13371,7 @@ class Play():
         """
         from constants import AWAKENED_FORCE_MIN_GAIN, AWAKENED_FORCE_GAIN_TAIL
         floor = max(AWAKENED_FORCE_MIN_GAIN, int(self.game.yardsToFirstDown or 0))
-        tail = int(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
+        tail = _rnd(np.random.exponential(AWAKENED_FORCE_GAIN_TAIL))
         return int(min(self.yardsToEndzone, floor + tail))
 
     def _holdUpShortCap(self, yardage):
@@ -12633,6 +13423,7 @@ class Play():
         # direction matches the play (dives inside, sweeps to the edge). Falls
         # back to the coach's gap tendencies when concepts are off.
         from constants import RUN_CONCEPT_ENABLED as _RC_ON, RUN_CONCEPTS as _RCS
+        from constants import RUN_GATE_MODEL_V2
         _conceptName = getattr(self, 'runConcept', None)
         _conceptGaps = _RCS.get(_conceptName, {}).get('gaps') if _RC_ON else None
         _forcedGap = getattr(self, '_forcedGap', None)   # trick plays (statue/reverse) force the edge
@@ -12672,6 +13463,7 @@ class Play():
         # the multiplier. Mutates `scheme` in place.
         self._applyPreSnapRead(scheme, isRun=True)
         effectiveRunDef = self.defense.defenseRunCoverageRating * scheme['runDefMult']
+        effectiveRunDef *= self.game.leadEaseOffFactor()  # leader sits on it, plays soft
 
         # --- Run CONCEPT: deception vs the defense's commitment, gated by execution ---
         # The coach called the concept (self.runConcept). Its matchup edge vs the
@@ -12825,21 +13617,26 @@ class Play():
                 self.yardage = max(-1, min(1, int(round(np.random.normal(QB_SNEAK_STUFF_MEAN, 0.7)))))
             self.insights['sneak'] = {'converted': self.sneakConverted,
                                       'chance': round(chance, 1)}
+        elif RUN_GATE_MODEL_V2:
+            # Three stages with carrier momentum carried between them — see
+            # _resolveRunGates. Sets self.yardage and self.tackledBy.
+            self._gateOutcome = self._resolveRunGates(
+                gapQuality, gapType, gate2Chance, gate3Chance, scheme)
         elif batched_randint(1, 100) > gate1Chance:
             # Stuffed at the line — -2 to 2 yards
-            self.yardage = max(-3, min(3, int(np.random.normal(0.5, 1.3))))
+            self.yardage = max(-3, min(3, _rnd(np.random.normal(0.5, 1.3))))
         else:
             # Through the line: 2-6 baseline yards (avg 3.5)
-            self.yardage = max(2, min(7, int(np.random.normal(3.5, 1.0))))
+            self.yardage = max(2, min(7, _rnd(np.random.normal(3.5, 1.0))))
             if batched_randint(1, 100) > gate2Chance:
                 # Wrapped up at second level: 1-5 more yards (avg 3)
-                self.yardage += max(1, min(5, int(np.random.normal(3.0, 1.2))))
+                self.yardage += max(1, min(5, _rnd(np.random.normal(2.4, 1.2))))
             else:
                 # Broke through: 5-12 more yards (avg 8)
-                self.yardage += max(4, min(12, int(np.random.normal(8.0, 2.0))))
+                self.yardage += max(4, min(12, _rnd(np.random.normal(8.0, 2.0))))
                 if batched_randint(1, 100) > gate3Chance:
                     # Chased down by deep coverage: trimmed (avg 11→8.5, cap 22→16)
-                    self.yardage += max(4, min(16, int(np.random.normal(8.5, 3.0))))
+                    self.yardage += max(4, min(16, _rnd(np.random.normal(7.6, 3.0))))
                 else:
                     # Housecall — exponential tail, TRIMMED (mean 22→14, min 12→10)
                     # so a full game rarely tops ~7 ypc and the 400-yard freak lines
@@ -12847,7 +13644,7 @@ class Play():
                     # slice of runs, so it barely moves the mean); this only clips
                     # the boom-run magnitudes, keeping the RB's normal workload/impact.
                     remaining = self.yardsToEndzone - self.yardage
-                    self.yardage += min(remaining, max(10, int(np.random.exponential(14))))
+                    self.yardage += min(remaining, max(10, _rnd(np.random.exponential(12))))
 
         self.yardage = min(self.yardage, self.yardsToEndzone)
 
@@ -12884,10 +13681,55 @@ class Play():
         # Beat the tackler first (stiff arm / spin / hurdle), THEN reach for the
         # marker — that's the real sequence, and it means a move can carry a
         # carrier into stretch range who wasn't there before.
-        _moveBonus, self.runnerMove, _moveFumbleBump = self._runnerMove(self.runner, self.tackledBy)
+        # Yardage at this instant IS the contact point — _runnerMove is gated to
+        # it. Everything gained past here is yards after contact.
+        _contactYards = self.yardage
+        _gate = getattr(self, '_gateOutcome', None)
+        if _gate is not None:
+            # V2 resolved contacts inside the cascade; the post-hoc move would
+            # double-count. Surface the last move it produced for the PBP.
+            _moveBonus, _moveFumbleBump = 0, 0
+            _mvs = [m for m in (_gate.get('moves') or []) if not str(m).endswith('_miss')]
+            self.runnerMove = _mvs[-1] if _mvs else None
+            if self.runnerMove:
+                self.insights['runnerMove'] = self.runnerMove
+        else:
+            _moveBonus, self.runnerMove, _moveFumbleBump = self._runnerMove(self.runner, self.tackledBy)
         if _moveBonus:
             self.yardage = min(self.yardage + _moveBonus, self.yardsToEndzone)
             self.insights['runnerMove'] = self.runnerMove
+        # Advanced RB metrics. The run game computed all of this already and threw
+        # it away — a broken tackle had no stat to land in (see _runnerMove), so
+        # elusiveness was invisible in the box score.
+        try:
+            from stat_tracker import StatCategory as _SCR
+            _rsr = self.game.isRegularSeasonGame
+            if _gate is not None:
+                # Real tackle attempts and breaks, counted per stage by the gate
+                # model. A failed gate IS a tackle attempt — that is the signal
+                # the flat cascade never surfaced.
+                _att = int(_gate.get('attempts', 0) or 0)
+                _brk = int(_gate.get('breaks', 0) or 0)
+                if _att:
+                    self.runner.addAdvanced(_SCR.RUSHING, 'tackleAttempts', _att, _rsr)
+                if _brk:
+                    self.runner.addAdvanced(_SCR.RUSHING, 'brokenTackles', _brk, _rsr)
+                _mvAtt = len(_gate.get('moves') or [])
+                if _mvAtt:
+                    self.runner.addAdvanced(_SCR.RUSHING, 'moveAttempts', _mvAtt, _rsr)
+                _fc = _gate.get('firstContactYards')
+                if _fc is not None:
+                    self._contactYards = _fc
+            elif self.runnerMove:
+                self.runner.addAdvanced(_SCR.RUSHING, 'moveAttempts', 1, _rsr)
+                if not str(self.runnerMove).endswith('_miss'):
+                    self.runner.addAdvanced(_SCR.RUSHING, 'brokenTackles', 1, _rsr)
+            self.runner.addAdvanced(_SCR.RUSHING, 'gapQualitySum',
+                                    int(round(gapQuality)), _rsr)
+            if _gate is None:
+                self._contactYards = _contactYards
+        except Exception:
+            pass
 
         # Stretch for the first down / goal line — a confident back reaches it out
         # to convert; the reach can expose the ball (fumble bump, resolved below).
@@ -13019,6 +13861,20 @@ class Play():
         # Update stats
         self.runner.addRushYards(self.yardage, self.game.isRegularSeasonGame)
         self.runner.addCarry(self.game.isRegularSeasonGame)
+        # Yards after contact + stuffs, banked with the carry so the denominators
+        # line up. _contactYards is the yardage at the moment the primary tackler
+        # arrived (see the runner-move block above); anything past it was earned
+        # after being hit.
+        try:
+            from stat_tracker import StatCategory as _SCR2
+            _rsr2 = self.game.isRegularSeasonGame
+            _yac = self.yardage - int(getattr(self, '_contactYards', self.yardage))
+            if _yac > 0:
+                self.runner.addAdvanced(_SCR2.RUSHING, 'yardsAfterContact', _yac, _rsr2)
+            if self.yardage <= 0:
+                self.runner.addAdvanced(_SCR2.RUSHING, 'stuffs', 1, _rsr2)
+        except Exception:
+            pass
         self.defense.gameDefenseStats['runYardsAlwd'] += self.yardage
         self.defense.gameDefenseStats['totalYardsAlwd'] += self.yardage
         if self.game.currentQuarter <= 2:
@@ -13048,7 +13904,8 @@ class Play():
 
         # Base sack rate at even matchup (differential = 0) is ~3%
         # Logistic function: probability increases smoothly with rush advantage
-        baseSackRate = 3.0
+        from constants import SACK_BASE_RATE, SACK_PROB_CAP
+        baseSackRate = SACK_BASE_RATE
         steepness = 0.15
 
         # Shift the curve so 0 differential = baseSackRate
@@ -13058,7 +13915,7 @@ class Play():
         # longer than normal — the standard 15% cap underestimates real risk.
         # Lift cap to 28% so a strong rush against thin protection can wreck
         # the play before it leaves the QB's hand.
-        capMax = 28 if dropbackDepth >= 6 else 15
+        capMax = 28 if dropbackDepth >= 6 else SACK_PROB_CAP
         return max(0.5, min(capMax, probability))
 
     def _qbEscapesSack(self) -> bool:
@@ -13340,22 +14197,196 @@ class Play():
 
     def _flair(self, player):
         """0..1 — how likely this player is to TRY something audacious.
+        Thin wrapper on the module-level flairOf so Game (punt selection) and Play
+        (runner moves, diving catches) share one implementation."""
+        return flairOf(player)
 
-        Built from creativity + xFactor, which were nearly inert in play
-        resolution before this (xFactor appeared in one QB-mobility calculation;
-        creativity in two concept exec weights). Flair never decides whether a
-        move WORKS — that's the physical attribute — only whether it's attempted."""
-        from constants import (FLAIR_PIVOT, FLAIR_RANGE, FLAIR_CREATIVITY_W,
-                               FLAIR_XFACTOR_W)
-        if player is None:
-            return 0.0
-        a = getattr(player, 'gameAttributes', None) or getattr(player, 'attributes', None)
-        if a is None:
-            return 0.0
-        cre = (getattr(a, 'creativity', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
-        xf = (getattr(a, 'xFactor', FLAIR_PIVOT) - FLAIR_PIVOT) / FLAIR_RANGE
-        raw = cre * FLAIR_CREATIVITY_W + xf * FLAIR_XFACTOR_W    # ~-1..+1
-        return max(0.0, min(1.0, 0.5 + raw / 2.0))               # 0..1, 0.5 at neutral
+    def _levelDefender(self, level, gapType):
+        """The defender the carrier meets at each stage of a run.
+
+        Uses the sim's offense->defense position mapping (TE->DE, RB->LB, QB->S,
+        WR->CB), so each stage is contested by a real, named player rather than a
+        team rating. Level 1 is the line, 2 the second level, 3 the secondary.
+        """
+        d = getattr(self.defense, 'rosterDict', None) or {}
+        if level == 1:
+            # Inside runs meet the LB filling; edge runs meet the DE setting the edge.
+            return d.get('rb') if gapType in ('A-gap', 'B-gap') else d.get('te')
+        if level == 2:
+            return d.get('rb') or d.get('te')
+        return d.get('qb') or d.get('wr1')
+
+    def _contactContest(self, carrier, tackler, baseChance, breaksUsed):
+        """One tackle attempt. Returns (broke, moveName).
+
+        The carrier either lowers a shoulder and runs through it, or elects a
+        move. Flair (creativity + xFactor) decides whether he TRIES something
+        audacious; the move's own physical attribute decides whether it works —
+        the same split `_runnerMove` uses. Powering through leans on power and
+        discipline instead, so a battering-ram back and a shifty one both have a
+        way to win, just different ones.
+        """
+        from constants import (RUN_CONTACT_SWING, RUN_MOVE_ELECT_BASE,
+                               RUN_MOVE_ELECT_FLAIR, RUN_MOVE_BONUS,
+                               RUN_SECOND_BREAK_PENALTY, RUNNER_MOVES)
+        if carrier is None:
+            return (False, None)
+        a = getattr(carrier, 'gameAttributes', None) or carrier.attributes
+
+        # Defender resistance: tackling skill blended with the discipline to stay
+        # square — the same pairing that resists a move elsewhere in the sim.
+        defRating = self.defense.defenseRunCoverageRating
+        if tackler is not None:
+            try:
+                dAttrs = tackler.attributes.getDefensiveAttributes(tackler.position)
+                tAttrs = getattr(tackler, 'gameAttributes', None) or tackler.attributes
+                defRating = (dAttrs.get('tackling', defRating) * 0.65
+                             + getattr(tAttrs, 'discipline', 80.0) * 0.35)
+            except Exception:
+                pass
+
+        moveName = None
+        elect = RUN_MOVE_ELECT_BASE + RUN_MOVE_ELECT_FLAIR * self._flair(carrier)
+        if _random.random() < max(0.0, min(1.0, elect)):
+            # Pick the move this carrier is built for, same selection as _runnerMove.
+            best, bestVal = None, -1e9
+            for name, spec in RUNNER_MOVES.items():
+                val = sum(getattr(a, attr, 80) * w for attr, w in spec['attrs'].items())
+                if val > bestVal:
+                    best, bestVal = name, val
+            carrierRating = bestVal + RUN_MOVE_BONUS
+            moveName = best
+        else:
+            # Run through it: power carries the contact, discipline keeps the feet.
+            carrierRating = getattr(a, 'power', 80) * 0.75 + getattr(a, 'discipline', 80) * 0.25
+
+        chance = baseChance + (carrierRating - defRating) * RUN_CONTACT_SWING
+        if breaksUsed:
+            chance -= RUN_SECOND_BREAK_PENALTY   # a second break is genuinely rare
+        broke = batched_randint(1, 100) <= max(2, min(95, chance))
+        if not broke and moveName:
+            moveName = f'{moveName}_miss'
+        return (broke, moveName)
+
+    def _resolveRunGates(self, gapQuality, gapType, gate2Chance, gate3Chance, scheme):
+        """Three-stage run resolution with carrier momentum carried between gates.
+
+        Replaces a flat pass/fail cascade in which a broken tackle was a post-hoc
+        yardage bonus rather than the thing that GOT the runner to the next level.
+
+          Gate 1 (the line) is tiered by gap quality: a wide-open gap releases the
+          carrier untouched; a partial gap is an even contest with a defender in
+          the hole; a plugged gap gives the defender the edge and only an elite
+          back busts out of it.
+
+          Gate 2 (second level) is where state matters most. Through clean means
+          full speed and an edge; through after breaking a tackle means the legs
+          are gone and it is roughly even; squeezed through a pile means a real
+          disadvantage. It is rarely uncontested — only when the linebacker is
+          blitzing or pulled into coverage.
+
+          Gate 3 (open field) is a pure speed contest for a carrier still
+          untouched, and a speed/agility contest with moves available otherwise.
+
+        Sets self.yardage and returns a dict of what happened for the box score.
+        """
+        from constants import (RUN_GAP_OPEN, RUN_GAP_PLUGGED, RUN_CONTACT_BASE,
+                               RUN_CONTACT_PLUGGED, RUN_BREAK_BASE, RUN_STATE_EDGE,
+                               RUN_MAX_BREAKS)
+        carrier = self.runner
+        state = 'clean'
+        breaks = 0      # tackles broken DOWNFIELD (gates 2 and 3)
+        lineWins = 0    # contacts won at the line — counted separately
+        attempts = 0
+        firstContactYards = None
+        moves = []
+
+        # ── GATE 1: the line ────────────────────────────────────────────────
+        if gapQuality >= RUN_GAP_OPEN:
+            # Wide open — nobody to beat. Straight through at full speed.
+            self.yardage = max(2, min(7, _rnd(np.random.normal(3.25, 1.0))))
+        else:
+            plugged = gapQuality < RUN_GAP_PLUGGED
+            base = RUN_CONTACT_PLUGGED if plugged else RUN_CONTACT_BASE
+            tackler = self._levelDefender(1, gapType)
+            attempts += 1
+            # The back meets the front a yard or two deep, not at the line itself.
+            firstContactYards = batched_randint(0, 2)
+            broke, mv = self._contactContest(carrier, tackler, base, breaks)
+            if mv:
+                moves.append(mv)
+            if not broke:
+                self.tackledBy = tackler
+                self.yardage = (max(-3, min(2, _rnd(np.random.normal(0.2, 1.2)))) if plugged
+                                else max(-2, min(3, _rnd(np.random.normal(1.1, 1.3)))))
+                return {'level': 1, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
+                        'state': state, 'moves': moves,
+                        'firstContactYards': firstContactYards}
+            lineWins += 1   # got through the front — NOT a broken tackle
+            state = 'fought' if plugged else 'contacted'
+            self.yardage = max(1, min(7, _rnd(np.random.normal(3.05, 1.1))))
+
+        # ── GATE 2: second level ────────────────────────────────────────────
+        # A blitzing linebacker is out of the run fit, which makes a clean second
+        # level much more likely — but it is an EDGE, not a free pass. Letting a
+        # blitz skip the stage outright sent every blitzed run to the open field.
+        from constants import RUN_BLITZ_EDGE
+        lbEdge = RUN_BLITZ_EDGE if (scheme and scheme.get('blitzPackage') is not None) else 0
+        if True:
+            tackler = self._levelDefender(2, gapType)
+            edge = RUN_STATE_EDGE.get(state, 0)
+            attempts += 1
+            if firstContactYards is None:
+                firstContactYards = self.yardage
+            if batched_randint(1, 100) > max(4, min(92, gate2Chance + edge + lbEdge)):
+                # A linebacker has him. Break it, or the run ends here.
+                if (breaks + lineWins) < RUN_MAX_BREAKS:
+                    broke, mv = self._contactContest(
+                        carrier, tackler, RUN_BREAK_BASE, breaks + lineWins)
+                    if mv:
+                        moves.append(mv)
+                else:
+                    broke = False
+                if not broke:
+                    self.tackledBy = tackler
+                    self.yardage += max(1, min(5, _rnd(np.random.normal(2.4, 1.2))))
+                    return {'level': 2, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
+                            'state': state, 'moves': moves,
+                            'firstContactYards': firstContactYards}
+                breaks += 1
+                state = 'contacted'
+                # Broke it, but he is not running clean — a smaller gain than the
+                # back who came through the second level untouched.
+                self.yardage += max(2, min(9, _rnd(np.random.normal(3.9, 1.6))))
+            else:
+                self.yardage += max(4, min(12, _rnd(np.random.normal(6.7, 2.0))))
+
+        # ── GATE 3: open field ──────────────────────────────────────────────
+        tackler = self._levelDefender(3, gapType)
+        edge = RUN_STATE_EDGE.get(state, 0)
+        if batched_randint(1, 100) > max(4, min(92, gate3Chance + edge)):
+            attempts += 1
+            if firstContactYards is None:
+                firstContactYards = self.yardage
+            # A clean carrier at full speed is simply run down — no move saves you
+            # from a correct angle. A contacted one can still make a man miss.
+            broke = False
+            if state != 'clean' and breaks < RUN_MAX_BREAKS:
+                broke, mv = self._contactContest(
+                    carrier, tackler, RUN_BREAK_BASE, breaks + lineWins)
+                if mv:
+                    moves.append(mv)
+            if not broke:
+                self.tackledBy = tackler
+                self.yardage += max(4, min(16, _rnd(np.random.normal(7.6, 3.0))))
+                return {'level': 3, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins,
+                        'state': state, 'moves': moves,
+                        'firstContactYards': firstContactYards}
+            breaks += 1
+        remaining = self.yardsToEndzone - self.yardage
+        self.yardage += min(remaining, max(10, _rnd(np.random.exponential(12))))
+        return {'level': 4, 'attempts': attempts, 'breaks': breaks, 'lineWins': lineWins, 'state': state,
+                'moves': moves, 'firstContactYards': firstContactYards}
 
     def _runnerMove(self, carrier, tackler):
         """A carrier about to be brought down tries to beat the tackler.
@@ -13922,21 +14953,22 @@ class Play():
             maxHeave = 50 + (arm - 70) * 0.4   # ~46 yds (weak arm) → ~62 yds (elite)
             return max(0, int(min(self.yardsToEndzone, maxHeave)))
 
+        from constants import PASS_DEPTH_MEANS as _PDM
         passTypeParams = {
-            PassType.short:    {'mean': 3,    'stdDev': 1.0},
-            PassType.medium:   {'mean': 6.5,  'stdDev': 2.0},
-            PassType.long:     {'mean': 15,   'stdDev': 3.5},
-            PassType.deep:     {'mean': 24,   'stdDev': 4.5},
+            PassType.short:    {'mean': _PDM['short'],  'stdDev': 1.2},
+            PassType.medium:   {'mean': _PDM['medium'], 'stdDev': 2.4},
+            PassType.long:     {'mean': _PDM['long'],   'stdDev': 3.5},
+            PassType.deep:     {'mean': _PDM['deep'],   'stdDev': 4.5},
             PassType.hailMary: {'mean': 45,   'stdDev': 8.0},
         }
         # A called screen (route concept) is a throw at or behind the line — the
         # gain is all run-after-catch, so air yards are ~0 regardless of the
         # target's nominal route depth.
         if getattr(self, 'passConcept', 'standard') == 'screen':
-            return max(0, int(np.random.normal(0.4, 0.8)))
+            return max(0, _rnd(np.random.normal(0.4, 0.8)))
 
         params = passTypeParams.get(passType, passTypeParams[PassType.medium])
-        airYards = int(np.random.normal(params['mean'], params['stdDev']))
+        airYards = _rnd(np.random.normal(params['mean'], params['stdDev']))
         return max(0, airYards)
 
     def passPlay(self, playKey):
@@ -14014,10 +15046,12 @@ class Play():
         else:
             basePassRush = self.defense.defensePassRushRating
         effectivePassRush = basePassRush * scheme['passRushMult']
+        effectivePassRush *= self.game.leadEaseOffFactor()  # rush three, drop eight
         effectivePassRush *= getattr(self, '_trickSackMult', 1.0)  # flea flicker blown up -> rush gets home
         self._trickSackMult = 1.0
         # Team-level pass coverage as fallback (individual matchups applied per-receiver below)
         effectivePassDef = self.defense.defensePassCoverageRating * scheme['passDefMult']
+        effectivePassDef *= self.game.leadEaseOffFactor()  # soft coverage, keep it in front
 
         # --- Play-action: a sold fake vs a run-committed defense freezes the second
         # level -> receivers open (softer coverage) and the rush is slower. Vs a
@@ -14207,6 +15241,15 @@ class Play():
             self.yardage = -int(np.random.choice(sackYardages, p=sackCurve))
             self.defense.gameDefenseStats['sacks'] += 1
             self.isSack = True
+            # Sacks were credited to the defense but never charged to the QB, so
+            # nothing in a quarterback's own record showed he took them.
+            try:
+                from stat_tracker import StatCategory as _SC
+                if self.passer is not None:
+                    self.passer.addAdvanced(_SC.PASSING, 'sacked', 1,
+                                            self.game.isRegularSeasonGame)
+            except Exception:
+                pass
             fumbleRoll = batched_randint(1,100)
             fumbleResist = round(((self.passer.gameAttributes.power*.7) + (self.passer.gameAttributes.discipline*1.3)/2) + self.passer.gameAttributes.luckModifier)
             fumbleResistModifyer = 0
@@ -14436,6 +15479,47 @@ class Play():
                 if self.targetSideline:
                     throwQuality = max(5, throwQuality * 0.90)
 
+                # ── Advanced QB metrics, banked at release ──
+                # Throw quality is the sim's own measure of how well the ball was
+                # put there. It drives resolution but was never kept, so a QB's
+                # box score could not separate "threw it badly" from "receiver
+                # dropped it" or "was covered".
+                try:
+                    from constants import (BAD_THROW_THRESHOLD as _BTT,
+                                           GOOD_THROW_THRESHOLD as _GTT)
+                    from stat_tracker import StatCategory as _SC
+                    _rs = self.game.isRegularSeasonGame
+                    self.throwQualityValue = throwQuality
+                    self.passer.addAdvanced(_SC.PASSING, 'throws', 1, _rs)
+                    self.passer.addAdvanced(_SC.PASSING, 'throwQualitySum',
+                                            int(round(throwQuality)), _rs)
+                    if throwQuality < _BTT:
+                        self.passer.addAdvanced(_SC.PASSING, 'badThrows', 1, _rs)
+                    elif throwQuality >= _GTT:
+                        # A well-placed ball. Counted at RELEASE like the other two, so it
+                        # covers incompletions and does not credit the receiver's hands.
+                        self.passer.addAdvanced(_SC.PASSING, 'goodThrows', 1, _rs)
+                    # Intended depth of the throw, banked at RELEASE so aDOT
+                    # covers incompletions too (calculatePassYardage only rolls on
+                    # the completion path). Means mirror its passTypeParams.
+                    from constants import PASS_DEPTH_MEANS as _PDM2
+                    _air = {PassType.short: _PDM2['short'], PassType.medium: _PDM2['medium'],
+                            PassType.long: _PDM2['long'], PassType.deep: _PDM2['deep'],
+                            PassType.hailMary: 45}.get(self.passType, _PDM2['medium'])
+                    _air = int(round(_air))
+                    self.passer.addAdvanced(_SC.PASSING, 'airYardsSum', _air, _rs)
+                    # Was the target covered when the ball went up? Recorded on
+                    # every throw so contested RATE has a denominator.
+                    from constants import CONTESTED_OPENNESS_THRESHOLD as _COT
+                    _tgt = self.selectedTarget or {}
+                    _rcv = _tgt.get('receiver')
+                    _open = _tgt.get('actualOpenness', _tgt.get('openness'))
+                    self._wasContested = (_open is not None and _open < _COT)
+                    if _rcv is not None and self._wasContested:
+                        _rcv.addAdvanced(_SC.RECEIVING, 'contestedTargets', 1, _rs)
+                except Exception:
+                    pass
+
                 # ── Record pass target + throw insights ──
                 self.insights['pass']['wasSacked'] = False
                 self.insights['pass']['qbVision'] = self.passer.attributes.vision
@@ -14610,7 +15694,20 @@ class Play():
                     if getattr(self, '_diveAttempt', False):
                         self._diveCatch = True
                     self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
-                    
+                    # Advanced: did the receiver win a contested ball, and did he
+                    # bail out a poorly placed one? Separates his contribution from
+                    # the quality of throw he was given.
+                    try:
+                        from constants import BAD_THROW_THRESHOLD as _BTT2
+                        from stat_tracker import StatCategory as _SC2
+                        _rs2 = self.game.isRegularSeasonGame
+                        if getattr(self, '_wasContested', False):
+                            self.receiver.addAdvanced(_SC2.RECEIVING, 'contestedCatches', 1, _rs2)
+                        if getattr(self, 'throwQualityValue', 100) < _BTT2:
+                            self.receiver.addAdvanced(_SC2.RECEIVING, 'bailouts', 1, _rs2)
+                    except Exception:
+                        pass
+
                     # Calculate air yards based on throw quality
                     passYards = self.calculatePassYardage(self.passType)
                     passYards = min(passYards, self.yardsToEndzone)
@@ -14623,14 +15720,15 @@ class Play():
                     yac = 0
                     if passYards < self.yardsToEndzone:
                         # Bad throws can't be caught in stride — limits all YAC.
+                        from constants import YAC_THROW_MULT as _YTM
                         if throwQuality >= 80:
-                            throwYacMult = 1.0
+                            throwYacMult = _YTM['elite']
                         elif throwQuality >= 60:
-                            throwYacMult = 0.75
+                            throwYacMult = _YTM['good']
                         elif throwQuality >= 40:
-                            throwYacMult = 0.45
+                            throwYacMult = _YTM['poor']
                         else:
-                            throwYacMult = 0.20
+                            throwYacMult = _YTM['bad']
 
                         # Sideline cap from receiver discipline (heads for boundary).
                         if self.targetSideline:
@@ -14660,11 +15758,17 @@ class Play():
                         # caught with defenders converging, so the chase-down
                         # outcome caps tighter. Mirrors the run game's bounded
                         # gate yardage — no stage can produce unbounded YAC.
+                        from constants import YAC_GATE_A_FAIL_CAP as _YFC
+                        from constants import YAC_TIER_CAPS as _YTC
+                        def _tc(name):
+                            t = _YTC[name]
+                            return {'gateAFail': _YFC, 'gateAPass': t['pass'],
+                                    'gateBFail': t['bFail'], 'housecallMean': t['house']}
                         yacCaps = {
-                            PassType.short:    {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 8,  'housecallMean': 12},
-                            PassType.medium:   {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 10, 'housecallMean': 12},
-                            PassType.long:     {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 12, 'housecallMean': 14},
-                            PassType.deep:     {'gateAFail': 3, 'gateAPass': 6, 'gateBFail': 15, 'housecallMean': 14},
+                            PassType.short:    _tc('short'),
+                            PassType.medium:   _tc('medium'),
+                            PassType.long:     _tc('long'),
+                            PassType.deep:     _tc('deep'),
                             PassType.hailMary: {'gateAFail': 2, 'gateAPass': 5, 'gateBFail': 10, 'housecallMean': 10},
                         }
                         caps = yacCaps.get(self.passType, yacCaps[PassType.medium])
@@ -14677,7 +15781,8 @@ class Play():
                                      self.receiver.gameAttributes.routeRunning * 0.2) / 2
                         slipPower += receiverPressureMod
                         slipExec = (4 if throwQuality >= 75 else 0) + (4 if self.selectedTarget['openness'] >= 70 else 0)
-                        gateAChance = max(8, min(45, 22 + (slipPower - slipDef) * 0.9 + slipExec))
+                        from constants import YAC_GATE_A_BASE as _YGB, YAC_GATE_A_CAP as _YGC
+                        gateAChance = max(8, min(_YGC, _YGB + (slipPower - slipDef) * 0.9 + slipExec))
 
                         # GATE B — open field (speed vs deep coverage).
                         rcvSpeed = (self.receiver.gameAttributes.speed * 1.7 +
@@ -14691,18 +15796,18 @@ class Play():
 
                         if batched_randint(1, 100) > gateAChance:
                             # Tackled by covering defender — clamped 0-3 YAC
-                            yac += _capYac(max(0, int(np.random.normal(1.5, 1.0))), caps['gateAFail'])
+                            yac += _capYac(max(0, _rnd(np.random.normal(1.0, 1.0))), caps['gateAFail'])
                         else:
                             # Slipped the tackle — clamped 2-6 YAC
-                            yac += _capYac(max(2, int(np.random.normal(4.0, 1.5))), caps['gateAPass'])
+                            yac += _capYac(max(2, _rnd(np.random.normal(3.2, 1.5))), caps['gateAPass'])
                             if (passYards + yac) < self.yardsToEndzone and not self.targetSideline:
                                 if batched_randint(1, 100) > gateBChance:
                                     # Safety angles WR off — clamped per tier
-                                    yac += _capYac(max(3, int(np.random.normal(7.0, 2.5))), caps['gateBFail'])
+                                    yac += _capYac(max(3, _rnd(np.random.normal(6.0, 2.5))), caps['gateBFail'])
                                 else:
                                     # Housecall — exponential tail, bounded by remaining field
                                     remYards = self.yardsToEndzone - passYards - yac
-                                    yac += min(remYards, max(8, int(np.random.exponential(caps['housecallMean']) * throwYacMult)))
+                                    yac += min(remYards, max(8, _rnd(np.random.exponential(caps['housecallMean']) * throwYacMult)))
 
                     self.yardage = passYards + yac
                     if self.yardage > self.yardsToEndzone:

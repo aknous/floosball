@@ -266,6 +266,18 @@ class CardBreakdown:
     gateInverse: bool = False   # inverse gate — the effect is active WHILE under the threshold
     gateAllPro: bool = False    # All-Pro card: its bar is lowered 30% (CARD_GATE_ALLPRO_MULT)
 
+    # ── Glitch (docs/GLITCH_CARDS.md) ──
+    # `glitched` marks the card; the rest describe THIS week's roll. `glitchOutcome` is the
+    # surge name and stays hidden from the user unless the on-card player is awakened —
+    # the score line renders it as corrupted characters otherwise.
+    glitched: bool = False
+    glitchChance: float = 0.0        # this week's trigger odds, for the in-week scramble intensity
+    glitchTriggered: bool = False
+    glitchOutcome: Optional[str] = None
+    glitchFp: float = 0.0            # extra FP the surge added (additive, never replacing)
+    glitchMultDelta: float = 0.0     # extra FPx delta the surge added
+    glitchReadable: bool = False     # True only when the player is awakened
+
 
 @dataclass
 class CardBonusResult:
@@ -312,6 +324,17 @@ def _buildPlayerStatLine(effectName: str, cardPlayerId: int, ctx) -> str:
     (see _ROSTER_SCOPED_STAT_LINE) keep the old lookup of whoever occupies the
     card's position, combining WR1+WR2 for pos 3.
     """
+    # Stat-ladder cards report THE STAT THEY READ, not a generic summary. A card paying
+    # on YAC showing "3 rec · 32 yd · 0 TD" hides the only number that explains the
+    # payout, which makes a working card look broken.
+    try:
+        from managers.cardEffects import ladderStatLine
+        line = ladderStatLine(effectName, (ctx.weekPlayerStats or {}).get(cardPlayerId, {}))
+        if line:
+            return line
+    except Exception:
+        pass
+
     if effectName not in _ROSTER_POSITION_EFFECTS:
         return ""
 
@@ -924,12 +947,20 @@ def calculateWeekCardBonuses(
             from constants import CARD_TIER_MULT
             _t = getattr(eq.user_card, "tier", 1) or 1
             _scaled = tierScaledStrength("catalyst", primary, CARD_TIER_MULT.get(_t, 1.0))
-            fpPer1Pct = _scaled.get("fpPer1Pct", primary.get("fpPer1Pct", 12))
-            baseline = primary.get("baseline", 55)
+            # Reads the CARD's own player, matching _computeCatalyst and the card text.
+            # This ran on ctx.weekRawFP (a whole roster, ~120 FP) against a baseline of
+            # 25 sized for ONE player, so it sat near its cap every week. Falls back to
+            # the roster-era keys so a card minted before the rebase still behaves.
+            fpPer1Pct = _scaled.get("fpPer1PctSolo",
+                                    primary.get("fpPer1PctSolo",
+                                                primary.get("fpPer1Pct", 5)))
+            baseline = primary.get("baselineSolo", primary.get("baseline", 12))
             maxBoost = _scaled.get("maxBoost", primary.get("maxBoost", 0.10))
-            rosterFP = ctx.weekRawFP
-            if rosterFP > baseline:
-                boost = min(maxBoost, (rosterFP - baseline) / fpPer1Pct / 100)
+            _cardPid = getattr(eq.user_card.card_template, "player_id", None)
+            playerFP = float(((ctx.weekPlayerStats or {}).get(_cardPid) or {})
+                             .get("fantasyPoints", 0) or 0)
+            if playerFP > baseline:
+                boost = min(maxBoost, (playerFP - baseline) / fpPer1Pct / 100)
             else:
                 boost = 0.0
             ctx.chanceBonus += boost
@@ -1165,6 +1196,12 @@ def calculateWeekCardBonuses(
     # its power bar. Runs BEFORE aggregation so boosted FPx factors get picked up below.
     _applyCaptainBoost(allBreakdowns, equippedCards, ctx)
 
+    # Glitch surges (docs/GLITCH_CARDS.md). Runs AFTER every effect has computed and after
+    # the amplifiers, so a surge scales the card's FINAL output, and BEFORE aggregation so
+    # the extra FP and FPx are picked up below. Strictly additive — a glitch never reduces
+    # what the card already produced.
+    _applyGlitchSurges(allBreakdowns, equippedCards, ctx)
+
     # Aggregate totals from all breakdowns
     for breakdown in allBreakdowns:
         result.totalBonusFP += breakdown.totalFP
@@ -1232,6 +1269,72 @@ def aggregateMultFactors(multFactors: List[float]) -> float:
     (1.3 stays 1.3).
     """
     return 1.0 + sum(max(0.0, f - 1.0) for f in multFactors)
+
+
+def _applyGlitchSurges(breakdowns: List[CardBreakdown], equippedCards, ctx) -> None:
+    """Roll each glitched card's weekly surge and add it on top of what the card produced.
+
+    Resolves at WEEK END and cannot resolve earlier: the trigger chance depends on anomaly
+    events that fire during the week's games. While games are live this only records the
+    running CHANCE, so the UI can scramble its line item with an intensity that tracks the
+    odds — the card is visibly computing something it will not tell you yet.
+    """
+    from constants import GLITCH_CARDS_ENABLED
+    if not GLITCH_CARDS_ENABLED or not breakdowns:
+        return
+    # CardBreakdown carries no equipped-card id, so key on (slot, player) — under fusion
+    # each slot holds a distinct rostered player, so the pair is unique within a lineup.
+    glitchedIds = {}
+    for eq in equippedCards:
+        uc = getattr(eq, 'user_card', None)
+        if uc is None or not getattr(uc, 'glitched', False):
+            continue
+        pid = getattr(getattr(uc, 'card_template', None), 'player_id', None)
+        glitchedIds[(getattr(eq, 'slot_number', 0), pid)] = (uc.id, pid)
+    if not glitchedIds:
+        return
+
+    from managers.glitchCards import (triggerChance, rollSurge, surgePayout,
+                                      anomalyContextFor)
+    season = getattr(ctx, 'season', 0) or 0
+    week = getattr(ctx, 'weekNumber', 0) or 0
+    dial = 1.0
+    try:
+        from managers.anomalyManager import getCriticalityMultiplier
+        dial = getCriticalityMultiplier(season, week)
+    except Exception:
+        pass
+
+    anomalyCtx = anomalyContextFor([pid for _, pid in glitchedIds.values()], season, week)
+
+    for b in breakdowns:
+        entry = glitchedIds.get((b.slotNumber, b.playerId))
+        if entry is None:
+            continue
+        userCardId, playerId = entry
+        state, events = anomalyCtx.get(playerId, ('stable', {}))
+        chance = triggerChance(state, events, dial)
+        b.glitched = True
+        b.glitchChance = round(chance, 3)
+        b.glitchReadable = (state == 'awakened')
+        # Unresolved while the week is still running AND in any projection. gamesActive
+        # alone is not enough: a projection has gamesActive False, so guarding on it only
+        # would RESOLVE a week that has not happened and show a settled payout in the
+        # forward-looking panel. The roll depends on anomaly events that have not fired.
+        if getattr(ctx, 'gamesActive', False) or getattr(ctx, 'isProjection', False):
+            continue
+        triggered, outcome, mult = rollSurge(
+            getattr(ctx, 'userId', 0) or 0, season, week, userCardId, chance)
+        if not triggered:
+            continue
+        extraFp, extraMult = surgePayout(mult, b.totalFP, b.primaryMult)
+        b.glitchTriggered = True
+        b.glitchOutcome = outcome
+        b.glitchFp = extraFp
+        b.glitchMultDelta = extraMult
+        b.totalFP = round(b.totalFP + extraFp, 2)
+        if extraMult and b.primaryMult > 1:
+            b.primaryMult = round(b.primaryMult + extraMult, 3)
 
 
 def _applyTradeoffEffects(breakdowns: List[CardBreakdown]) -> None:

@@ -993,6 +993,10 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
             session.query(Player).filter(Player.id.in_(playerIds)).all()
         }
         usedLines: set = set()
+        # ⚠️ At most ONE Cores conversation per tick, for the most significant crossing.
+        # The flavour line below already fires per player; a full exchange for each of
+        # them would bury a busy week's feed under the Cores talking to themselves.
+        coresSpokenFor: bool = False
         for playerId, targetState in ranked:
             playerName = playerNames.get(playerId)
             if not playerName:
@@ -1004,6 +1008,20 @@ def _updateStateLadder(session: Session, seasonNumber: int, week: int) -> None:
             line = template.format(player=playerName)
             _broadcastStateTransition(playerId, playerName, targetState, line, week,
                                        session=session, seasonNumber=seasonNumber)
+
+            # The Cores react BY NAME to the two rungs that actually mean something —
+            # a player awakening, or one being pulled back. `ranked` is ordered by
+            # significance, so the first one reached is the one worth the conversation.
+            if not coresSpokenFor and targetState in ('awakened', 'cleansed'):
+                try:
+                    from managers.coresManager import awakeningEntriesFor
+                    entries = awakeningEntriesFor(playerName, targetState)
+                    if entries:
+                        _broadcastCoreEntries(entries, session=session,
+                                              seasonNumber=seasonNumber, week=week)
+                        coresSpokenFor = True
+                except Exception as e:
+                    logger.debug(f"Cores awakening beat skipped: {e}")
 
 
 def _broadcastStateTransition(playerId: int, playerName: str, state: str,
@@ -1139,6 +1157,28 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
         )
         session.add(state)
         logger.info(f"Seeded LeagueAnomalyState season={seasonNumber} threshold={threshold} (hidden)")
+    elif _ANOMALY_FAST and (state.threshold or 0) >= THRESHOLD_PROVISIONAL:
+        # ⚠️ FAST mode adopts a season that started WITHOUT the flag.
+        #
+        # The threshold is the one FAST constant that is PERSISTED, and it is written
+        # exactly once, at the first tick of a season. Every other fast constant is read
+        # live off the module, so switching the flag on mid-season used to boost the
+        # contributions, the decay and the ladder — visibly, attention piles up — while
+        # leaving the bar at the unreachable sentinel a non-fast boot had stamped. The
+        # meter then sits at 0% forever no matter how high the aggregate climbs, which
+        # reads as "the flag does nothing" (observed: aggregate 4307 against a threshold
+        # of 1,000,000,000 at week 13).
+        #
+        # `_maybeSeedAdaptiveThreshold` cannot rescue it either — it no-ops in FAST, by
+        # design, because FAST is supposed to have taken the random band instead.
+        #
+        # Only the sentinel is replaced. A bar already locked to a real number is left
+        # alone, so this cannot re-roll a threshold mid-season and move the goalposts.
+        state.threshold = _seedThreshold(session)
+        logger.info(
+            f"FAST mode: replaced provisional threshold with {state.threshold} "
+            f"for season {seasonNumber} (flag enabled after the season began)"
+        )
 
     # Sum over-cap carry across all players (shared with the status read).
     overCapSum = _sumOverCapCarry(session, seasonNumber)
@@ -1269,6 +1309,52 @@ def _maybeFireWarning(state: LeagueAnomalyState,
         f"{len(entries)} turn(s))"
     )
     _broadcastCoreEntries(entries, session=session, seasonNumber=state.season, week=week)
+    _publishCriticalityNews(session, state, week, milestone)
+
+
+def _publishCriticalityNews(session: Optional[Session], state: LeagueAnomalyState,
+                            week: Optional[int], milestone: str) -> None:
+    """A plain, non-Cores news line when the instability crosses a threshold.
+
+    The Cores narrate the same moment in character, and those lines go to the feed too —
+    but they are voice, not report. This is the flat statement a reader scanning the feed
+    can act on, and it is deliberately NUMBER-FREE for the same reason the public status
+    endpoint is: the band is the information, and a raw aggregate would turn the season's
+    dread into a progress bar.
+    """
+    lines = {
+        'warning_low': 'Instability is building faster than the Cores can clear it',
+        'warning_high': 'The Cores are struggling to hold the simulation together',
+        'criticality': 'Containment has failed. The league is running unsupervised',
+        'suppression': 'The Cores forced the anomaly back. The simulation is quiet again',
+    }
+    text = lines.get(milestone)
+    if not text or session is None:
+        return
+    try:
+        from league_news import publish
+        publish(
+            session,
+            season=state.season,
+            week=int(week or 0),
+            category='criticality',
+            # ⚠️ `leadWeight`, not `lead_weight`. `publish` takes camelCase kwargs, so
+            # the snake_case spelling raised TypeError on EVERY call — and the whole
+            # body is wrapped in `except Exception`, so it failed silently. Criticality
+            # and suppression have therefore never once reached the feed: 17 seasons of
+            # the production database hold zero rows in this category.
+            # Above anything a game can produce (a clinch is 3.0). The instability
+            # crossing a threshold is the headline of whatever moment it lands in.
+            leadWeight=12.0,
+            eventType=milestone,
+            text=text,
+            # The Cores entries broadcast alongside this already; a second push would
+            # double the beat in the live feed.
+            broadcast=False,
+            commit=False,
+        )
+    except Exception as e:
+        logger.debug(f"Criticality news skipped: {e}")
 
 
 # ─── Reset + purge ──────────────────────────────────────────────────────────
@@ -1523,6 +1609,15 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
     # active-user-scaled seeding rather than snapping back up to the old band.
     state.threshold = max(THRESHOLD_FLOOR, int(state.threshold * THRESHOLD_DECAY_AFTER_CRITICALITY))
 
+    # Glitch cards: the Criticality marks one equipped card per user (docs/GLITCH_CARDS.md).
+    # Best-effort — a failure here must never stop the Criticality itself from firing.
+    try:
+        from managers.glitchCards import markCardsForCriticality
+        if session is not None:
+            markCardsForCriticality(session, state.season, startWeek)
+    except Exception as e:
+        logger.error(f"glitch card marking failed for S{state.season}W{startWeek}: {e}")
+
     # Compose the Cores' narration (multi-Core exchange) and record a
     # representative entry on the audit trail. Event type 'criticality' matches
     # the coresManager pools (the old 'thinning' key had no pool).
@@ -1563,6 +1658,7 @@ def _triggerCriticality(state: LeagueAnomalyState, currentWeek: int,
 
     # Broadcast to the league news feed.
     _broadcastCoreEntries(entries, session=session, seasonNumber=state.season, week=currentWeek)
+    _publishCriticalityNews(session, state, currentWeek, 'criticality')
 
 
 def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
@@ -1664,6 +1760,7 @@ def _suppressCriticality(state: LeagueAnomalyState, currentWeek: int,
     )
 
     _broadcastCoreEntries(entries, session=session, seasonNumber=state.season, week=currentWeek)
+    _publishCriticalityNews(session, state, currentWeek, 'suppression')
 
 
 def _broadcastCoreNews(news: Optional[Dict], session: Optional[Session] = None,

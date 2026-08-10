@@ -389,6 +389,16 @@ class SeasonManager:
 
         logger.info(f"Season {seasonNumber} initialized with {len(self.currentSeason.schedule)} games")
 
+        # The season opening belongs in the news feed as well as on the wire. Without it a
+        # brand-new league has an empty feed until the first game finishes, which reads as
+        # broken rather than as "nothing has happened yet".
+        self._publishScheduleNews(
+            'season_start',
+            f'Season {seasonNumber} is under way',
+            week=1,
+            season=seasonNumber,
+        )
+
         # Broadcast season_start so connected frontends update immediately
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
             seasonStartEvent = SeasonEvent.seasonStart(
@@ -616,6 +626,16 @@ class SeasonManager:
             if self.currentSeason.currentWeek == 0:
                 self.currentSeason.currentWeek = nextWeek
                 self.currentSeason.currentWeekText = nextWeekText
+                # Day 0's rule vote (Aris, the Game Format ballot) opens HERE — the
+                # moment the season starts — not at the rollover below. Week 1 is not a
+                # cross-day transition, so it only gets the 15-minute setup lead, and
+                # 15 minutes is not enough time for the league to vote on opening day's
+                # format. Opening here gives the whole run-up from season creation to
+                # first kickoff — in prod the season rolls over early Monday morning
+                # (startDate anchors to Monday 04:00 UTC) and week 1 kicks at 12:00 ET,
+                # so the ballot is up for the morning rather than 15 minutes. Idempotent
+                # — the rollover call below no-ops once this window exists.
+                self._maybeOpenRuleVote(nextWeek, weekStartTime)
 
             await self.timingManager.waitForWeekSetup(weekSetupTime)
 
@@ -630,8 +650,10 @@ class SeasonManager:
             # on the game-day-start weeks (1/8/15/22). Previously it opened BEFORE the wait —
             # the moment the prior day's games ended — so the ballot flashed up the evening
             # before. Opening here means it first appears when the week rolls over the following
-            # day, then stays open through the run-up to kickoff (resolved 15 min before the
-            # day's first game, below). Idempotent; never blocks the loop.
+            # day, then stays open through the run-up to kickoff (resolved as the day's first
+            # game starts, below). Weeks 8/15/22 roll over 8 hours early, so those ballots go up
+            # the evening before. Week 1 is handled above (opened at season start instead — its
+            # rollover lead is only 15 minutes). Idempotent; never blocks the loop.
             self._maybeOpenRuleVote(nextWeek, weekStartTime)
 
             # Recompute regular-season pressure blend: prior-season expectations
@@ -691,6 +713,11 @@ class SeasonManager:
                     nextGameStartTime=nextStartIso,
                 )
                 broadcaster.broadcast_sync('season', week_event)
+                self._publishScheduleNews(
+                    'week_start',
+                    f'{self.currentSeason.currentWeekText} begins, '
+                    f'{len(week.get("games", []))} games scheduled',
+                )
 
             # Resolve duplicate-effect equipped sets that pre-date the
             # no-duplicate rule. Modifies the just-completed week's
@@ -751,27 +778,42 @@ class SeasonManager:
                     # survived and blocked re-rolling — leaving the season with no
                     # retirements and no way to re-decide them. Persist first.
                     self.playerManager.savePlayerData()
-                    # Snapshot per-team active fan counts at this moment (also the
-                    # once-per-season marker above) so the GM vote threshold doesn't
-                    # shift as new fans log in after the front office opens.
-                    self._snapshotActiveFanCounts()
+                    # LAST step: stamp the once-per-season marker. Everything above is
+                    # what it protects from re-running (retirements re-roll if it does).
+                    # This used to be _snapshotActiveFanCounts(), which froze per-team
+                    # fan counts for the GM vote threshold and doubled as the marker.
+                    # Binding fan votes are gone, so the counts had no reader left.
+                    self._markFrontOfficeProcessed()
             except Exception as _e:
                 logger.warning(f"Front Office open (retirements) failed: {_e}")
 
-            # HoF ballot seed + coach candidate slate also open at the START of
-            # week GM_ACTIVE_WEEK (with the retirements above), not at week's end —
-            # so the Hall of Fame voting list and the Hire Coach slate are present
-            # the MOMENT retirements are announced. Gated `>= week` (idempotent,
-            # NOT the once-only retirement marker) so a deploy after week 22 still
-            # seeds them; runs AFTER the retirement block so the willRetire set is
-            # already populated (willRetire is persisted, so it survives a redeploy).
+            # HoF ballot seed opens at the START of week GM_ACTIVE_WEEK (with the
+            # retirements above), not at week's end — so the Hall of Fame voting list
+            # is present the MOMENT retirements are announced. Gated `>= week`
+            # (idempotent, NOT the once-only retirement marker) so a deploy after week
+            # 22 still seeds it; runs AFTER the retirement block so the willRetire set
+            # is already populated (willRetire is persisted, so it survives a redeploy).
+            #
+            # The per-team 3-candidate coach slate is NO LONGER generated here. Fans no
+            # longer vote to fire and hire coaches — the autonomous Front Office makes
+            # that call and backfills via teamManager.generateCoach() directly, so the
+            # slates had no remaining reader (getCoachCandidates had no callers, no API
+            # endpoint served them, and the frontend kept only an orphan type field).
+            # They were not free: each slate drew 3 names per team from the SAME
+            # unusedNames pool the players use, 72 a season, and unhired candidates
+            # never recycled their names (only retired players do, via
+            # _recyclePlayerName). That burned the ~789-name seed pool dry in about 11
+            # seasons, after which player generation silently failed —
+            # ensurePositionSupply could not create the free agents it knew were
+            # missing, the FA draft force-ended with empty roster slots, and playGame
+            # then hit a None roster slot. Measured in a 14-season sim: 1,104 coaches
+            # and 1,080 candidate rows against 262 players, with unused_names at 0.
             try:
                 from constants import GM_ACTIVE_WEEK as _GM_ACTIVE_WEEK
                 if self.currentSeason.currentWeek >= _GM_ACTIVE_WEEK:
                     self._seedHofBallot()
-                    self._generateCoachCandidatesForFA()
             except Exception as _e:
-                logger.warning(f"Front Office open (HoF seed / coach slate) failed: {_e}")
+                logger.warning(f"Front Office open (HoF seed) failed: {_e}")
 
             for game in range(0,len(self.currentSeason.activeGames)):
                 self.currentSeason.activeGames[game].leagueHighlights = self.currentSeason.leagueHighlights
@@ -970,6 +1012,10 @@ class SeasonManager:
             # current form state — feeds the regression-to-mean weakening
             # in _applyFormState.
             self._updateTeamFormHistory()
+            # Continuous form oscillation: pull each club back toward its own
+            # level, hard enough to overshoot, so seasons develop arcs instead
+            # of every team playing at one fixed level for 28 weeks.
+            self._updateTeamFormOffsets()
 
             # Checkpoint: save team + player stats BEFORE advancing the week
             # checkpoint.  If the process dies between here and _onWeekComplete,
@@ -1122,9 +1168,12 @@ class SeasonManager:
                     })
                 await broadcaster.broadcast_season_event(StandingsEvent.standingsUpdate(standings=standingsData))
 
-            # Check for records
+            # Check for records. Snapshot first so a break can be diffed out and
+            # published to the news feed.
+            _recordsBefore = self._snapshotRecords()
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
+            self._publishGameNews(gameInstance, _recordsBefore)
 
             # Resolve pick-em picks for this game immediately
             if gameIndex >= 0 and getattr(gameInstance, 'winningTeam', None):
@@ -1174,6 +1223,28 @@ class SeasonManager:
                             game.losingTeam.seasonTeamStats.setdefault('losses', 0)
                             game.winningTeam.seasonTeamStats['wins'] += 1
                             game.losingTeam.seasonTeamStats['losses'] += 1
+                        # Division record has to survive the recovery path too, or a
+                        # crashed division game silently drops out of the first playoff
+                        # tiebreaker while still counting in the overall record.
+                        _hd = getattr(game.homeTeam, 'division', None)
+                        _isDiv = bool(_hd) and _hd == getattr(game.awayTeam, 'division', None)
+                        # team.league is the league NAME (a string), not an object.
+                        _hl = getattr(game.homeTeam, 'league', None)
+                        _al = getattr(game.awayTeam, 'league', None)
+                        _isLg = _isDiv or (bool(_hl) and _hl == _al)
+                        if tiedAtCrash:
+                            for _t in (game.homeTeam, game.awayTeam):
+                                _s = _t.seasonTeamStats
+                                if _isDiv: _s['divTies'] = _s.get('divTies', 0) + 1
+                                if _isLg: _s['lgTies'] = _s.get('lgTies', 0) + 1
+                        else:
+                            _w, _l = game.winningTeam.seasonTeamStats, game.losingTeam.seasonTeamStats
+                            if _isDiv:
+                                _w['divWins'] = _w.get('divWins', 0) + 1
+                                _l['divLosses'] = _l.get('divLosses', 0) + 1
+                            if _isLg:
+                                _w['lgWins'] = _w.get('lgWins', 0) + 1
+                                _l['lgLosses'] = _l.get('lgLosses', 0) + 1
                     self._updateTeamRecords(game)
                 except Exception as recordErr:
                     logger.warning(f"Failed to update records after game error recovery: {recordErr}")
@@ -1445,6 +1516,10 @@ class SeasonManager:
             logger.info(f"Unlocked equipped cards for week {week}")
         except Exception as e:
             logger.error(f"Failed to unlock equipped cards for week {week}: {e}")
+
+        # The Cores narrate the slate that just finished. Before the week_end broadcast so
+        # a client refreshing off that event already has the lines.
+        self._publishCoresWeekNews(week)
 
         # Broadcast week_end event so frontend can refresh card state
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
@@ -2323,6 +2398,16 @@ class SeasonManager:
                             "chanceTriggered": b.chanceTriggered,
                             "streakActive": b.streakActive,
                             "streakCount": b.streakCount,
+                            # Glitch (docs/GLITCH_CARDS.md). Without these the line item
+                            # rendered live and then VANISHED the moment the week banked,
+                            # because the stored breakdown is what every later read uses.
+                            "glitched": getattr(b, "glitched", False),
+                            "glitchChance": getattr(b, "glitchChance", 0.0),
+                            "glitchTriggered": getattr(b, "glitchTriggered", False),
+                            "glitchOutcome": getattr(b, "glitchOutcome", None),
+                            "glitchFp": getattr(b, "glitchFp", 0.0),
+                            "glitchMultDelta": getattr(b, "glitchMultDelta", 0.0),
+                            "glitchReadable": getattr(b, "glitchReadable", False),
                         } for b in result.cardBreakdowns]
                         storedJson = _json.dumps({
                             "breakdowns": breakdownDicts,
@@ -2520,6 +2605,35 @@ class SeasonManager:
                 dbRow.format_state = json.dumps(extra)
         except Exception:
             logger.debug("Could not serialize format state for game", exc_info=True)
+
+    def _applyTeamStatsToRow(self, dbRow, game) -> None:
+        """Persist the full per-team box score, so a finished game can say HOW it was won.
+
+        The dedicated home_/away_ columns cover yards, TDs, FGs, sacks, ints and fumble
+        recoveries. They do NOT cover first downs or third/fourth-down conversions, and
+        those cannot be rebuilt from `game_player_stats` afterwards — a first down is a
+        team event, not a player one. Persisted as the same `team` block the live
+        broadcast sends, so the reader on the other side is the shape the frontend
+        already understands.
+
+        Play-by-play is deliberately still NOT persisted (owner): the feed is far larger
+        than these totals and stays in memory only.
+        """
+        try:
+            snapshot = game._buildGameStatsSnapshot()
+            if not snapshot:
+                return
+            payload = {
+                side: (snapshot.get(side) or {}).get('team')
+                for side in ('home', 'away')
+            }
+            # Both sides or neither — a half-written box score reads as a real one.
+            if not payload['home'] or not payload['away']:
+                return
+            import json
+            dbRow.team_stats = json.dumps(payload)
+        except Exception:
+            logger.debug("Could not serialize team stats for game", exc_info=True)
 
     def _applyGameStatsToRow(self, dbRow, gameStatsDict: dict) -> None:
         """Copy team stat totals from gameDict['gameStats'] into a DB Game row."""
@@ -2942,20 +3056,19 @@ class SeasonManager:
                     db_game.is_playoff = game.isPlayoff if hasattr(game, 'isPlayoff') else False
                     db_game.playoff_round = getattr(game, 'playoffRound', None)
                     db_game.total_plays = game.totalPlays if hasattr(game, 'totalPlays') else None
-                    if hasattr(game, 'homeScoresByQuarter') and game.homeScoresByQuarter:
-                        if len(game.homeScoresByQuarter) > 0: db_game.home_score_q1 = game.homeScoresByQuarter[0]
-                        if len(game.homeScoresByQuarter) > 1: db_game.home_score_q2 = game.homeScoresByQuarter[1]
-                        if len(game.homeScoresByQuarter) > 2: db_game.home_score_q3 = game.homeScoresByQuarter[2]
-                        if len(game.homeScoresByQuarter) > 3: db_game.home_score_q4 = game.homeScoresByQuarter[3]
-                        if len(game.homeScoresByQuarter) > 4: db_game.home_score_ot = sum(game.homeScoresByQuarter[4:])
-                    if hasattr(game, 'awayScoresByQuarter') and game.awayScoresByQuarter:
-                        if len(game.awayScoresByQuarter) > 0: db_game.away_score_q1 = game.awayScoresByQuarter[0]
-                        if len(game.awayScoresByQuarter) > 1: db_game.away_score_q2 = game.awayScoresByQuarter[1]
-                        if len(game.awayScoresByQuarter) > 2: db_game.away_score_q3 = game.awayScoresByQuarter[2]
-                        if len(game.awayScoresByQuarter) > 3: db_game.away_score_q4 = game.awayScoresByQuarter[3]
-                        if len(game.awayScoresByQuarter) > 4: db_game.away_score_ot = sum(game.awayScoresByQuarter[4:])
+                    # ⚠️ The quarter line comes off `homeScoreQ1..Q4` / `homeScoreOT`, which is what the
+                    # engine actually accumulates (`floosball_game` ~:12308). This used to read a
+                    # `homeScoresByQuarter` LIST that has never existed on the game object, so the
+                    # `hasattr` guard was always False and every quarter column stayed 0 — measured at
+                    # 0 of 783 finished games. Nothing errored, which is why it survived.
+                    for _side, _tgt in (('home', 'home'), ('away', 'away')):
+                        for _q in ('q1', 'q2', 'q3', 'q4'):
+                            setattr(db_game, f'{_tgt}_score_{_q}',
+                                    getattr(game, f'{_side}Score{_q.upper()}', 0) or 0)
+                        setattr(db_game, f'{_tgt}_score_ot', getattr(game, f'{_side}ScoreOT', 0) or 0)
                     self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
                     self._applyFormatStateToRow(db_game, game)
+                    self._applyTeamStatsToRow(db_game, game)
                     self.db_session.flush()
                     playerStats = self._extractPlayerStatsFromGame(game)
                     if playerStats:
@@ -2981,32 +3094,17 @@ class SeasonManager:
             )
             
             # Save quarter scores if available
-            if hasattr(game, 'homeScoresByQuarter') and game.homeScoresByQuarter:
-                if len(game.homeScoresByQuarter) > 0:
-                    db_game.home_score_q1 = game.homeScoresByQuarter[0]
-                if len(game.homeScoresByQuarter) > 1:
-                    db_game.home_score_q2 = game.homeScoresByQuarter[1]
-                if len(game.homeScoresByQuarter) > 2:
-                    db_game.home_score_q3 = game.homeScoresByQuarter[2]
-                if len(game.homeScoresByQuarter) > 3:
-                    db_game.home_score_q4 = game.homeScoresByQuarter[3]
-                if len(game.homeScoresByQuarter) > 4:
-                    db_game.home_score_ot = sum(game.homeScoresByQuarter[4:])
-            
-            if hasattr(game, 'awayScoresByQuarter') and game.awayScoresByQuarter:
-                if len(game.awayScoresByQuarter) > 0:
-                    db_game.away_score_q1 = game.awayScoresByQuarter[0]
-                if len(game.awayScoresByQuarter) > 1:
-                    db_game.away_score_q2 = game.awayScoresByQuarter[1]
-                if len(game.awayScoresByQuarter) > 2:
-                    db_game.away_score_q3 = game.awayScoresByQuarter[2]
-                if len(game.awayScoresByQuarter) > 3:
-                    db_game.away_score_q4 = game.awayScoresByQuarter[3]
-                if len(game.awayScoresByQuarter) > 4:
-                    db_game.away_score_ot = sum(game.awayScoresByQuarter[4:])
+            # Same fix as the UPDATE path above: read the attributes the engine really
+            # keeps, not a list that has never existed.
+            for _side in ('home', 'away'):
+                for _q in ('q1', 'q2', 'q3', 'q4'):
+                    setattr(db_game, f'{_side}_score_{_q}',
+                            getattr(game, f'{_side}Score{_q.upper()}', 0) or 0)
+                setattr(db_game, f'{_side}_score_ot', getattr(game, f'{_side}ScoreOT', 0) or 0)
             
             self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
             self._applyFormatStateToRow(db_game, game)
+            self._applyTeamStatsToRow(db_game, game)
             self.game_repo.save(db_game)
             self.db_session.flush()  # Get the ID
 
@@ -3102,6 +3200,12 @@ class SeasonManager:
                         receiving_stats=stats.get('receiving'),
                         kicking_stats=stats.get('kicking'),
                         defense_stats=stats.get('defense'),
+                        # Punt-return production. The season and career save paths
+                        # already persisted this; the per-game write dropped it, so
+                        # returning_stats was NULL on every game row and a returner's
+                        # work never reached the box score, the card layer (which reads
+                        # per-game stats) or the season backfill.
+                        returning_stats=stats.get('returning'),
                     )
                     self.game_repo.save_player_stats(db_stats)
         except Exception as e:
@@ -3225,8 +3329,14 @@ class SeasonManager:
         self.currentSeason.schedule.clear()
         dateTimeNow = datetime.datetime.utcnow()
 
-        # Calculate number of weeks (original formula)
-        numOfWeeks = int(((len(self.leagueManager.leagues[0].teamList) - 1) * 2) + (len(self.leagueManager.leagues[0].teamList) / 2))
+        # ⚠️ The schedule's OWN length, not a formula. This was
+        #     ((teamsPerLeague - 1) * 2) + teamsPerLeague / 2
+        # which is the length of the pre-divisional double round-robin plus interleague
+        # — 38 for two leagues of 16. The divisional generator returns 28, so the loop
+        # below iterated ten weeks past the end of its own input and the log announced a
+        # "38-week schedule" for a 28-week season. Anything reading that number, or the
+        # range it drives, was working from the wrong length of season.
+        numOfWeeks = len(schedule)
         
         # Convert generated schedule to our current season format
         for week in range(numOfWeeks):
@@ -3301,6 +3411,20 @@ class SeasonManager:
             return False
 
         teamById = {t.id: t for t in teamManager.teams}
+
+        # ⚠️ Reset every team's schedule before refilling it. The loop below APPENDS each
+        # game to `homeTeam.schedule` / `awayTeam.schedule`, and the only two places that
+        # clear those lists are new-season paths (`teamManager` season roll-over and
+        # `clearTeamSeasonStats`) — neither of which runs on a RESUME. So every restart
+        # that resumed an existing season stacked another full copy of the season onto each
+        # team, and a team page showed 56 weeks after one restart, 84 after two.
+        #
+        # `currentSeason.schedule` was never affected because it is ASSIGNED at the end of
+        # this function rather than appended to, which is why the games table and the
+        # league schedule both stayed at 28 weeks while team pages did not.
+        for team in teamManager.teams:
+            team.schedule = []
+
         now = datetime.datetime.utcnow()
         weekMap: Dict[int, Dict] = {}  # 1-indexed week → {startTime, games}
 
@@ -3444,7 +3568,31 @@ class SeasonManager:
         if leagueTeamCount == 0:
             return
 
-        expectedWeeks = int(((leagueTeamCount - 1) * 2) + (leagueTeamCount / 2))
+        # ⚠️ The season's ACTUAL length, not a formula — and this is the bug that kept
+        # putting 38 weeks on a 28-week season.
+        #
+        # This was a second copy of the pre-divisional round-robin formula
+        # `((teamsPerLeague - 1) * 2) + teamsPerLeague / 2`, which is 38 for two leagues
+        # of 16. So the divisional generator would correctly build 28 weeks, and then on
+        # the NEXT restart this repair decided weeks 29-38 were missing and FABRICATED
+        # ten weeks of random pairings to fill them. Observed in the log as
+        # "Detected 10 missing week(s): [29 ... 38]" after a clean 28-week generation,
+        # every restart, on a fresh database.
+        #
+        # A repair tool that invents fixtures must take its idea of the season from the
+        # schedule that was actually built. The in-memory schedule is the authority; the
+        # highest week already persisted is the fallback for a load that happens before
+        # it is populated. Only when there is neither does it fall back to counting a
+        # round-robin, and even then it can only ever fill gaps BELOW what exists.
+        expectedWeeks = len(getattr(self.currentSeason, 'schedule', None) or [])
+        if not expectedWeeks:
+            try:
+                expectedWeeks = max((r.week for r in self.game_repo.get_by_season_ordered(seasonNumber)
+                                     if not getattr(r, 'is_playoff', False)), default=0)
+            except Exception:
+                expectedWeeks = 0
+        if not expectedWeeks:
+            expectedWeeks = int(((leagueTeamCount - 1) * 2) + (leagueTeamCount / 2))
         expectedGamesPerWeek = leagueTeamCount // 2
 
         import random
@@ -3668,6 +3816,34 @@ class SeasonManager:
         league1Teams = copy.copy(self.leagueManager.leagues[0].teamList)
         league2Teams = copy.copy(self.leagueManager.leagues[1].teamList)
         
+        # Divisional format first (32 clubs / 4 divisions). Returns None and falls
+        # through to the original round-robin for any other league shape.
+        divisional = self._generateDivisionalSchedule()
+        if divisional is not None:
+            return divisional
+
+        # ⚠️ SAY SO. The fallback is a double round-robin plus interleague, which for two
+        # 16-club leagues is a THIRTY-EIGHT week season — ten weeks past the 28 the
+        # calendar, the playoff weeks (29+) and every downstream week check assume. It
+        # used to happen in silence, so a league that was briefly mis-shaped (one club
+        # renamed in `teams` but not in `teamDistribution`, which is exactly what
+        # happened on 2026-08-09) generated a 38-week schedule, persisted it, and nobody
+        # noticed until week 31 arrived with a full 16-game slate and no playoffs.
+        #
+        # A club count that SHOULD be divisional is a misconfiguration, not a format
+        # choice, so it is logged at ERROR with the shape that caused it.
+        try:
+            sizes = [len(l.teamList) for l in self.leagueManager.leagues]
+        except Exception:
+            sizes = []
+        logger.error(
+            "SCHEDULE: the divisional format did NOT apply — falling back to the "
+            f"round-robin. League sizes {sizes} (need exactly two leagues of 16 that "
+            f"divide into {self.DIVISIONS_PER_LEAGUE} divisions). The fallback runs far "
+            "past 28 weeks, so playoffs will not start on time. Check config.json's "
+            "teamDistribution covers every club in `teams`."
+        )
+
         # Generate different types of games
         league1Games = self._generateIntraleagueGames(league1Teams)
         league2Games = self._generateIntraleagueGames(league2Teams)
@@ -3692,6 +3868,665 @@ class SeasonManager:
 
         return schedule
     
+    DIVISIONS_PER_LEAGUE = 4
+
+    def _divisionNames(self, leagueName: str) -> List[str]:
+        """Division names for a league, from config.json's `divisions` map.
+
+        Config-driven because the owner names these (2026-08-07), the same way team names
+        and colours are owned there. Falls back to compass points so a config without the
+        key still produces a division-shaped league rather than silently dropping to the
+        flat round-robin.
+        """
+        try:
+            from config_manager import get_config
+            names = (get_config().get("divisions") or {}).get(leagueName)
+            if names and len(names) >= self.DIVISIONS_PER_LEAGUE:
+                return list(names)[:self.DIVISIONS_PER_LEAGUE]
+        except Exception:
+            pass
+        return [f"{leagueName} {d}" for d in ("North", "South", "East", "West")]
+
+    def _assignDivisions(self) -> bool:
+        """Split each league into four fixed divisions, stamped on the teams.
+
+        Returns True when the league is division-shaped: two leagues of equal size that
+        divide evenly into `DIVISIONS_PER_LEAGUE`. Assignment is POSITIONAL and therefore
+        stable for a given alignment — which is the point: a rivalry needs the same
+        opponents every season, so nothing here reshuffles annually. It also mirrors how
+        leagues themselves are split, by config order, so the owner controls which clubs
+        share a division purely by their order in config.json.
+
+        Was 2 divisions of 8; now 4 of 4 (owner, 2026-08-07).
+        """
+        lgs = getattr(self.leagueManager, 'leagues', None) or []
+        if len(lgs) != 2:
+            return False
+        sizes = {len(l.teamList) for l in lgs}
+        if len(sizes) != 1:
+            return False
+        n = sizes.pop()
+        per = self.DIVISIONS_PER_LEAGUE
+        if n < per * 2 or n % per:
+            return False
+        size = n // per
+        for league in lgs:
+            names = self._divisionNames(league.name)
+            for i, team in enumerate(league.teamList):
+                team.division = names[min(i // size, per - 1)]
+        # Persist immediately. This only runs at schedule generation, so if the stamp is
+        # not written now the next restart finds an un-divisioned league and nothing
+        # re-runs to fix it until the following season.
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            if teamManager:
+                teamManager.saveTeamData()
+        except Exception as e:
+            logger.warning(f"Could not persist division assignment: {e}")
+        return True
+
+    def _crossDivisionWeeks(self, divA, divB) -> List[List[tuple]]:
+        """Every club in one division plays every club in the other exactly once.
+        n divisions of n teams -> n rounds, each a full slate.
+
+        ⚠️ Home/away alternates by ROUND, not by `(i + r)`. The obvious-looking
+        `if (i + r) % 2` is broken and was live: the opponent index is `j = (i + r) % n`,
+        and a mod-n shift preserves parity, so "A hosts when (i+r) is even" means B only
+        ever hosts when j is ODD. Half of division B — every even-indexed club — got ZERO
+        home games in the entire cross-division block, in the shipped 8-club format as
+        well as this one. Alternating on `r` gives each side exactly n/2 home rounds and
+        does not correlate with either index.
+        """
+        n = len(divA)
+        weeks = []
+        for r in range(n):
+            games = []
+            aHosts = (r % 2 == 0)
+            for i in range(n):
+                j = (i + r) % n
+                games.append((divA[i], divB[j]) if aHosts else (divB[j], divA[i]))
+            weeks.append(games)
+        return weeks
+
+    def _generateDivisionalSchedule(self) -> Optional[List[List[tuple]]]:
+        """The 28-week divisional season for a 32-club league of 8 four-team divisions.
+
+            12  division rivals, twice home and away  (3 opponents x 4)
+            12  the rest of your league, once each    (12 opponents x 1)
+             4  one interleague division              (4 opponents x 1)
+            --
+            28  weeks -> exactly the 4 game days x 7 hourly slots the calendar has
+
+        Replaces the 14/8/6 split that worked when a division held 8 clubs. With only 3
+        rivals, a single home-and-away round is 6 games, so the rivalry weight had to come
+        from playing them TWICE over (owner call 2026-08-07, "rivalry-heavy"). Division
+        share lands at 43% against the old format's 50%, and every club in your league is
+        still played at least once — which the wider-interleague alternative could not
+        promise, since it would have drawn only 10 of the other league's 16.
+
+        Ordering is deliberate and is the whole point of the format: the second division
+        double-round is placed LAST, so the entire final game day is against the three
+        clubs you are racing for the division title.
+
+        Returns None when the league is not division-shaped, so the caller falls back to
+        the original round-robin.
+        """
+        import copy
+        import random
+        if not self._assignDivisions():
+            return None
+        lgs = self.leagueManager.leagues
+        perLeague = len(lgs[0].teamList)
+        per = self.DIVISIONS_PER_LEAGUE
+        size = perLeague // per
+        if perLeague != 32 // 2 or size != 4:
+            return None      # the 12/12/4 split only lands on 28 for four-club divisions
+
+        # Divisions in config order, per league.
+        divsByLeague = [[lg.teamList[i * size:(i + 1) * size] for i in range(per)]
+                        for lg in lgs]
+
+        def merge(blocks):
+            """blocks: list of per-group week-lists -> combined weekly slates."""
+            out = []
+            for w in range(len(blocks[0])):
+                week = []
+                for b in blocks:
+                    week.extend(b[w])
+                out.append(week)
+            return out
+
+        # --- division: a home-and-away round robin is 6 weeks for 4 clubs; run it twice.
+        # _generateIntraleagueGames returns the first pass followed by its mirror.
+        divRounds = [[], []]
+        for divs in divsByLeague:
+            for div in divs:
+                rr = self._generateIntraleagueGames(copy.copy(div))
+                divRounds[0].append(rr)
+        divFirst = merge(divRounds[0])          # 6 weeks
+        divSecond = merge(divRounds[0])         # the same 6 fixtures again, reordered below
+
+        # --- cross-division inside each league: every club meets the 12 outside its
+        # division once. Six division pairings organise into THREE rounds of two
+        # simultaneous pairings, so the whole league plays every week:
+        #     round 1  (1v2) (3v4)      round 2  (1v3) (2v4)      round 3  (1v4) (2v3)
+        # Each round is `size` weeks, so 3 x 4 = 12.
+        PAIRINGS = (((0, 1), (2, 3)), ((0, 2), (1, 3)), ((0, 3), (1, 2)))
+        crossBlocks = []
+        for a, b in (p for rnd in PAIRINGS for p in rnd):
+            for divs in divsByLeague:
+                crossBlocks.append(self._crossDivisionWeeks(divs[a], divs[b]))
+        # Two pairings per league run concurrently, so merge them four at a time
+        # (2 pairings x 2 leagues) into one 4-week round.
+        cross = []
+        for i in range(0, len(crossBlocks), 4):
+            cross.extend(merge(crossBlocks[i:i + 4]))
+
+        # --- interleague: pair division i of one league with division i of the other,
+        # so each club draws exactly one opposing division.
+        interBlocks = [self._crossDivisionWeeks(divsByLeague[0][i], divsByLeague[1][i])
+                       for i in range(per)]
+        inter = merge(interBlocks)              # 4 weeks
+
+        # Shuffle WITHIN each block so the run of weeks isn't identical every season, but
+        # never across blocks — the block order is the format.
+        for block in (divFirst, cross, inter, divSecond):
+            random.shuffle(block)
+
+        schedule = divFirst + cross + inter + divSecond
+        expected = 6 + 12 + 4 + 6
+        if len(schedule) != expected:
+            logger.error(
+                f"Divisional schedule built {len(schedule)} weeks, expected {expected} "
+                f"— falling back to the round-robin schedule.")
+            return None
+        logger.info(
+            f"Divisional schedule: {len(divFirst)} division + {len(cross)} cross-division "
+            f"+ {len(inter)} interleague + {len(divSecond)} division (run-in) "
+            f"= {len(schedule)} weeks")
+        return schedule
+
+    # A single game line worth a news item on its own.
+    #
+    # ⚠️ Thresholds are set from THIS SIM's measured distribution, at roughly the 99th
+    # percentile of non-zero player-games, NOT from real-world intuition. The first pass
+    # used NFL-shaped numbers and 3 sacks caught 5.6% of every player-game in the league —
+    # big games alone filled the entire feed and pushed clinches, upsets and records off
+    # it. Measured over 9,401 player-game lines (p50 / p90 / p99):
+    #
+    #   passing yards   220 / 332 / 425      rushing yards  71 / 169 / 271
+    #   passing TDs       1 /   3 /   5      rushing TDs     1 /   2 /   4
+    #   receiving yards  58 / 126 / 192      sacks           1 /   4 /   9
+    #   receiving TDs     1 /   2 /   3      FGs made        2 /   4 /   6
+    #
+    # At ~420 player-lines a week that lands around four big games per week, which is a
+    # feed item rather than a flood. Re-measure if the engine's scoring moves.
+    BIG_GAME_TESTS = [
+        ('passing', 'yards', 425, '{name} threw for {value} yards'),
+        ('passing', 'tds', 5, '{name} threw {value} touchdown passes'),
+        ('rushing', 'yards', 270, '{name} ran for {value} yards'),
+        ('rushing', 'tds', 4, '{name} ran in {value} touchdowns'),
+        ('receiving', 'yards', 190, '{name} went for {value} receiving yards'),
+        ('receiving', 'tds', 3, '{name} had {value} receiving touchdowns'),
+        ('defense', 'sacks', 9, '{name} recorded {value} sacks'),
+        ('defense', 'ints', 2, '{name} picked off {value} passes'),
+        ('kicking', 'fgs', 6, '{name} made {value} field goals'),
+    ]
+
+    # The four numbers a big-game item leads with — the player's line in whichever group
+    # triggered it, so the strip explains the headline rather than repeating it.
+    BIG_GAME_STRIP = {
+        'passing': [('YARDS', 'yards'), ('TOUCHDOWNS', 'tds'), ('COMPLETIONS', 'comp'), ('ATTEMPTS', 'att')],
+        'rushing': [('YARDS', 'yards'), ('TOUCHDOWNS', 'tds'), ('CARRIES', 'carries'), ('LONGEST', 'longest')],
+        'receiving': [('YARDS', 'yards'), ('TOUCHDOWNS', 'tds'), ('CATCHES', 'receptions'), ('TARGETS', 'targets')],
+        'defense': [('SACKS', 'sacks'), ('TACKLES', 'tackles'), ('INTERCEPTIONS', 'ints'), ('TFL', 'tfl')],
+        'kicking': [('MADE', 'fgs'), ('ATTEMPTS', 'fgAtt'), ('LONGEST', 'longest'), ('POINTS', 'pts')],
+    }
+
+    # ⚠️ "How far past its own bar" is only comparable BETWEEN categories if each bar sits
+    # at a comparable point in its own distribution — and they do not. The big-game
+    # thresholds are p99 of this sim's measured player-game distribution, so a typical
+    # qualifying big game clears its bar by 2%. `UPSET_NEWS_ELO_GAP` (120) is a far lower
+    # bar, so a typical qualifying upset clears it by 50%. Shipping the raw ratio left
+    # upsets taking 56-78% of measured headlines — the same bug the weighting was built to
+    # fix, only smaller.
+    #
+    # Dividing by the MEDIAN qualifying event of each category fixes the footing: 1.0 means
+    # "a typical one of these", whatever these are, so the headline goes to whatever was
+    # most exceptional FOR ITS KIND. Measured over 528 feed rows of a fast sim — top
+    # category share 55.7% -> 34.0%, big games 8.6% -> 33.5%. Re-measure if a threshold
+    # moves. A category absent here divides by 1.0, which is what keeps a clinch's
+    # deliberate 3.0 intact: clinching is rare and is meant to take its week.
+    LEAD_WEIGHT_REFERENCE = {'upset': 1.50, 'big_game': 1.02, 'record': 1.06}
+
+    def _leadWeight(self, category: str, raw: float) -> float:
+        """A raw past-the-bar ratio, put on a footing comparable across categories."""
+        return raw / self.LEAD_WEIGHT_REFERENCE.get(category, 1.0)
+
+    # A record's weight in the headline race is scaled by how hard it was to take. All
+    # four scopes fire off the same game, and a career mark falling should not lose the
+    # front page to the single-game mark that caused it.
+    RECORD_SCOPE_WEIGHT = {'game': 1.0, 'season': 1.2, 'career': 1.45, 'allTime': 1.7}
+
+    # Readable names for the record tree's leaf keys. Without these a headline reads
+    # "set the game wr record at 51", because the leaf under `players.fantasy.game` is a
+    # POSITION, not a stat.
+    RECORD_SCOPES = {'game': 'single-game', 'season': 'season', 'career': 'career', 'allTime': 'all-time'}
+    RECORD_STATS = {
+        'yards': 'yards', 'tds': 'touchdowns', 'comps': 'completions',
+        'ints': 'interceptions', 'fumbles': 'fumbles', 'receptions': 'receptions',
+        'fgs': 'field goals', 'fgYards': 'field goal distance', 'pts': 'points',
+        'wins': 'wins', 'losses': 'losses', 'titles': 'titles',
+        'leagueTitles': 'league titles', 'regSeasonTitles': 'regular-season titles',
+        'fumRec': 'fumble recoveries', 'elo': 'ELO',
+    }
+    RECORD_GROUPS = {'passing': 'passing', 'rushing': 'rushing', 'receiving': 'receiving', 'kicking': 'kicking'}
+
+    def _recordScope(self, path: str) -> str:
+        """Which scope a record path belongs to — `players.receiving.game.yards` -> `game`.
+
+        Mirrors `_recordLabel`'s parsing on purpose: the scope sits at a DIFFERENT index
+        for player records (`players.group.scope.leaf`) than for team ones
+        (`team.scope.leaf`), so reaching for a fixed position gets the leaf instead and
+        every record silently weighs the same.
+        """
+        parts = path.split('.')
+        if parts[0] == 'players' and len(parts) == 4:
+            return parts[2]
+        if parts[0] == 'team' and len(parts) == 3:
+            return parts[1]
+        return 'game'
+
+    def _recordLabel(self, path: str) -> Optional[str]:
+        """`players.receiving.game.yards` -> `single-game receiving yards`."""
+        parts = path.split('.')
+        if parts[0] == 'players' and len(parts) == 4:
+            _, group, scope, leaf = parts
+            scopeLabel = self.RECORD_SCOPES.get(scope, scope)
+            if group == 'fantasy':
+                # The leaf here is a position, and the stat is always fantasy points.
+                return f'{scopeLabel} fantasy points by a {leaf.upper()}'
+            statLabel = self.RECORD_STATS.get(leaf)
+            groupLabel = self.RECORD_GROUPS.get(group, group)
+            if not statLabel:
+                return None
+            # "receiving receptions" is a stutter; the group is implied by the stat.
+            if leaf in ('receptions', 'fgs', 'fgYards'):
+                return f'{scopeLabel} {statLabel}'
+            return f'{scopeLabel} {groupLabel} {statLabel}'
+        if parts[0] == 'team' and len(parts) == 3:
+            _, scope, leaf = parts
+            statLabel = self.RECORD_STATS.get(leaf)
+            if not statLabel:
+                return None
+            return f'{self.RECORD_SCOPES.get(scope, scope)} team {statLabel}'
+        return None
+
+    def _snapshotRecords(self) -> Dict[str, Any]:
+        """Flatten the records tree to `{path: value}` so a break can be diffed generically.
+
+        Deliberately NOT instrumented at each comparison site: the record checks are dozens
+        of near-identical `if stat > record` blocks spread over five methods, and a new
+        record type added later would silently skip the feed. A before/after diff cannot
+        drift.
+        """
+        flat: Dict[str, Any] = {}
+
+        def walk(node, path):
+            if isinstance(node, dict):
+                if 'value' in node and not isinstance(node.get('value'), dict):
+                    flat[path] = (node.get('value'), node.get('name'), node.get('id'))
+                    return
+                for key, child in node.items():
+                    walk(child, f'{path}.{key}' if path else key)
+
+        try:
+            walk(self.recordsManager.getRecords(), '')
+        except Exception as e:
+            logger.debug(f"Record snapshot skipped: {e}")
+        return flat
+
+    def _publishGameNews(self, game, recordsBefore: Optional[Dict[str, Any]] = None) -> None:
+        """Publish everything a finished game just made newsworthy.
+
+        Three independent checks — a record broken, an upset, a big individual game — each
+        wrapped so that a failure in one cannot lose the others.
+
+        ⚠️ The WHOLE body is wrapped as well, and that is not belt-and-braces. This hangs
+        off the game-completion path, and the first version computed the season and week
+        above the inner try blocks — one wrong attribute name there raised straight out of
+        `_simulateGame` and every game in the slate failed to simulate. Nothing about
+        publishing a news item is worth a game, so nothing here is allowed to escape.
+        """
+        try:
+            self._publishGameNewsInner(game, recordsBefore)
+        except Exception as e:
+            logger.debug(f"Game news skipped: {e}")
+
+    def _publishGameNewsInner(self, game, recordsBefore: Optional[Dict[str, Any]] = None) -> None:
+        from league_news import publish, stat
+        from constants import UPSET_NEWS_ELO_GAP, UPSET_MIN_WEEK, BIG_GAME_NEWS_ENABLED
+
+        # `currentWeek` lives on the SEASON, not the manager. The manager grows a
+        # `currentWeek` attribute lazily during the playoffs and has none at all during the
+        # regular season, so reading it here is an AttributeError for 28 weeks of every
+        # 32 — which is exactly how this broke.
+        season = getattr(self.currentSeason, 'seasonNumber', 0) or 0
+        week = getattr(self.currentSeason, 'currentWeek', 0) or 0
+
+        def emit(**kwargs):
+            try:
+                publish(self.db_session, season=season, week=week, **kwargs)
+            except Exception as e:
+                logger.debug(f"Game news publish skipped: {e}")
+
+        # ── A record fell ────────────────────────────────────────────────────
+        if recordsBefore:
+            try:
+                for path, (value, name, holderId) in self._snapshotRecords().items():
+                    previous = recordsBefore.get(path)
+                    if previous is None or previous[0] == value or not name:
+                        continue
+                    # ⚠️ Only a genuine BREAK. Every record starts at 0, so on a fresh
+                    # league the very first game sets all sixty of them at once and the
+                    # feed becomes a wall of "record set" items for one player.
+                    if not previous[0]:
+                        continue
+                    label = self._recordLabel(path)
+                    if not label:
+                        continue
+                    isPlayer = path.startswith('players.')
+                    # A record now carries a strip, so it can headline. Three numbers,
+                    # not four: the old mark, the new one, and the gap between them is
+                    # the whole story of a record falling, and the lead strip flexes to
+                    # however many cells it is given. Weighted by how comprehensively the
+                    # old mark was beaten, scaled by how hard the record was to take —
+                    # an all-time mark falling is a bigger story than a single-game one.
+                    prevValue = previous[0]
+                    margin = value - prevValue
+                    scope = self._recordScope(path)
+                    recordStats = [
+                        stat('NEW', round(value), positive=True),
+                        stat('PREVIOUS', round(prevValue)),
+                        stat('BEATEN BY', f'+{round(margin)}', positive=margin > 0),
+                    ]
+                    # ⚠️ `holderId` IS the team id on a team record — `_checkTeamGameRecord`
+                    # stores `id: team.id` right alongside the name. An earlier version
+                    # ignored that and matched the record's name against `team.name`, which
+                    # never hit: the record stores "Cleveland Rocks" (city + name) while
+                    # `team.name` is just "Rocks", so every team record shipped without a
+                    # crest. Player records get their team filled in at read time instead,
+                    # from the player row (front_page).
+                    emit(category='record', eventType=path,
+                         text=f'{name} set the {label} record at {round(value)}',
+                         teamId=None if isPlayer else holderId,
+                         playerId=holderId if isPlayer else None,
+                         playerName=name if isPlayer else None,
+                         stats=recordStats,
+                         leadWeight=self._leadWeight(
+                             'record',
+                             (value / prevValue) * self.RECORD_SCOPE_WEIGHT.get(scope, 1.0)))
+            except Exception as e:
+                logger.debug(f"Record news skipped: {e}")
+
+        # ── An upset ─────────────────────────────────────────────────────────
+        # Judged on PRE-GAME ELO, captured before the result moved it. Reading the live
+        # elo here would compare the teams after the win had already been priced in.
+        #
+        # ⚠️ And not before `UPSET_MIN_WEEK`. ELO regresses halfway to 1500 at every
+        # season reset, so a 120-point gap in the opening weeks is mostly last season's
+        # residue rather than this season's form — the feed was calling results
+        # surprising off a number the league had not yet earned. Playoff weeks are 29+
+        # and clear the bar on their own.
+        try:
+            winner = getattr(game, 'winningTeam', None)
+            loser = getattr(game, 'losingTeam', None)
+            if winner is not None and loser is not None:
+                homeIsWinner = winner is game.homeTeam
+                winnerElo = getattr(game, '_preGameHomeElo' if homeIsWinner else '_preGameAwayElo', 1500)
+                loserElo = getattr(game, '_preGameAwayElo' if homeIsWinner else '_preGameHomeElo', 1500)
+                gap = (loserElo or 1500) - (winnerElo or 1500)
+                if gap >= UPSET_NEWS_ELO_GAP and week >= UPSET_MIN_WEEK:
+                    winnerScore = game.homeScore if homeIsWinner else game.awayScore
+                    loserScore = game.awayScore if homeIsWinner else game.homeScore
+                    emit(category='upset', eventType='upset',
+                         text=f'{winner.city} {winner.name} have upset the {loser.city} {loser.name}',
+                         teamId=winner.id,
+                         stats=[
+                             stat('FINAL', f'{round(winnerScore)}-{round(loserScore)}'),
+                             stat('ELO GAP', f'-{round(gap)}'),
+                             stat('WINNER ELO', round(winnerElo or 1500)),
+                             stat('LOSER ELO', round(loserElo or 1500)),
+                         ],
+                         leadWeight=self._leadWeight('upset', gap / UPSET_NEWS_ELO_GAP))
+        except Exception as e:
+            logger.debug(f"Upset news skipped: {e}")
+
+        # ── A big individual game ────────────────────────────────────────────
+        # OFF by default — see `BIG_GAME_NEWS_ENABLED`. The feed is about the league and
+        # the simulation running it, not about who had a good afternoon; measured, these
+        # were 48% of all rows and crowded everything else off the visible feed.
+        #
+        # One item per player at most when enabled. A back who runs for 180 and three
+        # scores is one story, not two, and firing both would let a single game flood it.
+        if not BIG_GAME_NEWS_ENABLED:
+            return
+        try:
+            for team in (game.homeTeam, game.awayTeam):
+                for player in (getattr(team, 'rosterDict', {}) or {}).values():
+                    if not player or not hasattr(player, 'gameStatsDict'):
+                        continue
+                    for group, key, threshold, template in self.BIG_GAME_TESTS:
+                        line = player.gameStatsDict.get(group, {}) or {}
+                        value = line.get(key, 0) or 0
+                        if value < threshold:
+                            continue
+                        # The strip is the player's line in the group that triggered the
+                        # item, so it explains the headline instead of repeating it.
+                        strip = [
+                            stat(label, round(line.get(field, 0) or 0))
+                            for label, field in self.BIG_GAME_STRIP.get(group, [])
+                        ]
+                        emit(category='big_game', eventType=f'{group}.{key}',
+                             text=template.format(name=player.name, value=round(value)),
+                             playerId=player.id, playerName=player.name, teamId=team.id,
+                             stats=strip if len(strip) == 4 else None,
+                             leadWeight=self._leadWeight(
+                                 'big_game', value / threshold if threshold else 1.0))
+                        break
+        except Exception as e:
+            logger.debug(f"Big-game news skipped: {e}")
+
+    def _publishCoresWeekNews(self, week: int) -> None:
+        """The Cores react to the slate that just finished, and now and then just talk.
+
+        This is what the feed is mostly FOR (owner, 2026-08-08): the league told by the
+        things running it, rather than a list of who gained the most yards. Both pools
+        already existed and were reachable only from the ephemeral control-room endpoint,
+        so the Cores were characters nobody met unless they went looking.
+
+        ⚠️ Reactions come from `gameResultExchange`, which references TEAMS AND SCORES —
+        fine here. The `observation` beats do NOT go in the feed: those quote the raw
+        aggregate and threshold, and the public surfaces stay number-free so the anomaly
+        reads as a mood rather than a progress bar.
+
+        ⚠️ Wrapped whole, like `_publishGameNews`. Nothing about narrating a week may
+        break the week.
+        """
+        try:
+            from constants import CORES_GAME_NEWS_EVERY_WEEKS, CORES_AMBIENT_NEWS_EVERY_WEEKS
+            from managers.coresManager import gameResultEntriesFor, entriesForEvent
+            from league_news import publish
+
+            season = getattr(self.currentSeason, 'seasonNumber', 0) or 0
+            entries = []
+
+            if CORES_GAME_NEWS_EVERY_WEEKS and week % CORES_GAME_NEWS_EVERY_WEEKS == 0:
+                games = self._coresGameDigest()
+                if games:
+                    entries.extend(gameResultEntriesFor(games) or [])
+
+            # Untethered banter — world-building, bickering, the lore they invented. No
+            # triggering event, which is the point: the simulation is inhabited whether or
+            # not anything happened.
+            if CORES_AMBIENT_NEWS_EVERY_WEEKS and week % CORES_AMBIENT_NEWS_EVERY_WEEKS == 0:
+                entries.extend(entriesForEvent('idle') or [])
+
+            for entry in entries:
+                publish(
+                    self.db_session,
+                    season=season, week=week,
+                    category='cores',
+                    eventType=entry.get('eventType'),
+                    text=entry.get('text', ''),
+                    core=entry.get('core'),
+                    coreDisplayName=entry.get('coreDisplayName'),
+                    exchangeId=entry.get('exchangeId'),
+                    turnIndex=entry.get('turnIndex'),
+                    turnCount=entry.get('turnCount'),
+                )
+        except Exception as e:
+            logger.debug(f"Cores week news skipped: {e}")
+
+    def _coresGameDigest(self):
+        """The week's finals, shaped the way `gameResultExchange` reads them.
+
+        Built from the games already in memory rather than re-queried — this runs on the
+        sim thread at week end, and the season object is holding them anyway.
+        """
+        from constants import UPSET_NEWS_ELO_GAP
+        games = (getattr(self.currentSeason, 'completedWeekGames', None)
+                 or getattr(self.currentSeason, 'activeGames', None) or [])
+        out = []
+        for g in games:
+            try:
+                home, away = g.homeTeam, g.awayTeam
+                if home is None or away is None or g.homeScore == g.awayScore:
+                    continue   # a tie has no winner to name, and the pools all name one
+                homeWon = g.homeScore > g.awayScore
+                if homeWon:
+                    winner, loser, ws, ls = home, away, g.homeScore, g.awayScore
+                else:
+                    winner, loser, ws, ls = away, home, g.awayScore, g.homeScore
+                # Judged on PRE-game Elo, captured before the result moved it — the same
+                # basis and the same bar the upset news item uses, so the Cores and the
+                # feed cannot disagree about what counted as an upset.
+                winnerElo = getattr(g, '_preGameHomeElo' if homeWon else '_preGameAwayElo', 1500) or 1500
+                loserElo = getattr(g, '_preGameAwayElo' if homeWon else '_preGameHomeElo', 1500) or 1500
+                out.append({
+                    'winner': winner.name, 'loser': loser.name,
+                    'winnerScore': ws, 'loserScore': ls,
+                    'margin': ws - ls, 'total': ws + ls,
+                    'overtime': bool(getattr(g, 'isOvertime', False)),
+                    'upset': loserElo - winnerElo >= UPSET_NEWS_ELO_GAP,
+                    'week': getattr(self.currentSeason, 'currentWeek', 0) or 0,
+                })
+            except Exception:
+                continue
+        return out
+
+    def _publishScheduleNews(self, eventType: str, text: str,
+                             week: Optional[int] = None,
+                             season: Optional[int] = None) -> None:
+        """A schedule beat — a season opening, a week starting — in the news feed.
+
+        Its own category so the feed can colour it apart from results, and it deliberately
+        carries no stats: a slate that has not been played has no numbers worth a headline,
+        and this should never take the lead slot from an actual result.
+
+        Wrapped whole, like every other publisher hanging off the sim loop: nothing about a
+        news item is worth interrupting a season roll-over for.
+        """
+        try:
+            from league_news import publish
+            publish(
+                self.db_session,
+                season=season if season is not None else getattr(self.currentSeason, 'seasonNumber', 0) or 0,
+                week=week if week is not None else getattr(self.currentSeason, 'currentWeek', 0) or 0,
+                category='schedule',
+                eventType=eventType,
+                text=text,
+                # The surrounding code broadcasts its own season/week event; a second push
+                # would double the beat in the live feed.
+                broadcast=False,
+            )
+        except Exception as e:
+            logger.debug(f"Schedule news skipped ({eventType}): {e}")
+
+    def _publishTeamNews(self, category: str, text: str, team, lead: bool = False) -> None:
+        """Persist a team event to the league-news feed.
+
+        `lead=True` attaches the four-number strip that makes an item eligible to lead the
+        front page. A clinch gets one; an elimination deliberately does not — a losing
+        record, no seed and a negative differential is four numbers that say nothing, and
+        it is the wrong thing to headline a page with.
+        """
+        try:
+            from league_news import publish, stat
+            stats = None
+            if lead:
+                s = getattr(team, 'seasonTeamStats', {}) or {}
+                wins = s.get('wins', 0) or 0
+                losses = s.get('losses', 0) or 0
+                streak = s.get('streak', 0) or 0
+                diff = round(s.get('scoreDiff', 0) or 0)
+                stats = [
+                    stat('RECORD', f'{wins}-{losses}'),
+                    stat('STREAK', f'W{streak}' if streak > 0 else f'L{abs(streak)}' if streak else '-',
+                         positive=streak > 0),
+                    stat('POINTS FOR', round((s.get('Offense', {}) or {}).get('pts', 0) or 0)),
+                    stat('POINT DIFF', f'+{diff}' if diff > 0 else str(diff), positive=diff > 0),
+                ]
+            publish(
+                self.db_session,
+                season=getattr(self.currentSeason, 'seasonNumber', 0) or 0,
+                # On the season, not the manager — see `_publishGameNewsInner`.
+                week=getattr(self.currentSeason, 'currentWeek', 0) or 0,
+                category=category,
+                text=text,
+                teamId=team.id,
+                stats=stats,
+                # Clinching happens once a season per club. Weighted above anything a
+                # single game can produce so it takes the headline of the week it lands
+                # in rather than losing to whichever receiver had a big afternoon.
+                leadWeight=3.0 if lead else None,
+                # The surrounding code already broadcasts this line itself; publishing
+                # would send it twice.
+                broadcast=False,
+            )
+        except Exception as e:
+            logger.debug(f"Team news publish skipped ({category}): {e}")
+
+    def _applyDivisionSeeding(self, qualifiers, league):
+        """Division winners take the top seeds, the wildcards by record behind them.
+
+        A division winner is the best record inside its own division across the WHOLE
+        league (not just among qualifiers) — a club can win a weak division without being
+        top-half overall, and it should still get the seed. Falls back to plain record
+        order when the league has no divisions stamped.
+
+        Delegates to `standings_view.seedLeague`, which is also what the standings board
+        renders, so the projected seeds a fan reads all season cannot contradict the field
+        that actually gets built.
+
+        ⚠️ This used to swap each missing winner in by dropping the LAST qualifier, which
+        dropped the previously-swapped winner when a second one was missing: the field
+        came back one club short of the winners it claimed to contain, so `len(field)`
+        landed on 9 instead of 8 and the power-of-two check silently handed out byes.
+        Building the field from winners + wildcards makes the size structural.
+        """
+        from seeding import buildH2HGames
+        from standings_view import seedLeague
+        season = self.currentSeason.seasonNumber if self.currentSeason else 0
+        try:
+            h2h = buildH2HGames(self.db_session, season)
+        except Exception:
+            h2h = []
+        seeded = seedLeague(list(league.teamList), h2h)
+        if not seeded['seeds']:
+            return self._seedTeams(qualifiers)
+        return [t for t in seeded['ordered'] if t.id in seeded['seeds']]
+
     def _fixBackToBackMatchups(self, schedule: List[List[tuple]]) -> List[List[tuple]]:
         """Eliminate consecutive weeks where the same two teams play each other.
         Uses restart-with-reshuffle to avoid getting stuck in swap cycles."""
@@ -3767,7 +4602,23 @@ class SeasonManager:
         league1Group2Teams = []
         league2Group1Teams = []
         league2Group2Teams = []
-        
+
+        # ⚠️ This routine assumes both leagues are the SAME size and that size is
+        # EVEN. The split below walks `range(len(teamList))` and sends the first half
+        # to group 1 — at an odd count that is 8 and 7, so `group2Weeks` comes back
+        # one week short and the combine step dies on `group2Weeks[x]` with a bare
+        # IndexError that says nothing about why.
+        #
+        # It happened for real: a club renamed in config's `teams` but not in
+        # `teamDistribution` was silently dropped, leaving a 15-club league. Fail here,
+        # naming the sizes, rather than 40 lines later naming an index.
+        sizeA, sizeB = len(league1), len(league2)
+        if sizeA != sizeB or sizeA % 2 != 0:
+            raise ValueError(
+                f"Interleague scheduling needs two equal, even-sized leagues; got "
+                f"{sizeA} and {sizeB}. A club is probably missing from a league — check "
+                f"config.json's `teamDistribution` names against its `teams` array.")
+
         # Split leagues into groups
         for x in range(len(self.leagueManager.leagues[0].teamList)):
             if x < (len(self.leagueManager.leagues[0].teamList) / 2):
@@ -4012,27 +4863,61 @@ class SeasonManager:
             playoffsNonByeTeamList = []
             league.teamList[:] = self._seedTeams(league.teamList)
 
-            playoffTeamsList.extend(league.teamList[:int(len(league.teamList)/2)])
-            nonPlayoffTeamList.extend(league.teamList[int(len(league.teamList)/2):])
-            playoffsByeTeamList.extend(playoffTeamsList[:2])
-            playoffsNonByeTeamList.extend(playoffTeamsList[2:])
-            playoffsByeTeamList[:] = self._seedTeams(playoffsByeTeamList)
-            playoffsNonByeTeamList[:] = self._seedTeams(playoffsNonByeTeamList)
+            # Division winners take the top seeds. Winning the division is the prize; it
+            # buys a favourable matchup, not a free round. Ordered between themselves by
+            # record, then the wildcards by record behind them.
+            playoffTeamsList[:] = self._applyDivisionSeeding(
+                league.teamList[:int(len(league.teamList) / 2)], league)
+
+            # ⚠️ The eliminated set is the complement of the ACTUAL field, not the bottom
+            # half by record. A division winner can finish outside the top half — at four
+            # clubs per division that is routine, not a corner case — and taking the
+            # record slice here marked that club eliminated and dropped it into the FA
+            # draft order while it was still alive in the bracket.
+            _qualified = {id(t) for t in playoffTeamsList}
+            nonPlayoffTeamList.extend([t for t in league.teamList if id(t) not in _qualified])
+
+            # A power-of-two field needs no byes — every club plays every round.
+            # At 8 qualifiers (16-club leagues) that removes the structural advantage
+            # that was handing the top two seeds 89% of Floos Bowls: a bye skipped the
+            # round most likely to produce an upset. Non-power-of-two fields (the old
+            # 6-per-league shape) still bye the top two, which is what makes the
+            # bracket resolvable at all.
+            fieldSize = len(playoffTeamsList)
+            if fieldSize and (fieldSize & (fieldSize - 1)) == 0:
+                playoffsNonByeTeamList.extend(playoffTeamsList)
+            else:
+                playoffsByeTeamList.extend(playoffTeamsList[:2])
+                playoffsNonByeTeamList.extend(playoffTeamsList[2:])
+            # Re-sort by record ONLY when byes are in play. With a power-of-two field
+            # the list already carries the division-winner order set above, and
+            # re-seeding here would sort those winners straight back out of seeds 1-2.
+            if playoffsByeTeamList:
+                playoffsByeTeamList[:] = self._seedTeams(playoffsByeTeamList)
+                playoffsNonByeTeamList[:] = self._seedTeams(playoffsNonByeTeamList)
+
+            # The #1 seed. Read it off the QUALIFIER list, not the bye list — a
+            # power-of-two field has no byes at all, and this block used to index
+            # playoffsByeTeamList[0] unconditionally (IndexError the moment byes went
+            # away). The top qualifier is the top seed either way.
+            topSeed = playoffTeamsList[0] if playoffTeamsList else None
+            if topSeed is None:
+                logger.error(f"{league.name} produced no playoff qualifiers — skipping top-seed award")
+                continue
 
             # Award top seed Floobits if not already clinched mid-season.
             # Skipped on resume — the bonus already fired and clinchedTopSeed is
             # runtime-only, so re-running here would double-pay favorite-team fans.
-            if not resuming and not getattr(playoffsByeTeamList[0], 'clinchedTopSeed', False):
+            if not resuming and not getattr(topSeed, 'clinchedTopSeed', False):
                 from constants import CLINCH_TOPSEED_REWARD
                 self._awardFavoriteTeamBonus(
-                    playoffsByeTeamList[0].id, CLINCH_TOPSEED_REWARD, 'team_clinch_topseed',
+                    topSeed.id, CLINCH_TOPSEED_REWARD, 'team_clinch_topseed',
                     description='Favorite team clinched #1 seed',
                     season=self.currentSeason.seasonNumber)
-            playoffsByeTeamList[0].clinchedTopSeed = True
-            playoffsByeTeamList[0].seasonTeamStats['topSeed'] = True
+            topSeed.clinchedTopSeed = True
+            topSeed.seasonTeamStats['topSeed'] = True
 
             # Mark top seed in their league
-            topSeed = playoffsByeTeamList[0]
             season_str = 'Season {}'.format(self.currentSeason.seasonNumber)
             if season_str not in topSeed.topSeeds:
                 topSeed.topSeeds.append(season_str)
@@ -4041,6 +4926,36 @@ class SeasonManager:
                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _topSeedText}})
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                     await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_topSeedText))
+
+            season_str_div = 'Season {}'.format(self.currentSeason.seasonNumber)
+
+            # ── Division titles ──
+            # Awarded here rather than with the playoff seeds because a division winner is
+            # the best record INSIDE its division across the whole league, which
+            # _applyDivisionSeeding already computes — a club can win a weak division
+            # without being top-4 overall, and it has still won it.
+            divisions: Dict[str, list] = {}
+            for _t in league.teamList:
+                _d = getattr(_t, 'division', None)
+                if _d:
+                    divisions.setdefault(_d, []).append(_t)
+            for _divName, _members in divisions.items():
+                _ranked = self._seedTeams(list(_members))
+                if not _ranked:
+                    continue
+                _winner = _ranked[0]
+                _winner.seasonTeamStats['divisionChamp'] = True
+                if not hasattr(_winner, 'divisionTitles'):
+                    _winner.divisionTitles = []
+                if season_str_div not in _winner.divisionTitles:
+                    _winner.divisionTitles.append(season_str_div)
+                if not resuming:
+                    _divText = '{0} {1} win the {2}!'.format(
+                        _winner.city, _winner.name, _divName)
+                    self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _divText}})
+                    if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
+                        await broadcaster.broadcast_season_event(
+                            LeagueNewsEvent.leagueNews(_divText))
 
             playoffTeams[league.name] = playoffTeamsList.copy()
             playoffsByeTeams[league.name] = playoffsByeTeamList.copy()
@@ -4074,6 +4989,7 @@ class SeasonManager:
                             season=self.currentSeason.seasonNumber)
                         _clinchText = '{0} {1} have clinched a playoff berth'.format(team.city, team.name)
                         self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _clinchText}})
+                        self._publishTeamNews('clinched', _clinchText, team, lead=True)
                         if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                             await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_clinchText))
 
@@ -4086,6 +5002,7 @@ class SeasonManager:
                 if not resuming:
                     _elimText = '{0} {1} have faded from playoff contention'.format(team.city, team.name)
                     self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _elimText}})
+                    self._publishTeamNews('eliminated', _elimText, team)
                     if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                         await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_elimText))
 
@@ -4385,7 +5302,21 @@ class SeasonManager:
                 playoffTeamsList.clear()
 
                 season_str = 'Season {}'.format(self.currentSeason.seasonNumber)
-                
+
+                # Belt-and-braces: _simulatePlayoffGame's fallback should always leave a
+                # winner, but this block writes the season's champion and every accolade
+                # off it, so a None here would take the whole simulation task down (and
+                # did — see that fallback's comment). Bail out of the accolade write
+                # loudly instead, leaving the season championless but the sim alive.
+                if getattr(game, 'winningTeam', None) is None:
+                    logger.error(
+                        f"Floos Bowl has no winning team — season "
+                        f"{self.currentSeason.seasonNumber} will finish without a champion. "
+                        f"This means the bowl failed to simulate AND the winner fallback "
+                        f"did not fire; check the playoff game errors above."
+                    )
+                    return
+
                 # Both teams in the Floosbowl are league champions
                 if season_str not in game.winningTeam.leagueChampionships:
                     game.winningTeam.leagueChampionships.append(season_str)
@@ -4568,9 +5499,12 @@ class SeasonManager:
                     getattr(gameInstance, 'preGameAwayWinProbability', None)
                 )
 
-            # Check for records
+            # Check for records. Snapshot first so a break can be diffed out and
+            # published to the news feed.
+            _recordsBefore = self._snapshotRecords()
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
+            self._publishGameNews(gameInstance, _recordsBefore)
 
             # Resolve pick-em picks for this playoff game
             if gameIndex >= 0 and getattr(gameInstance, 'winningTeam', None):
@@ -4578,8 +5512,38 @@ class SeasonManager:
 
         except Exception as e:
             logger.error(f"Error simulating playoff game: {e}")
+            # A playoff game that fails to simulate must STILL yield a winner, or the
+            # bracket has a hole and everything downstream that reads winningTeam
+            # (accolades, champion, the next round's field) dereferences None and kills
+            # the whole simulation task. Fall back to the score if the game got far
+            # enough to have one, else the better regular-season record, else the home
+            # team. A wrong-but-decided result loses one game; an undecided one lost a
+            # 14-season league (an empty roster slot raised inside playGame, the bowl's
+            # winningTeam stayed None, and the sim died on the accolade write).
+            try:
+                if getattr(game, 'winningTeam', None) is None:
+                    home, away = getattr(game, 'homeTeam', None), getattr(game, 'awayTeam', None)
+                    hs, as_ = getattr(game, 'homeScore', 0) or 0, getattr(game, 'awayScore', 0) or 0
+                    if home is None or away is None:
+                        return None
+                    if hs != as_:
+                        winner = home if hs > as_ else away
+                    else:
+                        def _wins(team):
+                            stats = getattr(team, 'seasonTeamStats', None) or {}
+                            return stats.get('wins', 0) if hasattr(stats, 'get') else 0
+                        winner = home if _wins(home) >= _wins(away) else away
+                    game.winningTeam = winner
+                    game.losingTeam = away if winner is home else home
+                    logger.error(
+                        f"Playoff game failed to simulate — awarding it to {winner.name} "
+                        f"on {'score' if hs != as_ else 'regular-season record'} so the "
+                        f"bracket can continue. Investigate the failure above."
+                    )
+            except Exception as inner:
+                logger.error(f"Playoff winner fallback also failed: {inner}")
             return None
-    
+
     async def _completeSeasonSimulation(self) -> None:
         """Handle season completion tasks"""
         if not self.currentSeason:
@@ -4893,8 +5857,6 @@ class SeasonManager:
             self._offseasonGmResults = []
             self._offseasonFaVoteResults = {}
             self._offseasonFaPositionPriority = {}
-            self.playerManager._gmFaDirectives = {}
-            self.playerManager._gmFaPositionPriority = {}
             self.playerManager._faDraftBoards = {}
         # Reset freeAgencyComplete on every team — last season's FA draft
         # left it True, which would make this season's panel boot with every
@@ -6578,130 +7540,63 @@ class SeasonManager:
         currentSeasonNum = getattr(self.currentSeason, 'seasonNumber', 0) or 0
         self.playerManager.addPendingName(name, currentSeasonNum + NAME_REUSE_DELAY_SEASONS)
     
-    def _generateCoachCandidatesForFA(self) -> None:
-        """Pre-generate 3 coach candidates per team at front office open.
-
-        Users need to see candidates DURING the FA voting window (so they
-        know who they're voting for) — not after the fire vote resolves.
-        We generate up front for every team; teams whose fire vote fails
-        will have their candidates wiped after hire resolution and the
-        names returned to the unused-name pool, so this isn't a permanent
-        name drain.
-
-        Names consumed during candidate generation are persisted in a
-        single save AFTER the outer DB commit. Per-call saves inside the
-        loop would hammer SQLite's write lock (96 separate transactions
-        contending with the outer one) and deadlock.
-        """
-        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
-            return
-        if not self.currentSeason:
-            return
-        try:
-            from database.connection import get_session as _getSession
-            teamManager = self.serviceContainer.getService('team_manager')
-            if not teamManager:
-                return
-            session = _getSession()
-            try:
-                season = self.currentSeason.seasonNumber
-                generatedTeams = 0
-                for team in teamManager.teams:
-                    cands = teamManager.generateCoachCandidates(team, season, session=session)
-                    if cands:
-                        generatedTeams += 1
-                session.commit()
-                logger.info(
-                    f"Front Office: pre-generated coach candidates for {generatedTeams} teams"
-                )
-            finally:
-                session.close()
-            # Persist the names that were popped during candidate generation.
-            # Done AFTER the outer commit so the write-lock contention seen
-            # in fast mode (database is locked on DELETE FROM unused_names)
-            # can't happen — the candidate transaction is fully committed
-            # and released before we open a new session here.
-            try:
-                playerMgr = self.serviceContainer.getService('player_manager')
-                if playerMgr is not None and hasattr(playerMgr, 'saveUnusedNames'):
-                    playerMgr.saveUnusedNames()
-            except Exception as e:
-                logger.warning(f"Name pool save after candidate gen failed: {e}")
-        except Exception as e:
-            logger.warning(f"FA coach candidate pre-generation failed: {e}")
+    # app_setting key holding the last season whose Front Office open block ran.
+    FRONT_OFFICE_MARKER_KEY = 'front_office_open_season'
 
     def _frontOfficeProcessed(self) -> bool:
         """Has the week-GM_ACTIVE_WEEK Front Office open already run this season?
 
-        Keyed off the persisted per-team fan-count snapshot (the open block's
-        final step) on the season row, so a restart or deploy at/after week 22
-        won't re-run the block and re-roll retirements. Returns False (meaning
-        "run it") when the snapshot isn't set yet — including a zero-active-user
-        league, where the snapshot is still written as an empty JSON object.
+        This gate is what stops a restart or deploy at/after week 22 re-running the
+        block and RE-ROLLING retirements (_evaluateRetirementCandidates re-rolls every
+        not-yet-flagged player, so a second run inflates the retiring set).
+
+        Keyed off its own app_setting. It used to key off the per-team fan-count
+        snapshot written at the end of the same block — a side effect standing in for
+        a marker. That snapshot existed to freeze GM vote thresholds, and binding fan
+        votes are gone, so the snapshot went with them; the marker had to stop riding
+        on it first. The legacy column is still honoured as a fallback so a prod DB
+        that already ran week 22 this season under the old scheme isn't re-processed
+        on the deploy that ships this.
         """
         if not (DB_IMPORTS_AVAILABLE and USE_DATABASE) or not self.currentSeason:
             return False
+        season = self.currentSeason.seasonNumber
+        try:
+            from game_rules import _readAppSetting
+            stored = _readAppSetting(self.FRONT_OFFICE_MARKER_KEY)
+            if stored is not None and int(stored) >= int(season):
+                return True
+        except Exception:
+            pass
+        # Legacy fallback: the old marker was the fan-count snapshot on the season row.
         try:
             from database.connection import get_session as _getSession
             from database.models import Season as DBSeason
             session = _getSession()
             try:
-                row = session.get(DBSeason, self.currentSeason.seasonNumber)
+                row = session.get(DBSeason, season)
                 return bool(row and row.front_office_fan_snapshot)
             finally:
                 session.close()
         except Exception:
             return False
 
-    def _snapshotActiveFanCounts(self) -> None:
-        """Freeze per-team active fan counts at front office open (week 22).
-
-        Stored as JSON {teamId: count} on the season row. The GM vote
-        threshold reads this snapshot for fire / resign / cut votes so a
-        fan who logs in for the first time AFTER the voting window has
-        opened doesn't suddenly raise the bar mid-resolution.
-
-        "Active" = users with favorite_team_id == teamId AND
-        last_login_at >= season.start_date.
-        """
-        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
-            return
+    def _markFrontOfficeProcessed(self) -> None:
+        """Stamp this season's Front Office open as done (see _frontOfficeProcessed).
+        Must be the LAST step of the open block — everything before it is what the
+        marker is protecting from a second run."""
         if not self.currentSeason:
             return
         try:
-            import json as _json
-            from database.connection import get_session as _getSession
-            from database.models import Season as DBSeason, User
-            from sqlalchemy import func
-            session = _getSession()
-            try:
-                seasonRow = session.get(DBSeason, self.currentSeason.seasonNumber)
-                if seasonRow is None:
-                    return
-                snapshotStart = seasonRow.start_date
-                rows = session.query(
-                    User.favorite_team_id,
-                    func.count(User.id),
-                ).filter(
-                    User.favorite_team_id.isnot(None),
-                )
-                if snapshotStart is not None:
-                    rows = rows.filter(User.last_login_at >= snapshotStart)
-                rows = rows.group_by(User.favorite_team_id).all()
-                snapshot = {str(teamId): int(count) for teamId, count in rows}
-                seasonRow.front_office_fan_snapshot = _json.dumps(snapshot)
-                session.commit()
-                logger.info(
-                    f"Front Office fan snapshot: {len(snapshot)} teams, "
-                    f"total active fans = {sum(snapshot.values())}"
-                )
-            finally:
-                session.close()
+            from game_rules import _writeAppSetting
+            _writeAppSetting(self.FRONT_OFFICE_MARKER_KEY,
+                             str(self.currentSeason.seasonNumber))
         except Exception as e:
-            logger.warning(f"Failed to snapshot active fan counts: {e}")
-
-    # ── GM Mode offseason helpers ─────────────────────────────────────────
-
+            logger.error(
+                f"Could not stamp the Front Office marker for season "
+                f"{self.currentSeason.seasonNumber}: {e}. A restart before week's end "
+                f"would re-run the open block and re-roll retirements."
+            )
 
     async def _openFaVotingWindowMidSeason(self) -> None:
         """Open the FA voting window mid-season when the Front Office activates.
@@ -8719,6 +9614,121 @@ class SeasonManager:
                     p.attributes.determinationModifier = round(
                         min(5.0, p.attributes.determinationModifier + boost), 3)
 
+    def _recentTeamResults(self, window: int) -> dict:
+        """{team_id: [1|0, ...]} — each team's last `window` completed regular
+        season games this season, oldest first.
+
+        Read back off the games table rather than tracked on the team object so
+        a mid-season restart picks the window straight back up instead of
+        rebuilding it over the next few weeks.
+        """
+        from collections import defaultdict
+        out = defaultdict(list)
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session):
+            return {}
+        try:
+            rows = self.db_session.query(
+                DBGame.home_team_id, DBGame.away_team_id,
+                DBGame.home_score, DBGame.away_score
+            ).filter(
+                DBGame.season == self.currentSeason.seasonNumber,
+                DBGame.status == 'final',
+                DBGame.is_playoff == False  # noqa: E712 — SQL boolean, not Python
+            ).order_by(DBGame.week.asc(), DBGame.id.asc()).all()
+        except Exception as e:
+            logger.debug(f"_recentTeamResults: query failed ({e})")
+            return {}
+        for homeId, awayId, homeScore, awayScore in rows:
+            if homeScore is None or awayScore is None:
+                continue
+            out[homeId].append(1 if homeScore > awayScore else 0)
+            out[awayId].append(1 if awayScore > homeScore else 0)
+        return {teamId: results[-window:] for teamId, results in out.items()}
+
+    def _updateTeamFormOffsets(self) -> None:
+        """Weekly update of every team's continuous form offset — the layer that
+        makes a club run hot and cold across a season.
+
+        Without it, measured form variance (sd of a team's wins across the four
+        game days) sat at 1.06-1.13 against a coin-flip baseline of 1.32: every
+        club played at one fixed level all year and nothing ever moved. With the
+        shipped constants it reads 1.11, and clubs with a visibly flat season
+        (sd < 1.0) drop from 45% to 39%. See constants.py for the full measured
+        amplitude curve and why the plan's 1.6-1.9 target is out of reach here.
+
+        The feedback is NEGATIVE by construction. `recent` is the club's win rate
+        over the last FORM_WINDOW games MINUS its own season-to-date rate, so the
+        target is a deviation from the team's own level, not from .500 — and the
+        pull is the opposite sign. A team riding high gets pulled down toward its
+        true level and overshoots into a trough; a team in a hole gets pulled up
+        and overshoots into a run. It oscillates instead of running away, which
+        is what lets it add within-season variance without moving the win spread.
+
+        Both directions are trait-earned: collectiveVulnerability scales the fall
+        from a peak, collectiveResolve scales the climb out of a slump. A club of
+        disciplined professionals barely moves; a volatile one swings hard.
+
+        Deliberately separate from FORM_STATE_RATING_MULT, which stays as the
+        discrete badge layer with all its positive states pinned at 1.00.
+        """
+        from constants import (FORM_OSCILLATION_ENABLED, FORM_WINDOW, FORM_PULL,
+                               FORM_REVERSION, FORM_NOISE, FORM_MAX,
+                               FORM_FEEDBACK, FORM_DECAY)
+        if not FORM_OSCILLATION_ENABLED:
+            return
+        from random import gauss as _gauss
+
+        recentByTeam = self._recentTeamResults(FORM_WINDOW)
+        moved = []
+        for team in self.leagueManager.teams:
+            recentGames = recentByTeam.get(team.id) or []
+            wins = team.seasonTeamStats.get('wins', 0)
+            losses = team.seasonTeamStats.get('losses', 0)
+            played = wins + losses
+            # Until the season is longer than the window the two rates are the
+            # same number and `recent` is identically zero — nothing to react to.
+            if played <= FORM_WINDOW or len(recentGames) < FORM_WINDOW:
+                continue
+
+            recent = (sum(recentGames) / len(recentGames)) - (wins / played)
+            if FORM_FEEDBACK == 'momentum':
+                # A run FEEDS itself, and a slump deepens — the only shape that
+                # actually sustains a multi-week arc. Bounded by FORM_DECAY
+                # below, not by a restoring force, so it cannot run away.
+                target = recent * FORM_PULL
+                if recent > 0:
+                    target *= 0.5 + team.collectiveResolve()       # ride the run
+                else:
+                    target *= 0.5 + team.collectiveVulnerability()  # the collapse
+            else:
+                # Mean-reverting: above your own level pulls you down. Stable, and
+                # measured to cancel arcs rather than create them — kept for A/B.
+                target = -recent * FORM_PULL
+                if recent > 0:
+                    target *= 0.5 + team.collectiveVulnerability()
+                else:
+                    target *= 0.5 + team.collectiveResolve()
+
+            offset = getattr(team, 'formOffset', 0.0) or 0.0
+            offset += (target - offset) * FORM_REVERSION + _gauss(0, FORM_NOISE)
+            offset *= FORM_DECAY
+            team.formOffset = round(max(-FORM_MAX, min(FORM_MAX, offset)), 4)
+            moved.append(team)
+
+        # Persist here rather than leaving it to teamManager.saveTeamData(), which
+        # only runs at app init — without this the column would sit at 0 all season
+        # and a mid-season restart would flatten every club's arc.
+        if moved and DB_IMPORTS_AVAILABLE and USE_DATABASE and self.db_session:
+            try:
+                from database.models import Team as DBTeam
+                for team in moved:
+                    self.db_session.query(DBTeam).filter_by(id=team.id).update(
+                        {'form_offset': team.formOffset})
+                self.db_session.commit()
+            except Exception as e:
+                self.db_session.rollback()
+                logger.debug(f"_updateTeamFormOffsets: persist failed ({e})")
+
     def _updateTeamFormHistory(self) -> None:
         """Track how many consecutive weeks each team has been in their
         current form state. _applyFormState reads this at kickoff to apply
@@ -9600,6 +10610,10 @@ class SeasonManager:
         - "favorites": pick higher-ELO team (home breaks ties)
         - "underdogs": pick lower-ELO team (away breaks ties)
         - "random":    coin flip per game
+
+        `users.auto_pick_never_against_favorite` then overrides ANY of those on a game
+        involving the user's own club, so the auto-picker never calls against them.
+
         Uses 1.0x timing (pre-game) and ELO-based underdog multiplier."""
         import random as _random
         from datetime import datetime as _dt, timedelta as _td
@@ -9629,6 +10643,9 @@ class SeasonManager:
                 totalAutoPicks = 0
                 for user in autoUsers:
                     mode = user.auto_pick_mode or "off"
+                    favouriteId = (getattr(user, 'favorite_team_id', None)
+                                   if getattr(user, 'auto_pick_never_against_favorite', False)
+                                   else None)
                     existingPicks = pickemRepo.getUserPicks(user.id, seasonNum, week)
                     pickedIndices = {p.game_index for p in existingPicks}
                     for i, game in enumerate(games):
@@ -9649,6 +10666,19 @@ class SeasonManager:
                             pickedId = _random.choice((homeTeam.id, awayTeam.id))
                         else:
                             continue
+
+                        # ⚠️ Loyalty override. A user who runs auto-pick can ask never to
+                        # have a machine call against their own club on their behalf —
+                        # backing your team is the reason you have one, and the points it
+                        # costs are a price they would rather pay than see the pick.
+                        #
+                        # Applied AFTER the mode has chosen, so it overrides every mode
+                        # including "underdogs" and "random", and only ever flips the pick
+                        # TO the favourite club — it never picks against anyone else's.
+                        # Opt-in, because on average it loses points.
+                        if favouriteId and pickedId != favouriteId:
+                            if favouriteId in (homeTeam.id, awayTeam.id):
+                                pickedId = favouriteId
 
                         pickedIsHome = (pickedId == homeTeam.id)
                         underdogMult = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
@@ -10098,6 +11128,13 @@ class SeasonManager:
                 # Picks are already resolved per-game by _resolvePickEmGame.
                 # Award points-based Floobits + Clairvoyant bonus
                 userResults = pickemRepo.getWeekResultsByUser(season, week)
+                # ⚠️ How many games there were to pick. Perfect Week and Jinx are both
+                # "the WHOLE slate", and both were counting the reader's own picks
+                # instead: Perfect Week fired on `correctCount == totalPicks` with no
+                # floor, so one correct pick and nothing else was a perfect week (which
+                # is why prod shows it completed 413 times), and Jinx hardcoded 12, the
+                # old 24-club slate size, so at 32 clubs it can fire on 12 of 16.
+                slateSize = len(completedGames)
                 for userId, correctCount, totalPicks, totalPoints in userResults:
                     if totalPicks == 0:
                         continue
@@ -10118,8 +11155,9 @@ class SeasonManager:
                         from managers import achievementManager as _am
                         _am.onClairvoyant(session, userId, season)
 
-                    # Achievement hook — Perfect Week (all picks correct)
-                    if correctCount == totalPicks and totalPicks > 0:
+                    # Achievement hook — Perfect Week: every game on the slate, picked
+                    # and correct. Not merely "everything you picked came in".
+                    if slateSize > 0 and totalPicks >= slateSize and correctCount == totalPicks:
                         from managers import achievementManager as _am2
                         _am2.onPerfectPickEmWeek(session, userId, season)
 
@@ -10149,11 +11187,12 @@ class SeasonManager:
                             for p in userPicks
                         ):
                             _am4.unlockSecret(session, userId, "contrarian")
-                        # Secret — Jinx: a full 12-pick week, all MANUAL, every one
-                        # WRONG. The inverse of Perfect Week — rewards deliberately
-                        # picking every loser. Auto-picks excluded (same as Contrarian)
-                        # so an unlucky auto-picker on a chalk week doesn't unlock it.
-                        if len(userPicks) >= 12 and all(
+                        # Secret — Jinx: the FULL slate, all MANUAL, every one WRONG.
+                        # The inverse of Perfect Week — rewards deliberately picking
+                        # every loser. Auto-picks excluded (same as Contrarian) so an
+                        # unlucky auto-picker on a chalk week doesn't unlock it. Sized
+                        # off the slate, not a hardcoded 12, which was the 24-club count.
+                        if slateSize > 0 and len(userPicks) >= slateSize and all(
                             (not p.is_auto) and (p.correct is False)
                             for p in userPicks
                         ):
@@ -10596,6 +11635,12 @@ class SeasonManager:
                 db_stats.win_percentage = stats.get('winPerc', 0.0)
                 db_stats.streak = stats.get('streak', 0)
                 db_stats.score_differential = stats.get('scoreDiff', 0)
+                db_stats.div_wins = stats.get('divWins', 0) or 0
+                db_stats.div_losses = stats.get('divLosses', 0) or 0
+                db_stats.div_ties = stats.get('divTies', 0) or 0
+                db_stats.lg_wins = stats.get('lgWins', 0) or 0
+                db_stats.lg_losses = stats.get('lgLosses', 0) or 0
+                db_stats.lg_ties = stats.get('lgTies', 0) or 0
                 db_stats.made_playoffs = stats.get('madePlayoffs', False)
                 db_stats.league_champion = stats.get('leagueChamp', False)
                 db_stats.floosball_champion = stats.get('floosbowlChamp', False)
@@ -10654,65 +11699,30 @@ class SeasonManager:
             if not teamManager:
                 return
             
+            # One loop over (attribute, championship_type) instead of four near-identical
+            # blocks — the copy-paste version is where a new title type gets half-added.
+            TITLE_KINDS = (
+                ('topSeeds', 'regular_season'),
+                ('divisionTitles', 'division'),
+                ('leagueChampionships', 'league'),
+                ('floosbowlChampionships', 'floosbowl'),
+            )
             for team in teamManager.teams:
-                # Save top seeds
-                if hasattr(team, 'topSeeds') and team.topSeeds:
-                    for season_str in team.topSeeds:
-                        season_num = int(season_str.replace('Season ', ''))
-                        
-                        # Check if already exists
+                for attr, kind in TITLE_KINDS:
+                    for season_str in (getattr(team, attr, None) or []):
+                        try:
+                            season_num = int(str(season_str).replace('Season ', ''))
+                        except ValueError:
+                            continue
                         existing = self.db_session.query(DBChampionship).filter_by(
-                            team_id=team.id,
-                            season=season_num,
-                            championship_type='regular_season'
+                            team_id=team.id, season=season_num, championship_type=kind,
                         ).first()
-                        
                         if not existing:
-                            championship = DBChampionship(
-                                team_id=team.id,
-                                season=season_num,
-                                championship_type='regular_season'
-                            )
-                            self.db_session.add(championship)
-                
-                # Save league championships (Floosbowl finalists)
-                if hasattr(team, 'leagueChampionships') and team.leagueChampionships:
-                    for season_str in team.leagueChampionships:
-                        season_num = int(season_str.replace('Season ', ''))
-                        
-                        existing = self.db_session.query(DBChampionship).filter_by(
-                            team_id=team.id,
-                            season=season_num,
-                            championship_type='league'
-                        ).first()
-                        
-                        if not existing:
-                            championship = DBChampionship(
-                                team_id=team.id,
-                                season=season_num,
-                                championship_type='league'
-                            )
-                            self.db_session.add(championship)
-                
-                # Save Floosbowl championships (winners only)
-                if hasattr(team, 'floosbowlChampionships') and team.floosbowlChampionships:
-                    for season_str in team.floosbowlChampionships:
-                        season_num = int(season_str.replace('Season ', ''))
-                        
-                        existing = self.db_session.query(DBChampionship).filter_by(
-                            team_id=team.id,
-                            season=season_num,
-                            championship_type='floosbowl'
-                        ).first()
-                        
-                        if not existing:
-                            championship = DBChampionship(
-                                team_id=team.id,
-                                season=season_num,
-                                championship_type='floosbowl'
-                            )
-                            self.db_session.add(championship)
-            
+                            self.db_session.add(DBChampionship(
+                                team_id=team.id, season=season_num,
+                                championship_type=kind,
+                            ))
+
             self.db_session.commit()
             logger.info(f"Saved championships for season {self.currentSeason.seasonNumber}")
             

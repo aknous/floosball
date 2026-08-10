@@ -20,6 +20,14 @@ class PassingStats:
     ypc: float = 0.0
     twenty_plus: int = 0  # 20+
     longest: int = 0
+    # --- Advanced metrics. Raw counters; averages derived on read.
+    sacked: int = 0    # sacks taken - was never recorded anywhere
+    throws: int = 0    # balls actually released (excludes sacks)
+    throwQualitySum: int = 0    # / throws = avg throw quality
+    badThrows: int = 0    # releases below BAD_THROW_THRESHOLD
+    goodThrows: int = 0    # releases at or above GOOD_THROW_THRESHOLD
+    airYardsSum: int = 0    # / throws = average depth of target
+
     
     def reset(self):
         """Reset all stats to zero (faster than creating new instance)"""
@@ -33,6 +41,12 @@ class PassingStats:
         self.ypc = 0.0
         self.twenty_plus = 0
         self.longest = 0
+        self.sacked = 0
+        self.throws = 0
+        self.throwQualitySum = 0
+        self.badThrows = 0
+        self.goodThrows = 0
+        self.airYardsSum = 0
     
     def copy_from(self, other: 'PassingStats'):
         """Copy values from another PassingStats instance"""
@@ -47,6 +61,12 @@ class PassingStats:
         self.twenty_plus = other.twenty_plus
         self.longest = other.longest
 
+        self.sacked = other.sacked
+        self.throws = other.throws
+        self.throwQualitySum = other.throwQualitySum
+        self.badThrows = other.badThrows
+        self.goodThrows = other.goodThrows
+        self.airYardsSum = other.airYardsSum
 @dataclass
 class RushingStats:
     """Optimized rushing statistics structure"""
@@ -57,6 +77,17 @@ class RushingStats:
     tds: int = 0
     twenty_plus: int = 0  # 20+
     fumblesLost: int = 0
+    # --- Advanced metrics. Raw counters; averages derived on read.
+    yardsAfterContact: int = 0    # yards earned AFTER the tackler engaged (move +
+                                  # stretch only). NOT the NFL stat: the sim has no
+                                  # first-contact point inside its base yardage, so
+                                  # this is the extra-effort portion (~4% of rush yds)
+    brokenTackles: int = 0    # successful stiff arm / spin / hurdle
+    moveAttempts: int = 0    # moves tried, made or missed
+    stuffs: int = 0    # carries for <= 0
+    tackleAttempts: int = 0    # contacts faced (a failed gate IS a tackle attempt)
+    gapQualitySum: int = 0    # / carries = avg blocking faced
+
     
     def reset(self):
         """Reset all stats to zero"""
@@ -67,6 +98,12 @@ class RushingStats:
         self.tds = 0
         self.twenty_plus = 0
         self.fumblesLost = 0
+        self.yardsAfterContact = 0
+        self.brokenTackles = 0
+        self.moveAttempts = 0
+        self.stuffs = 0
+        self.tackleAttempts = 0
+        self.gapQualitySum = 0
     
     def copy_from(self, other: 'RushingStats'):
         """Copy values from another RushingStats instance"""
@@ -78,6 +115,12 @@ class RushingStats:
         self.twenty_plus = other.twenty_plus
         self.fumblesLost = other.fumblesLost
 
+        self.yardsAfterContact = other.yardsAfterContact
+        self.brokenTackles = other.brokenTackles
+        self.moveAttempts = other.moveAttempts
+        self.stuffs = other.stuffs
+        self.tackleAttempts = other.tackleAttempts
+        self.gapQualitySum = other.gapQualitySum
 @dataclass
 class ReceivingStats:
     """Optimized receiving statistics structure"""
@@ -92,6 +135,11 @@ class ReceivingStats:
     tds: int = 0
     twenty_plus: int = 0  # 20+
     fumbles: int = 0      # times stripped after a catch (see catch-strip in floosball_game)
+    # --- Advanced metrics. Raw counters; averages derived on read.
+    contestedTargets: int = 0    # targeted while covered
+    contestedCatches: int = 0    # ...and caught it anyway
+    bailouts: int = 0    # caught a ball below BAD_THROW_THRESHOLD
+
 
     def reset(self):
         """Reset all stats to zero"""
@@ -106,6 +154,9 @@ class ReceivingStats:
         self.tds = 0
         self.twenty_plus = 0
         self.fumbles = 0
+        self.contestedTargets = 0
+        self.contestedCatches = 0
+        self.bailouts = 0
 
     def copy_from(self, other: 'ReceivingStats'):
         """Copy values from another ReceivingStats instance"""
@@ -121,6 +172,9 @@ class ReceivingStats:
         self.twenty_plus = other.twenty_plus
         self.fumbles = other.fumbles
 
+        self.contestedTargets = other.contestedTargets
+        self.contestedCatches = other.contestedCatches
+        self.bailouts = other.bailouts
 @dataclass
 class KickingStats:
     """Optimized kicking statistics structure"""
@@ -149,6 +203,15 @@ class KickingStats:
     xpAtt: int = 0
     xps: int = 0
     xpPerc: float = 0.0
+    # --- Punting. Leg strength drives distance; accuracy drives placement.
+    punts: int = 0    # punts attempted
+    puntYards: int = 0    # gross punt yards
+    puntsInside20: int = 0    # downed inside the 20
+    puntsInside10: int = 0    # coffin corner
+    puntTouchbacks: int = 0    # sailed through -- gave the placement back
+    puntLongest: int = 0    # longest punt
+    puntReturnYards: int = 0    # yards given back on returns
+
     
     def reset(self):
         """Reset all stats to zero"""
@@ -173,6 +236,33 @@ class KickingStats:
         self.xpAtt = 0
         self.xps = 0
         self.xpPerc = 0.0
+
+@dataclass
+class ReturningStats:
+    """Punt/kick return production. The returner previously got NO credit at all --
+    return yards were only ever charged against the kicker as yards given back."""
+    puntReturns: int = 0
+    puntReturnYards: int = 0
+    puntReturnTds: int = 0
+    fairCatches: int = 0
+    muffs: int = 0
+    longest: int = 0
+
+    def reset(self):
+        self.puntReturns = 0
+        self.puntReturnYards = 0
+        self.puntReturnTds = 0
+        self.fairCatches = 0
+        self.muffs = 0
+        self.longest = 0
+
+    def copy_from(self, other: 'ReturningStats'):
+        self.puntReturns = other.puntReturns
+        self.puntReturnYards = other.puntReturnYards
+        self.puntReturnTds = other.puntReturnTds
+        self.fairCatches = other.fairCatches
+        self.muffs = other.muffs
+        self.longest = other.longest
 
 @dataclass
 class DefenseStats:
@@ -216,6 +306,7 @@ class OptimizedPlayerStats:
     receiving: ReceivingStats = field(default_factory=ReceivingStats)
     kicking: KickingStats = field(default_factory=KickingStats)
     defense: DefenseStats = field(default_factory=DefenseStats)
+    returning: ReturningStats = field(default_factory=ReturningStats)
     
     def reset_for_new_game(self):
         """Reset game stats (much faster than deepcopy)"""
@@ -226,6 +317,7 @@ class OptimizedPlayerStats:
         self.receiving.reset()
         self.kicking.reset()
         self.defense.reset()
+        self.returning.reset()
     
     def copy_from(self, other: 'OptimizedPlayerStats'):
         """Copy stats from another instance (faster than deepcopy)"""
@@ -255,7 +347,13 @@ class OptimizedPlayerStats:
                 'yards': self.passing.yards,
                 'ypc': self.passing.ypc,
                 '20+': self.passing.twenty_plus,
-                'longest': self.passing.longest
+                'longest': self.passing.longest,
+                'sacked': self.passing.sacked,
+                'throws': self.passing.throws,
+                'throwQualitySum': self.passing.throwQualitySum,
+                'badThrows': self.passing.badThrows,
+                'goodThrows': self.passing.goodThrows,
+                'airYardsSum': self.passing.airYardsSum
             },
             'rushing': {
                 'carries': self.rushing.carries,
@@ -264,7 +362,13 @@ class OptimizedPlayerStats:
                 'longest': self.rushing.longest,
                 'tds': self.rushing.tds,
                 '20+': self.rushing.twenty_plus,
-                'fumblesLost': self.rushing.fumblesLost
+                'fumblesLost': self.rushing.fumblesLost,
+                'yardsAfterContact': self.rushing.yardsAfterContact,
+                'brokenTackles': self.rushing.brokenTackles,
+                'moveAttempts': self.rushing.moveAttempts,
+                'stuffs': self.rushing.stuffs,
+                'tackleAttempts': self.rushing.tackleAttempts,
+                'gapQualitySum': self.rushing.gapQualitySum
             },
             'receiving': {
                 'targets': self.receiving.targets,
@@ -277,7 +381,10 @@ class OptimizedPlayerStats:
                 'longest': self.receiving.longest,
                 'tds': self.receiving.tds,
                 '20+': self.receiving.twenty_plus,
-                'fumbles': self.receiving.fumbles
+                'fumbles': self.receiving.fumbles,
+                'contestedTargets': self.receiving.contestedTargets,
+                'contestedCatches': self.receiving.contestedCatches,
+                'bailouts': self.receiving.bailouts
             },
             'kicking': {
                 'fgAtt': self.kicking.fgAtt,
@@ -300,7 +407,14 @@ class OptimizedPlayerStats:
                 'fgOver50perc': self.kicking.fgOver50perc,
                 'xpAtt': self.kicking.xpAtt,
                 'xps': self.kicking.xps,
-                'xpPerc': self.kicking.xpPerc
+                'xpPerc': self.kicking.xpPerc,
+                'punts': self.kicking.punts,
+                'puntYards': self.kicking.puntYards,
+                'puntsInside20': self.kicking.puntsInside20,
+                'puntsInside10': self.kicking.puntsInside10,
+                'puntTouchbacks': self.kicking.puntTouchbacks,
+                'puntLongest': self.kicking.puntLongest,
+                'puntReturnYards': self.kicking.puntReturnYards
             },
             'defense': {
                 'sacks': self.defense.sacks,
@@ -309,6 +423,14 @@ class OptimizedPlayerStats:
                 'tfl': self.defense.tfl,
                 'forcedFumbles': self.defense.forcedFumbles,
                 'passBreakups': self.defense.passBreakups,
+            },
+            'returning': {
+                'puntReturns': self.returning.puntReturns,
+                'puntReturnYards': self.returning.puntReturnYards,
+                'puntReturnTds': self.returning.puntReturnTds,
+                'fairCatches': self.returning.fairCatches,
+                'muffs': self.returning.muffs,
+                'longest': self.returning.longest,
             }
         }
     

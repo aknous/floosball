@@ -242,6 +242,10 @@ class TeamResponseBuilder(ResponseBuilder):
         return {
             'name': team.name,
             'city': team.city,
+            # The abbreviation was missing here while the game payload carried it, so any
+            # surface built off the TEAM dict (the standings board's wildcard track, its
+            # division-leader chip) rendered a blank where the abbr should be.
+            'abbr': getattr(team, 'abbr', None) or team.name[:3].upper(),
             'color': team.color,
             'secondaryColor': getattr(team, 'secondaryColor', team.color),
             'tertiaryColor': getattr(team, 'tertiaryColor', team.color),
@@ -844,38 +848,97 @@ class LeagueResponseBuilder(ResponseBuilder):
     """Builder for league-wide responses"""
     
     @staticmethod
-    def buildStandingsResponse(teams: List, h2hGames=None) -> Dict[str, Any]:
+    def buildStandingsResponse(teams: List, h2hGames=None, form=None,
+                               divisionOrder=None) -> Dict[str, Any]:
         """Build league standings response.
 
-        Ordered by the SAME tiebreaker chain the playoffs seed on (win% →
-        score differential → head-to-head point diff → points-for →
-        points-against) via seeding.orderTeams, so the board can't show an
-        order that doesn't match how playoffs would actually seed. `h2hGames`
-        (from seeding.buildH2HGames) is only consulted inside a real tie.
+        Seeded by the SAME chain the playoffs run on — `standings_view.seedLeague`, which
+        calls `seeding.orderTeams` and mirrors `_applyDivisionSeeding`'s division-winner
+        rule — so the board can't show an order that contradicts how the field would
+        actually be seeded. `h2hGames` (from `seeding.buildH2HGames`) is only consulted
+        inside a real tie.
+
+        Rows arrive in DISPLAY order: the qualifiers by seed, then everyone else by
+        record. `form` is the optional `{teamId: {last5, streak, rankLastWeek}}` map from
+        `standings_view.buildFormAndMovement` — omit it and those fields come back empty
+        rather than the endpoint failing. `divisionOrder` fixes the order the division
+        blocks render in (the owner's config order); anything not listed follows.
         """
-        from seeding import orderTeams
-        orderedTeams = orderTeams(list(teams), h2hGames or [])
+        from standings_view import seedLeague, gamesBackFrom
+
+        form = form or {}
+        seeded = seedLeague(list(teams), h2hGames or [])
+        orderedTeams = seeded['ordered']
+        seeds = seeded['seeds']
+        recordRanks = seeded['recordRanks']
+
+        # Games back is measured from the club ON the cut — the last playoff spot — so a
+        # qualifier reads negative (ahead) and the chasing pack reads positive.
+        spots = len(seeds)
+        cutTeam = next((t for t in orderedTeams if seeds.get(t.id, (None,))[0] == spots), None)
 
         team_standings = []
         for team in orderedTeams:
             team_dict = TeamResponseBuilder.buildTeamWithRatings(team)
-            # Surface score differential — it's the first tiebreaker, so it
-            # belongs on the board. Also include points for/against.
+            # Surface score differential — it's a tiebreaker, so it belongs on the board.
+            # Also include points for/against.
             scoreDiff = team.seasonTeamStats.get('scoreDiff', 0)
             pointsFor = (team.seasonTeamStats.get('Offense', {}) or {}).get('pts', 0)
+            # Division and its record: the division is how the board groups clubs, and
+            # both tiebreaker records are what let it explain its own ordering.
+            _st = team.seasonTeamStats
+            _dw = _st.get('divWins', 0) or 0
+            _dl = _st.get('divLosses', 0) or 0
+            _dt = _st.get('divTies', 0) or 0
+            _lw = _st.get('lgWins', 0) or 0
+            _ll = _st.get('lgLosses', 0) or 0
+            _lt = _st.get('lgTies', 0) or 0
+            seed, seedKind = seeds.get(team.id, (None, None))
+            _form = form.get(team.id) or {}
+            rankLastWeek = _form.get('rankLastWeek')
             team_dict.update({
                 'scoreDiff': cleanScore(scoreDiff),
                 'pointsFor': cleanScore(pointsFor),
                 'pointsAgainst': cleanScore(pointsFor - scoreDiff),
-                'streak': team.seasonTeamStats.get('streak', 0),
+                # The board reads a streak as a run ("W3"), not a signed counter. The
+                # counter stays available for anything that wants the raw number.
+                'streak': _form.get('streak', ''),
+                'streakCount': _st.get('streak', 0),
+                'last5': _form.get('last5', []),
+                'division': getattr(team, 'division', None),
+                'divisionRecord': f"{_dw}-{_dl}" + (f"-{_dt}" if _dt else ""),
+                'divisionWins': _dw,
+                'divisionLosses': _dl,
+                'divisionTies': _dt,
+                'leagueRecord': f"{_lw}-{_ll}" + (f"-{_lt}" if _lt else ""),
+                'leagueWins': _lw,
+                'leagueLosses': _ll,
+                'leagueTies': _lt,
+                # Projected playoff position if the season ended today. Null outside the cut.
+                'seed': seed,
+                'seedKind': seedKind,
+                'gamesBack': gamesBackFrom(cutTeam, team),
+                # Movement is against last week's rank BY RECORD within the league, so it
+                # answers "did they climb" rather than "did the seeding rule move them".
+                'rankLastWeek': rankLastWeek,
+                'rankChange': (rankLastWeek - recordRanks[team.id]) if rankLastWeek else 0,
             })
             team_standings.append(team_dict)
 
+        divisions = seeded['divisions']
+        if divisionOrder:
+            names = ([n for n in divisionOrder if n in divisions]
+                     + [n for n in divisions if n not in divisionOrder])
+        else:
+            names = list(divisions)
+
         return {
             'standings': team_standings,
+            'divisions': [{'name': name, 'teamIds': divisions[name]} for name in names],
             'totalTeams': len(team_standings)
         }
-    
+
+
     @staticmethod
     def buildScheduleResponse(games_by_week: Dict) -> Dict[str, Any]:
         """Build schedule response organized by week"""

@@ -22,6 +22,22 @@ except ImportError:
 
 logger = get_logger("floosball.playerManager")
 
+
+def _perfRating(player, attr: str) -> Optional[int]:
+    """A season performance rating worth writing down, or None.
+
+    The ratings are percentile-of-production and start every season at 0, so a
+    0 means "not calculated yet", not "was terrible". Storing that would erase
+    the reading a moment before it was taken.
+    """
+    value = getattr(player, attr, 0) or 0
+    try:
+        value = int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 class PlayerManager:
     """Manages player lifecycle, lists, and organization"""
     
@@ -84,7 +100,16 @@ class PlayerManager:
         # If no existing players found, generate new ones
         logger.info("No existing players found, generating new player pool")
         leagueConfig = config.get('leagueConfig', {})
-        totalPlayers = leagueConfig.get('initialPlayerCount', 144)
+        # Size the starting pool off the ACTUAL club count. This was a flat 144 —
+        # 24 clubs x 6 slots — so expanding the league silently under-generated and
+        # the opening draft left whole rosters empty (the supply floor only runs
+        # later, by which point the draft has already happened). An explicit
+        # initialPlayerCount in config still wins if one is set.
+        slotsPerTeam = 6
+        teamCount = len(config.get('teams') or []) or 24
+        totalPlayers = leagueConfig.get('initialPlayerCount') or (teamCount * slotsPerTeam)
+        logger.info(f"Initial pool: {totalPlayers} players for {teamCount} clubs "
+                    f"({slotsPerTeam} slots each)")
         
         # Load name lists from main config
         self.loadNameLists(config)
@@ -489,9 +514,16 @@ class PlayerManager:
                             'receiving': stat_record.receiving_stats or {},
                             'kicking': stat_record.kicking_stats or {},
                             'defense': stat_record.defense_stats or {},
+                            'returning': stat_record.returning_stats or {},
                             'gamesPlayed': stat_record.games_played,
                             'fantasyPoints': stat_record.fantasy_points,
                         }
+                        # Backfill any stat keys this stored blob predates. Stats
+                        # round-trip as JSON, and add_stat silently skips unknown
+                        # keys, so without this an existing player would never
+                        # accumulate a newly-added advanced metric.
+                        from floosball_player import mergeStatDefaults
+                        mergeStatDefaults(player.careerStatsDict)
                         # Re-point stat_tracker at the restored dict — without
                         # this, in-game stat increments go to the original
                         # empty dict from Player.__init__ and never reach
@@ -1503,7 +1535,12 @@ class PlayerManager:
                     'receiving': row.receiving_stats or {},
                     'kicking': row.kicking_stats or {},
                     'defense': row.defense_stats or {},
+                    'returning': row.returning_stats or {},
                 }
+                # Backfill stat keys this stored blob predates (see the career
+                # restore above) so newly-added advanced metrics accumulate.
+                from floosball_player import mergeStatDefaults
+                mergeStatDefaults(player.seasonStatsDict)
                 # Restore the direct gamesPlayed attribute used by MVP/All-Pro eligibility
                 player.gamesPlayed = row.games_played or 0
                 # Restore the season WPA value totals (plain attributes, not in the
@@ -1812,6 +1849,7 @@ class PlayerManager:
                             receiving_stats=stats_dict.get('receiving'),
                             kicking_stats=stats_dict.get('kicking'),
                             defense_stats=stats_dict.get('defense'),
+                            returning_stats=stats_dict.get('returning'),
                         )
                         self.db_session.add(db_career_stats)
                     else:
@@ -1835,8 +1873,9 @@ class PlayerManager:
                         db_career_stats.receiving_stats = dict(stats_dict.get('receiving') or {})
                         db_career_stats.kicking_stats = dict(stats_dict.get('kicking') or {})
                         db_career_stats.defense_stats = dict(stats_dict.get('defense') or {})
+                        db_career_stats.returning_stats = dict(stats_dict.get('returning') or {})
                         for _f in ('passing_stats', 'rushing_stats', 'receiving_stats',
-                                   'kicking_stats', 'defense_stats'):
+                                   'kicking_stats', 'defense_stats', 'returning_stats'):
                             flag_modified(db_career_stats, _f)
                 
                 # Save season stats (if we have a current season)
@@ -1897,12 +1936,16 @@ class PlayerManager:
                                     def_wpa=float(getattr(player, 'seasonDefWpa', 0.0)),
                                     wpa_snaps=int(getattr(player, 'seasonWpaSnaps', 0)),
                                     def_snaps=int(getattr(player, 'seasonDefWpaSnaps', 0)),
+                                    # How the season went, kept so a past season can still say so.
+                                    performance_rating=_perfRating(player, 'seasonPerformanceRating'),
+                                    defensive_performance_rating=_perfRating(player, 'seasonDefensivePerformanceRating'),
                                     # JSON for detailed stats
                                     passing_stats=season_dict.get('passing'),
                                     rushing_stats=season_dict.get('rushing'),
                                     receiving_stats=season_dict.get('receiving'),
                                     kicking_stats=season_dict.get('kicking'),
                                     defense_stats=season_dict.get('defense'),
+                                    returning_stats=season_dict.get('returning'),
                                 )
                                 self.db_session.add(db_season_stats)
                             else:
@@ -1931,6 +1974,15 @@ class PlayerManager:
                                 db_season_stats.def_wpa = float(getattr(player, 'seasonDefWpa', 0.0))
                                 db_season_stats.wpa_snaps = int(getattr(player, 'seasonWpaSnaps', 0))
                                 db_season_stats.def_snaps = int(getattr(player, 'seasonDefWpaSnaps', 0))
+                                # Only ever move these forward off a real reading — the ratings
+                                # are recomputed weekly and are 0 until the first calc of a new
+                                # season, which would otherwise wipe the season just finished.
+                                _perf = _perfRating(player, 'seasonPerformanceRating')
+                                if _perf is not None:
+                                    db_season_stats.performance_rating = _perf
+                                _defPerf = _perfRating(player, 'seasonDefensivePerformanceRating')
+                                if _defPerf is not None:
+                                    db_season_stats.defensive_performance_rating = _defPerf
                                 # Update JSON — wrap with dict() AND use
                                 # flag_modified() because the in-memory dict
                                 # we mutate IS the same object SQLAlchemy
@@ -1944,8 +1996,9 @@ class PlayerManager:
                                 db_season_stats.receiving_stats = dict(season_dict.get('receiving') or {})
                                 db_season_stats.kicking_stats = dict(season_dict.get('kicking') or {})
                                 db_season_stats.defense_stats = dict(season_dict.get('defense') or {})
+                                db_season_stats.returning_stats = dict(season_dict.get('returning') or {})
                                 for _f in ('passing_stats', 'rushing_stats', 'receiving_stats',
-                                           'kicking_stats', 'defense_stats'):
+                                           'kicking_stats', 'defense_stats', 'returning_stats'):
                                     flag_modified(db_season_stats, _f)
             
             # Commit all changes
@@ -3156,44 +3209,16 @@ class PlayerManager:
 
         logger.info(f"Free agency starting with {len(self.freeAgents)} free agents and {len(teams)} teams")
 
-        # GM directives: {teamId: [playerId, ...]} — populated by GM Mode sign_fa votes
-        gmDirectives = getattr(self, '_gmFaDirectives', {})
-
-        # DIRECTIVE PHASE: Honor GM directives first (one pass per team)
+        # The DIRECTIVE PHASE that used to run here is gone. It signed the players a
+        # team's fans had ranked on the sign_fa ballot before the fill rounds began.
+        # Binding fan votes were removed with the autonomous Front Office (gmManager.py
+        # is deleted), so `_gmFaDirectives` is now only ever assigned an empty dict and
+        # the phase was a no-op loop over nothing.
         freeAgentLists = {
             'qb': freeAgentQbList, 'rb': freeAgentRbList,
             'wr1': freeAgentWrList, 'wr2': freeAgentWrList,
             'te': freeAgentTeList, 'k': freeAgentKList,
         }
-        for team in freeAgencyOrder:
-            directives = gmDirectives.get(getattr(team, 'id', None), [])
-            for targetId in directives:
-                # Find the targeted player in the FA pool
-                targetPlayer = None
-                targetListKey = None
-                for lKey, faList in freeAgentLists.items():
-                    for p in faList:
-                        if p.id == targetId:
-                            targetPlayer = p
-                            targetListKey = lKey
-                            break
-                    if targetPlayer:
-                        break
-                if not targetPlayer:
-                    continue
-                # Don't re-sign a player this team just released this offseason
-                # (cut by fan vote, or expired and not kept) even if fans ranked
-                # them on the FA ballot.
-                if self._leftThisTeamThisOffseason(targetPlayer, team):
-                    continue
-                # Find open roster slot matching player's position
-                openSlot = self._findOpenSlotForPosition(team, targetPlayer.position.value)
-                if not openSlot:
-                    continue
-                # Sign the player
-                self._signPlayer(team, targetPlayer, openSlot, freeAgentLists[targetListKey],
-                                 freeAgencyDict, leagueHighlights, eventLog, allFaLists=freeAgentLists)
-                log_fa(f"  GM DIRECTIVE: {team.name} signs {targetPlayer.name} at {openSlot}")
 
         # FILL PHASE: Multi-round fill for remaining open roster spots
         teamsComplete = 0
@@ -3374,12 +3399,9 @@ class PlayerManager:
             'wr1': freeAgentWrList, 'wr2': freeAgentWrList,
             'te': freeAgentTeList, 'k': freeAgentKList,
         }
-        gmDirectives = getattr(self, '_gmFaDirectives', {})
+        # Per-team directive queues (fan sign_fa ballot targets) are gone with the
+        # binding-vote system — see the note in conductFreeAgencySimulation.
         teamDirectiveQueues = {}
-        for team in freeAgencyOrder:
-            directives = gmDirectives.get(getattr(team, 'id', None), [])
-            if directives:
-                teamDirectiveQueues[team.id] = list(directives)
 
         # --- DRAFT ROUNDS: one pick per team per round ---
         teamsComplete = 0
@@ -3422,94 +3444,11 @@ class PlayerManager:
                 # the queue is a fall-through pick (Rule 2 — their higher-
                 # ranked FAs ahead of them are gone or no longer eligible).
                 directivePick = False
-                prospectsById = {p.id: p for p in getattr(team, 'prospects', [])}
-                queue = teamDirectiveQueues.get(team.id, [])
-                while queue:
-                    targetId = queue.pop(0)
-
-                    # Case A — ranked target is a prospect: promote them
-                    prospectTarget = prospectsById.get(targetId)
-                    if prospectTarget is not None:
-                        openSlot = self._findOpenSlotForPosition(team, prospectTarget.position.value)
-                        if not openSlot:
-                            continue
-                        prospectTarget.is_prospect = False
-                        prospectTarget.prospect_seasons = 0
-                        prospectTarget.drafting_team_id = None
-                        prospectTarget.team = team
-                        team.rosterDict[openSlot] = prospectTarget
-                        if prospectTarget in team.prospects:
-                            team.prospects.remove(prospectTarget)
-                        try:
-                            prospectTarget.term = self._getPlayerTerm(prospectTarget)
-                            prospectTarget.termRemaining = prospectTarget.term
-                        except Exception:
-                            prospectTarget.termRemaining = 1
-                        freeAgencyDict.setdefault(team.name, []).append({
-                            'action': 'promote', 'player': prospectTarget.name,
-                            'position': prospectTarget.position.name, 'slot': openSlot,
-                        })
-                        leagueHighlights.insert(0, {
-                            'event': {'text': f"{team.name} promoted prospect {prospectTarget.name} ({prospectTarget.position.name}) by fan vote"}
-                        })
-                        logFa(f"  FAN VOTE PROMOTE (fall-through): {team.name} promotes {prospectTarget.name} at {openSlot}")
-                        yield {
-                            'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
-                            'playerId': getattr(prospectTarget, 'id', None),
-                            'player': prospectTarget.name, 'position': prospectTarget.position.name,
-                            'rating': round(prospectTarget.playerRating, 1), 'tier': prospectTarget.playerTier.name,
-                            'isPromotion': True,
-                            'slot': openSlot,
-                        }
-                        directivePick = True
-                        openPositions = [k for k, v in team.rosterDict.items() if v is None
-                                         and k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')]
-                        if not openPositions:
-                            teamsComplete += 1
-                            team.freeAgencyComplete = True
-                            yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
-                        break  # One action per turn
-
-                    # Case B — ranked target is an FA: sign them
-                    targetPlayer = None
-                    targetListKey = None
-                    for lKey, faList in freeAgentLists.items():
-                        for p in faList:
-                            if p.id == targetId:
-                                targetPlayer = p
-                                targetListKey = lKey
-                                break
-                        if targetPlayer:
-                            break
-                    if not targetPlayer:
-                        continue
-                    # Skip a player this team just released this offseason (cut
-                    # or let walk) even if fans ranked them on the FA ballot.
-                    if self._leftThisTeamThisOffseason(targetPlayer, team):
-                        continue
-                    openSlot = self._findOpenSlotForPosition(team, targetPlayer.position.value)
-                    if not openSlot:
-                        continue
-                    self._signPlayer(team, targetPlayer, openSlot, freeAgentLists[targetListKey],
-                                     freeAgencyDict, leagueHighlights, allFaLists=freeAgentLists)
-                    logFa(f"  GM DIRECTIVE: {team.name} signs {targetPlayer.name} at {openSlot}")
-                    yield {
-                        'type': 'pick', 'team': team.name, 'teamAbbr': teamAbbr,
-                        'playerId': getattr(targetPlayer, 'id', None),
-                        'player': targetPlayer.name, 'position': targetPlayer.position.name,
-                        'rating': round(targetPlayer.playerRating, 1), 'tier': targetPlayer.playerTier.name,
-                        'slot': openSlot,
-                    }
-                    directivePick = True
-                    # Check if roster is now full
-                    openPositions = [k for k, v in team.rosterDict.items() if v is None
-                                     and k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')]
-                    if not openPositions:
-                        teamsComplete += 1
-                        team.freeAgencyComplete = True
-                        yield {'type': 'team_complete', 'team': team.name, 'teamAbbr': teamAbbr}
-                    break  # One pick per turn
-
+                # The fan-directive pass (sign_fa ballot targets, incl. the
+                # prospect fall-through promotion) used to run here. Binding fan
+                # votes are gone with the autonomous Front Office, so the queue was
+                # always empty and the whole pass unreachable. directivePick stays
+                # False, so every team now goes straight to best-available below.
                 if not directivePick:
                     # Rule 3 — no fan directive matched. Sign or promote the
                     # best player available across FAs and prospects (handled
@@ -4399,20 +4338,11 @@ class PlayerManager:
                     return board[pid]
             return getattr(player, 'playerRating', getattr(player.attributes, 'skillRating', 0))
 
-        # Fan position priority (set by the FA ballot's "fill order"): when present,
-        # fill the highest-priority OPEN position first — best player there —
-        # OVERRIDING pure rating, so a team that ranked QB/WR ahead of K won't grab
-        # a higher-rated kicker first. Positions no fan ranked fall to the back,
-        # tie-broken by rating. No priority set -> best-rated overall (legacy).
-        priority = getattr(self, '_gmFaPositionPriority', {}).get(getattr(team, 'id', None))
-        if priority:
-            def _prioKey(c):
-                posVal = getattr(getattr(c[1], 'position', None), 'value', None)
-                idx = priority.index(posVal) if posVal in priority else len(priority)
-                return (idx, -_rating(c))
-            slot, candidate, kind = min(candidates, key=_prioKey)
-        else:
-            slot, candidate, kind = max(candidates, key=_rating)
+        # Best player available, in this GM's own currency. The fan "fill order"
+        # override that used to sit here (FA ballot position priority) is gone with
+        # the binding-vote system — `_gmFaPositionPriority` was only ever assigned an
+        # empty dict, so the override never fired.
+        slot, candidate, kind = max(candidates, key=_rating)
 
         teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
 

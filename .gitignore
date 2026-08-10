@@ -93,3 +93,7 @@ data/avatars/
 .env
 .env.local
 .env.production
+
+# Social-media crest exports. Regenerate with tools_export_crests.py — 1.3MB of
+# derived artwork does not belong in the repo when the generator is right here.
+exports/

@@ -51,11 +51,25 @@ class Team(Base):
     color: Mapped[str] = mapped_column(String(50))
     secondary_color: Mapped[Optional[str]] = mapped_column(String(50))
     tertiary_color: Mapped[Optional[str]] = mapped_column(String(50))
+    # Draw the avatar with primary/secondary swapped. Lets a club change its
+    # primary colour (kit, team page) without the mark's figure/ground flipping
+    # with it — the generator otherwise always paints the field in `color`.
+    logo_invert: Mapped[bool] = mapped_column(Boolean, default=False)
     offense_rating: Mapped[int] = mapped_column(Integer)
     defense_rating: Mapped[int] = mapped_column(Integer)
     overall_rating: Mapped[int] = mapped_column(Integer)
     league_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("leagues.id"))
+    # Which of its league's four divisions this club plays in. ⚠️ This was in-memory only
+    # (stamped by seasonManager._assignDivisions at schedule generation), so EVERY restart
+    # wiped it: the standings board lost its DIVISION column and By Division view,
+    # _applyDivisionSeeding fell back to plain record order and division winners lost their
+    # guaranteed top-four seeds, and the division-title award had nothing to award off.
+    division: Mapped[Optional[str]] = mapped_column(String(50))
     gm_score: Mapped[Optional[int]] = mapped_column(Integer)
+    # Continuous form offset (roughly ±FORM_MAX) — where the club currently sits
+    # in its own hot/cold arc. Updated weekly by the form oscillation layer;
+    # persisted so a mid-season restart doesn't flatten everyone to neutral.
+    form_offset: Mapped[Optional[float]] = mapped_column(Float, default=0.0)
     defense_tier: Mapped[Optional[int]] = mapped_column(Integer)
     defense_run_coverage_rating: Mapped[Optional[int]] = mapped_column(Integer)
     defense_pass_coverage_rating: Mapped[Optional[int]] = mapped_column(Integer)
@@ -74,6 +88,8 @@ class Team(Base):
     league_championships: Mapped[Optional[list]] = mapped_column(JSON)
     floosbowl_championships: Mapped[Optional[list]] = mapped_column(JSON)
     top_seeds: Mapped[Optional[list]] = mapped_column(JSON)
+    # Division titles ('Season N'), same shape as the other title lists.
+    division_titles: Mapped[Optional[list]] = mapped_column(JSON)
     playoff_appearances: Mapped[Optional[int]] = mapped_column(Integer, default=0)
     roster_history: Mapped[Optional[dict]] = mapped_column(JSON)
     # Single source of truth for "which coach does this team have".
@@ -374,6 +390,9 @@ class PlayerCareerStats(Base):
     receiving_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     kicking_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Punt/kick return production. Separate blob so a returner's work is
+    # credited to HIM, not just charged against the kicker.
+    returning_stats: Mapped[Optional[dict]] = mapped_column(JSON)
 
     # Relationship
     player: Mapped["Player"] = relationship("Player", back_populates="career_stats")
@@ -421,6 +440,16 @@ class PlayerSeasonStats(Base):
     def_wpa: Mapped[float] = mapped_column(Float, default=0.0)
     wpa_snaps: Mapped[int] = mapped_column(Integer, default=0)
     def_snaps: Mapped[int] = mapped_column(Integer, default=0)
+    # How the player actually PERFORMED that season, 0-100, as opposed to how
+    # good he was rated. Computed live every week by
+    # playerManager.calculatePerformanceRatings as a percentile of production
+    # against that season's pool, and until now never written down — so a past
+    # season had no way to say how the year went. Percentiles cannot be
+    # rederived later (the pool has moved on), which is why these are stored
+    # rather than recomputed. NULL for seasons that ended before the columns
+    # existed; not backfillable.
+    performance_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    defensive_performance_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Stats stored as JSON for flexibility (detailed breakdown)
     passing_stats: Mapped[Optional[dict]] = mapped_column(JSON)
@@ -428,6 +457,9 @@ class PlayerSeasonStats(Base):
     receiving_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     kicking_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Punt/kick return production. Separate blob so a returner's work is
+    # credited to HIM, not just charged against the kicker.
+    returning_stats: Mapped[Optional[dict]] = mapped_column(JSON)
 
     # Relationships
     player: Mapped["Player"] = relationship("Player", back_populates="season_stats")
@@ -492,6 +524,17 @@ class TeamSeasonStats(Base):
     win_percentage: Mapped[Optional[float]] = mapped_column(Float)
     streak: Mapped[Optional[int]] = mapped_column(Integer)
     score_differential: Mapped[Optional[int]] = mapped_column(Integer)
+    # ⚠️ The DIVISION and LEAGUE records, which drive the playoff tiebreaker. These were
+    # tracked in the in-memory `seasonTeamStats` dict and had no column here at all, so
+    # every restart reset them to zero and they re-accumulated only from the games played
+    # since that boot. Measured mid-season: 447 games played, 48 division decisions
+    # recorded. The tiebreaker was comparing whatever had happened since the last deploy.
+    div_wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    div_losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    div_ties: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lg_wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lg_losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lg_ties: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     
     # Achievements
     made_playoffs: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -530,6 +573,9 @@ class TeamSeasonStats(Base):
     # Stats stored as JSON (detailed breakdown)
     offense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Punt/kick return production. Separate blob so a returner's work is
+    # credited to HIM, not just charged against the kicker.
+    returning_stats: Mapped[Optional[dict]] = mapped_column(JSON)
 
     # Relationship
     team: Mapped["Team"] = relationship("Team", back_populates="season_stats")
@@ -745,6 +791,24 @@ class Game(Base):
     # column existed (the state is gone — not backfillable).
     format_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # The full per-team box score at completion, as JSON: `{'home': {...}, 'away': {...}}`,
+    # exactly the `team` block `_buildGameStatsSnapshot` broadcasts live.
+    #
+    # ⚠️ The dedicated home_/away_ columns above are NOT enough and are NOT superseded.
+    # They cover yards, TDs, FGs, sacks, ints and fumble recoveries — but first downs,
+    # third- and fourth-down conversions and attempts, completions, attempts and carries
+    # have no column and are not derivable from `game_player_stats` either (a first down
+    # is a team event, not a player one). Without this a finished game could report its
+    # score and nothing about how it was reached.
+    #
+    # A blob on the existing row rather than a `game_team_stats` table: this is display
+    # data, never aggregated over (season totals have their own table), so a join buys
+    # nothing and a second row per game costs more space than the JSON does.
+    #
+    # NULL for anything finished before this column existed — those totals only ever
+    # lived in the live game object, so there is nothing to backfill from.
+    team_stats: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # Relationships
     home_team: Mapped["Team"] = relationship("Team", foreign_keys=[home_team_id], back_populates="home_games")
     away_team: Mapped["Team"] = relationship("Team", foreign_keys=[away_team_id], back_populates="away_games")
@@ -778,6 +842,9 @@ class GamePlayerStats(Base):
     receiving_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     kicking_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     defense_stats: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Punt/kick return production. Separate blob so a returner's work is
+    # credited to HIM, not just charged against the kicker.
+    returning_stats: Mapped[Optional[dict]] = mapped_column(JSON)
     
     fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
     q4_fantasy_points: Mapped[int] = mapped_column(Integer, default=0)
@@ -893,6 +960,64 @@ class SupporterDividend(Base):
         UniqueConstraint("user_id", "season", "week", name="uq_supporter_dividend_week"),
         Index("idx_supporter_dividends_user", "user_id"),
     )
+
+
+class CuratedName(Base):
+    """Every name added AFTER the config seed — admin box or approved Discord /name.
+
+    ⚠️ THIS EXISTS BECAUSE config.json CANNOT BE THE STORE. `_seedUnusedNames` re-merges
+    config.json's players list on every boot, which is why config-origin names survive a
+    fresh start for free. The obvious fix for admin additions — write them back to
+    config.json too — does not work in prod: config.json is read from a relative path, so
+    in the container it is `/app/config.json`, and only `/data` is on a volume. Writes
+    would survive until the next deploy and then vanish, which is worse than not fixing it
+    because it looks fixed.
+
+    So the durable store is this table, on the volume and in clear_db's preserveTables.
+    `_seedCuratedNames` merges it back into the pool on boot, exactly as config is merged.
+
+    A name lives here permanently, even once it has been drawn onto a player. That is the
+    whole point: `unused_names` loses a name the moment it is assigned, so before this the
+    only copy of a fan-submitted name was the player row it landed on — and that row is
+    dropped by every reset. Measured at 16 such names on the prod snapshot.
+    """
+    __tablename__ = "curated_names"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # admin | discord
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class LeagueArchive(Base):
+    """One row per completed season, surviving every fresh start.
+
+    ⚠️ DELIBERATELY HAS NO FOREIGN KEYS, and that is the entire point. The existing history
+    tables store `player_id` / `team_id` and no names — `records` has no player_name column
+    at all — while ids restart from 1 on a wipe. Preserving those tables across a reset
+    would not save the history, it would silently REATTACH it: a 15-season passing record
+    would land on whichever rookie inherited id 292, and every championship would be
+    credited to an unrelated club. So the archive stores resolved NAMES, and nothing that
+    can be re-pointed.
+
+    Kept deliberately light (owner, 2026-08-07): who won, and who was MVP. Not records, not
+    the Hall of Fame, not user progress.
+
+    `era` groups seasons that shared a league. Era 1 is the 24-club league, seasons 1-15.
+    A future reset appends the next era rather than overwriting.
+    """
+    __tablename__ = "league_archive"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    era: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    era_label: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    champion: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    league_champions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    mvp: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("era", "season", name="uq_archive_era_season"),)
 
 
 class Championship(Base):
@@ -1040,6 +1165,10 @@ class User(Base):
     favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     pending_favorite_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"), nullable=True)
     favorite_team_locked_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Season a user last CHANGED their username. Mirrors favorite_team_locked_season:
+    # one change per season, so a rename is possible without letting someone churn names
+    # to dodge a reputation. NULL = never changed (the original pick does not count).
+    username_changed_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     auto_fill_roster: Mapped[bool] = mapped_column(Boolean, default=True)
     has_completed_onboarding: Mapped[bool] = mapped_column(Boolean, default=False)
     email_opt_out: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1050,6 +1179,14 @@ class User(Base):
     # Auto-pick mode for pick-em: "off" | "favorites" | "underdogs" | "random".
     # Replaces the old boolean auto_pick_favorites. Default "off" = user opts in manually.
     auto_pick_mode: Mapped[str] = mapped_column(String(20), default="off", nullable=False)
+    # ⚠️ Loyalty override on the AUTO-PICKER only — it never touches a pick the user
+    # made themselves. Requested by users who run auto-pick and do not want a machine
+    # calling against their own club on their behalf: backing your team is the whole
+    # reason you have one, and losing points for it is a price they would rather pay.
+    # Off by default, because it costs points on average and nobody should be opted in
+    # to that silently.
+    auto_pick_never_against_favorite: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False)
     # Vacancy fallback preference: prospect | fa | best_available (default)
     vacancy_auto_pick: Mapped[str] = mapped_column(String(20), default="best_available", nullable=False)
     team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)
@@ -1432,6 +1569,14 @@ class UserCard(Base):
     vaulted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # Permanent collection — irreversible; can't equip/sell/combine
     vaulted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # When it was vaulted
     vault_position: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Manual sort order within the Vault (null = unset)
+    # ── Glitch (docs/GLITCH_CARDS.md) ──
+    # Marked during a Criticality. Per-INSTANCE, not per-template: the same card can be
+    # clean in one collection and glitched in another, because the glitch happened to
+    # this copy at a specific event. A glitch only ever ADDS an extra payout; it never
+    # degrades the printed effect and the card can never be taken away.
+    glitched: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    glitched_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    glitched_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="user_cards")
@@ -2077,6 +2222,12 @@ class TeamFeedPost(Base):
     # Only set for target_type == 'player'.
     target_player_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("players.id"), nullable=True)
+    # Which GAME this was shouted at, when it was shouted from the game page.
+    # NULL for a post made on the team page — that one is about the club, not a
+    # night. Without this every stand showed the same posts on every game, so a
+    # shout at one match followed you to the next.
+    game_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("games.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     # True when generated by a rating / GM vote rather than chosen by the fan.
     # Auto posts are a DISPLAY artifact of a vote that already counts as
@@ -2230,6 +2381,11 @@ class Achievement(Base):
     target: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # progress needed to complete
     reward_config: Mapped[dict] = mapped_column(JSON, nullable=False)  # {floobits, packs:[slug], powerups:[slug], deferred}
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # ⚠️ RETIRED, not deleted. An achievement whose system is gone (GM votes, roster swaps)
+    # can never be earned again, but people have earned it — deleting the row would orphan
+    # their `user_achievements` and take a badge off a shelf. Retired templates are hidden
+    # from anyone who has NOT completed them, and stay visible to anyone who has.
+    retired: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     def __repr__(self):
@@ -2450,12 +2606,43 @@ class LeagueNewsItem(Base):
     player_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("players.id"), nullable=True)
     player_name: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     anomaly_state: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # How far past its own bar this event landed, as a ratio (1.0 = exactly at the
+    # threshold that made it news at all). It is what decides the front page's headline
+    # among everything that happened in the same moment. Comparable ACROSS categories
+    # precisely because each is normalised by its own threshold: a 235-yard receiving day
+    # against a 190 bar and an upset with a 148-point Elo gap against a 120 bar are both
+    # ~1.24, and both are "about a quarter past the bar".
+    lead_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Held at the top of the feed until an admin releases it.
+    #
+    # ⚠️ Pinning is what makes an announcement DURABLE. Without it a notice is subject to
+    # the same erosion as everything else: the reader fetches the newest ~40 rows, and a
+    # busy slate publishes enough clinches, records and Cores lines to push a notice out
+    # of that window within a day. A pinned row is fetched separately, so it survives the
+    # window entirely, and it ignores the lead's age cutoff.
+    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Optional second paragraph, for HAND-WRITTEN items only.
+    #
+    # ⚠️ `text` is deliberately one clause for everything this file's own rules cover:
+    # "Every headline is ONE templated clause. No analysis, no second sentence." That
+    # rule is about AUTOMATED copy — nothing in the sim writes at that level and an
+    # automated version never would. An admin announcement is the case it was excluding,
+    # so it gets a headline in `text` and the prose here. NULL for every published item.
+    body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Exchange threading — set when this item is one turn of a multi-Core
     # conversation, so the feed can group the turns under a single header on
     # refresh (not just live over WS).
     exchange_id: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     turn_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     turn_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Attribution (team events: a clinch, an elimination, an upset) so the feed can show
+    # the crest and link the row.
+    team_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # The four supporting numbers a LEAD item renders, as JSON
+    # `[{label, value, positive?}]`. Only items worth leading with carry it; a row-only
+    # item leaves it null, which is also how the feed decides what can lead.
+    stats_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (

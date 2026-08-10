@@ -60,6 +60,7 @@ def init_db():
     _seedBetaAllowlist()
     _seedAchievements()
     _seedUnusedNames()
+    _seedCuratedNames()
     logger.info(f"Database initialized at {DB_PATH}")
 
 
@@ -89,6 +90,45 @@ def _runPendingMigrations():
                 conn.execute(text(f"ALTER TABLE seasons ADD COLUMN {col} {colDef}"))
                 conn.commit()
                 logger.info(f"  Migration: added seasons.{col}")
+            except Exception:
+                conn.rollback()  # column already exists — ignore
+
+        # Glitch marks on owned cards (docs/GLITCH_CARDS.md).
+        for _col, _def in (('glitched', 'BOOLEAN DEFAULT 0 NOT NULL'),
+                           ('glitched_season', 'INTEGER'),
+                           ('glitched_week', 'INTEGER')):
+            try:
+                conn.execute(text(f"ALTER TABLE user_cards ADD COLUMN {_col} {_def}"))
+                conn.commit()
+                logger.info(f"  Migration: added user_cards.{_col}")
+            except Exception:
+                conn.rollback()  # column already exists — ignore
+
+        # Returning stats blob (punt returns) on the three player stat tables, plus
+        # team_season_stats — the model carries the column there too, and without the
+        # migration every query against that table breaks on an existing DB.
+        for _tbl in ('game_player_stats', 'player_season_stats', 'player_career_stats',
+                     'team_season_stats'):
+            try:
+                conn.execute(text(f"ALTER TABLE {_tbl} ADD COLUMN returning_stats TEXT"))
+                conn.commit()
+                logger.info(f"  Migration: added {_tbl}.returning_stats")
+            except Exception:
+                conn.rollback()  # column already exists — ignore
+
+        # Team avatar override: draw the mark with primary/secondary swapped, so a club
+        # can flip its kit colours without the logo's figure/ground flipping too.
+        for col, colDef in [
+            ('logo_invert', 'INTEGER DEFAULT 0'),
+            # Continuous form offset (roughly ±FORM_MAX) — where the club sits in
+            # its own hot/cold arc. Persisted so a mid-season restart doesn't
+            # flatten every team back to neutral form.
+            ('form_offset', 'REAL DEFAULT 0'),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE teams ADD COLUMN {col} {colDef}"))
+                conn.commit()
+                logger.info(f"  Migration: added teams.{col}")
             except Exception:
                 conn.rollback()  # column already exists — ignore
 
@@ -153,10 +193,17 @@ def _runPendingMigrations():
 
         # Cores exchange threading on persisted league-news items, so multi-Core
         # conversations group under one header on refresh (not just live).
+        # `team_id` and `stats_json` arrived with the front-page news feed: team events
+        # (clinch / elimination / upset) need a crest to link, and a LEAD item needs its
+        # four supporting numbers. An item with no stats_json is row-only, which is also
+        # how the feed decides what is allowed to lead.
         for col, colDef in [
             ("exchange_id", "VARCHAR(40)"),
             ("turn_index", "INTEGER"),
             ("turn_count", "INTEGER"),
+            ("team_id", "INTEGER"),
+            ("stats_json", "TEXT"),
+            ("lead_weight", "FLOAT"),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE league_news_items ADD COLUMN {col} {colDef}"))
@@ -164,6 +211,15 @@ def _runPendingMigrations():
                 logger.info(f"  Migration: added league_news_items.{col}")
             except Exception:
                 conn.rollback()
+
+        # Division membership. In-memory only until now, so a restart mid-season dropped
+        # every club out of its division (see the model comment).
+        try:
+            conn.execute(text("ALTER TABLE teams ADD COLUMN division VARCHAR(50)"))
+            conn.commit()
+            logger.info("  Migration: added teams.division")
+        except Exception:
+            conn.rollback()
 
         # Hall of Fame flag (v0.17). Without this, the in-memory hallOfFame
         # list resets on every restart and the HoF tab goes empty until brand-
@@ -424,6 +480,55 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # Division titles on teams (8 divisions, owner 2026-08-07).
+        try:
+            conn.execute(text("ALTER TABLE teams ADD COLUMN division_titles JSON"))
+            conn.commit()
+            logger.info("  Migration: added teams.division_titles")
+        except Exception:
+            conn.rollback()
+
+        # Permanent record of admin/Discord-approved names. See CuratedName: config.json
+        # cannot hold these because the container copy is ephemeral.
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS curated_names (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(120) NOT NULL UNIQUE,
+                    source VARCHAR(20),
+                    created_at DATETIME
+                )"""))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
+        # The cross-reset season archive. Must exist before any wipe can populate it.
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS league_archive (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    era INTEGER NOT NULL DEFAULT 1,
+                    era_label VARCHAR(80),
+                    season INTEGER NOT NULL,
+                    champion VARCHAR(120),
+                    league_champions TEXT,
+                    mvp VARCHAR(120),
+                    created_at DATETIME,
+                    UNIQUE(era, season)
+                )"""))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
+        # One-change-per-season username renames. Inline migration because alembic is not
+        # run on deploy — this is what actually lands the column on the prod DB.
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN username_changed_season INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added users.username_changed_season")
+        except Exception:
+            conn.rollback()
+
         # Discord linking columns (v0.9)
         # Note: SQLite doesn't support UNIQUE in ALTER TABLE ADD COLUMN,
         # so we add the column first, then create a unique index separately.
@@ -608,6 +713,13 @@ def _runPendingMigrations():
                 ('tackles', 'INTEGER DEFAULT 0'),
                 ('wpa', 'REAL DEFAULT 0'), ('def_wpa', 'REAL DEFAULT 0'),
                 ('wpa_snaps', 'INTEGER DEFAULT 0'), ('def_snaps', 'INTEGER DEFAULT 0'),
+                # Nullable on purpose: 0 would read as "played terribly" on
+                # every season that predates the column.
+                ('performance_rating', 'INTEGER'), ('defensive_performance_rating', 'INTEGER'),
+            ]),
+            ('team_feed_posts', [
+                # Nullable: a team-page post belongs to no game.
+                ('game_id', 'INTEGER'),
             ]),
             ('player_career_stats', [
                 ('passing_yards', 'INTEGER DEFAULT 0'), ('passing_tds', 'INTEGER DEFAULT 0'),
@@ -1392,6 +1504,66 @@ def _runPendingMigrations():
             logger.info("  Migration: added games.format_state")
         except Exception:
             conn.rollback()
+        # Full per-team box score at completion as JSON. The dedicated home_/away_ stat
+        # columns miss first downs and third/fourth-down conversions, which are TEAM
+        # events and so are not recoverable from game_player_stats. NULL for anything
+        # already final — those totals only lived on the live game object.
+        try:
+            conn.execute(text("ALTER TABLE games ADD COLUMN team_stats TEXT"))
+            conn.commit()
+            logger.info("  Migration: added games.team_stats")
+        except Exception:
+            conn.rollback()
+        # Body prose for hand-written league-news announcements. NULL for every
+        # system-published item, which is all of them before this column existed.
+        try:
+            conn.execute(text("ALTER TABLE league_news_items ADD COLUMN body TEXT"))
+            conn.commit()
+            logger.info("  Migration: added league_news_items.body")
+        except Exception:
+            conn.rollback()
+        # Pinned announcements are fetched outside the feed's newest-N window, so a
+        # notice can outlive a busy slate. Defaulted at the column so existing rows
+        # read as unpinned rather than NULL.
+        try:
+            conn.execute(text(
+                "ALTER TABLE league_news_items ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added league_news_items.pinned")
+        except Exception:
+            conn.rollback()
+        # An achievement whose system was removed is retired rather than deleted — the
+        # row has to stay so the people who earned it keep it. Defaulted at the column
+        # so every existing template reads as live.
+        try:
+            conn.execute(text(
+                "ALTER TABLE achievements ADD COLUMN retired BOOLEAN NOT NULL DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added achievements.retired")
+        except Exception:
+            conn.rollback()
+        # Division and league records, which drive the playoff tiebreaker and had no
+        # home in the database at all. Defaulted at the column; the backfill below
+        # reconstructs them for a season already in progress.
+        for _col in ('div_wins', 'div_losses', 'div_ties',
+                     'lg_wins', 'lg_losses', 'lg_ties'):
+            try:
+                conn.execute(text(
+                    f"ALTER TABLE team_season_stats ADD COLUMN {_col} INTEGER NOT NULL DEFAULT 0"))
+                conn.commit()
+                logger.info(f"  Migration: added team_season_stats.{_col}")
+            except Exception:
+                conn.rollback()
+        # Loyalty override for the auto-picker. Defaulted at the column so every
+        # existing account reads as opted out rather than NULL.
+        try:
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN auto_pick_never_against_favorite "
+                "BOOLEAN NOT NULL DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added users.auto_pick_never_against_favorite")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -1817,6 +1989,7 @@ def _backfillCoachFanTrust():
         logger.warning(f"  Backfill: coach fan_trust skipped: {e}")
     finally:
         conn.close()
+
 
 
 def _backfillTeamPeakStreaks():
@@ -2506,7 +2679,16 @@ def clear_db():
     # admins can add to from the dashboard; that curation should not be
     # wiped by a fresh start. New names from config.json are merged in
     # on every boot via _seedUnusedNames().
-    preserveTables = {"users", "beta_allowlist", "app_settings", "unused_names"}
+    # ⚠️ league_archive is the ONLY history that survives a wipe, and it survives because
+    # it holds resolved NAMES with no foreign keys. The other history tables must NOT be
+    # added here: `records` and `championships` store player_id/team_id with no names, and
+    # ids restart from 1, so preserving them would reattach a 15-season record to whichever
+    # rookie inherited the id rather than saving anything. See
+    # docs/FRESH_START_HISTORY_PLAN.md.
+    # curated_names is the durable home for admin/Discord names — config.json re-seeds
+    # itself on boot, but names added after the seed have no other permanent store.
+    preserveTables = {"users", "beta_allowlist", "app_settings", "unused_names",
+                      "league_archive", "curated_names"}
 
     # Drop all non-preserved tables (reverse dependency order), then recreate
     tablesToDrop = [t for t in reversed(Base.metadata.sorted_tables)
@@ -2540,6 +2722,7 @@ def clear_db():
     _seedBetaAllowlist()
     _seedAchievements()
     _seedUnusedNames()
+    _seedCuratedNames()
 
 
 def _seedPackTypes():
@@ -2656,7 +2839,7 @@ def _seedAchievements():
              "description": "Vault 5 cards of players on your favorite team.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "full_spectrum", "name": "Full Spectrum", "category": "collection", "scope": "once", "sort_order": 320, "target": 1,
-             "description": "Vault all four editions of a single player.",
+             "description": "Vault the base, holographic, prismatic and diamond print of a single player.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             {"key": "all_pro_set", "name": "All-Pro Set", "category": "collection", "scope": "once", "sort_order": 330, "target": 1,
              "description": "Vault every All-Pro card from a single season.",
@@ -2880,7 +3063,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": ["humble"], "powerups": [], "deferred": False}},
             {"key": "purist", "name": "Purist", "category": "secret", "scope": "once", "sort_order": 540, "target": 1,
              "description": "Play a full week with zero cards equipped.",
-             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}, "retired": True},
             {"key": "homer", "name": "Homer", "category": "secret", "scope": "once", "sort_order": 550, "target": 1,
              "description": "Set a fantasy roster composed entirely of players on your favorite team.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
@@ -2907,7 +3090,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
             {"key": "arsenal", "name": "Arsenal", "category": "secret", "scope": "once", "sort_order": 630, "target": 1,
              "description": "Hold 3 or more roster swaps at the same time.",
-             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}, "retired": True},
             {"key": "finicky", "name": "Finicky", "category": "secret", "scope": "once", "sort_order": 640, "target": 1,
              "description": "Re-roll the card shop 5 times in a row without buying anything in between.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
@@ -2916,16 +3099,16 @@ def _seedAchievements():
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
             {"key": "mutineer", "name": "Scorched Earth", "category": "secret", "scope": "once", "sort_order": 660, "target": 1,
              "description": "Vote to fire your coach and release every player on the roster in a single offseason.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}, "retired": True},
             {"key": "tribune", "name": "Tribune", "category": "secret", "scope": "once", "sort_order": 665, "target": 1,
              "description": "Cast 6 GM votes in a single season.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}, "retired": True},
             {"key": "monk", "name": "Monk", "category": "secret", "scope": "once", "sort_order": 670, "target": 1,
              "description": "Go an entire season without opening a card pack.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "stalwart", "name": "Stalwart", "category": "secret", "scope": "once", "sort_order": 680, "target": 1,
              "description": "Play an entire season with a full roster and zero roster swaps.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}, "retired": True},
             {"key": "underwriter", "name": "Underwriter", "category": "secret", "scope": "once", "sort_order": 685, "target": 5,
              "description": "Single-handedly fund five facility bars, upkeep or project, from empty to full.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
@@ -2958,7 +3141,7 @@ def _seedAchievements():
              "description": "Finish #1 on the season playoff bracket leaderboard.",
              "reward_config": {"floobits": 0, "packs": [], "powerups": [], "deferred": False}},
             {"key": "jinx", "name": "Jinx", "category": "secret", "scope": "once", "sort_order": 745, "target": 1,
-             "description": "Whiff on every single pick in a full 12-game pick-em week.",
+             "description": "Whiff on every single pick in a full pick-em week.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
             {"key": "greenhorn", "name": "Greenhorn", "category": "secret", "scope": "once", "sort_order": 750, "target": 1,
              "description": "Field a full fantasy roster made up entirely of rookies.",
@@ -2993,14 +3176,21 @@ def _seedAchievements():
         # Template-level fields that are safe to refresh without resetting user progress.
         # reward_config changes affect future grants only; already-completed achievements
         # keep whatever reward the user received at the time of completion.
-        refreshFields = ("name", "description", "category", "scope", "target", "sort_order", "reward_config")
+        # ⚠️ `retired` is refreshed like everything else, and `.get` supplies the default
+        # so a template without the key reads as live. That is what lets an achievement be
+        # UN-retired by deleting one flag here, and what makes retiring one land on an
+        # existing prod DB on the next boot rather than only on a fresh seed.
+        refreshFields = ("name", "description", "category", "scope", "target", "sort_order",
+                         "reward_config", "retired")
+        defaultsFor = {"retired": False}
         for d in defaults:
             existing = session.query(Achievement).filter(Achievement.key == d["key"]).first()
             if existing:
                 changed = False
                 for f in refreshFields:
-                    if getattr(existing, f) != d[f]:
-                        setattr(existing, f, d[f])
+                    value = d.get(f, defaultsFor.get(f))
+                    if getattr(existing, f) != value:
+                        setattr(existing, f, value)
                         changed = True
                 if changed:
                     updated += 1
@@ -3045,6 +3235,44 @@ def _seedBetaAllowlist():
         session.commit()
     except Exception:
         session.rollback()
+    finally:
+        session.close()
+
+
+def _seedCuratedNames():
+    """Merge admin/Discord-approved names back into the usable pool.
+
+    The exact counterpart of `_seedUnusedNames`, which does this for config.json. Config
+    gets that for free because it is a file that ships with the code; names added after the
+    seed have no such home — see CuratedName for why config.json cannot be written to in
+    prod. Without this, a fan-submitted name is removed from `unused_names` the moment it
+    is drawn onto a player, and then dies with that player row at the next reset.
+
+    Same filter as the config path: skip anything already pooled or held by a live player
+    or coach, so a name in active use is not re-pooled and drawn twice.
+    """
+    from database.models import UnusedName, CuratedName, Coach, Player
+    session = SessionLocal()
+    try:
+        curated = [row.name for row in session.query(CuratedName.name).all()]
+        if not curated:
+            return
+        existing = {row.name for row in session.query(UnusedName.name).all()}
+        inUse = {c.name for c in session.query(Coach.name).all() if c.name}
+        inUse |= {p.name for p in session.query(Player.name).all() if p.name}
+        added = 0
+        for name in curated:
+            if name in existing or name in inUse:
+                continue
+            session.add(UnusedName(name=name))
+            existing.add(name)
+            added += 1
+        if added:
+            session.commit()
+            logger.info(f"  Restored {added} curated name(s) to the pool")
+    except Exception as e:
+        session.rollback()
+        logger.warning(f"  Could not merge curated names: {e}")
     finally:
         session.close()
 

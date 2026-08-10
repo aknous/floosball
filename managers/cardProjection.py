@@ -228,6 +228,7 @@ def _perGameAverageStats(row) -> Optional[dict]:
         kickingStats=_avg(row.kicking_stats),
         fantasyPoints=(row.fantasy_points or 0) / gp,
         teamId=row.team_id or 0,
+        returningStats=_avg(getattr(row, 'returning_stats', None)),
     )
 
 
@@ -908,6 +909,13 @@ def _shapeCardPayload(breakdown, amplifier: Optional[Dict[str, Any]], effectConf
         "isMatch": bool(breakdown.matchMultiplied),
         "amplifier": amplifier,
         "estimated": estimated,
+        # Glitch (docs/GLITCH_CARDS.md). A projection deliberately carries NO outcome and
+        # no payout: the roll depends on anomaly events that have not fired yet and only
+        # resolves at week end. `glitchChance` is the odds as they stand, which is what the
+        # UI scrambles its line item against — the card is visibly computing something it
+        # will not tell you yet.
+        "glitched": bool(getattr(breakdown, "glitched", False)),
+        "glitchChance": round(float(getattr(breakdown, "glitchChance", 0.0) or 0.0), 3),
     }
 
 

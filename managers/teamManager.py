@@ -205,6 +205,7 @@ class TeamManager:
             team.color = db_team.color
             team.secondaryColor = getattr(db_team, 'secondary_color', db_team.color)
             team.tertiaryColor = getattr(db_team, 'tertiary_color', db_team.color)
+            team.logoInvert = bool(getattr(db_team, 'logo_invert', False) or False)
             
             # Ratings
             team.offenseRating = db_team.offense_rating or 0
@@ -218,9 +219,16 @@ class TeamManager:
             team.gmScore = db_team.gm_score or 0
             team.defenseOverallTier = db_team.defense_tier or 0
             team.defenseSeasonPerformanceRating = db_team.defense_season_performance or 0
-            
+            # Where the club sits in its hot/cold arc — restored so a mid-season
+            # restart doesn't flatten every team back to neutral form.
+            team.formOffset = getattr(db_team, 'form_offset', 0.0) or 0.0
+            # Division membership survives a restart. Without this, a mid-season deploy
+            # silently un-divisions the whole league.
+            team.division = getattr(db_team, 'division', None)
+
             # Historical stats (stored as JSON in database)
             team.allTimeTeamStats = db_team.all_time_stats or {}
+            team.divisionTitles = db_team.division_titles or []
             team.leagueChampionships = db_team.league_championships or []
             team.floosbowlChampionships = db_team.floosbowl_championships or []
             team.regularSeasonChampions = db_team.top_seeds or []  # top_seeds = regular season champions
@@ -262,6 +270,7 @@ class TeamManager:
         newTeam.color = teamData['color']
         newTeam.secondaryColor = teamData.get('secondaryColor', teamData['color'])
         newTeam.tertiaryColor = teamData.get('tertiaryColor', teamData['color'])
+        newTeam.logoInvert = bool(teamData.get('logoInvert', False))
         
         # Ratings
         newTeam.offenseRating = teamData['offenseRating']
@@ -278,6 +287,7 @@ class TeamManager:
         
         # Historical stats
         newTeam.allTimeTeamStats = teamData['allTimeTeamStats']
+        newTeam.divisionTitles = teamData.get('divisionTitles', [])
         newTeam.leagueChampionships = teamData['leagueChampionships']
         newTeam.floosbowlChampionships = teamData['floosbowlChampionships']
         newTeam.topSeeds = teamData.get('topSeeds', teamData.get('regularSeasonChampions', []))
@@ -424,6 +434,7 @@ class TeamManager:
             team.color = teamConfig['color']
             team.secondaryColor = teamConfig.get('secondaryColor', teamConfig['color'])
             team.tertiaryColor = teamConfig.get('tertiaryColor', teamConfig['color'])
+            team.logoInvert = bool(teamConfig.get('logoInvert', False))
             team.id = teamId
             
             self.teams.append(team)
@@ -501,12 +512,14 @@ class TeamManager:
                     abbr=team.abbr,
                     color=team.color,
                     secondary_color=getattr(team, 'secondaryColor', team.color),
-                    tertiary_color=getattr(team, 'tertiaryColor', team.color)
+                    tertiary_color=getattr(team, 'tertiaryColor', team.color),
+                    logo_invert=bool(getattr(team, 'logoInvert', False))
                 )
             else:
                 # Update color fields if they exist
                 db_team.secondary_color = getattr(team, 'secondaryColor', team.color)
                 db_team.tertiary_color = getattr(team, 'tertiaryColor', team.color)
+                db_team.logo_invert = bool(getattr(team, 'logoInvert', False))
             
             # Update team data
             db_team.offense_rating = team.offenseRating
@@ -518,9 +531,12 @@ class TeamManager:
             db_team.gm_score = team.gmScore
             db_team.defense_tier = team.defenseOverallTier
             db_team.defense_season_performance = team.defenseSeasonPerformanceRating
-            
+            db_team.form_offset = getattr(team, 'formOffset', 0.0) or 0.0
+            db_team.division = getattr(team, 'division', None)
+
             # Historical stats (stored as JSON)
             db_team.all_time_stats = team.allTimeTeamStats
+            db_team.division_titles = getattr(team, 'divisionTitles', []) or []
             db_team.league_championships = team.leagueChampionships
             db_team.floosbowl_championships = team.floosbowlChampionships
             db_team.top_seeds = team.topSeeds
@@ -568,6 +584,7 @@ class TeamManager:
             'color': team.color,
             'secondaryColor': getattr(team, 'secondaryColor', team.color),
             'tertiaryColor': getattr(team, 'tertiaryColor', team.color),
+            'logoInvert': bool(getattr(team, 'logoInvert', False)),
             'id': team.id,
             'offenseRating': team.offenseRating,
             'defenseRunCoverageRating': team.defenseRunCoverageRating,
@@ -579,6 +596,7 @@ class TeamManager:
             'allTimeTeamStats': team.allTimeTeamStats,
             'floosbowlChampionships': team.floosbowlChampionships,
             'topSeeds': team.topSeeds,
+            'divisionTitles': getattr(team, 'divisionTitles', []) or [],
             'leagueChampionships': team.leagueChampionships,
             'playoffAppearances': team.playoffAppearances,
             'gmScore': team.gmScore,
@@ -889,6 +907,14 @@ class TeamManager:
                     team.seasonTeamStats['winPerc'] = dbStats.win_percentage or 0.0
                     team.seasonTeamStats['streak'] = dbStats.streak or 0
                     team.seasonTeamStats['scoreDiff'] = dbStats.score_differential or 0
+                    # Without these the division and league records restart from zero on
+                    # every boot, and the playoff tiebreaker compares partial seasons.
+                    team.seasonTeamStats['divWins'] = getattr(dbStats, 'div_wins', 0) or 0
+                    team.seasonTeamStats['divLosses'] = getattr(dbStats, 'div_losses', 0) or 0
+                    team.seasonTeamStats['divTies'] = getattr(dbStats, 'div_ties', 0) or 0
+                    team.seasonTeamStats['lgWins'] = getattr(dbStats, 'lg_wins', 0) or 0
+                    team.seasonTeamStats['lgLosses'] = getattr(dbStats, 'lg_losses', 0) or 0
+                    team.seasonTeamStats['lgTies'] = getattr(dbStats, 'lg_ties', 0) or 0
                     team.seasonTeamStats['elo'] = dbStats.elo or team.seasonTeamStats.get('elo', 1500)
                     team.elo = team.seasonTeamStats['elo']
                     team.seasonTeamStats['madePlayoffs'] = dbStats.made_playoffs
@@ -1049,7 +1075,7 @@ class TeamManager:
         """Get team by ID via an O(1) id->team index.
 
         Called heavily when building standings/snapshots/favorite-team data;
-        the index is rebuilt only when the team count changes (24 teams,
+        the index is rebuilt only when the team count changes (32 teams,
         effectively never mid-season)."""
         count = len(self.teams)
         if getattr(self, '_teamByIdCount', None) != count or not hasattr(self, '_teamById'):
@@ -1129,6 +1155,9 @@ class TeamManager:
             team.pressureModifier = prior  # Game-time value starts at full prior expectation
             team.currentWinStreak = 0
             team.streakPressure = 0.0
+            # Form arcs are a within-season story — everyone starts flat, and
+            # the oscillation layer builds a new arc off this season's results.
+            team.formOffset = 0.0
             self.logger.debug(f"{team.name}: priorSeasonPressure={prior}")
 
         self.logger.info("Prior-season pressure baselines set")

@@ -7,6 +7,7 @@ class StatCategory(Enum):
     RUSHING = 'rushing'
     KICKING = 'kicking'
     DEFENSE = 'defense'
+    RETURNING = 'returning'
 
 class StatType(Enum):
     GAME = 'game'

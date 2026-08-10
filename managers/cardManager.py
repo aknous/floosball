@@ -4,7 +4,9 @@ import random
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from logger_config import get_logger
-from managers.cardEffects import buildEffectConfig as _buildEffectConfig, getEffectOutputType, effectValidPositions as _effectValidPositions
+from managers.cardEffects import (buildEffectConfig as _buildEffectConfig, getEffectOutputType,
+                                  effectValidPositions as _effectValidPositions,
+                                  effectPoolFor as _effectPoolFor)
 
 logger = get_logger("floosball.cardManager")
 
@@ -511,6 +513,62 @@ class CardManager:
     def __init__(self, serviceContainer):
         self.serviceContainer = serviceContainer
 
+    @staticmethod
+    def _assignEffects(edition: str, position: int, players: list,
+                       topUp: bool = True) -> list:
+        """Plan one (edition, position) bucket: [(player, effectName), ...].
+
+        Replaces `random.choice` per template, which both starved and clustered the pool.
+        Measured on a live season: 31 of 143 effects had NO template anywhere (prismatic
+        RB gave any one effect a 74% chance of not existing; diamond TE 92%) while 27
+        effects held 5+ templates. A card could be built, seeded, and still be
+        unobtainable — which is what made the pass-TD family need an admin grant.
+
+        Two rules, and the second is the one that makes coverage a guarantee rather than
+        a probability:
+
+          1. Effects are DEALT from a shuffled pool, so every one is handed out before
+             any repeats and counts differ by at most one.
+          2. When a bucket has FEWER players than effects, it mints one template per
+             EFFECT and cycles the players, instead of one per player. Dealing alone
+             cannot help here: prismatic RB is 7 players against 27 effects, so 20 must
+             be absent however you shuffle. This is the top-up that closes that gap.
+
+        So a bucket mints max(len(players), len(effects)) templates, and every effect is
+        minted wherever an eligible player exists.
+
+        `topUp=False` keeps rule 1 and drops rule 2, minting exactly one template per
+        player. That is what the ROOKIE path wants: it adds to a season pool whose
+        coverage is already guaranteed, so topping up there would mint the entire effect
+        set for a handful of rookies.
+
+        ⚠️ It cannot conjure a player. Nothing has ever rated 90 at QB (max 87) or K (max
+        88), so with diamond's threshold at 90 those two buckets are empty and their
+        effects stay unmintable — a rating-distribution fact, not a minting one. Owner
+        call 2026-08-07: left as is.
+        """
+        import random as _r
+        if edition == 'base' or not players:
+            return [(p, None) for p in players]
+        pool = _effectPoolFor(edition, position)
+        if not pool:
+            return [(p, None) for p in players]
+
+        effects = pool[:]
+        _r.shuffle(effects)
+        if not topUp and len(effects) > len(players):
+            effects = effects[:len(players)]
+        if len(players) > len(effects):
+            # More players than effects: keep dealing fresh shuffled passes so the extra
+            # templates spread evenly rather than piling onto whatever won the first roll.
+            while len(effects) < len(players):
+                nxt = pool[:]
+                _r.shuffle(nxt)
+                effects.extend(nxt)
+            effects = effects[:len(players)]
+        # Otherwise every effect gets its own template and players cycle to carry them.
+        return [(players[i % len(players)], eff) for i, eff in enumerate(effects)]
+
     def generateSeasonTemplates(
         self, session, seasonNumber: int,
         mvpPlayerId: Optional[int] = None,
@@ -549,15 +607,13 @@ class CardManager:
 
         templates: List[CardTemplate] = []
 
+        # Bucket by (edition, position) FIRST, because the effect plan for a bucket
+        # depends on how many players it holds — see _assignEffects.
+        buckets: dict = {}
         for player in playerManager.activePlayers:
-            # Cards are for rostered players only — exclude every off-roster
-            # population:
-            # - Free agents (player.team is None or a 'Free Agent' string)
-            # - Prospects (is_prospect=True OR drafting_team_id set; the flag
-            #   is the canonical marker but drafting_team_id catches
-            #   half-promoted state where one of the two got cleared)
-            # - Upcoming rookies (is_upcoming_rookie=True)
-            # - Retired players (player.team == 'Retired' string)
+            # Cards are for rostered players only — exclude every off-roster population:
+            # free agents, prospects (is_prospect OR drafting_team_id, since the flag has
+            # gotten out of sync before), upcoming rookies and retirees.
             if getattr(player, 'is_prospect', False):
                 continue
             if getattr(player, 'drafting_team_id', None):
@@ -568,17 +624,22 @@ class CardManager:
             teamId = getattr(teamObj, 'id', None) if teamObj is not None else None
             if not teamId:  # None or 0 — both invalid; rules out string-team values too
                 continue
-
             rating = getattr(player, 'playerRating', None)
             if rating is None:
                 continue
-
             positionValue = player.position.value if hasattr(player.position, 'value') else int(player.position)
-            isRookie = getattr(player, 'seasonsPlayed', 1) == 0
-
             for edition, threshold in EDITION_THRESHOLDS.items():
                 if rating < threshold:
                     continue
+                buckets.setdefault((edition, positionValue), []).append((player, teamId))
+
+        for (edition, positionValue), members in buckets.items():
+            plan = self._assignEffects(edition, positionValue, [m[0] for m in members])
+            teamById = {m[0].id: m[1] for m in members}
+            for player, effectName in plan:
+                rating = getattr(player, 'playerRating', None)
+                teamId = teamById.get(player.id)
+                isRookie = getattr(player, 'seasonsPlayed', 1) == 0
 
                 # Classification depends on edition (MVP/Champion/All-Pro require holo+)
                 classification = _buildClassification(
@@ -590,13 +651,15 @@ class CardManager:
                     edition=edition,
                 )
 
-                # Pass classification so a Champion card mints a lower (on-card) gate threshold.
+                # Pass classification so a Champion card mints a lower (on-card) gate
+                # threshold. The effect is PLANNED rather than rolled — see _assignEffects.
                 effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId,
-                                                  classification=classification)
+                                                  classification=classification,
+                                                  forceEffect=effectName)
                 rarityWeight = computeRarityWeight(edition, rating)
                 sellValue = getSellValue(edition, isActive=True)
 
-                template = CardTemplate(
+                templates.append(CardTemplate(
                     player_id=player.id,
                     edition=edition,
                     season_created=seasonNumber,
@@ -610,8 +673,7 @@ class CardManager:
                     sell_value=sellValue,
                     classification=classification,
                     output_type=getEffectOutputType(effectConfig.get("effectName")),
-                )
-                templates.append(template)
+                ))
 
         if templates:
             templateRepo.saveBatch(templates)
@@ -643,6 +705,7 @@ class CardManager:
         }
 
         templates: List[CardTemplate] = []
+        buckets: dict = {}
 
         for player in playerManager.activePlayers:
             if player.id in existingPlayerIds:
@@ -676,12 +739,23 @@ class CardManager:
             for edition, threshold in EDITION_THRESHOLDS.items():
                 if rating < threshold:
                     continue
+                buckets.setdefault((edition, positionValue), []).append((player, teamId))
 
-                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId)
+        for (edition, positionValue), members in buckets.items():
+            # topUp=False — the season pool already covers every effect; topping up here
+            # would mint the whole effect set for a handful of rookies.
+            plan = self._assignEffects(edition, positionValue,
+                                       [m[0] for m in members], topUp=False)
+            teamById = {m[0].id: m[1] for m in members}
+            for player, effectName in plan:
+                rating = getattr(player, 'playerRating', None)
+                teamId = teamById.get(player.id)
+                effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId,
+                                                  forceEffect=effectName)
                 rarityWeight = computeRarityWeight(edition, rating)
                 sellValue = getSellValue(edition, isActive=True)
 
-                template = CardTemplate(
+                templates.append(CardTemplate(
                     player_id=player.id,
                     edition=edition,
                     season_created=seasonNumber,
@@ -695,8 +769,7 @@ class CardManager:
                     sell_value=sellValue,
                     classification="rookie",
                     output_type=getEffectOutputType(effectConfig.get("effectName")),
-                )
-                templates.append(template)
+                ))
 
         if templates:
             templateRepo.saveBatch(templates)
@@ -893,6 +966,11 @@ class CardManager:
             "tierNote": tierNote,
             "vaulted": bool(getattr(userCard, "vaulted", False)),
             "vaultPosition": getattr(userCard, "vault_position", None),
+            # Glitch (docs/GLITCH_CARDS.md) — per-INSTANCE, so it rides on the userCard
+            # rather than the template. Drives the card's visual treatment.
+            "glitched": bool(getattr(userCard, "glitched", False)),
+            "glitchedSeason": getattr(userCard, "glitched_season", None),
+            "glitchedWeek": getattr(userCard, "glitched_week", None),
             "seasonCreated": template.season_created,
             "isRookie": template.is_rookie,
             "classification": classification,
@@ -1695,9 +1773,13 @@ class CardManager:
         # These packs explicitly promise classification breadth (one card
         # per qualifying player), so dedup by player_id.
         dedupByPlayer = getattr(packType, 'theme_type', None) in ('champion', 'allpro')
-        # Starter pack: no duplicate effectNames so new users can equip
-        # every starter card without hitting the no-duplicate-effects rule.
-        dedupByEffect = (packType.name == 'starter')
+        # EVERY pack avoids repeating an effect, not just the starter. Opening a pack and
+        # getting the same effect two or three times is the single most reported
+        # frustration with packs, and it is not what a pack is for: you buy one to see
+        # what is in the pool, and a repeat spends a slot telling you nothing. The pool
+        # can no longer satisfy it (a themed pack over a thin position, say) and the
+        # dedup falls through to whatever is left, so this can never return short.
+        dedupByEffect = True
 
         # Starter pack: hand a full ONE-PER-POSITION lineup (QB/RB/WR/TE/K) with
         # distinct players and effects, so a new user can equip the entire pack as a
@@ -1715,15 +1797,29 @@ class CardManager:
                 guaranteedDraw = self._weightedDraw(
                     guaranteedPool, packWeights, count=1
                 )
+                # The rest of the pack must also avoid the guaranteed card's effect —
+                # this branch used to drop to a plain weighted draw, so the pack most
+                # likely to repeat itself was the one you paid extra for.
                 excludedPlayerIds = (
                     {t.player_id for t in guaranteedDraw} if dedupByPlayer else set()
                 )
-                restPool = [t for t in pool if t.player_id not in excludedPlayerIds]
+                guaranteedEffects = {
+                    (getattr(t, 'effect_config', None) or {}).get('effectName')
+                    for t in guaranteedDraw
+                } - {None, ''}
+                restPool = [
+                    t for t in pool
+                    if t.player_id not in excludedPlayerIds
+                    and (getattr(t, 'effect_config', None) or {}).get('effectName')
+                    not in guaranteedEffects
+                ]
+                # Never let filtering empty the pool — a short pack is worse than a repeat.
+                if not restPool:
+                    restPool = pool
                 rest = self._weightedDrawDedup(
                     restPool, packWeights, count=max(0, count - 1),
                     dedupByPlayer=dedupByPlayer,
-                ) if dedupByPlayer else self._weightedDraw(
-                    pool, packWeights, count=max(0, count - 1),
+                    dedupByEffect=dedupByEffect,
                 )
                 return guaranteedDraw + rest
             # Fallback to unconstrained draw if no eligible templates exist
@@ -2464,7 +2560,11 @@ class CardManager:
             while len(picked) < count and poolCopy and attempts < maxAttempts:
                 attempts += 1
                 choice = random.choices(poolCopy, weights=weightsCopy, k=1)[0]
-                effectName = (choice.effect_config or {}).get('effect') if choice.effect_config else None
+                # KEY BUG: this read 'effect', but the config key is 'effectName' (the
+                # FACILITY_CATALOG schema uses 'effect' — easy to cross over). It always
+                # came back None, so seenEffects never filled and the shop's duplicate
+                # guard below has never once run.
+                effectName = (choice.effect_config or {}).get('effectName') if choice.effect_config else None
                 idx = poolCopy.index(choice)
                 if effectName and effectName in seenEffects:
                     # Duplicate effect — remove from pool and skip
