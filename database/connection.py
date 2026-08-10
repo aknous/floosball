@@ -60,6 +60,7 @@ def init_db():
     _seedPackTypes()
     _seedBetaAllowlist()
     _seedAchievements()
+    _collapseLiveGenerationalNames()
     _normalizeNamePool()
     _seedUnusedNames()
     _seedCuratedNames()
@@ -3286,6 +3287,8 @@ def _seedCuratedNames():
 #     Base -> Jr. -> III -> IV -> V -> VI -> VII -> VIII -> IX -> X -> XI
 # Longest-first so "VIII" is not eaten as "V" followed by a stranded "III".
 _NAME_SUFFIXES = ('Jr.', 'VIII', 'XII', 'XI', 'IX', 'VII', 'VI', 'IV', 'III', 'II', 'X', 'V')
+# app_setting key for the one-shot live-name collapse below.
+_COLLAPSE_MARKER = 'generational_names_collapsed'
 _NAME_SUFFIX_RE = _re.compile(
     r'\s+(' + '|'.join(_re.escape(s) for s in _NAME_SUFFIXES) + r')$'
 )
@@ -3303,6 +3306,78 @@ def baseName(name: str) -> str:
         previous = name
         name = _NAME_SUFFIX_RE.sub('', name).strip()
     return name
+
+
+def _collapseLiveGenerationalNames():
+    """ONE-SHOT: drop the generational suffix from players and coaches wearing one.
+
+    ⚠️ THIS RUNS EXACTLY ONCE, EVER, and it has to. A player named "Bob Jr." is
+    normally CORRECT — the ladder exists so a newcomer can debut as the next
+    generation of a name the league remembers. Collapsing on every boot would
+    delete that feature outright. The marker is the whole safety mechanism.
+
+    It exists because the fork documented on `_seedUnusedNames` seeded orphaned
+    variants into the pool, and player generation then drew them: production came
+    out of its season-1 wipe with ten players and a coach carrying a "Jr." whose
+    father had never played a down in that league.
+
+    ⚠️ A NAME IS SKIPPED WHEN THE BASE IS ALREADY WORN by another live player or
+    coach. That is not a rare edge — it is the fork's own signature, both forms of
+    a lineage generated into the same league, and production has three. Renaming
+    there would put two identical names on the field, which is worse than the
+    suffix. Left alone, the pair at least reads as a father and a son.
+
+    ⚠️ MUST RUN BEFORE PLAYERS LOAD. `savePlayerData` writes `db_player.name` from
+    the in-memory Player on every week and season boundary, so a rename applied to
+    a running league is silently overwritten by the next save. init_db() is called
+    at run_api.py:358, before floosballApplication builds its managers, which is
+    what makes the new name the one the sim picks up.
+    """
+    from database.models import UnusedName, Coach, Player, AppSetting
+    session = SessionLocal()
+    try:
+        marker = session.query(AppSetting).filter(AppSetting.key == _COLLAPSE_MARKER).first()
+        if marker is not None:
+            return
+        players = session.query(Player).all()
+        coaches = session.query(Coach).all()
+        live = {p.name for p in players if p.name} | {c.name for c in coaches if c.name}
+
+        renamed, skipped = [], []
+        for row in list(players) + list(coaches):
+            name = row.name or ''
+            if not _NAME_SUFFIX_RE.search(name):
+                continue
+            lineage = baseName(name)
+            if not lineage or lineage in live:
+                skipped.append(name)
+                continue
+            renamed.append((name, lineage))
+            live.discard(name)
+            live.add(lineage)
+            row.name = lineage
+            # The pool copy is now a duplicate of a name on the field.
+            # _normalizeNamePool runs next and would catch it anyway; doing it here
+            # keeps the two consistent inside one transaction.
+            for dupe in session.query(UnusedName).filter(UnusedName.name == lineage).all():
+                session.delete(dupe)
+
+        session.add(AppSetting(key=_COLLAPSE_MARKER, value=str(len(renamed))))
+        session.commit()
+        if renamed:
+            logger.info(f"Collapsed {len(renamed)} generational name(s) on live players/coaches:")
+            for was, now in sorted(renamed):
+                logger.info(f"    {was} -> {now}")
+        if skipped:
+            logger.info(
+                f"Left {len(skipped)} generational name(s) alone — the base is already "
+                f"worn by a live player or coach: {', '.join(sorted(skipped))}"
+            )
+    except Exception as exc:
+        session.rollback()
+        logger.warning(f"Failed to collapse live generational names: {exc}")
+    finally:
+        session.close()
 
 
 def _normalizeNamePool(resetLadders: bool = False):

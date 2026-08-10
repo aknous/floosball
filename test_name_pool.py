@@ -150,6 +150,86 @@ class NamePoolTests(unittest.TestCase):
         self.conn._normalizeNamePool()
         self.assertEqual(self.pool(), ['Bob Vance'])
 
+    # -- _collapseLiveGenerationalNames ------------------------------------
+
+    def livePlayerNames(self):
+        from database.models import Player
+        s = self.conn.SessionLocal()
+        try:
+            return sorted(p.name for p in s.query(Player).all())
+        finally:
+            s.close()
+
+    def addPlayers(self, *names):
+        from database.models import Player
+        for n in names:
+            self.session.add(Player(name=n, position='QB'))
+        self.session.commit()
+
+    def testCollapseDropsTheSuffixFromLivePlayers(self):
+        self.addPlayers('Freed Marinara Jr.', 'Elvis Amigo')
+        self.conn._collapseLiveGenerationalNames()
+        self.assertEqual(self.livePlayerNames(), ['Elvis Amigo', 'Freed Marinara'])
+
+    def testCollapseSkipsWhenTheBaseIsAlreadyOnTheField(self):
+        # THE PRODUCTION CASE, three of them: the fork generated both forms of a
+        # lineage into the same league. Renaming would put two identical names on
+        # the field, which is worse than the suffix.
+        self.addPlayers('Mochi Pushpin', 'Mochi Pushpin Jr.')
+        self.conn._collapseLiveGenerationalNames()
+        self.assertEqual(self.livePlayerNames(), ['Mochi Pushpin', 'Mochi Pushpin Jr.'])
+
+    def testCollapseSkipsWhenTheBaseIsWornByACoach(self):
+        from database.models import Coach
+        self.session.add(Coach(name='Sarasota Speedrun'))
+        self.session.commit()
+        self.addPlayers('Sarasota Speedrun Jr.')
+        self.conn._collapseLiveGenerationalNames()
+        self.assertEqual(self.livePlayerNames(), ['Sarasota Speedrun Jr.'])
+
+    def testCollapseAlsoRenamesCoaches(self):
+        from database.models import Coach
+        self.session.add(Coach(name='Sarasota Speedrun Jr.'))
+        self.session.commit()
+        self.conn._collapseLiveGenerationalNames()
+        s = self.conn.SessionLocal()
+        try:
+            self.assertEqual([c.name for c in s.query(Coach).all()], ['Sarasota Speedrun'])
+        finally:
+            s.close()
+
+    def testCollapseRemovesTheNowDuplicatePooledCopy(self):
+        self.seedPool('Freed Marinara', 'Elvis Amigo')
+        self.addPlayers('Freed Marinara Jr.')
+        self.conn._collapseLiveGenerationalNames()
+        self.assertEqual(self.pool(), ['Elvis Amigo'])
+
+    def testCollapseRunsOnlyOnce(self):
+        # THE SAFETY MECHANISM. A player named "Bob Jr." is normally correct — the
+        # ladder exists so a newcomer can debut as the next generation. A second
+        # run must not touch one.
+        self.addPlayers('Freed Marinara Jr.')
+        self.conn._collapseLiveGenerationalNames()
+        self.addPlayers('Bob Vance Jr.')
+        self.conn._collapseLiveGenerationalNames()
+        self.assertEqual(self.livePlayerNames(), ['Bob Vance Jr.', 'Freed Marinara'])
+
+    def testCollapseStampsItsMarkerEvenWithNothingToDo(self):
+        from database.models import AppSetting
+        self.conn._collapseLiveGenerationalNames()
+        s = self.conn.SessionLocal()
+        try:
+            self.assertIsNotNone(
+                s.query(AppSetting).filter(AppSetting.key == self.conn._COLLAPSE_MARKER).first())
+        finally:
+            s.close()
+
+    def testCollapseTwoJuniorsOfTheSameLineageKeepsOne(self):
+        # Only one can take the base; the second would collide with the first.
+        self.addPlayers('Bob Vance Jr.', 'Bob Vance III')
+        self.conn._collapseLiveGenerationalNames()
+        self.assertEqual(self.livePlayerNames(), ['Bob Vance', 'Bob Vance III'])
+
     # -- _seedUnusedNames --------------------------------------------------
 
     def seedFromConfig(self, names):
