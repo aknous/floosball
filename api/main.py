@@ -10346,10 +10346,10 @@ def setEquippedCards(
         if req.cards:
             from managers import achievementManager as _am
             _am.onCardEquipped(session, user.id)
-            # Fusion: equipping IS setting your fantasy lineup, so the onboarding
-            # "roster set" hook now fires here (migrated from the retired
-            # /api/fantasy/roster PUT).
-            _am.onFantasyRosterSet(session, user.id)
+            # ⚠️ `onFantasyRosterSet` (Field General) used to fire on the NEXT LINE, off
+            # this same condition. Since the fusion, equipping IS setting your lineup, so
+            # the two were one act awarding two badges and two lots of floobits from one
+            # click. Field General is retired and its hook is gone.
             # Gilded — a FULL lineup of Prismatic/Diamond cards. ⚠️ The floor was 5,
             # which was a full equipped set before the fusion; the lineup now has six
             # base slots (QB/RB/WR1/WR2/TE/K), so 5 let one slot sit empty and still

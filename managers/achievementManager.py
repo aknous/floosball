@@ -70,6 +70,16 @@ def recordProgress(session: Session, userId: int, key: str, increment: int = 1,
     ach = getAchievement(session, key)
     if ach is None:
         return None
+    # ⚠️ A RETIRED achievement accrues nothing, ever. Retiring hides a badge from
+    # anyone who has not already earned it (getUserAchievements), but it did NOT stop
+    # progress being recorded — so a retired achievement with a live hook would still
+    # grant its floobits and fire an unlock toast for a badge the UI never shows. That
+    # is not hypothetical: `arsenal` was retired with two of its hooks still in place,
+    # saved only by the buy handler happening to reject the powerup it keys off.
+    # Guarding here rather than at each call site means retiring one thing is a single
+    # flag, which is the whole point of having the flag.
+    if getattr(ach, 'retired', False):
+        return None
     ua = getOrCreateUserAchievement(session, userId, ach, currentSeason)
     if ua.completed_at is not None:
         return None  # already done (for this season, if per_season)
@@ -341,7 +351,7 @@ def backfillOnboardingAchievements(session: Session, userId: int) -> int:
     Idempotent — recordProgress() no-ops once an achievement is completed.
     Returns the number of achievements newly unlocked by this call."""
     from database.models import (
-        User, PickEmPick, PackOpening, FantasyRoster, FantasyRosterPlayer,
+        User, PickEmPick, PackOpening,
         EquippedCard, CurrencyTransaction,
     )
 
@@ -365,13 +375,10 @@ def backfillOnboardingAchievements(session: Session, userId: int) -> int:
         if recordProgress(session, userId, "pack_popper", absolute=1):
             unlocks += 1
 
-    # Field General — any roster with at least one player
-    hasRoster = session.query(FantasyRoster.id).join(
-        FantasyRosterPlayer, FantasyRosterPlayer.roster_id == FantasyRoster.id,
-    ).filter(FantasyRoster.user_id == userId).first()
-    if hasRoster:
-        if recordProgress(session, userId, "field_general", absolute=1):
-            unlocks += 1
+    # ⚠️ Field General is RETIRED, and its backfill went with it. It read the
+    # FantasyRoster/FantasyRosterPlayer tables, which the fantasy/cards fusion left
+    # unwritten, so it could not have completed for anyone who joined after the fusion
+    # even before the achievement was retired.
 
     # Deck Builder — any equipped card row
     hasEquipped = session.query(EquippedCard.id).filter(EquippedCard.user_id == userId).first()
@@ -552,10 +559,6 @@ def checkAnthology(session: Session, userId: int, currentSeason: int) -> Optiona
     if ANTHOLOGY_REQUIRED_PACK_NAMES.issubset(purchasedNames):
         return unlockSecret(session, userId, "anthology")
     return None
-
-
-def onFantasyRosterSet(session: Session, userId: int) -> Optional[UserAchievement]:
-    return recordProgress(session, userId, "field_general")
 
 
 def onFantasyRosterWeekCompleted(session: Session, userId: int, currentSeason: int) -> Optional[UserAchievement]:

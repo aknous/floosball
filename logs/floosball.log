@@ -52120,3 +52120,8 @@ Shutting down API server...
 2026-08-10 10:46:53 - floosball.api - INFO - Shutting down Floosball API server
 2026-08-10 10:46:53 - floosball.api - INFO - Closing 0 WebSocket connections
 2026-08-10 10:46:53 - floosball.api - INFO - API server shutdown complete
+2026-08-10 11:09:39 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 11:10:09 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 11:10:22 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 11:10:23 - floosball.achievements - INFO - _applyReward user=1 source=achievement:live_one floobits=25 packs=[] powerups=[]
+2026-08-10 11:10:23 - floosball.achievements - INFO - Achievement unlocked: user=1 key=live_one season=0
