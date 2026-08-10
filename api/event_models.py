@@ -83,6 +83,7 @@ class EventType(Enum):
 
     # Play reactions — user reactions to plays (and the sideline-quote personality events)
     PLAY_REACTION_UPDATE = "play_reaction_update"
+    GAME_FEED_POST = "game_feed_post"
 
     # Live in-game rally — fans cheering for a team mid-game
     GAME_RALLY = "game_rally"
@@ -336,6 +337,24 @@ class GameEvent:
             'playNumber': playNumber,
             'targetType': targetType,
             'reactions': reactions,
+        }
+
+    @staticmethod
+    def gameFeedPost(gameId: int, post: dict) -> dict:
+        """A shout from the stands, carried to everyone else watching this game.
+
+        Rides the same channel as playReactionUpdate for the same reason: the feed is
+        shared by every viewer, so a post that only reaches its author until someone
+        reloads is not a crowd, it is a note to self.
+
+        `post` is the SAME shape the GET returns, so the client appends it as-is rather
+        than keeping a second idea of what a post looks like — except `isMine`, which
+        is per-viewer and is decided on the receiving end.
+        """
+        return {
+            'event': EventType.GAME_FEED_POST.value,
+            'gameId': gameId,
+            'post': post,
         }
 
 

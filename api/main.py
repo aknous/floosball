@@ -12014,6 +12014,52 @@ def get_feed_catalog():
     })
 
 
+def _serializeFeedPost(session, post, team, isMine: bool = False) -> Dict[str, Any]:
+    """One post, in the shape the client renders.
+
+    ⚠️ ONE function for the GET and the live broadcast. They previously could not
+    disagree because only one of them existed; now that a post arrives by two routes,
+    a field added to one and missed by the other would make a shout look different
+    depending on whether you were watching when it landed.
+
+    `isMine` is the exception and is decided by the CALLER, because it is a fact about
+    the viewer rather than the post — the broadcast goes to everyone, so it ships False
+    and each client works out its own answer.
+    """
+    from database.models import User as _U
+    from database.repositories.feed_repository import renderPost, catalogEntry
+    entry = catalogEntry(post.post_key)
+    poster = session.get(_U, post.user_id)
+    return {
+        'id': post.id,
+        'postKey': post.post_key,
+        'text': renderPost(post.post_key),
+        'valence': entry[2] if entry else 0,
+        'teamId': post.team_id,
+        'teamAbbr': getattr(team, 'abbr', None),
+        'teamColor': getattr(team, 'color', None),
+        'username': getattr(poster, 'username', None),
+        'isMine': isMine,
+        'createdAt': post.created_at.isoformat() if post.created_at else None,
+    }
+
+
+def _broadcastFeedPost(gameId: int, post: Dict[str, Any]) -> None:
+    """Carry a shout to everyone else watching, the way reactions already travel.
+
+    Same channel and same failure posture as `_broadcastReactionUpdate`: a broadcast
+    that fails must never fail the post. The row is committed either way, so the worst
+    case is what the feed did before this existed — the shout appears on next load.
+    """
+    try:
+        from api.game_broadcaster import broadcaster as _broadcaster
+        if not _broadcaster.is_enabled():
+            return
+        _broadcaster.broadcast_sync(gameId, GameEvent.gameFeedPost(gameId=gameId, post=post))
+    except Exception as e:
+        logger.warning(f"feed post broadcast failed: {e}")
+
+
 @app.get("/api/games/{gameId}/feed/catalog")
 def get_game_feed_catalog():
     """What a fan can shout AT a game, grouped by heading.
@@ -12049,10 +12095,18 @@ def post_to_game_feed(gameId: int, req: _FeedPostRequest,
     try:
         repo = _feedRepo(session)
         try:
-            repo.addPost(user.id, teamId, req.postKey, None, gameId=gameId)
+            created = repo.addPost(user.id, teamId, req.postKey, None, gameId=gameId)
         except FeedError as e:
             raise HTTPException(400, str(e))
         session.commit()
+
+        # ⚠️ AFTER the commit. The row has to be durable before anyone is told about
+        # it, or a rollback leaves a shout on every other screen that no reload will
+        # reproduce. Same order the achievement grants use, for the same reason.
+        from database.models import Team as _TeamModel
+        _broadcastFeedPost(gameId, _serializeFeedPost(
+            session, created, session.get(_TeamModel, teamId), isMine=False))
+
         return build_success_response({
             'gameId': gameId,
             'postsRemaining': repo.remainingPosts(user.id),
@@ -12077,21 +12131,10 @@ def get_game_feed(gameId: int, limit: int = 50,
         for post in repo.getGameFeed(gameId, limit):
             if post.team_id not in teamCache:
                 teamCache[post.team_id] = session.get(_T, post.team_id)
-            team = teamCache[post.team_id]
-            poster = session.get(_U, post.user_id)
-            entry = catalogEntry(post.post_key)
-            posts.append({
-                'id': post.id,
-                'postKey': post.post_key,
-                'text': renderPost(post.post_key),
-                'valence': entry[2] if entry else 0,
-                'teamId': post.team_id,
-                'teamAbbr': getattr(team, 'abbr', None),
-                'teamColor': getattr(team, 'color', None),
-                'username': getattr(poster, 'username', None),
-                'isMine': bool(user and post.user_id == user.id),
-                'createdAt': post.created_at.isoformat() if post.created_at else None,
-            })
+            posts.append(_serializeFeedPost(
+                session, post, teamCache[post.team_id],
+                isMine=bool(user and post.user_id == user.id),
+            ))
         return build_success_response({
             'gameId': gameId,
             'posts': posts,
