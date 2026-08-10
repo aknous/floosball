@@ -22,6 +22,13 @@ from logger_config import get_logger
 
 logger = get_logger("floosball.achievements")
 
+# ⚠️ The four editions a set-completion achievement is asking for. `standard` is
+# EXCLUDED on purpose: it is the no-effect floor print, handed out free with the starter
+# pack, so counting it meant Full Spectrum and Completist could be finished on
+# standard + base + holographic + prismatic — four editions, no diamond, and neither
+# achievement means what it says. Both were written before `standard` existed.
+COLLECTIBLE_EDITIONS = ("base", "holographic", "prismatic", "diamond")
+
 
 def getAchievement(session: Session, key: str) -> Optional[Achievement]:
     """Look up an achievement template by its canonical key."""
@@ -404,6 +411,12 @@ def getUserAchievements(session: Session, userId: int, currentSeason: int = 0) -
     for ach, ua in rows:
         progress = ua.progress if ua else 0
         completedAt = ua.completed_at.isoformat() + 'Z' if ua and ua.completed_at else None
+        # ⚠️ A RETIRED achievement is one whose system no longer exists — GM votes, roster
+        # swaps. It stays on the shelf of whoever earned it and disappears for everyone
+        # else, because the alternative is a permanent goal nobody can reach. Checked
+        # against the row, not the current season, since these are all `once` scope.
+        if getattr(ach, "retired", False) and completedAt is None:
+            continue
         claimedAt = ua.claimed_at.isoformat() + 'Z' if ua and ua.claimed_at else None
         # Secret achievements: hide name/description/reward until unlocked.
         # Caller can still see the count so they know secrets exist.
@@ -635,11 +648,13 @@ def syncCollectionAchievements(session: Session, userId: int) -> List[UserAchiev
             diamondCount += 1
         if (getattr(_uc, "tier", 1) or 1) >= 4:
             hasMaxTierVaulted = True
-        editionsByPlayer.setdefault(tpl.player_id, set()).add(tpl.edition)
+        if tpl.edition in COLLECTIBLE_EDITIONS:
+            editionsByPlayer.setdefault(tpl.player_id, set()).add(tpl.edition)
         if tpl.classification and "all_pro" in tpl.classification:
             allProBySeason.setdefault(tpl.season_created, set()).add(tpl.player_id)
 
-    fullSpectrum = 1 if any(len(eds) >= 4 for eds in editionsByPlayer.values()) else 0
+    fullSpectrum = 1 if any(
+        len(eds) >= len(COLLECTIBLE_EDITIONS) for eds in editionsByPlayer.values()) else 0
 
     # All-Pro Set: a season where the user has vaulted every All-Pro player's card.
     allProSet = 0

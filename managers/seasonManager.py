@@ -11056,6 +11056,13 @@ class SeasonManager:
                 # Picks are already resolved per-game by _resolvePickEmGame.
                 # Award points-based Floobits + Clairvoyant bonus
                 userResults = pickemRepo.getWeekResultsByUser(season, week)
+                # ⚠️ How many games there were to pick. Perfect Week and Jinx are both
+                # "the WHOLE slate", and both were counting the reader's own picks
+                # instead: Perfect Week fired on `correctCount == totalPicks` with no
+                # floor, so one correct pick and nothing else was a perfect week (which
+                # is why prod shows it completed 413 times), and Jinx hardcoded 12, the
+                # old 24-club slate size, so at 32 clubs it can fire on 12 of 16.
+                slateSize = len(completedGames)
                 for userId, correctCount, totalPicks, totalPoints in userResults:
                     if totalPicks == 0:
                         continue
@@ -11076,8 +11083,9 @@ class SeasonManager:
                         from managers import achievementManager as _am
                         _am.onClairvoyant(session, userId, season)
 
-                    # Achievement hook — Perfect Week (all picks correct)
-                    if correctCount == totalPicks and totalPicks > 0:
+                    # Achievement hook — Perfect Week: every game on the slate, picked
+                    # and correct. Not merely "everything you picked came in".
+                    if slateSize > 0 and totalPicks >= slateSize and correctCount == totalPicks:
                         from managers import achievementManager as _am2
                         _am2.onPerfectPickEmWeek(session, userId, season)
 
@@ -11107,11 +11115,12 @@ class SeasonManager:
                             for p in userPicks
                         ):
                             _am4.unlockSecret(session, userId, "contrarian")
-                        # Secret — Jinx: a full 12-pick week, all MANUAL, every one
-                        # WRONG. The inverse of Perfect Week — rewards deliberately
-                        # picking every loser. Auto-picks excluded (same as Contrarian)
-                        # so an unlucky auto-picker on a chalk week doesn't unlock it.
-                        if len(userPicks) >= 12 and all(
+                        # Secret — Jinx: the FULL slate, all MANUAL, every one WRONG.
+                        # The inverse of Perfect Week — rewards deliberately picking
+                        # every loser. Auto-picks excluded (same as Contrarian) so an
+                        # unlucky auto-picker on a chalk week doesn't unlock it. Sized
+                        # off the slate, not a hardcoded 12, which was the 24-club count.
+                        if slateSize > 0 and len(userPicks) >= slateSize and all(
                             (not p.is_auto) and (p.correct is False)
                             for p in userPicks
                         ):

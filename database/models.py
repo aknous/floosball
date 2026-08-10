@@ -2362,6 +2362,11 @@ class Achievement(Base):
     target: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # progress needed to complete
     reward_config: Mapped[dict] = mapped_column(JSON, nullable=False)  # {floobits, packs:[slug], powerups:[slug], deferred}
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # ⚠️ RETIRED, not deleted. An achievement whose system is gone (GM votes, roster swaps)
+    # can never be earned again, but people have earned it — deleting the row would orphan
+    # their `user_achievements` and take a badge off a shelf. Retired templates are hidden
+    # from anyone who has NOT completed them, and stay visible to anyone who has.
+    retired: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     def __repr__(self):

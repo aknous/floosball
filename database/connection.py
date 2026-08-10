@@ -1532,6 +1532,16 @@ def _runPendingMigrations():
             logger.info("  Migration: added league_news_items.pinned")
         except Exception:
             conn.rollback()
+        # An achievement whose system was removed is retired rather than deleted — the
+        # row has to stay so the people who earned it keep it. Defaulted at the column
+        # so every existing template reads as live.
+        try:
+            conn.execute(text(
+                "ALTER TABLE achievements ADD COLUMN retired BOOLEAN NOT NULL DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added achievements.retired")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -2806,7 +2816,7 @@ def _seedAchievements():
              "description": "Vault 5 cards of players on your favorite team.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "full_spectrum", "name": "Full Spectrum", "category": "collection", "scope": "once", "sort_order": 320, "target": 1,
-             "description": "Vault all four editions of a single player.",
+             "description": "Vault the base, holographic, prismatic and diamond print of a single player.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
             {"key": "all_pro_set", "name": "All-Pro Set", "category": "collection", "scope": "once", "sort_order": 330, "target": 1,
              "description": "Vault every All-Pro card from a single season.",
@@ -3030,7 +3040,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": ["humble"], "powerups": [], "deferred": False}},
             {"key": "purist", "name": "Purist", "category": "secret", "scope": "once", "sort_order": 540, "target": 1,
              "description": "Play a full week with zero cards equipped.",
-             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}, "retired": True},
             {"key": "homer", "name": "Homer", "category": "secret", "scope": "once", "sort_order": 550, "target": 1,
              "description": "Set a fantasy roster composed entirely of players on your favorite team.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
@@ -3057,7 +3067,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
             {"key": "arsenal", "name": "Arsenal", "category": "secret", "scope": "once", "sort_order": 630, "target": 1,
              "description": "Hold 3 or more roster swaps at the same time.",
-             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}, "retired": True},
             {"key": "finicky", "name": "Finicky", "category": "secret", "scope": "once", "sort_order": 640, "target": 1,
              "description": "Re-roll the card shop 5 times in a row without buying anything in between.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
@@ -3066,16 +3076,16 @@ def _seedAchievements():
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
             {"key": "mutineer", "name": "Scorched Earth", "category": "secret", "scope": "once", "sort_order": 660, "target": 1,
              "description": "Vote to fire your coach and release every player on the roster in a single offseason.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}, "retired": True},
             {"key": "tribune", "name": "Tribune", "category": "secret", "scope": "once", "sort_order": 665, "target": 1,
              "description": "Cast 6 GM votes in a single season.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}, "retired": True},
             {"key": "monk", "name": "Monk", "category": "secret", "scope": "once", "sort_order": 670, "target": 1,
              "description": "Go an entire season without opening a card pack.",
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "stalwart", "name": "Stalwart", "category": "secret", "scope": "once", "sort_order": 680, "target": 1,
              "description": "Play an entire season with a full roster and zero roster swaps.",
-             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}, "retired": True},
             {"key": "underwriter", "name": "Underwriter", "category": "secret", "scope": "once", "sort_order": 685, "target": 5,
              "description": "Single-handedly fund five facility bars, upkeep or project, from empty to full.",
              "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
@@ -3108,7 +3118,7 @@ def _seedAchievements():
              "description": "Finish #1 on the season playoff bracket leaderboard.",
              "reward_config": {"floobits": 0, "packs": [], "powerups": [], "deferred": False}},
             {"key": "jinx", "name": "Jinx", "category": "secret", "scope": "once", "sort_order": 745, "target": 1,
-             "description": "Whiff on every single pick in a full 12-game pick-em week.",
+             "description": "Whiff on every single pick in a full pick-em week.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
             {"key": "greenhorn", "name": "Greenhorn", "category": "secret", "scope": "once", "sort_order": 750, "target": 1,
              "description": "Field a full fantasy roster made up entirely of rookies.",
@@ -3143,14 +3153,21 @@ def _seedAchievements():
         # Template-level fields that are safe to refresh without resetting user progress.
         # reward_config changes affect future grants only; already-completed achievements
         # keep whatever reward the user received at the time of completion.
-        refreshFields = ("name", "description", "category", "scope", "target", "sort_order", "reward_config")
+        # ⚠️ `retired` is refreshed like everything else, and `.get` supplies the default
+        # so a template without the key reads as live. That is what lets an achievement be
+        # UN-retired by deleting one flag here, and what makes retiring one land on an
+        # existing prod DB on the next boot rather than only on a fresh seed.
+        refreshFields = ("name", "description", "category", "scope", "target", "sort_order",
+                         "reward_config", "retired")
+        defaultsFor = {"retired": False}
         for d in defaults:
             existing = session.query(Achievement).filter(Achievement.key == d["key"]).first()
             if existing:
                 changed = False
                 for f in refreshFields:
-                    if getattr(existing, f) != d[f]:
-                        setattr(existing, f, d[f])
+                    value = d.get(f, defaultsFor.get(f))
+                    if getattr(existing, f) != value:
+                        setattr(existing, f, value)
                         changed = True
                 if changed:
                     updated += 1

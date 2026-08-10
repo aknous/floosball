@@ -10057,7 +10057,7 @@ def setEquippedCards(
     from database.models import FantasyRoster, EquippedCard, UserCard, CardTemplate
     from database.repositories.card_repositories import EquippedCardRepository
     from managers.cardManager import (
-        FUSION_ALL_SLOTS, FLEX_SLOT, SLOT_TO_ORDINAL, cardFitsSlot,
+        FUSION_ALL_SLOTS, FUSION_BASE_SLOTS, FLEX_SLOT, SLOT_TO_ORDINAL, cardFitsSlot,
     )
 
     sm = floosball_app.seasonManager if floosball_app else None
@@ -10269,9 +10269,12 @@ def setEquippedCards(
             # "roster set" hook now fires here (migrated from the retired
             # /api/fantasy/roster PUT).
             _am.onFantasyRosterSet(session, user.id)
-            # Gilded — full equipped set (5+ slots, no empties) of Prismatic/Diamond cards
+            # Gilded — a FULL lineup of Prismatic/Diamond cards. ⚠️ The floor was 5,
+            # which was a full equipped set before the fusion; the lineup now has six
+            # base slots (QB/RB/WR1/WR2/TE/K), so 5 let one slot sit empty and still
+            # called it a full set. Matched to the composition secrets below.
             GILDED_EDITIONS = {"prismatic", "diamond"}
-            if len(req.cards) >= 5:
+            if len(req.cards) >= len(FUSION_BASE_SLOTS):
                 allGilded = all(
                     (cardTemplates.get(c.userCardId) and cardTemplates[c.userCardId].edition in GILDED_EDITIONS)
                     for c in req.cards
@@ -10282,7 +10285,7 @@ def setEquippedCards(
             # Composition secrets — inspect the DEPICTED players of a full lineup
             # (all 6 base slots; FLEX optional). Migrated from the retired fantasy
             # PUT, now keyed off the equipped cards' players.
-            if len(req.cards) >= 6:
+            if len(req.cards) >= len(FUSION_BASE_SLOTS):
                 from database.models import Player
                 from api_response_builders import PlayerResponseBuilder
                 depictedIds = [cardTemplates[c.userCardId].player_id for c in req.cards]
@@ -10676,16 +10679,21 @@ def selectPack(req: SelectPackRequest, user: _User = Depends(_getCurrentUser)):
         _am.syncCuratorProgress(session, user.id, currentSeason)
         if any(c.get("edition") == "diamond" for c in (result.get("kept") or [])):
             _am.onDiamondOpened(session, user.id, currentSeason)
-        # Secret: Completist (all 4 editions of the same player this season)
+        # Secret: Completist (base + holographic + prismatic + diamond of one player).
+        # ⚠️ Filtered to COLLECTIBLE_EDITIONS rather than counting distinct editions
+        # outright — `standard` is the free no-effect floor print, so a bare "4 distinct"
+        # count completed on standard/base/holo/prismatic, with no diamond anywhere.
         try:
             from database.models import UserCard as _UC, CardTemplate as _CT
+            from managers.achievementManager import COLLECTIBLE_EDITIONS
             from sqlalchemy import func
             editionRows = (
                 session.query(_CT.player_id, func.count(func.distinct(_CT.edition)).label("editionCount"))
                 .join(_UC, _UC.card_template_id == _CT.id)
-                .filter(_UC.user_id == user.id, _CT.season_created == currentSeason)
+                .filter(_UC.user_id == user.id, _CT.season_created == currentSeason,
+                        _CT.edition.in_(list(COLLECTIBLE_EDITIONS)))
                 .group_by(_CT.player_id)
-                .having(func.count(func.distinct(_CT.edition)) >= 4)
+                .having(func.count(func.distinct(_CT.edition)) >= len(COLLECTIBLE_EDITIONS))
                 .first()
             )
             if editionRows:
