@@ -524,6 +524,17 @@ class TeamSeasonStats(Base):
     win_percentage: Mapped[Optional[float]] = mapped_column(Float)
     streak: Mapped[Optional[int]] = mapped_column(Integer)
     score_differential: Mapped[Optional[int]] = mapped_column(Integer)
+    # ⚠️ The DIVISION and LEAGUE records, which drive the playoff tiebreaker. These were
+    # tracked in the in-memory `seasonTeamStats` dict and had no column here at all, so
+    # every restart reset them to zero and they re-accumulated only from the games played
+    # since that boot. Measured mid-season: 447 games played, 48 division decisions
+    # recorded. The tiebreaker was comparing whatever had happened since the last deploy.
+    div_wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    div_losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    div_ties: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lg_wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lg_losses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lg_ties: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     
     # Achievements
     made_playoffs: Mapped[bool] = mapped_column(Boolean, default=False)

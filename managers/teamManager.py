@@ -907,6 +907,14 @@ class TeamManager:
                     team.seasonTeamStats['winPerc'] = dbStats.win_percentage or 0.0
                     team.seasonTeamStats['streak'] = dbStats.streak or 0
                     team.seasonTeamStats['scoreDiff'] = dbStats.score_differential or 0
+                    # Without these the division and league records restart from zero on
+                    # every boot, and the playoff tiebreaker compares partial seasons.
+                    team.seasonTeamStats['divWins'] = getattr(dbStats, 'div_wins', 0) or 0
+                    team.seasonTeamStats['divLosses'] = getattr(dbStats, 'div_losses', 0) or 0
+                    team.seasonTeamStats['divTies'] = getattr(dbStats, 'div_ties', 0) or 0
+                    team.seasonTeamStats['lgWins'] = getattr(dbStats, 'lg_wins', 0) or 0
+                    team.seasonTeamStats['lgLosses'] = getattr(dbStats, 'lg_losses', 0) or 0
+                    team.seasonTeamStats['lgTies'] = getattr(dbStats, 'lg_ties', 0) or 0
                     team.seasonTeamStats['elo'] = dbStats.elo or team.seasonTeamStats.get('elo', 1500)
                     team.elo = team.seasonTeamStats['elo']
                     team.seasonTeamStats['madePlayoffs'] = dbStats.made_playoffs

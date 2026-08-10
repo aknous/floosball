@@ -11635,6 +11635,12 @@ class SeasonManager:
                 db_stats.win_percentage = stats.get('winPerc', 0.0)
                 db_stats.streak = stats.get('streak', 0)
                 db_stats.score_differential = stats.get('scoreDiff', 0)
+                db_stats.div_wins = stats.get('divWins', 0) or 0
+                db_stats.div_losses = stats.get('divLosses', 0) or 0
+                db_stats.div_ties = stats.get('divTies', 0) or 0
+                db_stats.lg_wins = stats.get('lgWins', 0) or 0
+                db_stats.lg_losses = stats.get('lgLosses', 0) or 0
+                db_stats.lg_ties = stats.get('lgTies', 0) or 0
                 db_stats.made_playoffs = stats.get('madePlayoffs', False)
                 db_stats.league_champion = stats.get('leagueChamp', False)
                 db_stats.floosball_champion = stats.get('floosbowlChamp', False)

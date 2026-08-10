@@ -1542,6 +1542,18 @@ def _runPendingMigrations():
             logger.info("  Migration: added achievements.retired")
         except Exception:
             conn.rollback()
+        # Division and league records, which drive the playoff tiebreaker and had no
+        # home in the database at all. Defaulted at the column; the backfill below
+        # reconstructs them for a season already in progress.
+        for _col in ('div_wins', 'div_losses', 'div_ties',
+                     'lg_wins', 'lg_losses', 'lg_ties'):
+            try:
+                conn.execute(text(
+                    f"ALTER TABLE team_season_stats ADD COLUMN {_col} INTEGER NOT NULL DEFAULT 0"))
+                conn.commit()
+                logger.info(f"  Migration: added team_season_stats.{_col}")
+            except Exception:
+                conn.rollback()
         # Loyalty override for the auto-picker. Defaulted at the column so every
         # existing account reads as opted out rather than NULL.
         try:
@@ -1977,6 +1989,7 @@ def _backfillCoachFanTrust():
         logger.warning(f"  Backfill: coach fan_trust skipped: {e}")
     finally:
         conn.close()
+
 
 
 def _backfillTeamPeakStreaks():
