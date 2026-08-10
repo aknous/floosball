@@ -252,8 +252,8 @@
       "city": "Montreal",
       "name": "Curd",
       "abbr": "MON",
-      "color": "#F0E4B0",
-      "secondaryColor": "#7A4B12",
+      "color": "#A8007E",
+      "secondaryColor": "#FFE066",
       "tertiaryColor": "#6A1B9A"
     },
     {
@@ -262,7 +262,8 @@
       "abbr": "SEO",
       "color": "#E9E3D3",
       "secondaryColor": "#2F6C70",
-      "tertiaryColor": "#B0BEC5"
+      "tertiaryColor": "#B0BEC5",
+      "logoInvert": true
     },
     {
       "city": "Hamburg",

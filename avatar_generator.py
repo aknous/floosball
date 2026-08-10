@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 #   9 Minnesota Pops -> 54 (three-point). The three roundels at 8 were meant to read as
 #   soda bubbles and did not.
 CLUB_PATTERN_OVERRIDES = {
-    9: 54,
+    9: 54,     # Minnesota Pops -> three-point. The roundels at 8 never read as bubbles.
+    27: 55,    # Montreal Curd -> wide annulet, with the new magenta/yellow.
+    28: 56,    # Seoul Trains -> pinwheel. Per pall at 27 was a plain three-way split.
 }
 
 
@@ -863,6 +865,44 @@ class AvatarGenerator:
             content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>
                 <path d="{_d}" stroke="#{c2}" stroke-width="{_armW:.2f}" fill="none"
                       stroke-linecap="butt"/>'''
+
+        elif patternType == 55:
+            # Annulet, WIDE - a bold ring set close to the rim, so the field reads as a
+            # border around it rather than as a background behind it.
+            #
+            # ⚠️ NOT the annulet at 44, which is a smaller ring centred in open field. This
+            # is the same charge at a different scale, and the difference is the whole
+            # point: at 44 the eye reads a ring ON a field; here it reads a band WITHIN a
+            # circle. Kept separate so 44 stays available in its original proportions.
+            _r = half * 0.46
+            content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>
+                <circle cx="{half}" cy="{half}" r="{_r:.1f}" fill="none"
+                        stroke="#{c2}" stroke-width="{size * 0.13:.2f}"/>'''
+
+        elif patternType == 56:
+            # Pinwheel - a triangle at the centre with each side carried on past ONE
+            # vertex only, always the same way round.
+            #
+            # ⚠️ The one-sidedness IS the figure. Extend both ends of every side and you
+            # get a static three-pointed star (which is what the first attempt drew);
+            # extend one and the whole mark turns. Anticlockwise here, which is the
+            # owner's pick - reversing the vertex order is the only difference.
+            import math as _math
+            _R = half * 0.42
+            _far = size * 1.6
+            _V = [(half + _R * _math.cos(_math.radians(-90 + a)),
+                   half + _R * _math.sin(_math.radians(-90 + a))) for a in (0, 120, 240)]
+            _V = _V[::-1]                      # anticlockwise
+            _lines = ''
+            for _i in range(3):
+                _a, _b = _V[_i], _V[(_i + 1) % 3]
+                _dx, _dy = _b[0] - _a[0], _b[1] - _a[1]
+                _L = _math.hypot(_dx, _dy) or 1.0
+                _ux, _uy = _dx / _L, _dy / _L
+                _lines += (f'<line x1="{_a[0]:.1f}" y1="{_a[1]:.1f}" '
+                           f'x2="{_b[0] + _ux * _far:.1f}" y2="{_b[1] + _uy * _far:.1f}" '
+                           f'stroke="#{c2}" stroke-width="{size * 0.09:.2f}"/>')
+            content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>{_lines}'''
 
         else:
             # Unreachable at 32 clubs (patternType is always 0-31 and every value now has a

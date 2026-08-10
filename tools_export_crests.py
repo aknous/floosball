@@ -43,9 +43,13 @@ def main():
     jobs = [('00-floosball-league',
              gen.generateLeagueLogo(args.size, [t['color'] for t in cfg['teams']]))]
     for i, t in enumerate(cfg['teams'], start=1):
+        # ⚠️ logoInvert comes from config, not hardcoded False. A club that flips its
+        # mark (the Trains do) would otherwise export the un-inverted version while the
+        # app showed the inverted one.
         jobs.append((f"{i:02d}-{slug(t)}",
                      gen.generateTeamAvatar(t['name'], t['color'], t['secondaryColor'],
-                                            t['tertiaryColor'], args.size, i, False)))
+                                            t['tertiaryColor'], args.size, i,
+                                            bool(t.get('logoInvert', False)))))
 
     for name, svg in jobs:
         open(f'{STAGING}/{name}.svg', 'w').write(svg)
