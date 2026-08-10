@@ -2,8 +2,8 @@
   "adminPassword": "floosball",
   "botApiKey": "floosball-bot-secret",
   "clerkJwksUrl": "https://capable-dragon-13.clerk.accounts.dev/.well-known/jwks.json",
-  "betaEnabled": true,
-  "accessMode": "request",
+  "betaEnabled": false,
+  "accessMode": "open",
   "betaAllowlist": [
     "andrewknous@gmail.com"
   ],

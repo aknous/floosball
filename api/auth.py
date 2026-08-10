@@ -587,10 +587,19 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
                 # thread just wrote.
                 from sqlalchemy.exc import IntegrityError
                 try:
+                    # ⚠️ A username is GENERATED here, not left null.
+                    #
+                    # It used to be None, and the only thing that ever filled it was the
+                    # onboarding modal's first step. With that modal gone (the closed beta
+                    # is over and the forced flow with it), a null would have followed the
+                    # user forever — every leaderboard row and feed post reading "someone".
+                    #
+                    # They can still choose their own: `POST /api/users/me/username` takes
+                    # a rename once per season, and the first pick does not count as one.
                     user = User(
                         clerk_id=clerkUserId,
                         email=email,
-                        username=None,
+                        username=_generateUsernameCandidate(session),
                         hashed_password="",
                     )
                     session.add(user)
@@ -665,6 +674,28 @@ def getCurrentUser(creds: HTTPAuthorizationCredentials = Depends(_bearerScheme))
                     detail="Floosball is in closed beta. Your email is not on the allowlist.",
                 )
 
+        # ⚠️ HAND BACK A USABLE OBJECT.
+        #
+        # `session.commit()` above EXPIRES every attribute on the instance (SQLAlchemy's
+        # `expire_on_commit` defaults to True), and the `finally` below CLOSES the
+        # session. The User returned was therefore detached AND expired, so the first
+        # `user.id` in any endpoint tried to lazy-load from a dead session and raised
+        # DetachedInstanceError.
+        #
+        # It went unnoticed because the beta gate read `user.email` a few lines up, INSIDE
+        # the still-open session — that access quietly reloaded the expired row and left
+        # the instance populated. Turning the gate off (the closed beta is over) removed
+        # the accidental refresh and the latent bug surfaced immediately, on
+        # GET /api/games/{id}/rally.
+        #
+        # refresh() repopulates, expunge() detaches deliberately with the values intact.
+        try:
+            session.refresh(user)
+            session.expunge(user)
+        except Exception:
+            # A user we cannot refresh is still better returned than not — the endpoints
+            # that only read already-loaded fields will work.
+            pass
         return user
     except HTTPException:
         raise
