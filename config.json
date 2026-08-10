@@ -108,8 +108,8 @@
       "city": "Minnesota",
       "name": "Pops",
       "abbr": "MIN",
-      "color": "#EFE04A",
-      "secondaryColor": "#2E9E3F",
+      "color": "#8E1B2E",
+      "secondaryColor": "#F2D7A0",
       "tertiaryColor": "#6A3494"
     },
     {
@@ -1091,16 +1091,16 @@
   "teamDistribution": {
     "Corduroy League": [
       "Strangers",
-      "Normals",
+      "Rocks",
       "Broads",
       "Monuments",
-      "Melons",
-      "Rocks",
+      "Slippers",
+      "Normals",
       "Beans",
       "Caddies",
       "Pops",
       "Sodas",
-      "Slippers",
+      "Melons",
       "Wafflecones",
       "Dry Heat",
       "Residents",
