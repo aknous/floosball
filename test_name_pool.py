@@ -171,21 +171,46 @@ class NamePoolTests(unittest.TestCase):
         self.conn._collapseLiveGenerationalNames()
         self.assertEqual(self.livePlayerNames(), ['Elvis Amigo', 'Freed Marinara'])
 
-    def testCollapseSkipsWhenTheBaseIsAlreadyOnTheField(self):
+    def testCollapseReassignsWhenTheBaseIsAlreadyOnTheField(self):
         # THE PRODUCTION CASE, three of them: the fork generated both forms of a
-        # lineage into the same league. Renaming would put two identical names on
-        # the field, which is worse than the suffix.
+        # lineage into the same league. Collapsing would put two identical names on
+        # the field, so the junior takes a fresh name from the pool instead.
+        self.seedPool('Elvis Amigo')
         self.addPlayers('Mochi Pushpin', 'Mochi Pushpin Jr.')
         self.conn._collapseLiveGenerationalNames()
-        self.assertEqual(self.livePlayerNames(), ['Mochi Pushpin', 'Mochi Pushpin Jr.'])
+        self.assertEqual(self.livePlayerNames(), ['Elvis Amigo', 'Mochi Pushpin'])
+        # The replacement left the pool with it.
+        self.assertEqual(self.pool(), [])
 
-    def testCollapseSkipsWhenTheBaseIsWornByACoach(self):
+    def testCollapseReassignsWhenTheBaseIsWornByACoach(self):
         from database.models import Coach
         self.session.add(Coach(name='Sarasota Speedrun'))
         self.session.commit()
+        self.seedPool('Elvis Amigo')
         self.addPlayers('Sarasota Speedrun Jr.')
         self.conn._collapseLiveGenerationalNames()
-        self.assertEqual(self.livePlayerNames(), ['Sarasota Speedrun Jr.'])
+        self.assertEqual(self.livePlayerNames(), ['Elvis Amigo'])
+
+    def testReplacementIsNeverItselfAVariant(self):
+        # This runs BEFORE _normalizeNamePool, so the pool can still be holding the
+        # orphaned variants that caused the whole problem. Handing one out would
+        # just move a Junior from one player to another.
+        self.seedPool('Bob Vance Jr.', 'Elvis Amigo')
+        self.addPlayers('Mochi Pushpin', 'Mochi Pushpin Jr.')
+        self.conn._collapseLiveGenerationalNames()
+        self.assertEqual(self.livePlayerNames(), ['Elvis Amigo', 'Mochi Pushpin'])
+
+    def testReplacementIsNeverAlreadyOnTheField(self):
+        self.seedPool('Mochi Pushpin', 'Elvis Amigo')
+        self.addPlayers('Mochi Pushpin', 'Mochi Pushpin Jr.')
+        self.conn._collapseLiveGenerationalNames()
+        self.assertEqual(self.livePlayerNames(), ['Elvis Amigo', 'Mochi Pushpin'])
+
+    def testCollapseLeavesTheNameWhenThePoolCannotHelp(self):
+        # An empty pool must not blank a player's name.
+        self.addPlayers('Mochi Pushpin', 'Mochi Pushpin Jr.')
+        self.conn._collapseLiveGenerationalNames()
+        self.assertEqual(self.livePlayerNames(), ['Mochi Pushpin', 'Mochi Pushpin Jr.'])
 
     def testCollapseAlsoRenamesCoaches(self):
         from database.models import Coach
@@ -224,11 +249,12 @@ class NamePoolTests(unittest.TestCase):
         finally:
             s.close()
 
-    def testCollapseTwoJuniorsOfTheSameLineageKeepsOne(self):
-        # Only one can take the base; the second would collide with the first.
+    def testCollapseTwoJuniorsOfTheSameLineageSplitsThem(self):
+        # Only one can take the base; the second collides with it and is reassigned.
+        self.seedPool('Elvis Amigo')
         self.addPlayers('Bob Vance Jr.', 'Bob Vance III')
         self.conn._collapseLiveGenerationalNames()
-        self.assertEqual(self.livePlayerNames(), ['Bob Vance', 'Bob Vance III'])
+        self.assertEqual(self.livePlayerNames(), ['Bob Vance', 'Elvis Amigo'])
 
     # -- _seedUnusedNames --------------------------------------------------
 

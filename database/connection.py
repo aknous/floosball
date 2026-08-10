@@ -3321,11 +3321,15 @@ def _collapseLiveGenerationalNames():
     out of its season-1 wipe with ten players and a coach carrying a "Jr." whose
     father had never played a down in that league.
 
-    ⚠️ A NAME IS SKIPPED WHEN THE BASE IS ALREADY WORN by another live player or
-    coach. That is not a rare edge — it is the fork's own signature, both forms of
-    a lineage generated into the same league, and production has three. Renaming
-    there would put two identical names on the field, which is worse than the
-    suffix. Left alone, the pair at least reads as a father and a son.
+    ⚠️ WHEN THE BASE IS ALREADY WORN by another live player or coach, the junior
+    gets a FRESH NAME FROM THE POOL instead. That collision is not a rare edge — it
+    is the fork's own signature, both forms of a lineage generated into the same
+    league, and production has three. Collapsing there would put two identical
+    names on the field, so the junior is reassigned (owner, 2026-08-10: the league
+    is new, so no history is attached to the name being replaced). The replacement
+    must be BASE-FORM and an unused lineage: this runs before `_normalizeNamePool`,
+    so the pool can still be holding the orphaned variants that caused all this.
+    If the pool cannot supply one, the name is left alone rather than blanked.
 
     ⚠️ MUST RUN BEFORE PLAYERS LOAD. `savePlayerData` writes `db_player.name` from
     the in-memory Player on every week and season boundary, so a rename applied to
@@ -3343,14 +3347,35 @@ def _collapseLiveGenerationalNames():
         coaches = session.query(Coach).all()
         live = {p.name for p in players if p.name} | {c.name for c in coaches if c.name}
 
-        renamed, skipped = [], []
+        def drawReplacement():
+            """First pooled name that is base-form and whose lineage is free."""
+            for candidate in session.query(UnusedName).order_by(UnusedName.id).all():
+                pooled = candidate.name or ''
+                if not pooled or _NAME_SUFFIX_RE.search(pooled):
+                    continue
+                if pooled in live:
+                    continue
+                session.delete(candidate)
+                return pooled
+            return None
+
+        renamed, reassigned, skipped = [], [], []
         for row in list(players) + list(coaches):
             name = row.name or ''
             if not _NAME_SUFFIX_RE.search(name):
                 continue
             lineage = baseName(name)
-            if not lineage or lineage in live:
-                skipped.append(name)
+            if not lineage:
+                continue
+            if lineage in live:
+                replacement = drawReplacement()
+                if replacement is None:
+                    skipped.append(name)
+                    continue
+                reassigned.append((name, replacement))
+                live.discard(name)
+                live.add(replacement)
+                row.name = replacement
                 continue
             renamed.append((name, lineage))
             live.discard(name)
@@ -3362,16 +3387,22 @@ def _collapseLiveGenerationalNames():
             for dupe in session.query(UnusedName).filter(UnusedName.name == lineage).all():
                 session.delete(dupe)
 
-        session.add(AppSetting(key=_COLLAPSE_MARKER, value=str(len(renamed))))
+        session.add(AppSetting(key=_COLLAPSE_MARKER,
+                               value=str(len(renamed) + len(reassigned))))
         session.commit()
         if renamed:
             logger.info(f"Collapsed {len(renamed)} generational name(s) on live players/coaches:")
             for was, now in sorted(renamed):
                 logger.info(f"    {was} -> {now}")
-        if skipped:
+        if reassigned:
             logger.info(
-                f"Left {len(skipped)} generational name(s) alone — the base is already "
-                f"worn by a live player or coach: {', '.join(sorted(skipped))}"
+                f"Reassigned {len(reassigned)} name(s) whose base was already on the field:")
+            for was, now in sorted(reassigned):
+                logger.info(f"    {was} -> {now}")
+        if skipped:
+            logger.warning(
+                f"Left {len(skipped)} generational name(s) alone — the base was taken and "
+                f"the pool had no replacement: {', '.join(sorted(skipped))}"
             )
     except Exception as exc:
         session.rollback()
