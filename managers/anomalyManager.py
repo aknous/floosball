@@ -1139,6 +1139,28 @@ def _updateLeagueAggregate(session: Session, seasonNumber: int, week: int) -> No
         )
         session.add(state)
         logger.info(f"Seeded LeagueAnomalyState season={seasonNumber} threshold={threshold} (hidden)")
+    elif _ANOMALY_FAST and (state.threshold or 0) >= THRESHOLD_PROVISIONAL:
+        # ⚠️ FAST mode adopts a season that started WITHOUT the flag.
+        #
+        # The threshold is the one FAST constant that is PERSISTED, and it is written
+        # exactly once, at the first tick of a season. Every other fast constant is read
+        # live off the module, so switching the flag on mid-season used to boost the
+        # contributions, the decay and the ladder — visibly, attention piles up — while
+        # leaving the bar at the unreachable sentinel a non-fast boot had stamped. The
+        # meter then sits at 0% forever no matter how high the aggregate climbs, which
+        # reads as "the flag does nothing" (observed: aggregate 4307 against a threshold
+        # of 1,000,000,000 at week 13).
+        #
+        # `_maybeSeedAdaptiveThreshold` cannot rescue it either — it no-ops in FAST, by
+        # design, because FAST is supposed to have taken the random band instead.
+        #
+        # Only the sentinel is replaced. A bar already locked to a real number is left
+        # alone, so this cannot re-roll a threshold mid-season and move the goalposts.
+        state.threshold = _seedThreshold(session)
+        logger.info(
+            f"FAST mode: replaced provisional threshold with {state.threshold} "
+            f"for season {seasonNumber} (flag enabled after the season began)"
+        )
 
     # Sum over-cap carry across all players (shared with the status read).
     overCapSum = _sumOverCapCarry(session, seasonNumber)
