@@ -89,10 +89,49 @@ class HonorRollTests(unittest.TestCase):
         beyond = _computeHonorRoll(cfg['primary'], Ctx(thr * 5), 7, 1).multBonus
         self.assertEqual(beyond, full)
 
+    def testClearingTheBarPaysTheBaseRatherThanNothing(self):
+        """The last dead point. At EXACTLY the bar the ramp used to pay +0.00."""
+        for edition in EDITIONS:
+            cfg = cfgFor(edition, QB)
+            thr = cfg['primary']['fpThreshold']
+            result = _computeHonorRoll(cfg['primary'], Ctx(thr), 7, 1)
+            self.assertGreater(result.multBonus or 0, 1.0, edition)
+            self.assertAlmostEqual(result.multBonus, cfg['primary']['baseMult'], places=2)
+
+    def testTheBaseIsBelowTheMaximum(self):
+        # Otherwise "and grows if they score more" would be a lie.
+        for edition in EDITIONS:
+            p = cfgFor(edition, QB)['primary']
+            self.assertLess(p['baseMult'], p['maxMult'], edition)
+
+    def testAnOldCardWithNoBaseStillScores(self):
+        # Cards minted before baseMult existed must not crash or pay a negative.
+        cfg = cfgFor('metallic', QB)
+        legacy = dict(cfg['primary'])
+        legacy.pop('baseMult', None)
+        thr = legacy['fpThreshold']
+        result = _computeHonorRoll(legacy, Ctx(thr * 2), 7, 1)
+        self.assertAlmostEqual(result.multBonus, legacy['maxMult'], places=2)
+
+    def testTheAdvertisedThresholdIsTheOneItScoresAgainst(self):
+        """The detail is formatted from the params, so a late sync would desync them."""
+        import re
+        for edition in EDITIONS:
+            for position in (QB, K):
+                cfg = cfgFor(edition, position)
+                shown = re.search(r'reaches (\d+) FP', cfg['detail'])
+                self.assertIsNotNone(shown, cfg['detail'])
+                self.assertEqual(int(shown.group(1)), cfg['primary']['fpThreshold'])
+
     def testTheTextTellsTheReaderItGrows(self):
         from managers.cardEffects import EFFECT_DETAIL_TEMPLATES, EFFECT_TOOLTIPS
         for text in (EFFECT_DETAIL_TEMPLATES['honor_roll'], EFFECT_TOOLTIPS['honor_roll']):
             self.assertRegex(text, r'grow', f'ramp not described: {text}')
+
+    def testNoEmDashInTheCardText(self):
+        from managers.cardEffects import EFFECT_DETAIL_TEMPLATES, EFFECT_TOOLTIPS
+        for text in (EFFECT_DETAIL_TEMPLATES['honor_roll'], EFFECT_TOOLTIPS['honor_roll']):
+            self.assertNotIn('\u2014', text, f'em-dash in copy: {text}')
 
 
 if __name__ == '__main__':

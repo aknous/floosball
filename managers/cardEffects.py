@@ -1054,7 +1054,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "entourage": "+{perPlayerFP} FP for every roster player with {minStars}★+",
     "touchdown_pinata": "+{perTdFP} FP for every TD your roster scores",
     "scrappy": "+{baseFP} FP guaranteed, chance at {enhancedFP} FP. Trigger odds fill from this player's FP plus each {maxStars}★-or-lower roster player.",
-    "honor_roll": "+FPx once this player reaches {fpThreshold} FP, growing with every point past it. The full +{maxDelta} FPx lands at double that.",
+    "honor_roll": "+{baseDelta} FPx once this player reaches {fpThreshold} FP, and grows if they score more, up to +{maxDelta} FPx.",
     "three_pointer": "+{perFgFP} FP for every FG this player makes",
     "garbage_time": "+{perPlayerFP} FP for every roster player with 0 TDs",
     "loyalty_bonus": "+{perStreakFP} FP per win in your favorite team's win streak",
@@ -1848,12 +1848,20 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         # the detail template and _computeHedge.
         return {"floorSoloFP": round(11 + rn * 0.14, 1)}
     if effectName == "honor_roll":
-        # FPx when THIS player clears the bar, ramping from the threshold to twice it.
+        # FPx when THIS player clears the bar, growing from there to double it.
+        #
+        # ⚠️ `baseMult` IS THE PAYOUT AT THE BAR, and it exists because the ramp used to
+        # start at zero: a card could read ACTIVE, with a full green bar, and pay
+        # +0.00 FPx at the exact point it switched on. Clearing the bar now earns
+        # HONOR_ROLL_BASE_SHARE of the maximum, and beating it earns the rest.
+        #
         # `perPlayerMult` was dropped with the rebase: it paid per qualifying ROSTER
-        # player and _computeHonorRoll has not read it since. Cards minted before this
-        # keep the dead key, which is harmless — the detail never referenced it.
+        # player and _computeHonorRoll has not read it since. Cards minted before that
+        # keep the dead key, which is harmless since no detail template referenced it.
+        _maxDelta = (0.42 + rn * 0.014) * editionScale * _BAL_FPX_MULT
         return {"rewardType": "mult",
-                "maxMult": round(1 + (0.42 + rn * 0.014) * editionScale * _BAL_FPX_MULT, 2),
+                "baseMult": round(1 + _maxDelta * HONOR_ROLL_BASE_SHARE, 2),
+                "maxMult": round(1 + _maxDelta, 2),
                 "fpThreshold": 15}
     if effectName == "three_pointer":
         # Measured 39.0 FP/week, second highest at metallic, off only 1.98 FGs a game.
@@ -2730,6 +2738,19 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     # StreakConfig: check by effect name (not gated on category)
     streakConfig = STREAK_CONFIGS.get(effectName)
 
+    # ⚠️ HONOR ROLL'S RAMP STARTS WHERE ITS BAR FILLS (owner, 2026-08-10), and this has
+    # to happen BEFORE the detail is formatted or the card advertises one threshold and
+    # scores against another. It used a hardcoded fpThreshold of 15 while the bar
+    # unlocked at the gate's own position- and edition-scaled figure, 9 FP for a
+    # metallic QB, so the card sat full and green reading ACTIVE while paying +0.00 FPx
+    # across a six-point dead band. Syncing them also makes the figure scale by position
+    # and rarity like every other bar, rather than asking a kicker and a quarterback for
+    # the same 15 FP.
+    if effectName == "honor_roll":
+        _hrGate = buildGateSpec(effectName, position, classification, edition)
+        if _hrGate and _hrGate.get("threshold"):
+            primary["fpThreshold"] = _hrGate["threshold"]
+
     tagline = EFFECT_TAGLINES.get(effectName, "")
     tooltip = EFFECT_TOOLTIPS.get(effectName, "")
 
@@ -2811,16 +2832,6 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
     gate = buildGateSpec(effectName, position, classification, edition)
     if gate:
         config["gate"] = gate
-        # ⚠️ HONOR ROLL'S RAMP STARTS WHERE ITS BAR FILLS (owner, 2026-08-10). It used
-        # a hardcoded fpThreshold of 15 while the bar unlocked at the gate's own
-        # position- and edition-scaled figure — 9 FP for a metallic QB. So the card sat
-        # there full, green and reading as ACTIVE while paying +0.00 FPx across a
-        # six-point dead band, which is the same "it says it is on and it is not"
-        # contradiction the power bar exists to avoid. Syncing them also makes the
-        # threshold scale by position and rarity like every other bar, instead of
-        # asking a kicker and a quarterback for the same 15 FP.
-        if effectName == "honor_roll" and gate.get("threshold"):
-            config["primary"]["fpThreshold"] = gate["threshold"]
         # Surface the gate as its OWN field (frontend renders it on its own line, a
         # distinct requirement from the effect detail). Not appended to the detail
         # string. Fall back to it as the detail only if there's no effect detail.
@@ -3070,14 +3081,16 @@ def _computeHonorRoll(primary, ctx, cardPlayerId, eqId):
     """
     threshold = primary.get("fpThreshold", 15)
     maxMult = primary.get("maxMult", 1.30)
+    # Older cards were minted without a base and started their ramp at zero.
+    baseMult = primary.get("baseMult") or 1.0
     playerFP = (ctx.weekPlayerStats or {}).get(cardPlayerId, {}).get("fantasyPoints", 0) or 0
     if playerFP < threshold:
-        return EffectResult(equation=f"{round(playerFP, 1)} FP — needs {threshold}+ this week")
-    # From the threshold up to 2x it, ramp 0 -> full bonus; capped at maxMult.
+        return EffectResult(equation=f"{round(playerFP, 1)} FP, needs {threshold}+ this week")
+    # Clearing the bar pays the base; beating it ramps to the max at double the bar.
     over = min(1.0, (playerFP - threshold) / max(threshold, 1))
-    mult = round(1.0 + (maxMult - 1.0) * over, 2)
+    mult = round(baseMult + (maxMult - baseMult) * over, 2)
     delta = round(mult - 1.0, 2)
-    eq = f"+{delta} FPx — {round(playerFP, 1)} FP (past the {threshold} bar)"
+    eq = f"+{delta} FPx from {round(playerFP, 1)} FP (bar is {threshold})"
     return EffectResult(multBonus=mult, equation=eq)
 
 
@@ -6195,6 +6208,12 @@ _CHANCE_EFFECTS = _CHANCE_FP_EFFECTS | _CHANCE_CONDITION_ONLY_EFFECTS
 # dormant for possible future use. (The old "underdog"-flavored losers — underdog, martyr,
 # rock_bottom, indemnity — were retired in the fusion chance rework, 2026-07-26.)
 _INVERSE_GATE_EFFECTS = frozenset()
+
+
+# What Honor Roll pays the moment its bar fills, as a share of its maximum. The rest is
+# earned by beating the bar, up to double it. Above zero on purpose: a card that reads
+# ACTIVE has to be worth something, or the bar is lying about what it means.
+HONOR_ROLL_BASE_SHARE = 0.35
 
 
 def buildGateSpec(effectName: str, position: int, classification: str = None,
