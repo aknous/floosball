@@ -3329,8 +3329,14 @@ class SeasonManager:
         self.currentSeason.schedule.clear()
         dateTimeNow = datetime.datetime.utcnow()
 
-        # Calculate number of weeks (original formula)
-        numOfWeeks = int(((len(self.leagueManager.leagues[0].teamList) - 1) * 2) + (len(self.leagueManager.leagues[0].teamList) / 2))
+        # ⚠️ The schedule's OWN length, not a formula. This was
+        #     ((teamsPerLeague - 1) * 2) + teamsPerLeague / 2
+        # which is the length of the pre-divisional double round-robin plus interleague
+        # — 38 for two leagues of 16. The divisional generator returns 28, so the loop
+        # below iterated ten weeks past the end of its own input and the log announced a
+        # "38-week schedule" for a 28-week season. Anything reading that number, or the
+        # range it drives, was working from the wrong length of season.
+        numOfWeeks = len(schedule)
         
         # Convert generated schedule to our current season format
         for week in range(numOfWeeks):
