@@ -8391,6 +8391,21 @@ class Game:
                         _wtName = getattr(_wt, 'abbr', None) or getattr(_wt, 'name', 'The winner')
                         _hi, _lo = max(self.homeScore, self.awayScore), min(self.homeScore, self.awayScore)
                         _tiebreakNote = f"{_wtName} win on points {_cleanNum(_hi)}-{_cleanNum(_lo)}"
+                elif getattr(_fmt, 'key', '') == 'chess_clock':
+                    # ⚠️ The "ran out of time" line existed only as a `gameFeed` entry,
+                    # which the REST feed serves and the socket never carries — so a
+                    # reader watching live saw the whistle with no reason for it, and a
+                    # chess game can end mid-quarter with the clock reading well above
+                    # 0:00. It is the same kind of fact as the frames points tiebreak,
+                    # so it travels the same way rather than growing a second channel.
+                    try:
+                        if (self.losingTeam is not None
+                                and _fmt._lockedOut(self, self.losingTeam)):
+                            _lt = (getattr(self.losingTeam, 'abbr', None)
+                                   or getattr(self.losingTeam, 'name', 'The loser'))
+                            _tiebreakNote = f"{_lt} ran out of time"
+                    except Exception:
+                        pass
 
             # Broadcast game end with stats
             event = GameEvent.gameEnd(
