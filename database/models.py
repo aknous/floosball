@@ -1168,6 +1168,14 @@ class User(Base):
     # Auto-pick mode for pick-em: "off" | "favorites" | "underdogs" | "random".
     # Replaces the old boolean auto_pick_favorites. Default "off" = user opts in manually.
     auto_pick_mode: Mapped[str] = mapped_column(String(20), default="off", nullable=False)
+    # ⚠️ Loyalty override on the AUTO-PICKER only — it never touches a pick the user
+    # made themselves. Requested by users who run auto-pick and do not want a machine
+    # calling against their own club on their behalf: backing your team is the whole
+    # reason you have one, and losing points for it is a price they would rather pay.
+    # Off by default, because it costs points on average and nobody should be opted in
+    # to that silently.
+    auto_pick_never_against_favorite: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False)
     # Vacancy fallback preference: prospect | fa | best_available (default)
     vacancy_auto_pick: Mapped[str] = mapped_column(String(20), default="best_available", nullable=False)
     team_funding_pct: Mapped[int] = mapped_column(Integer, default=25)

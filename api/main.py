@@ -8027,6 +8027,7 @@ def get_current_user_profile(user: _User = Depends(_getCurrentUser)):
             "emailSeasonReport": user.email_season_report,
             "teamFundingPct": 25 if getattr(user, 'team_funding_pct', 25) is None else user.team_funding_pct,
             "autoPickMode": getattr(user, 'auto_pick_mode', 'off') or 'off',
+            "autoPickNeverAgainstFavorite": bool(getattr(user, 'auto_pick_never_against_favorite', False)),
             "isAdmin": getattr(user, 'is_admin', False),
             "followedPlayerIds": followedPlayerIds,
         }
@@ -8210,6 +8211,8 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
             if mode not in ("off", "favorites", "underdogs", "random"):
                 raise HTTPException(status_code=400, detail=f"Invalid autoPickMode: {mode}")
             dbUser.auto_pick_mode = mode
+        if "autoPickNeverAgainstFavorite" in payload:
+            dbUser.auto_pick_never_against_favorite = bool(payload["autoPickNeverAgainstFavorite"])
         session.commit()
         return {
             "ok": True,
@@ -8218,6 +8221,7 @@ def update_user_preferences(payload: Dict[str, Any], user: _User = Depends(_getC
             "emailSeasonReport": dbUser.email_season_report,
             "teamFundingPct": dbUser.team_funding_pct,
             "autoPickMode": dbUser.auto_pick_mode,
+            "autoPickNeverAgainstFavorite": dbUser.auto_pick_never_against_favorite,
         }
     except Exception as e:
         session.rollback()

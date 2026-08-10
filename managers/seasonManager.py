@@ -10580,6 +10580,10 @@ class SeasonManager:
         - "favorites": pick higher-ELO team (home breaks ties)
         - "underdogs": pick lower-ELO team (away breaks ties)
         - "random":    coin flip per game
+
+        `users.auto_pick_never_against_favorite` then overrides ANY of those on a game
+        involving the user's own club, so the auto-picker never calls against them.
+
         Uses 1.0x timing (pre-game) and ELO-based underdog multiplier."""
         import random as _random
         from datetime import datetime as _dt, timedelta as _td
@@ -10609,6 +10613,9 @@ class SeasonManager:
                 totalAutoPicks = 0
                 for user in autoUsers:
                     mode = user.auto_pick_mode or "off"
+                    favouriteId = (getattr(user, 'favorite_team_id', None)
+                                   if getattr(user, 'auto_pick_never_against_favorite', False)
+                                   else None)
                     existingPicks = pickemRepo.getUserPicks(user.id, seasonNum, week)
                     pickedIndices = {p.game_index for p in existingPicks}
                     for i, game in enumerate(games):
@@ -10629,6 +10636,19 @@ class SeasonManager:
                             pickedId = _random.choice((homeTeam.id, awayTeam.id))
                         else:
                             continue
+
+                        # ⚠️ Loyalty override. A user who runs auto-pick can ask never to
+                        # have a machine call against their own club on their behalf —
+                        # backing your team is the reason you have one, and the points it
+                        # costs are a price they would rather pay than see the pick.
+                        #
+                        # Applied AFTER the mode has chosen, so it overrides every mode
+                        # including "underdogs" and "random", and only ever flips the pick
+                        # TO the favourite club — it never picks against anyone else's.
+                        # Opt-in, because on average it loses points.
+                        if favouriteId and pickedId != favouriteId:
+                            if favouriteId in (homeTeam.id, awayTeam.id):
+                                pickedId = favouriteId
 
                         pickedIsHome = (pickedId == homeTeam.id)
                         underdogMult = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)

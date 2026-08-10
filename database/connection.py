@@ -1542,6 +1542,16 @@ def _runPendingMigrations():
             logger.info("  Migration: added achievements.retired")
         except Exception:
             conn.rollback()
+        # Loyalty override for the auto-picker. Defaulted at the column so every
+        # existing account reads as opted out rather than NULL.
+        try:
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN auto_pick_never_against_favorite "
+                "BOOLEAN NOT NULL DEFAULT 0"))
+            conn.commit()
+            logger.info("  Migration: added users.auto_pick_never_against_favorite")
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
