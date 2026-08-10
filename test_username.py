@@ -102,6 +102,36 @@ class UsernameTests(unittest.TestCase):
         for _ in range(30):
             self.assertEqual(len(self.auth.generateUsernameCandidates(self.session, count=4)), 4)
 
+    # -- leading character -------------------------------------------------
+
+    def testANameMayStartWithAnUnderscoreOrADigit(self):
+        for name in ('_floosfan', '99Problems', '_99', 'x_9'):
+            chosen, err = self.auth.validateUsername(name)
+            self.assertIsNone(err, f'{name}: {err}')
+
+    def testTheCharacterSetItselfDidNotWiden(self):
+        # Only the LEADING rule opened up. Punctuation is still out, which is what
+        # keeps lookalikes from being buildable out of dots and dashes.
+        for name in ('floos-fan', '.floos', 'floos fan', 'floos!'):
+            chosen, err = self.auth.validateUsername(name)
+            self.assertIsNotNone(err, name)
+
+    def testReservedNamesSurviveALeadingUnderscore(self):
+        """Allowing a leading underscore re-opens the route the list exists to close.
+
+        "_admin" and "_cassian_" clear a plain membership test while reading in a feed
+        as exactly the name they imitate, so separators are stripped before the check.
+        """
+        for name in ('_admin', 'admin_', '_cassian_', '__vera__', 'admin1', '_mod_'):
+            chosen, err = self.auth.validateUsername(name)
+            self.assertEqual(err, 'That name is reserved', f'{name}: {err}')
+
+    def testStrippingDoesNotOverReach(self):
+        # A real name that merely CONTAINS a reserved word is not reserved.
+        for name in ('_administrator_of_nothing', 'Veranda', 'Coreymatic'):
+            chosen, err = self.auth.validateUsername(name)
+            self.assertNotEqual(err, 'That name is reserved', name)
+
     # -- grandfathering ----------------------------------------------------
 
     def testAnAlreadyIssuedLongNameStaysValid(self):

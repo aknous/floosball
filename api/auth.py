@@ -152,7 +152,17 @@ _USERNAME_LASTS = [
 
 USERNAME_MIN_LEN = 3
 USERNAME_MAX_LEN = 20
-_USERNAME_RE = _re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+# ⚠️ A name may START with a digit or an underscore (owner, 2026-08-10). The rule used
+# to demand a leading LETTER, which refused "_floosfan" and "99Problems" for no reason a
+# reader could see. The character SET is unchanged — letters, digits and underscore — so
+# nothing new arrives that could be used to build a lookalike out of punctuation.
+_USERNAME_RE = _re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_]*$")
+
+# Underscores and digits are stripped before the reserved-name check. Allowing them to
+# lead re-opens the very impersonation route that list exists to close: "_admin",
+# "admin_" and "_cassian_" all clear a plain membership test while reading in a feed as
+# exactly the name they are imitating.
+_RESERVED_STRIP_RE = _re.compile(r"[_0-9]+")
 
 # Names nobody may take. Impersonation is the point: a user called "Cassian" posting in a
 # feed that also carries real Cores lines is indistinguishable from the Core itself, and
@@ -306,9 +316,9 @@ def validateUsername(name: str) -> tuple:
     if len(name) > USERNAME_MAX_LEN and not isGeneratedUsername(name):
         return None, f"Username must be {USERNAME_MAX_LEN} characters or fewer"
     if not _USERNAME_RE.match(name):
-        return None, "Use letters, numbers and underscores, starting with a letter"
+        return None, "Use letters, numbers and underscores"
     lowered = name.lower()
-    if lowered in USERNAME_RESERVED:
+    if lowered in USERNAME_RESERVED or _RESERVED_STRIP_RE.sub("", lowered) in USERNAME_RESERVED:
         return None, "That name is reserved"
     if containsProfanity(name):
         return None, "That name is not available"
