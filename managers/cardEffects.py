@@ -864,13 +864,13 @@ EFFECT_TOOLTIPS = {
     "entourage": "Seeing stars. Bonus FP for each high-rated player on your roster.",
     "touchdown_pinata": "Every house call fills the piñata. Bonus FP per roster TD.",
     "scrappy": "Somebody has to believe in them. Guaranteed FP floor plus a chance at enhanced FP. The trigger bar fills from this player's own FP and from each low-rated player on your roster.",
-    "honor_roll": "Make the grade. FPx per roster player putting up 15+ FP this week.",
+    "honor_roll": "Make the grade. FPx when this player clears the bar, growing the further past it they go.",
     "three_pointer": "Three points for them, bonus for you. FP for every kicker FG.",
     "garbage_time": "Hey, they showed up. Bonus FP for each roster player who doesn't score a TD.",
     "loyalty_bonus": "Bandwagoning encouraged. Bonus FP based on your favorite team's win streak.",
     "windfall": "When your players ball out, you get paid. Floobits per overperforming roster player.",
     "rng": "Feeling lucky? Random FP rolled each week.",
-    "snake_eyes": "Bad is good. The lower your lowest-scoring roster player's FP this week, the bigger the FPx on your total.",
+    "snake_eyes": "Bad is good. The worse this player's week, the bigger the FPx on your total.",
     "avalanche": "Momentum builds with every score. Each roster TD pays more FP than the last.",
     "hedge": "Insurance policy. Tops this player up to an FP floor on a quiet week.",
     "complacency": "Put the phone down. FP that grows each week you don't touch your roster. Stacking streak cards accelerates growth.",
@@ -945,7 +945,7 @@ EFFECT_TOOLTIPS = {
     # ── Game-Outcome Effects ──
     "comeback_kid": "Find the rising teams. FP per roster player whose team missed playoffs last season. Bonus floobits if your favorite team pulls off a comeback win.",
     "domination": "Ride with the leaders. FP per roster player whose team is currently top-6 in their league. Bonus floobits if your favorite team wins by 21+.",
-    "walk_off": "Built for the late game. FP per Q4 or OT TD or field goal scored by a roster player. Bonus floobits if your favorite team wins on a walk-off.",
+    "walk_off": "Built for the late game. FP per Q4 or OT TD or field goal scored by this player. Bonus floobits if your favorite team wins on a walk-off.",
     # ── Card-to-Card Interaction Effects ──
     "full_roster": "Cover all your bases. Big FPx, but only in a week where every performing card in your lineup clears its FP power bar. One cold player and it pays nothing.",
     "all_in": "Adds FPx for each fantasy point this player scores past a high FP line, up to a cap. No bonus below the line.",
@@ -969,16 +969,16 @@ EFFECT_TOOLTIPS = {
     "traverse": "High stakes yardage gamble. FP floor plus a jackpot chance based on yardage by this player.",
     # ── Chance Synergy Effects ──
     "advantage": "Loaded dice. Every chance card in your hand rolls twice, keeping the better result.",
-    "catalyst": "Compound interest. Roster FP boosts odds on all your chance cards. Also pays Floobits.",
+    "catalyst": "Compound interest. This player's FP boosts the odds on all your chance cards. Also pays Floobits.",
     # ── Strategy-Warping Effects ──
-    "alchemy": "Transmutation complete. Each FG by this player counts as a TD for fantasy scoring and other card effects.",
+    "alchemy": "Transmutation complete. Every field goal your kicker makes counts as a TD for fantasy scoring and other card effects.",
     "home_alone": "Embrace the void. FPx that grows with each empty roster slot.",
     "closer": "Always be closing. Bonus FP from this player's Q4 and OT production.",
     "dark_horse": "The stars shine brightest from below. FPx that scales inversely with the star rating of your roster's {posLabel}.",
     "vagabond": "Never settle. FPx that grows with each roster swap you've made this season.",
     "fat_cat": "Money talks. FP that scales with your Floobits balance. Excludes current week earnings.",
     "surplus": "A reliable kickback. Adds a flat Floobits bonus to your weekly earnings while equipped.",
-    "bonsai": "Grown, not gifted. Roster performance earns permanent FP growth each week. Higher levels demand bigger weeks. Resets if unequipped.",
+    "bonsai": "Grown, not gifted. This player's own performance earns permanent FP growth each week. Higher levels demand bigger weeks. Resets if unequipped.",
     # ── New cards (FP/FPx rebalance) ──
     "anthem": "Power in numbers. Flat FP that fires when your hand is heavy on flat-FP cards. 3 or more pays a bonus, 4 raises it, 5 maxes it out.",
     "conductor": "Orchestrates the rest of your hand. Every other flat-FP card you have equipped outputs more. Produces nothing on its own.",
@@ -1162,7 +1162,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "advantage": "All chance cards roll {rollCount}x for their bonus, keeping the best result",
     "catalyst": "+1% chance boost per {fpPer1PctSolo} of this player's FP above {baselineSolo}. Max +{maxBoostDisplay}%. Also pays {baseFloobits} Floobits",
     # ── Strategy-Warping Effects ──
-    "alchemy": "+{perFgBonusFP} bonus FP per FG by this player. FGs also count as roster TDs for other cards in your hand.",
+    "alchemy": "+{perFgBonusFP} bonus FP per FG by your kicker. Those FGs also count as TDs for other cards in your hand.",
     "home_alone": "+{perSlotMult} FPx per empty roster slot",
     "closer": "This player's Q4/OT fantasy points are multiplied by {q4MultFactor}x",
     "dark_horse": "+{perStarMult} FPx per star under 5 of your rostered {posLabel}",
@@ -1848,9 +1848,11 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
         # the detail template and _computeHedge.
         return {"floorSoloFP": round(11 + rn * 0.14, 1)}
     if effectName == "honor_roll":
-        # FPx delta per roster player with 15+ FP this week.
+        # FPx when THIS player clears the bar, ramping from the threshold to twice it.
+        # `perPlayerMult` was dropped with the rebase: it paid per qualifying ROSTER
+        # player and _computeHonorRoll has not read it since. Cards minted before this
+        # keep the dead key, which is harmless — the detail never referenced it.
         return {"rewardType": "mult",
-                "perPlayerMult": round((0.084 + rn * 0.0042) * editionScale * _BAL_FPX_MULT, 2),
                 "maxMult": round(1 + (0.42 + rn * 0.014) * editionScale * _BAL_FPX_MULT, 2),
                 "fpThreshold": 15}
     if effectName == "three_pointer":
@@ -2929,8 +2931,8 @@ def _computeRng(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeSnakeEyes(primary, ctx, cardPlayerId, eqId):
-    """Weekly FPx that inversely scales with your lowest-scoring roster player's FP.
-    Lower lowest = higher multiplier. Snake eyes (0 FP) pays out the most."""
+    """Weekly FPx that inversely scales with THIS player's FP (re-based off the roster).
+    The worse their week, the higher the multiplier. Snake eyes (0 FP) pays out the most."""
     if not ctx.weekPlayerStats or getattr(ctx, 'gamesActive', False):
         return EffectResult(equation="Waiting for games to complete")
     tiers = primary.get("tiers", [(0, 3.0), (4, 2.5), (9, 2.0), (14, 1.5), (19, 1.2)])
@@ -4564,7 +4566,7 @@ def _computeAdvantage(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeCatalyst(primary, ctx, cardPlayerId, eqId):
-    """Dynamic chance boost from roster FP + small floobits base.
+    """Dynamic chance boost from THIS player's FP (re-based off the roster) + small floobits base.
 
     Boost = (rosterFP - baseline) / fpPer1Pct / 100, capped at maxBoost.
     Also pays a flat floobits dividend.
@@ -5027,7 +5029,7 @@ def _computeDomination(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeWalkOff(primary, ctx, cardPlayerId, eqId):
-    """FP per Q4/OT scoring play (TD or FG) by a roster player. Counts each
+    """FP per Q4/OT scoring play (TD or FG) by THIS player (re-based off the roster). Counts each
     scoring event individually — two Q4 TDs from one rostered player = 2.
     A Q4 TD pass between two rostered players (QB and WR) = 2. Floobits
     bonus on actual fav-team walk-off win.
@@ -5075,6 +5077,15 @@ def _computeAlchemy(primary, ctx, cardPlayerId, eqId):
     plus a bonus FP per FG. The rosterTotalTds bump happens in the
     calculator's pre-pass — see calculateWeekCardBonuses — so this
     function only needs to compute its own FP payout.
+
+    ⚠️ STILL ROSTER-SCOPED: it sums every FG by a KICKER on the roster, not by the
+    depicted player, so the on-card rebase never reached it. Both texts used to say
+    "by this player" and now say "your kicker", which is what the code does. In
+    practice the two almost always coincide — alchemy is K-exclusive and a roster has
+    one K slot — and they part only when a FLEX slot holds a second kicker. Rebasing
+    the maths onto `cardPlayerId` is a scoring change rather than a wording one, and
+    is moot while the effect is unmintable (diamond needs a 90 rating and no K has
+    ever passed 88 — see CLAUDE.md).
     """
     if not ctx.gamesActive and not ctx.teamResults:
         return EffectResult(equation="Waiting for games")
@@ -5230,7 +5241,7 @@ def cultivationGrowthChance(primary, triggerCount, growthLevel, chanceBonus=0.0)
 def _computeCultivation(primary, ctx, cardPlayerId, eqId):
     """Performance-driven growth — growth chance is earned by hitting trigger
     events, and the threshold scales with current growth level. Higher levels
-    require bigger roster weeks to keep pushing the base upward."""
+    require bigger weeks from THIS player to keep pushing the base upward."""
     baseFP = primary.get("baseFP", 4.0)
     growthFP = primary.get("growthFP", 2.0)
     # streak_count tracks number of successful growths (starts at 1 = no growth)
