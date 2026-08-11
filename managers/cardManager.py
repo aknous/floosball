@@ -6,7 +6,8 @@ from typing import List, Dict, Any, Optional
 from logger_config import get_logger
 from managers.cardEffects import (buildEffectConfig as _buildEffectConfig, getEffectOutputType,
                                   effectValidPositions as _effectValidPositions,
-                                  effectPoolFor as _effectPoolFor)
+                                  effectPoolFor as _effectPoolFor,
+                                  withLiveCategory)
 
 logger = get_logger("floosball.cardManager")
 
@@ -2634,6 +2635,7 @@ class CardManager:
             t = row.card_template
             buyPrice = self._featuredBuyPrice(t)
             effName = (t.effect_config or {}).get("effectName") or ""
+            effCfg = withLiveCategory(t.effect_config)
             card = {
                 "templateId": t.id,
                 "playerId": t.player_id,
@@ -2645,7 +2647,8 @@ class CardManager:
                 "seasonCreated": t.season_created,
                 "isRookie": t.is_rookie,
                 "classification": t.classification,
-                "effectConfig": t.effect_config,
+                "effectConfig": effCfg,
+                "category": (effCfg or {}).get("category") or "flat_fp",
                 "sellValue": t.sell_value,
                 "buyPrice": buyPrice,
                 "ownedEffectCount": ownedCounts.get(effName, 0),

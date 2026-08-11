@@ -2594,6 +2594,31 @@ def _deriveOutputType(category: str, effectName: str, primary: dict) -> str:
     return "fp"
 
 
+def withLiveCategory(effectConfig: dict) -> dict:
+    """A stored effect_config with its CATEGORY refreshed from the live map.
+
+    ⚠️ USE THIS ANYWHERE A STORED `effect_config` IS HANDED TO A CLIENT. The category is
+    written at mint, and the frontend reads `card.category || card.effectConfig.category`
+    — so a payload built straight off the template row carries whatever the effect was
+    categorised as the day it was minted. That is how Showoff kept its Conditional badge
+    in the SHOP after it stopped being conditional: `serializeCard` had been taught to
+    prefer the live map, but the shop builds its own dict from the template and never
+    goes through it.
+
+    Returns a copy — the caller may be holding a SQLAlchemy JSON attribute, and mutating
+    it in place would mark the row dirty and write the change back to the database.
+    """
+    if not effectConfig:
+        return effectConfig
+    effectName = effectConfig.get("effectName") or ""
+    live = EFFECT_CATEGORY.get(effectName)
+    if not live or effectConfig.get("category") == live:
+        return effectConfig
+    refreshed = dict(effectConfig)
+    refreshed["category"] = live
+    return refreshed
+
+
 def rebuildPrimaryParams(effectName: str, playerRating: int, editionScale: float) -> dict:
     """Rebuild primary params from the current builder for a given effect.
 

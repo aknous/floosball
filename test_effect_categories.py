@@ -103,6 +103,30 @@ class EffectCategoryTests(unittest.TestCase):
         stored = {'effectName': 'an_effect_that_was_deleted', 'category': 'streak'}
         self.assertEqual(live.get(stored['effectName']) or stored['category'], 'streak')
 
+    def testAStoredConfigHandedToAClientCarriesTheLiveCategory(self):
+        """⚠️ THE SHOP BUILDS ITS OWN CARD DICT. `serializeCard` was taught to prefer the
+        live map, but `getFeaturedCards` assembles a payload straight off the template row
+        and passes `effect_config` through — so Showoff kept the Conditional badge in the
+        shop after it stopped being conditional, which is how it was reported. Anything
+        handing out a stored config goes through `withLiveCategory`.
+        """
+        from managers.cardEffects import withLiveCategory
+        for name in MOVED:
+            stale = {'effectName': name, 'category': 'conditional', 'detail': 'x'}
+            self.assertEqual(withLiveCategory(stale)['category'], 'flat_fp', name)
+            # And it must not mutate what it was handed: that dict is a SQLAlchemy JSON
+            # attribute, and writing to it in place marks the row dirty.
+            self.assertEqual(stale['category'], 'conditional',
+                             'withLiveCategory mutated the stored config in place')
+
+    def testTheShopPathUsesIt(self):
+        """Structural, because the fault was a path that skipped the shared serializer."""
+        import inspect
+        from managers.cardManager import CardManager
+        src = inspect.getsource(CardManager.getFeaturedCards)
+        self.assertIn('withLiveCategory', src,
+                      'the shop hands out effect_config without refreshing its category')
+
     def testLongshotStillHasCardsToDouble(self):
         """A modifier whose whole job is doubling conditional cards needs some to be
         mintable, or it is a dead week for everyone holding one."""
