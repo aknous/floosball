@@ -140,6 +140,13 @@ def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
 _SLOT_LABEL_BY_ORDINAL = {1: 'QB', 2: 'RB', 3: 'WR1', 4: 'WR2', 5: 'TE', 6: 'K', 7: 'FLEX'}
 
 
+def bankedLineupPlayerIds(bankedWeek):
+    """The players a settled week actually scored, or [] if it has no breakdown."""
+    return [b.get("playerId")
+            for b in ((bankedWeek or {}).get("breakdowns") or [])
+            if b.get("playerId")]
+
+
 class FantasyTracker:
     """Single source of truth for fantasy roster points.
 
@@ -331,10 +338,16 @@ class FantasyTracker:
 
         Returns {(user_id, week): [(EquippedCard, depicted_player_id), ...]} across ALL
         weeks of the season — the season leaderboard sums each week's actual lineup (there
-        is no season-long lock snapshot). EquippedCard rows persist per week, so a past
-        week's lineup is reconstructable exactly, pairing with that week's banked
-        WeeklyCardBonus. No live-lock / slot-eligibility filtering here — that only matters
-        for the CURRENT week's live scoring, applied separately by the caller."""
+        is no season-long lock snapshot).
+
+        ⚠️ THESE ROWS ARE NOT A HISTORICAL RECORD, despite being keyed by week. The equip
+        handler deletes and re-inserts a week's rows on every change, and the next week is
+        seeded by carrying them forward, so a swap made after a week banks but before it
+        rolls over REWRITES what that week appears to have held. A settled week's lineup
+        comes from its banked WeeklyCardBonus breakdown (`bankedLineupPlayerIds`); these
+        rows answer only for a week that has not banked. No live-lock / slot-eligibility
+        filtering here — that only matters for the CURRENT week's live scoring, applied
+        separately by the caller."""
         from database.models import EquippedCard, UserCard, CardTemplate
         rows = (
             session.query(EquippedCard, CardTemplate.player_id)
@@ -640,23 +653,40 @@ class FantasyTracker:
                     currentDepicted = equippedByUserWeek.get((userId, currentWeek), [])
                 rosterPlayerIds = {pid for _eq, pid in currentDepicted}
 
+                userWeekBonuses = weekCardBonusMap.get(userId, {})
+
+                def lineupForWeek(wk):
+                    """Who actually scored that week.
+
+                    ⚠️ A BANKED WEEK IS SETTLED, and `equipped_cards` cannot say what it
+                    held. The equip handler runs deleteByUserWeek then re-inserts under
+                    the CURRENT week, so a swap made after a week banks but before the
+                    week rolls over silently rewrites that week's rows, and this sum
+                    (recomputed on every request) moves with them. Measured on
+                    production: 11 users, 18 weeks, up to +41 FP of retroactive drift on
+                    a season base. The banked breakdown is written once and never
+                    revised, so it is the record; equipment answers only for a week that
+                    has not banked yet.
+                    """
+                    pids = bankedLineupPlayerIds(userWeekBonuses.get(wk))
+                    if pids:
+                        return pids
+                    if wk == currentWeek:
+                        return [pid for _eq, pid in currentDepicted]
+                    return [pid for _eq, pid in equippedByUserWeek.get((userId, wk), [])]
+
                 # Weeks this user equipped each player (for the per-player season earned).
                 playerEquippedWeeks = {}   # pid -> set(weeks)
-                for (uId, wk), lineup in equippedByUserWeek.items():
-                    if uId != userId:
-                        continue
-                    for _eq, pid in lineup:
+                for wk in range(1, currentWeek + 1):
+                    for pid in lineupForWeek(wk):
                         playerEquippedWeeks.setdefault(pid, set()).add(wk)
 
                 # Season base FP = Σ over weeks of that week's lineup's per-player week FP.
                 seasonEarnedFP = 0.0
                 currentWeekPlayerFP = 0.0
                 for wk in range(1, currentWeek + 1):
-                    if wk == currentWeek:
-                        wkPids = [pid for _eq, pid in currentDepicted]
-                    else:
-                        wkPids = [pid for _eq, pid in equippedByUserWeek.get((userId, wk), [])]
-                    wkBase = sum(weekPlayerFPMap.get(pid, {}).get(wk, 0) for pid in wkPids)
+                    wkBase = sum(weekPlayerFPMap.get(pid, {}).get(wk, 0)
+                                 for pid in lineupForWeek(wk))
                     seasonEarnedFP += wkBase
                     if wk == currentWeek:
                         currentWeekPlayerFP = wkBase
@@ -769,7 +799,6 @@ class FantasyTracker:
                         playerGameStats[pid] = rawStats
 
                 # ── Card bonuses ──
-                userWeekBonuses = weekCardBonusMap.get(userId, {})
                 storedSeasonCardBonus = sum(
                     wb["fp"] for wb in userWeekBonuses.values()
                 )

@@ -25,7 +25,15 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from managers.fantasyTracker import _SLOT_LABEL_BY_ORDINAL
+from managers.fantasyTracker import _SLOT_LABEL_BY_ORDINAL, bankedLineupPlayerIds
+
+
+def weekFP(week, currentWeek, banked, equippedRows, live, fpByPlayerWeek):
+    """`getSnapshot`'s per-week base FP, in the order it resolves a lineup."""
+    pids = bankedLineupPlayerIds(banked.get(week))
+    if not pids:
+        pids = live if week == currentWeek else equippedRows.get(week, [])
+    return sum(fpByPlayerWeek.get((p, week), 0) for p in pids)
 
 
 def rowsFor(banked, breakdowns, liveLineup):
@@ -83,6 +91,43 @@ class LeaderboardLineupTests(unittest.TestCase):
                                         'effect': 'gold_rush'}])
         self.assertEqual(before, after,
                          'the banked row moved when the user changed a card')
+
+    # -- the season total ---------------------------------------------------
+    #
+    # The same confusion, one layer down. `seasonEarnedFP` is recomputed from the
+    # per-week rows on EVERY request, so overwriting a week's rows moved a total that
+    # had already been earned. Reproduced from the production figures for user `bea`:
+    # week 7 banked a lineup worth 61 FP, and the rows now standing in week 7 are
+    # worth 98.
+
+    BANKED_WK7 = {7: {'breakdowns': [{'playerId': 2, 'playerName': 'Robbie Tumbles'}]}}
+    ROWS_AFTER_SWAP = {7: [9]}          # rewritten by the swap
+    FP = {(2, 7): 61.0, (9, 7): 98.0}
+
+    def testASettledWeekKeepsWhatItEarned(self):
+        """THE REGRESSION. Measured on production as +41 FP for the worst-hit user."""
+        self.assertEqual(
+            weekFP(7, 8, self.BANKED_WK7, self.ROWS_AFTER_SWAP, [], self.FP), 61.0)
+
+    def testSwappingBeforeTheWeekRollsOverDoesNotPayTheNewLineup(self):
+        # bea's exact case: the week had banked but was still `currentWeek`, so the
+        # live set was the swapped-in one and got counted.
+        self.assertEqual(
+            weekFP(7, 7, self.BANKED_WK7, self.ROWS_AFTER_SWAP, [9], self.FP), 61.0)
+
+    def testAWeekThatHasNotBankedStillCountsWhatIsEquippedNow(self):
+        # Mid-week the reader is watching their live lineup accumulate.
+        self.assertEqual(weekFP(7, 7, {}, {}, [9], self.FP), 98.0)
+
+    def testAPastWeekWithNoBreakdownFallsBackToItsRows(self):
+        # Weeks banked before breakdowns were stored have no better source.
+        self.assertEqual(
+            weekFP(7, 8, {7: {'breakdowns': []}}, self.ROWS_AFTER_SWAP, [], self.FP), 98.0)
+
+    def testABreakdownWithNoPlayerDoesNotZeroTheWeek(self):
+        # An empty-slot breakdown row must not be mistaken for "this week scored 0".
+        banked = {7: {'breakdowns': [{'effectName': 'none'}]}}
+        self.assertEqual(weekFP(7, 8, banked, self.ROWS_AFTER_SWAP, [], self.FP), 98.0)
 
     def testTheSlotMapMatchesTheOneCardsAreEquippedWith(self):
         from managers.cardManager import SLOT_TO_ORDINAL
