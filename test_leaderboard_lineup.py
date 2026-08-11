@@ -29,23 +29,32 @@ from managers.fantasyTracker import (_SLOT_LABEL_BY_ORDINAL, bankedLineupPlayerI
                                      completeSnapshotFrom, weekIsFullyRecorded)
 
 
-def lineupForWeek(week, currentWeek, banked, equippedRows, live, boundary=None, season=1):
+def weekIsClosed(week, settledWeeks, boundary, season=1):
+    """`getSnapshot`'s predicate: the week finished AND its record is complete."""
+    return week in settledWeeks and weekIsFullyRecorded(season, week, boundary)
+
+
+def lineupForWeek(week, currentWeek, banked, equippedRows, live, boundary=None,
+                  settledWeeks=None, season=1):
     """`getSnapshot`'s resolver, in the order it decides."""
+    if settledWeeks is None:
+        settledWeeks = set(banked)
     row = banked.get(week)
     if row is not None:
         pids = bankedLineupPlayerIds(row)
         if pids:
             return pids
-    elif weekIsFullyRecorded(season, week, boundary):
+    elif weekIsClosed(week, settledWeeks, boundary, season):
         return []
     return live if week == currentWeek else equippedRows.get(week, [])
 
 
-def weekFP(week, currentWeek, banked, equippedRows, live, fpByPlayerWeek, boundary=None):
+def weekFP(week, currentWeek, banked, equippedRows, live, fpByPlayerWeek, boundary=None,
+           settledWeeks=None):
     """`getSnapshot`'s per-week base FP."""
     return sum(fpByPlayerWeek.get((p, week), 0)
                for p in lineupForWeek(week, currentWeek, banked, equippedRows, live,
-                                      boundary))
+                                      boundary, settledWeeks))
 
 
 def rowsFor(banked, breakdowns, liveLineup):
@@ -159,7 +168,7 @@ class LeaderboardLineupTests(unittest.TestCase):
         week 7.
         """
         self.assertEqual(
-            weekFP(7, 7, {}, {7: [9]}, [9], self.FP, boundary=(1, 1)), 0.0)
+            weekFP(7, 7, {}, {7: [9]}, [9], self.FP, boundary=(1, 1), settledWeeks={7}), 0.0)
 
     def testAWeekRecordedBeforeTheBoundaryStaysPermissive(self):
         """⚠️ The gate must NOT reach back over weeks whose record is incomplete.
@@ -170,7 +179,24 @@ class LeaderboardLineupTests(unittest.TestCase):
         from users who did play.
         """
         self.assertEqual(
-            weekFP(7, 7, {}, {7: [9]}, [9], self.FP, boundary=(1, 8)), 98.0)
+            weekFP(7, 7, {}, {7: [9]}, [9], self.FP, boundary=(1, 8), settledWeeks={7}), 98.0)
+
+    def testALiveWeekStillAccruesBeforeItBanks(self):
+        """⚠️ THE REGRESSION THIS GATE CAUSED, caught in testing.
+
+        Nobody has a banked row until the whistle, and a live week is also at or after
+        the boundary — so gating on the boundary ALONE zeroed everyone's base FP for the
+        whole week they were watching. The week must have actually CLOSED (someone banked
+        it) before absence can mean anything.
+        """
+        self.assertEqual(
+            weekFP(7, 7, {}, {}, [9], self.FP, boundary=(1, 1), settledWeeks=set()), 98.0)
+
+    def testAClosedWeekIsBothProcessedAndPastTheBoundary(self):
+        self.assertTrue(weekIsClosed(7, {7}, (1, 1)))
+        self.assertFalse(weekIsClosed(7, set(), (1, 1)), 'week never processed')
+        self.assertFalse(weekIsClosed(7, {7}, (1, 8)), 'week predates the boundary')
+        self.assertFalse(weekIsClosed(7, {7}, None), 'league never stamped')
 
     def testTheBoundaryIsReadFromTheStampedSetting(self):
         self.assertEqual(completeSnapshotFrom(lambda k: '2:5'), (2, 5))

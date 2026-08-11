@@ -537,6 +537,16 @@ class FantasyTracker:
             # record is COMPLETE — see `lineupForWeek`.
             from game_rules import _readAppSetting as _readSetting
             snapshotBoundary = completeSnapshotFrom(_readSetting)
+            # Weeks that have actually been PROCESSED. ⚠️ Needed as well as the boundary:
+            # the boundary only says a week is late enough to trust, while a LIVE week is
+            # also late enough and has simply not banked yet. Gating on the boundary alone
+            # zeroes everyone's base FP mid-week, since nobody has a row until the whistle.
+            settledWeeks = {wk for weeks in weekCardBonusMap.values() for wk in weeks}
+
+            def weekIsClosed(wk):
+                """The week finished AND its record is complete, so absence is meaningful."""
+                return (wk in settledWeeks
+                        and weekIsFullyRecorded(seasonNum, wk, snapshotBoundary))
 
             # ── 5. Equipped cards for current week ──
             equippedByUser = {}
@@ -721,7 +731,7 @@ class FantasyTracker:
                     # Applying the gate there would delete FP from users who did play,
                     # so it starts at the stamped boundary and earlier weeks stay
                     # permissive.
-                    elif weekIsFullyRecorded(seasonNum, wk, snapshotBoundary):
+                    elif weekIsClosed(wk):
                         return []
                     if wk == currentWeek:
                         return [pid for _eq, pid in currentDepicted]
@@ -876,7 +886,13 @@ class FantasyTracker:
                 # empty stats between weeks, producing false output.
                 hasWeekData = gamesActive or bool(dbCurrentWeekFullStats)
 
-                if not hasStoredCurrentWeekBonus and userId in equippedByUser and hasWeekData:
+                # ⚠️ AND the week must not already have CLOSED without them. Otherwise a
+                # user who equips after the whistle has no stored bonus, so this branch
+                # computes one live against that week's finished stats — handing them a
+                # card bonus for a week they did not field. Gating base FP alone left
+                # this half open.
+                if (not hasStoredCurrentWeekBonus and userId in equippedByUser
+                        and hasWeekData and not weekIsClosed(currentWeek)):
                     # Need to compute current week card bonus
                     userEquipped = equippedByUser[userId]
                     cardCalcStats = {}
