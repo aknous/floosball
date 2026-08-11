@@ -78,6 +78,31 @@ class EffectCategoryTests(unittest.TestCase):
                               f'check _EFFECT_BUILDER_OVERRIDES')
                 self.assertGreater(primary[key], 0, f'{name} minted a zero {key}')
 
+    def testAStaleStoredCategoryDoesNotSurviveTheRead(self):
+        """⚠️ THE SECOND HALF OF THE FIX, and the half that was missed. The category is
+        written into effect_config at MINT, and both readers took the stored value — so
+        re-categorising an effect reached only cards minted afterwards, and the five that
+        stopped being conditional would have gone on collecting the longshot doubling all
+        season. Measured on production at the time: 23 templates carrying the stale
+        category (showoff 10, believe 8, walk_off 5). Reported as Showoff still showing
+        the Conditional badge after the move.
+        """
+        from managers.cardEffects import EFFECT_CATEGORY as live
+        for name in MOVED:
+            stored = {'effectName': name, 'category': 'conditional'}
+            asRead = live.get(stored['effectName']) or stored['category']
+            self.assertEqual(asRead, 'flat_fp',
+                             f'{name} minted under the old category still reads as '
+                             f'conditional, so longshot still doubles it')
+
+    def testAnUnknownEffectKeepsWhateverItWasMintedWith(self):
+        """The fallback has to survive: an effect the live map has never heard of is all
+        the stored value is good for, and dropping it would blank the badge on anything
+        the map has since forgotten."""
+        from managers.cardEffects import EFFECT_CATEGORY as live
+        stored = {'effectName': 'an_effect_that_was_deleted', 'category': 'streak'}
+        self.assertEqual(live.get(stored['effectName']) or stored['category'], 'streak')
+
     def testLongshotStillHasCardsToDouble(self):
         """A modifier whose whole job is doubling conditional cards needs some to be
         mintable, or it is a dead week for everyone holding one."""
