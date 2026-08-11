@@ -566,6 +566,50 @@ def onFantasyRosterWeekCompleted(session: Session, userId: int, currentSeason: i
     return recordProgress(session, userId, "veteran", currentSeason=currentSeason)
 
 
+def backfillVeteran(session: Session, userId: int, currentSeason: int) -> Optional[UserAchievement]:
+    """Set Veteran progress to the number of weeks this user actually fielded a lineup.
+
+    ⚠️ THE WEEKLY CREDIT WAS BROKEN FOR THE WHOLE SEASON, so progress on a live database
+    is zero for everyone regardless of how many weeks they played — it counted off
+    `FantasyRoster`/`FantasyRosterPlayer`, tables the fusion left unwritten. Fixing the
+    weekly hook alone would start the count from today and quietly cost people the weeks
+    they had already played.
+
+    Counted off the same banked `WeeklyCardBonus` rows the live credit now uses, so the
+    backfilled figure and everything after it are the same measurement. ABSOLUTE rather
+    than incremental, so this is idempotent — it can run on every visit without inflating
+    anyone, and it cannot overtake the weekly hook.
+
+    ⚠️ EQUIPPED ROWS ARE COUNTED TOO, and the reason is not symmetry. A bonus row is only
+    written when a week is PROCESSED, so on a live database the two sources differ by
+    exactly the week in flight (measured: equipped weeks 10-13, banked 10-12) — and a
+    reader who has equipped all season should not have to wait for a rollover to see the
+    week they are playing counted. Taking the larger of the two also rescues anyone whose
+    early weeks predate the snapshot work, since `equipped_cards` goes back further than
+    the bonus rows do.
+
+    ⚠️ It is a MAXIMUM, not a sum: the same week appears in both, and adding them would
+    count most weeks twice.
+    """
+    from database.models import WeeklyCardBonus, EquippedCard
+    banked = (
+        session.query(WeeklyCardBonus.week)
+        .filter(WeeklyCardBonus.user_id == userId, WeeklyCardBonus.season == currentSeason)
+        .distinct()
+        .count()
+    )
+    equipped = (
+        session.query(EquippedCard.week)
+        .filter(EquippedCard.user_id == userId, EquippedCard.season == currentSeason)
+        .distinct()
+        .count()
+    )
+    weeks = max(banked, equipped)
+    if weeks <= 0:
+        return None
+    return recordProgress(session, userId, "veteran", absolute=weeks, currentSeason=currentSeason)
+
+
 def onCardEquipped(session: Session, userId: int) -> Optional[UserAchievement]:
     return recordProgress(session, userId, "deck_builder")
 

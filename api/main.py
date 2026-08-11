@@ -14019,6 +14019,11 @@ def listAchievements(user: _User = Depends(_getCurrentUser)):
             # whose progress got stuck catch up the next time they check.
             if currentSeason:
                 achievementManager.syncCuratorProgress(session, user.id, currentSeason)
+                # Veteran's weekly credit counted off tables the fusion left unwritten,
+                # so nobody accrued anything all season. Re-sync from the banked weekly
+                # rows here as well, or fixing the hook would start everyone from zero
+                # and cost them the weeks they had already played.
+                achievementManager.backfillVeteran(session, user.id, currentSeason)
             session.commit()
         except Exception as e:
             session.rollback()
