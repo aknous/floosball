@@ -4202,6 +4202,107 @@ async def get_history_records(response: Response, limit: int = Query(default=10,
         session.close()
 
 
+# Team record book. Each entry is a pair of `home_`/`away_` columns on the games table,
+# which is what makes the queries below a UNION rather than a simple select: one game row
+# holds BOTH clubs' figures, so a leaderboard has to read each side separately and stack
+# them. Points come from the score columns; the rest are the per-game team totals the sim
+# already denormalises.
+#
+# ⚠️ Deliberately NOT read from `recordManager`'s tree. That holds a single holder per
+# record — one name, one number — which is the right shape for announcing a break and the
+# wrong shape for a page that shows a top ten. Computing from the games table also means
+# the book is correct for every season already played, including the stretch where team
+# records were being lost on restart.
+_TEAM_RECORD_STATS = {
+    "points":     {"label": "Points",        "home": "home_score",      "away": "away_score"},
+    "passYards":  {"label": "Passing Yards", "home": "home_pass_yards", "away": "away_pass_yards"},
+    "rushYards":  {"label": "Rushing Yards", "home": "home_rush_yards", "away": "away_rush_yards"},
+    "passTds":    {"label": "Passing TDs",   "home": "home_pass_tds",   "away": "away_pass_tds"},
+    "rushTds":    {"label": "Rushing TDs",   "home": "home_rush_tds",   "away": "away_rush_tds"},
+    "fgs":        {"label": "Field Goals",   "home": "home_fgs",        "away": "away_fgs"},
+    "sacks":      {"label": "Sacks",         "home": "home_sacks",      "away": "away_sacks"},
+    "ints":       {"label": "Interceptions", "home": "home_ints",       "away": "away_ints"},
+}
+
+
+@app.get("/api/history/team-records")
+async def get_history_team_records(response: Response, limit: int = Query(default=10, ge=1, le=50)):
+    """Top-N TEAM records, single-game and single-season.
+
+    The record book showed players only, so a reader who saw "X set the single-game team
+    points record" in the news had nowhere to go and check it.
+
+    ⚠️ No CAREER scope. A club does not retire, so a career total is just "has existed
+    the longest" — the all-time counting records that DO mean something for a club (wins,
+    titles) belong with the franchise history rather than in a stat leaderboard.
+    """
+    response.headers["Cache-Control"] = "public, max-age=300"
+    if floosball_app is None:
+        raise HTTPException(status_code=503, detail="Application not initialized")
+    from database.connection import get_session
+    from database.models import Game as DBGame, Team as DBTeam
+    from sqlalchemy import func, desc, select, literal_column
+
+    session = get_session()
+    try:
+        result: Dict[str, Dict[str, list]] = {"game": {}, "season": {}}
+        teams = {t.id: t for t in session.query(DBTeam).all()}
+
+        def teamCell(teamId):
+            t = teams.get(teamId)
+            return {
+                "teamId": teamId,
+                "teamName": f"{t.city} {t.name}".strip() if t and getattr(t, 'city', None) else (t.name if t else "Unknown"),
+                "teamAbbr": t.abbr if t else None,
+            }
+
+        # ⚠️ `status` is stored lowercase ('final'), and comparing against 'Final' silently
+        # returns an empty book. Compared case-insensitively so neither casing can break it.
+        finalOnly = func.lower(DBGame.status) == 'final'
+
+        for statKey, meta in _TEAM_RECORD_STATS.items():
+            homeCol = getattr(DBGame, meta["home"])
+            awayCol = getattr(DBGame, meta["away"])
+
+            # One row per club per game, both sides stacked.
+            sides = select(
+                DBGame.home_team_id.label("team_id"), homeCol.label("v"),
+                DBGame.season.label("season"), DBGame.week.label("week"),
+            ).where(finalOnly).union_all(select(
+                DBGame.away_team_id.label("team_id"), awayCol.label("v"),
+                DBGame.season.label("season"), DBGame.week.label("week"),
+            ).where(finalOnly)).subquery()
+
+            gameRows = session.execute(
+                select(sides.c.team_id, sides.c.v, sides.c.season, sides.c.week)
+                .where(sides.c.v.isnot(None))
+                .order_by(desc(sides.c.v))
+                .limit(limit)
+            ).all()
+            result["game"][statKey] = [
+                {**teamCell(r.team_id), "value": round(float(r.v), 1),
+                 "season": r.season, "week": r.week}
+                for r in gameRows if r.v
+            ]
+
+            seasonRows = session.execute(
+                select(sides.c.team_id, sides.c.season,
+                       func.sum(sides.c.v).label("total"))
+                .group_by(sides.c.team_id, sides.c.season)
+                .order_by(desc(literal_column("total")))
+                .limit(limit)
+            ).all()
+            result["season"][statKey] = [
+                {**teamCell(r.team_id), "value": round(float(r.total), 1), "season": r.season}
+                for r in seasonRows if r.total
+            ]
+
+        labels = {k: v["label"] for k, v in _TEAM_RECORD_STATS.items()}
+        return build_success_response({"records": result, "labels": labels})
+    finally:
+        session.close()
+
+
 @app.get("/api/history/user-records")
 async def get_history_user_records(response: Response, limit: int = Query(default=10, ge=1, le=50)):
     """Top-N fantasy records across users.
