@@ -135,6 +135,11 @@ def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
         fantasyPoints=fantasyPoints, teamId=teamId)
 
 
+# Slot ordinal back to its label, the inverse of cardManager.SLOT_TO_ORDINAL. Banked
+# breakdowns store the ordinal, and a leaderboard row is labelled by slot.
+_SLOT_LABEL_BY_ORDINAL = {1: 'QB', 2: 'RB', 3: 'WR1', 4: 'WR2', 5: 'TE', 6: 'K', 7: 'FLEX'}
+
+
 class FantasyTracker:
     """Single source of truth for fantasy roster points.
 
@@ -626,28 +631,13 @@ class FantasyTracker:
                 # (locked-only during games / slot-eligible); past weeks use the persisted
                 # lineup. No season lock snapshot / offset — a week's FP is all post-lock
                 # (cards lock at game start).
-                # ⚠️ ONCE A WEEK IS BANKED, ITS LINEUP IS HISTORY. The live equipped set
-                # is only the right answer while the week is still being scored. After
-                # the bonus is banked, `cardBreakdowns` below comes from the stored
-                # record — the cards that actually scored — so pairing it with whatever
-                # is equipped NOW builds a row out of two different moments.
-                #
-                # Reported from production: a lineup reading "Frig Lagotis / Gold Rush"
-                # showed on the leaderboard as "Frig Lagotis / Battering Ram", and an
-                # earlier screenshot of the same row showed "Locust Clambake / Battering
-                # Ram" — the card stayed put (it is the banked one) while the player
-                # tracked whatever the user had just equipped.
-                _bankedThisWeek = currentWeek in weekCardBonusMap.get(userId, {})
-                _persistedWeek = equippedByUserWeek.get((userId, currentWeek), [])
-                if isCurrentSeason and not (_bankedThisWeek and _persistedWeek):
+                if isCurrentSeason:
                     currentDepicted = [
                         (eq, eq.user_card.card_template.player_id)
                         for eq in equippedByUser.get(userId, [])
                     ]
                 else:
-                    # Banked, or a past season: use the lineup that actually played.
-                    # Falls back to live above when no per-week lineup was persisted.
-                    currentDepicted = _persistedWeek
+                    currentDepicted = equippedByUserWeek.get((userId, currentWeek), [])
                 rosterPlayerIds = {pid for _eq, pid in currentDepicted}
 
                 # Weeks this user equipped each player (for the per-player season earned).
@@ -926,6 +916,50 @@ class FantasyTracker:
                         if eName:
                             cat = bd.get("category") or _EC.get(eName, "flat_fp")
                             bd["outputType"] = _reDeriveOT(cat, eName, bd)
+
+                    # ⚠️ A BANKED WEEK'S LINEUP COMES FROM THE BANKED RECORD, not from
+                    # what is equipped now. `rosterPlayers` above is the LIVE set, and
+                    # pairing it with these stored breakdowns builds each row out of two
+                    # different moments.
+                    #
+                    # Reported from production with screenshots: a lineup reading
+                    # "Frig Lagotis / Gold Rush" appeared on the leaderboard as
+                    # "Frig Lagotis / Battering Ram", and an earlier capture of the same
+                    # row read "Locust Clambake / Battering Ram" — the card sat still
+                    # because it is the banked one, while the player followed whatever
+                    # had just been equipped.
+                    #
+                    # ⚠️ `equipped_cards` CANNOT stand in for this. The equip handler
+                    # deletes and rewrites that week's rows on every change, so after a
+                    # re-equip they describe the newest selection rather than the one
+                    # that scored. Verified on production: that user's equipped_cards for
+                    # week 7 held Frig Lagotis / gold_rush while week 7's BANKED record
+                    # held Robbie Tumbles / battering_ram. The breakdown is the only
+                    # thing written once and never revised.
+                    _bankedPlayers = []
+                    for bd in cardBreakdowns:
+                        pid = bd.get("playerId")
+                        if not pid:
+                            continue
+                        pObj = self._playerManager.getPlayerById(pid)
+                        _bankedPlayers.append({
+                            "slot": _SLOT_LABEL_BY_ORDINAL.get(bd.get("slotNumber"), ""),
+                            "playerId": pid,
+                            "playerName": bd.get("playerName") or (pObj.name if pObj else "Unknown"),
+                            "position": (pObj.position.name
+                                         if pObj and hasattr(pObj.position, 'name') else ""),
+                            "teamAbbr": (getattr(pObj.team, 'abbr', '')
+                                         if pObj and getattr(pObj, 'team', None) else ""),
+                            "teamId": (getattr(pObj.team, 'id', None)
+                                       if pObj and getattr(pObj, 'team', None) else None),
+                            "earnedPoints": round(sum(
+                                weekPlayerFPMap.get(pid, {}).get(w, 0)
+                                for w in playerEquippedWeeks.get(pid, set())), 1),
+                            "weekFP": round(weekPlayerFPMap.get(pid, {}).get(currentWeek, 0), 1),
+                            "isPrev": False,
+                        })
+                    if _bankedPlayers:
+                        rosterPlayers = _bankedPlayers
 
                 # Season card bonus = stored weeks + live current week
                 seasonCardBonus = storedSeasonCardBonus

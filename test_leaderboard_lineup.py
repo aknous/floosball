@@ -5,13 +5,18 @@
 "Frig Lagotis / Battering Ram", and an earlier capture of that row showed
 "Locust Clambake / Battering Ram". Three different answers for one slot.
 
-The cause was that the two halves of the row came from different points in time. The
-PLAYERS were taken from the LIVE equipped set (`equippedByUser`), while `cardBreakdowns`
-for a banked week come from the stored record — the cards that actually scored. Change a
-card after a week banks and the row pairs today's player with that week's effect.
+The two halves came from different moments. The PLAYERS were taken from the LIVE
+equipped set, while `cardBreakdowns` for a banked week come from the stored record: the
+cards that actually scored. Change a card after a week banks and the row pairs today's
+player with that week's effect, which is why the card sat still while the player moved.
 
-The rule this pins: once a week's bonus is banked the week is settled, so the row uses
-the lineup that was persisted for it. Only an unbanked week reads live equipment.
+⚠️ `equipped_cards` CANNOT be the source either, which is the trap this file exists to
+mark. The equip handler runs `deleteByUserWeek` and re-inserts, so a week's rows are
+REWRITTEN on every change and end up describing the newest selection rather than the one
+that played. Verified against production: that user's equipped_cards for week 7 held
+Frig Lagotis / gold_rush while week 7's BANKED record held Robbie Tumbles /
+battering_ram. The breakdown is the only thing written once and never revised, so a
+banked row is rebuilt from it.
 """
 
 import os
@@ -20,63 +25,69 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-
-def chooseLineup(isCurrentSeason, banked, persistedWeek, liveEquipped):
-    """The selection exactly as fantasyTracker runs it.
-
-    Kept as a pure function here because the surrounding assembly needs a season, a
-    database and ten collaborating maps; the DECISION is the part that was wrong.
-    """
-    if isCurrentSeason and not (banked and persistedWeek):
-        return liveEquipped
-    return persistedWeek
+from managers.fantasyTracker import _SLOT_LABEL_BY_ORDINAL
 
 
-LIVE = [('eqNew', 'Frig Lagotis')]
-BANKED = [('eqOld', 'Locust Clambake')]
+def rowsFor(banked, breakdowns, liveLineup):
+    """The selection as fantasyTracker runs it: banked rows come from the breakdowns."""
+    rows = list(liveLineup)
+    if banked:
+        fromBanked = [
+            {'slot': _SLOT_LABEL_BY_ORDINAL.get(b.get('slotNumber'), ''),
+             'playerName': b.get('playerName'), 'effect': b.get('effectName')}
+            for b in breakdowns if b.get('playerId')
+        ]
+        if fromBanked:
+            rows = fromBanked
+    return rows
+
+
+BANKED = [
+    {'slotNumber': 1, 'playerId': 1, 'playerName': 'Dougie Malibu', 'effectName': 'piggy_bank'},
+    {'slotNumber': 2, 'playerId': 2, 'playerName': 'Robbie Tumbles', 'effectName': 'battering_ram'},
+]
+LIVE = [
+    {'slot': 'QB', 'playerName': 'Dougie Malibu', 'effect': 'piggy_bank'},
+    {'slot': 'RB', 'playerName': 'Frig Lagotis', 'effect': 'gold_rush'},
+]
 
 
 class LeaderboardLineupTests(unittest.TestCase):
-    def testABankedWeekUsesTheLineupThatPlayed(self):
-        """THE REGRESSION. The card is historic, so the player must be too."""
-        self.assertEqual(
-            chooseLineup(isCurrentSeason=True, banked=True,
-                         persistedWeek=BANKED, liveEquipped=LIVE),
-            BANKED)
+    def testABankedRowShowsThePlayerThatScored(self):
+        """THE REGRESSION, in the exact shape it was reported."""
+        rows = rowsFor(True, BANKED, LIVE)
+        rb = next(r for r in rows if r['slot'] == 'RB')
+        self.assertEqual(rb['playerName'], 'Robbie Tumbles')
+        self.assertEqual(rb['effect'], 'battering_ram')
 
-    def testALiveWeekStillFollowsWhatIsEquippedNow(self):
+    def testABankedRowNeverPairsALivePlayerWithABankedCard(self):
+        rows = rowsFor(True, BANKED, LIVE)
+        self.assertNotIn('Frig Lagotis', [r['playerName'] for r in rows])
+
+    def testALiveWeekStillShowsWhatIsEquippedNow(self):
         # Mid-week the reader is watching their current lineup score.
-        self.assertEqual(
-            chooseLineup(isCurrentSeason=True, banked=False,
-                         persistedWeek=BANKED, liveEquipped=LIVE),
-            LIVE)
+        self.assertEqual(rowsFor(False, [], LIVE), LIVE)
 
-    def testAPastSeasonAlwaysUsesThePersistedLineup(self):
-        self.assertEqual(
-            chooseLineup(isCurrentSeason=False, banked=True,
-                         persistedWeek=BANKED, liveEquipped=LIVE),
-            BANKED)
-        self.assertEqual(
-            chooseLineup(isCurrentSeason=False, banked=False,
-                         persistedWeek=BANKED, liveEquipped=LIVE),
-            BANKED)
+    def testABankedWeekWithNoBreakdownsFallsBackToLive(self):
+        # Older rows banked a total without per-card detail; an empty expansion
+        # would be worse than an approximate one.
+        self.assertEqual(rowsFor(True, [], LIVE), LIVE)
 
-    def testABankedWeekWithNoPersistedLineupFallsBackToLive(self):
-        """Older rows have a banked bonus but no per-week lineup saved.
+    def testABreakdownWithNoPlayerIsSkippedRatherThanBlank(self):
+        rows = rowsFor(True, BANKED + [{'slotNumber': 5, 'effectName': 'none'}], LIVE)
+        self.assertEqual(len(rows), 2)
 
-        Showing the live lineup there is imperfect, but it beats an empty expansion.
-        """
-        self.assertEqual(
-            chooseLineup(isCurrentSeason=True, banked=True,
-                         persistedWeek=[], liveEquipped=LIVE),
-            LIVE)
-
-    def testChangingCardsAfterABankedWeekDoesNotMoveTheRow(self):
-        """The specific behaviour from the screenshots."""
-        beforeSwap = chooseLineup(True, True, BANKED, BANKED)
-        afterSwap = chooseLineup(True, True, BANKED, LIVE)
-        self.assertEqual(beforeSwap, afterSwap,
+    def testChangingCardsAfterAWeekBanksDoesNotMoveTheRow(self):
+        before = rowsFor(True, BANKED, LIVE)
+        after = rowsFor(True, BANKED, [{'slot': 'RB', 'playerName': 'Locust Clambake',
+                                        'effect': 'gold_rush'}])
+        self.assertEqual(before, after,
                          'the banked row moved when the user changed a card')
+
+    def testTheSlotMapMatchesTheOneCardsAreEquippedWith(self):
+        from managers.cardManager import SLOT_TO_ORDINAL
+        for label, ordinal in SLOT_TO_ORDINAL.items():
+            self.assertEqual(_SLOT_LABEL_BY_ORDINAL.get(ordinal), label, label)
 
 
 if __name__ == '__main__':
