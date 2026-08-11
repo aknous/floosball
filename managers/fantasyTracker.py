@@ -506,12 +506,6 @@ class FantasyTracker:
 
             # ── 4. Stored card bonuses per user per week ──
             weekCardBonusMap = self._getWeekCardBonusesFromDB(session, seasonNum)
-            # Weeks that have CLOSED, league-wide. `_processWeekCardEffects` writes a row
-            # for every user who fielded a lineup (including at zero), so once any row
-            # exists for a week, that week's record is complete and a user missing from
-            # it fielded nothing. Needed because `equipped_cards` keeps no history of
-            # its own — see `lineupForWeek`.
-            settledWeeks = {wk for weeks in weekCardBonusMap.values() for wk in weeks}
 
             # ── 5. Equipped cards for current week ──
             equippedByUser = {}
@@ -681,14 +675,16 @@ class FantasyTracker:
                         # equipped rows are the only surviving hint.
                         if pids:
                             return pids
-                    elif wk in settledWeeks:
-                        # ⚠️ The week closed with no record of this user, so they fielded
-                        # nothing. Their equipped rows for it were stamped by a LATER
-                        # equip (the handler writes under `currentWeek`, and the next
-                        # week is seeded by carrying them forward), so trusting them pays
-                        # out a lineup set after the whistle. Two such users on
-                        # production at week 7.
-                        return []
+                    # ⚠️ A MISSING ROW DOES NOT MEAN THE USER WAS ABSENT, so it is NOT
+                    # treated as an empty lineup. `_processWeekCardEffects` counts only
+                    # rows with `locked=True`, and `lockAllForWeek` runs ONCE at week
+                    # start — a user who signed up mid-week equipped into a running week
+                    # and was never locked. Measured on production: 13 of 21 users have a
+                    # week with a lineup and no banked row, overwhelmingly their FIRST.
+                    # Reading absence into that would have deleted real base FP from most
+                    # of the league. The equip handler now locks against a live slate, so
+                    # the snapshot closes going forward, but weeks 1-7 keep their holes
+                    # and this must stay permissive.
                     if wk == currentWeek:
                         return [pid for _eq, pid in currentDepicted]
                     return [pid for _eq, pid in equippedByUserWeek.get((userId, wk), [])]

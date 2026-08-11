@@ -35,8 +35,6 @@ def lineupForWeek(week, currentWeek, banked, equippedRows, live, settledWeeks=()
         pids = bankedLineupPlayerIds(row)
         if pids:
             return pids
-    elif week in settledWeeks:
-        return []
     return live if week == currentWeek else equippedRows.get(week, [])
 
 
@@ -147,10 +145,16 @@ class LeaderboardLineupTests(unittest.TestCase):
     # no way to tell them from someone who equipped after the whistle. It is now written
     # whenever a lineup was fielded, which is what lets the absence below mean something.
 
-    def testEquippingAfterAWeekClosesEarnsNothingForIt(self):
-        """Two such users on production at week 7, holding week-7 rows they never played."""
+    def testAMissingRowIsNotReadAsAbsence(self):
+        """⚠️ The rule that was nearly shipped and would have deleted real FP.
+
+        `_processWeekCardEffects` counts only LOCKED rows and `lockAllForWeek` runs once
+        at week start, so a user who signed up mid-week banked no row despite fielding a
+        lineup. On production that was 13 of 21 users, overwhelmingly their FIRST week.
+        Absence of a row therefore means "no record", never "did not play".
+        """
         self.assertEqual(
-            weekFP(7, 7, {}, {7: [9]}, [9], self.FP, settledWeeks={7}), 0.0)
+            weekFP(7, 7, {}, {7: [9]}, [9], self.FP, settledWeeks={7}), 98.0)
 
     def testFieldingALineupThatEarnedNoBonusStillCountsItsBaseFP(self):
         # The case that makes a bare "no row" test unsafe: a zero row is still a roll
@@ -167,6 +171,24 @@ class LeaderboardLineupTests(unittest.TestCase):
         self.assertEqual(
             weekFP(7, 8, {7: {'breakdowns': []}}, {7: [9]}, [], self.FP,
                    settledWeeks={7}), 98.0)
+
+    def testALineupSetIntoALiveSlateIsLocked(self):
+        """The write-side half: an unlocked row banks nothing and leaves no snapshot.
+
+        `lockAllForWeek` runs once at week start, and the equip handler's 409 guard only
+        fires when EXISTING rows are locked, so a user with none — a mid-week signup —
+        could equip into a running slate and never be locked. Read as source text
+        because importing `api.main` drags in the whole app.
+        """
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'api', 'main.py')
+        with open(path, encoding='utf-8') as fh:
+            src = fh.read()
+        marker = 'equippedRepo.deleteByUserWeek(user.id, currentSeason, currentWeek)'
+        self.assertIn(marker, src)
+        writeBlock = src[src.index(marker):src.index(marker) + 1600]
+        self.assertNotIn('locked=False', writeBlock,
+                         'equip writes a row that a live slate will never lock')
+        self.assertIn('locked=_areGamesStarted()', writeBlock)
 
     def testTheSlotMapMatchesTheOneCardsAreEquippedWith(self):
         from managers.cardManager import SLOT_TO_ORDINAL

@@ -10104,7 +10104,15 @@ def setEquippedCards(
                 slot=c.slot,
                 slot_number=SLOT_TO_ORDINAL[c.slot],
                 user_card_id=c.userCardId,
-                locked=False,
+                # ⚠️ LOCK IT IF THE SLATE IS ALREADY LIVE. `lockAllForWeek` runs ONCE, at
+                # week start (seasonManager ~:868), and the 409 guard above only fires
+                # when EXISTING rows are locked — so a user with no rows yet (a brand new
+                # signup mid-week) could equip into a running week and never be locked.
+                # `_processWeekCardEffects` counts only locked rows, so their lineup
+                # banked no card bonus and left no snapshot of what they fielded.
+                # Measured on production: 13 of 21 users had such a week, overwhelmingly
+                # their FIRST, which is the worst possible week to silently score nothing.
+                locked=_areGamesStarted(),
                 streak_count=prevStreakByCardId.get(c.userCardId, 1),
                 peak_output=prevPeakByCardId.get(c.userCardId),
                 weeks_since_break=prevWeeksSinceByCardId.get(c.userCardId, 0),
