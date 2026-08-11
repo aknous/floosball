@@ -302,7 +302,23 @@ def _findUpcomingOpponent(session, favTeamId, season, week, teamManager) -> Tupl
     return getattr(opp, 'elo', 1500.0), getattr(opp, 'abbr', '') or getattr(opp, 'name', '')
 
 
-def buildProjectionContext(session, userId, season, week, seasonManager, playerManager) -> Optional[CardCalcContext]:
+def buildProjectionContext(session, userId, season, week, seasonManager, playerManager,
+                           extraPlayerIds=None) -> Optional[CardCalcContext]:
+    """Build the context a projection scores against.
+
+    ⚠️ `extraPlayerIds` EXISTS FOR CARDS YOU DO NOT OWN. The context loads stats for the
+    players DEPICTED BY YOUR EQUIPPED CARDS, which is right for projecting your own hand
+    — and wrong for the shop and the pack-reveal, where the whole point is a card whose
+    player is not in your lineup. Their stats were absent, so every effect that reads its
+    own player (which post-fusion is most of them) saw zeros and the card projected 0.0.
+    Reported as Slippery and Odometer showing a 0 projection in the shop; measured on
+    template 346, whose player averages 12.9 FP a game.
+
+    The extra players are loaded for STATS and FP HISTORY only. They are deliberately NOT
+    added to `rosterPlayerIds`, because that set is what roster-aggregate effects count
+    over — putting a shop card's player in it would have every OTHER card in the hand
+    project as though you had already bought this one.
+    """
     from database.models import (
         FantasyRoster, PlayerSeasonStats,
         User, UserCurrency, WeeklyModifier,
@@ -335,9 +351,11 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
         except Exception:
             initialRosterPlayerIds = set()
 
+    # Stats are needed for the lineup AND for any candidate being previewed against it.
+    statPlayerIds = set(rosterPlayerIds) | {int(pid) for pid in (extraPlayerIds or []) if pid}
     statRows = (session.query(PlayerSeasonStats)
                 .filter(PlayerSeasonStats.season == season,
-                        PlayerSeasonStats.player_id.in_(rosterPlayerIds))
+                        PlayerSeasonStats.player_id.in_(statPlayerIds))
                 .all())
     rowByPlayer = {r.player_id: r for r in statRows}
 
@@ -350,7 +368,13 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     rosterPlayerTeamIds = {}
     playerSeasonFPPerGame = {}
 
-    for _eq, pid in depictedPairs:
+    # ⚠️ THE EXTRAS ARE LOOKED UP LIKE ANY OTHER PLAYER BUT NEVER FOLD INTO THE ROSTER
+    # AGGREGATES. A shop candidate's own stat line has to be readable or its effect scores
+    # against zeros, but adding its FP and TDs to `weekRawFP` / `rosterTotalTds` would
+    # price every OTHER card in the hand as though the candidate were already equipped.
+    extras = [pid for pid in ({int(p) for p in (extraPlayerIds or []) if p} - rosterPlayerIds)]
+    for pid, onRoster in ([(p, True) for _eq, p in depictedPairs]
+                          + [(p, False) for p in extras]):
         dbPlayer = playerManager.getPlayerById(pid) if playerManager else None
         if dbPlayer:
             rosterPlayerNames[pid] = getattr(dbPlayer, 'name', '')
@@ -372,12 +396,13 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
             "kicking_stats": {"fgs": 0, "fgAtt": 0, "fgYards": 0, "longest": 0, "fg40plus": 0},
         }
         weekPlayerStats[pid] = avg
-        weekRawFP += avg.get("fantasyPoints", 0)
-        rosterTotalTds += (
-            (avg.get("passing_stats", {}) or {}).get("tds", 0)
-            + (avg.get("rushing_stats", {}) or {}).get("runTds", 0)
-            + (avg.get("receiving_stats", {}) or {}).get("rcvTds", 0)
-        )
+        if onRoster:
+            weekRawFP += avg.get("fantasyPoints", 0)
+            rosterTotalTds += (
+                (avg.get("passing_stats", {}) or {}).get("tds", 0)
+                + (avg.get("rushing_stats", {}) or {}).get("runTds", 0)
+                + (avg.get("receiving_stats", {}) or {}).get("rcvTds", 0)
+            )
         if row:
             playerSeasonFPPerGame[pid] = (row.fantasy_points or 0) / max(row.games_played, 1)
 
@@ -613,9 +638,11 @@ def buildProjectionContext(session, userId, season, week, seasonManager, playerM
     # estimated from these completed weeks (weeks before the one being projected).
     from database.models import WeeklyPlayerFP as _WPF
     playerWeeklyFP: Dict[int, list] = {}
+    # Same set as the stats above: the gate's clear-probability is read per player, and a
+    # candidate with no history falls back to a flat 0.5 rather than its real rate.
     for _r in (session.query(_WPF)
                .filter(_WPF.season == season, _WPF.week < week,
-                       _WPF.player_id.in_(rosterPlayerIds))
+                       _WPF.player_id.in_(statPlayerIds))
                .all()):
         playerWeeklyFP.setdefault(_r.player_id, []).append(_r.fantasy_points or 0)
 
@@ -1004,7 +1031,15 @@ def computeCandidateProjection(userCard, session, userId, season, week,
     """
     from database.models import FantasyRoster, EquippedCard
 
-    ctx = buildProjectionContext(session, userId, season, week, seasonManager, playerManager)
+    # The candidate's OWN player has to be in the context, or every effect that reads
+    # its depicted player scores against an absent stat line and the card projects 0.
+    candidatePlayerId = None
+    try:
+        candidatePlayerId = userCard.card_template.player_id
+    except Exception:
+        candidatePlayerId = None
+    ctx = buildProjectionContext(session, userId, season, week, seasonManager, playerManager,
+                                 extraPlayerIds=[candidatePlayerId] if candidatePlayerId else None)
     if ctx is None:
         return None
 
