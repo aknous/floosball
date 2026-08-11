@@ -506,6 +506,12 @@ class FantasyTracker:
 
             # ── 4. Stored card bonuses per user per week ──
             weekCardBonusMap = self._getWeekCardBonusesFromDB(session, seasonNum)
+            # Weeks that have CLOSED, league-wide. `_processWeekCardEffects` writes a row
+            # for every user who fielded a lineup (including at zero), so once any row
+            # exists for a week, that week's record is complete and a user missing from
+            # it fielded nothing. Needed because `equipped_cards` keeps no history of
+            # its own — see `lineupForWeek`.
+            settledWeeks = {wk for weeks in weekCardBonusMap.values() for wk in weeks}
 
             # ── 5. Equipped cards for current week ──
             equippedByUser = {}
@@ -668,9 +674,21 @@ class FantasyTracker:
                     revised, so it is the record; equipment answers only for a week that
                     has not banked yet.
                     """
-                    pids = bankedLineupPlayerIds(userWeekBonuses.get(wk))
-                    if pids:
-                        return pids
+                    banked = userWeekBonuses.get(wk)
+                    if banked is not None:
+                        pids = bankedLineupPlayerIds(banked)
+                        # A row with no breakdown predates breakdown storage; its
+                        # equipped rows are the only surviving hint.
+                        if pids:
+                            return pids
+                    elif wk in settledWeeks:
+                        # ⚠️ The week closed with no record of this user, so they fielded
+                        # nothing. Their equipped rows for it were stamped by a LATER
+                        # equip (the handler writes under `currentWeek`, and the next
+                        # week is seeded by carrying them forward), so trusting them pays
+                        # out a lineup set after the whistle. Two such users on
+                        # production at week 7.
+                        return []
                     if wk == currentWeek:
                         return [pid for _eq, pid in currentDepicted]
                     return [pid for _eq, pid in equippedByUserWeek.get((userId, wk), [])]
@@ -693,6 +711,12 @@ class FantasyTracker:
 
                 # Per-player breakdown for the CURRENT lineup (+ each player's season
                 # earned across the weeks THEY were equipped).
+                #
+                # A player only shows week FP if they were in THIS week's lineup. Someone
+                # who equips after the week closes is holding cards for the week ahead,
+                # and crediting them with what those players scored while unowned would
+                # print rows that do not sum to the week total above.
+                thisWeekLineup = set(lineupForWeek(currentWeek))
                 rosterPlayers = []
                 shownEarned = 0.0
                 for eq, pid in currentDepicted:
@@ -702,7 +726,8 @@ class FantasyTracker:
                         for w in playerEquippedWeeks.get(pid, set())
                     )
                     shownEarned += playerEarnedFP
-                    playerWeekFP = weekPlayerFPMap.get(pid, {}).get(currentWeek, 0)
+                    playerWeekFP = (weekPlayerFPMap.get(pid, {}).get(currentWeek, 0)
+                                    if pid in thisWeekLineup else 0)
                     rosterPlayers.append({
                         "slot": getattr(eq, 'slot', None) or (
                             pObj.position.name

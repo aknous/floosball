@@ -28,12 +28,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from managers.fantasyTracker import _SLOT_LABEL_BY_ORDINAL, bankedLineupPlayerIds
 
 
-def weekFP(week, currentWeek, banked, equippedRows, live, fpByPlayerWeek):
-    """`getSnapshot`'s per-week base FP, in the order it resolves a lineup."""
-    pids = bankedLineupPlayerIds(banked.get(week))
-    if not pids:
-        pids = live if week == currentWeek else equippedRows.get(week, [])
-    return sum(fpByPlayerWeek.get((p, week), 0) for p in pids)
+def lineupForWeek(week, currentWeek, banked, equippedRows, live, settledWeeks=()):
+    """`getSnapshot`'s resolver, in the order it decides."""
+    row = banked.get(week)
+    if row is not None:
+        pids = bankedLineupPlayerIds(row)
+        if pids:
+            return pids
+    elif week in settledWeeks:
+        return []
+    return live if week == currentWeek else equippedRows.get(week, [])
+
+
+def weekFP(week, currentWeek, banked, equippedRows, live, fpByPlayerWeek, settledWeeks=()):
+    """`getSnapshot`'s per-week base FP."""
+    return sum(fpByPlayerWeek.get((p, week), 0)
+               for p in lineupForWeek(week, currentWeek, banked, equippedRows, live,
+                                      settledWeeks))
 
 
 def rowsFor(banked, breakdowns, liveLineup):
@@ -128,6 +139,34 @@ class LeaderboardLineupTests(unittest.TestCase):
         # An empty-slot breakdown row must not be mistaken for "this week scored 0".
         banked = {7: {'breakdowns': [{'effectName': 'none'}]}}
         self.assertEqual(weekFP(7, 8, banked, self.ROWS_AFTER_SWAP, [], self.FP), 98.0)
+
+    # -- a closed week has a complete roll ----------------------------------
+    #
+    # The snapshot used to be written only `if totalFP > 0 or floobitsEarned > 0`, so a
+    # settled week held no record of anyone whose cards earned nothing, and there was
+    # no way to tell them from someone who equipped after the whistle. It is now written
+    # whenever a lineup was fielded, which is what lets the absence below mean something.
+
+    def testEquippingAfterAWeekClosesEarnsNothingForIt(self):
+        """Two such users on production at week 7, holding week-7 rows they never played."""
+        self.assertEqual(
+            weekFP(7, 7, {}, {7: [9]}, [9], self.FP, settledWeeks={7}), 0.0)
+
+    def testFieldingALineupThatEarnedNoBonusStillCountsItsBaseFP(self):
+        # The case that makes a bare "no row" test unsafe: a zero row is still a roll
+        # call, so the week counts normally.
+        banked = {7: {'breakdowns': [{'playerId': 2, 'playerName': 'Robbie Tumbles'}]}}
+        self.assertEqual(weekFP(7, 7, banked, {7: [9]}, [9], self.FP, settledWeeks={7}), 61.0)
+
+    def testAnOpenWeekIsNotTreatedAsAbsence(self):
+        # Before the week closes there is no roll call, so equipment is all there is.
+        self.assertEqual(weekFP(7, 7, {}, {}, [9], self.FP, settledWeeks={6}), 98.0)
+
+    def testALegacyRowWithNoBreakdownDoesNotZeroTheWeek(self):
+        # Weeks banked before breakdowns were stored must not read as absence.
+        self.assertEqual(
+            weekFP(7, 8, {7: {'breakdowns': []}}, {7: [9]}, [], self.FP,
+                   settledWeeks={7}), 98.0)
 
     def testTheSlotMapMatchesTheOneCardsAreEquippedWith(self):
         from managers.cardManager import SLOT_TO_ORDINAL

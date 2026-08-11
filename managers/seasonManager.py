@@ -2360,8 +2360,20 @@ class SeasonManager:
                         except Exception as _e:
                             logger.warning(f"Compound hook failed: {_e}")
 
-                    # Persist FP bonus
-                    if totalFP > 0 or result.floobitsEarned > 0:
+                    # Persist FP bonus.
+                    #
+                    # ⚠️ THIS ROW IS THE WEEK'S LINEUP SNAPSHOT, not just a payout, so it
+                    # is written whenever a lineup was FIELDED — including at zero. It
+                    # used to be conditional on `totalFP > 0 or floobitsEarned > 0`, and
+                    # a settled week therefore had no record of anyone whose cards
+                    # happened to earn nothing. That matters because `equipped_cards` is
+                    # rewritten by any later re-equip (see fantasyTracker's
+                    # `lineupForWeek`), so with no row here there is NOTHING left saying
+                    # who actually played that week, and the leaderboard falls back to
+                    # whatever is equipped now. A zero row sums to zero everywhere it is
+                    # read; what it adds is the ability to tell "fielded and earned
+                    # nothing" from "was not there".
+                    if userEquipped:
                         if totalFP > 0:
                             roster.card_bonus_points = (roster.card_bonus_points or 0) + totalFP
                         import json as _json
