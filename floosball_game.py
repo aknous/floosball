@@ -9883,6 +9883,13 @@ class Game:
         if eventDict is None:
             return None
         eventDict['trigger'] = triggerType
+        # ⚠️ WALL CLOCK, so the Bleachers can interleave this with fan posts. The rail
+        # carries two voices: cutaways, which know only the GAME clock, and shouts from
+        # the stands, which are stamped `created_at` in real time. With nothing in common
+        # the rail could only concatenate them — every sideline line landed under every
+        # fan post regardless of when it was said. This is the shared axis.
+        from datetime import datetime as _dt
+        eventDict['createdAt'] = _dt.utcnow().isoformat() + 'Z'
         self._sidelineCutawaysFired += 1
         return eventDict
 
