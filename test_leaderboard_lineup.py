@@ -141,17 +141,18 @@ class LeaderboardLineupTests(unittest.TestCase):
     # -- a closed week has a complete roll ----------------------------------
     #
     # The snapshot used to be written only `if totalFP > 0 or floobitsEarned > 0`, so a
-    # settled week held no record of anyone whose cards earned nothing, and there was
-    # no way to tell them from someone who equipped after the whistle. It is now written
-    # whenever a lineup was fielded, which is what lets the absence below mean something.
+    # settled week held no record of anyone whose cards earned nothing. It is now written
+    # whenever a lineup was fielded. Until every week in range was recorded that way,
+    # absence stays unreadable — see the first test below.
 
     def testAMissingRowIsNotReadAsAbsence(self):
         """⚠️ The rule that was nearly shipped and would have deleted real FP.
 
-        `_processWeekCardEffects` counts only LOCKED rows and `lockAllForWeek` runs once
-        at week start, so a user who signed up mid-week banked no row despite fielding a
-        lineup. On production that was 13 of 21 users, overwhelmingly their FIRST week.
-        Absence of a row therefore means "no record", never "did not play".
+        The row was historically written only when the lineup PAID, so a lineup of
+        no-effect `standard` starter cards was fielded and banked nothing. On production
+        13 of 21 users have such a week, some MID-TENURE (SweatpantsDoodlebug89 weeks 4
+        and 6), which rules out "had not joined yet". Absence means "no record", never
+        "did not play".
         """
         self.assertEqual(
             weekFP(7, 7, {}, {7: [9]}, [9], self.FP, settledWeeks={7}), 98.0)
@@ -172,23 +173,23 @@ class LeaderboardLineupTests(unittest.TestCase):
             weekFP(7, 8, {7: {'breakdowns': []}}, {7: [9]}, [], self.FP,
                    settledWeeks={7}), 98.0)
 
-    def testALineupSetIntoALiveSlateIsLocked(self):
-        """The write-side half: an unlocked row banks nothing and leaves no snapshot.
+    def testTheSnapshotIsWrittenForALineupThatPaidNothing(self):
+        """The write-side half, and the reason absence stays unreadable.
 
-        `lockAllForWeek` runs once at week start, and the equip handler's 409 guard only
-        fires when EXISTING rows are locked, so a user with none — a mid-week signup —
-        could equip into a running slate and never be locked. Read as source text
-        because importing `api.main` drags in the whole app.
+        The row used to be written only `if totalFP > 0 or result.floobitsEarned > 0`, so
+        a lineup of no-effect `standard` starter cards was fielded and left no trace.
+        Read as source text because importing seasonManager drags in the whole app.
         """
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'api', 'main.py')
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'managers', 'seasonManager.py')
         with open(path, encoding='utf-8') as fh:
             src = fh.read()
-        marker = 'equippedRepo.deleteByUserWeek(user.id, currentSeason, currentWeek)'
+        marker = 'weekBonus = WeeklyCardBonus('
         self.assertIn(marker, src)
-        writeBlock = src[src.index(marker):src.index(marker) + 1600]
-        self.assertNotIn('locked=False', writeBlock,
-                         'equip writes a row that a live slate will never lock')
-        self.assertIn('locked=_areGamesStarted()', writeBlock)
+        guard = src[max(0, src.index(marker) - 4200):src.index(marker)]
+        self.assertNotIn('if totalFP > 0 or result.floobitsEarned > 0:', guard,
+                         'the week snapshot is conditional on the lineup paying out')
+        self.assertIn('if userEquipped:', guard)
 
     def testTheSlotMapMatchesTheOneCardsAreEquippedWith(self):
         from managers.cardManager import SLOT_TO_ORDINAL

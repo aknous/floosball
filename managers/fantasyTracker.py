@@ -676,15 +676,19 @@ class FantasyTracker:
                         if pids:
                             return pids
                     # ⚠️ A MISSING ROW DOES NOT MEAN THE USER WAS ABSENT, so it is NOT
-                    # treated as an empty lineup. `_processWeekCardEffects` counts only
-                    # rows with `locked=True`, and `lockAllForWeek` runs ONCE at week
-                    # start — a user who signed up mid-week equipped into a running week
-                    # and was never locked. Measured on production: 13 of 21 users have a
-                    # week with a lineup and no banked row, overwhelmingly their FIRST.
-                    # Reading absence into that would have deleted real base FP from most
-                    # of the league. The equip handler now locks against a live slate, so
-                    # the snapshot closes going forward, but weeks 1-7 keep their holes
-                    # and this must stay permissive.
+                    # treated as an empty lineup — however tempting, because a user who
+                    # signs up mid-week equips between slates, lands rows on the week
+                    # that just finished, and IS credited base FP for a week they did not
+                    # play. The reason it cannot be tightened yet: the snapshot row was
+                    # historically written only when a lineup PAID (`totalFP > 0 or
+                    # floobitsEarned > 0`), so a lineup of no-effect `standard` starter
+                    # cards banked nothing and left no row despite being fielded. On
+                    # production 13 of 21 users have such a week, and some are mid-tenure
+                    # (SweatpantsDoodlebug89 weeks 4 and 6), which rules out "they had
+                    # not joined yet" as the explanation. Zeroing would delete real FP.
+                    # `_processWeekCardEffects` now writes a row whenever a lineup was
+                    # fielded, so weeks from that deploy onward are complete and this can
+                    # tighten once no incomplete week is still in range.
                     if wk == currentWeek:
                         return [pid for _eq, pid in currentDepicted]
                     return [pid for _eq, pid in equippedByUserWeek.get((userId, wk), [])]
