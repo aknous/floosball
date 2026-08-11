@@ -791,9 +791,13 @@ class FantasyTracker:
                             "gameScore": gameScore,
                         }
 
-                # ── Player game stats for display (current lineup) ──
+                # ── Player game stats for display (this week's lineup) ──
+                # Keyed by player id and looked up per displayed row, so it must cover
+                # whoever is DISPLAYED. Once the week banks, that is the banked lineup
+                # rather than the live one, and a row missing from here loses the game
+                # line under its name.
                 playerGameStats = {}
-                for pid in rosterPlayerIds:
+                for pid in rosterPlayerIds | set(lineupForWeek(currentWeek)):
                     rawStats = allPlayerRawStats.get(pid)
                     if rawStats:
                         playerGameStats[pid] = rawStats
