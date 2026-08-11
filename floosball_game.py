@@ -5402,6 +5402,19 @@ class Game:
         self.turnover(self.offensiveTeam, self.defensiveTeam, self.yardsToSafety)
         self._pendingPossessionChange = True
 
+    def _playAlreadyInFeed(self, play) -> bool:
+        """Has this exact Play already been listed in the feed?
+
+        IDENTITY, not equality — the play loop reuses one `self.play` per snap and the
+        question is only ever whether that object was fed twice. The feed is the record,
+        so it is also the answer: any branch that formats and feeds a play mid-drive can
+        break the loop without having to signal that fact through a flag.
+        """
+        if play is None:
+            return False
+        return any(isinstance(entry, dict) and entry.get('play') is play
+                   for entry in self.gameFeed)
+
     def _chessClockDepletionTurnover(self) -> bool:
         """Chess clock: an offense that spends its entire time budget to 0 mid-drive loses
         the ball IMMEDIATELY (it can't keep possessing on empty) — force a turnover to the
@@ -6996,7 +7009,16 @@ class Game:
                 break
             # Format and add previous play to feed BEFORE quarter transitions
             # This ensures Q4 plays appear before OT events
-            lastPlayFormatted = getattr(self, '_pendingPossessionChange', False)
+            #
+            # ⚠️ `lastPlayFormatted` is a LOCAL, so it dies with each drive and has to be
+            # re-derived here. A possession change is the usual proof that the drive-ending
+            # branch already fed its play — but it is not the only way a drive ends. A punt
+            # MUFFED AND RECOVERED BY THE KICKING TEAM feeds and broadcasts the play and
+            # then breaks with the SAME offense still on the field, so nothing set
+            # `_pendingPossessionChange` and the next iteration listed that play a SECOND
+            # time (prod game 108, Q3 4:06). Ask the feed itself as well.
+            lastPlayFormatted = (getattr(self, '_pendingPossessionChange', False)
+                                 or self._playAlreadyInFeed(getattr(self, 'play', None)))
             if self.totalPlays > 0 and self.gameClockSeconds <= 0:
                 # Broadcast the last play with the CURRENT quarter before advanceQuarter() changes it.
                 # Use playResult (not playText) to check if the play actually ran.
@@ -8111,11 +8133,7 @@ class Game:
                             # Kneels and spikes were already inserted into gameFeed
                             # before falling through to outcome handling — don't
                             # double-list the same play when it ends in a safety.
-                            playInFeed = any(
-                                isinstance(entry, dict) and entry.get('play') is self.play
-                                for entry in self.gameFeed
-                            )
-                            if not playInFeed:
+                            if not self._playAlreadyInFeed(self.play):
                                 self.gameFeed.insert(0, {'play': self.play})
                             self.highlights.insert(0, {'play': self.play})
                             self.leagueHighlights.insert(0, {'play': self.play})
@@ -8174,11 +8192,7 @@ class Game:
         # which never runs when the game ends. Handle all cases here.
         # Scan the whole feed: a sideline cutaway inserted by the prior broadcast can
         # push the play off index 0 even when it was already added inside the loop.
-        alreadyInFeed = any(
-            entry.get('play') is self.play
-            for entry in self.gameFeed
-            if isinstance(entry, dict)
-        )
+        alreadyInFeed = self._playAlreadyInFeed(self.play)
         if self.totalPlays > 0 and self.play:
             playActuallyRan = getattr(self.play, 'playResult', None) is not None
             if playActuallyRan and not alreadyInFeed:
@@ -11654,10 +11668,11 @@ class Game:
         # "Npt Try" label (via the serialized conversionPoints), so the play text stays the
         # clean run/pass narration — no "Going for N from the M —" prefix.
 
-        # Defensive: only insert if this Play object isn't already at the top
-        # of the feed. Guards against any unexpected double-invocation path.
-        alreadyInFeed = bool(self.gameFeed) and self.gameFeed[0].get('play') is self.play
-        if not alreadyInFeed:
+        # Defensive: only insert if this Play object isn't already in the feed.
+        # Guards against any unexpected double-invocation path. Scans the whole feed
+        # rather than index 0 — a sideline cutaway inserted by the prior broadcast can
+        # push the play down a slot.
+        if not self._playAlreadyInFeed(self.play):
             self.gameFeed.insert(0, {'play': self.play})
         if good:
             self.highlights.insert(0, {'play': self.play})
