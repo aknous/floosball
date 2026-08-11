@@ -276,6 +276,44 @@ class LeaderboardLineupTests(unittest.TestCase):
         self.assertEqual(weekFP(1, 2, {}, {1: [9]}, [], fp, boundary=(1, 1),
                                 settledWeeks={1}), 0.0)
 
+    def testTheWeeklyBoardAppliesTheSameGate(self):
+        """⚠️ The fifth miss: a SECOND door onto the same mutable rows.
+
+        `/api/fantasy/leaderboard/weekly` builds straight from `_equippedRostersByWeek`
+        and never touched `getSnapshot`, so gating the snapshot left it wide open.
+        Reported from testing: equipping after week 2's games but before the week 3
+        rollover put week 2's points on the week 2 board.
+        """
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'api', 'main.py')
+        with open(path, encoding='utf-8') as fh:
+            src = fh.read()
+        start = src.index('def get_fantasy_weekly_leaderboard')
+        body = src[start:src.index('# CURRENCY (FLOOBITS)', start)]
+        self.assertIn('weekIsFullyRecorded', body, 'the weekly board has no boundary gate')
+        self.assertIn('bankedRows', body, 'the weekly board does not read the banked record')
+        self.assertIn('continue', body, 'a closed week with no row is not skipped')
+
+    def testEveryHistoricalFpReaderIsAccountedFor(self):
+        """The sweep that should have happened before declaring the first fix done.
+
+        Any reader of a PAST week's equipped rows can credit a lineup put on after the
+        whistle. Readers pinned to `currentWeek` are the live lineup and are fine.
+        """
+        import re
+        root = os.path.dirname(os.path.abspath(__file__))
+        # Match the operand itself rather than using a lookahead: `\s*` backtracks to
+        # zero width, so `(?!currentWeek)` passes on the space and flags every line.
+        pattern = re.compile(r'EquippedCard\.week\s*==\s*(\w+)')
+        offenders = []
+        for rel in ('api/main.py', 'managers/fantasyTracker.py'):
+            with open(os.path.join(root, rel), encoding='utf-8') as fh:
+                for i, line in enumerate(fh, 1):
+                    m = pattern.search(line)
+                    if m and m.group(1) != 'currentWeek':
+                        offenders.append(f'{rel}:{i} reads week={m.group(1)}')
+        self.assertEqual(offenders, [],
+                         f'past-week equipped reads outside the gate: {offenders}')
+
     def testTheBoundaryIsReadFromTheStampedSetting(self):
         self.assertEqual(completeSnapshotFrom(lambda k: '2:5'), (2, 5))
         self.assertIsNone(completeSnapshotFrom(lambda k: None))

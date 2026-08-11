@@ -8712,7 +8712,10 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
     """
     response.headers["Cache-Control"] = "public, max-age=10"
     from database.connection import get_session
-    from database.models import User
+    from database.models import User, WeeklyPlayerFP
+    from game_rules import _readAppSetting
+    from managers.fantasyTracker import (_SLOT_LABEL_BY_ORDINAL, completeSnapshotFrom,
+                                         weekIsFullyRecorded)
 
     seasonNum = season if season is not None else _getCurrentSeasonNumber()
     if seasonNum is None:
@@ -8765,25 +8768,52 @@ def get_fantasy_weekly_leaderboard(response: Response, season: Optional[int] = Q
                 userCache[uid] = session.get(User, uid)
             return userCache[uid]
 
-        # Build per-week entries from the equipped lineups
+        # ⚠️ THIS BOARD MUST FOLLOW THE SAME RULE AS `getSnapshot`, and did not. It builds
+        # from `equipped_cards`, which the equip handler REWRITES under the CURRENT week,
+        # so a lineup assembled after a week's games have finished lands on that week and
+        # was credited with its FP. Reported from testing: equipping after week 2's games
+        # but before the week 3 rollover put week 2's points on the week 2 board. Gating
+        # only `getSnapshot` left this endpoint as a second, ungated door onto the same
+        # mutable rows.
+        boundary = completeSnapshotFrom(_readAppSetting)
+        settledWeeks = {
+            w for (w,) in session.query(WeeklyPlayerFP.week)
+            .filter_by(season=seasonNum).distinct().all()
+        }
+
+        def weekIsClosed(wk: int) -> bool:
+            """Banked AND completely recorded, so an absent row means "did not field"."""
+            return wk in settledWeeks and weekIsFullyRecorded(seasonNum, wk, boundary)
+
+        # Build per-week entries from the lineup that actually played that week
         weekData: Dict[int, Dict[int, dict]] = {}
         for (userId, week), lineup in equippedByWeek.items():
+            bonus = weekCardBonus.get(userId, {}).get(week, {})
+            bankedRows = [b for b in (bonus.get("breakdowns") or []) if b.get("playerId")]
+            if bankedRows:
+                # The banked record: written once at week end and never revised.
+                lineupRows = [(_SLOT_LABEL_BY_ORDINAL.get(b.get("slotNumber"), "?"),
+                               b.get("playerId"), b.get("playerName")) for b in bankedRows]
+            elif weekIsClosed(week):
+                continue          # no games, no points
+            else:
+                lineupRows = [(eq.slot or "?", pid, None) for eq, pid in lineup]
+
             players = []
             rosterFP = 0.0
-            for eq, playerId in lineup:
+            for slot, playerId, bankedName in lineupRows:
                 fp = playerWeekFP(playerId, week)
                 rosterFP += fp
                 playerObj = floosball_app.playerManager.getPlayerById(playerId) if floosball_app else None
                 hasTeam = playerObj is not None and hasattr(playerObj, 'team') and hasattr(playerObj.team, 'name')
                 players.append({
-                    "slot": eq.slot or "?",
-                    "playerName": playerObj.name if playerObj else "Unknown",
+                    "slot": slot,
+                    "playerName": playerObj.name if playerObj else (bankedName or "Unknown"),
                     "teamAbbr": getattr(playerObj.team, 'abbr', '') if hasTeam else "",
                     "teamId": getattr(playerObj.team, 'id', None) if hasTeam else None,
                     "weekPoints": round(fp, 1),
                 })
 
-            bonus = weekCardBonus.get(userId, {}).get(week, {})
             cardBonusFP = float(bonus.get("fp", 0) or 0)
             weekPoints = rosterFP + cardBonusFP
 

@@ -61162,3 +61162,810 @@ Shutting down API server...
 Shutting down API server...
 2026-08-10 22:20:18 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
 2026-08-10 22:24:20 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 22:25:19 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 22:25:20 - floosball.api_server - INFO - ============================================================
+2026-08-10 22:25:20 - floosball.api_server - INFO - Floosball API Server
+2026-08-10 22:25:20 - floosball.api_server - INFO - ============================================================
+2026-08-10 22:25:20 - floosball.api_server - INFO - Timing Mode: SCHEDULED
+2026-08-10 22:25:20 - floosball.api_server - INFO - Fresh Start: True
+2026-08-10 22:25:20 - floosball.api_server - INFO - Card Reset: False
+2026-08-10 22:25:20 - floosball.api_server - INFO - Card Reset (current season only): False
+2026-08-10 22:25:20 - floosball.api_server - INFO - ============================================================
+2026-08-10 22:25:20 - floosball.api_server - INFO - Initializing Floosball Application...
+2026-08-10 22:25:20 - floosball.api_server - INFO - Fresh start requested - clearing database
+2026-08-10 22:25:20 - floosball.database - WARNING - Failed to clear season-scoped app settings on fresh start: name 'text' is not defined
+2026-08-10 22:25:20 - floosball.database - INFO - Database cleared (preserved users, league_archive, app_settings, beta_allowlist, unused_names, curated_names) at /Users/andrew/Projects/floosball/data/floosball.db
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: added player_attributes.demeanor
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: ensured showcase_slots table
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: ensured uq_teams_coach_id (one coach per team)
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: created play_reactions table
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: created uq_equipped_card_slot_pos index
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: added player_attributes.archetype
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: player_sentiment_ratings ensured
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: coach_sentiment_votes ensured
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: team_feed_posts ensured
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: app_settings table ensured with default rows
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: ensured spectator_progress table
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: ensured supporter_dividends table
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: ensured award_votes + hof_ballot_entries tables
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: ensured team_facilities table
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: ensured pending_names table
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: ensured facility_projects + team_treasury + upkeep_funded + facility_votes
+2026-08-10 22:25:20 - floosball.database - INFO -   Migration: replaced 'random' powerup slugs in pending_rewards
+2026-08-10 22:25:20 - floosball.database - INFO -   Backfill diagnostic: game_player_stats has 0 rows
+2026-08-10 22:25:20 - floosball.database - INFO -   Backfill: no empty rows found. Total PSS rows: 0
+2026-08-10 22:25:20 - floosball.config - INFO - Cached configuration from config.json
+2026-08-10 22:25:20 - floosball.database - INFO -   Seeded 112 achievement templates
+2026-08-10 22:25:20 - floosball.database - INFO - Seeded 256 new names from config into unused_names pool
+2026-08-10 22:25:20 - floosball.application - INFO - Initializing FloosballApplication
+2026-08-10 22:25:20 - floosball.playerManager - INFO - PlayerManager using DATABASE storage
+2026-08-10 22:25:20 - floosball.playerManager - INFO - PlayerManager initialized
+2026-08-10 22:25:20 - floosball.team_manager - INFO - TeamManager using DATABASE storage
+2026-08-10 22:25:20 - floosball.leagueManager - INFO - LeagueManager using DATABASE storage
+2026-08-10 22:25:20 - floosball.leagueManager - INFO - LeagueManager initialized
+2026-08-10 22:25:20 - floosball.record_manager - INFO - RecordManager using DATABASE storage
+2026-08-10 22:25:20 - floosball.personalityReactionEngine - INFO - Loaded 28 personalities, 17 quirks, 247 hometowns, 10 favorite categories
+2026-08-10 22:25:20 - floosball.personalityManager - INFO - PersonalityManager initialized
+2026-08-10 22:25:20 - floosball.application - INFO - All managers using shared database session to prevent locking
+2026-08-10 22:25:20 - floosball.seasonManager - INFO - SeasonManager using DATABASE storage
+2026-08-10 22:25:20 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2026-08-10 22:25:20 - floosball.seasonManager - INFO - SeasonManager initialized
+2026-08-10 22:25:20 - floosball.application - INFO - Registered all managers with service container
+2026-08-10 22:25:20 - floosball.application - INFO - FloosballApplication initialized successfully
+2026-08-10 22:25:20 - floosball.application - INFO - Initializing league system
+2026-08-10 22:25:20 - floosball.timingManager - INFO - Timing mode changed to scheduled
+2026-08-10 22:25:20 - floosball.seasonManager - INFO - Season timing mode set to scheduled
+2026-08-10 22:25:20 - floosball.application - INFO - Application timing mode set to scheduled
+2026-08-10 22:25:20 - floosball.record_manager - INFO - No records found in database, using empty structure
+2026-08-10 22:25:20 - floosball.application - INFO - Setting up players...
+2026-08-10 22:25:20 - floosball.playerManager - INFO - Generating initial player pool
+2026-08-10 22:25:20 - floosball.playerManager - INFO - No existing players found, generating new player pool
+2026-08-10 22:25:20 - floosball.playerManager - INFO - Initial pool: 192 players for 32 clubs (6 slots each)
+2026-08-10 22:25:20 - floosball.playerManager - INFO - Loaded 886 unused names from database
+2026-08-10 22:25:20 - floosball.playerManager - INFO - Generated 192 total players
+2026-08-10 22:25:20 - floosball.application - INFO - Setting up teams...
+2026-08-10 22:25:20 - floosball.team_manager - INFO - Loaded 0 teams from data
+2026-08-10 22:25:20 - floosball.team_manager - INFO - Created 32 new teams from config
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Generated 32 teams
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Saved 32 teams to database
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Seeded facilities (tier-grandfathered) for 32 team(s)
+2026-08-10 22:25:23 - floosball.application - INFO - Setting up leagues...
+2026-08-10 22:25:23 - floosball.leagueManager - INFO - Creating league structure from config
+2026-08-10 22:25:23 - floosball.leagueManager - INFO - Applied persisted league alignment from app_settings
+2026-08-10 22:25:23 - floosball.leagueManager - INFO - Saved 2 leagues to database
+2026-08-10 22:25:23 - floosball.leagueManager - INFO - Created 2 leagues with 32 teams
+2026-08-10 22:25:23 - floosball.application - INFO - Assigning players to teams...
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Socks McElroy: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Damica Hardhat: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Glint Gaspereaux: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Johny Frankly: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Rusty Apology: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Fizzle Tubthumper: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Nico The Fox: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Cal Blandin: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Folksy Tallboy: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Kissy Skeeballer: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Rocio Mulgrew: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Aaron Bingus: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Bleeb Refurb: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Penguin Newsboy: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Martha Fright: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Rancho Frutch: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Xander Bilson: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Chick Neriardi: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Petty Lord Aedilhun: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Bigwig Sauceman: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Boots Huevo: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Cowpoke Tungle: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Winnie Infernal: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Flexon Anchorarms: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Daytona Sid: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Moist Parables: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Grandpa Rickland: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Johnnie Noble: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Slaps Rohnson: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Critter Eclair: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Mabel Beachvolleyball: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Grover Mailfraud: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Alanis Ratking: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Beedo Meemaw: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Ricky Two Sinks: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Dewey Cloudpuncher: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Cantina Fawcette: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Jomber Trammyn: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Sam Colt: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Lohnny Roosevelt: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Doncha Broski: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for John St. Funk: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Bromley LaCroix: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Alister Broomhandle: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Bailiff Gooddog: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Tanuki Batman: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Denver Granite: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Mario Trolleyproblem: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Al Listen: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Serenity Candor: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Gorran, the Kingslayer: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Thalia Bouncepad: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Audra Earthen: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Glenallen Cliffworm: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Delimeat Garrison: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Troubador Mernandez: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Lul Diggle: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Aggressive Librarian: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Velka, Seeker of Sins: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Grandma Yousuf: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Marty Longisland: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Mousey Dalton: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Torque Manderlay: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Priscilla Bass: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Ultraviolet Samson: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Roderic, The Undying: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Spheroid Kittridge: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Laserdisc Gutpunch: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Rusty Mateo: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Trolley Sanchez: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Squids Johnson: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Bernie Plackett: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Sir Sturdy: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Kirt Vurr: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Tessa Modest: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Crunchtime McCown: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Jumpjet Trinidad: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Cottan Jean: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Cornbread Tippins: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Sweaty Protoge: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Mikey Lookalike: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Swap Dreamy: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Jett Duke: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Georgia Slapchop: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Judge Jackal: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Katydid Flyfisher: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Shaggy Porcelain: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Timpani Cottonblend: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Lime Warfield: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Henry Nurple: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Kent Camel: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Winston Jazz Hands: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Casio Foxtrot: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Hancock Insufferable: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Elijah Mockingbird: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Fondue Messaround: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Jollyroger Favicon: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Slippy Catlion: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Tomato Kablooey: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Acid Del Mar: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Viggy Burningman: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Taya McBride: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Commodore Blackshaw: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Subray Wizzbang: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Fargus Danders: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Scorch Jumpman: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Spooky Fred: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Invader Jim: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Leslie Waterguns: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Toadstool Nightmare: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Frankie Cork: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Esmerelda Winedrunk: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Silencio Portland: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Edgar Bongos: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Allen Blase: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Chud Bumpington: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Steven Phones: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Cam McLoverly: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Archer Littlebreath: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Bodie The Dog: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Tricky Hotjam: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Tobias Clayhanger: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Tock Klaxxon: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Jark Pedensen: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Newt Bleeze: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Spanch Furrier: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Junior Gravy: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Sopie News: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Dungaree Shaman: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Sharon Boing: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Haircut LaRoy: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Sister Lettuce: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Pontiac Gaines: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Cussy Volcano: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Zathanael Spindizzy: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Scrapmetal Meringue: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Bobson Gearloose: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Mochi Pushpin: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Proctor Fantastic: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Cyril Trigun: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Candi Milkwater: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Tuna Melt: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Marsha Pause: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Lecter Llama: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Billy Bloom: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Coconut Deep: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Zeal Fletcher: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Jonboy Montanya: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Rudolph Owlbear: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Chap Tabasco: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Jerry: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Discount Taxidermist: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Gillman Lubel: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Orla Shadowban: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Cannibal Dan: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Kevin Oddly: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Yorky Gleason: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Garth Tater: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Riverdale Dreamcast: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Dingers Culpepper: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Tackling Dummy: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Ducky Spacejam: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Trackstar Ducat: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Norman Hairdresser: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Dialup McAvoy: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Alvin DeTamble: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Joey Goodnight: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Finnegan Facepuncher: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Grunt Deepfrier: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for No-Feet Bobbins: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Bobbysoxer Portcullis: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Bootleg Dentist: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Vinny Halftone: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Snines Vignette: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Harlan Paulsen: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Elliot Riverbeans: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Ren Aziza: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Cutaway Howitzer: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Phipps Nomdeplume: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Snicklefritz Sandbar: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Fergie Dennison: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Ladybug Looksee: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Dennis Nervis: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Fred Gregg: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Nutmeg Milkymoon: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Magilla Coolmom: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Grunge McBlaze: term=3, termRemaining=3
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Mary-Sue Powerwalk: term=1, termRemaining=1
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Trisha Starlight: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Maisie Cliche: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Kudos Jenderson: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract for Gutler LaCronks: term=2, termRemaining=2
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Fixed contract state for 192 players during team assignment
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Assigned 0 players to team rosters, 192 free agents identified
+2026-08-10 22:25:23 - floosball.application - INFO - Draft check: 32/32 teams have empty rosters. Needs draft: True
+2026-08-10 22:25:23 - floosball.application - INFO - Conducting initial draft...
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Starting initial player draft
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Draft complete: 0 undrafted players moved to free agency
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Draft complete. 192 players drafted, 192 free agents
+2026-08-10 22:25:23 - floosball.application - INFO - Assigning personality traits...
+2026-08-10 22:25:23 - floosball.application - INFO - Personality assigned: 384 players (148 base, 218 common variants, 18 rare variants), 0 quirked
+2026-08-10 22:25:23 - floosball.application - INFO -   → rare variants in league: alien, android, dramatic, fossil, knight, mystic, time_traveler
+2026-08-10 22:25:23 - floosball.application - INFO - Initializing teams with rosters...
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Assigned offense tiers for all teams
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Avatar pre-generation complete: 0 new, 32 cached
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Initialized 32 teams
+2026-08-10 22:25:23 - floosball.application - INFO - Calculating initial ELO ratings...
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Calculating new ELO ratings for all teams
+2026-08-10 22:25:23 - floosball.team_manager - INFO - ELO ratings updated for 32 teams (mean rating: 75)
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Saving player data to database
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Saved 192 players to database (192 active, 0 retired)
+2026-08-10 22:25:23 - floosball.playerManager - INFO - Team assignment stats: 192 with teams, 0 free agents, 0 retired, 0 null teams, 0 errors
+2026-08-10 22:25:23 - floosball.leagueManager - INFO - Saved league data for 2 leagues
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Saved 32 teams to database
+2026-08-10 22:25:23 - floosball.record_manager - INFO - Saved 0 records to database
+2026-08-10 22:25:23 - floosball.application - INFO - League initialization complete
+2026-08-10 22:25:23 - floosball.api - INFO - FloosballApplication reference set in API
+2026-08-10 22:25:23 - floosball.game_broadcaster - INFO - Game broadcasting ENABLED
+2026-08-10 22:25:23 - floosball.api_server - INFO - Game broadcasting enabled
+2026-08-10 22:25:23 - floosball.api_server - INFO - FloosballApplication initialized successfully
+2026-08-10 22:25:23 - floosball.api_server - INFO - Starting API server on http://0.0.0.0:8000
+2026-08-10 22:25:23 - floosball.api_server - INFO - API documentation: http://localhost:8000/docs
+2026-08-10 22:25:23 - floosball.api_server - INFO - WebSocket endpoints:
+2026-08-10 22:25:23 - floosball.api_server - INFO -   - ws://localhost:8000/ws/game/{game_id}
+2026-08-10 22:25:23 - floosball.api_server - INFO -   - ws://localhost:8000/ws/season
+2026-08-10 22:25:23 - floosball.api_server - INFO -   - ws://localhost:8000/ws/standings
+2026-08-10 22:25:23 - floosball.api_server - INFO - ============================================================
+2026-08-10 22:25:23 - floosball.application - INFO - Starting league simulation
+2026-08-10 22:25:23 - floosball.application - INFO - Starting new simulation - 10 seasons
+2026-08-10 22:25:23 - floosball.application - INFO - Simulating 10 seasons
+2026-08-10 22:25:23 - floosball.application - INFO - === SEASON 1 ===
+2026-08-10 22:25:23 - floosball.seasonManager - INFO - Starting season 1
+2026-08-10 22:25:23 - floosball.seasonManager - INFO - Scheduled mode: season start anchored to 2026-08-17T04:00:00
+2026-08-10 22:25:23 - floosball.leagueManager - INFO - Cleared season data for all leagues
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Cleared season stats for all teams
+2026-08-10 22:25:23 - floosball.seasonManager - INFO - Creating season schedule using original algorithm
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Saved 32 teams to database
+2026-08-10 22:25:23 - floosball.seasonManager - INFO - Divisional schedule: 6 division + 12 cross-division + 4 interleague + 6 division (run-in) = 28 weeks
+2026-08-10 22:25:23 - floosball.seasonManager - INFO - Created 28-week schedule with 28 games
+2026-08-10 22:25:23 - floosball.seasonManager - INFO - Funding tiers assigned for season 1: {'SMALL_MARKET': 31, 'MEGA_MARKET': 1}
+2026-08-10 22:25:23 - floosball.seasonManager - INFO - Initialized team funding for season 1 (baseline=200F)
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Setting prior-season pressure baselines for season 1
+2026-08-10 22:25:23 - floosball.team_manager - INFO - Prior-season pressure baselines set
+2026-08-10 22:25:23 - floosball.cardManager - INFO - Generated 720 card templates for season 1 (720 classified)
+2026-08-10 22:25:23 - floosball.seasonManager - INFO - Card template generation complete: 720 templates for season 1
+2026-08-10 22:25:23 - floosball.auth - INFO - Provisioned starter pack for user 1: 100 Floobits + cards
+2026-08-10 22:25:23 - floosball.auth - INFO - Provisioned starter pack for user 2: 100 Floobits + cards
+2026-08-10 22:25:23 - floosball.seasonManager - INFO - Re-provisioned starter packs for 2 existing user(s)
+2026-08-10 22:25:24 - floosball.playerManager - INFO - Rating history: snapshotted 192 new entries for season 1
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Saved season 1 to database
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Season 1 initialized with 28 games
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Running simulation for season 1
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Opened game stats file: logs/game_stats_season_1.txt
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Simulating Week 1 in scheduled mode
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Weekly modifier for S1W1: Synergy
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: synergy
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Weekly modifier for S1W2: Ironclad
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Weekly modifier for S1W3: Payday
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Weekly modifier for S1W4: Steady
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Weekly modifier for S1W5: Amplify
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Weekly modifier for S1W6: Frenzy
+2026-08-10 22:25:24 - floosball.seasonManager - INFO - Weekly modifier for S1W7: Fortunate
+2026-08-10 22:25:24 - floosball.rulevote - INFO - Rule vote OPEN: S1 day 0 kind=change options=[{'key': 'gf_innings_3', 'label': 'Innings (3, try-driven)', 'patch': {'gameFormat': 'innings', 'inningsPerGame': 3, 'triesPerInning': 3}, 'field': None, 'value': None}, {'key': 'gf_frames_6', 'label': 'Frames (6, match play)', 'patch': {'gameFormat': 'frames', 'framesPerGame': 6}, 'field': None, 'value': None}, {'key': 'gf_chess_clock_30', 'label': 'Chess Clock (30:00 each)', 'patch': {'gameFormat': 'chess_clock', 'offenseClockBudgetSeconds': 1800}, 'field': None, 'value': None}] closes=2026-08-17 16:00:00
+2026-08-10 22:25:24 - floosball.timingManager - INFO - Waiting 566375.9s for week setup
+2026-08-10 22:25:24 - floosball.backup - INFO - DB backup loop: first in 300s, then every 24.0h, keeping 7.
+2026-08-10 22:25:24 - floosball.api - INFO - Starting Floosball API server
+2026-08-10 22:25:24 - floosball.game_broadcaster - INFO - Main event loop registered for cross-thread broadcasts
+2026-08-10 22:25:24 - floosball.api - INFO - API server ready - waiting for FloosballApplication initialization
+2026-08-10 22:25:31 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 1)
+2026-08-10 22:25:31 - floosball.application - INFO - Found saved simulation state: Season 1, Week 0
+2026-08-10 22:25:39 - floosball.api - INFO - Admin deleted user 2 (aknous@pepperdash.com)
+2026-08-10 22:25:40 - floosball.auth - INFO - Provisioned starter pack for user 2: 100 Floobits + cards
+2026-08-10 22:25:40 - floosball.auth - INFO - Auto-provisioned user: clerk_id=user_3BAJfHmVugh8n9SvrCqQhziodjS, email=aknous@pepperdash.com (username pending)
+2026-08-10 22:25:41 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 22:25:41 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 22:25:41 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 1)
+2026-08-10 22:25:44 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 22:25:44 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 22:25:48 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 1)
+2026-08-10 22:25:53 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 22:25:53 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 22:25:54 - floosball.api - INFO - Shutting down Floosball API server
+2026-08-10 22:25:54 - floosball.api - INFO - Closing 0 WebSocket connections
+2026-08-10 22:25:54 - floosball.api - INFO - API server shutdown complete
+2026-08-10 22:25:54 - floosball.api_server - INFO - Simulation task cancelled (shutdown).
+2026-08-10 22:25:54 - floosball.api_server - INFO - 
+Shutting down API server...
+2026-08-10 22:25:57 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 22:25:58 - floosball.api_server - INFO - ============================================================
+2026-08-10 22:25:58 - floosball.api_server - INFO - Floosball API Server
+2026-08-10 22:25:58 - floosball.api_server - INFO - ============================================================
+2026-08-10 22:25:58 - floosball.api_server - INFO - Timing Mode: FAST_WEEKLY
+2026-08-10 22:25:58 - floosball.api_server - INFO - Fresh Start: False
+2026-08-10 22:25:58 - floosball.api_server - INFO - Card Reset: False
+2026-08-10 22:25:58 - floosball.api_server - INFO - Card Reset (current season only): False
+2026-08-10 22:25:58 - floosball.api_server - INFO - ============================================================
+2026-08-10 22:25:58 - floosball.api_server - INFO - Initializing Floosball Application...
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: ensured showcase_slots table
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: ensured uq_teams_coach_id (one coach per team)
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: created play_reactions table
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: created uq_equipped_card_slot_pos index
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: player_sentiment_ratings ensured
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: coach_sentiment_votes ensured
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: team_feed_posts ensured
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: app_settings table ensured with default rows
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: ensured spectator_progress table
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: ensured supporter_dividends table
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: ensured award_votes + hof_ballot_entries tables
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: ensured team_facilities table
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: ensured pending_names table
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: ensured facility_projects + team_treasury + upkeep_funded + facility_votes
+2026-08-10 22:25:58 - floosball.database - INFO -   Migration: replaced 'random' powerup slugs in pending_rewards
+2026-08-10 22:25:58 - floosball.database - INFO -   Backfill diagnostic: game_player_stats has 0 rows
+2026-08-10 22:25:58 - floosball.database - INFO -   Backfill: no empty rows found. Total PSS rows: 0
+2026-08-10 22:25:58 - floosball.config - INFO - Cached configuration from config.json
+2026-08-10 22:25:58 - floosball.database - INFO - Seeded 0 new names from config into unused_names pool (skipped 224 already in use by coaches/players)
+2026-08-10 22:25:58 - floosball.database - INFO - Database initialized at /Users/andrew/Projects/floosball/data/floosball.db
+2026-08-10 22:25:58 - floosball.application - INFO - Initializing FloosballApplication
+2026-08-10 22:25:58 - floosball.playerManager - INFO - PlayerManager using DATABASE storage
+2026-08-10 22:25:58 - floosball.playerManager - INFO - PlayerManager initialized
+2026-08-10 22:25:58 - floosball.team_manager - INFO - TeamManager using DATABASE storage
+2026-08-10 22:25:58 - floosball.leagueManager - INFO - LeagueManager using DATABASE storage
+2026-08-10 22:25:58 - floosball.leagueManager - INFO - LeagueManager initialized
+2026-08-10 22:25:58 - floosball.record_manager - INFO - RecordManager using DATABASE storage
+2026-08-10 22:25:58 - floosball.personalityReactionEngine - INFO - Loaded 28 personalities, 17 quirks, 247 hometowns, 10 favorite categories
+2026-08-10 22:25:58 - floosball.personalityManager - INFO - PersonalityManager initialized
+2026-08-10 22:25:58 - floosball.application - INFO - All managers using shared database session to prevent locking
+2026-08-10 22:25:58 - floosball.seasonManager - INFO - SeasonManager using DATABASE storage
+2026-08-10 22:25:58 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2026-08-10 22:25:58 - floosball.seasonManager - INFO - SeasonManager initialized
+2026-08-10 22:25:58 - floosball.application - INFO - Registered all managers with service container
+2026-08-10 22:25:58 - floosball.application - INFO - FloosballApplication initialized successfully
+2026-08-10 22:25:58 - floosball.application - INFO - Initializing league system
+2026-08-10 22:25:58 - floosball.timingManager - INFO - Timing mode changed to fast-weekly
+2026-08-10 22:25:58 - floosball.seasonManager - INFO - Season timing mode set to fast-weekly
+2026-08-10 22:25:58 - floosball.application - INFO - Application timing mode set to fast-weekly
+2026-08-10 22:25:58 - floosball.record_manager - INFO - No records found in database, using empty structure
+2026-08-10 22:25:58 - floosball.application - INFO - Setting up players...
+2026-08-10 22:25:58 - floosball.playerManager - INFO - Generating initial player pool
+2026-08-10 22:25:58 - floosball.playerManager - INFO - Found 192 players in database, loading...
+2026-08-10 22:25:58 - floosball.playerManager - INFO - Successfully loaded 192 players from database
+2026-08-10 22:25:58 - floosball.playerManager - INFO - Loaded 192 existing players from data files
+2026-08-10 22:25:58 - floosball.playerManager - INFO - Loaded 662 unused names from database
+2026-08-10 22:25:58 - floosball.application - INFO - Setting up teams...
+2026-08-10 22:25:58 - floosball.team_manager - INFO - Loaded 32 teams from database
+2026-08-10 22:25:58 - floosball.team_manager - INFO - Rebuilding rosters from 192 active players
+2026-08-10 22:25:58 - floosball.team_manager - INFO - Found players assigned to 32 teams
+2026-08-10 22:25:58 - floosball.team_manager - INFO - DEBUG: 0 players without team assignment
+2026-08-10 22:25:58 - floosball.team_manager - INFO - DEBUG: team_players keys = [7, 17, 21, 3, 18, 20, 9, 12, 14, 24, 4, 23, 2, 30, 5, 15, 19, 31, 16, 28, 27, 22, 13, 6, 8, 11, 29, 1, 10, 25, 26, 32]
+2026-08-10 22:25:58 - floosball.team_manager - INFO - DEBUG: First team roster keys: ['qb', 'k', 'wr1', 'wr2', 'te', 'rb']
+2026-08-10 22:25:58 - floosball.team_manager - INFO - Rebuilt rosters for 32/32 teams
+2026-08-10 22:26:00 - floosball.team_manager - INFO - Generated 32 teams from database
+2026-08-10 22:26:00 - floosball.team_manager - INFO - Saved 32 teams to database
+2026-08-10 22:26:00 - floosball.application - INFO - Setting up leagues...
+2026-08-10 22:26:00 - floosball.leagueManager - INFO - Creating league structure from config
+2026-08-10 22:26:00 - floosball.leagueManager - INFO - Applied persisted league alignment from app_settings
+2026-08-10 22:26:00 - floosball.leagueManager - INFO - Saved 2 leagues to database
+2026-08-10 22:26:00 - floosball.leagueManager - INFO - Created 2 leagues with 32 teams
+2026-08-10 22:26:00 - floosball.application - INFO - Assigning players to teams...
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Jetskis already has 2 WRs, cannot assign Glint Gaspereaux
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Broads already has 2 WRs, cannot assign Johny Frankly
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Slippers already has 2 WRs, cannot assign Folksy Tallboy
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Classics already has 2 WRs, cannot assign Kissy Skeeballer
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Jetskis already has 2 WRs, cannot assign Martha Fright
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Broads already has 2 WRs, cannot assign Rancho Frutch
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Waffles already has 2 WRs, cannot assign Boots Huevo
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Slippers already has 2 WRs, cannot assign Cowpoke Tungle
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Monuments already has 2 WRs, cannot assign Grandpa Rickland
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Exoticos already has 2 WRs, cannot assign Johnnie Noble
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Curd already has 2 WRs, cannot assign Alanis Ratking
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Pops already has 2 WRs, cannot assign Beedo Meemaw
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Beans already has 2 WRs, cannot assign Sam Colt
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Trains already has 2 WRs, cannot assign Lohnny Roosevelt
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Trains already has 2 WRs, cannot assign Bailiff Gooddog
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Rhyme already has 2 WRs, cannot assign Tanuki Batman
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Pinecones already has 2 WRs, cannot assign Gorran, the Kingslayer
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Residents already has 2 WRs, cannot assign Thalia Bouncepad
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Grillmeisters already has 2 WRs, cannot assign Lul Diggle
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Phones already has 2 WRs, cannot assign Aggressive Librarian
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Tuesdays already has 2 WRs, cannot assign Torque Manderlay
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Buffalo already has 2 WRs, cannot assign Priscilla Bass
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Dry Heat already has 2 WRs, cannot assign Rusty Mateo
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Cranes already has 2 WRs, cannot assign Trolley Sanchez
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Cranes already has 2 WRs, cannot assign Tessa Modest
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Pops already has 2 WRs, cannot assign Crunchtime McCown
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Rhyme already has 2 WRs, cannot assign Mikey Lookalike
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Sand Dollars already has 2 WRs, cannot assign Swap Dreamy
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Dry Heat already has 2 WRs, cannot assign Shaggy Porcelain
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Rocks already has 2 WRs, cannot assign Timpani Cottonblend
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Tuesdays already has 2 WRs, cannot assign Casio Foxtrot
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Sodas already has 2 WRs, cannot assign Hancock Insufferable
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Strangers already has 2 WRs, cannot assign Tomato Kablooey
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Rocks already has 2 WRs, cannot assign Acid Del Mar
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Pinecones already has 2 WRs, cannot assign Fargus Danders
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Sodas already has 2 WRs, cannot assign Scorch Jumpman
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Monuments already has 2 WRs, cannot assign Frankie Cork
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Caddies already has 2 WRs, cannot assign Esmerelda Winedrunk
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Residents already has 2 WRs, cannot assign Steven Phones
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Waffles already has 2 WRs, cannot assign Cam McLoverly
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Classics already has 2 WRs, cannot assign Tock Klaxxon
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Melons already has 2 WRs, cannot assign Jark Pedensen
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Normals already has 2 WRs, cannot assign Dungaree Shaman
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Grillmeisters already has 2 WRs, cannot assign Sharon Boing
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Normals already has 2 WRs, cannot assign Zathanael Spindizzy
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Buffalo already has 2 WRs, cannot assign Scrapmetal Meringue
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Midnights already has 2 WRs, cannot assign Candi Milkwater
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Melons already has 2 WRs, cannot assign Tuna Melt
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Strangers already has 2 WRs, cannot assign Zeal Fletcher
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Oysters already has 2 WRs, cannot assign Jonboy Montanya
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Caddies already has 2 WRs, cannot assign Gillman Lubel
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Raccoons already has 2 WRs, cannot assign Orla Shadowban
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Extras already has 2 WRs, cannot assign Riverdale Dreamcast
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Bees already has 2 WRs, cannot assign Dingers Culpepper
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Curd already has 2 WRs, cannot assign Dialup McAvoy
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Bees already has 2 WRs, cannot assign Alvin DeTamble
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Sand Dollars already has 2 WRs, cannot assign Bobbysoxer Portcullis
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Beans already has 2 WRs, cannot assign Bootleg Dentist
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Exoticos already has 2 WRs, cannot assign Ren Aziza
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Midnights already has 2 WRs, cannot assign Cutaway Howitzer
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Extras already has 2 WRs, cannot assign Dennis Nervis
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Oysters already has 2 WRs, cannot assign Fred Gregg
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Phones already has 2 WRs, cannot assign Trisha Starlight
+2026-08-10 22:26:00 - floosball.playerManager - WARNING - Team Raccoons already has 2 WRs, cannot assign Maisie Cliche
+2026-08-10 22:26:00 - floosball.playerManager - INFO - Assigned 128 players to team rosters, 0 free agents identified
+2026-08-10 22:26:00 - floosball.application - INFO - Draft check: 0/32 teams have empty rosters. Needs draft: False
+2026-08-10 22:26:00 - floosball.application - INFO - Assigning personality traits...
+2026-08-10 22:26:00 - floosball.application - INFO - Personality assigned: 192 players (74 base, 109 common variants, 9 rare variants), 0 quirked
+2026-08-10 22:26:00 - floosball.application - INFO -   → rare variants in league: alien, android, dramatic, fossil, knight, mystic, time_traveler
+2026-08-10 22:26:00 - floosball.application - INFO - Initializing teams with rosters...
+2026-08-10 22:26:00 - floosball.team_manager - INFO - Assigned offense tiers for all teams
+2026-08-10 22:26:00 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2026-08-10 22:26:00 - floosball.team_manager - INFO - Avatar pre-generation complete: 0 new, 32 cached
+2026-08-10 22:26:00 - floosball.team_manager - INFO - Initialized 32 teams
+2026-08-10 22:26:00 - floosball.application - INFO - Calculating initial ELO ratings...
+2026-08-10 22:26:00 - floosball.team_manager - INFO - Calculating new ELO ratings for all teams
+2026-08-10 22:26:00 - floosball.team_manager - INFO - ELO ratings updated for 32 teams (mean rating: 75)
+2026-08-10 22:26:00 - floosball.playerManager - INFO - Saving player data to database
+2026-08-10 22:26:01 - floosball.playerManager - INFO - Saved 192 players to database (192 active, 0 retired)
+2026-08-10 22:26:01 - floosball.playerManager - INFO - Team assignment stats: 192 with teams, 0 free agents, 0 retired, 0 null teams, 0 errors
+2026-08-10 22:26:01 - floosball.leagueManager - INFO - Saved league data for 2 leagues
+2026-08-10 22:26:01 - floosball.team_manager - INFO - Saved 32 teams to database
+2026-08-10 22:26:01 - floosball.record_manager - INFO - Saved 0 records to database
+2026-08-10 22:26:01 - floosball.application - INFO - League initialization complete
+2026-08-10 22:26:01 - floosball.api - INFO - FloosballApplication reference set in API
+2026-08-10 22:26:01 - floosball.game_broadcaster - INFO - Game broadcasting ENABLED
+2026-08-10 22:26:01 - floosball.game_broadcaster - INFO - Game-event broadcasts SUPPRESSED
+2026-08-10 22:26:01 - floosball.api_server - INFO - fast-weekly: broadcasting enabled, game-event broadcasts suppressed
+2026-08-10 22:26:01 - floosball.api_server - INFO - FloosballApplication initialized successfully
+2026-08-10 22:26:01 - floosball.api_server - INFO - Starting API server on http://0.0.0.0:8000
+2026-08-10 22:26:01 - floosball.api_server - INFO - API documentation: http://localhost:8000/docs
+2026-08-10 22:26:01 - floosball.api_server - INFO - WebSocket endpoints:
+2026-08-10 22:26:01 - floosball.api_server - INFO -   - ws://localhost:8000/ws/game/{game_id}
+2026-08-10 22:26:01 - floosball.api_server - INFO -   - ws://localhost:8000/ws/season
+2026-08-10 22:26:01 - floosball.api_server - INFO -   - ws://localhost:8000/ws/standings
+2026-08-10 22:26:01 - floosball.api_server - INFO - ============================================================
+2026-08-10 22:26:01 - floosball.application - INFO - Starting league simulation
+2026-08-10 22:26:01 - floosball.application - INFO - Found saved simulation state: Season 1, Week 0
+2026-08-10 22:26:01 - floosball.application - INFO - Resuming simulation from Season 1, Week 0
+2026-08-10 22:26:01 - floosball.application - INFO - Simulating 10 seasons
+2026-08-10 22:26:01 - floosball.application - INFO - === SEASON 1 ===
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Starting season 1
+2026-08-10 22:26:01 - floosball.leagueManager - INFO - Cleared season data for all leagues
+2026-08-10 22:26:01 - floosball.team_manager - INFO - Cleared season stats for all teams
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Existing schedule found for season 1 — loading from database
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Restored season start date from DB: 2026-08-17T04:00:00
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Loaded 448 games (28 weeks) from DB for season 1
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Resumed funding records for season 1: {'SMALL_MARKET': 31, 'MEGA_MARKET': 1}
+2026-08-10 22:26:01 - floosball.team_manager - INFO - Setting prior-season pressure baselines for season 1
+2026-08-10 22:26:01 - floosball.team_manager - INFO - Prior-season pressure baselines set
+2026-08-10 22:26:01 - floosball.cardManager - INFO - Card templates already exist for season 1 (720 templates), skipping generation
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Card template generation complete: 0 templates for season 1
+2026-08-10 22:26:01 - floosball.playerManager - INFO - Rating history: snapshotted 0 new entries for season 1
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Saved season 1 to database
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Season 1 initialized with 28 games
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Running simulation for season 1
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Opened game stats file: logs/game_stats_season_1.txt
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Simulating Week 1 in fast-weekly mode
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: synergy
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: synergy
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: ironclad
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: payday
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: steady
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: amplify
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: frenzy
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: fortunate
+2026-08-10 22:26:01 - floosball.timingManager - INFO - fast-weekly mode: week setup delay 0.0s
+2026-08-10 22:26:01 - floosball.backup - INFO - DB backup loop: first in 300s, then every 24.0h, keeping 7.
+2026-08-10 22:26:01 - floosball.api - INFO - Starting Floosball API server
+2026-08-10 22:26:01 - floosball.game_broadcaster - INFO - Main event loop registered for cross-thread broadcasts
+2026-08-10 22:26:01 - floosball.api - INFO - API server ready - waiting for FloosballApplication initialization
+2026-08-10 22:26:01 - floosball.anomaly - INFO - Seeded LeagueAnomalyState season=1 threshold=111 (hidden)
+2026-08-10 22:26:01 - floosball.anomaly - INFO - Anomaly weekly tick complete — season 1, week 1
+2026-08-10 22:26:01 - floosball.timingManager - INFO - fast-weekly mode: games start delay 0.0s
+2026-08-10 22:26:01 - floosball.seasonManager - INFO - Auto-picked 16 games for 1 users (week 1)
+2026-08-10 22:26:02 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 13 (winner: Broads)
+2026-08-10 22:26:02 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 3 (winner: Grillmeisters)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 15 (winner: Melons)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 11 (winner: Caddies)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 6 (winner: Oysters)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 2 (winner: Curd)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 10 (winner: Beans)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 0 (winner: Dry Heat)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 1 (winner: Extras)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 4 (winner: Rocks)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 8 (winner: Waffles)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 12 (winner: Jetskis)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 7 (winner: Residents)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 14 (winner: Trains)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 5 (winner: Tuesdays)
+2026-08-10 22:26:03 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 9 (winner: Slippers)
+2026-08-10 22:26:04 - floosball.playerManager - INFO - Calculating performance ratings for week 1
+2026-08-10 22:26:04 - floosball.playerManager - INFO - Performance ratings calculated for week 1
+2026-08-10 22:26:04 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2026-08-10 22:26:04 - floosball.seasonManager - INFO - Saved team season stats for season 1
+2026-08-10 22:26:04 - floosball.playerManager - INFO - Saving player data to database
+2026-08-10 22:26:04 - floosball.playerManager - INFO - Saved 192 players to database (192 active, 0 retired)
+2026-08-10 22:26:04 - floosball.playerManager - INFO - Team assignment stats: 192 with teams, 0 free agents, 0 retired, 0 null teams, 0 errors
+2026-08-10 22:26:04 - floosball.seasonManager - INFO - Showcase dividends paid to 0 users (S1 wk1)
+2026-08-10 22:26:04 - floosball.supporter - INFO - Supporter accrual s1 w1: 1/1 fans credited
+2026-08-10 22:26:04 - floosball.seasonManager - INFO - Pick-em weekly prize: user 1 #1 = 20 Floobits
+2026-08-10 22:26:04 - floosball.seasonManager - INFO - Pick-em resolved for S1W1: 1 users
+2026-08-10 22:26:04 - floosball.seasonManager - INFO - Unlocked equipped cards for week 1
+2026-08-10 22:26:04 - floosball.timingManager - INFO - fast-weekly mode: post-week delay 30.0s
+2026-08-10 22:26:04 - floosball.websocket - INFO - send_to_user(1): no identified connections (event=floobits_received)
+2026-08-10 22:26:04 - floosball.websocket - INFO - send_to_user(1): no identified connections (event=floobits_received)
+2026-08-10 22:26:04 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 1)
+2026-08-10 22:26:08 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 22:26:08 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 22:26:09 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 1)
+2026-08-10 22:26:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: synergy
+2026-08-10 22:26:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: ironclad
+2026-08-10 22:26:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: payday
+2026-08-10 22:26:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: steady
+2026-08-10 22:26:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: amplify
+2026-08-10 22:26:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: frenzy
+2026-08-10 22:26:12 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: fortunate
+2026-08-10 22:26:15 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 22:26:15 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 22:26:15 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 1)
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Simulating Week 2 in fast-weekly mode
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: ironclad
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: synergy
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: ironclad
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: payday
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: steady
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: amplify
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: frenzy
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: fortunate
+2026-08-10 22:26:34 - floosball.timingManager - INFO - fast-weekly mode: week setup delay 0.0s
+2026-08-10 22:26:34 - floosball.anomaly - INFO - Anomaly weekly tick complete — season 1, week 2
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Memory cleanup: cleared play-by-play data from 16 completed games
+2026-08-10 22:26:34 - floosball.timingManager - INFO - fast-weekly mode: games start delay 0.0s
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Auto-picked 16 games for 1 users (week 2)
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: synergy
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: ironclad
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: payday
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: steady
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: amplify
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: frenzy
+2026-08-10 22:26:34 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: fortunate
+2026-08-10 22:26:35 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 6 (winner: Normals)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 7 (winner: Oysters)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 10 (winner: Caddies)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 1 (winner: Dry Heat)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 11 (winner: Sand Dollars)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 12 (winner: Jetskis)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 8 (winner: Pops)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 15 (winner: Sodas)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 14 (winner: Trains)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 0 (winner: Extras)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 9 (winner: Slippers)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 4 (winner: Buffalo)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 5 (winner: Rocks)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 3 (winner: Strangers)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 13 (winner: Raccoons)
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 2 (winner: Grillmeisters)
+2026-08-10 22:26:36 - floosball.playerManager - INFO - Calculating performance ratings for week 2
+2026-08-10 22:26:36 - floosball.playerManager - INFO - Performance ratings calculated for week 2
+2026-08-10 22:26:36 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Saved team season stats for season 1
+2026-08-10 22:26:36 - floosball.playerManager - INFO - Saving player data to database
+2026-08-10 22:26:36 - floosball.playerManager - INFO - Saved 192 players to database (192 active, 0 retired)
+2026-08-10 22:26:36 - floosball.playerManager - INFO - Team assignment stats: 192 with teams, 0 free agents, 0 retired, 0 null teams, 0 errors
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Showcase dividends paid to 0 users (S1 wk2)
+2026-08-10 22:26:36 - floosball.supporter - INFO - Supporter accrual s1 w2: 1/1 fans credited
+2026-08-10 22:26:36 - floosball.achievements - INFO - _applyReward user=1 source=achievement:sharp floobits=50 packs=[] powerups=[]
+2026-08-10 22:26:36 - floosball.achievements - INFO - Achievement unlocked: user=1 key=sharp season=1
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Pick-em weekly prize: user 1 #1 = 20 Floobits
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Pick-em resolved for S1W2: 1 users
+2026-08-10 22:26:36 - floosball.seasonManager - INFO - Unlocked equipped cards for week 2
+2026-08-10 22:26:36 - floosball.timingManager - INFO - fast-weekly mode: post-week delay 30.0s
+2026-08-10 22:26:36 - floosball.websocket - INFO - send_to_user(1): no identified connections (event=floobits_received)
+2026-08-10 22:26:36 - floosball.websocket - INFO - send_to_user(1): no identified connections (event=achievement_unlocked)
+2026-08-10 22:26:36 - floosball.websocket - INFO - send_to_user(1): no identified connections (event=floobits_received)
+2026-08-10 22:26:37 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 22:26:37 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 22:26:37 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 1)
+2026-08-10 22:26:39 - floosball.achievements - INFO - _applyReward user=2 source=achievement:deck_builder floobits=25 packs=[] powerups=[]
+2026-08-10 22:26:39 - floosball.achievements - INFO - Achievement unlocked: user=2 key=deck_builder season=0
+2026-08-10 22:26:46 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 22:26:46 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 22:26:46 - floosball.websocket - INFO - WebSocket connected to channel 'season' (total: 1)
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Simulating Week 3 in fast-weekly mode
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: payday
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: synergy
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: ironclad
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: payday
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: steady
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: amplify
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: frenzy
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: fortunate
+2026-08-10 22:27:06 - floosball.timingManager - INFO - fast-weekly mode: week setup delay 0.0s
+2026-08-10 22:27:06 - floosball.anomaly - INFO - State transitions: 6 (incl. 0 awakenings)
+2026-08-10 22:27:06 - floosball.anomaly - INFO - Anomaly weekly tick complete — season 1, week 3
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Memory cleanup: cleared play-by-play data from 16 completed games
+2026-08-10 22:27:06 - floosball.timingManager - INFO - fast-weekly mode: games start delay 0.0s
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Auto-carried equipped cards for 1 users into week 3
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Auto-locked roster for user 2
+2026-08-10 22:27:06 - floosball.seasonManager - INFO - Auto-picked 16 games for 1 users (week 3)
+2026-08-10 22:27:07 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: synergy
+2026-08-10 22:27:07 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: ironclad
+2026-08-10 22:27:07 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: payday
+2026-08-10 22:27:07 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: steady
+2026-08-10 22:27:07 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: amplify
+2026-08-10 22:27:07 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: frenzy
+2026-08-10 22:27:07 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: fortunate
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 0 (winner: Dry Heat)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 1 (winner: Extras)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 7 (winner: Residents)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 6 (winner: Normals)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 3 (winner: Strangers)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 11 (winner: Caddies)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 2 (winner: Phones)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 10 (winner: Beans)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 13 (winner: Pinecones)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 12 (winner: Raccoons)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 15 (winner: Melons)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 4 (winner: Rocks)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 9 (winner: Cranes)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 8 (winner: Waffles)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 5 (winner: Bees)
+2026-08-10 22:27:08 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 14 (winner: Trains)
+2026-08-10 22:27:08 - floosball.playerManager - INFO - Calculating performance ratings for week 3
+2026-08-10 22:27:08 - floosball.playerManager - INFO - Performance ratings calculated for week 3
+2026-08-10 22:27:08 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2026-08-10 22:27:09 - floosball.seasonManager - INFO - Saved team season stats for season 1
+2026-08-10 22:27:09 - floosball.playerManager - INFO - Saving player data to database
+2026-08-10 22:27:09 - floosball.playerManager - INFO - Saved 192 players to database (192 active, 0 retired)
+2026-08-10 22:27:09 - floosball.playerManager - INFO - Team assignment stats: 192 with teams, 0 free agents, 0 retired, 0 null teams, 0 errors
+2026-08-10 22:27:09 - floosball.seasonManager - INFO - Card bonus for user 2 week 3: +0.00 FP (total: 0.00)
+2026-08-10 22:27:09 - floosball.seasonManager - INFO - Weekly leaderboard prize: user 2 #1 = 30 Floobits
+2026-08-10 22:27:09 - floosball.seasonManager - INFO - Awarded weekly leaderboard prizes to 1 users for week 3
+2026-08-10 22:27:09 - floosball.seasonManager - INFO - Awarded weekly FP floobits to 1 users for week 3
+2026-08-10 22:27:09 - floosball.seasonManager - INFO - Showcase dividends paid to 0 users (S1 wk3)
+2026-08-10 22:27:09 - floosball.supporter - INFO - Supporter accrual s1 w3: 1/1 fans credited
+2026-08-10 22:27:09 - floosball.seasonManager - INFO - Pick-em weekly prize: user 1 #1 = 20 Floobits
+2026-08-10 22:27:09 - floosball.seasonManager - INFO - Pick-em resolved for S1W3: 1 users
+2026-08-10 22:27:09 - floosball.seasonManager - INFO - Unlocked equipped cards for week 3
+2026-08-10 22:27:09 - floosball.timingManager - INFO - fast-weekly mode: post-week delay 30.0s
+2026-08-10 22:27:09 - floosball.websocket - INFO - send_to_user(1): no identified connections (event=floobits_received)
+2026-08-10 22:27:09 - floosball.websocket - INFO - send_to_user(1): no identified connections (event=floobits_received)
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Simulating Week 4 in fast-weekly mode
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: steady
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: synergy
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: ironclad
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: payday
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: steady
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: amplify
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: frenzy
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: fortunate
+2026-08-10 22:27:39 - floosball.timingManager - INFO - fast-weekly mode: week setup delay 0.0s
+2026-08-10 22:27:39 - floosball.anomaly - INFO - State transitions: 4 (incl. 4 awakenings)
+2026-08-10 22:27:39 - floosball.anomaly - INFO - Anomaly weekly tick complete — season 1, week 4
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Memory cleanup: cleared play-by-play data from 16 completed games
+2026-08-10 22:27:39 - floosball.timingManager - INFO - fast-weekly mode: games start delay 0.0s
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Auto-carried equipped cards for 1 users into week 4
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Auto-picked 16 games for 1 users (week 4)
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W1: synergy
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W2: ironclad
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W3: payday
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W4: steady
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W5: amplify
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W6: frenzy
+2026-08-10 22:27:39 - floosball.seasonManager - INFO - Weekly modifier already set for S1W7: fortunate
+2026-08-10 22:27:40 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 12 (winner: Jetskis)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 11 (winner: Midnights)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 3 (winner: Phones)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 13 (winner: Broads)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 2 (winner: Grillmeisters)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 10 (winner: Caddies)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 7 (winner: Residents)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 9 (winner: Slippers)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 6 (winner: Normals)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 15 (winner: Sodas)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 14 (winner: Trains)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 0 (winner: Extras)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 5 (winner: Bees)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 1 (winner: Classics)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 4 (winner: Tuesdays)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Resolved 1 pick-em picks for game 8 (winner: Cranes)
+2026-08-10 22:27:41 - floosball.playerManager - INFO - Calculating performance ratings for week 4
+2026-08-10 22:27:41 - floosball.playerManager - INFO - Performance ratings calculated for week 4
+2026-08-10 22:27:41 - floosball.team_manager - INFO - Sorted defense tiers for all teams
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Saved team season stats for season 1
+2026-08-10 22:27:41 - floosball.playerManager - INFO - Saving player data to database
+2026-08-10 22:27:41 - floosball.playerManager - INFO - Saved 192 players to database (192 active, 0 retired)
+2026-08-10 22:27:41 - floosball.playerManager - INFO - Team assignment stats: 192 with teams, 0 free agents, 0 retired, 0 null teams, 0 errors
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Card bonus for user 2 week 4: +0.00 FP (total: 0.00)
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Weekly leaderboard prize: user 2 #1 = 30 Floobits
+2026-08-10 22:27:41 - floosball.seasonManager - INFO - Awarded weekly leaderboard prizes to 1 users for week 4
+2026-08-10 22:27:42 - floosball.seasonManager - INFO - Awarded weekly FP floobits to 1 users for week 4
+2026-08-10 22:27:42 - floosball.seasonManager - INFO - Showcase dividends paid to 0 users (S1 wk4)
+2026-08-10 22:27:42 - floosball.supporter - INFO - Supporter accrual s1 w4: 1/1 fans credited
+2026-08-10 22:27:42 - floosball.achievements - INFO - _applyReward user=1 source=achievement:oracle_i floobits=25 packs=[] powerups=[]
+2026-08-10 22:27:42 - floosball.achievements - INFO - Achievement unlocked: user=1 key=oracle_i season=1
+2026-08-10 22:27:42 - floosball.seasonManager - INFO - Pick-em weekly prize: user 1 #1 = 20 Floobits
+2026-08-10 22:27:42 - floosball.seasonManager - INFO - Pick-em resolved for S1W4: 1 users
+2026-08-10 22:27:42 - floosball.seasonManager - INFO - Unlocked equipped cards for week 4
+2026-08-10 22:27:42 - floosball.timingManager - INFO - fast-weekly mode: post-week delay 30.0s
+2026-08-10 22:27:42 - floosball.websocket - INFO - send_to_user(1): no identified connections (event=floobits_received)
+2026-08-10 22:27:42 - floosball.websocket - INFO - send_to_user(1): no identified connections (event=achievement_unlocked)
+2026-08-10 22:27:42 - floosball.websocket - INFO - send_to_user(1): no identified connections (event=floobits_received)
+2026-08-10 22:27:43 - floosball.websocket - INFO - WebSocket disconnected from channel 'season'
+2026-08-10 22:27:43 - floosball.api - INFO - Client disconnected from season updates
+2026-08-10 22:27:43 - floosball.api - INFO - Shutting down Floosball API server
+2026-08-10 22:27:43 - floosball.api - INFO - Closing 0 WebSocket connections
+2026-08-10 22:27:43 - floosball.api - INFO - API server shutdown complete
+2026-08-10 22:27:43 - floosball.api_server - INFO - Simulation task cancelled (shutdown).
+2026-08-10 22:27:43 - floosball.api_server - INFO - 
+Shutting down API server...
+2026-08-10 22:29:01 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 22:29:06 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-10 22:29:27 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
