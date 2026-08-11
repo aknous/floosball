@@ -1847,6 +1847,38 @@ def _backfillFloorTemplates():
         conn.close()
 
 
+def _backfillEffectParams(primary: dict, effectName: str) -> bool:
+    """Add a param an effect's CURRENT text needs onto an ALREADY-MINTED template.
+
+    ⚠️ RE-RENDERING TEXT IS NOT ENOUGH WHEN THE PARAM KEYS CHANGED. Effect values are
+    frozen at mint and templates are minted once a season, so a rework that introduces a
+    new key leaves every existing card's text asking for something its `primary` does not
+    have — and `_renderTemplate` prints `?` where the number belongs. Reported from
+    production: Honor Roll reading "+? FPx once this player reaches 15 FP", on 10 of 10
+    minted templates.
+
+    Honor Roll is also the case where the missing param was not merely cosmetic:
+    `_computeHonorRoll` falls back to `baseMult = 1.0`, which is the OLD behaviour of
+    paying nothing at the exact moment the bar fills. So a card without it was both
+    printing `?` and quietly still doing the thing the rework existed to stop.
+
+    Derived from what IS stored rather than rebuilt from the player — `rebuildPrimaryParams`
+    works off the raw rating and would not reproduce the mint-time dampening, so it would
+    hand these cards different numbers than they were minted with. `baseMult` needs no
+    guesswork: it is a fixed share of the maximum, which is stored.
+
+    Returns True if `primary` was changed. Add a case when an effect's keys change; a
+    key RENAME with the same meaning belongs here too.
+    """
+    if effectName == 'honor_roll' and 'baseMult' not in primary:
+        maxMult = primary.get('maxMult')
+        if isinstance(maxMult, (int, float)) and maxMult > 1.0:
+            from managers.cardEffects import HONOR_ROLL_BASE_SHARE
+            primary['baseMult'] = round(1 + (maxMult - 1) * HONOR_ROLL_BASE_SHARE, 2)
+            return True
+    return False
+
+
 def _refreshCardEffectText():
     """Update stale tooltip/detail text on card templates whose effects were reworked.
 
@@ -1855,6 +1887,10 @@ def _refreshCardEffectText():
     AND the current value (computed from stored primary). Add an effect
     name to refreshEffects when its tooltip / detail template changes
     and existing card descriptions should re-render on next boot.
+
+    ⚠️ Params are backfilled FIRST (`_backfillEffectParams`), because a text refresh
+    against a primary that lacks the key the new text asks for renders `?` — which is how
+    this shipped to production once already.
     """
     import json as _json
     import re as _re
@@ -1882,6 +1918,12 @@ def _refreshCardEffectText():
         "believe", "showoff", "eminence",
         # FP → FPx conversions for Base FPx variety. Param keys changed.
         "homer", "honor_roll",
+        # Gunslinger was re-pointed from pass yards onto well-placed throws and the
+        # COMPUTE was updated with a legacy fallback, but both its texts were left
+        # describing the retired mechanic — so the card scored on throws while its
+        # detail promised FP per 100 passing yards, and asked for a param no
+        # currently-minted card has.
+        "gunslinger",
     }
 
     # Same FullMult → Delta synthesis buildEffectConfig does. Keep these
@@ -1930,12 +1972,24 @@ def _refreshCardEffectText():
             if effectName not in refreshEffects:
                 continue
             primary = cfg.get("primary", {}) or {}
+            paramsChanged = _backfillEffectParams(primary, effectName)
+            if paramsChanged:
+                cfg["primary"] = primary
             newTooltip = _renderTemplate(EFFECT_TOOLTIPS.get(effectName, ""), primary)
             newDetail = _renderTemplate(EFFECT_DETAIL_TEMPLATES.get(effectName, ""), primary)
-            if cfg.get("tooltip") == newTooltip and cfg.get("detail") == newDetail:
+            if (not paramsChanged and cfg.get("tooltip") == newTooltip
+                    and cfg.get("detail") == newDetail):
                 continue
             cfg["tooltip"] = newTooltip
             cfg["detail"] = newDetail
+            # A '?' here means the CURRENT text asks for a param this card was never
+            # minted with, and it is about to be shown to a reader exactly like that.
+            # Say so at boot rather than waiting for someone to report the card.
+            if '?' in f"{newTooltip} {newDetail}" and '?' not in f"{EFFECT_TOOLTIPS.get(effectName, '')} {EFFECT_DETAIL_TEMPLATES.get(effectName, '')}":
+                logger.warning(
+                    f"  Migration: '{effectName}' text still has an unresolved placeholder "
+                    f"after refresh — add a case to _backfillEffectParams (stored keys: "
+                    f"{sorted(primary.keys())})")
             conn.execute(
                 text("UPDATE card_templates SET effect_config = :cfg WHERE id = :id"),
                 {"cfg": _json.dumps(cfg), "id": row[0]},

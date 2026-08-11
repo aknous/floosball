@@ -918,7 +918,7 @@ EFFECT_TOOLTIPS = {
     "automatic": "Perfection pays. FP growing each consecutive week this player goes perfect on FGs. Stacking streak cards accelerates growth.",
     "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 100 FP. Stacking streak cards accelerates growth.",
     # ── New Position-Based Effects ──
-    "gunslinger": "Let it fly. FP that scales with how many passing yards this player racks up.",
+    "gunslinger": "Let it fly. FP for every well-placed ball this player throws.",
     "air_raid": "Death from above. Floobits for each passing TD this player throws.",
     "workhorse": "Pound the rock. FP scaling with rushing attempts by this player.",
     "expedition": "Yards are yards. FP that scales with how many rushing yards this player gains.",
@@ -1109,7 +1109,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "automatic": "+{baseReward} FP base, +{growthPerTick} per consecutive week your K makes all FG attempts. A week with no FG attempts will not break the streak.",
     "momentum": "+{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week your roster scores 100+ FP.",
     # ── New Position-Based Effects ──
-    "gunslinger": "+{perHundredYardsFP} FP for every 100 passing yards in one game by this player",
+    "gunslinger": "+{perGoodThrowFP} FP for every well-placed ball by this player",
     "air_raid": "{perTdFloobits} Floobits for every passing TD in one game by this player",
     "workhorse": "+{perAttemptFP} FP for every rushing attempt in one game by this player",
     "expedition": "+{perFiftyYardsFP} FP for every 50 rushing yards in one game by this player",
