@@ -147,6 +147,32 @@ def bankedLineupPlayerIds(bankedWeek):
             if b.get("playerId")]
 
 
+# app_settings key holding "season:week" of the first week whose lineup snapshot was
+# written for EVERY fielded lineup rather than only paying ones. Stamped by
+# `_processWeekCardEffects`. From that week on, a user with no row did not field.
+COMPLETE_SNAPSHOT_SETTING = 'lineup_snapshot_complete_from'
+
+
+def completeSnapshotFrom(readSetting):
+    """(season, week) the complete-snapshot rule starts at, or None if never stamped."""
+    raw = readSetting(COMPLETE_SNAPSHOT_SETTING)
+    if not raw:
+        return None
+    try:
+        season, week = str(raw).split(':')
+        return int(season), int(week)
+    except (ValueError, AttributeError):
+        return None
+
+
+def weekIsFullyRecorded(season, week, boundary):
+    """True when `week` is at or after the point every fielded lineup was recorded."""
+    if not boundary:
+        return False
+    bSeason, bWeek = boundary
+    return season > bSeason or (season == bSeason and week >= bWeek)
+
+
 class FantasyTracker:
     """Single source of truth for fantasy roster points.
 
@@ -506,6 +532,11 @@ class FantasyTracker:
 
             # ── 4. Stored card bonuses per user per week ──
             weekCardBonusMap = self._getWeekCardBonusesFromDB(session, seasonNum)
+            # No games means no points: a lineup put together after a week's games have
+            # finished cannot score for that week. Enforceable only where the week's
+            # record is COMPLETE — see `lineupForWeek`.
+            from game_rules import _readAppSetting as _readSetting
+            snapshotBoundary = completeSnapshotFrom(_readSetting)
 
             # ── 5. Equipped cards for current week ──
             equippedByUser = {}
@@ -675,20 +706,23 @@ class FantasyTracker:
                         # equipped rows are the only surviving hint.
                         if pids:
                             return pids
-                    # ⚠️ A MISSING ROW DOES NOT MEAN THE USER WAS ABSENT, so it is NOT
-                    # treated as an empty lineup — however tempting, because a user who
-                    # signs up mid-week equips between slates, lands rows on the week
-                    # that just finished, and IS credited base FP for a week they did not
-                    # play. The reason it cannot be tightened yet: the snapshot row was
-                    # historically written only when a lineup PAID (`totalFP > 0 or
-                    # floobitsEarned > 0`), so a lineup of no-effect `standard` starter
-                    # cards banked nothing and left no row despite being fielded. On
-                    # production 13 of 21 users have such a week, and some are mid-tenure
-                    # (SweatpantsDoodlebug89 weeks 4 and 6), which rules out "they had
-                    # not joined yet" as the explanation. Zeroing would delete real FP.
-                    # `_processWeekCardEffects` now writes a row whenever a lineup was
-                    # fielded, so weeks from that deploy onward are complete and this can
-                    # tighten once no incomplete week is still in range.
+                    # NO GAMES MEANS NO POINTS (owner, 2026-08-10). A lineup assembled
+                    # after a week's games have finished did not play that week, so it
+                    # scores nothing for it. Equipping lands rows on `currentWeek`, which
+                    # does not advance until rollover, so a first-time equip in that gap
+                    # otherwise collects the week's FP outright — measured on production
+                    # at 59.0 and 33.0 FP for two users in week 7.
+                    #
+                    # ⚠️ ONLY ENFORCEABLE WHERE THE WEEK'S RECORD IS COMPLETE. Before the
+                    # unconditional snapshot, a row was written only when a lineup PAID,
+                    # so an absence could equally mean "fielded and earned nothing" —
+                    # 13 of 21 production users have such a week, some MID-TENURE
+                    # (SweatpantsDoodlebug89 weeks 4 and 6, cause still unexplained).
+                    # Applying the gate there would delete FP from users who did play,
+                    # so it starts at the stamped boundary and earlier weeks stay
+                    # permissive.
+                    elif weekIsFullyRecorded(seasonNum, wk, snapshotBoundary):
+                        return []
                     if wk == currentWeek:
                         return [pid for _eq, pid in currentDepicted]
                     return [pid for _eq, pid in equippedByUserWeek.get((userId, wk), [])]

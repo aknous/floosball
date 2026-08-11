@@ -25,24 +25,27 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from managers.fantasyTracker import _SLOT_LABEL_BY_ORDINAL, bankedLineupPlayerIds
+from managers.fantasyTracker import (_SLOT_LABEL_BY_ORDINAL, bankedLineupPlayerIds,
+                                     completeSnapshotFrom, weekIsFullyRecorded)
 
 
-def lineupForWeek(week, currentWeek, banked, equippedRows, live, settledWeeks=()):
+def lineupForWeek(week, currentWeek, banked, equippedRows, live, boundary=None, season=1):
     """`getSnapshot`'s resolver, in the order it decides."""
     row = banked.get(week)
     if row is not None:
         pids = bankedLineupPlayerIds(row)
         if pids:
             return pids
+    elif weekIsFullyRecorded(season, week, boundary):
+        return []
     return live if week == currentWeek else equippedRows.get(week, [])
 
 
-def weekFP(week, currentWeek, banked, equippedRows, live, fpByPlayerWeek, settledWeeks=()):
+def weekFP(week, currentWeek, banked, equippedRows, live, fpByPlayerWeek, boundary=None):
     """`getSnapshot`'s per-week base FP."""
     return sum(fpByPlayerWeek.get((p, week), 0)
                for p in lineupForWeek(week, currentWeek, banked, equippedRows, live,
-                                      settledWeeks))
+                                      boundary))
 
 
 def rowsFor(banked, breakdowns, liveLineup):
@@ -140,38 +143,65 @@ class LeaderboardLineupTests(unittest.TestCase):
 
     # -- a closed week has a complete roll ----------------------------------
     #
-    # The snapshot used to be written only `if totalFP > 0 or floobitsEarned > 0`, so a
-    # settled week held no record of anyone whose cards earned nothing. It is now written
-    # whenever a lineup was fielded. Until every week in range was recorded that way,
-    # absence stays unreadable — see the first test below.
+    # NO GAMES MEANS NO POINTS. A lineup assembled after a week's games have finished
+    # did not play that week. Absence of a snapshot row is what proves it, which is only
+    # sound once the row is written for EVERY fielded lineup — it used to be written only
+    # `if totalFP > 0 or floobitsEarned > 0`. The boundary stamped by
+    # `_processWeekCardEffects` is where the gate switches on; before it, absence is
+    # ambiguous and stays permissive.
 
-    def testAMissingRowIsNotReadAsAbsence(self):
-        """⚠️ The rule that was nearly shipped and would have deleted real FP.
+    def testALineupBuiltAfterTheGamesEarnsNothingForThatWeek(self):
+        """THE RULE: no games means no points (owner, 2026-08-10).
 
-        The row was historically written only when the lineup PAID, so a lineup of
-        no-effect `standard` starter cards was fielded and banked nothing. On production
-        13 of 21 users have such a week, some MID-TENURE (SweatpantsDoodlebug89 weeks 4
-        and 6), which rules out "had not joined yet". Absence means "no record", never
-        "did not play".
+        Equipping lands rows on `currentWeek`, which does not advance until rollover, so
+        a first-time equip between the final whistle and the rollover otherwise collects
+        the whole week's FP. Measured on production at 59.0 and 33.0 FP for two users in
+        week 7.
         """
         self.assertEqual(
-            weekFP(7, 7, {}, {7: [9]}, [9], self.FP, settledWeeks={7}), 98.0)
+            weekFP(7, 7, {}, {7: [9]}, [9], self.FP, boundary=(1, 1)), 0.0)
+
+    def testAWeekRecordedBeforeTheBoundaryStaysPermissive(self):
+        """⚠️ The gate must NOT reach back over weeks whose record is incomplete.
+
+        Before the unconditional snapshot a row was written only when a lineup PAID, so
+        an absence there can equally mean "fielded and earned nothing" — 13 of 21
+        production users have such a week, some MID-TENURE. Zeroing those deletes FP
+        from users who did play.
+        """
+        self.assertEqual(
+            weekFP(7, 7, {}, {7: [9]}, [9], self.FP, boundary=(1, 8)), 98.0)
+
+    def testTheBoundaryIsReadFromTheStampedSetting(self):
+        self.assertEqual(completeSnapshotFrom(lambda k: '2:5'), (2, 5))
+        self.assertIsNone(completeSnapshotFrom(lambda k: None))
+        self.assertIsNone(completeSnapshotFrom(lambda k: 'garbage'))
+
+    def testAnUnstampedLeagueEnforcesNothing(self):
+        # Until the first week is recorded completely there is no safe boundary, so the
+        # gate stays off rather than defaulting to on.
+        self.assertFalse(weekIsFullyRecorded(1, 7, None))
+
+    def testALaterSeasonIsAlwaysPastTheBoundary(self):
+        self.assertTrue(weekIsFullyRecorded(2, 1, (1, 8)))
+        self.assertFalse(weekIsFullyRecorded(1, 7, (1, 8)))
+        self.assertTrue(weekIsFullyRecorded(1, 8, (1, 8)))
 
     def testFieldingALineupThatEarnedNoBonusStillCountsItsBaseFP(self):
         # The case that makes a bare "no row" test unsafe: a zero row is still a roll
         # call, so the week counts normally.
         banked = {7: {'breakdowns': [{'playerId': 2, 'playerName': 'Robbie Tumbles'}]}}
-        self.assertEqual(weekFP(7, 7, banked, {7: [9]}, [9], self.FP, settledWeeks={7}), 61.0)
+        self.assertEqual(weekFP(7, 7, banked, {7: [9]}, [9], self.FP, boundary=(1, 1)), 61.0)
 
     def testAnOpenWeekIsNotTreatedAsAbsence(self):
         # Before the week closes there is no roll call, so equipment is all there is.
-        self.assertEqual(weekFP(7, 7, {}, {}, [9], self.FP, settledWeeks={6}), 98.0)
+        self.assertEqual(weekFP(7, 7, {}, {}, [9], self.FP, boundary=(1, 8)), 98.0)
 
     def testALegacyRowWithNoBreakdownDoesNotZeroTheWeek(self):
         # Weeks banked before breakdowns were stored must not read as absence.
         self.assertEqual(
             weekFP(7, 8, {7: {'breakdowns': []}}, {7: [9]}, [], self.FP,
-                   settledWeeks={7}), 98.0)
+                   boundary=(1, 1)), 98.0)
 
     def testTheSnapshotIsWrittenForALineupThatPaidNothing(self):
         """The write-side half, and the reason absence stays unreadable.

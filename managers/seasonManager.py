@@ -1766,6 +1766,22 @@ class SeasonManager:
                         continue
                     byUser.setdefault(eq.user_id, []).append(eq)
 
+                # ⚠️ MARK THE FIRST WEEK RECORDED COMPLETELY. A row is now written for
+                # every fielded lineup, including one that paid nothing, so from this
+                # week on "no row" genuinely means "did not field". Earlier weeks were
+                # written only when a lineup PAID, so their absences are ambiguous and
+                # the leaderboard must keep crediting them (see fantasyTracker's
+                # `lineupForWeek`). Stamped here, at the first processing run under the
+                # unconditional write, so the boundary is a fact about the DATA rather
+                # than a deploy date someone has to remember.
+                try:
+                    from game_rules import _readAppSetting, _writeAppSetting
+                    from managers.fantasyTracker import COMPLETE_SNAPSHOT_SETTING as _CSS
+                    if not _readAppSetting(_CSS):
+                        _writeAppSetting(_CSS, f"{season}:{week}")
+                except Exception as _e:
+                    logger.warning(f"Could not stamp lineup-snapshot boundary: {_e}")
+
                 # Get FP from WeeklyPlayerFP (banked by FantasyTracker)
                 weekFPRows = session.query(WeeklyPlayerFP).filter_by(
                     season=season, week=week
