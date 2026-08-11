@@ -4814,12 +4814,24 @@ def _computeAllIn(primary, ctx, cardPlayerId, eqId):
 
 
 def _computeDiversified(primary, ctx, cardPlayerId, eqId):
-    """+FP per unique output type in hand."""
+    """+FP per unique output type in hand.
+
+    ⚠️ A BLANK IS NOT AN OUTPUT TYPE. The `standard` no-effect floor print stores
+    `outputType: ''` (cardEffects.py, the `none` config) — 192 of 722 templates on a live
+    database — and a plain `set()` counted that empty string as a type of its own. A hand
+    of six starter prints plus one flat-FP card came out as TWO unique output types and
+    paid double, which is the reverse of what the card is for: those six contribute no
+    output at all. Reported from the shop as +87.6 projected against a card reading +65.7
+    per type, a number the discrete payout can never land on.
+
+    The other three readers of this list (`anthem`, `gold_rush`, `stacked_deck`) each test
+    for one named type, so a blank never matched and they were unaffected.
+    """
     perType = primary.get("perTypeFP", 1.5)
-    types = set(ctx.equippedCardOutputTypes)
+    types = {t for t in (ctx.equippedCardOutputTypes or []) if t}
     count = len(types)
     bonus = round(perType * count, 1)
-    eq = f"{perType}/type × {count} unique output types"
+    eq = f"{perType}/type × {count} unique output type{'' if count == 1 else 's'}"
     return EffectResult(fpBonus=bonus, equation=eq)
 
 
