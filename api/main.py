@@ -12047,6 +12047,26 @@ def get_feed_catalog():
     })
 
 
+def _utcIso(dt) -> Optional[str]:
+    """A datetime as ISO-8601 that says it is UTC.
+
+    ⚠️ `datetime.utcnow()` — what these columns default to — produces a NAIVE datetime,
+    and `.isoformat()` on it emits no timezone at all. JavaScript reads a date-time string
+    with no offset as LOCAL time, so every one of these arrived hours adrift on any client
+    away from UTC. That is what kept sideline lines pinned below fan posts in the
+    Bleachers: the posts parsed into the future and outsorted every cutaway, which carries
+    an explicit Z.
+
+    The client had already worked around it for DISPLAY by appending a Z itself
+    (`relativeTime`), which is why the ages looked right while the ORDER was wrong.
+    Saying it here is the fix; anything sorting on these no longer has to know.
+    """
+    if dt is None:
+        return None
+    iso = dt.isoformat()
+    return iso if (iso.endswith('Z') or '+' in iso[10:]) else iso + 'Z'
+
+
 def _serializeFeedPost(session, post, team, isMine: bool = False) -> Dict[str, Any]:
     """One post, in the shape the client renders.
 
@@ -12073,7 +12093,7 @@ def _serializeFeedPost(session, post, team, isMine: bool = False) -> Dict[str, A
         'teamColor': getattr(team, 'color', None),
         'username': getattr(poster, 'username', None),
         'isMine': isMine,
-        'createdAt': post.created_at.isoformat() if post.created_at else None,
+        'createdAt': _utcIso(post.created_at),
     }
 
 
@@ -12249,7 +12269,7 @@ def get_team_feed(teamId: int, limit: int = 50,
                 'targetPlayerId': post.target_player_id,
                 'targetName': targetName,
                 'valence': entry[2] if entry else 0,
-                'createdAt': post.created_at.isoformat() if post.created_at else None,
+                'createdAt': _utcIso(post.created_at),
                 'mine': bool(user and post.user_id == user.id),
                 'isAuto': bool(getattr(post, 'is_auto', False)),
             })
@@ -12373,6 +12393,39 @@ def _perUserCacheControl(user, anonymousPolicy: str) -> str:
     and that is the traffic worth caching.
     """
     return "private, no-store" if user is not None else anonymousPolicy
+
+
+def _liveGameFor(scheduleGame, *pools):
+    """The live object for a scheduled game — matched by IDENTITY, never by position.
+
+    ⚠️ THESE LISTS ARE NOT GUARANTEED PARALLEL. `activeGames` / `completedWeekGames` were
+    indexed with the schedule's own loop counter, which assumes the sim holds them in
+    schedule order. Measured on production during a live week: 11 of 16 cards showed a
+    pick for a team that was not in the matchup on the card, each card carrying the
+    PREVIOUS card's home team — the signature of two lists offset from one another. Every
+    past week read correctly, because those fall back to the schedule object and never
+    substitute anything.
+
+    A pick is stored against (week, gameIndex), where gameIndex is the position in the
+    SCHEDULE, so a mismatch here silently files a reader's pick against another game's
+    card — and the check or cross lands on the wrong matchup once results come in.
+
+    Matches on team ids: a fixture is the pair of clubs playing it, and unlike the game
+    id that is present on both the schedule object and the live one.
+    """
+    def teamsOf(game):
+        home = getattr(game, 'homeTeam', None)
+        away = getattr(game, 'awayTeam', None)
+        return (getattr(home, 'id', None), getattr(away, 'id', None))
+
+    wanted = teamsOf(scheduleGame)
+    if wanted == (None, None):
+        return scheduleGame
+    for pool in pools:
+        for candidate in (pool or []):
+            if teamsOf(candidate) == wanted:
+                return candidate
+    return scheduleGame
 
 
 def _pickemPickable(statusVal) -> bool:
@@ -12553,14 +12606,9 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
 
         scheduleGames = schedule[week - 1].get('games', [])
         for i, game in enumerate(scheduleGames):
-            # Use active game object if available (has live status/quarter),
-            # then completed games, then fall back to schedule object
-            if activeGames and i < len(activeGames):
-                liveGame = activeGames[i]
-            elif completedGames and i < len(completedGames):
-                liveGame = completedGames[i]
-            else:
-                liveGame = game
+            # The live object for THIS fixture (live status/quarter), or the completed
+            # one, or the schedule entry. Matched by teams — see _liveGameFor.
+            liveGame = _liveGameFor(game, activeGames, completedGames)
             rawStatus = getattr(liveGame, 'status', None)
             # Compare by enum value to avoid identity issues across module reloads
             statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
@@ -12736,7 +12784,9 @@ def submit_pickem_pick(body: dict, user: _User = Depends(_getCurrentUser)):
         game = scheduleGames[gameIndex]
         # Also check activeGames for live state
         activeGames = currentSeason.activeGames
-        liveGame = activeGames[gameIndex] if activeGames and gameIndex < len(activeGames) else game
+        # By teams, not by position — a pick validated against the wrong fixture is
+        # either refused as an invalid team or filed against another game. See _liveGameFor.
+        liveGame = _liveGameFor(game, activeGames)
         totalGames = len(scheduleGames)
 
     # Per-game lock: a pick closes at KICKOFF, not at the final whistle.
@@ -12887,7 +12937,7 @@ def get_pickem_day(response: Response, user: Optional[_User] = Depends(_getOptio
             activeGames = currentSeason.activeGames if w == week else None
             games = []
             for i, g in enumerate(scheduleGames):
-                liveGame = activeGames[i] if (activeGames and i < len(activeGames)) else g
+                liveGame = _liveGameFor(g, activeGames)
                 games.append(_buildPickemMatchup(liveGame, i))
             slots.append({
                 "week": w,
@@ -12993,7 +13043,7 @@ def submit_pickem_picks(body: dict, user: _User = Depends(_getCurrentUser)):
                     continue
                 game = scheduleGames[gameIndex]
                 activeGames = currentSeason.activeGames if w == activeWeek else None
-                liveGame = activeGames[gameIndex] if (activeGames and gameIndex < len(activeGames)) else game
+                liveGame = _liveGameFor(game, activeGames)
 
             rawStatus = getattr(liveGame, 'status', None)
             statusVal = rawStatus.value if hasattr(rawStatus, 'value') else None
