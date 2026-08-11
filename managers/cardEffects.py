@@ -1660,7 +1660,12 @@ _LADDER_VOLUMES = {
     # QBs throw ~1 TD a game, so unlike receiving TDs this is not a rare event: 43% of
     # QB games are scoreless but 29% are multi-TD. Measured over 736 QB games.
     "passTds":   {1: 1.02},
-    "targets":   {3: 9.9, 4: 8.7},
+    # ⚠️ RE-MEASURED after the target-counting fix (12.3 WR / 11.0 TE over 24 games,
+    # was 9.9 / 8.7). A target used to be booked only on a catch or a drop, so an
+    # incompletion never reached the receiver's line and this table — which sizes
+    # Attention's rate — was reading about 24% light. Left alone, the card would have
+    # quietly paid a quarter more than its rung.
+    "targets":   {3: 12.3, 4: 11.0},
     # Return yards go to whichever skill player returns; ~2.5 returns a game at ~9 yards.
     "returnYards": {2: 23.0, 3: 23.0},
     # Rare one-off events, used as the BONUS half of a base+bonus card.
