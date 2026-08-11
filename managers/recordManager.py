@@ -620,6 +620,27 @@ class RecordManager:
             self.logger.error(f"Failed to load records from database: {e}")
             self._records = self._initializeRecordStructure()
     
+    def _applyRecordValues(self, record_dict: Dict[str, Any], db_record) -> None:
+        """Copy a stored row's value and holder onto a node of the in-memory tree.
+
+        Shared by the team and player paths so the two cannot disagree about what a
+        loaded record consists of.
+        """
+        record_dict['value'] = db_record.value
+        record_dict['id'] = db_record.player_id or db_record.team_id
+        if db_record.player_id:
+            player_manager = self.serviceContainer.getService('player_manager')
+            player = player_manager.getPlayerById(db_record.player_id) if player_manager else None
+            if player:
+                record_dict['name'] = player.name
+        elif db_record.team_id:
+            team_manager = self.serviceContainer.getService('team_manager')
+            team = team_manager.getTeamById(db_record.team_id) if team_manager else None
+            if team:
+                record_dict['name'] = team.name
+        if db_record.season:
+            record_dict['season'] = db_record.season
+
     def _updateRecordFromDB(self, db_record) -> None:
         """Update in-memory record structure from a database record"""
         try:
@@ -629,7 +650,26 @@ class RecordManager:
             
             # Determine if player or team record
             entity_type = 'players' if db_record.player_id else 'team'
-            
+
+            # ⚠️ The team tree has NO GROUP LEVEL — `team.<scope>.<stat>` against the
+            # player tree's `players.<group>.<scope>.<stat>` — so a team row is written
+            # under the synthetic group `_TEAM_RECORD_GROUP` and unwrapped here. Reaching
+            # into `records['team'][category][scope][stat]` looked symmetrical and was a
+            # level too deep, which lost every team record on restart.
+            if entity_type == 'team':
+                container = records.get('team', {})
+                # Rows written before this fix carry `category='<scope>'` and
+                # `scope='<stat>'`; the current shape carries the synthetic group. Accept
+                # both, so an existing database is not asked to have been right.
+                if db_record.category == self._TEAM_RECORD_GROUP:
+                    scope, stat = db_record.scope, db_record.stat_name
+                else:
+                    scope, stat = db_record.category, db_record.scope
+                node = container.get(scope, {}).get(stat)
+                if isinstance(node, dict) and 'value' in node:
+                    self._applyRecordValues(node, db_record)
+                return
+
             # Navigate to the correct nested location
             if entity_type in records:
                 if db_record.category in records[entity_type]:
@@ -674,9 +714,24 @@ class RecordManager:
             if 'players' in records:
                 saved_count += self._saveRecordCategory(records['players'], 'players')
             
-            # Save team records
+            # ⚠️ THE TEAM TREE IS ONE LEVEL SHALLOWER THAN THE PLAYER TREE, and this is
+            # where that bit. A player record is `players.<group>.<scope>.<stat>`
+            # (passing.game.yards); a team record is `team.<scope>.<stat>`
+            # (game.pts) — there is no group. Passing it to the same walker wrote
+            # `category='game', scope='pts', stat_name='pts'`, and `_applyDbRecord` reads
+            # `records['team'][category][scope][stat]`, which is a level too deep and never
+            # matched. So EVERY TEAM RECORD WAS SILENTLY LOST ON RESTART: the value went to
+            # the database and came back 0.
+            #
+            # Reported as "Buffalo set the single-game team points record at 24, previous
+            # 8" the day after a 42 had been posted and announced. Verified by round trip:
+            # save 42, reload 0, while a player record saved 411 and reloaded 411.
+            #
+            # `_TEAM_RECORD_GROUP` is a synthetic group that gives the team tree the same
+            # depth the walker and the loader both assume.
             if 'team' in records:
-                saved_count += self._saveRecordCategory(records['team'], 'team')
+                saved_count += self._saveRecordCategory(
+                    {self._TEAM_RECORD_GROUP: records['team']}, 'team')
             
             self.db_session.commit()
             self.logger.info(f"Saved {saved_count} records to database")
@@ -685,6 +740,11 @@ class RecordManager:
             self.logger.error(f"Failed to save records to database: {e}")
             self.db_session.rollback()
     
+    # The group name team records are stored under, so `team.<scope>.<stat>` round-trips
+    # through a schema built for `players.<group>.<scope>.<stat>`. It is unwrapped again on
+    # load — see `_applyDbRecord`.
+    _TEAM_RECORD_GROUP = 'team'
+
     def _saveRecordCategory(self, category_data: Dict[str, Any], entity_type: str) -> int:
         """Recursively save record category to database"""
         saved_count = 0
