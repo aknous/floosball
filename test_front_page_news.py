@@ -1,6 +1,6 @@
 """The front page's news feed is cumulative, mixed, and led by something recent.
 
-Three behaviours that are easy to regress and each of which was wrong at least once
+Three behaviors that are easy to regress and each of which was wrong at least once
 while building it:
 
   * NO CATEGORY OWNS THE FEED. A whole slate of games resolves at once, so the newest N
@@ -246,7 +246,7 @@ expect("a Cores line is attributed inline", out['items'][0]['text'].startswith('
 print("\nCategory labels reach the frontend intact")
 out = build([Row('anomaly_transition', 'someone flickers'), Row('big_game', 'a line')])
 raws = {i['rawCategory'] for i in out['items']}
-expect("the raw category rides along for colour lookup", 'anomaly_transition' in raws)
+expect("the raw category rides along for color lookup", 'anomaly_transition' in raws)
 expect("the display category is humanised", any(i['category'] == 'ANOMALY TRANSITION' for i in out['items']))
 
 print()

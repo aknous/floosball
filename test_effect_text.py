@@ -7,7 +7,7 @@ edited separately, so nothing stops one being updated and the other left behind.
 ⚠️ THE ON-CARD REBASE DID EXACTLY THAT. Effects were re-based off the depicted player
 (docs/CARD_ONCARD_REBASE_PLAN.md), the details and the compute functions were rewritten
 to read `cardPlayerId`, and FIVE descriptions were left describing the old
-roster-aggregate behaviour — honor_roll, bonsai, catalyst, snake_eyes and walk_off. A
+roster-aggregate behavior — honor_roll, bonsai, catalyst, snake_eyes and walk_off. A
 reader comparing the shop text with the card in their hand saw two different effects,
 which is how it was reported.
 """

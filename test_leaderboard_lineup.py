@@ -239,7 +239,7 @@ class LeaderboardLineupTests(unittest.TestCase):
                         'the boundary is stamped after the no-participants early return')
 
     def testAWeekBeforeTheBoundaryCreditsEquipmentPutOnAfterTheWhistle(self):
-        # The consequence, stated as behaviour: this is what the user saw, and it is
+        # The consequence, stated as behavior: this is what the user saw, and it is
         # correct ONLY because such a week's record is genuinely incomplete.
         self.assertEqual(
             weekFP(1, 2, {}, {1: [9]}, [], {(9, 1): 98.0}, boundary=(1, 2),
@@ -268,7 +268,7 @@ class LeaderboardLineupTests(unittest.TestCase):
                         'the boundary is cleared outside clear_db')
 
     def testAStaleBoundaryFromAPriorRunExemptsWeekOne(self):
-        # The behaviour that made it invisible: week 1 looks fine in isolation, and only
+        # The behavior that made it invisible: week 1 looks fine in isolation, and only
         # a boundary carried over from a PREVIOUS run turns the gate off.
         fp = {(9, 1): 98.0}
         self.assertEqual(weekFP(1, 2, {}, {1: [9]}, [], fp, boundary=(1, 2),

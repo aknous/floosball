@@ -36,7 +36,7 @@ class FakeTeamManager:
 
 
 print("\nThe reload clears every team's schedule before refilling")
-# The behaviour under test is the reset loop at the top of _loadScheduleFromDatabase.
+# The behavior under test is the reset loop at the top of _loadScheduleFromDatabase.
 # Exercising the whole method needs a DB, a Season and a service container; the contract
 # that actually matters is "no team keeps a fixture from a previous load", so that is what
 # is asserted here directly against the same statement the method runs.

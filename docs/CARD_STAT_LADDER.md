@@ -209,7 +209,7 @@ the way the four above were. They are the last survivors of the "worse is better
 the fusion rework retired (martyr, underdog, rock_bottom, indemnity), so consistency argues
 for retiring them too, but that is a separate call.
 
-## Full card catalogue
+## Full card catalog
 
 Every mintable effect, by rarity then output type, with the exact tagline, back-of-card
 text and detail line. Existing entries are pulled verbatim from `cardEffects.py`; **`NEW`**
@@ -566,7 +566,7 @@ tuning range):
 | receiving TDs | 0.40 | **per unit** | 0.25 | 0.100 | 0.250 | 25 |
 
 **Rule of thumb: the rarer the stat, the smaller the denominator.** TDs take a per-unit
-rate; yardage needs per 50 or per 100. Every FPx detail line in the catalogue now names its
+rate; yardage needs per 50 or per 100. Every FPx detail line in the catalog now names its
 unit, so nothing is left implicitly per-yard.
 
 Note this also caps how fine FPx balancing can ever be. Below roughly **+0.05 FPx at a mean
@@ -687,7 +687,7 @@ Three rules fix it without inventing premises:
    basis, two prints. This is the cheapest way to widen the FPx pool — no new premise, no
    new stat, no new mechanic.
 
-As drafted, the catalogue below takes metallic from **54% FP / 14% FPx / 32% Floobits**
+As drafted, the catalog below takes metallic from **54% FP / 14% FPx / 32% Floobits**
 to **53% / 24% / 24%** — the FPx pool more than doubles, from 4 cards to 9, and Floobits
 drops from a third of the tier to a quarter.
 
@@ -950,7 +950,7 @@ reception** — that is a balance fix, independent of naming.
    are the same person and the wording was just stale framing (now fixed). Good Neighbor
    mints on ANY position while paying off the roster kicker's missed FGs, so a QB card's
    depicted player is decorative. Lock it to K, or re-base it. Text left accurate until
-   the behaviour is settled.
+   the behavior is settled.
 4. **The remaining rating-keyed cards** (see *Still rating-keyed*). The chance-fill
    group is half stat-driven already and needs only its `conditionFill` input swapped; the
    star-count group needs a decision on whether a static rating band is acceptable at all

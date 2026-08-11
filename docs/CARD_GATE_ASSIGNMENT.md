@@ -20,7 +20,7 @@ in most cases.
 |---|---|---|
 | **A. Roster production** | 42 | **Re-base to the card player** where the premise survives — that makes them card-specific and they need no gate at all (they join the 21). Gate only the ones whose premise is genuinely whole-lineup. |
 | **B. Roster traits** | 22 | **Keep roster-scoped, add a gate.** This is the deckbuilding layer worth preserving; the gate stops it paying out behind a dud lineup. |
-| **C. Favourite team** | 9 | **Gate.** The purest roster-irrelevant cards — they pay identically no matter who is fielded. Biggest single win. |
+| **C. Favorite team** | 9 | **Gate.** The purest roster-irrelevant cards — they pay identically no matter who is fielded. Biggest single win. |
 | **D. Hand composition** | 9 | **Gate.** `full_roster` and `all_in` still need the Phase 5c premise redesign on top (both still mintable). |
 | **E. Economy** | 1 | **Gate.** |
 | **F. Flat / chance / external** | 22 | **Gate.** `freebie`, `allowance`, `rng`, `surplus`, `big_deal` are pure flat payouts and are the core of the carry. |

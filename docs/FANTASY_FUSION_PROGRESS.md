@@ -108,14 +108,14 @@ chip that was never built; the mint-time gate line was even stripped from the se
 by the serializer's `_rebuildTemplates`). Built the surfacing:
 - **Live power bar on the card** (`TradingCard.tsx`, new `GateBar` + optional `gateFP` prop):
   on the lineup a fill meter shows the depicted player's week FP vs the threshold, colored
-  green (ON) / grey (`X / T FP · OFF`), and the effect name/tagline dim when the bar isn't
+  green (ON) / gray (`X / T FP · OFF`), and the effect name/tagline dim when the bar isn't
   met. In collection/shop (no live FP) it shows the static requirement chip ("Unlocks at 8
   FP" / "Active under 8 FP" for inverse). Reads `card.effectConfig.gate` (already serialized).
 - **Wired** `Lineup.tsx` to pass `gateFP={weekFPBySlot[slot]}` (the depicted player's live
   week FP, already computed there from the snapshot).
 - **Scoring-breakdown marker** — `CardBreakdown` now carries `gateActive` / `gateThreshold`
   (`cardEffectCalculator.py`, from `ctx._gateRatios`), serialized in `_breakdownToDict`
-  (`fantasyTracker.py`) and surfaced as a grey **GATE** pill (hover: "needs N FP — scored
+  (`fantasyTracker.py`) and surfaced as a gray **GATE** pill (hover: "needs N FP — scored
   nothing this week") on gated-off cards in `PointsBreakdownPanel.tsx`.
 - **Note:** the chip/bar is the gate's surface, so the serializer's detail-strip was left
   as-is (re-appending would double-show the gate). Verified: `gateActive` True→fired /

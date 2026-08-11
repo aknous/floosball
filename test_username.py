@@ -9,7 +9,7 @@ nothing was ever sent.
 
 Measured on production: 36 of 157 named users (23%) carry a generated name past the
 cap, handed to them by auto-provisioning at signup. They stay valid — the exemption is
-grandfathering for those accounts, not a licence for the generator.
+grandfathering for those accounts, not a license for the generator.
 """
 
 import os

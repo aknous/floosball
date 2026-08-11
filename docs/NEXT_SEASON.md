@@ -50,9 +50,9 @@ both have misled before, in both directions.
 ### 1. Finalize new team colors and icons
 
 Further along than "needs finalizing". The heraldic pattern set was already extended
-24 → 32 at expansion, and a render of all 32 with colours stripped confirms **32 distinct
+24 → 32 at expansion, and a render of all 32 with colors stripped confirms **32 distinct
 marks, no duplicates** (`avatar_generator._generateMarbleSvg`). Marks are generated from
-each club's two colours + a pattern keyed to `(teamId - 1) % 32`.
+each club's two colors + a pattern keyed to `(teamId - 1) % 32`.
 
 What actually needs a decision is **contrast**, and it is mostly NOT the new clubs:
 
@@ -62,11 +62,11 @@ What actually needs a decision is **contrast**, and it is mostly NOT the new clu
 | Colorado Oysters | 1.4:1 | |
 | Anaheim Rhyme | 1.4:1 | |
 | Seattle Cranes | 1.7:1 | |
-| St. Louis Arches (new) | 2.2:1 | grey on red, muddy at the 20px standings size |
+| St. Louis Arches (new) | 2.2:1 | gray on red, muddy at the 20px standings size |
 
 The other seven new clubs run 3.2–5.3:1 and are fine. ⚠️ `logoInvert` exists for exactly
-this kind of fix, but it only swaps which colour paints field vs figure — it cannot help a
-pair with equal luminance, which needs a colour CHANGED rather than reordered.
+this kind of fix, but it only swaps which color paints field vs figure — it cannot help a
+pair with equal luminance, which needs a color CHANGED rather than reordered.
 
 Also worth knowing: pattern **23 has no explicit branch**. It falls through to the `else`
 (a "pale", single vertical band). Output is still unique because nothing else draws a
@@ -246,9 +246,9 @@ not against this note** — same rule as the rest of this file.
 | Playoff history per club, derived | backend `852d4c5` |
 | `isAwakened` on the player payload | backend `f316df5` |
 
-⚠️ **The crest directory was 24 clubs at the old colours.** The browser serves STATIC files
+⚠️ **The crest directory was 24 clubs at the old colors.** The browser serves STATIC files
 from `floosball-react/public/avatars/{teamId}.png` — not the API — so clubs 25-32 had no
-crest at all and everything else was stale. Regenerate from `config.json` after any colour
+crest at all and everything else was stale. Regenerate from `config.json` after any color
 or mark change; the API endpoint is not what the app uses.
 
 ⚠️ **And the code had its own copy of that stale count.** `boardPieces.CREST_MAX_ID` was
@@ -278,7 +278,7 @@ and the ones that still *behaved* were two analysis harnesses (backend `ac6e650`
   game in progress exists), past seasons and careers from the DB. Reading the DB for the live
   season shows a table lagging the scoreboard by however long since the last save.
 - **`GET /api/stats/teams`** — mostly a read of `team_season_stats`, but a club's GIVEAWAYS
-  and SACKS ALLOWED are not on its own row: the sim credits a turnover to the defence that
+  and SACKS ALLOWED are not on its own row: the sim credits a turnover to the defense that
   forced it, so the surrendering side only exists as a join back through `games`. ⚠️ That
   join is **REGULAR SEASON ONLY** — sweeping up the playoffs subtracts four games of
   giveaways from twenty-eight games of takeaways and reports a margin belonging to neither.
@@ -310,7 +310,7 @@ button opens onto. The composer currently reuses `TeamFeed` for the viewer's own
 **Decisions already made, so they are not re-litigated:**
 - **Player profile: build option `1a` (Standing), not `1b` (Banner).** They are explicitly
   not mergeable. 1a's flat panels match the front page / standings / game board already
-  shipped; 1b's team-colour gradient hero is a departure. One component to swap if the
+  shipped; 1b's team-color gradient hero is a departure. One component to swap if the
   owner prefers 1b.
 - **The profile's data contract needs NOTHING more.** The README asks for two additions;
   `isAwakened` shipped, and per-season `defense` was **already** in `stats[]`

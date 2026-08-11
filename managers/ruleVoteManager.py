@@ -602,7 +602,7 @@ class RuleVoteManager:
 
         ⚠️ It carries the CORE WHO RAN THE VOTE (`RuleVoteWindow.core` — Aris for a
         change, Pyre for a revert), so the feed shows their glyph instead of a bare
-        coloured dot. `LeagueNews.mark()` draws a Core icon for any row with a `core`,
+        colored dot. `LeagueNews.mark()` draws a Core icon for any row with a `core`,
         and `isCore` still requires `category === 'cores'`, so the row keeps the rules
         rail, the rules tint and no speaker name — it is still a report, just one with
         an author. A rule change was the only noteworthy-weight row in the feed with

@@ -13,7 +13,7 @@ Chrome's file:// handling of standalone SVG is inconsistent, and the dev server 
 already running. It must be up on :3000.
 
 Output is transparent PNG: the crest is a circle, so a baked-in background would
-show as square corners against anything that is not the same colour.
+show as square corners against anything that is not the same color.
 """
 import argparse, json, os, re, shutil, subprocess, sys, struct
 

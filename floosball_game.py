@@ -76,7 +76,7 @@ except ImportError:
     getDefensiveScheme = None
 
 
-# Mid-game re-plan behaviour (see Game._maybeReadjustGameplans). Module-level so
+# Mid-game re-plan behavior (see Game._maybeReadjustGameplans). Module-level so
 # experiments can A/B variants without threading flags through the engine; these
 # defaults are the production configuration.
 _REPLAN_CONFIG = {
@@ -893,7 +893,7 @@ def _rnd(value) -> int:
 
     int() truncates TOWARD ZERO. That collapses every draw in the open interval
     (-1, 1) to exactly 0 and shaves ~0.5 off every positive draw, which produced
-    two artefacts across the whole sim: an artificial spike of zero-yard plays
+    two artifacts across the whole sim: an artificial spike of zero-yard plays
     (P(<=0) on a lost line contact was 47% against the 20% the distribution
     actually implies, driving a 28-31% RB stuff rate vs a real-world ~18%), and
     every configured mean reading ~0.5 higher than it behaved -- which is why the
@@ -1565,7 +1565,7 @@ class Game:
 
 
     def _coachClockIQ(self, coach) -> float:
-        """Normalise clockManagement (60–100) to 0.0–1.0 for situational decision gates.
+        """Normalize clockManagement (60–100) to 0.0–1.0 for situational decision gates.
 
         0.0 = worst (attr 60), 0.5 = neutral (attr 80), 1.0 = best (attr 100).
         """
@@ -2102,7 +2102,7 @@ class Game:
         # WHO eases off is a coaching trait, not a league-wide rule. A conservative
         # coach with clock sense calls the dogs off and lets the other side have the
         # underneath stuff; an aggressive one keeps his foot down and runs it up.
-        # Centred on 1.0 at a neutral coach so the league-average behaviour is the
+        # Centerd on 1.0 at a neutral coach so the league-average behavior is the
         # measured one, with the spread being the character.
         coach = getattr(self.defensiveTeam, 'coach', None)
         if coach:
@@ -2469,7 +2469,7 @@ class Game:
                                FG_CURVE_CENTER, FG_CURVE_SLOPE)
         if not kicker:
             return 0.0
-        # Centred at FG_CURVE_CENTER. The old centre of 52 with slope 0.18 put an
+        # Centerd at FG_CURVE_CENTER. The old center of 52 with slope 0.18 put an
         # average kicker at ~50% from 52 yards where real kickers are ~68%, so the
         # distance curve was pessimistic before any skill term applied.
         baseFgProb = 1 / (1 + math.exp(FG_CURVE_SLOPE * (fgDist - FG_CURVE_CENTER)))
@@ -9209,7 +9209,7 @@ class Game:
             # Regression-to-mean: teams stuck in the same form state for
             # 3+ weeks have a rising chance per game to have their form
             # contribution halved. Preserves the prior _applyFormState
-            # behaviour now that form is folded into disposition.
+            # behavior now that form is folded into disposition.
             weeksHeld = getattr(team, '_formStateWeeksHeld', 0)
             if weeksHeld >= 3 and formMult != 1.0:
                 weakenChance = min(0.70, (weeksHeld - 2) * 0.15)
@@ -11874,7 +11874,7 @@ class Game:
         REPLAN_MIN_PLAYS plays, and the magnitude scales with confidence
         (plays / REPLAN_FULL_CONFIDENCE_PLAYS, capped at 1.0). So a Q1->Q2 tweak
         is gentle and a Q3->Q4 tweak (three quarters of data) runs at full force.
-        Adaptability still gates the FREQUENCY. Behaviour is configurable via the
+        Adaptability still gates the FREQUENCY. Behavior is configurable via the
         module-level `_REPLAN_CONFIG` (defaults are production)."""
         if not GAMEPLAN_AVAILABLE or not _REPLAN_CONFIG.get('enabled', True):
             return

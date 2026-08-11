@@ -5,7 +5,7 @@ Per lore.md: the Core is a collection of AIs running floosball as an
 experiment. Individual Cores are distinct personalities. Some are benevolent,
 some are not, and the players inside cannot tell them apart.
 
-The current instance is catalogued (Cores-side) as **498b** — the players
+The current instance is cataloged (Cores-side) as **498b** — the players
 have no number; the surface world never says it. The number surfaces in idle
 banter and a few anomaly beats. See data/lore.md "Instance 498b".
 

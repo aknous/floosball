@@ -98,7 +98,7 @@ expect("a club with 4 runs in 17 seasons can see all four",
 print("\nNothing to show")
 expect("a club that never made it returns an empty list", buildPlayoffHistory(S([]), 1) == [])
 empty = summarize([], seasonsPlayed=17)
-expect("...and summarises cleanly rather than erroring", empty['appearances'] == 0 and empty['bestRound'] is None)
+expect("...and summarizes cleanly rather than erroring", empty['appearances'] == 0 and empty['bestRound'] is None)
 
 print("\nRound parsing tolerates the name as well as the number")
 # The column has held '1'..'4' in every season checked, but the season manager knows these

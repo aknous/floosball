@@ -8,7 +8,7 @@ with the same code, so a team row went to the database as
 `records['team'][category][scope][stat]` — a level too deep, matching nothing.
 
 So EVERY TEAM RECORD WAS SILENTLY LOST ON RESTART. The value was written, and came back
-zero. Nothing raised, because a lookup that misses simply leaves the initialised 0 in
+zero. Nothing raised, because a lookup that misses simply leaves the initialized 0 in
 place, which reads exactly like "no record set yet".
 
 Reported from the front page: "Buffalo Buffalo set the single-game team points record at

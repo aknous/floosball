@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Merge the live card catalogue (from code) with the planned new cards into the doc."""
+"""Merge the live card catalog (from code) with the planned new cards into the doc."""
 import re, io, collections
 
 src = io.open('managers/cardEffects.py', encoding='utf-8').read()
@@ -34,7 +34,7 @@ def kind(e):
     return 'Other'
 
 
-# Cards whose behaviour or name changes under this plan. value = note shown in the table.
+# Cards whose behavior or name changes under this plan. value = note shown in the table.
 CHANGED = {
     'gunslinger': 'CHANGED — re-pointed from pass yards to throw quality; needs the new '
                   '`goodThrows` counter. New copy below.',

@@ -255,7 +255,7 @@ on the card actually goes into effect. some can even scale to the card player's
 production."*
 
 - **21 effects** already key off the card player (the Stage 1 re-based set) — leave alone.
-- **105 effects** key off something else (roster totals, favourite team, economy, chance)
+- **105 effects** key off something else (roster totals, favorite team, economy, chance)
   or are flat boosts — these get a **gate**: below the bar the card pays NOTHING.
 
 A gate, not a multiplier. The multiplier experiment failed because a 0.25x floor still
@@ -422,7 +422,7 @@ weak player clears their own average ~half the time.
 This keeps BOTH goals:
 - the gate STAT still varies per card (rush yards / receptions / YAC / completions / FP)
   → diversity, the owner's vision;
-- self-relative normalisation → ~100-115% roster signal → balance.
+- self-relative normalization → ~100-115% roster signal → balance.
 
 Card text becomes "activates on a strong rushing game" / "when they beat their receiving
 average", NOT a fixed number. So the per-stat percentile calibration table below is the

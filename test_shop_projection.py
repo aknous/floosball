@@ -118,7 +118,7 @@ class ExtraSetTests(unittest.TestCase):
 
 
 class LiveContextTests(unittest.TestCase):
-    """The behaviour, against a real database when one is present — this is the check that
+    """The behavior, against a real database when one is present — this is the check that
     actually caught the bug, and the source assertions above are its cheap standing guard.
 
     Skipped where there is no local database or no user holding an equipped lineup, so a

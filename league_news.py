@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger('floosball.leagueNews')
 
-# Categories the front page knows how to colour. Anything else still stores and renders,
+# Categories the front page knows how to color. Anything else still stores and renders,
 # just in the muted fallback.
 CLINCHED = 'clinched'
 ELIMINATED = 'eliminated'

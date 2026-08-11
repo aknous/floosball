@@ -11,7 +11,7 @@ Both live cases, found in production on 764 templates:
                 the detail started asking for `{baseDelta}`. 10 of 10 minted templates
                 read "+? FPx once this player reaches 15 FP". Worse than cosmetic:
                 `_computeHonorRoll` falls back to `baseMult = 1.0`, so those cards were
-                still paying nothing at the bar — the exact behaviour the rework removed.
+                still paying nothing at the bar — the exact behavior the rework removed.
   gunslinger  — re-pointed from pass yards onto well-placed throws. The compute was
                 updated (with a legacy fallback) and the builder now mints
                 `perGoodThrowFP`, but BOTH texts were left describing the retired

@@ -4273,7 +4273,7 @@ class PlayerManager:
         # This team's own board, built pre-draft (see _buildFaDraftBoards):
         # {playerId: perceivedValue}, containing only free agents who would sign
         # here. Absent (no autonomous FO, or the build failed) = fall back to
-        # true-rating order, which is the pre-existing behaviour.
+        # true-rating order, which is the pre-existing behavior.
         board = getattr(self, '_faDraftBoards', {}).get(getattr(team, 'id', None))
 
         def _bestFaFor(faList, applyReleaseBlock, applyBoard):

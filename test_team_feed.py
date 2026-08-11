@@ -272,10 +272,10 @@ def test_gm_uses_the_same_scale_as_players():
     r.session.commit()
     avg, _ = r.getAggregate(7)
     assert r.getStanding(7) == normalizeSentiment(avg) == 1.0
-    print("PASS GM standing uses the same normalisation as players")
+    print("PASS GM standing uses the same normalization as players")
 
 
-def test_gm_standing_is_gated_and_normalised():
+def test_gm_standing_is_gated_and_normalized():
     r = _coachRepo()
     for uid in range(GM_SENTIMENT_MIN_VOTERS - 1):
         r.setRating(uid, 7, 1)
@@ -285,7 +285,7 @@ def test_gm_standing_is_gated_and_normalised():
     r.setRating(99, 7, 1)
     r.session.commit()
     assert r.getStanding(7) == -1.0, "unanimous 1-star is -1"
-    print(f"PASS GM standing gated until {GM_SENTIMENT_MIN_VOTERS} voters, then normalised")
+    print(f"PASS GM standing gated until {GM_SENTIMENT_MIN_VOTERS} voters, then normalized")
 
 
 

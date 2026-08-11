@@ -202,7 +202,7 @@ def test_the_facility_never_replaces_the_gm():
           f"({sharpBare:.2f})")
 
 
-def test_no_team_reads_as_the_old_behaviour():
+def test_no_team_reads_as_the_old_behavior():
     """Passing no team must value exactly as before the facility existed."""
     brain = _brain()
     coach = FakeCoach(scouting=88)
@@ -224,7 +224,7 @@ def test_boards_exclude_players_who_will_not_come():
 
 
 def test_two_teams_rank_the_same_pool_differently():
-    """The headline behaviour: one club's #1 is another's #5."""
+    """The headline behavior: one club's #1 is another's #5."""
     import random
     brain = _brain()
     pool = [FakePlayer(f'FA{i}', 70 + i, seasons=0, pid=i, ceiling=70 + i + 12)

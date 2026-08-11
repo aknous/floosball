@@ -3907,7 +3907,7 @@ class SeasonManager:
         """Division names for a league, from config.json's `divisions` map.
 
         Config-driven because the owner names these (2026-08-07), the same way team names
-        and colours are owned there. Falls back to compass points so a config without the
+        and colors are owned there. Falls back to compass points so a config without the
         key still produces a division-shaped league rather than silently dropping to the
         flat round-robin.
         """
@@ -4040,7 +4040,7 @@ class SeasonManager:
         divSecond = merge(divRounds[0])         # the same 6 fixtures again, reordered below
 
         # --- cross-division inside each league: every club meets the 12 outside its
-        # division once. Six division pairings organise into THREE rounds of two
+        # division once. Six division pairings organize into THREE rounds of two
         # simultaneous pairings, so the whole league plays every week:
         #     round 1  (1v2) (3v4)      round 2  (1v3) (2v4)      round 3  (1v4) (2v3)
         # Each round is `size` weeks, so 3 x 4 = 12.
@@ -4463,7 +4463,7 @@ class SeasonManager:
                              season: Optional[int] = None) -> None:
         """A schedule beat — a season opening, a week starting — in the news feed.
 
-        Its own category so the feed can colour it apart from results, and it deliberately
+        Its own category so the feed can color it apart from results, and it deliberately
         carries no stats: a slate that has not been played has no numbers worth a headline,
         and this should never take the lead slot from an actual result.
 
@@ -6868,7 +6868,7 @@ class SeasonManager:
                 )
             except Exception as e:
                 # A team with no board falls back to true-rating order, which is
-                # the pre-existing behaviour — never a missing pick.
+                # the pre-existing behavior — never a missing pick.
                 logger.warning(f"FA board build failed for {getattr(team, 'name', '?')}: {e}")
         self.playerManager._faDraftBoards = boards
 
@@ -7180,7 +7180,7 @@ class SeasonManager:
         teamManager = self.serviceContainer.getService('team_manager')
         if not teamManager:
             return
-        # SIM-ONLY: model fan behaviour (re-sign your best eligible players) so a
+        # SIM-ONLY: model fan behavior (re-sign your best eligible players) so a
         # userless sim isn't an all-walk extreme. Prod is unaffected — it's driven
         # by real fan votes. Gated by env; set by retention_harness.py.
         simulateFans = bool(os.environ.get('SIMULATE_FAN_RESIGNS'))
@@ -10676,7 +10676,7 @@ class SeasonManager:
                 totalAutoPicks = 0
                 for user in autoUsers:
                     mode = user.auto_pick_mode or "off"
-                    favouriteId = (getattr(user, 'favorite_team_id', None)
+                    favoriteId = (getattr(user, 'favorite_team_id', None)
                                    if getattr(user, 'auto_pick_never_against_favorite', False)
                                    else None)
                     existingPicks = pickemRepo.getUserPicks(user.id, seasonNum, week)
@@ -10707,11 +10707,11 @@ class SeasonManager:
                         #
                         # Applied AFTER the mode has chosen, so it overrides every mode
                         # including "underdogs" and "random", and only ever flips the pick
-                        # TO the favourite club — it never picks against anyone else's.
+                        # TO the favorite club — it never picks against anyone else's.
                         # Opt-in, because on average it loses points.
-                        if favouriteId and pickedId != favouriteId:
-                            if favouriteId in (homeTeam.id, awayTeam.id):
-                                pickedId = favouriteId
+                        if favoriteId and pickedId != favoriteId:
+                            if favoriteId in (homeTeam.id, awayTeam.id):
+                                pickedId = favoriteId
 
                         pickedIsHome = (pickedId == homeTeam.id)
                         underdogMult = calculateUnderdogMultiplier(homeElo, awayElo, pickedIsHome)
