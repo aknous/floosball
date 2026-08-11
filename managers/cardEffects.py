@@ -951,7 +951,7 @@ EFFECT_TOOLTIPS = {
     "all_in": "Adds FPx for each fantasy point this player scores past a high FP line, up to a cap. No bonus below the line.",
     "diversified": "Don't put all your eggs in one basket. FP per unique output type (FP, FPx, Floobits) across your equipped cards.",
     "gold_rush": "Floobits cards amplify each other. Floobits bonus for each other floobits card in your hand.",
-    "stacked_deck": "Multiply the multipliers. FPx for each FPx card in your hand.",
+    "stacked_deck": "Multiply the multipliers. FPx for every other FPx card in your hand.",
     "copycat": "Copies the best. FP equal to the highest flat FP bonus from your other cards.",
     "chain_reaction": "Cards feeding cards. FPx that scales with how many of your other 4 cards produced a non-zero bonus.",
     "bonus_round": "Everyone chipped in. FP if 4 or more of your other cards triggered a non-zero bonus this week.",
@@ -1142,7 +1142,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "all_in": "+{perFPxShown} FPx for every fantasy point this player scores past {studLine} FP.",
     "diversified": "+{perTypeFP} FP per unique output type in your hand (FP, FPx, Floobits)",
     "gold_rush": "{perCardFloobits} Floobits per other Floobits card in your hand",
-    "stacked_deck": "Self-compounds: each other FPx card in your hand stacks +{perCardMult} on this card's own delta",
+    "stacked_deck": "+{perCardMult} FPx for each other FPx card in your hand",
     "copycat": "+FP equal to highest flat FP bonus from your other cards",
     "chain_reaction": "+{perCardXMult} FPx for every card in your hand that produced a non-zero bonus this week",
     "bonus_round": "+{rewardValue} FP when 4 or more of your other cards produced a non-zero bonus this week",
@@ -4798,7 +4798,10 @@ def _computeStackedDeck(primary, ctx, cardPlayerId, eqId):
     otherMults = max(0, multCount - 1)
     mult = round((1 + perCard) ** otherMults, 2)
     delta = round(mult - 1.0, 2)
-    eq = f"(1 + {perCard})^{otherMults} other FPx cards = +{delta:.2f} FPx"
+    if otherMults == 0:
+        return EffectResult(multBonus=mult, equation="No other FPx cards in your hand")
+    eq = (f"{otherMults} other FPx card{'s' if otherMults != 1 else ''} "
+          f"compounding at +{perCard} = +{delta:.2f} FPx")
     return EffectResult(multBonus=mult, equation=eq)
 
 
