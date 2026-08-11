@@ -1564,27 +1564,23 @@ FEED_POST_CATALOG = {
 # No slang, no chants that belong to a real club.
 GAME_FEED_CATALOG = {
     # -- willing them on
-    'lets_go':        ("Let's go!",                    'Get up',      1),
-    'right_here':     ('Right here, right now',        'Get up',      1),
-    'take_it':        ('Take this one',                'Get up',      1),
-    'all_night':      ('We do this all night',         'Get up',      1),
-    # -- the defence
-    'get_a_stop':     ('Get a stop',                   'Defense',     1),
-    'hold_them':      ('Hold them here',               'Defense',     1),
-    'wall_up':        ('Wall up',                      'Defense',     1),
-    # -- approval of what just happened
-    'thats_the_play': ("That's the play",              'Yes',         1),
-    'about_time':     ('About time',                   'Yes',         0),
-    'keep_it_going':  ('Keep it going',                'Yes',         1),
+    'thats_the_play': ("What a play!",                 'Positive',   1),
+    'about_time':     ('About time!',                  'Positive',   1),
+    'yes':            ('Yes!',                         'Positive',   1),
+    'lets_go':        ("Let's go!",                    'Positive',   1),
+    'believe':        ("Believe!",                    'Positive',   1),
     # -- displeasure
-    'wake_up':        ('Wake up',                      'Not good',   -1),
-    'this_hurts':     ('This one hurts',               'Not good',   -1),
-    'not_like_this':  ('Not like this',                'Not good',   -1),
-    'we_had_that':    ('We had that',                  'Not good',   -1),
-    # -- the state of the game
-    'still_in_it':    ("We're still in it",            'The score',   1),
-    'long_way':       ('Long way to go',               'The score',   0),
-    'nervous':        ('This is unbearable',           'The score',   0),
+    'wake_up':        ('Wake up',                      'Negative',   -1),
+    'welp':           ('Welp',                         'Negative',   -1),
+    'bums':           ('Dangit!',                      'Negative',   -1),
+    'not_like_this':  ('Not like this',                'Negative',   -1),
+    'so_close':       ('So close!',                    'Negative',   -1),
+    'we_must_be_cursed': ('We must be cursed',         'Negative',   -1),
+    # -- the defence
+    'get_a_stop':     ('Make a stop',                  'Defense',     1),
+    'hold_them':      ('Hold them here',               'Defense',     1),
+    'defense':        ('DEFENSE',                      'Defense',     1),
+    'not_another_yard': ('Not another yard',           'Defense',     1),
 }
 
 # Which star ratings generate a post, and of which flavour. A 3 says nothing —
