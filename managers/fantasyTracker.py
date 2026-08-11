@@ -537,11 +537,22 @@ class FantasyTracker:
             # record is COMPLETE — see `lineupForWeek`.
             from game_rules import _readAppSetting as _readSetting
             snapshotBoundary = completeSnapshotFrom(_readSetting)
-            # Weeks that have actually been PROCESSED. ⚠️ Needed as well as the boundary:
-            # the boundary only says a week is late enough to trust, while a LIVE week is
-            # also late enough and has simply not banked yet. Gating on the boundary alone
+            # Weeks that have actually BANKED. ⚠️ Needed as well as the boundary: the
+            # boundary only says a week is late enough to trust, while a LIVE week is also
+            # late enough and has simply not banked yet. Gating on the boundary alone
             # zeroes everyone's base FP mid-week, since nobody has a row until the whistle.
-            settledWeeks = {wk for weeks in weekCardBonusMap.values() for wk in weeks}
+            #
+            # ⚠️ READ FROM WeeklyPlayerFP, NOT from the card-bonus rows. `bankWeek` writes
+            # player FP for EVERY week that completes, whereas a card-bonus row only
+            # appears if somebody fielded a lineup — so an early week with no participants
+            # looked unclosed and switched the gate off precisely where a newcomer's rows
+            # land. Observed locally: weeks 1-4 banked, only 3-4 had bonus rows, and a user
+            # who equipped in week 2 was credited for it. Queried straight from the table
+            # because `weekPlayerFPMap` has the LIVE current week overlaid onto it.
+            settledWeeks = {
+                w for (w,) in session.query(WeeklyPlayerFP.week)
+                .filter_by(season=seasonNum).distinct().all()
+            }
 
             def weekIsClosed(wk):
                 """The week finished AND its record is complete, so absence is meaningful."""

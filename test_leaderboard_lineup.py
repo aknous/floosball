@@ -198,6 +198,28 @@ class LeaderboardLineupTests(unittest.TestCase):
         self.assertFalse(weekIsClosed(7, {7}, (1, 8)), 'week predates the boundary')
         self.assertFalse(weekIsClosed(7, {7}, None), 'league never stamped')
 
+    def testAWeekNobodyPlayedStillCountsAsClosed(self):
+        """⚠️ The second miss, also caught in testing.
+
+        `settledWeeks` was derived from the card-bonus rows, but those only exist if
+        somebody fielded a lineup. An early week with no participants therefore looked
+        UNCLOSED and switched the gate off exactly where a newcomer's rows land. Observed
+        locally: weeks 1-4 banked, only 3-4 had bonus rows, and a user who equipped in
+        week 2 was credited for it.
+        """
+        self.assertTrue(weekIsClosed(2, {1, 2, 3, 4}, (1, 1)), 'banked week read as open')
+        self.assertFalse(weekIsClosed(2, {3, 4}, (1, 1)), 'the bug: derived from bonuses')
+
+    def testSettledWeeksComeFromBankedPlayerFp(self):
+        """Pin the SOURCE, since that is what was wrong rather than the logic."""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'managers', 'fantasyTracker.py')
+        with open(path, encoding='utf-8') as fh:
+            src = fh.read()
+        block = src[src.index('settledWeeks = {'):src.index('settledWeeks = {') + 260]
+        self.assertIn('WeeklyPlayerFP', block,
+                      'settledWeeks must not be derived from card-bonus rows')
+
     def testTheBoundaryIsReadFromTheStampedSetting(self):
         self.assertEqual(completeSnapshotFrom(lambda k: '2:5'), (2, 5))
         self.assertIsNone(completeSnapshotFrom(lambda k: None))
