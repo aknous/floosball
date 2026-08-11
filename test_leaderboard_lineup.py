@@ -249,6 +249,33 @@ class LeaderboardLineupTests(unittest.TestCase):
             weekFP(1, 2, {}, {1: [9]}, [], {(9, 1): 98.0}, boundary=(1, 1),
                    settledWeeks={1}), 0.0)
 
+    def testAFreshStartClearsTheBoundary(self):
+        """⚠️ The fourth miss, and why fresh sims kept reproducing the leak.
+
+        `clear_db()` preserves `app_settings` WHOLESALE, so the boundary stamp outlived
+        every wipe while the data it describes was dropped. With the season counter
+        restarting at 1, a stale "1:2" left the NEW week 1 sitting before the boundary
+        and permanently exempt from the gate — on a clean run, every time.
+        """
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'database', 'connection.py')
+        with open(path, encoding='utf-8') as fh:
+            src = fh.read()
+        self.assertIn('COMPLETE_SNAPSHOT_SETTING', src,
+                      'clear_db does not clear the season-scoped boundary stamp')
+        clear = src.index('def clear_db')
+        self.assertLess(clear, src.index('COMPLETE_SNAPSHOT_SETTING'),
+                        'the boundary is cleared outside clear_db')
+
+    def testAStaleBoundaryFromAPriorRunExemptsWeekOne(self):
+        # The behaviour that made it invisible: week 1 looks fine in isolation, and only
+        # a boundary carried over from a PREVIOUS run turns the gate off.
+        fp = {(9, 1): 98.0}
+        self.assertEqual(weekFP(1, 2, {}, {1: [9]}, [], fp, boundary=(1, 2),
+                                settledWeeks={1}), 98.0)
+        self.assertEqual(weekFP(1, 2, {}, {1: [9]}, [], fp, boundary=(1, 1),
+                                settledWeeks={1}), 0.0)
+
     def testTheBoundaryIsReadFromTheStampedSetting(self):
         self.assertEqual(completeSnapshotFrom(lambda k: '2:5'), (2, 5))
         self.assertIsNone(completeSnapshotFrom(lambda k: None))
