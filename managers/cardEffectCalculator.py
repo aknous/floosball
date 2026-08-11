@@ -181,6 +181,10 @@ class CardCalcContext:
     #                  without threshold scaling. Used to compute the "if it
     #                  hits" upside for the odds display.
     projectionVariant: str = 'expected'
+    # Flipped for one extra pass over a chance card, to read what it pays when the roll
+    # MISSES — its guaranteed floor. The expected value interpolates from there rather
+    # than scaling the triggered payout down through it. See _ProjectionMissRNG.
+    projectionForceMiss: bool = False
 
     # Internal — set by computeEffect dispatcher, not by caller
     _currentEffectName: str = ""
@@ -577,13 +581,32 @@ class _ProjectionRNG:
     """Deterministic RNG used when building a payout projection.
 
     Always returns 0.0 so every chance-card trigger path evaluates as
-    'triggered'. The calculator then scales the result by the recorded
-    chance threshold in _computeCardPass, producing an expected-value
+    'triggered'. The calculator then interpolates between this and the
+    missed outcome in _computeCardPass, producing an expected-value
     estimate without the effect functions needing to branch on
     projection mode themselves.
     """
     def random(self) -> float:
         return 0.0
+
+
+class _ProjectionMissRNG:
+    """The other half of the projection: every chance path evaluates as MISSED.
+
+    ⚠️ A CHANCE CARD'S MISS IS NOT ZERO. Most of them pay a guaranteed floor and roll
+    for an enhanced payout on top — `fp = enhancedFP if triggered else baseFP` — so
+    scaling the triggered value by the odds projected BELOW the floor the card always
+    pays. Reported from production: a card guaranteeing a base projecting under it.
+    With base 5 / enhanced 18 at 25%, the old pass showed 4.5 against a floor of 5;
+    the honest estimate is 5 + (18 - 5) x 0.25 = 8.25.
+
+    Asking the effect what it pays on a miss beats teaching twelve compute functions
+    to declare a floor: the answer comes from the same code that pays it, so an effect
+    with no floor still yields 0 and projects exactly as before. Safe to run twice —
+    no chance compute mutates the context.
+    """
+    def random(self) -> float:
+        return 1.0
 
 
 def _chanceRoll(ctx: CardCalcContext, userCardId: int, seedExtra: str = "") -> _random.Random:
@@ -596,7 +619,7 @@ def _chanceRoll(ctx: CardCalcContext, userCardId: int, seedExtra: str = "") -> _
     produce expected value.
     """
     if getattr(ctx, 'isProjection', False):
-        return _ProjectionRNG()
+        return _ProjectionMissRNG() if getattr(ctx, 'projectionForceMiss', False) else _ProjectionRNG()
     seedStr = f"{ctx.userId}-{ctx.season}-{ctx.weekNumber}-{userCardId}-{seedExtra}"
     seedHash = int(hashlib.sha256(seedStr.encode()).hexdigest(), 16) % (2**32)
     rng = _random.Random(seedHash)
@@ -645,6 +668,27 @@ def _rescaleEquationValue(equation, tierMult):
         return str(int(round(scaled)))
 
     return _EQ_NUMBER.sub(_repl, equation)
+
+
+def _computeMissedOutcome(effectConfig, ctx, cardPlayerId, eqId, firstPassBreakdowns):
+    """What this chance effect pays when the roll MISSES — its guaranteed floor.
+
+    Runs the same compute a second time with the RNG forced to miss. Cheap (projection
+    only, chance cards only) and side-effect free: no chance compute mutates the context.
+    Returns None if anything goes wrong, which puts the floor at zero — the old
+    behaviour, so a bad answer here can never inflate a projection.
+    """
+    forceMissWas = getattr(ctx, 'projectionForceMiss', False)
+    try:
+        ctx.projectionForceMiss = True
+        return computeEffect(effectConfig, ctx, cardPlayerId, eqId,
+                             firstPassBreakdowns=firstPassBreakdowns)
+    except Exception:
+        logger.debug("projection: missed-outcome pass failed for %s",
+                     effectConfig.get('effectName'), exc_info=True)
+        return None
+    finally:
+        ctx.projectionForceMiss = forceMissWas
 
 
 def _computeCardPass(
@@ -715,11 +759,23 @@ def _computeCardPass(
             and not getattr(primary, 'chanceMetaGrowth', False)):
         # chanceMetaGrowth (Bonsai): fpBonus is the guaranteed base and the odds gate
         # future growth, so the projected value is the base as-is, not base × odds.
+        #
+        # ⚠️ EXPECTED VALUE IS INTERPOLATED FROM THE MISS, NOT SCALED FROM THE HIT.
+        # Most chance cards pay a guaranteed floor and roll for an enhanced payout on
+        # top (`fp = enhancedFP if triggered else baseFP`), so scaling the triggered
+        # value by the odds produced a projection BELOW the floor the card always pays
+        # — which is how it was reported. The miss run is what the effect itself pays
+        # when the roll fails, so a card with no floor still projects at hit × odds.
         threshold = primary.chanceThreshold
-        primary.fpBonus *= threshold
-        primary.floobits = int(primary.floobits * threshold)
+        missed = _computeMissedOutcome(effectConfig, ctx, cardPlayerId, eq.id,
+                                       firstPassBreakdowns)
+        floorFP = missed.fpBonus if missed else 0.0
+        floorFloobits = missed.floobits if missed else 0
+        floorMult = missed.multBonus if (missed and missed.multBonus > 1) else 1.0
+        primary.fpBonus = floorFP + (primary.fpBonus - floorFP) * threshold
+        primary.floobits = int(round(floorFloobits + (primary.floobits - floorFloobits) * threshold))
         if primary.multBonus > 1:
-            primary.multBonus = 1 + (primary.multBonus - 1) * threshold
+            primary.multBonus = floorMult + (primary.multBonus - floorMult) * threshold
 
     # 1b. Card upgrade tier. Self-reporting cards scale their own output by
     # CARD_TIER_MULT; structural cards (amplifiers / meta — no own output) get a
