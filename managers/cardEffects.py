@@ -6322,21 +6322,44 @@ def buildGateSpec(effectName: str, position: int, classification: str = None,
 def gateRatio(gate: dict, ctx, cardPlayerId: int) -> float:
     """The card's power-bar switch from the depicted player's weekly FP.
 
-    LIVE (and the optimistic-ceiling projection): pure on/off — 1.0 / 0.0. Normal cards are
-    on once FP clears the threshold (a bench-warmer never fills the bar); inverse cards are
-    on WHILE FP stays under it. Missing FP reads as 0.
+    LIVE: pure on/off — 1.0 / 0.0. Normal cards are on once FP clears the threshold (a
+    bench-warmer never fills the bar); inverse cards are on WHILE FP stays under it.
+    Missing FP reads as 0.
 
     EXPECTED PROJECTION: returns the empirical PROBABILITY the player clears the bar this
     week (fraction of their weekly games meeting the condition, Laplace-smoothed so it's
     never a hard 0/1), so a card near its threshold projects as its expected value instead
     of an all-or-nothing read on the season average. `_applyGateRatio` scales the card's
-    output by this fraction, mirroring how chance cards are EV-scaled in projection."""
+    output by this fraction, mirroring how chance cards are EV-scaled in projection.
+
+    ⚠️ OPTIMISTIC (CEILING) PROJECTION: THE GATE IS CLEARED, unconditionally. The ceiling
+    answers "what does this pay when the week goes well", and clearing the bar IS the week
+    going well — so the gate is part of the good case, not a hurdle placed in front of it.
+
+    It used to fall through to the live branch and roll on/off against the season average
+    inflated by `_PEAK_STAT_INFLATION`, which broke the ceiling in two ways:
+
+      1. a player whose INFLATED average still misses the bar gated to 0.0, so the peak
+         breakdown came back empty and `bestCaseFP = max(expected, 0)` pinned the ceiling
+         to the EXPECTED value. Reported as an Odometer reading "up to 0.8 FP" — measured
+         on template 457, whose player averages 5.6 FP against a threshold of 12 (inflated
+         9.8, still short) while the effect itself computed 16.0. His real weeks include
+         12, 12 and 11, so the bar is cleared in practice; the ceiling was 19x too low.
+      2. latent, since `_INVERSE_GATE_EFFECTS` is currently EMPTY: an inverse card could
+         never have shown a ceiling at all, because inflating FP is precisely what fails
+         an inverse gate. Forcing the gate on covers that case before it can ship.
+
+    The `max(expected, peak)` downstream means the damage always looked like a MISSING
+    range rather than a wrong number, which is what let it sit. Measured over a 160-card
+    sample, 114 were gated and 1 was pinned — rare, because most players clear their bar
+    on an inflated average, and worst exactly where the card is already marginal."""
     threshold = gate.get('threshold', 0) or 0
     if threshold <= 0:
         return 1.0
     inverse = bool(gate.get('inverse'))
-    if (getattr(ctx, 'isProjection', False)
-            and getattr(ctx, 'projectionVariant', 'expected') == 'expected'):
+    if getattr(ctx, 'isProjection', False):
+        if getattr(ctx, 'projectionVariant', 'expected') == 'optimistic':
+            return 1.0
         weekly = (getattr(ctx, 'playerWeeklyFP', None) or {}).get(cardPlayerId)
         if weekly:
             n = len(weekly)
