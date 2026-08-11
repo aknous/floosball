@@ -220,6 +220,35 @@ class LeaderboardLineupTests(unittest.TestCase):
         self.assertIn('WeeklyPlayerFP', block,
                       'settledWeeks must not be derived from card-bonus rows')
 
+    def testTheBoundaryIsStampedBeforeTheEarlyReturn(self):
+        """⚠️ The third miss, and the one the user actually saw.
+
+        `_processWeekCardEffects` returns early when nobody has cards equipped. Stamping
+        after that meant WEEK 1 OF A NEW LEAGUE never stamped, the boundary landed on the
+        first week someone played, and week 1 sat permanently BEFORE the boundary. A user
+        equipping between week 1's whistle and the rollover then had week 1's FP credited
+        on the week 2 board. Completeness is a property of the CODE, not of turnout.
+        """
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'managers', 'seasonManager.py')
+        with open(path, encoding='utf-8') as fh:
+            src = fh.read()
+        stamp = src.index('COMPLETE_SNAPSHOT_SETTING as _CSS')
+        earlyReturn = src.index('allEquipped = equippedRepo.getAllForWeek(season, week)')
+        self.assertLess(stamp, earlyReturn,
+                        'the boundary is stamped after the no-participants early return')
+
+    def testAWeekBeforeTheBoundaryCreditsEquipmentPutOnAfterTheWhistle(self):
+        # The consequence, stated as behaviour: this is what the user saw, and it is
+        # correct ONLY because such a week's record is genuinely incomplete.
+        self.assertEqual(
+            weekFP(1, 2, {}, {1: [9]}, [], {(9, 1): 98.0}, boundary=(1, 2),
+                   settledWeeks={1}), 98.0)
+        # With the stamp in the right place, week 1 IS the boundary and the leak closes.
+        self.assertEqual(
+            weekFP(1, 2, {}, {1: [9]}, [], {(9, 1): 98.0}, boundary=(1, 1),
+                   settledWeeks={1}), 0.0)
+
     def testTheBoundaryIsReadFromTheStampedSetting(self):
         self.assertEqual(completeSnapshotFrom(lambda k: '2:5'), (2, 5))
         self.assertIsNone(completeSnapshotFrom(lambda k: None))

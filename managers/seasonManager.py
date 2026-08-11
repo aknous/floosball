@@ -1753,6 +1753,27 @@ class SeasonManager:
                 equippedRepo = EquippedCardRepository(session)
                 currencyRepo = CurrencyRepository(session)
 
+                # ⚠️ MARK THE FIRST WEEK RECORDED COMPLETELY — BEFORE THE EARLY RETURN
+                # BELOW. A row is now written for every fielded lineup, including one
+                # that paid nothing, so from this week on "no row" means "did not field".
+                # Earlier weeks were written only when a lineup PAID, so their absences
+                # are ambiguous and must keep crediting (see `lineupForWeek`).
+                #
+                # ⚠️ COMPLETENESS IS A PROPERTY OF THE CODE, NOT OF TURNOUT. Stamping
+                # after `if not allEquipped: return` meant a week nobody had equipped for
+                # — week 1 of any new league — never stamped, so the boundary landed on
+                # the first week someone played and left week 1 BEFORE it, permanently
+                # permissive. A user equipping between week 1's whistle and the rollover
+                # then had week 1's FP credited to them on the week 2 board, which is
+                # exactly the leak the gate exists to close.
+                try:
+                    from game_rules import _readAppSetting, _writeAppSetting
+                    from managers.fantasyTracker import COMPLETE_SNAPSHOT_SETTING as _CSS
+                    if not _readAppSetting(_CSS):
+                        _writeAppSetting(_CSS, f"{season}:{week}")
+                except Exception as _e:
+                    logger.warning(f"Could not stamp lineup-snapshot boundary: {_e}")
+
                 # Get all locked equipped cards for this week
                 allEquipped = equippedRepo.getAllForWeek(season, week)
                 if not allEquipped:
@@ -1765,22 +1786,6 @@ class SeasonManager:
                     if not eq.locked:
                         continue
                     byUser.setdefault(eq.user_id, []).append(eq)
-
-                # ⚠️ MARK THE FIRST WEEK RECORDED COMPLETELY. A row is now written for
-                # every fielded lineup, including one that paid nothing, so from this
-                # week on "no row" genuinely means "did not field". Earlier weeks were
-                # written only when a lineup PAID, so their absences are ambiguous and
-                # the leaderboard must keep crediting them (see fantasyTracker's
-                # `lineupForWeek`). Stamped here, at the first processing run under the
-                # unconditional write, so the boundary is a fact about the DATA rather
-                # than a deploy date someone has to remember.
-                try:
-                    from game_rules import _readAppSetting, _writeAppSetting
-                    from managers.fantasyTracker import COMPLETE_SNAPSHOT_SETTING as _CSS
-                    if not _readAppSetting(_CSS):
-                        _writeAppSetting(_CSS, f"{season}:{week}")
-                except Exception as _e:
-                    logger.warning(f"Could not stamp lineup-snapshot boundary: {_e}")
 
                 # Get FP from WeeklyPlayerFP (banked by FantasyTracker)
                 weekFPRows = session.query(WeeklyPlayerFP).filter_by(
