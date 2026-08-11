@@ -51,12 +51,21 @@ EFFECT_CATEGORY = {
     "feeding_frenzy": "floobits", "highlight_reel": "floobits", "workhorse": "flat_fp",
     "expedition": "flat_fp",
     "goal_line_vulture": "floobits",
-    # conditional
-    "showoff": "conditional", "bandwagon": "conditional",
-    "believe": "conditional",
+    # conditional — ⚠️ ALL-OR-NOTHING ON A CONDITION, which is what the category means
+    # and what `longshot` doubles. A card that pays PER something is an accumulator
+    # however many facts it consults: five drifted in here by being reworked from a gate
+    # into a count and keeping the label — showoff (per 5-star player), believe (per
+    # season win), comeback_kid and domination (per roster player on a club with a given
+    # standing) and walk_off (per Q4/OT score). Longshot doubled the whole card for them,
+    # one week in eight, for meeting no condition at all. Their params still come from
+    # `_buildConditionalParams` via `_EFFECT_BUILDER_OVERRIDES`, so nothing minted moves.
+    #
+    # `mismatch` STAYS: per-TD plus a real bonus tier at the threshold (owner call).
+    "bandwagon": "conditional",
     "reclamation": "conditional", "pedigree": "conditional",
     "mismatch": "conditional",
-    "comeback_kid": "conditional", "domination": "conditional", "walk_off": "conditional",
+    "showoff": "flat_fp", "believe": "flat_fp",
+    "comeback_kid": "flat_fp", "domination": "flat_fp", "walk_off": "flat_fp",
     # streak
     "on_fire": "streak",
     "snowball_fight": "streak", "fairweather_fan": "streak", "bandwagon_express": "streak",
@@ -2512,6 +2521,12 @@ _PARAM_BUILDERS = {
 # Effects whose handler lives in a different builder than their EFFECT_CATEGORY
 # would dispatch to. Overrides category-based dispatch for param building only.
 _EFFECT_BUILDER_OVERRIDES = {
+    # Reworked out of the conditional category (see EFFECT_CATEGORY) but their param
+    # branches still live in the conditional builder. Pointed back at it so the numbers
+    # they mint are unchanged by the re-categorisation.
+    "showoff": _buildConditionalParams, "believe": _buildConditionalParams,
+    "comeback_kid": _buildConditionalParams, "domination": _buildConditionalParams,
+    "walk_off": _buildConditionalParams,
     # Stat-ladder prismatic rungs. Their CATEGORY is 'streak' so the UI labels them as
     # streak cards and the breakdown fills streakActive/streakCount, but their params are
     # FPx-shaped, so dispatch goes to the multiplier builder.
