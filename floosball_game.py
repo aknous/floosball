@@ -15683,6 +15683,19 @@ class Play():
                         catchProbs['dropProb'] = 0
                         catchProbs['catchProb'] = 100
 
+                # ⚠️ THE TARGET IS BOOKED AT RELEASE, not by outcome. A target is any pass
+                # thrown at a receiver — that is the rule in real football, where a
+                # completion, an incompletion, a ball broken up by the corner, a drop and a
+                # pick on a ball aimed at you are all targets. It used to be credited
+                # inside the catch and drop branches only, so an incompletion and an
+                # interception vanished from the receiver's line entirely. Measured on a
+                # league: `targets == receptions + drops` for EVERY player, and catch rate
+                # read 94.3% against a real-world ~65%.
+                #
+                # Here rather than in each branch because that is what "at release" means,
+                # and because the next outcome added would otherwise have to remember.
+                self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
+
                 # Roll for outcome
                 outcomeRoll = batched_randint(1, 100)
 
@@ -15735,7 +15748,7 @@ class Play():
                     # A grab off a lay-out on a contested ball gets the diving-catch tag.
                     if getattr(self, '_diveAttempt', False):
                         self._diveCatch = True
-                    self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
+                    # (the target was booked at release, above)
                     # Advanced: did the receiver win a contested ball, and did he
                     # bail out a poorly placed one? Separates his contribution from
                     # the quality of throw he was given.
@@ -16026,8 +16039,7 @@ class Play():
                 
                 # Check for drop
                 elif outcomeRoll <= (catchProbs['intProb'] + catchProbs['catchProb'] + catchProbs['dropProb']):
-                    # DROPPED PASS
-                    self.receiver.addRcvPassTarget(self.game.isRegularSeasonGame)
+                    # DROPPED PASS (target already booked at release)
                     self.receiver.addPassDrop(self.game.isRegularSeasonGame)
                     self.receiver.updateInGameConfidence(-.005, source='mistake')
                     self.defense.updateInGameConfidence(.005)

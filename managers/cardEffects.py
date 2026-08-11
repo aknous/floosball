@@ -51,12 +51,21 @@ EFFECT_CATEGORY = {
     "feeding_frenzy": "floobits", "highlight_reel": "floobits", "workhorse": "flat_fp",
     "expedition": "flat_fp",
     "goal_line_vulture": "floobits",
-    # conditional
-    "showoff": "conditional", "bandwagon": "conditional",
-    "believe": "conditional",
+    # conditional — ⚠️ ALL-OR-NOTHING ON A CONDITION, which is what the category means
+    # and what `longshot` doubles. A card that pays PER something is an accumulator
+    # however many facts it consults: five drifted in here by being reworked from a gate
+    # into a count and keeping the label — showoff (per 5-star player), believe (per
+    # season win), comeback_kid and domination (per roster player on a club with a given
+    # standing) and walk_off (per Q4/OT score). Longshot doubled the whole card for them,
+    # one week in eight, for meeting no condition at all. Their params still come from
+    # `_buildConditionalParams` via `_EFFECT_BUILDER_OVERRIDES`, so nothing minted moves.
+    #
+    # `mismatch` STAYS: per-TD plus a real bonus tier at the threshold (owner call).
+    "bandwagon": "conditional",
     "reclamation": "conditional", "pedigree": "conditional",
     "mismatch": "conditional",
-    "comeback_kid": "conditional", "domination": "conditional", "walk_off": "conditional",
+    "showoff": "flat_fp", "believe": "flat_fp",
+    "comeback_kid": "flat_fp", "domination": "flat_fp", "walk_off": "flat_fp",
     # streak
     "on_fire": "streak",
     "snowball_fight": "streak", "fairweather_fan": "streak", "bandwagon_express": "streak",
@@ -918,7 +927,7 @@ EFFECT_TOOLTIPS = {
     "automatic": "Perfection pays. FP growing each consecutive week this player goes perfect on FGs. Stacking streak cards accelerates growth.",
     "momentum": "Can't stop won't stop. FPx grows each week your roster breaks 100 FP. Stacking streak cards accelerates growth.",
     # ── New Position-Based Effects ──
-    "gunslinger": "Let it fly. FP that scales with how many passing yards this player racks up.",
+    "gunslinger": "Let it fly. FP for every well-placed ball this player throws.",
     "air_raid": "Death from above. Floobits for each passing TD this player throws.",
     "workhorse": "Pound the rock. FP scaling with rushing attempts by this player.",
     "expedition": "Yards are yards. FP that scales with how many rushing yards this player gains.",
@@ -1109,7 +1118,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "automatic": "+{baseReward} FP base, +{growthPerTick} per consecutive week your K makes all FG attempts. A week with no FG attempts will not break the streak.",
     "momentum": "+{baseRewardDelta} FPx base, +{growthPerTick} per consecutive week your roster scores 100+ FP.",
     # ── New Position-Based Effects ──
-    "gunslinger": "+{perHundredYardsFP} FP for every 100 passing yards in one game by this player",
+    "gunslinger": "+{perGoodThrowFP} FP for every well-placed ball by this player",
     "air_raid": "{perTdFloobits} Floobits for every passing TD in one game by this player",
     "workhorse": "+{perAttemptFP} FP for every rushing attempt in one game by this player",
     "expedition": "+{perFiftyYardsFP} FP for every 50 rushing yards in one game by this player",
@@ -1660,7 +1669,12 @@ _LADDER_VOLUMES = {
     # QBs throw ~1 TD a game, so unlike receiving TDs this is not a rare event: 43% of
     # QB games are scoreless but 29% are multi-TD. Measured over 736 QB games.
     "passTds":   {1: 1.02},
-    "targets":   {3: 9.9, 4: 8.7},
+    # ⚠️ RE-MEASURED after the target-counting fix (12.3 WR / 11.0 TE over 24 games,
+    # was 9.9 / 8.7). A target used to be booked only on a catch or a drop, so an
+    # incompletion never reached the receiver's line and this table — which sizes
+    # Attention's rate — was reading about 24% light. Left alone, the card would have
+    # quietly paid a quarter more than its rung.
+    "targets":   {3: 12.3, 4: 11.0},
     # Return yards go to whichever skill player returns; ~2.5 returns a game at ~9 yards.
     "returnYards": {2: 23.0, 3: 23.0},
     # Rare one-off events, used as the BONUS half of a base+bonus card.
@@ -2507,6 +2521,12 @@ _PARAM_BUILDERS = {
 # Effects whose handler lives in a different builder than their EFFECT_CATEGORY
 # would dispatch to. Overrides category-based dispatch for param building only.
 _EFFECT_BUILDER_OVERRIDES = {
+    # Reworked out of the conditional category (see EFFECT_CATEGORY) but their param
+    # branches still live in the conditional builder. Pointed back at it so the numbers
+    # they mint are unchanged by the re-categorisation.
+    "showoff": _buildConditionalParams, "believe": _buildConditionalParams,
+    "comeback_kid": _buildConditionalParams, "domination": _buildConditionalParams,
+    "walk_off": _buildConditionalParams,
     # Stat-ladder prismatic rungs. Their CATEGORY is 'streak' so the UI labels them as
     # streak cards and the breakdown fills streakActive/streakCount, but their params are
     # FPx-shaped, so dispatch goes to the multiplier builder.

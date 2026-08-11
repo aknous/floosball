@@ -1612,11 +1612,22 @@ class CardManager:
                 add("XP", k.get('xps'))
             if k.get('fgAvg'):
                 add("Avg", f"{k.get('fgAvg')} yd")
+        # ⚠️ PER GAME, alongside the total (users asked). A season total answers "how
+        # much did this player produce" and hides "how good were they" — a 14-game
+        # injury-shortened year and a full one are not comparable on the total, and the
+        # card back is exactly where a reader is comparing two players. Sent computed
+        # rather than as a games count for the client to divide by, so every surface
+        # showing this line quotes the same number.
+        gamesPlayed = row.games_played or 0
+        fantasyPoints = row.fantasy_points or 0
         return {
             "season": season,
             "teamName": teamName,
             "teamColor": teamColor,
-            "fantasyPoints": row.fantasy_points or 0,
+            "fantasyPoints": fantasyPoints,
+            "gamesPlayed": gamesPlayed,
+            "fantasyPointsPerGame": (round(fantasyPoints / gamesPlayed, 1)
+                                     if gamesPlayed > 0 else None),
             "lines": lines,
         }
 
