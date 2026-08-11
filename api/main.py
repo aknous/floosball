@@ -8507,7 +8507,7 @@ def _computeLeaderboardData(seasonNum: int = None) -> dict:
 def get_fantasy_snapshot(response: Response, season: Optional[int] = Query(default=None),
                          user: Optional[_User] = Depends(_getOptionalUser)):
     """Get full fantasy snapshot — single source of truth for roster + leaderboard."""
-    response.headers["Cache-Control"] = "public, max-age=10"
+    response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=10")
     if not floosball_app:
         return build_success_response(
             {"season": None, "week": 0, "gamesActive": False, "entries": []}
@@ -12355,6 +12355,26 @@ def cast_hof_vote(req: _HofVoteRequest, user: _User = Depends(_getCurrentUser)):
 # ============================================================================
 
 
+def _perUserCacheControl(user, anonymousPolicy: str) -> str:
+    """Cache policy for an endpoint whose body CHANGES once a user is attached.
+
+    ⚠️ A payload carrying the caller's own picks/roster is not `public` and is not
+    cacheable for ten seconds. Both halves of that bit us:
+
+    (1) STALENESS, reported as "my pick clears itself". The prognostications page saves a
+        pick and refetches the day to reconcile — and the browser answered that refetch
+        out of its own cache with a body captured BEFORE the pick existed, so the pick
+        vanished off the card a moment after it was made. Confirmed against a running sim:
+        16 rows in `pick_em_picks` for the week, and the very next GET reporting one.
+    (2) `public` invites a SHARED cache (a CDN, a proxy) to hand one signed-in user's
+        picks to the next caller of the same URL.
+
+    Anonymous callers get the payload the policy was written for — no user data in it,
+    and that is the traffic worth caching.
+    """
+    return "private, no-store" if user is not None else anonymousPolicy
+
+
 def _pickemPickable(statusVal) -> bool:
     """A pick is open until the game KICKS OFF (owner, 2026-08-10).
 
@@ -12440,7 +12460,7 @@ def get_pickem_week(response: Response, user: Optional[_User] = Depends(_getOpti
     """Get this week's matchups with the user's existing picks (if any).
     Each game has per-game pickability and current multiplier based on quarter.
     """
-    response.headers["Cache-Control"] = "public, max-age=10"
+    response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=10")
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
 
@@ -12831,7 +12851,7 @@ def get_pickem_day(response: Response, user: Optional[_User] = Depends(_getOptio
     (sim-weeks sharing `week // 7`). Playoffs collapse to the single active round.
     (Fantasy modifiers are surfaced separately on the fantasy page — not here.)
     """
-    response.headers["Cache-Control"] = "public, max-age=10"
+    response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=10")
     if floosball_app is None:
         raise HTTPException(503, "Application not initialized")
 
