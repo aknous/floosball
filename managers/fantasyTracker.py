@@ -626,13 +626,28 @@ class FantasyTracker:
                 # (locked-only during games / slot-eligible); past weeks use the persisted
                 # lineup. No season lock snapshot / offset — a week's FP is all post-lock
                 # (cards lock at game start).
-                if isCurrentSeason:
+                # ⚠️ ONCE A WEEK IS BANKED, ITS LINEUP IS HISTORY. The live equipped set
+                # is only the right answer while the week is still being scored. After
+                # the bonus is banked, `cardBreakdowns` below comes from the stored
+                # record — the cards that actually scored — so pairing it with whatever
+                # is equipped NOW builds a row out of two different moments.
+                #
+                # Reported from production: a lineup reading "Frig Lagotis / Gold Rush"
+                # showed on the leaderboard as "Frig Lagotis / Battering Ram", and an
+                # earlier screenshot of the same row showed "Locust Clambake / Battering
+                # Ram" — the card stayed put (it is the banked one) while the player
+                # tracked whatever the user had just equipped.
+                _bankedThisWeek = currentWeek in weekCardBonusMap.get(userId, {})
+                _persistedWeek = equippedByUserWeek.get((userId, currentWeek), [])
+                if isCurrentSeason and not (_bankedThisWeek and _persistedWeek):
                     currentDepicted = [
                         (eq, eq.user_card.card_template.player_id)
                         for eq in equippedByUser.get(userId, [])
                     ]
                 else:
-                    currentDepicted = equippedByUserWeek.get((userId, currentWeek), [])
+                    # Banked, or a past season: use the lineup that actually played.
+                    # Falls back to live above when no per-week lineup was persisted.
+                    currentDepicted = _persistedWeek
                 rosterPlayerIds = {pid for _eq, pid in currentDepicted}
 
                 # Weeks this user equipped each player (for the per-player season earned).
