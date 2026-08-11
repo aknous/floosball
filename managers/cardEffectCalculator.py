@@ -707,7 +707,15 @@ def _computeCardPass(
     effectName = effectConfig.get("effectName", "")
     displayName = effectConfig.get("displayName", "")
     detail = effectConfig.get("detail", "")
-    category = effectConfig.get("category", "")
+    # ⚠️ THE LIVE MAP WINS OVER THE STORED CATEGORY. The category is written into
+    # effect_config at mint, and reading it back meant a RE-CATEGORISATION only reached
+    # cards minted after it — so five effects that stopped being conditional would have
+    # kept collecting the `longshot` doubling all season on 23 already-minted templates.
+    # Same rule the detail and tooltip already follow (rebuilt from the current templates
+    # rather than migrated), and it needs no migration for the next one either. The
+    # stored value survives only for an effect this map has never heard of.
+    from managers.cardEffects import EFFECT_CATEGORY as _LIVE_CATEGORY
+    category = _LIVE_CATEGORY.get(effectName) or effectConfig.get("category", "")
 
     # Rebuild stale primary params — test stored primary against current template
     # to detect missing keys, regardless of whether detail was already patched.

@@ -6,7 +6,8 @@ from typing import List, Dict, Any, Optional
 from logger_config import get_logger
 from managers.cardEffects import (buildEffectConfig as _buildEffectConfig, getEffectOutputType,
                                   effectValidPositions as _effectValidPositions,
-                                  effectPoolFor as _effectPoolFor)
+                                  effectPoolFor as _effectPoolFor,
+                                  withLiveCategory)
 
 logger = get_logger("floosball.cardManager")
 
@@ -793,10 +794,14 @@ class CardManager:
         from constants import CARD_TIER_MULT as _CTM
         sellValue = max(1, int(sellValue * _CTM.get(getattr(userCard, "tier", 1) or 1, 1.0)))
 
-        # Derive category from effect name if missing from effectConfig (legacy cards)
+        # ⚠️ The LIVE map first, the stored value only for an effect it has never heard
+        # of. Reading the stored category back meant the Conditional badge (and the
+        # longshot doubling that rides the same field, see cardEffectCalculator) outlived
+        # a re-categorisation on every card already minted — reported as Showoff still
+        # showing the badge. Same rule the detail/tooltip below already follow.
         from managers.cardEffects import EFFECT_CATEGORY
         effectName = effectConfig.get("effectName", "")
-        category = effectConfig.get("category") or EFFECT_CATEGORY.get(effectName, "flat_fp")
+        category = EFFECT_CATEGORY.get(effectName) or effectConfig.get("category") or "flat_fp"
 
         # Always re-derive outputType from current category (handles reclassified effects)
         from managers.cardEffects import _deriveOutputType
@@ -2630,6 +2635,7 @@ class CardManager:
             t = row.card_template
             buyPrice = self._featuredBuyPrice(t)
             effName = (t.effect_config or {}).get("effectName") or ""
+            effCfg = withLiveCategory(t.effect_config)
             card = {
                 "templateId": t.id,
                 "playerId": t.player_id,
@@ -2641,7 +2647,8 @@ class CardManager:
                 "seasonCreated": t.season_created,
                 "isRookie": t.is_rookie,
                 "classification": t.classification,
-                "effectConfig": t.effect_config,
+                "effectConfig": effCfg,
+                "category": (effCfg or {}).get("category") or "flat_fp",
                 "sellValue": t.sell_value,
                 "buyPrice": buyPrice,
                 "ownedEffectCount": ownedCounts.get(effName, 0),
