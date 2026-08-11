@@ -135,6 +135,44 @@ def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
         fantasyPoints=fantasyPoints, teamId=teamId)
 
 
+# Slot ordinal back to its label, the inverse of cardManager.SLOT_TO_ORDINAL. Banked
+# breakdowns store the ordinal, and a leaderboard row is labelled by slot.
+_SLOT_LABEL_BY_ORDINAL = {1: 'QB', 2: 'RB', 3: 'WR1', 4: 'WR2', 5: 'TE', 6: 'K', 7: 'FLEX'}
+
+
+def bankedLineupPlayerIds(bankedWeek):
+    """The players a settled week actually scored, or [] if it has no breakdown."""
+    return [b.get("playerId")
+            for b in ((bankedWeek or {}).get("breakdowns") or [])
+            if b.get("playerId")]
+
+
+# app_settings key holding "season:week" of the first week whose lineup snapshot was
+# written for EVERY fielded lineup rather than only paying ones. Stamped by
+# `_processWeekCardEffects`. From that week on, a user with no row did not field.
+COMPLETE_SNAPSHOT_SETTING = 'lineup_snapshot_complete_from'
+
+
+def completeSnapshotFrom(readSetting):
+    """(season, week) the complete-snapshot rule starts at, or None if never stamped."""
+    raw = readSetting(COMPLETE_SNAPSHOT_SETTING)
+    if not raw:
+        return None
+    try:
+        season, week = str(raw).split(':')
+        return int(season), int(week)
+    except (ValueError, AttributeError):
+        return None
+
+
+def weekIsFullyRecorded(season, week, boundary):
+    """True when `week` is at or after the point every fielded lineup was recorded."""
+    if not boundary:
+        return False
+    bSeason, bWeek = boundary
+    return season > bSeason or (season == bSeason and week >= bWeek)
+
+
 class FantasyTracker:
     """Single source of truth for fantasy roster points.
 
@@ -326,10 +364,16 @@ class FantasyTracker:
 
         Returns {(user_id, week): [(EquippedCard, depicted_player_id), ...]} across ALL
         weeks of the season — the season leaderboard sums each week's actual lineup (there
-        is no season-long lock snapshot). EquippedCard rows persist per week, so a past
-        week's lineup is reconstructable exactly, pairing with that week's banked
-        WeeklyCardBonus. No live-lock / slot-eligibility filtering here — that only matters
-        for the CURRENT week's live scoring, applied separately by the caller."""
+        is no season-long lock snapshot).
+
+        ⚠️ THESE ROWS ARE NOT A HISTORICAL RECORD, despite being keyed by week. The equip
+        handler deletes and re-inserts a week's rows on every change, and the next week is
+        seeded by carrying them forward, so a swap made after a week banks but before it
+        rolls over REWRITES what that week appears to have held. A settled week's lineup
+        comes from its banked WeeklyCardBonus breakdown (`bankedLineupPlayerIds`); these
+        rows answer only for a week that has not banked. No live-lock / slot-eligibility
+        filtering here — that only matters for the CURRENT week's live scoring, applied
+        separately by the caller."""
         from database.models import EquippedCard, UserCard, CardTemplate
         rows = (
             session.query(EquippedCard, CardTemplate.player_id)
@@ -488,6 +532,32 @@ class FantasyTracker:
 
             # ── 4. Stored card bonuses per user per week ──
             weekCardBonusMap = self._getWeekCardBonusesFromDB(session, seasonNum)
+            # No games means no points: a lineup put together after a week's games have
+            # finished cannot score for that week. Enforceable only where the week's
+            # record is COMPLETE — see `lineupForWeek`.
+            from game_rules import _readAppSetting as _readSetting
+            snapshotBoundary = completeSnapshotFrom(_readSetting)
+            # Weeks that have actually BANKED. ⚠️ Needed as well as the boundary: the
+            # boundary only says a week is late enough to trust, while a LIVE week is also
+            # late enough and has simply not banked yet. Gating on the boundary alone
+            # zeroes everyone's base FP mid-week, since nobody has a row until the whistle.
+            #
+            # ⚠️ READ FROM WeeklyPlayerFP, NOT from the card-bonus rows. `bankWeek` writes
+            # player FP for EVERY week that completes, whereas a card-bonus row only
+            # appears if somebody fielded a lineup — so an early week with no participants
+            # looked unclosed and switched the gate off precisely where a newcomer's rows
+            # land. Observed locally: weeks 1-4 banked, only 3-4 had bonus rows, and a user
+            # who equipped in week 2 was credited for it. Queried straight from the table
+            # because `weekPlayerFPMap` has the LIVE current week overlaid onto it.
+            settledWeeks = {
+                w for (w,) in session.query(WeeklyPlayerFP.week)
+                .filter_by(season=seasonNum).distinct().all()
+            }
+
+            def weekIsClosed(wk):
+                """The week finished AND its record is complete, so absence is meaningful."""
+                return (wk in settledWeeks
+                        and weekIsFullyRecorded(seasonNum, wk, snapshotBoundary))
 
             # ── 5. Equipped cards for current week ──
             equippedByUser = {}
@@ -635,29 +705,73 @@ class FantasyTracker:
                     currentDepicted = equippedByUserWeek.get((userId, currentWeek), [])
                 rosterPlayerIds = {pid for _eq, pid in currentDepicted}
 
+                userWeekBonuses = weekCardBonusMap.get(userId, {})
+
+                def lineupForWeek(wk):
+                    """Who actually scored that week.
+
+                    ⚠️ A BANKED WEEK IS SETTLED, and `equipped_cards` cannot say what it
+                    held. The equip handler runs deleteByUserWeek then re-inserts under
+                    the CURRENT week, so a swap made after a week banks but before the
+                    week rolls over silently rewrites that week's rows, and this sum
+                    (recomputed on every request) moves with them. Measured on
+                    production: 11 users, 18 weeks, up to +41 FP of retroactive drift on
+                    a season base. The banked breakdown is written once and never
+                    revised, so it is the record; equipment answers only for a week that
+                    has not banked yet.
+                    """
+                    banked = userWeekBonuses.get(wk)
+                    if banked is not None:
+                        pids = bankedLineupPlayerIds(banked)
+                        # A row with no breakdown predates breakdown storage; its
+                        # equipped rows are the only surviving hint.
+                        if pids:
+                            return pids
+                    # NO GAMES MEANS NO POINTS (owner, 2026-08-10). A lineup assembled
+                    # after a week's games have finished did not play that week, so it
+                    # scores nothing for it. Equipping lands rows on `currentWeek`, which
+                    # does not advance until rollover, so a first-time equip in that gap
+                    # otherwise collects the week's FP outright — measured on production
+                    # at 59.0 and 33.0 FP for two users in week 7.
+                    #
+                    # ⚠️ ONLY ENFORCEABLE WHERE THE WEEK'S RECORD IS COMPLETE. Before the
+                    # unconditional snapshot, a row was written only when a lineup PAID,
+                    # so an absence could equally mean "fielded and earned nothing" —
+                    # 13 of 21 production users have such a week, some MID-TENURE
+                    # (SweatpantsDoodlebug89 weeks 4 and 6, cause still unexplained).
+                    # Applying the gate there would delete FP from users who did play,
+                    # so it starts at the stamped boundary and earlier weeks stay
+                    # permissive.
+                    elif weekIsClosed(wk):
+                        return []
+                    if wk == currentWeek:
+                        return [pid for _eq, pid in currentDepicted]
+                    return [pid for _eq, pid in equippedByUserWeek.get((userId, wk), [])]
+
                 # Weeks this user equipped each player (for the per-player season earned).
                 playerEquippedWeeks = {}   # pid -> set(weeks)
-                for (uId, wk), lineup in equippedByUserWeek.items():
-                    if uId != userId:
-                        continue
-                    for _eq, pid in lineup:
+                for wk in range(1, currentWeek + 1):
+                    for pid in lineupForWeek(wk):
                         playerEquippedWeeks.setdefault(pid, set()).add(wk)
 
                 # Season base FP = Σ over weeks of that week's lineup's per-player week FP.
                 seasonEarnedFP = 0.0
                 currentWeekPlayerFP = 0.0
                 for wk in range(1, currentWeek + 1):
-                    if wk == currentWeek:
-                        wkPids = [pid for _eq, pid in currentDepicted]
-                    else:
-                        wkPids = [pid for _eq, pid in equippedByUserWeek.get((userId, wk), [])]
-                    wkBase = sum(weekPlayerFPMap.get(pid, {}).get(wk, 0) for pid in wkPids)
+                    wkBase = sum(weekPlayerFPMap.get(pid, {}).get(wk, 0)
+                                 for pid in lineupForWeek(wk))
                     seasonEarnedFP += wkBase
                     if wk == currentWeek:
                         currentWeekPlayerFP = wkBase
 
                 # Per-player breakdown for the CURRENT lineup (+ each player's season
                 # earned across the weeks THEY were equipped).
+                #
+                # A player only shows week FP if they were in THIS week's lineup. Someone
+                # who equips after the week closes is holding cards for the week ahead,
+                # and crediting them with what those players scored while unowned would
+                # print rows that do not sum to the week total above.
+                thisWeekLineup = set(lineupForWeek(currentWeek))
                 rosterPlayers = []
                 shownEarned = 0.0
                 for eq, pid in currentDepicted:
@@ -667,7 +781,8 @@ class FantasyTracker:
                         for w in playerEquippedWeeks.get(pid, set())
                     )
                     shownEarned += playerEarnedFP
-                    playerWeekFP = weekPlayerFPMap.get(pid, {}).get(currentWeek, 0)
+                    playerWeekFP = (weekPlayerFPMap.get(pid, {}).get(currentWeek, 0)
+                                    if pid in thisWeekLineup else 0)
                     rosterPlayers.append({
                         "slot": getattr(eq, 'slot', None) or (
                             pObj.position.name
@@ -756,15 +871,18 @@ class FantasyTracker:
                             "gameScore": gameScore,
                         }
 
-                # ── Player game stats for display (current lineup) ──
+                # ── Player game stats for display (this week's lineup) ──
+                # Keyed by player id and looked up per displayed row, so it must cover
+                # whoever is DISPLAYED. Once the week banks, that is the banked lineup
+                # rather than the live one, and a row missing from here loses the game
+                # line under its name.
                 playerGameStats = {}
-                for pid in rosterPlayerIds:
+                for pid in rosterPlayerIds | set(lineupForWeek(currentWeek)):
                     rawStats = allPlayerRawStats.get(pid)
                     if rawStats:
                         playerGameStats[pid] = rawStats
 
                 # ── Card bonuses ──
-                userWeekBonuses = weekCardBonusMap.get(userId, {})
                 storedSeasonCardBonus = sum(
                     wb["fp"] for wb in userWeekBonuses.values()
                 )
@@ -779,7 +897,13 @@ class FantasyTracker:
                 # empty stats between weeks, producing false output.
                 hasWeekData = gamesActive or bool(dbCurrentWeekFullStats)
 
-                if not hasStoredCurrentWeekBonus and userId in equippedByUser and hasWeekData:
+                # ⚠️ AND the week must not already have CLOSED without them. Otherwise a
+                # user who equips after the whistle has no stored bonus, so this branch
+                # computes one live against that week's finished stats — handing them a
+                # card bonus for a week they did not field. Gating base FP alone left
+                # this half open.
+                if (not hasStoredCurrentWeekBonus and userId in equippedByUser
+                        and hasWeekData and not weekIsClosed(currentWeek)):
                     # Need to compute current week card bonus
                     userEquipped = equippedByUser[userId]
                     cardCalcStats = {}
@@ -911,6 +1035,50 @@ class FantasyTracker:
                         if eName:
                             cat = bd.get("category") or _EC.get(eName, "flat_fp")
                             bd["outputType"] = _reDeriveOT(cat, eName, bd)
+
+                    # ⚠️ A BANKED WEEK'S LINEUP COMES FROM THE BANKED RECORD, not from
+                    # what is equipped now. `rosterPlayers` above is the LIVE set, and
+                    # pairing it with these stored breakdowns builds each row out of two
+                    # different moments.
+                    #
+                    # Reported from production with screenshots: a lineup reading
+                    # "Frig Lagotis / Gold Rush" appeared on the leaderboard as
+                    # "Frig Lagotis / Battering Ram", and an earlier capture of the same
+                    # row read "Locust Clambake / Battering Ram" — the card sat still
+                    # because it is the banked one, while the player followed whatever
+                    # had just been equipped.
+                    #
+                    # ⚠️ `equipped_cards` CANNOT stand in for this. The equip handler
+                    # deletes and rewrites that week's rows on every change, so after a
+                    # re-equip they describe the newest selection rather than the one
+                    # that scored. Verified on production: that user's equipped_cards for
+                    # week 7 held Frig Lagotis / gold_rush while week 7's BANKED record
+                    # held Robbie Tumbles / battering_ram. The breakdown is the only
+                    # thing written once and never revised.
+                    _bankedPlayers = []
+                    for bd in cardBreakdowns:
+                        pid = bd.get("playerId")
+                        if not pid:
+                            continue
+                        pObj = self._playerManager.getPlayerById(pid)
+                        _bankedPlayers.append({
+                            "slot": _SLOT_LABEL_BY_ORDINAL.get(bd.get("slotNumber"), ""),
+                            "playerId": pid,
+                            "playerName": bd.get("playerName") or (pObj.name if pObj else "Unknown"),
+                            "position": (pObj.position.name
+                                         if pObj and hasattr(pObj.position, 'name') else ""),
+                            "teamAbbr": (getattr(pObj.team, 'abbr', '')
+                                         if pObj and getattr(pObj, 'team', None) else ""),
+                            "teamId": (getattr(pObj.team, 'id', None)
+                                       if pObj and getattr(pObj, 'team', None) else None),
+                            "earnedPoints": round(sum(
+                                weekPlayerFPMap.get(pid, {}).get(w, 0)
+                                for w in playerEquippedWeeks.get(pid, set())), 1),
+                            "weekFP": round(weekPlayerFPMap.get(pid, {}).get(currentWeek, 0), 1),
+                            "isPrev": False,
+                        })
+                    if _bankedPlayers:
+                        rosterPlayers = _bankedPlayers
 
                 # Season card bonus = stored weeks + live current week
                 seasonCardBonus = storedSeasonCardBonus

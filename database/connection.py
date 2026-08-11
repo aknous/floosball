@@ -2717,6 +2717,27 @@ def clear_db():
     except Exception as e:
         logger.warning(f"Failed to reset per-season user flags on fresh start: {e}")
 
+    # ⚠️ Same hazard one table over: `app_settings` is preserved WHOLESALE, so a key
+    # describing data that was just dropped survives and goes on being believed. Keys
+    # scoped to a SEASON must be cleared here, exactly like the user flags above.
+    #
+    # `lineup_snapshot_complete_from` holds "season:week" of the first week whose lineup
+    # snapshot was complete. After a wipe it points at a week that no longer exists, and
+    # because the counter restarts at 1 a stale "1:2" leaves the NEW week 1 sitting
+    # before the boundary — permanently exempt from the no-games-no-points gate. That
+    # survived every fresh start, which is why the leak kept reproducing on clean runs.
+    #
+    # Deliberately selective: `generational_names_collapsed` and the name-pool markers
+    # describe the PRESERVED pool and must NOT be cleared.
+    try:
+        from managers.fantasyTracker import COMPLETE_SNAPSHOT_SETTING
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM app_settings WHERE key = :k"),
+                         {"k": COMPLETE_SNAPSHOT_SETTING})
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to clear season-scoped app settings on fresh start: {e}")
+
     logger.info(f"Database cleared (preserved {', '.join(preserveTables)}) at {DB_PATH}")
 
     # Run migrations for preserved tables (e.g. new columns on users)

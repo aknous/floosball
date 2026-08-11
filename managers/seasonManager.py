@@ -1753,6 +1753,27 @@ class SeasonManager:
                 equippedRepo = EquippedCardRepository(session)
                 currencyRepo = CurrencyRepository(session)
 
+                # ⚠️ MARK THE FIRST WEEK RECORDED COMPLETELY — BEFORE THE EARLY RETURN
+                # BELOW. A row is now written for every fielded lineup, including one
+                # that paid nothing, so from this week on "no row" means "did not field".
+                # Earlier weeks were written only when a lineup PAID, so their absences
+                # are ambiguous and must keep crediting (see `lineupForWeek`).
+                #
+                # ⚠️ COMPLETENESS IS A PROPERTY OF THE CODE, NOT OF TURNOUT. Stamping
+                # after `if not allEquipped: return` meant a week nobody had equipped for
+                # — week 1 of any new league — never stamped, so the boundary landed on
+                # the first week someone played and left week 1 BEFORE it, permanently
+                # permissive. A user equipping between week 1's whistle and the rollover
+                # then had week 1's FP credited to them on the week 2 board, which is
+                # exactly the leak the gate exists to close.
+                try:
+                    from game_rules import _readAppSetting, _writeAppSetting
+                    from managers.fantasyTracker import COMPLETE_SNAPSHOT_SETTING as _CSS
+                    if not _readAppSetting(_CSS):
+                        _writeAppSetting(_CSS, f"{season}:{week}")
+                except Exception as _e:
+                    logger.warning(f"Could not stamp lineup-snapshot boundary: {_e}")
+
                 # Get all locked equipped cards for this week
                 allEquipped = equippedRepo.getAllForWeek(season, week)
                 if not allEquipped:
@@ -2360,8 +2381,20 @@ class SeasonManager:
                         except Exception as _e:
                             logger.warning(f"Compound hook failed: {_e}")
 
-                    # Persist FP bonus
-                    if totalFP > 0 or result.floobitsEarned > 0:
+                    # Persist FP bonus.
+                    #
+                    # ⚠️ THIS ROW IS THE WEEK'S LINEUP SNAPSHOT, not just a payout, so it
+                    # is written whenever a lineup was FIELDED — including at zero. It
+                    # used to be conditional on `totalFP > 0 or floobitsEarned > 0`, and
+                    # a settled week therefore had no record of anyone whose cards
+                    # happened to earn nothing. That matters because `equipped_cards` is
+                    # rewritten by any later re-equip (see fantasyTracker's
+                    # `lineupForWeek`), so with no row here there is NOTHING left saying
+                    # who actually played that week, and the leaderboard falls back to
+                    # whatever is equipped now. A zero row sums to zero everywhere it is
+                    # read; what it adds is the ability to tell "fielded and earned
+                    # nothing" from "was not there".
+                    if userEquipped:
                         if totalFP > 0:
                             roster.card_bonus_points = (roster.card_bonus_points or 0) + totalFP
                         import json as _json
