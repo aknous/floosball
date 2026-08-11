@@ -12047,6 +12047,26 @@ def get_feed_catalog():
     })
 
 
+def _utcIso(dt) -> Optional[str]:
+    """A datetime as ISO-8601 that says it is UTC.
+
+    ⚠️ `datetime.utcnow()` — what these columns default to — produces a NAIVE datetime,
+    and `.isoformat()` on it emits no timezone at all. JavaScript reads a date-time string
+    with no offset as LOCAL time, so every one of these arrived hours adrift on any client
+    away from UTC. That is what kept sideline lines pinned below fan posts in the
+    Bleachers: the posts parsed into the future and outsorted every cutaway, which carries
+    an explicit Z.
+
+    The client had already worked around it for DISPLAY by appending a Z itself
+    (`relativeTime`), which is why the ages looked right while the ORDER was wrong.
+    Saying it here is the fix; anything sorting on these no longer has to know.
+    """
+    if dt is None:
+        return None
+    iso = dt.isoformat()
+    return iso if (iso.endswith('Z') or '+' in iso[10:]) else iso + 'Z'
+
+
 def _serializeFeedPost(session, post, team, isMine: bool = False) -> Dict[str, Any]:
     """One post, in the shape the client renders.
 
@@ -12073,7 +12093,7 @@ def _serializeFeedPost(session, post, team, isMine: bool = False) -> Dict[str, A
         'teamColor': getattr(team, 'color', None),
         'username': getattr(poster, 'username', None),
         'isMine': isMine,
-        'createdAt': post.created_at.isoformat() if post.created_at else None,
+        'createdAt': _utcIso(post.created_at),
     }
 
 
@@ -12249,7 +12269,7 @@ def get_team_feed(teamId: int, limit: int = 50,
                 'targetPlayerId': post.target_player_id,
                 'targetName': targetName,
                 'valence': entry[2] if entry else 0,
-                'createdAt': post.created_at.isoformat() if post.created_at else None,
+                'createdAt': _utcIso(post.created_at),
                 'mine': bool(user and post.user_id == user.id),
                 'isAuto': bool(getattr(post, 'is_auto', False)),
             })
