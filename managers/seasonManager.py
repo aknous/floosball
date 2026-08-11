@@ -1479,7 +1479,7 @@ class SeasonManager:
 
         # Achievement hook — Veteran (rosters set this regular-season week)
         if not in_playoffs:
-            self._creditVeteranForWeek(self.currentSeason.seasonNumber)
+            self._creditVeteranForWeek(self.currentSeason.seasonNumber, week)
 
         # Supporter dividends (fan-income) — accrue every week, regular AND
         # playoff (backing a deep-run team keeps paying). Ticks tenure for all
@@ -10903,26 +10903,42 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"Pre-game reminder broadcast failed: {e}")
 
-    def _creditVeteranForWeek(self, season: int) -> None:
-        """Bump Veteran achievement progress for every user who had a fantasy
-        roster with at least one player this season when the week ended."""
+    def _creditVeteranForWeek(self, season: int, week: int) -> None:
+        """Bump Veteran progress for every user who fielded a lineup in the week that
+        just ended.
+
+        ⚠️ IT READ `FantasyRoster` / `FantasyRosterPlayer`, WHICH THE FUSION LEFT
+        UNWRITTEN. `fantasy_roster_players` holds zero rows on a live database while
+        `equipped_cards` holds plenty, so the `.in_()` subquery matched nothing and NOBODY
+        was ever credited — reported as Veteran never tracking progress. Same fault that
+        took Field General's backfill; under the fusion "has a fantasy roster" means "has
+        equipped cards".
+
+        ⚠️ Counted off `WeeklyCardBonus`, not off `equipped_cards`. That is the BANKED
+        record of the week — written once when the week's effects are processed and never
+        revised — whereas equipped rows are the LIVE lineup and get carried forward, so
+        reading them would credit the same standing lineup every week whether or not its
+        owner was there. It is also the same table the fantasy leaderboard trusts for a
+        settled week, so Veteran counts exactly the weeks a reader is credited for
+        elsewhere.
+        """
         try:
             from database.connection import get_session
-            from database.models import FantasyRoster, FantasyRosterPlayer
+            from database.models import WeeklyCardBonus
             from managers import achievementManager as _am
             session = get_session()
             try:
                 userIds = [
-                    r.user_id for r in session.query(FantasyRoster.user_id).filter(
-                        FantasyRoster.season == season,
-                        FantasyRoster.id.in_(
-                            session.query(FantasyRosterPlayer.roster_id).distinct()
-                        ),
+                    r.user_id for r in session.query(WeeklyCardBonus.user_id).filter(
+                        WeeklyCardBonus.season == season,
+                        WeeklyCardBonus.week == week,
                     ).distinct().all()
                 ]
                 for uid in userIds:
                     _am.onFantasyRosterWeekCompleted(session, uid, season)
                 session.commit()
+                if userIds:
+                    logger.info(f"Veteran: credited week {week} to {len(userIds)} users")
             except Exception as e:
                 session.rollback()
                 logger.warning(f"Veteran achievement credit failed: {e}")
