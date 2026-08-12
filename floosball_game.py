@@ -2049,6 +2049,16 @@ class Game:
         # Realistic spike budget — using more would forfeit too many downs.
         # Down 1 or 2 → 1 spike between productive plays; 3rd down → 0.
         spikesAvailable = 1 if self.down < self.gameRules.downsPerSeries - 1 else 0
+        # ⚠️ THIS LOOP COUNTS A PLAY THAT DOES NOT FIT, ON PURPOSE — FOR NOW. It enters on
+        # `secs > FINAL_SNAP_SECS` (2) and only then subtracts the 7 a play costs, so at
+        # 0:15 it reports 2 plays when one run (a ~12s hurry-up huddle plus 4-6s live)
+        # does not fit once. Tightening it to `secs >= 7` was tried and MEASURED WORSE:
+        # over 40 games a side, late FG attempts fell 33 -> 18 at four downs and halves
+        # ending in range rose 21 -> 24. The count feeds eight decisions with opposite
+        # senses — `<= 1` kicks, `>= 2` hurries up, `>= 1` allows a spike — so lowering it
+        # buys a few kicks and loses the clock management that gets a drive into range at
+        # all. Re-tune the whole set together or not at all; the end-of-half kick is
+        # handled directly instead (see `_lastSnapBeforeBreak`).
         plays = 0
         while secs > FINAL_SNAP_SECS:
             plays += 1
@@ -2064,6 +2074,33 @@ class Game:
             else:
                 secs -= 18
         return plays
+
+    def _lastSnapBeforeBreak(self) -> bool:
+        """Is this the last snap the offense gets before the half or the game ends?
+
+        ⚠️ THE DOWN NUMBER DOES NOT ANSWER THIS. The engine splits play-calling on
+        `down < downsPerSeries` (clock management) vs `down == downsPerSeries`
+        (`_fourthDownCaller`), and only the second branch knows how to end a half — it
+        kicks a makeable field goal once the clock dips inside ~15-35s. So "is this my
+        last chance" was really being asked as "is this my last DOWN", and those are
+        different questions.
+
+        `downsPerSeries` is a MUTABLE RULE (3 to 5). At five downs a 4th down is no
+        longer the final down, so it takes the clock-management branch, which had no
+        end-of-half kick of its own — reported from a live game as 4th and 3 on the
+        opponent's 11, a ~28 yard kick, run for a single yard as the clock hit 0:00. The
+        half ended with the ball in range and no points. Owner: "the play was genuinely
+        the last play of the half, so down should not have mattered."
+
+        A snap costs a huddle plus the live ball. In hurry-up that is ~12s of pre-snap
+        (9-15 by coach clock IQ) and 4-6s of run, so once the clock is under roughly one
+        of those there is no snap after this one whatever the down says.
+        """
+        from constants import LAST_SNAP_WINDOW_SECS
+        secs = self._offenseEffectiveSecs()
+        if secs <= 0:
+            return True
+        return secs <= LAST_SNAP_WINDOW_SECS
 
     def leadEaseOffFactor(self) -> float:
         """Multiplier on the DEFENSE's effective ratings when that defense's own
@@ -4394,8 +4431,12 @@ class Game:
         runFocus = getattr(defGp, 'runStopFocus', 0.5) if defGp is not None else 0.5
         if runFocus < SNEAK_LOOK_MIN_RUNFOCUS:
             return None      # the box isn't sold on the sneak — nothing to exploit
-        # 4th down is the wrong time to get cute: a stuffed fake ends the drive.
-        if self.down >= 4:
+        # The LAST down is the wrong time to get cute: a stuffed fake ends the drive.
+        # ⚠️ This read `down >= 4`, which is only the last down when the ruleset happens
+        # to run four. `downsPerSeries` is mutable (3 or 5): at 3 the guard never fired at
+        # all and the fake could be called on the down that ends the drive — the precise
+        # case it exists to prevent.
+        if self.down >= self.gameRules.downsPerSeries:
             return None
         commit = (runFocus - SNEAK_LOOK_MIN_RUNFOCUS) / max(0.01, 0.80 - SNEAK_LOOK_MIN_RUNFOCUS)
         scouting = getattr(coach, 'scouting', 80) if coach else 80
@@ -4598,6 +4639,35 @@ class Game:
                 }
         self.play.insights['_prePlayComposure'] = prePlayComposure
 
+        # ⚠️ LAST SNAP OF A HALF, IN RANGE — KICK IT, ON ANY DOWN. This sits ABOVE the
+        # `down < downsPerSeries` split deliberately: everything below is one branch for
+        # non-final downs and another for the final one, and only the second knows how to
+        # end a half. That is fine while the last down IS the fourth, and wrong the moment
+        # the ruleset says otherwise. Taking the free three when there is no snap after
+        # this one is not a down-dependent decision, so it is not asked as one.
+        #
+        # Guarded to a kick that is worth taking: a real half boundary, a makeable
+        # distance for THIS kicker, and a score where three points still mean something.
+        if (self.currentQuarter in (2, 4) and self._lastSnapBeforeBreak()
+                and not self._isGarbageTime(scoreDiff)):
+            _lastKicker = self.offensiveTeam.rosterDict.get('k')
+            _lastMax = ((_lastKicker.maxFgDistance - self.gameRules.fgSnapDistance)
+                        if _lastKicker else 0)
+            # Inside the 5 a touchdown is the better end to a half, and Q4 keeps its own
+            # drain/desperation logic below when a field goal cannot settle it.
+            _fgSettles = self.currentQuarter == 2 or scoreDiff >= -self._fgValue()
+            if 5 < self.yardsToEndzone <= _lastMax and _fgSettles:
+                self.play.insights['clockMgmt'] = {
+                    'decision': 'lastSnapFG',
+                    'reason': 'No snap after this one — take the makeable FG',
+                    'clockRemaining': self.gameClockSeconds,
+                    'down': self.down,
+                    'downsPerSeries': self.gameRules.downsPerSeries,
+                    'yardsToEndzone': self.yardsToEndzone,
+                }
+                self.play.playType = PlayType.FieldGoal
+                return
+
         # Clock management — evaluated before any play selection on non-final downs
         if self.down < self.gameRules.downsPerSeries:
             # Kneel: Q4/OT, leading — only when guaranteed to drain the clock
@@ -4711,7 +4781,13 @@ class Game:
             if (endOfHalfPush and self._offenseEffectiveSecs() <= 45
                     and 5 < self.yardsToEndzone <= _eohKickerMax):
                 eohPlaysAvailable = self._estimateAvailablePlays()
-                if self.down == self.gameRules.downsPerSeries or eohPlaysAvailable <= 1:
+                # ⚠️ This block only runs on NON-FINAL downs (see the `down <
+                # downsPerSeries` gate above), so the `down == downsPerSeries` test that
+                # used to sit here could never be true — the final down reaches
+                # `_fourthDownCaller` instead, which has its own end-of-half branch. Only
+                # the play count decides it here, which is why that count being right
+                # matters so much.
+                if eohPlaysAvailable <= 1:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'endOfHalfFG',
                         'reason': 'End of half, take the FG on the last play (any score)',
@@ -7569,17 +7645,27 @@ class Game:
                 # Drive Clock (plays unit): one snap spent (seconds unit drains via
                 # consumeGameTime). No-op unless the mechanic is on.
                 self._tickDriveClockPlays()
+                # ⚠️ THESE TWO STATS ARE POSITIONAL, NOT LITERAL. "Third down" means the
+                # last chance to keep the series alive normally and "fourth down" means
+                # the one that ends it — but `downsPerSeries` is mutable (3 to 5), so the
+                # hardcoded 3 and 4 measured the wrong downs the moment the Cores changed
+                # the rule. At 5 downs the fourth-down counter logged a routine down where
+                # going for it is unremarkable; at 3 downs it could never log anything at
+                # all, and the third-down counter was silently counting the FINAL down.
+                _lastDown = self.gameRules.downsPerSeries
+                _setupDown = _lastDown - 1
+                _goingForIt = self.play.playType not in (PlayType.Punt, PlayType.FieldGoal)
                 if self.offensiveTeam is self.homeTeam:
                     self.homePlaysTotal += 1
-                    if self.down == 3:
+                    if self.down == _setupDown:
                         self.home3rdDownAtt += 1
-                    elif self.down == 4 and self.play.playType not in (PlayType.Punt, PlayType.FieldGoal):
+                    elif self.down == _lastDown and _goingForIt:
                         self.home4thDownAtt += 1
                 if self.offensiveTeam is self.awayTeam:
                     self.awayPlaysTotal += 1
-                    if self.down == 3:
+                    if self.down == _setupDown:
                         self.away3rdDownAtt += 1
-                    elif self.down == 4 and self.play.playType not in (PlayType.Punt, PlayType.FieldGoal):
+                    elif self.down == _lastDown and _goingForIt:
                         self.away4thDownAtt += 1
 
                 # PLAY EXECUTION: Handle different play types
@@ -8056,14 +8142,18 @@ class Game:
                         downBefore = self.down
                         self.play.down = downBefore  # Store pre-play down for clutch/choke evaluation
                         self.down = 1
+                        # ⚠️ Positional, exactly like the ATTEMPT counters — and it has to
+                        # match them or the rate is computed from two different downs.
+                        _lastDown = self.gameRules.downsPerSeries
+                        _setupDown = _lastDown - 1
                         if self.offensiveTeam is self.homeTeam:
                             self.home1stDownsTotal += 1
-                            if downBefore == 3: self.home3rdDownConv += 1
-                            elif downBefore == 4: self.home4thDownConv += 1
+                            if downBefore == _setupDown: self.home3rdDownConv += 1
+                            elif downBefore == _lastDown: self.home4thDownConv += 1
                         elif self.offensiveTeam is self.awayTeam:
                             self.away1stDownsTotal += 1
-                            if downBefore == 3: self.away3rdDownConv += 1
-                            elif downBefore == 4: self.away4thDownConv += 1
+                            if downBefore == _setupDown: self.away3rdDownConv += 1
+                            elif downBefore == _lastDown: self.away4thDownConv += 1
                         if self.yardsToEndzone < self.gameRules.firstDownDistance:
                             self.yardsToFirstDown = self.yardsToEndzone
                         else:

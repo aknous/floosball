@@ -2345,6 +2345,13 @@ LEAGUE_COMPRESSION_MEAN = 84        # Center of the curve
 # undercounted the last snap in tight windows.
 FINAL_SNAP_SECS = 2
 
+# How little clock means "there is no snap after this one". A snap costs a hurry-up
+# huddle (~12s, 9-15 by coach clock IQ) plus the live ball (4-6s for a run), so under
+# ~18s the play being called is the last one. Used by `_lastSnapBeforeBreak` to take a
+# makeable end-of-half field goal on ANY down — `downsPerSeries` is mutable (3 to 5), so
+# "the final down" and "the last chance" are not the same question.
+LAST_SNAP_WINDOW_SECS = 18
+
 # ── Chess-clock timeouts ──────────────────────────────────────────────────
 # In the Chess Clock format the offense's possession budget IS its real clock,
 # and a timeout stops the pre-snap huddle drain — so a team preserves its budget
