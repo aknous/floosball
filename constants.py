@@ -2345,12 +2345,21 @@ LEAGUE_COMPRESSION_MEAN = 84        # Center of the curve
 # undercounted the last snap in tight windows.
 FINAL_SNAP_SECS = 2
 
-# How little clock means "there is no snap after this one". A snap costs a hurry-up
-# huddle (~12s, 9-15 by coach clock IQ) plus the live ball (4-6s for a run), so under
-# ~18s the play being called is the last one. Used by `_lastSnapBeforeBreak` to take a
-# makeable end-of-half field goal on ANY down — `downsPerSeries` is mutable (3 to 5), so
-# "the final down" and "the last chance" are not the same question.
-LAST_SNAP_WINDOW_SECS = 18
+# "There is no snap after this one" — the window `_lastSnapBeforeBreak` uses to take a
+# makeable end-of-half field goal on ANY down (`downsPerSeries` is mutable, 3 to 5, so
+# "the final down" and "the last chance" are not the same question).
+#
+# ⚠️ IT IS NOT ONE NUMBER, because a stopped clock changes the cost of a snap entirely:
+#
+#   clock running, no timeout : huddle (~12s) + live ball (~5s) + the FG snap = ~19s
+#   clock stopped or a timeout in hand : huddle skipped, live ball + FG snap  = ~7s
+#
+# A fixed value is wrong in both directions — 18 kicks while a well-managed offense
+# could still fit a sideline throw AND the kick, and it is barely enough for one that
+# cannot stop the clock at all. So the window is built from these two parts instead, and
+# an offense that has managed its clock keeps the wider set of options it earned.
+LAST_SNAP_HUDDLE_SECS = 12   # hurry-up pre-snap; 9-15 across the coach clock-IQ range
+LAST_SNAP_LIVE_SECS = 5      # snap to whistle on a run (4-6)
 
 # ── Chess-clock timeouts ──────────────────────────────────────────────────
 # In the Chess Clock format the offense's possession budget IS its real clock,

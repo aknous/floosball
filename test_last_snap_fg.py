@@ -40,14 +40,23 @@ logging.disable(logging.CRITICAL)
 
 import managers  # noqa: F401  — breaks the floosball_game circular import
 import floosball_game as fg
-from constants import LAST_SNAP_WINDOW_SECS
+from constants import (FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS,
+                       LAST_SNAP_LIVE_SECS)
+
+
+STOPPABLE = LAST_SNAP_LIVE_SECS + FINAL_SNAP_SECS                       # ~7s
+RUNNING = STOPPABLE + LAST_SNAP_HUDDLE_SECS                            # ~19s
 
 
 class StubGame:
     _lastSnapBeforeBreak = fg.Game._lastSnapBeforeBreak
 
-    def __init__(self, secs):
+    def __init__(self, secs, clockRunning=True, timeouts=0):
         self.gameClockSeconds = secs
+        self.clockRunning = clockRunning
+        self.homeTimeoutsRemaining = self.awayTimeoutsRemaining = timeouts
+        self.offensiveTeam = self.homeTeam = object()
+        self.awayTeam = object()
 
     def _offenseEffectiveSecs(self):
         return self.gameClockSeconds
@@ -58,20 +67,33 @@ class LastSnapWindowTests(unittest.TestCase):
         self.assertTrue(StubGame(0)._lastSnapBeforeBreak())
         self.assertTrue(StubGame(-3)._lastSnapBeforeBreak())
 
-    def testTheWindowCoversASnapThatWouldNotFit(self):
-        """A snap is a hurry-up huddle (~12s) plus the live ball (4-6s for a run), so
-        under ~18s there is no play after this one. The reported reading was a run at
-        roughly 0:15."""
-        self.assertTrue(StubGame(15)._lastSnapBeforeBreak(),
-                        'a run at 0:15 leaves no time for another snap')
-        self.assertTrue(StubGame(LAST_SNAP_WINDOW_SECS)._lastSnapBeforeBreak())
+    def testAClockRunningWithNoTimeoutNeedsTheWholeHuddle(self):
+        """Nothing can stop the clock, so another snap costs a hurry-up huddle (~12s)
+        plus the live ball before the kick can even be snapped. The reported play ran at
+        roughly 0:17."""
+        self.assertTrue(StubGame(15, clockRunning=True, timeouts=0)._lastSnapBeforeBreak(),
+                        'a run at 0:15 with the clock live and no timeout leaves no snap')
+        self.assertTrue(StubGame(RUNNING - 1, True, 0)._lastSnapBeforeBreak())
+        self.assertFalse(StubGame(RUNNING, True, 0)._lastSnapBeforeBreak())
 
-    def testPlentyOfClockIsNotTheLastSnap(self):
+    def testAStoppableClockEarnsTheWiderWindow(self):
+        """⚠️ THE WINDOW IS NOT ONE NUMBER. With the clock stopped, or a timeout in hand
+        to stop it, the huddle is skipped and a play plus the kick fit inside ~7s — so an
+        offense that has managed its clock keeps the options it earned. Owner: "18 seconds
+        seems like a lot of time, I would expect it to be around the 8 second mark"."""
+        # Two ways to be stoppable: the clock is live but a timeout is in hand, or it is
+        # already stopped. Either way the huddle is skipped.
+        for running, tos in ((True, 2), (False, 0)):
+            self.assertFalse(StubGame(15, clockRunning=running, timeouts=tos)._lastSnapBeforeBreak(),
+                             'a team that can stop the clock still has a play at 0:15')
+            self.assertTrue(StubGame(STOPPABLE - 1, running, tos)._lastSnapBeforeBreak())
+
+    def testPlentyOfClockIsNeverTheLastSnap(self):
         """The rule must not fire while a drive still has plays in it, or an offense
         kicks from the 40 with a minute left instead of driving."""
-        self.assertFalse(StubGame(LAST_SNAP_WINDOW_SECS + 1)._lastSnapBeforeBreak())
-        self.assertFalse(StubGame(45)._lastSnapBeforeBreak())
-        self.assertFalse(StubGame(120)._lastSnapBeforeBreak())
+        for running, tos in ((True, 0), (True, 3), (False, 0), (False, 3)):
+            self.assertFalse(StubGame(45, running, tos)._lastSnapBeforeBreak())
+            self.assertFalse(StubGame(120, running, tos)._lastSnapBeforeBreak())
 
     def testItDoesNotConsultTheDownAtAll(self):
         """THE POINT. The helper takes no down and reads none — that is what makes the
