@@ -84,5 +84,39 @@ try:
 except ValueError as e:
     expect(f"cross-edition rejected  ({e})", 'edition' in str(e).lower())
 
+# ⚠️ THE DONOR MUST BE FROM THIS SEASON. Nothing checked it, so a previous season's
+# card could be fed in to graft its effect onto a live one. That defeated two rules at
+# once: only current-season cards can be equipped or score (an expired card is a
+# collectible, not a parts bin), and a RETIRED effect is dropped from the MINT POOL
+# rather than deleted — but a transplant mints with `forceEffect=`, which bypasses the
+# pool, so an old donor could put a deliberately-retired effect back into live play,
+# freshly priced at today's values. Verified against the live map: comeback_kid,
+# domination, castaway and reclamation are all absent from `effectPoolFor` and all four
+# force-mint without complaint. Gating the DONOR closes both, because an effect retired
+# at a season boundary cannot appear on a card minted this season.
+p4 = Player(name='Last Year Guy'); s.add(p4); s.flush()
+tOld = CardTemplate(player_id=p4.id, edition=HOLO, season_created=0, player_name='Last Year Guy',
+                    player_rating=85, position=WR,
+                    effect_config=buildEffectConfig(HOLO, 85, WR, None, forceEffect='slippery'),
+                    rarity_weight=8, sell_value=30)
+s.add(tOld); s.flush()
+oldCard = UserCard(user_id=u.id, card_template_id=tOld.id, acquired_via='test')
+s.add(oldCard); s.flush()
+try:
+    cm.transplantEffect(s, u.id, oldCard.id, targetId, 1, 0)
+    expect("expired donor rejected", False)
+except ValueError as e:
+    expect(f"expired donor rejected  ({e})", 'previous season' in str(e).lower())
+
+# ...and the same card IS accepted once it is current-season, so the guard is about the
+# season and not about something incidental to how this fixture was built.
+tOld.season_created = 1
+s.flush()
+try:
+    cm.transplantEffect(s, u.id, oldCard.id, targetId, 1, 0)
+    expect("same donor accepted once current-season", True)
+except ValueError as e:
+    expect(f"same donor accepted once current-season  (got {e})", False)
+
 print(f"\n{'ALL PASS' if not failures else f'{len(failures)} FAILED: ' + '; '.join(failures)}")
 sys.exit(1 if failures else 0)
