@@ -174,6 +174,55 @@ This is four interacting layers resolving before the ball is snapped, and the si
 - **Zero-sum by construction where possible**, the way `_applyPreSnapRead` already is — a league-average defense nets nothing from disguise, so the layer redistributes rather than inflating. Measure the league-wide multiplier before shipping, exactly as the pre-snap read did (mean accuracy 0.5173 → 1.0016, i.e. 0.16% stronger defense league-wide).
 - **Build the disguise LAST**, against an audible system already measured against honest looks. Otherwise a miscalibrated disguise and a miscalibrated audible mask each other.
 
+## Part 4 — Pre-snap commentary (without this, none of the above exists)
+
+**Owner direction, 2026-08-12:** *"there's a lot that is happening between plays that happens silently. there needs to be some kind of commentary going on between snaps that tells fans what is happening. the QB audibles, they start going no huddle, the defense is showing blitz, etc."*
+
+⚠️ **THIS IS NOT POLISH, IT IS THE DELIVERABLE.** Parts 1-3 add three layers of decision-making that resolve entirely between the whistle and the snap, and the feed today reports only what happened AFTER the snap. Built without this, the whole system is invisible work: the QB audibles into a trap and the reader sees a 2-yard gain with no idea why. Every mechanic here earns its keep only if a fan can watch it happen.
+
+### The plumbing already exists
+
+`gameFeed` carries two entry kinds today — `{'play': ...}` and `{'event': {...}}`, the latter with `text` / `_type` / `quarter` / `timeRemaining` (see the chess-clock lockout and timeout announcers). The frontend already distinguishes them: `GameModalNew` filters on `!p.event` for the box score and the win-probability chart, and `isSidelineCutaway` is a third kind that renders differently again. So a pre-snap beat is **a new `_type` on the existing event entry**, not new plumbing.
+
+It should also flow into the interleaved Bleachers timeline alongside the sideline cutaways, which already sort correctly by UTC timestamp.
+
+### ⚠️ The reveal rule — this settles the open question
+
+The pre-snap line reports **what the QB SEES, including when that is a lie.** The truth arrives with the play.
+
+> *"They're showing blitz..."* → snap → *"...and they dropped eight. Rodrigo never saw it."*
+
+That is the whole design in two lines, and it means the pre-snap commentary is never a spoiler. **The reader is fooled alongside the quarterback and learns the truth alongside him**, which is strictly better drama than either revealing early (no tension) or never revealing (no payoff). It also means the same line can be honest or a lie with no change to the writer's side — the disguise decides, not the phrasing.
+
+### Cadence — silence is the default
+
+A line on every snap is noise, and would bury the play-by-play it sits next to. Pre-snap beats fire only on a **state change or a decision**, not on a state:
+
+| beat | when | fires |
+|---|---|---|
+| going no-huddle | on ENTERING the state | once, not every snap in it |
+| defense shows blitz / soft | when a disguise is shown | rate-limited; not every disguised snap |
+| QB audibles | on a check, either way | always — it is the most interesting thing that can happen pre-snap |
+| QB sniffs it out | on a good read against a disguise | always, and this is the line that sells `instinct` |
+| defense tips its hand | on a blown disguise (`discipline` failed) | always — the reader should see the mistake |
+
+Everything else stays silent. ⚠️ The Bleachers taught this lesson already: an exchange per beat buried a busy week under the Cores talking to themselves, and the fix was one exchange per tick taking the most significant crossing. Same rule here — **at most one pre-snap line per snap**, taking the most significant.
+
+### What it unlocks beyond this plan
+
+- **`defensiveMind` becomes visible.** It currently does per-play work that no reader can see. A defense that disguises well and gets caught doing it is a coach with a personality.
+- **Anticipation.** The sim has no tension between plays at all right now; the feed goes from result to result. A "they're showing blitz" line is the first thing that makes a reader wait for the next snap.
+- **It is where personality could land later.** A cocky QB and a rattled one should audible differently, and `personalityManager` already voices players. Out of scope here, noted so the hook is deliberate.
+
+### Where it hooks
+
+1. A `_presnapBeat()` writer alongside `formatPlayText` / `_puntPlayText`, taking the tempo state, the shown look and the audible outcome.
+2. `gameFeed.insert(0, {'event': {'_type': 'presnap', ...}})` in the PRE-SNAP block (`~:7529`), after the tempo and read are resolved and BEFORE the play executes — so it lands in the feed ahead of its own play.
+3. `play.insights` carries the structured version (shown vs actual, read outcome) for the insights panel and for any future investigation.
+4. Frontend: render it lighter than a play — it is a state, not a result. The `schedule` band treatment in the league news feed is the closest existing precedent.
+
+⚠️ **The broadcast path must be checked.** `_presnapBeat` fires between plays, and the timing modes that suppress game events (`turbo-silent`, `fast-weekly`) must suppress these too, or a silent sim starts narrating.
+
 ## Measurement
 
 The clock work this week established the pattern: a **low-variance targeted probe** beats a noisy aggregate. Per-arm, before/after:
@@ -196,7 +245,7 @@ The clock work this week established the pattern: a **low-variance targeted prob
 3. **The predictability penalty.** Negative disguise in `_applyPreSnapRead`. Measure 3 — this is the balance gate; do not proceed while no-huddle is a free win.
 4. **Audibles against HONEST looks.** The read, the three outcomes, measured while the defense is still telling the truth. Measure 4.
 5. **Defensive disguise.** Shown-vs-actual, its cost, and the trap. Measure 6 — and only here, because a miscalibrated disguise and a miscalibrated audible mask each other.
-6. **PBP + play insights** for all three, so a reader can see it happen and a future investigation can read the decision. A disguise that worked should be visible in the feed; that is most of the drama.
+6. **Pre-snap commentary (Part 4).** ⚠️ Not last in importance — it is what makes 1-3 exist for a reader, and it should be built incrementally ALONGSIDE each layer rather than saved up: a no-huddle line with Part 1, an audible line with Part 2, the disguise lines with Part 3. Saving it to the end means three layers land invisible and unverifiable by eye.
 
 Flags: `NO_HUDDLE_ENABLED`, `AUDIBLE_ENABLED`, `DEFENSIVE_DISGUISE_ENABLED`, each default-on once measured, so any one can be switched off for an A/B without unpicking the others.
 
@@ -207,6 +256,6 @@ Flags: `NO_HUDDLE_ENABLED`, `AUDIBLE_ENABLED`, `DEFENSIVE_DISGUISE_ENABLED`, eac
 1. **Does a bad QB decline to audible, or audible badly?** Declining is safer and more realistic; audibling badly is more fun and gives `xFactor` somewhere to hurt. Current lean: **both**, split by `instinct` (sees it or not) vs `flairOf` (acts on it or not) — a bold QB who cannot read is the interesting failure case.
 2. **Should no-huddle be available OUTSIDE a two-minute drill?** Real offenses use it as a tempo weapon on any down. The clock-driven trigger says no. A `hurryUp`-only rule is simpler and matches the reported need; a coach-preference version is a later layer and would need its own attribute.
 3. **Does the defense get to substitute?** Real no-huddle's edge is that it prevents defensive personnel changes. The sim has no personnel packages, so there is nothing to model — noting it so it is not mistaken for an oversight.
-4. **Should a disguise be visible to the READER even when it fools the QB?** The feed knowing more than the quarterback is where the drama is ("they showed blitz and dropped eight, and he never saw it"), but it also tells a fan the answer before the play resolves. Lean: reveal it in the play-by-play AFTER resolution, never before.
+4. ~~**Should a disguise be visible to the READER even when it fools the QB?**~~ **SETTLED by Part 4:** the pre-snap line reports what the QB SEES (the lie included) and the play text reveals the truth. The reader is fooled alongside him and learns with him.
 5. **Can the offense bait too?** A QB who reads a disguise could hard-count to make the defense declare. That is a fourth layer and almost certainly a step too far — noting it so it is a deliberate omission rather than an oversight.
 6. **Fatigue.** No-huddle should tire the offense faster. The sim has a fatigue model applied pre-game; a within-game tempo cost is a separate piece of work and is out of scope here.
