@@ -76,7 +76,7 @@ def testDeterminationStateMirrorsConfidence():
 # ── Attempts ────────────────────────────────────────────────────────────────
 
 def testFlashyCarriersTryMovesFarMoreOften():
-    """The headline behaviour: xFactor and creativity decide who goes for it."""
+    """The headline behavior: xFactor and creativity decide who goes for it."""
     flashy = _attemptRate(_carrier(creativity=100, xFactor=100))
     plodder = _attemptRate(_carrier(creativity=60, xFactor=60))
     assert flashy > plodder * 2.5, f'flashy {flashy:.3f} vs plodder {plodder:.3f}'

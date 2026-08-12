@@ -1,6 +1,6 @@
 """Autonomous Front Office — GM brain valuation + re-sign decision.
 
-Covers the behaviours the design actually promises, not just that the code
+Covers the behaviors the design actually promises, not just that the code
 runs: arc classification, scouting gating the forward read, position weighting,
 and the comparative re-sign test. See docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md.
 """
@@ -113,7 +113,7 @@ def test_developer_credits_ceiling():
 # --------------------------------------------------------- scouting
 
 def test_scouting_gates_the_forward_read():
-    """The headline behaviour: a sharp scout sees the arc, a poor one sees
+    """The headline behavior: a sharp scout sees the arc, a poor one sees
     today's number. Averaged over many draws so the noise term cancels."""
     brain = _brain(yearsPastByName={'Fading': 2})
     rng = random.Random(1234)

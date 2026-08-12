@@ -294,7 +294,7 @@ RECEIVER_MATCHUP_SCALE = 50.0   # Divisor when computing receiver-vs-coverage ma
 
 # Coach attribute scaling
 COACH_ATTR_NEUTRAL = 80         # Attribute value with zero effect (midpoint of 60-100 range)
-COACH_ATTR_RANGE = 20           # Half-range used to normalise coach attributes to [-1, 1]
+COACH_ATTR_RANGE = 20           # Half-range used to normalize coach attributes to [-1, 1]
 COACH_OFFENSIVE_MIND_FLOOR = 60 # offensiveMind below this value gives zero matchup weighting
 # Flavor: chance a newly-generated coach reuses a RETIRED player's name (a former
 # player returning as a coach), instead of drawing a fresh name from the pool.
@@ -939,7 +939,7 @@ FORM_FORCE = float(_os.environ.get('FLOOS_FORM_FORCE', '0'))
 # Calibration only: multiply ONE roster slot's in-game attributes up on even-id
 # teams and down on odd-id teams, to measure that position's CAUSAL impact on
 # winning. Correlation between a position's rating and team wins cannot separate
-# "this position barely matters" from "this rating poorly summarises the position";
+# "this position barely matters" from "this rating poorly summarizes the position";
 # forcing the attributes directly can. 0 = off. See Game._applyPositionForce.
 POSITION_FORCE = float(_os.environ.get('FLOOS_POS_FORCE', '0'))
 POSITION_FORCE_SLOT = _os.environ.get('FLOOS_POS_SLOT', 'qb')
@@ -984,7 +984,7 @@ FG_MARGIN_CEILING = 0.35    # plenty of leg helps, but only so much -- accuracy 
 # and diving catches.
 PUNT_TYPES_ENABLED = _os.environ.get('FLOOS_PUNT_TYPES') != 'off'
 # legStrength * this = a punter's ceiling. Raised from 0.70 when the shank and the
-# missed-pin outcomes landed: those are correct behaviour, but they cost ~2.5 yards
+# missed-pin outcomes landed: those are correct behavior, but they cost ~2.5 yards
 # of league gross average, so the base kick has to absorb them.
 PUNT_MAX_YARDS_PER_LEG = 0.755
 PUNT_BOOMER_YTE = 65            # own end: at/beyond this yards-to-endzone, boom it
@@ -1011,7 +1011,7 @@ PUNT_COFFIN_TOUCHBACK = 0.30    # a missed coffin corner sails through
 PUNT_PIN_TOODEEP = 0.22         # share of missed pins that sail through
 PUNT_PIN_SHORT_MIN = 17         # a pin that comes up short lands out this far
 PUNT_PIN_SHORT_MAX = 25
-# THE SHANK. Nothing modelled a punt simply coming off the foot badly, on ANY punt
+# THE SHANK. Nothing modeled a punt simply coming off the foot badly, on ANY punt
 # type -- so a routine punt could never cost you field position. Accuracy prevents
 # it; it cancels whatever placement was intended.
 PUNT_SHANK_BASE = 0.038         # ~4% of punts, in line with real sub-30-yard punts
@@ -1170,7 +1170,7 @@ CONTESTED_OPENNESS_THRESHOLD = 40  # receiver openness below this counts as cont
 WPA_DROP_RECEIVER_SHARE = 0.7
 
 # ---- Leading-Team Ease-Off ----
-# The sim modelled the trailing team giving up (_isGarbageTime) but never the
+# The sim modeled the trailing team giving up (_isGarbageTime) but never the
 # LEADING team easing off, so a club building a blowout pressed at full intensity
 # for four quarters and the trailing side often finished with nothing. Real teams
 # rush three and keep everything in front once the result is settled — that soft
@@ -1183,8 +1183,8 @@ WPA_DROP_RECEIVER_SHARE = 0.7
 # untouched, i.e. a leading team still runs the ball just as well, it runs it more.
 # WHO eases off is coach-scaled: 0.5*(1-aggressiveness) + 0.5*clockManagement maps
 # to a 0.4x (killer, keeps his foot down) .. 1.6x (professional, calls off the dogs)
-# multiplier on the ease-off, centred at 1.0 for a neutral coach so league-average
-# behaviour stays the measured one and the spread is character.
+# multiplier on the ease-off, centered at 1.0 for a neutral coach so league-average
+# behavior stays the measured one and the spread is character.
 LEAD_EASE_OFF_ENABLED = _os.environ.get('FLOOS_LEAD_EASE') != 'off'
 LEAD_EASE_OFF_MAX = float(_os.environ.get('FLOOS_LEAD_EASE_MAX', '0.15'))
 
@@ -1195,7 +1195,7 @@ LEAD_EASE_OFF_MAX = float(_os.environ.get('FLOOS_LEAD_EASE_MAX', '0.15'))
 # without this, league compression, fatigue, funding morale, team disposition and
 # form oscillation were all offense-only. A cold team still defended at full
 # strength, and a stacked roster's defensive edge was never compressed at all.
-# FLOOS_DEF_MODS=off reverts to the old offense-only behaviour.
+# FLOOS_DEF_MODS=off reverts to the old offense-only behavior.
 # MEASURED (8 leagues x 5 seasons/arm): switching this ON made parity WORSE, not
 # better. Win spread barely moved (22.3 -> 21.9) but the playoffs got far more
 # deterministic — champions with the league's best record went 28% -> 45%, and the
@@ -1203,7 +1203,7 @@ LEAD_EASE_OFF_MAX = float(_os.environ.get('FLOOS_LEAD_EASE_MAX', '0.15'))
 # Compression does shrink defensive talent gaps, but the same change also hands the
 # confidence / disposition / funding-morale boosts to defenders, and those all
 # correlate with already being good, which more than cancels it. So this ships OFF:
-# the offense-only behaviour is now a documented deliberate choice rather than an
+# the offense-only behavior is now a documented deliberate choice rather than an
 # accident. FLOOS_DEF_MODS=on to re-enable (and re-measure before trusting it).
 DEFENSE_MODIFIERS_ENABLED = _os.environ.get('FLOOS_DEF_MODS') != 'off'
 # 'momentum'  — a run feeds itself and a slump deepens, bounded by FORM_DECAY.
@@ -1421,7 +1421,7 @@ LEAGUE_REALIGN_WINDOW_SEASONS = 2
 #    players in a single offseason; the rest of its expiring players walk. Forces
 #    an annual "who do we protect?" decision.
 # Env overrides so the retention levers can be A/B'd without editing this file.
-# FLOOS_RETENTION=off disables both. Default (unset) = the shipped behaviour.
+# FLOOS_RETENTION=off disables both. Default (unset) = the shipped behavior.
 _RETENTION_OFF = _os.environ.get('FLOOS_RETENTION') == 'off'
 RESIGN_ONCE_ENABLED = not _RETENTION_OFF
 RESIGN_ONCE_LIMIT = 1             # re-signs allowed with the SAME team before a forced walk
@@ -1576,7 +1576,7 @@ GAME_FEED_CATALOG = {
     'not_like_this':  ('Not like this',                'Negative',   -1),
     'so_close':       ('So close!',                    'Negative',   -1),
     'we_must_be_cursed': ('We must be cursed',         'Negative',   -1),
-    # -- the defence
+    # -- the defense
     'get_a_stop':     ('Make a stop',                  'Defense',     1),
     'hold_them':      ('Hold them here',               'Defense',     1),
     'defense':        ('DEFENSE',                      'Defense',     1),
@@ -1794,7 +1794,7 @@ FO_RESIGN_SURPLUS_MARGIN = 0.5
 # as "the aggression dial". That dial is ALREADY expressed by FO_FA_CONTENTION
 # below: an early picker is measured against the top of the board and a late
 # picker against thin leftovers, which is the same early-aggressive /
-# late-conservative behaviour. Scaling the threshold by pick slot TOO would
+# late-conservative behavior. Scaling the threshold by pick slot TOO would
 # double-count it and, with a near-minimum pool, suppress cuts almost entirely.
 # So the threshold is flat and the dial lives in one place.
 FO_CUT_ENABLED = True

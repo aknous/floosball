@@ -588,7 +588,7 @@ target 159 there are only ~15 spare players across 5 positions, so after the
 `FO_FA_CONTENTION` depth discount most teams will see **no available
 replacement at all** — which by design returns 0 and means "keep him".
 
-Predicted equilibrium behaviour: re-signs approach the cap for everyone, cuts
+Predicted equilibrium behavior: re-signs approach the cap for everyone, cuts
 approach zero, and the comparative market test goes quiet because there is no
 market. Rosters still fill (the supply floor guarantees it), but front-office
 decisions become largely forced rather than chosen.
@@ -729,7 +729,7 @@ only decides WHICH two, never WHETHER to spend a slot. Raising
 Built BEFORE the rest of Part A, deliberately: cut-for-upgrade against uniform
 coaches and a near-minimum pool would produce almost no cuts, and a simcheck
 couldn't tell correct-and-quiet from broken-and-quiet. Specialist spread makes
-the brain's behaviour observable first.
+the brain's behavior observable first.
 
 - **Generation** (`floosball_coach.generateAttributes`): each attribute now
   `clip(center + shared + N(0, COACH_ATTR_INDEP_SIGMA=9), 60, 100)` with one
@@ -1036,7 +1036,7 @@ no longer reads as broken.
 Two things found and fixed along the way that were real bugs, not styling:
 locker-room gauge domains were read off `computeLockerRoom`'s docstring, which
 describes a roster average rather than the league spread (a third of the league
-pegged full); and 10 of 24 team colours failed 4.5:1 as text on the dark page
+pegged full); and 10 of 24 team colors failed 4.5:1 as text on the dark page
 (Detroit's navy at 1.41:1), now lifted by `readableOnDark()`.
 
 ### Still open in the sentiment layer

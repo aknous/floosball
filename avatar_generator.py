@@ -224,7 +224,7 @@ class AvatarGenerator:
         c1 = color1.lstrip('#')
         c2 = color2.lstrip('#')
         # logoInvert: paint the field in the SECONDARY and the figure in the primary.
-        # A club that swaps its two colours can set this to keep the mark looking
+        # A club that swaps its two colors can set this to keep the mark looking
         # exactly as it did, while kits and team pages pick up the new primary.
         if logoInvert:
             c1, c2 = c2, c1
@@ -509,7 +509,7 @@ class AvatarGenerator:
             content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>
                 <g transform="rotate(90 {half} {half})">{ch_shapes}</g>'''
         elif patternType == 29:
-            # Sunrise - rays fanning from the base, not from the centre.
+            # Sunrise - rays fanning from the base, not from the center.
             rays = 7
             wedges = ""
             for i in range(rays):
@@ -731,7 +731,7 @@ class AvatarGenerator:
                       height="{size - 2*inset:.1f}" fill="none" stroke="#{c2}" stroke-width="{w:.1f}"/>'''
 
         elif patternType == 44:
-            # Annulet - one bold ring, centred.
+            # Annulet - one bold ring, centered.
             content = f'''<rect width="{size}" height="{size}" fill="#{c1}"/>
                 <circle cx="{half}" cy="{half}" r="{size*0.30:.1f}" fill="none"
                         stroke="#{c2}" stroke-width="{size*0.15:.1f}"/>'''
@@ -840,9 +840,9 @@ class AvatarGenerator:
 
         elif patternType == 54:
             # Three-point - a pall inverted with its arms at a true 120 degrees, so it sits
-            # symmetric about the centre rather than reaching for the corners.
+            # symmetric about the center rather than reaching for the corners.
             #
-            # A peace sign is FOUR arms from the centre (up, down, down-left, down-right);
+            # A peace sign is FOUR arms from the center (up, down, down-left, down-right);
             # take the straight-down one out and this is what is left. It is also the
             # arrangement on the Mercedes badge, the whole difference there being the ring
             # drawn around it — deliberately omitted, since the ring is what makes it read
@@ -870,7 +870,7 @@ class AvatarGenerator:
             # Annulet, WIDE - a bold ring set close to the rim, so the field reads as a
             # border around it rather than as a background behind it.
             #
-            # ⚠️ NOT the annulet at 44, which is a smaller ring centred in open field. This
+            # ⚠️ NOT the annulet at 44, which is a smaller ring centered in open field. This
             # is the same charge at a different scale, and the difference is the whole
             # point: at 44 the eye reads a ring ON a field; here it reads a band WITHIN a
             # circle. Kept separate so 44 stays available in its original proportions.
@@ -880,7 +880,7 @@ class AvatarGenerator:
                         stroke="#{c2}" stroke-width="{size * 0.13:.2f}"/>'''
 
         elif patternType == 56:
-            # Pinwheel - a triangle at the centre with each side carried on past ONE
+            # Pinwheel - a triangle at the center with each side carried on past ONE
             # vertex only, always the same way round.
             #
             # ⚠️ The one-sidedness IS the figure. Extend both ends of every side and you

@@ -106,10 +106,10 @@ r = calls(defScore=17, offScore=17, yardsToEndzone=30, secs=50)
 expect(f"TIED with the offense in range -> also stops the clock ({r:.0%})", r > 0.4,)
 
 # ── the touchdown limb: a red-zone threat erases more than a kick can ──────
-# Without this the defence had a hole the width of the red zone. Up 5 with the opponent on
+# Without this the defense had a hole the width of the red zone. Up 5 with the opponent on
 # the 3, a FG does not help them, so the kick limb says "clock is your friend" — but they
 # are not kicking, they are scoring to go ahead. This is the mirror of _isTdDrainMode,
-# which holds exactly that score back; without it the defence cannot answer that play.
+# which holds exactly that score back; without it the defense cannot answer that play.
 r = calls(defScore=19, offScore=14, yardsToEndzone=3, secs=50)
 expect(f"up 5, opponent on the 3 -> stops the clock ({r:.0%})", r > 0.4)
 

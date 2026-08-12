@@ -335,7 +335,7 @@ nothing should lose meaning: the cleansed aren't diminished, they're *drafted*.
 
 The character material writes itself. Cassian is the distracted superfan who wanted one more good
 game and built it. Halverson is appalled — these are people, and one of them is now two people.
-Vera catalogues both copies without comment. Pyre asks who is cleaning it up afterwards.
+Vera catalogs both copies without comment. Pyre asks who is cleaning it up afterwards.
 
 Design notes:
 - **It must not touch records.** An exhibition, outside the season, no standings impact. That is
@@ -537,10 +537,10 @@ fanbase's whole season of investment and simply look like an enthusiast.
 
 Recommendation: **keep it.** It is genuinely good — deniable social sabotage is exactly the ARG
 texture this design has been reaching for, it produces stories, and it costs the saboteur real
-Floobits to pull off. It also has a natural defence rather than needing a rule: **the symptoms
+Floobits to pull off. It also has a natural defense rather than needing a rule: **the symptoms
 system.** Fans who actually read a player's strain can tell when to stop, and can tell when
 someone else is pushing too hard. Paying attention to character becomes protective, which is
-exactly the behaviour we want to reward.
+exactly the behavior we want to reward.
 
 If it ever needs a brake, the least intrusive one is a **contribution cooldown per fan per
 augment**, so blowing something up takes sustained, visible effort rather than one anonymous
@@ -710,7 +710,7 @@ zone**, which protects the push-your-luck from becoming routine.
 ### What is attention still for?
 
 If chrome drives awakening, attention loses its primary job. It should probably survive as the
-**league aggregate** feed — the thing that builds toward Criticality — so passive fan behaviour
+**league aggregate** feed — the thing that builds toward Criticality — so passive fan behavior
 still generates pressure while chrome supplies deliberate, targeted pressure. Otherwise the
 attention system, the ladder, the decay and the cap all retire, which is a much bigger excision.
 

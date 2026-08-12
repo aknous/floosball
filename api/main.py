@@ -4206,7 +4206,7 @@ async def get_history_records(response: Response, limit: int = Query(default=10,
 # which is what makes the queries below a UNION rather than a simple select: one game row
 # holds BOTH clubs' figures, so a leaderboard has to read each side separately and stack
 # them. Points come from the score columns; the rest are the per-game team totals the sim
-# already denormalises.
+# already denormalizes.
 #
 # ⚠️ Deliberately NOT read from `recordManager`'s tree. That holds a single holder per
 # record — one name, one number — which is the right shape for announcing a break and the
@@ -5042,7 +5042,7 @@ async def get_stats_teams(
     """Every club's offensive and defensive line for a season.
 
     ⚠️ A club's GIVEAWAYS and SACKS ALLOWED are the opponent's takeaways and
-    sacks — the sim records a turnover against the defence that forced it, so
+    sacks — the sim records a turnover against the defense that forced it, so
     the surrendering side only exists as a join back through the games table.
     Turnover margin needs both halves and cannot be read off one club's row.
     """
@@ -5079,7 +5079,7 @@ async def get_stats_teams(
                                         _G.status == 'final',
                                         _G.is_playoff == False).all()  # noqa: E712
             for g in games:
-                # A takeaway BY the home defence is a giveaway BY the away club.
+                # A takeaway BY the home defense is a giveaway BY the away club.
                 given.setdefault(g.away_team_id, dict(blank))
                 given.setdefault(g.home_team_id, dict(blank))
                 given[g.away_team_id]['turnovers'] += (g.home_ints or 0) + (g.home_fum_rec or 0)
@@ -6957,7 +6957,7 @@ async def get_offseason_info(user: _User = Depends(_getOptionalUser)):
         except Exception:
             pass
 
-    # Always empty now: this listed the players a user's favourite team was directed
+    # Always empty now: this listed the players a user's favorite team was directed
     # to sign by the sign_fa fan ballot. Binding fan votes went away with the
     # autonomous Front Office, so `_gmFaDirectives` is never populated. Kept as a
     # field so the response shape doesn't change under the frontend.
@@ -10487,7 +10487,7 @@ def getPackTypes(response: Response, user: Optional[_User] = Depends(_getOptiona
                 # already exempts always-available packs, and a client that
                 # re-derives the rule drifts from it. That is exactly what
                 # happened here — the API would sell the Collection Pack at 5/5
-                # and the shop greyed the button out with "Cycle full".
+                # and the shop grayed the button out with "Cycle full".
                 "countsTowardCycle": _countsTowardCycleCap(p),
             }
             if p.theme_type:
@@ -11919,7 +11919,7 @@ def _requireOwnClub(user, teamId: int):
     """
     favorite = getattr(user, 'favorite_team_id', None)
     if not favorite:
-        raise HTTPException(400, "Pick a favourite team before having your say")
+        raise HTTPException(400, "Pick a favorite team before having your say")
     if teamId is None or int(favorite) != int(teamId):
         raise HTTPException(403, "You can only have your say about your own club")
 
@@ -12580,7 +12580,7 @@ def _buildPickemMatchup(liveGame, gameIndex: int) -> dict:
             "name": liveGame.homeTeam.name,
             # The picker prints "Washington / Monuments" over two lines — a three-letter
             # code is the least distinguishable way to render a club on a board of
-            # sixteen, and the city is what makes the name recognisable.
+            # sixteen, and the city is what makes the name recognizable.
             "city": liveGame.homeTeam.city,
             "abbr": liveGame.homeTeam.abbr,
             "color": liveGame.homeTeam.color,
@@ -13800,7 +13800,7 @@ def _announcementVoice(postAs: str, icon: str, teamId):
       * Posting AS A CORE is category `cores`. It is not an announcement wearing a Core's
         icon; it is a line in that Core's voice, and the feed already knows how to render
         those — the display name is folded into the text ("Vera: ..."), the row takes the
-        Core's own colour, and it threads with the sim's own Cores lines. Borrowing the
+        Core's own color, and it threads with the sim's own Cores lines. Borrowing the
         icon alone would have looked right and read wrong.
 
     ⚠️ The league MARK (as opposed to a league announcement's default dot) rides in the

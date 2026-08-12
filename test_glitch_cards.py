@@ -166,7 +166,7 @@ def testEveryStateAboveTheBottomQualifies():
 def testStrippingTheLineupIsNowATrapRatherThanAnExploit():
     """Inverted deliberately. One card is ONE roll at having anybody unsettled, so a
     single-card lineup catches a glitch far less often than a full one — the opposite of
-    the old behaviour, where stripping down guaranteed the target."""
+    the old behavior, where stripping down guaranteed the target."""
     import random as _r
     ladder = [('stable', 0.85), ('stirring', 0.07), ('erratic', 0.04),
               ('rampant', 0.02), ('awakened', 0.02)]

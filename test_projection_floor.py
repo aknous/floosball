@@ -37,7 +37,7 @@ from managers import cardEffects as ce
 from managers.cardEffectCalculator import CardCalcContext, _computeMissedOutcome
 
 # Every chance effect that pays a guaranteed floor, plus the ones that do not — both
-# behaviours are being pinned.
+# behaviors are being pinned.
 CHANCE_EFFECTS = ('scrappy', 'babysitter', 'tank_commander', 'underdog',
                   'consolation_prize', 'rock_bottom', 'sleeper', 'dud_insurance',
                   'crescendo', 'traverse', 'promised_land', 'barrage', 'houdini')

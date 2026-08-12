@@ -120,7 +120,7 @@ def _runPendingMigrations():
                 conn.rollback()  # column already exists — ignore
 
         # Team avatar override: draw the mark with primary/secondary swapped, so a club
-        # can flip its kit colours without the logo's figure/ground flipping too.
+        # can flip its kit colors without the logo's figure/ground flipping too.
         for col, colDef in [
             ('logo_invert', 'INTEGER DEFAULT 0'),
             # Continuous form offset (roughly ±FORM_MAX) — where the club sits in
@@ -1858,7 +1858,7 @@ def _backfillEffectParams(primary: dict, effectName: str) -> bool:
     minted templates.
 
     Honor Roll is also the case where the missing param was not merely cosmetic:
-    `_computeHonorRoll` falls back to `baseMult = 1.0`, which is the OLD behaviour of
+    `_computeHonorRoll` falls back to `baseMult = 1.0`, which is the OLD behavior of
     paying nothing at the exact moment the bar fills. So a card without it was both
     printing `?` and quietly still doing the thing the rework existed to stop.
 
@@ -3499,7 +3499,7 @@ def _normalizeNamePool(resetLadders: bool = False):
     ⚠️ THE INVARIANT IS ONE FORM OF A LINEAGE AT A TIME. A name goes up a rung
     precisely BECAUSE its previous holder is gone (`_recyclePlayerName` runs at
     retirement), so a base and its Junior are never both live. When they are, one
-    of them is an artefact:
+    of them is an artifact:
 
       * `clear_db()` preserves `unused_names` but drops every player and coach, so
         a variant left in the pool has no parent anywhere and never will — a
@@ -3546,7 +3546,7 @@ def _normalizeNamePool(resetLadders: bool = False):
             if lineage in seen or lineage in inUse:
                 # A second form of a lineage that is already accounted for. The
                 # tie between two variants of an absent base is arbitrary (id
-                # order) — that case only arises from the artefacts above.
+                # order) — that case only arises from the artifacts above.
                 removed.append(row.name)
                 session.delete(row)
                 continue

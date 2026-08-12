@@ -676,7 +676,7 @@ def _computeMissedOutcome(effectConfig, ctx, cardPlayerId, eqId, firstPassBreakd
     Runs the same compute a second time with the RNG forced to miss. Cheap (projection
     only, chance cards only) and side-effect free: no chance compute mutates the context.
     Returns None if anything goes wrong, which puts the floor at zero — the old
-    behaviour, so a bad answer here can never inflate a projection.
+    behavior, so a bad answer here can never inflate a projection.
     """
     forceMissWas = getattr(ctx, 'projectionForceMiss', False)
     try:

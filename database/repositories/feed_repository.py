@@ -54,7 +54,7 @@ def renderPost(postKey: str, targetName: Optional[str] = None) -> str:
 class FeedRepository:
     def __init__(self, session: Session, now: Optional[datetime] = None):
         self.session = session
-        # Injectable clock so decay/rate-limit behaviour is testable.
+        # Injectable clock so decay/rate-limit behavior is testable.
         self._now = now
 
     def now(self) -> datetime:

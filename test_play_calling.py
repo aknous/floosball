@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Break the floosball_game ↔ managers circular import.
 # seasonManager.py uses `FloosGame.Game` as a type annotation at class-definition
-# time, which fails when floosball_game is only partially initialised.
+# time, which fails when floosball_game is only partially initialized.
 # Solution: register a stub module first so the annotation resolves, then load
 # the real module once managers is fully cached.
 _stub = types.ModuleType('floosball_game')
@@ -138,7 +138,7 @@ def makeGame(down=1, ytg=10, quarter=1, clock=600, homeScore=0, awayScore=0,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def computeWeights(g, coach):
-    """Run the full weight pipeline and return normalised percentages."""
+    """Run the full weight pipeline and return normalized percentages."""
     scoreDiff = (g.homeScore - g.awayScore) if g.offensiveTeam is g.homeTeam \
                 else (g.awayScore - g.homeScore)
     w = g._computePlayWeights(scoreDiff, coach)
@@ -159,7 +159,7 @@ def runWeightTests():
     """Expanded weight scenarios organized by situational group."""
     print("=" * 60)
     print("PART 1 — PLAY WEIGHT DISTRIBUTIONS")
-    print("  (all % normalised over run+short+medium+long)")
+    print("  (all % normalized over run+short+medium+long)")
     print("=" * 60)
 
     avgCoach     = makeCoach(80, 80, 80)
@@ -255,11 +255,11 @@ def runWeightTests():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Analysis — comparative tables and behavioural findings
+# Analysis — comparative tables and behavioral findings
 # ─────────────────────────────────────────────────────────────────────────────
 
 def runAnalysis():
-    """Compute targeted comparison tables and surface notable system behaviours."""
+    """Compute targeted comparison tables and surface notable system behaviors."""
     print("=" * 60)
     print("ANALYSIS — COMPARATIVE TABLES & KEY FINDINGS")
     print("=" * 60)

@@ -179,11 +179,11 @@ class FrontOfficeBrain:
         return current
 
     def _attrLean(self, coach, attr: str, bonus: float = 0.0) -> float:
-        """Normalise a 60-100 coach attribute to 0.0-1.0. A missing coach reads
+        """Normalize a 60-100 coach attribute to 0.0-1.0. A missing coach reads
         as neutral-average rather than incompetent, so an unmanaged team still
         makes middling-sane decisions.
 
-        `bonus` is added to the raw attribute BEFORE normalising — that's how
+        `bonus` is added to the raw attribute BEFORE normalizing — that's how
         the Scouting Department buys vision (see scoutingVision). A coach with
         no bonus behaves exactly as before."""
         if coach is None and not bonus:
@@ -414,7 +414,7 @@ class FrontOfficeBrain:
         Derived from its index in the worst-first FA order, discounted by
         FO_FA_CONTENTION because not every team ahead needs the same position.
         A missing/short order degrades to 0 (shop the top of the board), which
-        is the pre-existing behaviour rather than a silent surprise.
+        is the pre-existing behavior rather than a silent surprise.
         """
         if not faOrder or team is None:
             return 0

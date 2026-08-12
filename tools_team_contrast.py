@@ -1,8 +1,8 @@
-"""Contrast check for team marks — run while editing colours in config.json.
+"""Contrast check for team marks — run while editing colors in config.json.
 
 A club's avatar is painted in its PRIMARY and SECONDARY only (avatar_generator paints the
-field in one and the heraldic figure in the other), so those two colours have to differ in
-LUMINANCE, not just in hue. Two colours can look completely different to the eye and still
+field in one and the heraldic figure in the other), so those two colors have to differ in
+LUMINANCE, not just in hue. Two colors can look completely different to the eye and still
 be the same brightness — at which point the pattern disappears and the mark is a flat disc.
 That is not hypothetical: San Diego currently sits at 1.0:1, which is exactly that.
 
@@ -13,7 +13,7 @@ That is not hypothetical: San Diego currently sits at 1.0:1, which is exactly th
 Bar is 3.0:1. Marks render as small as 20px in the standings, and below 3.0 the pattern
 starts to mush at that size; below 2.0 it is effectively gone.
 
-⚠️ `logoInvert` does NOT help here. It swaps which colour paints field vs figure, so it
+⚠️ `logoInvert` does NOT help here. It swaps which color paints field vs figure, so it
 changes the look but not the luminance gap — a low-contrast pair stays low-contrast.
 """
 import sys, json, colorsys
@@ -59,7 +59,7 @@ if '--fix' in args:
     print(f"  primary   {p}")
     print(f"  secondary {sec}   -> {ratio(p, sec):.1f}:1\n")
     print("  Candidates keep the secondary's HUE and move its lightness, so the club keeps")
-    print("  its colour identity and only the brightness gap changes.\n")
+    print("  its color identity and only the brightness gap changes.\n")
     h, l, s = hexToHls(sec)
     seen = set()
     for dl in [x / 100 for x in range(-60, 65, 5)]:

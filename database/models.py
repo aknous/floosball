@@ -52,7 +52,7 @@ class Team(Base):
     secondary_color: Mapped[Optional[str]] = mapped_column(String(50))
     tertiary_color: Mapped[Optional[str]] = mapped_column(String(50))
     # Draw the avatar with primary/secondary swapped. Lets a club change its
-    # primary colour (kit, team page) without the mark's figure/ground flipping
+    # primary color (kit, team page) without the mark's figure/ground flipping
     # with it — the generator otherwise always paints the field in `color`.
     logo_invert: Mapped[bool] = mapped_column(Boolean, default=False)
     offense_rating: Mapped[int] = mapped_column(Integer)
@@ -2609,7 +2609,7 @@ class LeagueNewsItem(Base):
     # How far past its own bar this event landed, as a ratio (1.0 = exactly at the
     # threshold that made it news at all). It is what decides the front page's headline
     # among everything that happened in the same moment. Comparable ACROSS categories
-    # precisely because each is normalised by its own threshold: a 235-yard receiving day
+    # precisely because each is normalized by its own threshold: a 235-yard receiving day
     # against a 190 bar and an upset with a 148-point Elo gap against a 120 bar are both
     # ~1.24, and both are "about a quarter past the bar".
     lead_weight: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

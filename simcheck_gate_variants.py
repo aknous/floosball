@@ -1,7 +1,7 @@
 """Owner design (2026-07-22): gate the card on its own player's production.
 
   * effect already keys off the CARD PLAYER's production  -> leave alone (21)
-  * anything else (roster totals, favourite team, economy, chance, flat boosts)
+  * anything else (roster totals, favorite team, economy, chance, flat boosts)
     -> the card player must CLEAR A THRESHOLD before the effect fires  (105)
 
 A gate, not a multiplier: below the bar the card pays nothing, so a weak lineup

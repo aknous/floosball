@@ -58,7 +58,7 @@ surface world never says it. The mid-century texture of the world (see *The
 Frame*) belongs to the players; the catalog number belongs to the Cores,
 who sit above that aesthetic. The gap is the point: when an *aware* player
 says the number out loud, it lands as dread, because it means they know
-they are catalogued.
+they are cataloged.
 
 Reading the designation:
 - The **number** (498) is which instance in the Cores' catalog. There are
@@ -281,7 +281,7 @@ experience is Cores-authored throughout.
 ## Previous Iterations
 
 This is not the first floosball, and floosball is not the Core's only
-game. The current iteration is catalogued as **498b** (see *Instance
+game. The current iteration is cataloged as **498b** (see *Instance
 498b*); **498a** is the prior run of this same instance, and it ended. We
 don't have to define previous iterations or other games — but the
 existence of "previous versions of this" is a useful well to draw from

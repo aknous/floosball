@@ -12,7 +12,7 @@ has one home.
 
 ⚠️ The reason this moved: the cutline is now derived from league size, not the hardcoded
 `PLAYOFF_SPOTS = 6` it used to be. At 32 clubs the field is EIGHT per league, so a bubble
-measured against a 6-spot cutline centred the window two places above the clubs actually
+measured against a 6-spot cutline centered the window two places above the clubs actually
 fighting for the last seat — the redesigned game board's FEATURED chip was landing on the
 wrong games.
 """

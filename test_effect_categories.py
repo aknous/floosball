@@ -10,7 +10,7 @@ eight.
 Five effects drifted in by being REWORKED from a gate into a count and keeping the label:
 
   showoff       was "FP when your slot outperforms their rating", became per 5-star player
-  believe       became per favourite-team season win
+  believe       became per favorite-team season win
   comeback_kid  became per roster player whose club missed the playoffs
   domination    became per roster player on a top-6 club
   walk_off      became per Q4/OT score by this player

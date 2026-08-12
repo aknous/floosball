@@ -911,7 +911,7 @@ class PlayerAttributes:
         else:
             # Underperform — use a variance floor so even neutral players can
             # produce choke-level modifiers under high pressure.  The floor only
-            # kicks in when pressure is significant (≥0.5 normalised).
+            # kicks in when pressure is significant (≥0.5 normalized).
             chokeVariance = maxVariance
             if normalizedPressure >= 0.5:
                 chokeVariance = max(2.0, maxVariance)

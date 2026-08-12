@@ -324,14 +324,14 @@ across five arms, the cause was **entirely the form layer** and it was pure tail
 (30.4 -> 30.2). Defensive modifiers (6.9%) and compression (7.4%) were innocent.
 
 The owner's diagnosis was better than damping the form downside: **winning teams never
-took their foot off the gas.** The sim modelled the trailing team giving up
+took their foot off the gas.** The sim modeled the trailing team giving up
 (`_isGarbageTime` stops them hurrying and spiking) but had no model of the LEADING team
 easing off. A club building a blowout pressed at full intensity for four quarters, so the
 trailing side often finished with nothing. In real football a settled game has the leader
 rushing three, keeping everything in front and trading yards for clock — which is exactly
 why a blowout usually still has the loser scoring at least once.
 
-Two fixes, both real-football behaviour rather than a damper:
+Two fixes, both real-football behavior rather than a damper:
 
 1. **`Game.leadEaseOffFactor()`** (`LEAD_EASE_OFF_MAX` 0.15) — scales the LEADING team's
    effective run D, pass D and pass rush down in the second half when they are up more
@@ -350,8 +350,8 @@ than by the depth of the trough.
   drain + the Q4 lead-protection floor lean run and suppress deep/long). Its execution
   is untouched: a leading team still runs the ball just as well, it just runs it more.
 * **WHO eases off is a coaching trait.** `0.5*(1-aggressiveness) + 0.5*clockManagement`
-  maps to a 0.4x .. 1.6x multiplier on the ease-off, centred at 1.0 for a neutral coach
-  so league-average behaviour stays the measured one and the spread is character. A
+  maps to a 0.4x .. 1.6x multiplier on the ease-off, centered at 1.0 for a neutral coach
+  so league-average behavior stays the measured one and the spread is character. A
   killer coach with poor clock sense keeps the defense at 94% of full and runs the score
   up; a conservative professional drops to 76% and lets the other side have the
   underneath. The Q3 drain is likewise coach-scaled (`_mul`), unlike the Q4 floor, which

@@ -211,7 +211,7 @@ The awakened treatment is built for exactly this and says so in its own comment:
 > shimmer janked on every reflow).
 
 So: `.awakened-row`'s shape — a static wash plus a slow box-shadow breath, **no movement, no
-character corruption** — for every glitched card. Only the colour varies:
+character corruption** — for every glitched card. Only the color varies:
 
 | card state | treatment |
 |---|---|

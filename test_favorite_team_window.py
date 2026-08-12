@@ -27,7 +27,7 @@ class FavoriteTeamWindowTests(unittest.TestCase):
         from database.models import Base
         # ⚠️ `managers` first. Importing api.main cold trips a circular import
         # (api.main -> floosball_game -> managers -> seasonManager -> floosball_game),
-        # and the cycle resolves once the package is already initialised.
+        # and the cycle resolves once the package is already initialized.
         import managers  # noqa: F401
         import api.main as main
 

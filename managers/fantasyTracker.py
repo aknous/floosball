@@ -136,7 +136,7 @@ def _dbStatsToCardFormat(passingStats: dict, rushingStats: dict,
 
 
 # Slot ordinal back to its label, the inverse of cardManager.SLOT_TO_ORDINAL. Banked
-# breakdowns store the ordinal, and a leaderboard row is labelled by slot.
+# breakdowns store the ordinal, and a leaderboard row is labeled by slot.
 _SLOT_LABEL_BY_ORDINAL = {1: 'QB', 2: 'RB', 3: 'WR1', 4: 'WR2', 5: 'TE', 6: 'K', 7: 'FLEX'}
 
 

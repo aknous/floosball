@@ -1,6 +1,6 @@
 """GM turnover — fired / leave / retire (AFO plan Part C).
 
-Asserts the behaviours the design promises: competence is real job security,
+Asserts the behaviors the design promises: competence is real job security,
 a first-year GM isn't fired for an inherited roster, goodwill softens but never
 nullifies, departure is record-independent, and the unbuilt sentiment layer is a
 neutral no-op rather than a hidden term.
