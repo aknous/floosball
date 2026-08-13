@@ -11869,10 +11869,11 @@ def set_player_sentiment(playerId: int, req: _SentimentRatingRequest,
             pass   # the feed echo must never fail the rating itself
         session.commit()
         average, raters = repo.getAggregate(playerId)
-        # The quorum scales with the engaged fanbase, so a busier league needs
-        # more turnout before a number is trustworthy. Below it the aggregate is
-        # withheld — showing it invites brigading a figure one or two people set.
-        need = repo.requiredRaters()
+        # The quorum scales with THIS CLUB's fanbase, so a bigger following needs
+        # more turnout before a number is trustworthy while a small one can still
+        # be heard. Below it the aggregate is withheld — showing it invites
+        # brigading a figure one or two people set.
+        need = repo.requiredRatersFor(playerId)
         return build_success_response({
             "playerId": playerId,
             "myRating": req.rating,
@@ -11911,7 +11912,7 @@ def get_player_sentiment(playerId: int, user: Optional[_User] = Depends(_getOpti
     try:
         repo = _sentimentRepo(session)
         average, raters = repo.getAggregate(playerId)
-        need = repo.requiredRaters()
+        need = repo.requiredRatersFor(playerId)
         settled = raters >= need
         return build_success_response({
             "playerId": playerId,
@@ -11987,7 +11988,7 @@ def rate_gm(teamId: int, req: _CoachRatingRequest, user: _User = Depends(_getCur
             pass
         session.commit()
         average, raters = repo.getAggregate(coach.id)
-        need = repo.requiredRaters()
+        need = repo.requiredRatersFor(coach.id)
         return build_success_response({
             "teamId": teamId, "coachId": coach.id,
             "myRating": req.rating,
@@ -12043,7 +12044,7 @@ def get_gm_vote(teamId: int, user: Optional[_User] = Depends(_getOptionalUser)):
     try:
         repo = _coachSentimentRepo(session)
         average, raters = repo.getAggregate(coach.id)
-        need = repo.requiredRaters()
+        need = repo.requiredRatersFor(coach.id)
         return build_success_response({
             "teamId": teamId, "coachId": coach.id,
             "myRating": repo.getUserRating(user.id, coach.id) if user else None,

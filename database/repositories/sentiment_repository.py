@@ -21,38 +21,61 @@ from constants import (
 )
 
 
-# The active-user count is a few queries, and a team page asks for the quorum
-# once per rating control. Cache it briefly so one page load doesn't re-count
-# the league seven times over.
+# A team page asks for the quorum once per rating control, so the per-club fan
+# counts are cached briefly rather than re-counted for every player on the page.
 _quorumCache: dict = {'value': None, 'at': None}
 _QUORUM_TTL_SECONDS = 60
 
 
-def requiredRaters(session, floor: Optional[int] = None) -> int:
-    """Distinct raters needed before a subject's sentiment counts.
+def teamFanCounts(session) -> Dict[int, int]:
+    """{teamId: how many users have favorited it}. Briefly cached.
 
-    Scales with the engaged user base, mirroring `AwardsManager._quorum` so the
-    two can't drift into different notions of "enough turnout". Falls back to
-    the floor if the count is unavailable — never gate harder on an error.
+    Favoriters rather than *active* favoriters on purpose: `last_login_at` is
+    never written by the application, so any "active" count is 0 in production
+    and would make every club's quorum the bare floor.
     """
-    import math
     from datetime import datetime
-    from constants import SENTIMENT_MIN_RATERS, SENTIMENT_QUORUM_ACTIVE_FRACTION
-    base = SENTIMENT_MIN_RATERS if floor is None else floor
+    from database.models import User
 
     now = datetime.utcnow()
     cached, at = _quorumCache['value'], _quorumCache['at']
     if cached is not None and at is not None and (now - at).total_seconds() < _QUORUM_TTL_SECONDS:
-        active = cached
-    else:
-        try:
-            from managers.anomalyManager import _countActiveUsers
-            active = _countActiveUsers(session)
-        except Exception:
-            return base
-        _quorumCache['value'], _quorumCache['at'] = active, now
+        return cached
+    try:
+        counts = dict(session.query(User.favorite_team_id, func.count(User.id))
+                      .filter(User.favorite_team_id.isnot(None))
+                      .group_by(User.favorite_team_id).all())
+        counts = {int(k): int(v) for k, v in counts.items() if k is not None}
+    except Exception:
+        return {}          # unknown fanbase -> every club falls back to the floor
+    _quorumCache['value'], _quorumCache['at'] = counts, now
+    return counts
 
-    return max(base, math.ceil(active * SENTIMENT_QUORUM_ACTIVE_FRACTION))
+
+def requiredRatersForTeam(session, teamId: Optional[int],
+                          floor: Optional[int] = None) -> int:
+    """Distinct raters a subject of THIS CLUB needs before their sentiment counts.
+
+    ⚠️ Scaled to the club's OWN fanbase, because only that club's fans are
+    allowed to rate it. A league-wide bar was unreachable for small clubs by
+    construction — on production, 5 clubs had no fans and several had one or
+    two against a flat floor of 3, so their players could never register
+    sentiment however strongly those fans felt.
+
+    Since the fraction is below 1, the bar a club faces is always within reach
+    of the fans it actually has. Errors and unknown clubs fall back to the
+    floor — never gate harder on a failure.
+    """
+    import math
+    from constants import SENTIMENT_MIN_RATERS, SENTIMENT_QUORUM_FAN_FRACTION
+    base = SENTIMENT_MIN_RATERS if floor is None else floor
+    if teamId is None:
+        return base
+    try:
+        fans = teamFanCounts(session).get(int(teamId), 0)
+    except Exception:
+        return base
+    return max(base, math.ceil(fans * SENTIMENT_QUORUM_FAN_FRACTION))
 
 
 def normalizeSentiment(average: Optional[float]) -> float:
@@ -151,24 +174,49 @@ class SentimentRepository:
             q = q.filter(PlayerSentimentRating.player_id.in_(list(playerIds)))
         return {int(pid): (float(avg or 0.0), int(cnt)) for pid, avg, cnt in q.all()}
 
-    def requiredRaters(self) -> int:
-        """Turnout this league needs before a rating counts."""
-        return requiredRaters(self.session)
+    def _teamIdsFor(self, playerIds=None) -> Dict[int, Optional[int]]:
+        """{playerId: teamId} — the club whose quorum each player answers to.
+
+        One query for the whole set; the GM sweep prices every roster in the
+        league, so a per-player lookup would be an N+1 in the offseason.
+        """
+        from database.models import Player
+        try:
+            q = self.session.query(Player.id, Player.team_id)
+            if playerIds:
+                q = q.filter(Player.id.in_(list(playerIds)))
+            return {int(pid): (int(tid) if tid is not None else None)
+                    for pid, tid in q.all()}
+        except Exception:
+            # No roster table to consult (a minimal test schema, or a read
+            # racing a migration). Unknown club falls back to the floor, which
+            # gates no harder than before — never fail closed on a lookup.
+            return {}
+
+    def requiredRatersFor(self, playerId: int) -> int:
+        """Turnout THIS PLAYER'S CLUB needs before a rating counts."""
+        teamId = self._teamIdsFor([playerId]).get(int(playerId))
+        return requiredRatersForTeam(self.session, teamId)
 
     def getSentiment(self, playerId: int) -> float:
         """Normalized -1..+1 sentiment, or 0.0 below the rater quorum."""
         avg, count = self.getAggregate(playerId)
-        if count < self.requiredRaters():
+        if count < self.requiredRatersFor(playerId):
             return 0.0
         return normalizeSentiment(avg)
 
     def getSentimentMap(self, playerIds=None) -> Dict[int, float]:
-        """Bulk normalized sentiment, already rater-gated. Players below the
-        floor are simply absent — callers should default to 0.0."""
-        need = self.requiredRaters()
+        """Bulk normalized sentiment, already rater-gated. Players below their
+        own club's bar are simply absent — callers should default to 0.0."""
+        aggregates = self.getAggregates(playerIds)
+        teamIds = self._teamIdsFor(list(aggregates.keys()) or playerIds)
+        needByTeam: Dict[Optional[int], int] = {}
         out = {}
-        for pid, (avg, count) in self.getAggregates(playerIds).items():
-            if count >= need:
+        for pid, (avg, count) in aggregates.items():
+            teamId = teamIds.get(pid)
+            if teamId not in needByTeam:
+                needByTeam[teamId] = requiredRatersForTeam(self.session, teamId)
+            if count >= needByTeam[teamId]:
                 out[pid] = normalizeSentiment(avg)
         return out
 
@@ -178,15 +226,27 @@ class SentimentRepository:
                  playerIds=None) -> List[dict]:
         """Fan Favorites / Most Hated. Rater-gated, so a board can't be topped
         by a player one person rated once."""
+        # ⚠️ The rater gate moved OUT of the HAVING clause: the bar is now
+        # per-club, so it can't be one scalar in SQL. Filtered below instead.
         rows = (self.session.query(
                     PlayerSentimentRating.player_id,
                     func.avg(PlayerSentimentRating.rating).label('avg'),
                     func.count(PlayerSentimentRating.id).label('cnt'))
-                .group_by(PlayerSentimentRating.player_id)
-                .having(func.count(PlayerSentimentRating.id) >= requiredRaters(self.session)))
+                .group_by(PlayerSentimentRating.player_id))
         if playerIds:
             rows = rows.filter(PlayerSentimentRating.player_id.in_(list(playerIds)))
         rows = rows.all()
+
+        teamIds = self._teamIdsFor([int(pid) for pid, _a, _c in rows])
+        needByTeam: Dict[Optional[int], int] = {}
+
+        def _cleared(pid, cnt):
+            teamId = teamIds.get(int(pid))
+            if teamId not in needByTeam:
+                needByTeam[teamId] = requiredRatersForTeam(self.session, teamId)
+            return int(cnt) >= needByTeam[teamId]
+
+        rows = [r for r in rows if _cleared(r[0], r[2])]
 
         entries = [{
             'playerId': int(pid),
@@ -274,38 +334,64 @@ class CoachSentimentRepository:
             return 0.0, 0
         return float(row[0] or 0.0), int(row[1])
 
-    def requiredRaters(self) -> int:
+    def _teamIdsByCoach(self, coachIds=None) -> Dict[int, Optional[int]]:
+        """{coachId: teamId}. Team.coach_id is the single source of truth for
+        who manages whom, so the GM's quorum is his club's."""
+        from database.models import Team
+        try:
+            q = self.session.query(Team.coach_id, Team.id).filter(Team.coach_id.isnot(None))
+            if coachIds:
+                q = q.filter(Team.coach_id.in_(list(coachIds)))
+            return {int(cid): int(tid) for cid, tid in q.all()}
+        except Exception:
+            return {}      # see SentimentRepository._teamIdsFor
+
+    def requiredRatersFor(self, coachId: int) -> int:
         from constants import GM_SENTIMENT_MIN_VOTERS
-        return requiredRaters(self.session, floor=GM_SENTIMENT_MIN_VOTERS)
+        teamId = self._teamIdsByCoach([coachId]).get(int(coachId))
+        return requiredRatersForTeam(self.session, teamId,
+                                     floor=GM_SENTIMENT_MIN_VOTERS)
 
     def getStanding(self, coachId: int) -> float:
         """-1..+1, or 0.0 below the rater quorum — what turnover reads."""
         avg, count = self.getAggregate(coachId)
-        if count < self.requiredRaters():
+        if count < self.requiredRatersFor(coachId):
             return 0.0
         return normalizeSentiment(avg)
 
     def getStandingMap(self) -> dict:
         """{coachId: -1..+1} for the league in one query — the offseason
-        turnover pass runs across every team."""
+        turnover pass runs across every team. Each GM is gated by his OWN
+        club's fanbase, so an unpopular GM at a small club still registers."""
+        from constants import GM_SENTIMENT_MIN_VOTERS
         from database.models import CoachSentimentVote
-        need = self.requiredRaters()
         rows = (self.session.query(CoachSentimentVote.coach_id,
                                    func.avg(CoachSentimentVote.rating),
                                    func.count(CoachSentimentVote.id))
                 .group_by(CoachSentimentVote.coach_id).all())
-        return {int(cid): normalizeSentiment(float(avg or 0.0))
-                for cid, avg, cnt in rows if int(cnt) >= need}
+        teamIds = self._teamIdsByCoach([int(cid) for cid, _a, _c in rows])
+        needByTeam: Dict[Optional[int], int] = {}
+        out = {}
+        for cid, avg, cnt in rows:
+            teamId = teamIds.get(int(cid))
+            if teamId not in needByTeam:
+                needByTeam[teamId] = requiredRatersForTeam(
+                    self.session, teamId, floor=GM_SENTIMENT_MIN_VOTERS)
+            if int(cnt) >= needByTeam[teamId]:
+                out[int(cid)] = normalizeSentiment(float(avg or 0.0))
+        return out
 
     def getBoard(self, limit: int, mostLiked: bool = True):
         """Best / worst regarded GMs league-wide."""
         from database.models import CoachSentimentVote
+        # Gate applied in Python — the bar is per-club, so it is not one scalar.
         rows = (self.session.query(CoachSentimentVote.coach_id,
                                    func.avg(CoachSentimentVote.rating),
                                    func.count(CoachSentimentVote.id))
                 .group_by(CoachSentimentVote.coach_id)
-                .having(func.count(CoachSentimentVote.id) >= self.requiredRaters())
                 .all())
+        cleared = self.getStandingMap()
+        rows = [r for r in rows if int(r[0]) in cleared]
         entries = [{
             'coachId': int(cid),
             'average': round(float(avg), 2),
