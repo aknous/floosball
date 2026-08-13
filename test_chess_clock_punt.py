@@ -84,20 +84,61 @@ class ChessClockPuntTests(unittest.TestCase):
         self.assertNotIn('or not', block.split('_puntHelps =')[1].split('\n')[0])
 
     def testTheDecisionByScoreAndDistance(self):
-        """The decision, run rather than grepped."""
-        def punts(scoreDiff):
+        """The three-way rule, run rather than grepped.
+
+        Losing never punts at any distance. Leading always does. TIED depends on what a
+        giveaway hands the opponent: deep in your own end it is a chip shot and the game,
+        near midfield it is a 60+ yard kick and therefore nothing.
+        """
+        from constants import CHESS_CLOCK_TIED_PIN_YARDS as PIN
+
+        def puntHelps(scoreDiff):
             return scoreDiff >= 0
 
-        # Behind by anything, anywhere on the field: play on.
-        for ytez in (10, 40, 80, 95):
-            self.assertFalse(punts(-1), f'trailing by 1 punted from {ytez}')
-            self.assertFalse(punts(-7), f'trailing by 7 punted from {ytez}')
-            self.assertFalse(punts(-21), f'trailing by 21 punted from {ytez}')
-        # Level or ahead always punts, at any distance — field position is all that is
-        # left, and the possession is lost either way.
-        for ytez in (10, 40, 80):
-            self.assertTrue(punts(0))
-            self.assertTrue(punts(+7))
+        def tiedChoice(scoreDiff, ytez):
+            return scoreDiff == 0 and ytez < PIN
+
+        # Behind by anything, anywhere: play on.
+        for ytez in (10, 40, 55, 80, 95):
+            self.assertFalse(puntHelps(-1), f'trailing punted from {ytez}')
+            self.assertFalse(puntHelps(-21), f'trailing punted from {ytez}')
+
+        # Ahead: always punt, and never dampened — the lead is what is being protected.
+        for ytez in (55, 80, 95):
+            self.assertTrue(puntHelps(+3))
+            self.assertFalse(tiedChoice(+3, ytez), 'a lead must not take the tied discount')
+
+        # Tied and pinned deep (own 25 and back): a giveaway is makeable field goal
+        # range, so this is not a choice.
+        for ytez in (75, 85, 95):
+            self.assertTrue(puntHelps(0))
+            self.assertFalse(tiedChoice(0, ytez),
+                             f'tied at ytez {ytez} should be an automatic punt')
+
+        # Tied near midfield: a real choice, weighted toward pinning.
+        for ytez in (50, 60, 71):
+            self.assertTrue(puntHelps(0))
+            self.assertTrue(tiedChoice(0, ytez),
+                            f'tied at ytez {ytez} should be a weighted choice')
+
+    def testTheTiedChoiceStillLeansToPunting(self):
+        """"More heavily weighted to punting though" — the discount must not turn the
+        near-midfield case into a coin flip against punting."""
+        from constants import CHESS_CLOCK_TIED_MIDFIELD_PUNT as D
+        self.assertGreater(D, 0.5, 'the tied choice must still favor pinning')
+        self.assertLess(D, 1.0, 'at 1.0 it is not a choice at all')
+        for gameIQ, label in ((0.0, 'poor'), (0.5, 'average'), (1.0, 'elite')):
+            base = 0.4 + 0.6 * gameIQ
+            self.assertGreaterEqual(base * D, 0.3,
+                                    f'a {label} staff barely punts near midfield')
+
+    def testTheTiedDiscountIsOneRollNotTwo(self):
+        """A second independent roll would compound into a much lower punt rate than
+        either number suggests, and make the behavior unreadable from the constants."""
+        block = _block()
+        self.assertIn('CHESS_CLOCK_TIED_MIDFIELD_PUNT if _tiedChoice else 1.0', block)
+        self.assertEqual(block.count('_random.random()'), 1,
+                         'the punt decision must resolve on a single roll')
 
     def testItIsTheLastSnapAndTheCoachSeesIt(self):
         """It fires only on the last snap the budget allows, and recognising that the

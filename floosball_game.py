@@ -5116,10 +5116,22 @@ class Game:
             # Gated on the coach: recognising that the clock, not the down, is what ends
             # this drive is clock management, so a sharp staff does it near-always and a
             # poor one gets caught playing the down.
+            # ⚠️ TIED IS A FIELD POSITION QUESTION, NOT A YES/NO (owner, 2026-08-13).
+            # A tied team cannot score again either, so it is playing for the tie — and
+            # what a giveaway costs it depends entirely on WHERE. Deep in its own end,
+            # handing the ball over is handing over a chip-shot field goal and the game
+            # with it, so it always punts. Near midfield the opponent gets nothing from
+            # the spot (a 60+ yard kick), so pinning them and taking a shot are both real
+            # options, weighted toward pinning.
+            #
             # CHESS_CLOCK_STRIKE_YARDS is read by the strike block below, which shares
             # this import rather than repeating it.
-            from constants import CHESS_CLOCK_PUNT_ENABLED, CHESS_CLOCK_STRIKE_YARDS
+            from constants import (CHESS_CLOCK_PUNT_ENABLED, CHESS_CLOCK_STRIKE_YARDS,
+                                   CHESS_CLOCK_TIED_PIN_YARDS, CHESS_CLOCK_TIED_MIDFIELD_PUNT)
             _puntHelps = scoreDiff >= 0
+            # Tied and close enough to midfield that a turnover on downs is not a gift.
+            _tiedChoice = (scoreDiff == 0
+                           and self.yardsToEndzone < CHESS_CLOCK_TIED_PIN_YARDS)
             # ⚠️ A PUNT IS POINTLESS WHEN THE OTHER SIDE IS ALSO LOCKED OUT. `suppressPunt`
             # already encodes this for chess clock — a locked-out defense cannot do
             # anything with the ball, and `possessionReceiver` hands it straight back — so
@@ -5137,8 +5149,13 @@ class Game:
                 _ppCharged = self._awakenedReadyFor(_ppK, 'kick')
                 _ppKMax = (self._chargedKickerMaxFg(_ppK) if _ppCharged
                            else ((_ppK.maxFgDistance - self.gameRules.fgSnapDistance) if _ppK else 0))
+                # ⚠️ ONE roll, not two: the tied near-midfield case DAMPENS the coach's
+                # acceptance rather than rolling separately, so a snap still resolves on a
+                # single decision and the rates stay legible.
+                _accept = ((0.4 + 0.6 * gameIQ)
+                           * (CHESS_CLOCK_TIED_MIDFIELD_PUNT if _tiedChoice else 1.0))
                 # Only out of range — in range the block above already took the points.
-                if self.yardsToEndzone > _ppKMax and _random.random() < (0.4 + 0.6 * gameIQ):
+                if self.yardsToEndzone > _ppKMax and _random.random() < _accept:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'chessClockPunt',
                         'reason': 'Budget nearly out and no kick available — punt rather '
