@@ -2358,6 +2358,11 @@ FINAL_SNAP_SECS = 2
 # could still fit a sideline throw AND the kick, and it is barely enough for one that
 # cannot stop the clock at all. So the window is built from these two parts instead, and
 # an offense that has managed its clock keeps the wider set of options it earned.
+# Chess clock: punt on the last snap the budget allows when no field goal is available,
+# rather than let the clock die and hand the opponent the ball AT THE SPOT (a lockout is
+# `turnover(..., yardsToSafety)`). Off restores the old behaviour exactly.
+CHESS_CLOCK_PUNT_ENABLED = True
+
 LAST_SNAP_HUDDLE_SECS = 12   # hurry-up pre-snap; 9-15 across the coach clock-IQ range
 LAST_SNAP_LIVE_SECS = 5      # snap to whistle on a run (4-6)
 

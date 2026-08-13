@@ -5022,6 +5022,50 @@ class Game:
                     self.play.playType = PlayType.FieldGoal
                     return
 
+            # ⚠️ OUT OF RANGE ON THE LAST SNAP: PUNT, don't just let the budget die.
+            #
+            # A chess-clock lockout is a turnover AT THE SPOT — `_chessClockDepletionTurnover`
+            # calls `turnover(..., self.yardsToSafety)` — so an offense that lets its budget
+            # run out on its own 8 hands the opponent the ball on the 8. Reported: teams
+            # deep in their own end simply playing on until the clock died and gifting an
+            # easy score.
+            #
+            # The possession is lost EITHER WAY, so the only thing still on the table is
+            # field position, and a punt is worth ~40 yards of it for free. That makes this
+            # the exact counterpart of the in-range block above: same trigger, and where a
+            # kick would have banked points, a punt banks field.
+            #
+            # ⚠️ TRAILING IS THE EXCEPTION. Once the budget is gone the offense never
+            # possesses again, so a trailing team's last snap is its last chance to score —
+            # a punt there concedes the game to buy field position it will never use. Only
+            # a team that is level or ahead punts; anyone behind plays on and takes the shot.
+            #
+            # Gated on the coach: recognising that the clock, not the down, is what ends
+            # this drive is clock management, so a sharp staff does it near-always and a
+            # poor one gets caught playing the down.
+            from constants import CHESS_CLOCK_PUNT_ENABLED
+            if (CHESS_CLOCK_PUNT_ENABLED
+                    and self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
+                    and scoreDiff >= 0
+                    and not self._isGarbageTime(scoreDiff)
+                    and self._lastSnapBeforeBreak()):
+                _ppK = self.offensiveTeam.rosterDict.get('k')
+                _ppCharged = self._awakenedReadyFor(_ppK, 'kick')
+                _ppKMax = (self._chargedKickerMaxFg(_ppK) if _ppCharged
+                           else ((_ppK.maxFgDistance - self.gameRules.fgSnapDistance) if _ppK else 0))
+                # Only out of range — in range the block above already took the points.
+                if self.yardsToEndzone > _ppKMax and _random.random() < (0.4 + 0.6 * gameIQ):
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'chessClockPunt',
+                        'reason': 'Budget nearly out and no kick available — punt rather '
+                                  'than hand the ball over at this spot',
+                        'clockRemaining': self.gameClockSeconds,
+                        'yardsToEndzone': self.yardsToEndzone,
+                        'coachClockIQ': round(gameIQ, 2),
+                    }
+                    self.play.playType = PlayType.Punt
+                    return
+
             # Drive Clock about to expire (roughly one play left) and in makeable FG
             # range: take the points NOW on ANY down, rather than run a play and turn
             # it over with zero. Skips goal-to-go (a near-certain TD is worth more)
