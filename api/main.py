@@ -3518,6 +3518,15 @@ async def get_standings(response: Response):
         from database.connection import get_session
         sm = floosball_app.seasonManager
         season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        # Games in a regular season — what "no result can take this away" is measured
+        # against. Read off the schedule rather than hardcoded, because the season length
+        # has already moved once (24 clubs / 14 weeks -> 32 / 28) and a stale constant
+        # would quietly clinch everyone early.
+        try:
+            _sched = getattr(sm.currentSeason, 'schedule', None) if sm and sm.currentSeason else None
+            totalGames = len(_sched) if _sched else None
+        except Exception:
+            totalGames = None
         leagues = floosball_app.leagueManager.leagues
         teamsByLeague = {league.name: league.teamList for league in leagues}
         _session = get_session()
@@ -3536,7 +3545,7 @@ async def get_standings(response: Response):
             except Exception:
                 divisionOrder = None
             built = LeagueResponseBuilder.buildStandingsResponse(
-                league.teamList, h2h, form, divisionOrder)
+                league.teamList, h2h, form, divisionOrder, totalGames=totalGames)
             standings_list.append({
                 'name': league.name,
                 'divisions': built['divisions'],

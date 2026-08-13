@@ -1454,6 +1454,10 @@ class SeasonManager:
 
         # (Weekly roster-swap grant retired with the swap system in the fusion.)
 
+        # Division titles, playoff berths and the top seed, as they are SECURED.
+        if not in_playoffs:
+            self._publishClinchNews(week)
+
         # Process card effects for this week (regular season only)
         if not in_playoffs:
             self._processWeekCardEffects(self.currentSeason.seasonNumber, week)
@@ -4485,6 +4489,69 @@ class SeasonManager:
             )
         except Exception as e:
             logger.debug(f"Schedule news skipped ({eventType}): {e}")
+
+    def _publishClinchNews(self, week: int) -> None:
+        """Announce division titles, playoff berths and the top seed AS THEY ARE WON.
+
+        ⚠️ The sim already had `team.clinchedPlayoffs`, but it is only set during
+        playoff SEEDING — every qualifier at once, on the final day. That is a
+        result, not news: by the time it fires the season is over. A fan means
+        "this club can no longer be caught", which is a mid-season event and is
+        what `standings_view.clinchStatus` computes.
+
+        ⚠️ A DIVISION TITLE IS THE HEADLINE HERE (owner). With eight divisions,
+        24 of 32 clubs will never win a league title, so the division is what most
+        of the league is actually playing for — see the Playoffs notes. It leads;
+        a berth does not.
+
+        Idempotent through `team._clinchAnnounced`: the flags are recomputed from
+        the table every week and stay true once true, so without a marker every
+        remaining week would re-announce the same title.
+        """
+        try:
+            from standings_view import clinchStatus
+            season = self.currentSeason
+            if not season:
+                return
+            totalGames = len(getattr(season, 'schedule', None) or []) or None
+            if not totalGames:
+                return
+            teamManager = self.serviceContainer.getService('team_manager')
+            leagues = self.leagueManager.leagues if self.leagueManager else []
+            for league in leagues:
+                status = clinchStatus(list(league.teamList), totalGames)
+                for team in league.teamList:
+                    flags = status.get(getattr(team, 'id', None)) or {}
+                    announced = getattr(team, '_clinchAnnounced', None)
+                    if not isinstance(announced, set):
+                        announced = set()
+                        team._clinchAnnounced = announced
+                    # Most specific first: a club that wins its division on the
+                    # same weekend it secures a berth should read as the title.
+                    for key, category, text, lead in (
+                        ('topSeed', 'clinched',
+                         f'{team.city} {team.name} have locked up the top seed in the '
+                         f'{league.name}', True),
+                        ('division', 'clinched',
+                         f'{team.city} {team.name} are {getattr(team, "division", None)} '
+                         f'division champions', True),
+                        ('playoffs', 'clinched',
+                         f'{team.city} {team.name} have clinched a playoff berth', False),
+                    ):
+                        won = flags.get({'topSeed': 'clinchedTopSeed',
+                                         'division': 'clinchedDivision',
+                                         'playoffs': 'clinchedPlayoffs'}[key])
+                        if not won or key in announced:
+                            continue
+                        announced.add(key)
+                        try:
+                            season.leagueHighlights.insert(0, {'event': {'text': text}})
+                        except Exception:
+                            pass
+                        self._publishTeamNews(category, text, team, lead=lead)
+        except Exception as e:
+            # Never let an announcement break a week rollover.
+            logger.warning(f"_publishClinchNews failed in week {week}: {e}")
 
     def _publishTeamNews(self, category: str, text: str, team, lead: bool = False) -> None:
         """Persist a team event to the league-news feed.

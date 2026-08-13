@@ -868,7 +868,7 @@ class LeagueResponseBuilder(ResponseBuilder):
     
     @staticmethod
     def buildStandingsResponse(teams: List, h2hGames=None, form=None,
-                               divisionOrder=None) -> Dict[str, Any]:
+                               divisionOrder=None, totalGames=None) -> Dict[str, Any]:
         """Build league standings response.
 
         Seeded by the SAME chain the playoffs run on — `standings_view.seedLeague`, which
@@ -883,10 +883,15 @@ class LeagueResponseBuilder(ResponseBuilder):
         rather than the endpoint failing. `divisionOrder` fixes the order the division
         blocks render in (the owner's config order); anything not listed follows.
         """
-        from standings_view import seedLeague, gamesBackFrom
+        from standings_view import seedLeague, gamesBackFrom, clinchStatus
 
         form = form or {}
         seeded = seedLeague(list(teams), h2hGames or [])
+        # Who is mathematically in, who has won their division, who owns the top seed.
+        # Computed HERE rather than read off the teams because the flags the sim carries
+        # (`team.clinchedPlayoffs`) are only set at playoff seeding — i.e. everyone at
+        # once on the final day, which is not what a fan means by clinching.
+        clinch = clinchStatus(list(teams), totalGames) if totalGames else {}
         orderedTeams = seeded['ordered']
         seeds = seeded['seeds']
         recordRanks = seeded['recordRanks']
@@ -913,6 +918,7 @@ class LeagueResponseBuilder(ResponseBuilder):
             _ll = _st.get('lgLosses', 0) or 0
             _lt = _st.get('lgTies', 0) or 0
             seed, seedKind = seeds.get(team.id, (None, None))
+            _clinch = clinch.get(team.id) or {}
             _form = form.get(team.id) or {}
             rankLastWeek = _form.get('rankLastWeek')
             team_dict.update({
@@ -936,6 +942,13 @@ class LeagueResponseBuilder(ResponseBuilder):
                 # Projected playoff position if the season ended today. Null outside the cut.
                 'seed': seed,
                 'seedKind': seedKind,
+                # ⚠️ CLINCHED is a different claim from SEEDED. A seed is where the club
+                # would land if the season stopped now; clinched means no remaining result
+                # can take it away. The board shows both, and they disagree all season.
+                'clinchedPlayoffs': bool(_clinch.get('clinchedPlayoffs')),
+                'clinchedDivision': bool(_clinch.get('clinchedDivision')),
+                'clinchedTopSeed': bool(_clinch.get('clinchedTopSeed')),
+                'eliminated': bool(_clinch.get('eliminated')),
                 'gamesBack': gamesBackFrom(cutTeam, team),
                 # Movement is against last week's rank BY RECORD within the league, so it
                 # answers "did they climb" rather than "did the seeding rule move them".
