@@ -2145,7 +2145,20 @@ class Game:
                     need = float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
             else:
                 need = float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
-            return secs < need + LAST_SNAP_LIVE_SECS + FINAL_SNAP_SECS
+            # ⚠️ NO CLOSING-SNAP RESERVE HERE, unlike the standard branch below.
+            #
+            # `FINAL_SNAP_SECS` exists to keep room for a closing FIELD GOAL — the kick
+            # has to be snappable after the last productive play. There is no such kick in
+            # this branch: the punt IS the play, and a punt needs only to be SNAPPED.
+            # `_lockedOut` is `budget <= 0` and `_chessClockDepletionTurnover` runs AFTER
+            # the play resolves, so a punt started with a single second left completes and
+            # possession changes through the punt — the lockout then has nothing to take.
+            # Owner: "as long as there's 1 second left they can punt still."
+            #
+            # So the only thing that must FIT is the productive play we are deciding
+            # against: if it would exhaust the budget, it still completes and THEN the ball
+            # is forfeited at the spot, which is the giveaway this rule exists to prevent.
+            return secs < need + LAST_SNAP_LIVE_SECS
 
         timeoutsLeft = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
                         else self.awayTimeoutsRemaining)
@@ -5041,10 +5054,23 @@ class Game:
             # block above); a tying FG waits for the last play; and either way the offense
             # keeps driving for a better look while it can. Excludes trailing by more than a
             # FG (futile) and goal-to-go (a TD is worth more).
+            # ⚠️ `_estimateAvailablePlays()` USED TO GATE THIS AND IS FORMAT-BLIND. It
+            # charges 7s per play — a standard-format number — against a possession BUDGET
+            # where a snap costs 20-35s. Measured: at 20s of budget it reports TWO plays
+            # available when ZERO fit; at 45s it reports four against one. So `<= 1`
+            # essentially never became true in chess clock and an offense in range with a
+            # dying budget never banked the points.
+            #
+            # ⚠️ And a FIELD GOAL, like a punt, only needs to be SNAPPED — `_lockedOut` is
+            # `budget <= 0` and the depletion turnover runs AFTER the play resolves, so a
+            # kick started with one second left still happens. Owner: "a productive play
+            # could be a FG too, that only needs at least 1 second." So the question is not
+            # whether the KICK fits; it is whether another PRODUCTIVE play does, which is
+            # exactly what `_lastSnapBeforeBreak` answers.
             if (self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
                     and self.yardsToEndzone > 5 and not self._isGarbageTime(scoreDiff)
                     and scoreDiff >= -self._fgValue()
-                    and self._estimateAvailablePlays() <= 1):
+                    and self._lastSnapBeforeBreak()):
                 _ccK = self.offensiveTeam.rosterDict.get('k')
                 _ccCharged = self._awakenedReadyFor(_ccK, 'kick')
                 _ccKMax = (self._chargedKickerMaxFg(_ccK) if _ccCharged

@@ -154,12 +154,31 @@ class ChessClockSnapCostTests(unittest.TestCase):
 
     def testASnapThatFitsIsNotTheLastOne(self):
         """⚠️ The point of the cost model is to punt LATE, not early. Owner: "what I want
-        to avoid is a team punting and they still have a few seconds left on their
-        clock." At a neutral huddle a snap costs 20+5+2, so 30s of budget still holds
-        one and must NOT trigger the punt."""
-        from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU
-        self.assertFalse(self._game(30, NEU)._lastSnapBeforeBreak())
-        self.assertTrue(self._game(25, NEU)._lastSnapBeforeBreak())
+        to avoid is a team punting and they still have a few seconds left on their clock."
+
+        ⚠️ The threshold is DERIVED here, not restated. Writing the arithmetic out by hand
+        is what made two of these tests fail the moment the model was corrected — they
+        were pinning a number rather than the rule."""
+        from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU, LAST_SNAP_LIVE_SECS as LIVE
+        need = NEU + LIVE
+        self.assertFalse(self._game(need + 1, NEU)._lastSnapBeforeBreak(),
+                         'punting while a snap still fits')
+        self.assertTrue(self._game(need - 1, NEU)._lastSnapBeforeBreak())
+
+    def testAPuntNeedsOnlyToBeSNAPPED(self):
+        """⚠️ NO CLOSING-SNAP RESERVE in this branch. `FINAL_SNAP_SECS` keeps room for a
+        closing FIELD GOAL, and there is no such kick here — the punt IS the play.
+        `_lockedOut` is `budget <= 0` and `_chessClockDepletionTurnover` runs AFTER the
+        play resolves, so a punt started with a single second left completes and
+        possession changes through the punt. Owner: "as long as there's 1 second left they
+        can punt still."
+
+        So the only thing that must FIT is the productive play being decided against."""
+        from constants import (CHESS_CLOCK_NEUTRAL_HUDDLE as NEU,
+                               LAST_SNAP_LIVE_SECS as LIVE, FINAL_SNAP_SECS as SNAP)
+        # A budget that holds the play but not the play-plus-reserve must NOT punt.
+        self.assertFalse(self._game(NEU + LIVE + SNAP - 1, NEU)._lastSnapBeforeBreak(),
+                         'a closing-snap reserve is being charged where no kick follows')
 
     def testAGenuinelyRoomyBudgetIsNotTheLastSnap(self):
         from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU
@@ -177,8 +196,9 @@ class ChessClockSnapCostTests(unittest.TestCase):
         clock pays the tempo\'s own pre-snap; a stopped one pays the flat drain instead —
         an if/elif in the pre-snap block. Taking the LARGER of the two was tried and
         punted far too early: it charged a hurrying offense 25 for a snap costing it 12."""
-        from constants import CHESS_CLOCK_STOPPED_HUDDLE_DRAIN as STOP
-        need = STOP + 5 + 2
+        from constants import (CHESS_CLOCK_STOPPED_HUDDLE_DRAIN as STOP,
+                               LAST_SNAP_LIVE_SECS as LIVE)
+        need = STOP + LIVE
         g = self._game(need - 1, 12)
         g.clockRunning = False
         self.assertTrue(g._lastSnapBeforeBreak(), 'the stopped drain is not being charged')
