@@ -1686,10 +1686,22 @@ class TeamManager:
         market — for everyone else. A club immediately re-hiring the person it
         just fired would read as a bug whatever their attributes say.
         """
+        # ⚠️ IN USE IN MEMORY COUNTS AS TAKEN. `getAvailableCoaches` asks only
+        # whether a row is referenced by `Team.coach_id`, so a club holding a
+        # coach whose link was never persisted (coach_id NULL) leaves that row
+        # looking free — and another club hires the GM it is already using.
+        # Caught in a production-shaped rehearsal: two clubs sat on NULL
+        # coach_id while their GMs were handed to Broads and Monuments, putting
+        # the same two names on four clubs. The stale link is a pre-existing
+        # fault; generating a fresh coach every time used to hide it, because
+        # pool rows were never hired at all.
+        inUse = {getattr(getattr(t, 'coach', None), 'id', None) for t in self.teams}
+        inUse.discard(None)
         candidates = []
         try:
             candidates = [c for c in self.getAvailableCoaches()
-                          if excludeCoachId is None or c.id != excludeCoachId]
+                          if c.id not in inUse
+                          and (excludeCoachId is None or c.id != excludeCoachId)]
         except Exception as e:
             self.logger.warning(f"_hireReplacementCoach: pool unavailable: {e}")
         if not candidates:
