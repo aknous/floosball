@@ -5086,30 +5086,40 @@ class Game:
             # the exact counterpart of the in-range block above: same trigger, and where a
             # kick would have banked points, a punt banks field.
             #
-            # ⚠️ TRAILING IS ONLY AN EXCEPTION WHERE SCORING IS ACTUALLY POSSIBLE. This
-            # first shipped as a flat `scoreDiff >= 0` — anyone behind plays on — on the
-            # reasoning that once the budget is gone the offense never possesses again, so
-            # its last snap is its last chance to score.
+            # ⚠️ A TRAILING TEAM NEVER PUNTS HERE, AT ANY DISTANCE.
             #
-            # That is true at the opponent's 35 and a fiction on your own 20: no single play
-            # scores from 80 yards out, so "going for it" there concedes the field position
-            # and gets nothing for it.
+            # This briefly carried a DISTANCE carve-out — a trailing team punted from
+            # outside `CHESS_CLOCK_STRIKE_YARDS` — on the reasoning that no single play
+            # scores from 80 yards out, so going for it there concedes field position for
+            # nothing. Reported from a live game 2026-08-13: a LOSING team ran its budget
+            # out and punted on its last play, which is the read that reasoning misses.
             #
-            # ⚠️ This is NOT what caused game 349 — that team was LEADING, so this gate let
-            # the punt through and a different bug stopped it (the snap-cost one in
-            # `_lastSnapBeforeBreak`). Kept because the reasoning stands on its own, not
-            # because it fixed the report.
+            # Owner, 2026-08-13: "if the possession budget runs out and they're losing,
+            # then they lose, so no sense in punting. it's only if they're winning and
+            # their budget is about to run out and they have to play defense is when they
+            # should punt it." The test is `>= 0` rather than `> 0` because a TIED team is
+            # in exactly the position that clause describes — it cannot score again, so it
+            # has to play defense, and handing the ball over on its own 8 loses outright.
+            # Losing is the only state where field position buys nothing.
             #
-            # So the test is DISTANCE, not score: a trailing team goes for it only from
-            # inside `CHESS_CLOCK_STRIKE_YARDS`, where one play could plausibly reach the
-            # end zone. Everyone else punts, at any score.
+            # Field position is worth nothing to this team. Once the budget is gone the
+            # offense NEVER POSSESSES AGAIN (`_chessClockDepletionTurnover` hands the ball
+            # over and any future possession locks out immediately), so the only points
+            # still available to it are a safety or a defensive score — neither of which a
+            # punt meaningfully buys. A punt therefore improves the MARGIN, not the RESULT,
+            # and playing for the margin while losing is what reads as surrender.
+            #
+            # ⚠️ The carve-out was never load-bearing: game 349 was a LEADING team, stopped
+            # by the snap-cost bug in `_lastSnapBeforeBreak`, and this comment said so at
+            # the time. It was kept because the argument "stood on its own". It did not.
             #
             # Gated on the coach: recognising that the clock, not the down, is what ends
             # this drive is clock management, so a sharp staff does it near-always and a
             # poor one gets caught playing the down.
+            # CHESS_CLOCK_STRIKE_YARDS is read by the strike block below, which shares
+            # this import rather than repeating it.
             from constants import CHESS_CLOCK_PUNT_ENABLED, CHESS_CLOCK_STRIKE_YARDS
-            _canStrike = self.yardsToEndzone <= CHESS_CLOCK_STRIKE_YARDS
-            _puntHelps = scoreDiff >= 0 or not _canStrike
+            _puntHelps = scoreDiff >= 0
             # ⚠️ A PUNT IS POINTLESS WHEN THE OTHER SIDE IS ALSO LOCKED OUT. `suppressPunt`
             # already encodes this for chess clock — a locked-out defense cannot do
             # anything with the ball, and `possessionReceiver` hands it straight back — so
