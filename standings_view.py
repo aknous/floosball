@@ -194,6 +194,11 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
                           if getattr(t, 'id', None) != tid] if myDivision else []
         divisionClinched = bool(myDivision) and all(
             ceiling(t) <= floor for t in divisionRivals)
+        # ⚠️ THE DIVISION IS A SECOND ROAD IN, so it also decides elimination. The
+        # title is lost only once a rival is beyond reach; while it is winnable a
+        # club is alive no matter how far down the league table it sits.
+        divisionLost = bool(myDivision) and any(
+            _points(t) > myCeiling for t in divisionRivals)
 
         out[tid] = {
             # ⚠️ WINNING THE DIVISION IS AN AUTO-CLINCH (owner). A division winner
@@ -209,7 +214,16 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
             # the league is not the 1 seed until its own division is settled —
             # it could still be seeded behind a winner it out-performed.
             'clinchedTopSeed': divisionClinched and canPassMe == 0,
-            'eliminated': cannotBeCaught >= spots,
+            # ⚠️ ELIMINATED MEANS NO ROAD IN AT ALL, not "too far down the table".
+            # Reported from the live board: a club that had WON ITS DIVISION was
+            # being greyed out as eliminated, because its record was poor enough
+            # that `spots` rivals sat above it — which is exactly the situation a
+            # guaranteed division seed exists to protect. A club is out only when
+            # the wildcard is gone AND the division is lost; an undivisioned
+            # league has only the one road, so the wildcard test stands alone.
+            # This is the mirror of the auto-clinch above and was missed with it.
+            'eliminated': (cannotBeCaught >= spots
+                           and (divisionLost or not myDivision)),
         }
     return out
 
