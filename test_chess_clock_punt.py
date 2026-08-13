@@ -60,11 +60,43 @@ class ChessClockPuntTests(unittest.TestCase):
         self.assertIn('maxFgDistance', block)
         self.assertIn('_chargedKickerMaxFg', block)
 
-    def testATrailingTeamDoesNotPunt(self):
-        """⚠️ The exception that makes this correct rather than merely tidy. Once the
-        budget is gone the offense never possesses again, so punting while behind concedes
-        the game for field position it will never use."""
-        self.assertIn('scoreDiff >= 0', _block())
+    def testTheTrailingExceptionIsDistanceNotScore(self):
+        """⚠️ THE SECOND BUG, and it shipped. The exception first read `scoreDiff >= 0` —
+        anyone behind plays on — on the reasoning that a trailing team's last snap is its
+        last chance to score. True at the opponent\'s 35, a fiction on your own 20.
+
+        Reported from production game 349 (ARI 14 MEX 7, Q4 3:30): a trailing team ran a
+        play from its own 20, ran the budget out, and handed the ball back at the 20 — the
+        exact giveaway this rule exists to stop, waved through by its own exception.
+
+        ⚠️ Asserting the substring `scoreDiff >= 0` is NOT enough: it survives inside the
+        corrected expression, so that assertion passed under both rules and tested
+        nothing. The distance term is what has to be there."""
+        block = _block()
+        self.assertIn('CHESS_CLOCK_STRIKE_YARDS', block)
+        self.assertIn('_canStrike', block)
+        self.assertIn('_puntHelps = scoreDiff >= 0 or not _canStrike', block)
+
+    def testTheReportedSituationNowPunts(self):
+        """The decision, run rather than grepped."""
+        from constants import CHESS_CLOCK_STRIKE_YARDS as S
+
+        def punts(scoreDiff, yardsToEndzone):
+            canStrike = yardsToEndzone <= S
+            return scoreDiff >= 0 or not canStrike
+
+        # Game 349: trailing by 7 on their own 20 — 80 yards out, nothing scores from
+        # there on one snap.
+        self.assertTrue(punts(-7, 80), 'the reported giveaway is still allowed')
+        self.assertTrue(punts(-3, 80), 'a field goal cannot help from 80 either')
+        # Still goes for it where a single play could genuinely reach the end zone.
+        self.assertFalse(punts(-7, 40))
+        self.assertFalse(punts(-1, S))
+        # Level or ahead always punts, at any distance — field position is all that is
+        # left and the possession is lost either way.
+        for ytez in (10, 40, 80):
+            self.assertTrue(punts(0, ytez))
+            self.assertTrue(punts(+7, ytez))
 
     def testItIsTheLastSnapAndTheCoachSeesIt(self):
         """It fires only on the last snap the budget allows, and recognising that the
@@ -73,6 +105,63 @@ class ChessClockPuntTests(unittest.TestCase):
         block = _block()
         self.assertIn('self._lastSnapBeforeBreak()', block)
         self.assertIn('gameIQ', block)
+
+    def testItIsSuppressedWhenTheDEFENSEIsLockedOut(self):
+        """⚠️ A punt achieves nothing when the other side is also out of budget: a
+        locked-out defense cannot do anything with the ball, and `possessionReceiver`
+        hands it straight back. So punting spends a down for no field position while the
+        offense still has budget to score with.
+
+        `suppressPunt` already encodes this for chess clock and the drive-clock punt below
+        has always consulted it; this block did not. Owner: "the clock running out also
+        assumes the other team has time remaining. if they don't... they'd keep trying to
+        score."""
+        self.assertIn('self.format.suppressPunt(self)', _block())
+
+    def testTheFieldGoalBranchIsNotSuppressed(self):
+        """⚠️ Deliberately asymmetric. A punt is a giveaway and is pointless against a
+        locked-out defense; a FIELD GOAL is points, and points are worth having whoever
+        holds the ball next."""
+        with open(os.path.join(HERE, 'floosball_game.py')) as fh:
+            src = fh.read()
+        i = src.index("'decision': 'chessClockFG'")
+        head = src[max(0, i - 1600):i]
+        block = head[head.rindex('if ('):]
+        self.assertNotIn('suppressPunt', block)
+
+    def testTheStrikeIsARealCALLNotJustARefusal(self):
+        """⚠️ Declining to punt was only ever a REFUSAL — the play then came from the
+        normal down-and-distance table, so an offense that had decided it must score kept
+        calling whatever 2nd-and-7 usually calls. With a budget measured in one or two
+        snaps that is a slow walk into a lockout. Owner: "teams with little time
+        remaining, the other team is out, and needing to score, they should be taking deep
+        shots to gain yards fast."
+
+        Measured over 150 chess-clock games: 73 shots, 55 deep and 18 long."""
+        with open(os.path.join(HERE, 'floosball_game.py')) as fh:
+            src = fh.read()
+        i = src.index("'decision': 'chessClockStrike'")
+        head = src[max(0, i - 1400):i]
+        block = head[head.rindex('if ('):]
+        # It fires only where the situation is unambiguous.
+        self.assertIn('self.format.suppressPunt(self)', block)   # nobody to punt to
+        self.assertIn('scoreDiff <= 0', block)                   # points are needed
+        self.assertIn('_lastSnapBeforeBreak()', block)           # the budget is going
+        self.assertIn('_isGarbageTime', block)
+        # And it actually CALLS the shot rather than falling through.
+        tail = src[i:i + 900]
+        self.assertIn('passPlay(self._selectPassPlay(_shot))', tail)
+        self.assertIn("'deep' if self.yardsToEndzone > CHESS_CLOCK_STRIKE_YARDS else 'long'", src)
+
+    def testTheStrikeDoesNotOverrideSidelineTargeting(self):
+        """⚠️ This forced `targetSideline = False` on the reasoning that stopping the GAME
+        clock does nothing for a possession budget. That is wrong — a stopped clock is
+        charged less, so getting out of bounds genuinely preserves budget and is a
+        strategy. The override is gone; the normal sideline logic decides."""
+        with open(os.path.join(HERE, 'floosball_game.py')) as fh:
+            src = fh.read()
+        i = src.index("'decision': 'chessClockStrike'")
+        self.assertNotIn('targetSideline = False', src[i:i + 700])
 
     def testGarbageTimeIsExcluded(self):
         self.assertIn('_isGarbageTime', _block())

@@ -37,6 +37,7 @@ into `sentimentTilt` once the ratings layer exists.
 """
 
 import logging
+import statistics
 from random import gauss
 
 import os as _os
@@ -54,8 +55,9 @@ from constants import (
     FO_DECLINE_PER_YEAR_PAST, FO_DECLINE_MAX,
     FO_RESIGN_SURPLUS_MARGIN, FO_FA_CONTENTION,
     FO_CUT_ENABLED, FO_CUT_UPGRADE_MARGIN, FO_CUT_MAX_PER_TEAM,
+    FO_CUT_MIN_CONFIDENCE,
     SENTIMENT_MAX_VALUE_SWING,
-    FO_SCOUT_FACILITY_ENABLED,
+    FO_SCOUT_FACILITY_ENABLED, FO_SCOUT_WINNERS_CURSE_CORRECTION,
     FA_PREFERENCE_ENABLED, FA_PREF_MAX_DEMAND, FA_PREF_VET_FULL_SEASONS,
     FA_PREF_VET_WEIGHT, FA_PREF_JITTER,
 )
@@ -71,6 +73,33 @@ ARC_REGRESSING = 'regressing'
 
 def _clamp(value, low, high):
     return max(low, min(high, value))
+
+
+def _atLeastOneSurvives(upgrades: int, trials: int, p: float) -> float:
+    """P(fewer than `upgrades` of `trials` independent picks land on this position).
+
+    The number of clubs ahead that take a player here is Binomial(trials, p), so
+    at least one upgrade is still on the board exactly when that count comes in
+    under the number of upgrades. Written out rather than pulled from a library
+    because the loop is a handful of terms and the codebase has no scipy.
+    """
+    if upgrades <= 0:
+        return 0.0
+    if trials <= 0 or p <= 0.0:
+        return 1.0          # nobody picks before us; whatever exists is ours
+    p = min(1.0, float(p))
+    if upgrades > trials:
+        return 1.0          # more upgrades than there are picks to consume them
+    # P(X <= upgrades - 1), X ~ Binomial(trials, p), by the recurrence
+    # term(k+1) = term(k) * (n-k)/(k+1) * p/(1-p) to avoid factorials.
+    if p >= 1.0:
+        return 0.0
+    term = (1.0 - p) ** trials
+    total = term
+    for k in range(0, upgrades - 1):
+        term *= (trials - k) / (k + 1) * (p / (1.0 - p))
+        total += term
+    return _clamp(total, 0.0, 1.0)
 
 
 def positionValue(player) -> float:
@@ -93,6 +122,10 @@ class FrontOfficeBrain:
         # or unknown players read neutral, so the brain works unchanged with no
         # sentiment layer at all.
         self.sentimentMap = sentimentMap or {}
+        # {(gmKey, playerId): standard-normal draw} — this GM's SETTLED opinion
+        # of a player, held for as long as the brain lives (one offseason; see
+        # seasonManager._foBrainForOffseason). See _scoutError.
+        self._scoutBeliefs: dict = {}
 
     # ---------------------------------------------------------------- arc
 
@@ -231,12 +264,56 @@ class FrontOfficeBrain:
         seen = current + (forward - current) * vision
 
         # Error shrinks to zero as vision approaches 1.
-        noiseSigma = FO_SCOUT_NOISE_MAX * (1.0 - vision)
-        if noiseSigma > 0:
-            draw = rng.gauss(0, noiseSigma) if rng is not None else gauss(0, noiseSigma)
-            seen += draw
+        seen += self._scoutError(player, coach, self._noiseSigma(vision), rng)
 
         return max(0.0, seen) * positionValue(player)
+
+    @staticmethod
+    def _noiseSigma(vision: float) -> float:
+        """Spread of this GM's misjudgement, in rating points."""
+        return FO_SCOUT_NOISE_MAX * (1.0 - vision)
+
+    @staticmethod
+    def _gmKey(coach):
+        """Identity of the front office holding an opinion. Falls back to the
+        object's identity for an unsaved coach, and to a shared key for no coach
+        at all — an unmanaged team is one anonymous evaluator, not many."""
+        if coach is None:
+            return 0
+        return getattr(coach, 'id', None) or id(coach)
+
+    def _scoutError(self, player, coach, sigma: float, rng=None) -> float:
+        """This GM's misjudgement of this player — DRAWN ONCE and then held.
+
+        A GM who overrates a player has to overrate them consistently: when
+        deciding whether to cut the incumbent they are replacing, when ranking
+        the draft board, and when actually making the pick. Re-rolling made a
+        GM's "opinion" a fresh dice throw at every question, so the same club
+        could cut a starter for a free agent it then declined to sign.
+
+        Holding the draw is also what makes a bad evaluator LEGIBLE, which is
+        the point of the attribute: the mistake persists, gets acted on, and
+        the team lives with the player it signed.
+
+        ⚠️ An injected `rng` BYPASSES the cache. That is the deterministic /
+        distribution-sampling path tests use, where repeated calls are meant to
+        produce a spread. Production never passes one.
+        """
+        if sigma <= 0:
+            return 0.0
+        if rng is not None:
+            return rng.gauss(0, sigma)
+        pid = getattr(player, 'id', None)
+        if pid is None:
+            return gauss(0, sigma)
+        key = (self._gmKey(coach), pid)
+        draw = self._scoutBeliefs.get(key)
+        if draw is None:
+            # Stored as a STANDARD normal so the same opinion rescales cleanly
+            # if this GM's vision changes (a Scouting Department upgrade).
+            draw = gauss(0, 1.0)
+            self._scoutBeliefs[key] = draw
+        return draw * sigma
 
     def sentimentTilt(self, player, coach=None) -> float:
         """Fan sentiment x this GM's `fanTrust`, in perceivedValue points.
@@ -318,7 +395,50 @@ class FrontOfficeBrain:
         depth = max(0, int(pickDepth))
         if depth >= len(values):
             return 0.0      # position picked clean before this team's turn
-        return values[depth]
+        return self._deWinnersCurse(values, depth,
+                                    self._noiseSigma(self.scoutingVision(coach, team))
+                                    * positionValue(player))
+
+    @staticmethod
+    def _deWinnersCurse(values, depth: int, sigma: float) -> float:
+        """Correct the value of a player SELECTED FOR BEING THE HIGHEST-RATED.
+
+        Picking the best of N noisy reads does not give an unbiased estimate of
+        that player — it preferentially finds whoever this GM happened to
+        overrate, so the market always looks better than it is and looks better
+        the DEEPER the pool. Measured before this existed: an average scout read
+        a 20-man pool as **+6.1** above its actual best player and cut a clearly
+        superior incumbent 20% of the time, rising to +16.2 and 60% for a poor
+        scout. That put the decision on the size of the free agent pool rather
+        than on any player in it — the same two men were kept 100% of the time in
+        a thin pool and 8% in a deep one.
+
+        ⚠️ The fix belongs HERE and not in `perceivedValue`, because the noise is
+        wanted on the ORDERING — two GMs reaching for different men is a design
+        goal (see buildDraftBoard). It is only wrong on the scalar that gets
+        compared against a fixed threshold.
+
+        Standard shrink-to-the-mean: how much of the pool's spread is real
+        talent rather than misjudgement decides how much of the gap survives.
+        It needs no tuning knob because it reads both terms off the data —
+        a perfect scout (sigma 0) is untouched, and a pool of interchangeable
+        players seen through heavy noise collapses to its mean, which is the
+        honest answer to "who can I get".
+
+        The incumbent is deliberately NOT shrunk: they were never selected for
+        looking good, so their single read is already unbiased. The asymmetry
+        here is what cancels the asymmetry in how the two sides were chosen.
+        """
+        selected = values[depth]
+        if sigma <= 0 or len(values) < 2 or not FO_SCOUT_WINNERS_CURSE_CORRECTION:
+            return selected
+        noiseVar = sigma * sigma
+        spreadVar = statistics.pvariance(values)
+        # Whatever spread is left once misjudgement is accounted for is real.
+        talentVar = max(0.0, spreadVar - noiseVar)
+        keep = talentVar / (talentVar + noiseVar)
+        mean = statistics.fmean(values)
+        return mean + (selected - mean) * keep
 
     # ------------------------------------------------- destination preference
 
@@ -408,6 +528,76 @@ class FrontOfficeBrain:
             board[pid] = self.decisionValue(p, coach, rng=rng, team=team)
         return board
 
+    def upgradeConfidence(self, player, coach=None, pool=None, rng=None,
+                          teamsAhead=0, team=None, margin=None) -> float:
+        """P(this club ends up with someone BETTER at this slot) — not P(it gets
+        the particular man it wants).
+
+        ⚠️ THIS IS THE QUESTION THE CUT DECISION SHOULD HAVE BEEN ASKING. It used
+        to price ONE free agent (`bestReplacementValue`, the pickDepth-th best)
+        and cut if that player beat the incumbent. Measured, the club then signed
+        that exact player **8%** of the time — 92% went elsewhere — so the whole
+        decision rested on an outcome that almost never happened, and cut results
+        came out a coin flip (44% better / 46% worse) no matter how honest the
+        valuation was. A club does not need the man it wants. It needs SOMEONE
+        better than the man it has.
+
+        So: count how many free agents clear the incumbent by the cut margin,
+        then ask how likely it is that at least one of them is still on the board
+        when this club is on the clock. Each of the `teamsAhead` clubs picking
+        first takes a player at this position with probability
+        `FO_FA_CONTENTION`, so the number consumed is Binomial(teamsAhead, p) and
+        the answer is P(consumed < upgrades).
+
+        The behaviour this produces is the intuitive one, and it falls out rather
+        than being scripted: a club with a genuinely POOR starter is safe to cut
+        (much of the pool beats him, so some of it survives any run on the
+        position), while a club with a decent starter is not (only the top few
+        beat him, and the top of the board always goes). That is also why the
+        old model failed hardest exactly where it mattered — the top is the part
+        that is never there.
+
+        Returns 0.0 when nothing in the pool is an upgrade, which correctly reads
+        as "there is no move to make here".
+        """
+        if margin is None:
+            margin = FO_CUT_UPGRADE_MARGIN
+        if pool is None:
+            pool = getattr(self.playerManager, 'freeAgents', None) or []
+        pos = getattr(player, 'position', None)
+        incumbent = self.decisionValue(player, coach, rng=rng, team=team)
+
+        upgrades = 0
+        for fa in pool:
+            if fa is None or fa is player:
+                continue
+            if getattr(fa, 'position', None) != pos:
+                continue
+            if getattr(fa, 'willRetire', False):
+                continue
+            if team is not None and not self.willSignWith(fa, team):
+                continue
+            if self.decisionValue(fa, coach, rng=rng, team=team) - incumbent >= margin:
+                upgrades += 1
+        if upgrades <= 0:
+            return 0.0
+        return _atLeastOneSurvives(upgrades, max(0, int(teamsAhead)),
+                                   FO_FA_CONTENTION)
+
+    def faTeamsAhead(self, team, faOrder=None) -> int:
+        """How many clubs pick BEFORE this one in the worst-first FA draft.
+
+        The raw index, where `faPickDepth` returns the discounted estimate built
+        from it. The confidence model needs the count of independent chances to
+        lose a player, not the expected number lost.
+        """
+        if not faOrder or team is None:
+            return 0
+        try:
+            return int(list(faOrder).index(team))
+        except ValueError:
+            return 0
+
     def faPickDepth(self, team, faOrder=None) -> int:
         """How far down the FA board this team should expect to be shopping.
 
@@ -425,7 +615,7 @@ class FrontOfficeBrain:
         return int(index * FO_FA_CONTENTION)
 
     def rankResignCandidates(self, expiring, coach=None, pool=None, rng=None,
-                             pickDepth=0):
+                             pickDepth=0, team=None):
         """Rank walk-year incumbents by how much they beat the best replacement
         at their own position ("surplus").
 
@@ -440,9 +630,9 @@ class FrontOfficeBrain:
         """
         ranked = []
         for player in expiring:
-            incumbent = self.decisionValue(player, coach, rng=rng)
+            incumbent = self.decisionValue(player, coach, rng=rng, team=team)
             replacement = self.bestReplacementValue(player, coach, pool=pool, rng=rng,
-                                                    pickDepth=pickDepth)
+                                                    pickDepth=pickDepth, team=team)
             surplus = incumbent - replacement
             if surplus >= FO_RESIGN_SURPLUS_MARGIN:
                 ranked.append((player, surplus))
@@ -450,21 +640,27 @@ class FrontOfficeBrain:
         return ranked
 
     def chooseResigns(self, expiring, limit, coach=None, pool=None, rng=None,
-                      pickDepth=0):
+                      pickDepth=0, team=None):
         """The re-sign decision: at most `limit` keepers, best surplus first.
 
         `limit` is the caller's — RESIGN_LIMIT_PER_OFFSEASON is a parity
         guardrail this brain deliberately does NOT relitigate. The brain only
         changes WHO fills the slots, never how many there are.
+
+        ⚠️ Pass `team`. Without it the replacement side is priced against free
+        agents who would refuse this club, and the Scouting Department's vision
+        bonus silently does not apply — see bestReplacementValue.
         """
         if limit <= 0:
             return []
         return [p for p, _surplus in self.rankResignCandidates(
-            expiring, coach=coach, pool=pool, rng=rng, pickDepth=pickDepth)[:limit]]
+            expiring, coach=coach, pool=pool, rng=rng,
+            pickDepth=pickDepth, team=team)[:limit]]
 
     # -------------------------------------------------------------- cuts
 
-    def rankCutCandidates(self, team, coach=None, pool=None, rng=None, pickDepth=0):
+    def rankCutCandidates(self, team, coach=None, pool=None, rng=None, pickDepth=0,
+                          teamsAhead=0):
         """Rank players worth CUTTING, biggest upgrade first.
 
         Only players still UNDER CONTRACT are considered. A walk-year player who
@@ -487,27 +683,46 @@ class FrontOfficeBrain:
                 continue                      # vacates on its own
             if (getattr(player, 'termRemaining', 0) or 0) <= 1:
                 continue                      # walk-year: retention decides them
-            incumbent = self.decisionValue(player, coach, rng=rng)
+            incumbent = self.decisionValue(player, coach, rng=rng, team=team)
             replacement = self.bestReplacementValue(player, coach, pool=pool,
-                                                    rng=rng, pickDepth=pickDepth)
+                                                    rng=rng, pickDepth=pickDepth,
+                                                    team=team)
             upgrade = replacement - incumbent
-            if upgrade >= FO_CUT_UPGRADE_MARGIN:
-                ranked.append((player, slot, upgrade))
+            if upgrade < FO_CUT_UPGRADE_MARGIN:
+                continue
+            # ⚠️ AND the club must be CONFIDENT it can actually come away better
+            # off. The size of the gap says the move is worth making; this says
+            # it is likely to survive contact with a worst-first draft that has
+            # already taken the top of the board 92% of the time.
+            confidence = self.upgradeConfidence(
+                player, coach=coach, pool=pool, rng=rng,
+                teamsAhead=teamsAhead, team=team)
+            if confidence < FO_CUT_MIN_CONFIDENCE:
+                continue
+            ranked.append((player, slot, upgrade))
         ranked.sort(key=lambda r: -r[2])
         return ranked
 
-    def chooseCuts(self, team, coach=None, pool=None, rng=None, pickDepth=0):
+    def chooseCuts(self, team, coach=None, pool=None, rng=None, pickDepth=0,
+                   teamsAhead=0):
         """Players this GM cuts in anticipation of signing an upgrade.
 
-        Uncapped by design (plan Part A): real upgrades are scarce, every team
-        fishes the same finite pool, and worst-first FA order means a cut may
-        not be replaced — so churn is expected to self-limit. Add a soft cap
-        only if a sim shows thrash.
+        Capped at FO_CUT_MAX_PER_TEAM, biggest upgrade first. The plan called
+        for this to be uncapped — real upgrades are scarce, every team fishes
+        the same finite pool, and worst-first FA order means a cut may not be
+        replaced, so churn was expected to self-limit. It did not, and the cap
+        was added; this docstring claimed otherwise until 2026-08-13.
+
+        ⚠️ The cap is a BACKSTOP, not the brake. What actually decides how many
+        cuts happen is whether the replacement estimate is honest — see
+        `_deWinnersCurse`, without which a deep pool sent nearly every team to
+        the cap and a thin one produced none.
         """
         if not FO_CUT_ENABLED:
             return []
         ranked = self.rankCutCandidates(team, coach=coach, pool=pool,
-                                        rng=rng, pickDepth=pickDepth)
+                                        rng=rng, pickDepth=pickDepth,
+                                        teamsAhead=teamsAhead)
         if FO_CUT_MAX_PER_TEAM is not None:
             ranked = ranked[:FO_CUT_MAX_PER_TEAM]   # biggest upgrades first
         return [(p, slot) for p, slot, _u in ranked]

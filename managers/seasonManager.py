@@ -5500,8 +5500,18 @@ class SeasonManager:
             # the round body: a crash before here replays the round; after here
             # it's durably done. The bowl (final round) needs no checkpoint — the
             # post-playoff finish flips simulation_state to the offseason.
-            if x < numOfRounds - 1:
-                self._persistPlayoffState(currentRound, self.currentWeekText, playoffTeams)
+            # ⚠️ The FINAL round is checkpointed TOO. It used to be skipped
+            # (`if x < numOfRounds - 1`) on the reasoning that the bowl needs no
+            # resume point, since the post-playoff finish flips straight to the
+            # offseason. But this checkpoint also carries `faOrder`, and the
+            # Floos Bowl is where its last TWO entries are appended (runner-up,
+            # then champion) — so the persisted order was permanently 30 long,
+            # and on ANY offseason resume `faPickDepth` could not find those two
+            # clubs and returned 0, telling the two best teams in the league they
+            # pick FIRST in free agency. Re-checkpointing the last round is inert
+            # for bracket resume (there is no round after it) and is what makes
+            # the order whole.
+            self._persistPlayoffState(currentRound, self.currentWeekText, playoffTeams)
 
         # Clear PLAYOFF_TEST phase flag
         self.timingManager.playoffPhase = False
@@ -5704,9 +5714,55 @@ class SeasonManager:
                 self._loadScheduleFromDatabase(seasonNumber)
             except Exception as e:
                 logger.warning(f"restoreForOffseasonResume: schedule reload failed: {e}")
+        self._restoreFreeAgencyOrder()
         # Mark the season as in the offseason week.
         self.currentSeason.currentWeek = 0
         self.currentSeason.currentWeekText = 'Offseason'
+
+    def _restoreFreeAgencyOrder(self) -> None:
+        """Rebuild `freeAgencyOrder` from the playoff checkpoint.
+
+        ⚠️ WITHOUT THIS, A MID-OFFSEASON RESTART SILENTLY REBUILDS EVERY ROSTER
+        DECISION ON A FALSE PREMISE. `restoreForOffseasonResume` constructs a
+        fresh `Season`, whose `freeAgencyOrder` starts EMPTY, and nothing else
+        refilled it — only the mid-PLAYOFF resume path did. An empty order makes
+        `frontOfficeBrain.faPickDepth` return 0 for every club, so all 32 believe
+        they pick first in free agency and price their incumbents against the top
+        of the board. That is the single most churn-producing state the front
+        office has: measured in a deep-pool season, 62 cuts and 0 re-signs.
+
+        The window is a restart between the Floos Bowl and the
+        `frontoffice_decisions` step completing — i.e. exactly a deploy landing
+        on draft day.
+
+        A missing or unreadable checkpoint leaves the order empty, which is the
+        pre-existing behavior; `_applyRetentionLimits` warns loudly about it
+        rather than pretending the depths are real.
+        """
+        if not (DB_IMPORTS_AVAILABLE and USE_DATABASE):
+            return
+        try:
+            from database.connection import get_session as _gs
+            from database.models import SimulationState
+            sess = _gs()
+            try:
+                row = sess.query(SimulationState).filter_by(id=1).first()
+                payload = getattr(row, 'playoff_state', None) if row else None
+            finally:
+                sess.close()
+            if not payload:
+                logger.warning("Offseason resume: no playoff checkpoint — FA order "
+                               "unavailable, GM churn will read high")
+                return
+            faOrderIds = (json.loads(payload) or {}).get('faOrder', []) or []
+            teamManager = self.serviceContainer.getService('team_manager')
+            teamById = {t.id: t for t in (teamManager.teams if teamManager else [])}
+            self.currentSeason.freeAgencyOrder = [
+                teamById[tid] for tid in faOrderIds if tid in teamById]
+            logger.info("Offseason resume: restored FA order of "
+                        f"{len(self.currentSeason.freeAgencyOrder)}")
+        except Exception as e:
+            logger.warning(f"Offseason resume: FA order restore failed: {e}")
 
     # ── Mid-playoff resume (hotfix/playoff-resume) ──────────────────────────
     def _persistPlayoffState(self, completedRound: int, roundText: str, playoffTeams: dict) -> None:
@@ -6866,11 +6922,7 @@ class SeasonManager:
             underneath it between rounds
           - destination preference is settled before any GM plans around it
         """
-        from constants import AUTONOMOUS_FO_ENABLED
         boards = {}
-        if not AUTONOMOUS_FO_ENABLED:
-            self.playerManager._faDraftBoards = boards
-            return
         teamManager = self.serviceContainer.getService('team_manager')
         teams = teamManager.teams if teamManager else []
         pool = list(getattr(self.playerManager, 'freeAgents', None) or [])
@@ -7145,63 +7197,49 @@ class SeasonManager:
 
     def _applyRetentionLimits(self) -> None:
         """Per team, decide which EXPIRING players (contract up this offseason) get
-        RE-SIGNED vs walk to FA. FAN-DRIVEN — a player is only kept if fans voted to
-        re-sign them (`_gmResigned`, set by the resign vote in STEP 2). There is NO
-        auto-keep: with no vote, a player walks (fans may deliberately let players
-        go, or simply not vote; unmanaged teams circulate their talent faster). Two
-        limits apply on top:
-          - RE-SIGN-ONCE: a player already re-signed the limit number of times by
-            this team is FORCED to walk even if fans voted to keep them.
-          - COUNT LIMIT: at most RESIGN_LIMIT_PER_OFFSEASON re-signs per offseason;
-            if fans voted for more, only the most-voted keep (rest walk).
-        Kept players stay flagged `_gmResigned` (STEP 3 renews them + increments the
-        re-sign count); the rest are cleared and walk. See PARITY_PROSPECT_PLAN.md P5."""
-        from constants import (RESIGN_ONCE_ENABLED, RESIGN_ONCE_LIMIT,
-                               RESIGN_LIMIT_ENABLED, RESIGN_LIMIT_PER_OFFSEASON,
-                               AUTONOMOUS_FO_ENABLED)
-        if not (RESIGN_ONCE_ENABLED or RESIGN_LIMIT_ENABLED):
-            return
-        # AUTONOMOUS FRONT OFFICE: when enabled, the GM brain picks the keepers
-        # instead of the fans. The guardrails below (re-sign-once, per-offseason
-        # count) are unchanged either way — only the DECIDER swaps. Env override
-        # lets a sim harness exercise the brain without flipping the constant.
-        brain = None
-        faOrder = None
-        if AUTONOMOUS_FO_ENABLED or os.environ.get('AUTONOMOUS_FO'):
-            from managers.frontOfficeBrain import FrontOfficeBrain
-            # Fan sentiment (plan Part D), fetched ONCE for the whole league —
-            # the sweep values every roster on every team, so per-player lookups
-            # would be an N+1 here. Absent players read neutral, so a league
-            # with no ratings at all behaves exactly as before.
-            sentimentMap = {}
-            try:
-                from constants import SENTIMENT_ENABLED
-                if SENTIMENT_ENABLED:
-                    from database.connection import get_session
-                    from database.repositories.sentiment_repository import buildSentimentMap
-                    # Combined signal: the 1-5 standing stance LEADS, the post
-                    # pulse nudges. Built in one place so a caller can't read
-                    # only half of it.
-                    sentimentMap = buildSentimentMap(get_session())
-            except Exception as e:
-                logger.warning(f"GM brain: sentiment unavailable, running neutral: {e}")
-            if sentimentMap:
-                logger.info(f"GM brain: {len(sentimentMap)} player(s) carry fan sentiment")
-            brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap)
-            # Worst-first FA order (snapshotted at playoffs). A team judges its
-            # incumbent against the free agent still likely to be there at ITS
-            # slot, so an early picker churns boldly and a late one holds.
-            faOrder = getattr(self.currentSeason, 'freeAgencyOrder', None) or None
-            if not faOrder:
-                logger.warning("GM brain: no FA order available — every team will "
-                               "shop the top of the board (churn will read high)")
+        RE-SIGNED vs walk to FA.
+
+        The GM brain decides: a re-sign slot is spent only where the incumbent
+        beats the best replacement realistically available at this team's slot in
+        the worst-first FA order. One limit applies on top — at most
+        RESIGN_LIMIT_PER_OFFSEASON re-signs per offseason, which forces an annual
+        "who do we protect?" call. Kept players stay flagged `_gmResigned` (STEP 3
+        renews them); the rest are cleared and walk.
+
+        ⚠️ THE RE-SIGN-ONCE LIMIT IS GONE (owner, 2026-08-13). It forced a player
+        to walk after a single re-sign, capping any career at roughly two
+        contracts with one club — a dynasty-breaker that also made a career-long
+        one-club player impossible, which sits against "players are characters".
+        `hasReachedResignLimit` still exists and still answers, so re-enabling is
+        one constant; nothing else was torn out.
+
+        ⚠️ There is NO fan-vote path any more. It was gated behind
+        AUTONOMOUS_FO_ENABLED and documented as a safe rollback, but the binding
+        vote system was deleted and nothing has set `_gmResigned` since — so the
+        "rollback" walked every expiring player in the league (measured: 22
+        expiring, 0 kept). A switch that silently empties every roster is worse
+        than no switch. See PARITY_PROSPECT_PLAN.md P5.
+        """
+        from constants import RESIGN_LIMIT_ENABLED, RESIGN_LIMIT_PER_OFFSEASON
         teamManager = self.serviceContainer.getService('team_manager')
         if not teamManager:
             return
-        # SIM-ONLY: model fan behavior (re-sign your best eligible players) so a
-        # userless sim isn't an all-walk extreme. Prod is unaffected — it's driven
-        # by real fan votes. Gated by env; set by retention_harness.py.
-        simulateFans = bool(os.environ.get('SIMULATE_FAN_RESIGNS'))
+        # ONE brain for the whole offseason, shared with the FA draft boards.
+        # ⚠️ This used to build its own, which gave retention a SEPARATE scouting
+        # belief cache from the draft — so a club could cut a starter for a free
+        # agent it then valued differently when the time came to sign them.
+        brain = self._foBrainForOffseason()
+        # Worst-first FA order (snapshotted at playoffs). A team judges its
+        # incumbent against the free agent still likely to be there at ITS
+        # slot, so an early picker churns boldly and a late one holds.
+        faOrder = getattr(self.currentSeason, 'freeAgencyOrder', None) or None
+        if not faOrder:
+            logger.warning("GM brain: no FA order available — every team will "
+                           "shop the top of the board (churn will read high)")
+        # ⚠️ SIMULATE_FAN_RESIGNS is now a NO-OP. It stood in for fan resign votes
+        # so a userless sim wasn't an all-walk extreme; the brain decides for
+        # every league now, so there is nothing left for it to stand in for.
+        # retention_harness.py still sets it and is unaffected.
         limit = RESIGN_LIMIT_PER_OFFSEASON if RESIGN_LIMIT_ENABLED else 99
 
         # ASSESSMENT SWEEP ORDER (plan Part A). With the brain driving, teams
@@ -7211,30 +7249,31 @@ class SeasonManager:
         # ONLY: actual acquisition is still the worst-first FA draft, so there
         # is no anti-parity effect.
         sweepTeams = list(teamManager.teams)
-        if brain is not None:
-            def _sweepKey(t):
-                stats = getattr(t, 'seasonTeamStats', None) or {}
-                champ = 1 if stats.get('floosbowlChamp') else 0
-                wins = float(stats.get('wins', 0) or 0)
-                losses = float(stats.get('losses', 0) or 0)
-                played = wins + losses
-                winPct = (wins / played) if played else 0.0
-                return (-champ, -winPct, getattr(t, 'name', ''))
-            sweepTeams.sort(key=_sweepKey)
-            logger.info("GM brain assessment sweep (best-first): "
-                        + ", ".join(getattr(t, 'name', '?') for t in sweepTeams[:5]) + " ...")
-            # Position-keyed lists releasePlayerToFreeAgency maintains alongside
-            # playerManager.freeAgents.
-            faLists = {
-                'qb': [p for p in self.playerManager.freeAgents if p.position.value == 1],
-                'rb': [p for p in self.playerManager.freeAgents if p.position.value == 2],
-                'wr': [p for p in self.playerManager.freeAgents if p.position.value == 3],
-                'te': [p for p in self.playerManager.freeAgents if p.position.value == 4],
-                'k':  [p for p in self.playerManager.freeAgents if p.position.value == 5],
-            }
-            cutTally = 0
+
+        def _sweepKey(t):
+            stats = getattr(t, 'seasonTeamStats', None) or {}
+            champ = 1 if stats.get('floosbowlChamp') else 0
+            wins = float(stats.get('wins', 0) or 0)
+            losses = float(stats.get('losses', 0) or 0)
+            played = wins + losses
+            winPct = (wins / played) if played else 0.0
+            return (-champ, -winPct, getattr(t, 'name', ''))
+        sweepTeams.sort(key=_sweepKey)
+        logger.info("GM brain assessment sweep (best-first): "
+                    + ", ".join(getattr(t, 'name', '?') for t in sweepTeams[:5]) + " ...")
+        # Position-keyed lists releasePlayerToFreeAgency maintains alongside
+        # playerManager.freeAgents.
+        faLists = {
+            'qb': [p for p in self.playerManager.freeAgents if p.position.value == 1],
+            'rb': [p for p in self.playerManager.freeAgents if p.position.value == 2],
+            'wr': [p for p in self.playerManager.freeAgents if p.position.value == 3],
+            'te': [p for p in self.playerManager.freeAgents if p.position.value == 4],
+            'k':  [p for p in self.playerManager.freeAgents if p.position.value == 5],
+        }
+        cutTally = 0
 
         for team in sweepTeams:
+            coach = getattr(team, 'coach', None)
             expiring, forcedWalk = [], []
             for p in team.rosterDict.values():
                 if p is None or getattr(p, 'willRetire', False):
@@ -7242,81 +7281,53 @@ class SeasonManager:
                 if (getattr(p, 'termRemaining', 0) or 0) > 1:
                     continue  # stays on current deal
                 if self.playerManager.hasReachedResignLimit(p):
-                    forcedWalk.append(p)    # re-sign limit reached — must walk
+                    forcedWalk.append(p)    # limit re-enabled — must walk
                 else:
-                    expiring.append(p)      # contract up → keep only if voted
-            if brain is not None:
-                # GM BRAIN decides. A slot is spent only where the incumbent
-                # beats the best replacement available at his position, so a
-                # good player the market can replace is allowed to walk while a
-                # modest one with nothing behind him is kept.
-                pickDepth = brain.faPickDepth(team, faOrder)
-                kept = brain.chooseResigns(expiring, limit,
-                                           coach=getattr(team, 'coach', None),
-                                           pickDepth=pickDepth)
-                keptIds = {id(p) for p in kept}
-                for p in expiring:
-                    p._gmResigned = id(p) in keptIds
-                for p in forcedWalk:
-                    p._gmResigned = False        # re-sign-once override still wins
-                logger.info(f"Retention {team.name} (GM brain): re-signed {len(kept)}, "
-                            f"forced-walk {len(forcedWalk)}, walked {len(expiring) - len(kept)} "
-                            f"(faDepth {pickDepth})")
-                if os.environ.get('RETENTION_DEBUG'):
-                    def _fmtb(pl): return f"{pl.name}({getattr(pl,'playerRating',0)}/{brain.classifyArc(pl)})"
-                    logger.info(
-                        f"  RESIGN[{team.name}] kept: {', '.join(_fmtb(p) for p in kept) or '-'} | "
-                        f"walked: {', '.join(_fmtb(p) for p in expiring if id(p) not in keptIds) or '-'}")
+                    expiring.append(p)      # contract up → keep only if the GM wants them
 
-                # CUT-FOR-UPGRADE. Released LIVE so the teams later in the sweep
-                # assess against the fuller market this one just created.
-                cuts = brain.chooseCuts(team, coach=getattr(team, 'coach', None),
-                                        pickDepth=pickDepth)
-                for player, slot in cuts:
-                    self.playerManager.releasePlayerToFreeAgency(player, team, faLists)
-                    cutTally += 1
-                    self._recordOffseasonEvent(
-                        'cut', team=team, player=player, detail='GM upgrade cut')
-                if cuts:
-                    logger.info(f"  CUT[{team.name}] " + ", ".join(
-                        f"{p.name}({getattr(p, 'playerRating', 0)})" for p, _s in cuts))
-                continue
-
-            if simulateFans:
-                # Stand in for fan resign votes: keep the best `limit` eligible.
-                for p in sorted(expiring, key=lambda x: -(getattr(x, 'playerRating', 0) or 0))[:limit]:
-                    p._gmResigned = True
-            # Keep only players fans voted to re-sign (real votes, or the sim's
-            # stand-in above), capped at the count limit. Tiebreak on net votes so
-            # the most-supported stay; fall back to rating for the sim stand-in
-            # (no real vote tallies) and any legacy flag without a stored count.
-            def _resignRank(p):
-                nv = getattr(p, '_gmResignNetVotes', None)
-                return nv if nv is not None else (getattr(p, 'playerRating', 0) or 0)
-            voted = sorted((p for p in expiring if getattr(p, '_gmResigned', False)),
-                           key=lambda x: -_resignRank(x))
-            kept = voted[:limit]
+            # GM BRAIN decides. A slot is spent only where the incumbent beats
+            # the best replacement available at his position, so a good player
+            # the market can replace is allowed to walk while a modest one with
+            # nothing behind him is kept.
+            # ⚠️ `team=` is load-bearing on BOTH calls: it applies destination
+            # preference (a club must not plan around a free agent who would
+            # refuse it) and the Scouting Department's vision bonus. Omitted
+            # until 2026-08-13, which silently disabled both for retention.
+            pickDepth = brain.faPickDepth(team, faOrder)
+            # Raw count of clubs picking first, which the confidence model needs
+            # (pickDepth is already the discounted expectation built from it).
+            teamsAhead = brain.faTeamsAhead(team, faOrder)
+            kept = brain.chooseResigns(expiring, limit, coach=coach,
+                                       pickDepth=pickDepth, team=team)
             keptIds = {id(p) for p in kept}
             for p in expiring:
-                p._gmResigned = id(p) in keptIds     # NO auto-keep: unvoted -> walk
+                p._gmResigned = id(p) in keptIds
             for p in forcedWalk:
-                p._gmResigned = False                # re-sign-once override
-            logger.info(f"Retention {team.name}: re-signed {len(kept)}, forced-walk {len(forcedWalk)}, "
-                        f"walked {len(expiring) - len(kept)}")
-            # RETENTION_DEBUG: show the actual decision — which players were
-            # re-signed (most-voted, capped at the limit) and who walked and why.
-            # Off by default; a harness sets the env var to surface the logic.
+                p._gmResigned = False
+            logger.info(f"Retention {team.name} (GM brain): re-signed {len(kept)}, "
+                        f"forced-walk {len(forcedWalk)}, walked {len(expiring) - len(kept)} "
+                        f"(faDepth {pickDepth})")
             if os.environ.get('RETENTION_DEBUG'):
-                def _fmt(pl): return f"{pl.name}({getattr(pl,'playerRating',0)})"
-                keptStr = ", ".join(_fmt(p) for p in kept) or "-"
-                walked = [p for p in expiring if id(p) not in keptIds]
+                def _fmtb(pl): return f"{pl.name}({getattr(pl,'playerRating',0)}/{brain.classifyArc(pl)})"
                 logger.info(
-                    f"  RESIGN[{team.name}] kept: {keptStr} | "
-                    f"walk(not-resigned): {', '.join(_fmt(p) for p in walked) or '-'} | "
-                    f"walk(re-sign-limit): {', '.join(_fmt(p) for p in forcedWalk) or '-'}")
+                    f"  RESIGN[{team.name}] kept: {', '.join(_fmtb(p) for p in kept) or '-'} | "
+                    f"walked: {', '.join(_fmtb(p) for p in expiring if id(p) not in keptIds) or '-'}")
 
-        if brain is not None:
-            logger.info(f"GM brain sweep complete: {cutTally} upgrade cut(s) league-wide")
+            # CUT-FOR-UPGRADE. Released LIVE so the teams later in the sweep
+            # assess against the fuller market this one just created.
+            # (chooseCuts already takes the team positionally and forwards it.)
+            cuts = brain.chooseCuts(team, coach=coach, pickDepth=pickDepth,
+                                    teamsAhead=teamsAhead)
+            for player, slot in cuts:
+                self.playerManager.releasePlayerToFreeAgency(player, team, faLists)
+                cutTally += 1
+                self._recordOffseasonEvent(
+                    'cut', team=team, player=player, detail='GM upgrade cut')
+            if cuts:
+                logger.info(f"  CUT[{team.name}] " + ", ".join(
+                    f"{p.name}({getattr(p, 'playerRating', 0)})" for p, _s in cuts))
+
+        logger.info(f"GM brain sweep complete: {cutTally} upgrade cut(s) league-wide")
 
     async def _processRosteredPlayerContracts(self) -> None:
         """Process contract decrements and retirements for players on team rosters"""

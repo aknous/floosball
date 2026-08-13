@@ -2111,6 +2111,44 @@ class Game:
         secs = self._offenseEffectiveSecs()
         if secs <= 0:
             return True
+
+        # ⚠️ CHESS CLOCK CHARGES A COMPLETELY DIFFERENT PRICE FOR A SNAP, and this helper
+        # was quoting the standard one. `_offenseEffectiveSecs` correctly returns the
+        # possession BUDGET there — so the clock being read was right — but the cost
+        # compared against it was 7s (stoppable) or 19s (running), the standard-format
+        # huddle. A chess-clock snap drains the budget by its huddle: 20s neutral, 35s
+        # relaxed, and 25s even when the game clock is already STOPPED, because possession
+        # time is spent regardless.
+        #
+        # So at ~25s of budget the helper said "there is another snap", the offense ran one,
+        # the snap cost more than the budget held, and the possession was forfeited at the
+        # spot. Reported from production game 349: ARI, LEADING 14-7, 1st and 10 on their
+        # own 20 at Q4 3:20 — ran for 4 and handed MEX the ball on the 20, with no
+        # clock-management decision recorded at all.
+        #
+        # ⚠️ And the timeout shortcut does not apply here either: stopping the game clock
+        # does NOT stop the budget, so there is no version of this where the huddle is free.
+        if getattr(self.format, 'key', '') == 'chess_clock':
+            # ⚠️ A team's budget is whatever ticks off the GAME clock while it holds the
+            # ball, so a snap costs exactly what a snap costs in any other format:
+            #
+            #   clock RUNNING  -> the huddle burns clock, so huddle + live ball
+            #   clock STOPPED  -> the huddle is FREE (nothing is ticking); the clock
+            #                     restarts at the snap, so only the live ball costs
+            #
+            # Earlier versions charged a flat stopped-clock drain here, back when the
+            # budget was the real clock and the game clock was derived from it. With that
+            # inverted the drain no longer exists and neither does the charge.
+            if self.clockRunning:
+                try:
+                    _intent, huddle = self._classifyTempoIntent()
+                    need = float(huddle or 0)
+                except Exception:
+                    need = float(LAST_SNAP_HUDDLE_SECS)
+            else:
+                need = 0.0
+            return secs < need + LAST_SNAP_LIVE_SECS
+
         timeoutsLeft = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
                         else self.awayTimeoutsRemaining)
         # The huddle is only paid when the clock is running AND cannot be stopped.
@@ -5005,10 +5043,23 @@ class Game:
             # block above); a tying FG waits for the last play; and either way the offense
             # keeps driving for a better look while it can. Excludes trailing by more than a
             # FG (futile) and goal-to-go (a TD is worth more).
+            # ⚠️ `_estimateAvailablePlays()` USED TO GATE THIS AND IS FORMAT-BLIND. It
+            # charges 7s per play — a standard-format number — against a possession BUDGET
+            # where a snap costs 20-35s. Measured: at 20s of budget it reports TWO plays
+            # available when ZERO fit; at 45s it reports four against one. So `<= 1`
+            # essentially never became true in chess clock and an offense in range with a
+            # dying budget never banked the points.
+            #
+            # ⚠️ And a FIELD GOAL, like a punt, only needs to be SNAPPED — `_lockedOut` is
+            # `budget <= 0` and the depletion turnover runs AFTER the play resolves, so a
+            # kick started with one second left still happens. Owner: "a productive play
+            # could be a FG too, that only needs at least 1 second." So the question is not
+            # whether the KICK fits; it is whether another PRODUCTIVE play does, which is
+            # exactly what `_lastSnapBeforeBreak` answers.
             if (self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
                     and self.yardsToEndzone > 5 and not self._isGarbageTime(scoreDiff)
                     and scoreDiff >= -self._fgValue()
-                    and self._estimateAvailablePlays() <= 1):
+                    and self._lastSnapBeforeBreak()):
                 _ccK = self.offensiveTeam.rosterDict.get('k')
                 _ccCharged = self._awakenedReadyFor(_ccK, 'kick')
                 _ccKMax = (self._chargedKickerMaxFg(_ccK) if _ccCharged
@@ -5035,18 +5086,41 @@ class Game:
             # the exact counterpart of the in-range block above: same trigger, and where a
             # kick would have banked points, a punt banks field.
             #
-            # ⚠️ TRAILING IS THE EXCEPTION. Once the budget is gone the offense never
-            # possesses again, so a trailing team's last snap is its last chance to score —
-            # a punt there concedes the game to buy field position it will never use. Only
-            # a team that is level or ahead punts; anyone behind plays on and takes the shot.
+            # ⚠️ TRAILING IS ONLY AN EXCEPTION WHERE SCORING IS ACTUALLY POSSIBLE. This
+            # first shipped as a flat `scoreDiff >= 0` — anyone behind plays on — on the
+            # reasoning that once the budget is gone the offense never possesses again, so
+            # its last snap is its last chance to score.
+            #
+            # That is true at the opponent's 35 and a fiction on your own 20: no single play
+            # scores from 80 yards out, so "going for it" there concedes the field position
+            # and gets nothing for it.
+            #
+            # ⚠️ This is NOT what caused game 349 — that team was LEADING, so this gate let
+            # the punt through and a different bug stopped it (the snap-cost one in
+            # `_lastSnapBeforeBreak`). Kept because the reasoning stands on its own, not
+            # because it fixed the report.
+            #
+            # So the test is DISTANCE, not score: a trailing team goes for it only from
+            # inside `CHESS_CLOCK_STRIKE_YARDS`, where one play could plausibly reach the
+            # end zone. Everyone else punts, at any score.
             #
             # Gated on the coach: recognising that the clock, not the down, is what ends
             # this drive is clock management, so a sharp staff does it near-always and a
             # poor one gets caught playing the down.
-            from constants import CHESS_CLOCK_PUNT_ENABLED
+            from constants import CHESS_CLOCK_PUNT_ENABLED, CHESS_CLOCK_STRIKE_YARDS
+            _canStrike = self.yardsToEndzone <= CHESS_CLOCK_STRIKE_YARDS
+            _puntHelps = scoreDiff >= 0 or not _canStrike
+            # ⚠️ A PUNT IS POINTLESS WHEN THE OTHER SIDE IS ALSO LOCKED OUT. `suppressPunt`
+            # already encodes this for chess clock — a locked-out defense cannot do
+            # anything with the ball, and `possessionReceiver` hands it straight back — so
+            # punting spends a down to achieve nothing while the offense still has budget
+            # to score with. The drive-clock punt below has always consulted it; this block
+            # did not. Owner: "if they don't [have time], the team with the ball wouldn't
+            # punt, they'd keep trying to score."
             if (CHESS_CLOCK_PUNT_ENABLED
                     and self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
-                    and scoreDiff >= 0
+                    and _puntHelps
+                    and not self.format.suppressPunt(self)
                     and not self._isGarbageTime(scoreDiff)
                     and self._lastSnapBeforeBreak()):
                 _ppK = self.offensiveTeam.rosterDict.get('k')
@@ -5065,6 +5139,46 @@ class Game:
                     }
                     self.play.playType = PlayType.Punt
                     return
+
+            # ⚠️ NEEDING POINTS WITH NO CLOCK AND NOBODY TO PUNT TO — TAKE A SHOT.
+            #
+            # Declining to punt was only ever a REFUSAL: the play then came from the normal
+            # down-and-distance table, so an offense that had decided it must score kept
+            # calling whatever 2nd-and-7 usually calls. With a budget measured in one or
+            # two snaps that is a slow walk into a lockout.
+            #
+            # Fires only where the situation is unambiguous: the budget is nearly gone, the
+            # DEFENSE is locked out (so there is no punt to make and no answering drive to
+            # fear), and the offense is not ahead — points are the only thing left to play
+            # for. Owner: "teams with little time remaining, the other team is out, and
+            # needing to score, they should be taking deep shots to gain yards fast."
+            #
+            # Depth scales with the distance left: `deep` (27 air yards) when the end zone
+            # is far and yards matter more than completion, `long` (17) once inside
+            # striking distance, where catching it is worth more than heaving it.
+            if (self._chessClockLow(50)
+                    and self.down < self.gameRules.downsPerSeries
+                    and self.format.suppressPunt(self)
+                    and scoreDiff <= 0
+                    and not self._isGarbageTime(scoreDiff)
+                    and self.yardsToEndzone > 5
+                    and self._lastSnapBeforeBreak()):
+                _shot = 'deep' if self.yardsToEndzone > CHESS_CLOCK_STRIKE_YARDS else 'long'
+                self.play.insights['clockMgmt'] = {
+                    'decision': 'chessClockStrike',
+                    'reason': 'Budget nearly out, nobody to punt to, and points needed — '
+                              'take a shot downfield',
+                    'clockRemaining': self.gameClockSeconds,
+                    'yardsToEndzone': self.yardsToEndzone,
+                    'depth': _shot,
+                }
+                # ⚠️ The sideline is NOT forced off here. It was, on the reasoning that
+                # stopping the game clock does nothing for a possession budget — which is
+                # wrong: a stopped clock is charged the smaller of the stopped drain and
+                # the tempo huddle, so getting out of bounds genuinely preserves budget.
+                # The normal sideline logic decides.
+                self.play.passPlay(self._selectPassPlay(_shot))
+                return
 
             # Drive Clock about to expire (roughly one play left) and in makeable FG
             # range: take the points NOW on ANY down, rather than run a play and turn
@@ -7711,19 +7825,13 @@ class Game:
                     # Check if clock expired during pre-snap
                     if self.gameClockSeconds <= 0:
                         break
-                elif (getattr(self.format, 'key', '') == 'chess_clock'
-                        and not getattr(self, '_timeoutCalled', False)
-                        and self.play.playType not in (PlayType.Kneel, PlayType.Spike)):
-                    # Chess clock: even with the game clock already STOPPED (incompletion /
-                    # out of bounds), running a play still uses possession time — drain a
-                    # reduced huddle from the budget so clock-stopping plays aren't nearly
-                    # free (which explodes the play count in pass-heavy games). A deliberate
-                    # TIMEOUT still fully preserves the budget (the intentional tool); this
-                    # floor is only for the cheap, unchosen stops.
-                    from constants import CHESS_CLOCK_STOPPED_HUDDLE_DRAIN
-                    self._inPreSnap = True
-                    self.consumeGameTime(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
-                    self._inPreSnap = False
+                # ⚠️ NO STOPPED-CLOCK CHARGE ANY MORE. This used to drain the budget even
+                # with the game clock stopped, so that clock-stopping plays "aren't nearly
+                # free". Under the corrected time model they ARE free, and correctly so: a
+                # team's budget is whatever ticks off the GAME clock while it has the ball,
+                # and a stopped clock ticks nothing. The play count is no longer at risk
+                # from this either — the period now ends on the game clock rather than on
+                # budget spent, so cheap snaps cannot stall it.
                     if self.gameClockSeconds <= 0:
                         break
                 self.totalPlays += 1
@@ -10794,6 +10902,19 @@ class Game:
         if getattr(self.format, 'key', '') == 'chess_clock':
             from constants import (CHESS_CLOCK_NEUTRAL_HUDDLE, CHESS_CLOCK_RELAXED_HUDDLE,
                                    CHESS_CLOCK_CONSERVE_SECS)
+            # ⚠️ A NEARLY-EMPTY BUDGET OVERRIDES "GAME IN HAND". The relax branch below
+            # used to come first, so a team up two scores kept its 35s huddle right down
+            # to an empty budget — and then could not fit a snap at all, so it punted with
+            # ~37s still showing. Owner: "what I want to avoid is a team punting and they
+            # still have a few seconds left on their clock."
+            #
+            # Running out is not a scoreboard question: a lockout is a turnover AT THE
+            # SPOT whatever the lead, so the last of the budget is worth spending quickly
+            # rather than strolling into a giveaway. This sits ABOVE the relax check for
+            # that reason.
+            from constants import CHESS_CLOCK_LAST_GASP_SECS
+            if self._chessClockLow(CHESS_CLOCK_LAST_GASP_SECS):
+                return ('hurryUp', 12)
             # Relax (normal pace) when the clock no longer matters: up big (game in hand)
             # OR trailing with no realistic budget left to catch up (out of reach).
             if scoreDiff > 2 * self._oneScore() or not self._chessClockCatchUpPossible(scoreDiff):

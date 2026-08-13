@@ -1423,10 +1423,18 @@ LEAGUE_REALIGN_WINDOW_SEASONS = 2
 # Env overrides so the retention levers can be A/B'd without editing this file.
 # FLOOS_RETENTION=off disables both. Default (unset) = the shipped behavior.
 _RETENTION_OFF = _os.environ.get('FLOOS_RETENTION') == 'off'
-RESIGN_ONCE_ENABLED = not _RETENTION_OFF
+# ⚠️ RE-SIGN-ONCE IS OFF (owner, 2026-08-13). At limit 1 a player was forced to
+# walk after a single re-sign, capping any career at roughly two contracts with
+# one club — so a career-long one-club player was IMPOSSIBLE, which cuts against
+# "players are characters" (design pillar 2). It was built as a dynasty-breaker,
+# but the parity package's other levers (star scarcity, the per-offseason re-sign
+# cap, compression) already do that work.
+# The machinery is intact — `playerManager.hasReachedResignLimit` still reads
+# both of these and `players.team_resign_count` is still tracked and persisted —
+# so re-enabling is flipping this one flag, not a rebuild.
+RESIGN_ONCE_ENABLED = False
 RESIGN_ONCE_LIMIT = 1             # re-signs allowed with the SAME team before a forced walk
-                                  # (1 = a player stays ~2 contracts / 4-5 yrs, then walks —
-                                  # this is the real dynasty-breaker; 2 let a 6-peat re-emerge)
+                                  # (only consulted while RESIGN_ONCE_ENABLED)
 RESIGN_LIMIT_ENABLED = not _RETENTION_OFF
 RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
 
@@ -1440,19 +1448,29 @@ SENTIMENT_RATING_MAX = 5
 SENTIMENT_NEUTRAL = 3.0           # midpoint; maps to 0.0 sentiment
 
 # How many distinct raters a subject needs before their sentiment counts at all.
-# Below it the GM reads neutral and the average is withheld, so one loud fan
+# Below it the subject reads neutral and the average is withheld, so one voice
 # can't move a roster decision or manufacture a public number.
 #
-# SCALES WITH ENGAGEMENT, like the awards quorum: a bigger, busier league should
-# need more turnout before a number is trustworthy.
-#     required = max(SENTIMENT_MIN_RATERS, ceil(activeUsers x FRACTION))
+# ⚠️ SCALES WITH THAT CLUB'S OWN FANBASE, not with the league (owner,
+# 2026-08-13). Only a club's own fans may rate its players (`_requireOwnClub`),
+# so a league-wide bar is a bar some clubs CANNOT CLEAR: measured on production,
+# 163 favoriters spread over 32 clubs left 5 teams with no fans at all and
+# several with one or two, against a flat floor of 3 — those rosters could never
+# register sentiment no matter how their fans felt.
+#     required = max(SENTIMENT_MIN_RATERS, ceil(teamFans x FAN_FRACTION))
+# Because the fraction is below 1, the bar is ALWAYS reachable by a club's own
+# fanbase, which is the property the old formula lacked. A one-fan club needs
+# that one fan; a 14-fan club needs 5, so a single voice never speaks for a
+# crowd. At 0.34: 1 -> 1, 3 -> 2, 6 -> 2, 9 -> 4, 14 -> 5.
 #
-# The fraction is far below the awards' 0.20 on purpose. An award is ONE
-# league-wide vote where all attention converges; ratings are spread across 144
-# players plus 24 GMs. At 0.20 with 140 active fans every player would need 28
-# raters — thousands of ratings league-wide — and nothing would ever unhide.
-# At 0.05: 140 fans -> 7 raters, 50 -> 3 (the floor).
-SENTIMENT_MIN_RATERS = 3
+# ⚠️ Keyed on FAVORITERS, not "active" ones. `_countActiveUsers` reads
+# `users.last_login_at`, which NOTHING IN THE APP EVER WRITES (only tests), so
+# it returns 0 in production and every quorum scaling off it silently pins to
+# its floor. Tighten this to active fans only once that column is populated.
+SENTIMENT_MIN_RATERS = 1
+SENTIMENT_QUORUM_FAN_FRACTION = 0.34
+# Retained for the awards quorum, which IS a single league-wide vote and so is
+# correctly scaled against the league rather than one club.
 SENTIMENT_QUORUM_ACTIVE_FRACTION = 0.05
 
 # How far sentiment can move a valuation, in perceivedValue points, at FULL
@@ -1587,9 +1605,11 @@ GAME_FEED_CATALOG = {
 # a shrug isn't worth a post, and the feed stays signal.
 FEED_AUTOPOST_BY_RATING = {5: 1, 4: 1, 3: None, 2: -1, 1: -1}
 
-# GMs use the same scaled quorum as players — one rating model, one floor.
+# GMs use the same fanbase-scaled quorum as players — one rating model, one
+# floor. A GM is rated by the club's fans, so the same "a small club must still
+# be able to speak" argument applies verbatim; see SENTIMENT_MIN_RATERS.
 # (Kept as its own name so a GM-specific floor stays possible later.)
-GM_SENTIMENT_MIN_VOTERS = 3
+GM_SENTIMENT_MIN_VOTERS = 1
 
 # ---- GM turnover: fired / retire / leave (AFO plan Part C) ----
 # All three exits are sim decisions, each rolling the replacement gamble. Since
@@ -1685,12 +1705,16 @@ ROOKIE_DRAFT_ENABLED = False
 
 # ---- Autonomous Front Office (docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md) ----
 # The sim's GM brain makes roster decisions; fans express sentiment that tips
-# close calls. Phase 1 = valuation + the re-sign decider. While this flag is
-# False the existing fan-vote path runs unchanged, so the two never both decide.
-# Now ON (plan step 7). The brain decides; the binding-vote path is dead and
-# is being removed. Kept as a flag so a bad offseason can be rolled back to
-# fan votes without a revert.
-AUTONOMOUS_FO_ENABLED = True
+# close calls.
+# ⚠️ REMOVED 2026-08-13 — this was `AUTONOMOUS_FO_ENABLED`, and its comment said
+# it was "kept as a flag so a bad offseason can be rolled back to fan votes".
+# THAT ROLLBACK DID NOT EXIST. The binding-vote system was deleted and nothing
+# has set `_gmResigned` since, so the fallback path kept nobody: measured on a
+# played season, 22 expiring players and 0 re-signed — flipping the flag would
+# have walked every walk-year player in the league in one offseason, in the name
+# of safety. (CLAUDE.md separately called the flag "vestigial — read nowhere";
+# it was read in two places and was live.) The brain is the only decider now.
+# Deliberately not replaced with a working switch: there is nothing to switch TO.
 
 # Positional value multiplier. Every fill/upgrade/re-sign decision ranks by
 # perceivedValue = projectedRating x POSITION_VALUE, which is what stops
@@ -1735,6 +1759,20 @@ FO_SCOUT_NOISE_MAX = 12.0
 # sharper read of the board without ever replacing the GM's own eye. Before
 # this the facility had no reader anywhere in the codebase.
 FO_SCOUT_FACILITY_ENABLED = True
+
+# Correct the winner's curse when the GM prices "the best player I can get".
+# Picking the highest of N noisy reads preferentially finds whoever this GM
+# overrated, so the free agent market reads better than it is and reads better
+# the DEEPER the pool. Measured with it OFF: an average scout saw a 20-man pool
+# as +6.1 above its actual best player (a poor scout +16.2) and cut a clearly
+# better incumbent 20% of the time (60% for the poor scout) — and across four
+# simulated seasons the 66 resulting cuts landed a better player 52% of the time
+# and a worse one 47%, moving roster quality +0.6 against the +6.0 every one of
+# those decisions claimed. That is a coin flip dressed as judgement.
+# ⚠️ This corrects the SCALAR compared against a threshold, never the per-player
+# ordering — GMs reaching for different men is a design goal, not the bug.
+# Off only for A/B; see frontOfficeBrain._deWinnersCurse.
+FO_SCOUT_WINNERS_CURSE_CORRECTION = True
 
 # ── Free agent destination preference ───────────────────────────────────────
 # Players decide where they are willing to sign BEFORE the draft, so a team's
@@ -1809,6 +1847,23 @@ FO_CUT_UPGRADE_MARGIN = 6.0   # value points the replacement must beat the
 # binds on that transient — but 70 would read as absurd, so it is bounded.
 # Mirrors the re-sign cap: a GM makes at most a couple of decisive moves a year.
 FO_CUT_MAX_PER_TEAM = 2
+
+# How sure a GM must be that it can come away with SOMEONE better before it cuts.
+# ⚠️ THE CUT USED TO REST ON GETTING ONE PARTICULAR PLAYER, and measured, the club
+# signed that exact man **8% of the time** — 92% went elsewhere, because deciding
+# and acquiring are separate phases with a worst-first draft between them and
+# `_leftThisTeamThisOffseason` blocks re-signing your own cut player, so there is
+# no fallback. Cut results were consequently a coin flip (44% better / 46% worse)
+# NO MATTER HOW HONEST THE VALUATION WAS: fixing the estimate cut volume 66 -> 50
+# and moved the hit rate not at all.
+# A club does not need the man it wants, it needs someone better than the man it
+# has — so the gate is now P(at least one upgrade survives to my pick), from a
+# Binomial over the clubs picking ahead. See frontOfficeBrain.upgradeConfidence.
+# The behaviour falls out rather than being scripted: a club with a POOR starter
+# can cut confidently (much of the pool beats him, so some of it survives a run
+# on the position) while a club with a decent one cannot, because only the top of
+# the board beats him and the top always goes.
+FO_CUT_MIN_CONFIDENCE = 0.60
 
 # How deep into the FA pool a team should look when judging its own incumbent.
 # Benchmarking every team against the single league-best free agent is wrong:
@@ -2363,6 +2418,17 @@ FINAL_SNAP_SECS = 2
 # `turnover(..., yardsToSafety)`). Off restores the old behaviour exactly.
 CHESS_CLOCK_PUNT_ENABLED = True
 
+# How close the end zone has to be for ONE desperation play to plausibly reach it — the
+# only situation in which a TRAILING offense should spend its last snap going for it
+# rather than punting. Beyond this a heave is not a chance, it is a giveaway: the drive
+# ends either way and the only thing still on the table is where the opponent starts.
+#
+# ⚠️ Set from the losing case, not the winning one. At 45 a deep shot plus YAC can score;
+# at 80 (a team on its own 20 — the reported game) nothing can, and the old rule sent them
+# out to try anyway.
+CHESS_CLOCK_STRIKE_YARDS = 45
+
+
 LAST_SNAP_HUDDLE_SECS = 12   # hurry-up pre-snap; 9-15 across the coach clock-IQ range
 LAST_SNAP_LIVE_SECS = 5      # snap to whistle on a run (4-6)
 
@@ -2409,6 +2475,22 @@ CHESS_CLOCK_CONSERVE_SECS = 180
 # (drains nothing) — that's the intentional conservation tool; this is for the cheap,
 # unchosen stops.
 CHESS_CLOCK_STOPPED_HUDDLE_DRAIN = 25
+
+# What a snap costs, as a fraction of the tempo's normal huddle, when the game clock is
+# already STOPPED (an incompletion or a catch out of bounds). Stopping the clock has to be
+# a STRATEGY — it must always save budget — but it must not be free, or a pass-heavy
+# offense buys near-unlimited snaps and the play count explodes. 0.6 makes getting out of
+# bounds worth roughly 40% of a snap, capped by CHESS_CLOCK_STOPPED_HUDDLE_DRAIN above so
+# a slow offense cannot pay more for a stopped clock than a running one.
+CHESS_CLOCK_STOPPED_HUDDLE_FRACTION = 0.6
+
+# Budget at which a chess-clock offense hurries REGARDLESS of the score. The tempo logic
+# otherwise relaxes when the game is in hand, which kept a 35s huddle on a nearly-empty
+# budget — the offense then could not fit a snap at all and punted with ~37s still
+# showing. Running out is not a scoreboard question: a lockout is a turnover at the spot
+# whatever the lead. Sized at roughly two hurried snaps, so the last of the budget gets
+# spent rather than strolled away.
+CHESS_CLOCK_LAST_GASP_SECS = 60
 # Budget a scoring drive costs, used to decide whether a TRAILING chess-clock team can
 # still realistically catch up: it needs (scoresNeeded x TD-drive) of budget, OR just a
 # short FG-drive when a field goal ties/wins. These are OPTIMISTIC — a well-executed

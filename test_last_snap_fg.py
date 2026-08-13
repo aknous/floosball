@@ -52,6 +52,9 @@ class StubGame:
     _lastSnapBeforeBreak = fg.Game._lastSnapBeforeBreak
 
     def __init__(self, secs, clockRunning=True, timeouts=0):
+        # The real Game always has a `format` (it is a property resolving from gameRules),
+        # so a stub without one is the stub being wrong. None reads as standard.
+        self.format = None
         self.gameClockSeconds = secs
         self.clockRunning = clockRunning
         self.homeTimeoutsRemaining = self.awayTimeoutsRemaining = timeouts
@@ -103,6 +106,73 @@ class LastSnapWindowTests(unittest.TestCase):
         self.assertNotIn('self.down', src)
         self.assertNotIn('downsPerSeries', src.split('"""')[-1],
                          'the executable body must not branch on the ruleset')
+
+
+class ChessClockSnapCostTests(unittest.TestCase):
+    """A chess-clock budget is whatever ticks off the GAME clock while you hold the ball.
+
+    ⚠️ THE FORMAT USED TO RUN THIS BACKWARDS: the budget was the real clock and the
+    displayed game clock was DERIVED from it, a quarter ending once totalBudget/4 of
+    offense time had been spent. That inversion is why cheap snaps stalled the period —
+    less budget spent meant less game clock — and it forced a flat "stopped clock" charge
+    so clock-stopping plays would not be free.
+
+    Owner's model, which is the simple one: a normal game clock, and each team's own clock
+    ticking down by exactly what the game clock ticks while they have the ball. Two things
+    fall out — a stopped clock costs NOBODY anything, because nothing is ticking, and the
+    period ends on the game clock like every other format, so no amount of cheap snaps can
+    stall it.
+
+    So the cost of a snap here is just the cost of a snap anywhere:
+        clock RUNNING -> huddle + live ball
+        clock STOPPED -> live ball only (the clock restarts at the snap)
+    """
+
+    class _Fmt:
+        key = 'chess_clock'
+
+    def _game(self, budget, huddle, running=True):
+        g = StubGame(budget)
+        g.format = self._Fmt()
+        g.clockRunning = running
+        g.homeTimeoutsRemaining = g.awayTimeoutsRemaining = 3
+        g._classifyTempoIntent = lambda: ('neutral', huddle)
+        return g
+
+    def testARunningClockPaysTheHuddleAndTheBall(self):
+        from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU, LAST_SNAP_LIVE_SECS as LIVE
+        need = NEU + LIVE
+        self.assertTrue(self._game(need - 1, NEU)._lastSnapBeforeBreak())
+        self.assertFalse(self._game(need + 1, NEU)._lastSnapBeforeBreak())
+
+    def testAStoppedClockPaysOnlyTheBall(self):
+        """⚠️ The huddle is FREE with the clock stopped — that is what a chess clock means,
+        and it is why getting out of bounds is a strategy. Owner: "the budget cost of a
+        snap when the clock is stopped is just the length of the play. the clock doesn't
+        run when they're huddling."""
+        from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU, LAST_SNAP_LIVE_SECS as LIVE
+        self.assertTrue(self._game(LIVE - 1, NEU, running=False)._lastSnapBeforeBreak())
+        self.assertFalse(self._game(LIVE + 1, NEU, running=False)._lastSnapBeforeBreak())
+        # And the same budget with the clock RUNNING cannot fit a snap, because the huddle
+        # now costs — which is the whole difference.
+        self.assertTrue(self._game(LIVE + 1, NEU, running=True)._lastSnapBeforeBreak())
+
+    def testTheTempoSetsTheRunningCost(self):
+        """A relaxed offense runs out sooner than a hurrying one, because its huddle is
+        what it is paying."""
+        from constants import (CHESS_CLOCK_NEUTRAL_HUDDLE as NEU,
+                               CHESS_CLOCK_RELAXED_HUDDLE as REL, LAST_SNAP_LIVE_SECS as LIVE)
+        budget = REL          # enough for a neutral snap, not a relaxed one
+        self.assertTrue(self._game(budget, REL)._lastSnapBeforeBreak())
+        self.assertFalse(self._game(budget, NEU)._lastSnapBeforeBreak())
+
+    def testNoFlatStoppedDrainRemains(self):
+        """⚠️ The flat drain belonged to the inverted model and must not come back — it
+        charged a hurrying offense more for a stopped clock than a running one."""
+        import inspect
+        src = inspect.getsource(fg.Game._lastSnapBeforeBreak)
+        body = src.split('"""')[-1]
+        self.assertNotIn('CHESS_CLOCK_STOPPED_HUDDLE_DRAIN', body)
 
 
 class PlacementTests(unittest.TestCase):

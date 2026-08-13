@@ -1,16 +1,23 @@
 """Fan sentiment — storage, aggregation, and the GM tilt (AFO plan Part D).
 
-Asserts what the design promises: net one rating per fan, a rater floor so one
+Asserts what the design promises: net one rating per fan, a rater quorum so one
 loud voice can't move a roster decision, and a tilt that scales with the GM's
 own fanTrust while never being large enough to force a clearly-bad move.
+
+⚠️ The quorum is scaled to EACH CLUB'S OWN FANBASE (owner, 2026-08-13), because
+only a club's own fans may rate it. Under the old flat floor of 3, a club with
+one or two fans could never register sentiment at all however strongly they
+felt — measured on production as 5 clubs with no fans and several with one or
+two, out of 163 favoriters spread across 32 clubs.
 """
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from database.models import Base, PlayerSentimentRating
+from database.models import Base, PlayerSentimentRating, User, Player
 from database.repositories.sentiment_repository import (
-    SentimentRepository, normalizeSentiment,
+    SentimentRepository, normalizeSentiment, requiredRatersForTeam,
+    teamFanCounts, _quorumCache,
 )
 from managers.frontOfficeBrain import FrontOfficeBrain
 from constants import SENTIMENT_MIN_RATERS, SENTIMENT_MAX_VALUE_SWING
@@ -19,7 +26,12 @@ from floosball_player import Position
 
 
 def _session():
-    """In-memory DB with just the tables we need."""
+    """In-memory DB with just the ratings table.
+
+    No `players` table on purpose: the club lookup must FAIL OPEN to the floor
+    rather than raising, which is what keeps a schema gap from silently gating
+    every player in the league to neutral.
+    """
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine, tables=[PlayerSentimentRating.__table__])
     return sessionmaker(bind=engine)()
@@ -27,6 +39,29 @@ def _session():
 
 def _repo():
     return SentimentRepository(_session())
+
+
+def _clubRepo(fans: int, playerIds=(7,), teamId: int = 1):
+    """A repo over a club with `fans` favoriters and a roster.
+
+    The quorum is per-club, so anything testing it needs the club to exist.
+    ⚠️ The module-level fan-count cache is cleared per build — otherwise the
+    first club's fanbase answers for every later one in the same test run.
+    """
+    engine = create_engine("sqlite://")
+    # No `teams` table: the player quorum resolves a club through
+    # `Player.team_id` and counts favoriters on `users`, and never joins Team.
+    Base.metadata.create_all(engine, tables=[
+        PlayerSentimentRating.__table__, User.__table__, Player.__table__])
+    session = sessionmaker(bind=engine)()
+    for pid in playerIds:
+        session.add(Player(id=pid, name=f"Player{pid}", team_id=teamId))
+    for uid in range(1, fans + 1):
+        session.add(User(id=uid, clerk_id=f"u{uid}", email=f"fan{uid}@test",
+                         username=f"fan{uid}", favorite_team_id=teamId))
+    session.commit()
+    _quorumCache['value'], _quorumCache['at'] = None, None
+    return SentimentRepository(session)
 
 
 # ------------------------------------------------------------- storage
@@ -68,19 +103,56 @@ def test_withdrawing_a_rating():
 
 # --------------------------------------------------------- aggregation
 
-def test_rater_floor_gates_the_signal():
-    """The whole anti-brigade point: below the floor a player reads NEUTRAL, so
-    one loud fan cannot move a roster decision."""
-    r = _repo()
-    for uid in range(SENTIMENT_MIN_RATERS - 1):
+def test_a_big_fanbase_still_gates_the_signal():
+    """The anti-brigade point survives the rescale: at a well-supported club a
+    couple of voices still read NEUTRAL, because the bar rose with the crowd."""
+    r = _clubRepo(fans=12)
+    need = requiredRatersForTeam(r.session, 1)
+    assert need > 1, f"a 12-fan club should need more than one voice, got {need}"
+
+    for uid in range(1, need):
         r.setRating(uid, 7, 5)
     r.session.commit()
-    assert r.getSentiment(7) == 0.0, "below floor must read neutral"
+    assert r.getSentiment(7) == 0.0, "below the club's bar must read neutral"
 
-    r.setRating(999, 7, 5)
+    r.setRating(need, 7, 5)
     r.session.commit()
-    assert r.getSentiment(7) > 0.0, "at the floor the signal engages"
-    print(f"PASS sentiment is gated until {SENTIMENT_MIN_RATERS} distinct raters")
+    assert r.getSentiment(7) > 0.0, "at the bar the signal engages"
+    print(f"PASS a 12-fan club is gated until {need} distinct raters")
+
+
+def test_a_one_fan_club_can_still_be_heard():
+    """⚠️ THE REGRESSION. Under the old flat floor of 3 this club's players read
+    neutral FOREVER: only its own fans may rate it, and it has one. Sentiment
+    that some clubs structurally cannot express is not a fan layer."""
+    r = _clubRepo(fans=1)
+    assert requiredRatersForTeam(r.session, 1) == 1
+    r.setRating(1, 7, 5)
+    r.session.commit()
+    assert r.getSentiment(7) > 0.0, "a club's whole fanbase must be able to speak"
+    print("PASS a one-fan club's single fan clears its own bar")
+
+
+def test_the_bar_is_always_reachable_by_the_fanbase():
+    """The property the old formula lacked. A bar a club cannot clear with every
+    fan it has is a bar that silently disables the feature for that club."""
+    for fans in (1, 2, 3, 5, 8, 14, 40):
+        r = _clubRepo(fans=fans)
+        need = requiredRatersForTeam(r.session, 1)
+        assert need <= fans, f"{fans} fans face an unreachable bar of {need}"
+        assert need >= 1
+    print("PASS every club's bar sits within the fanbase it actually has")
+
+
+def test_the_bar_grows_with_the_fanbase():
+    sizes = [1, 3, 6, 14, 40]
+    needs = []
+    for fans in sizes:
+        r = _clubRepo(fans=fans)
+        needs.append(requiredRatersForTeam(r.session, 1))
+    assert needs == sorted(needs), needs
+    assert needs[-1] > needs[0], needs
+    print(f"PASS the bar rises with support ({dict(zip(sizes, needs))})")
 
 
 def test_normalization_maps_onto_minus_one_to_one():
@@ -107,11 +179,13 @@ def test_bulk_map_matches_per_player():
 
 
 def test_boards_exclude_under_rated_players():
-    r = _repo()
-    for uid in range(SENTIMENT_MIN_RATERS):
+    # A well-supported club, so a single rating is genuinely under its bar.
+    r = _clubRepo(fans=12, playerIds=(10, 11, 12))
+    need = requiredRatersForTeam(r.session, 1)
+    for uid in range(1, need + 1):
         r.setRating(uid, 10, 5)        # genuinely loved
         r.setRating(uid, 11, 1)        # genuinely hated
-    r.setRating(50, 12, 5)             # one rater only — must not appear
+    r.setRating(1, 12, 5)              # one rater only — must not appear
     r.session.commit()
 
     loved = r.getBoard(10, mostLoved=True)
@@ -193,40 +267,33 @@ def test_unknown_player_reads_neutral():
 
 
 
-def test_quorum_scales_with_the_active_fanbase():
-    """The floor is for a small league; a busier one should need more turnout
-    before a public average is trustworthy."""
-    import math
-    from constants import SENTIMENT_MIN_RATERS, SENTIMENT_QUORUM_ACTIVE_FRACTION
-
-    def required(active):
-        return max(SENTIMENT_MIN_RATERS, math.ceil(active * SENTIMENT_QUORUM_ACTIVE_FRACTION))
-
-    assert required(0) == SENTIMENT_MIN_RATERS      # empty league -> the floor
-    assert required(18) == SENTIMENT_MIN_RATERS     # small league -> still the floor
-    assert required(140) > SENTIMENT_MIN_RATERS     # busy league -> more turnout
-    assert required(400) > required(140)            # monotonic
-    print(f"PASS quorum scales (0/18 -> {required(0)}, 140 -> {required(140)}, 400 -> {required(400)})")
-
-
 def test_quorum_never_drops_below_the_floor():
-    """However tiny the base, one or two fans must never set a public number."""
-    from database.repositories.sentiment_repository import requiredRaters
-    from constants import SENTIMENT_MIN_RATERS
-
+    """A failure must never gate HARDER than normal, and never to zero."""
     class DeadSession:
         def query(self, *a, **k): raise RuntimeError('no db')
 
-    # An unavailable count must fall back to the floor, never to zero.
-    assert requiredRaters(DeadSession()) == SENTIMENT_MIN_RATERS
-    print("PASS an unavailable user count falls back to the floor, not to zero")
+    _quorumCache['value'], _quorumCache['at'] = None, None
+    assert requiredRatersForTeam(DeadSession(), 1) == SENTIMENT_MIN_RATERS
+    # An unknown club (a free agent has none) also falls back rather than raising.
+    assert requiredRatersForTeam(DeadSession(), None) == SENTIMENT_MIN_RATERS
+    print("PASS an unavailable fan count falls back to the floor, not to zero")
+
+
+def test_a_missing_players_table_fails_open():
+    """⚠️ The club lookup is a SECOND query behind every rating read. If it
+    raises, sentiment must degrade to the floor — not gate the whole league to
+    neutral, which would disable the fan layer on a schema hiccup."""
+    r = _repo()                    # no players/users/teams tables at all
+    r.setRating(1, 7, 5)
+    r.session.commit()
+    assert r.getSentiment(7) > 0.0
+    print("PASS a missing roster table degrades to the floor, not to silence")
 
 
 def test_ratings_stay_hidden_until_quorum():
-    """End to end: the aggregate is withheld until the scaled quorum is met."""
-    from database.repositories.sentiment_repository import requiredRaters
-    r = _repo()
-    need = requiredRaters(r.session)
+    """End to end: the aggregate is withheld until the club's quorum is met."""
+    r = _clubRepo(fans=12)
+    need = requiredRatersForTeam(r.session, 1)
     for uid in range(need - 1):
         r.setRating(uid, 7, 5)
     r.session.commit()

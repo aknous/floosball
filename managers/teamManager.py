@@ -1593,32 +1593,230 @@ class TeamManager:
                     self.logger.info(
                         f"{retiringName} retires after {retiringSeasons} seasons with {team.name}"
                     )
-                # Drop the retired coach's DB row so it can't be re-linked
-                # via team_id and can't pollute the unassigned coach pool.
-                if (DATABASE_AVAILABLE and USE_DATABASE and self.db_session
-                        and retiringId is not None):
-                    try:
-                        from database.models import Coach as DBCoach
-                        dbCoach = self.db_session.get(DBCoach, retiringId)
-                        if dbCoach is not None:
-                            self.db_session.delete(dbCoach)
-                            self.db_session.flush()
-                    except Exception as e:
-                        self.logger.warning(
-                            f"handleCoachRetirement: failed to delete retired "
-                            f"coach {retiringName} (id={retiringId}): {e}"
-                        )
-                # The replacement gamble. Specialists (Part B) mean the new GM
-                # is better-or-worse PER DIMENSION, not simply up or down.
-                team.coach = self.generateCoach()
+                    # A retiree is DONE — drop the row so it can't be re-linked
+                    # and can't pollute the unassigned coach pool.
+                    if (DATABASE_AVAILABLE and USE_DATABASE and self.db_session
+                            and retiringId is not None):
+                        try:
+                            from database.models import Coach as DBCoach
+                            dbCoach = self.db_session.get(DBCoach, retiringId)
+                            if dbCoach is not None:
+                                self.db_session.delete(dbCoach)
+                                self.db_session.flush()
+                        except Exception as e:
+                            self.logger.warning(
+                                f"handleCoachRetirement: failed to delete retired "
+                                f"coach {retiringName} (id={retiringId}): {e}"
+                            )
+                else:
+                    # ⚠️ BANK THE SEASON THEY JUST COACHED BEFORE THEY LEAVE.
+                    # `seasonsCoached += 1` at the top of this loop is in memory
+                    # only, and the save below writes the INCOMING coach — so a
+                    # departing GM's final season was never persisted and they
+                    # entered the market showing stale tenure. That is precisely
+                    # the field the carousel is meant to surface, so without this
+                    # a GM fired after three seasons is hired elsewhere reading
+                    # as a first-timer.
+                    self._persistCoachTenure(retiringId, retiringSeasons)
+                # ⚠️ A FIRED OR DEPARTED GM IS **KEPT** (owner, 2026-08-13).
+                # Their row survives and becomes unassigned the moment
+                # _saveCoachToDatabase repoints Team.coach_id, so another club
+                # can hire them — the carousel the plan calls "a real trade, not
+                # a reroll". Deleting them cost two things: a GM simply ceased
+                # to exist mid-career (no rival rebuild, no story), and their
+                # NAME went with them — `_recyclePlayerName` only ever runs on
+                # players, so every turnover permanently burned a name out of
+                # the shared pool. Measured before this: 662 -> 594 pooled names
+                # across 8 seasons with the live population flat.
+                team.coach = self._hireReplacementCoach(team, excludeCoachId=retiringId)
                 self._saveCoachToDatabase(team)
+                # ⚠️ VERIFY THE HIRE LANDED. Hiring off the pool re-points an
+                # EXISTING coach row rather than inserting a fresh one, so a
+                # stale or contended row can leave the club with `coach_id` NULL
+                # while the in-memory object looks fine — `_saveCoachToDatabase`
+                # swallows its own failure and rolls back. Caught in a 6-season
+                # sim as one club (of 32) finishing with no coach at all, which
+                # the baseline never produced. Generating is always available as
+                # a fallback, so a vacancy is never the outcome.
+                if not self._coachIsLinked(team):
+                    self.logger.warning(
+                        f"{team.name}: pool hire did not stick — generating instead")
+                    team.coach = self.generateCoach()
+                    self._saveCoachToDatabase(team)
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")
+                self._recordCoachChange(team, exitKind, retiringName, retiringSeasons)
 
         total = sum(exits.values())
         if total:
             self.logger.info(
                 f"GM turnover: {total} change(s) — {exits['retired']} retired, "
                 f"{exits['fired']} fired, {exits['left']} stepped down")
+
+    def _persistCoachTenure(self, coachId, seasons: int) -> None:
+        """Write a departing GM's season count to their row.
+
+        Surviving coaches get theirs persisted by the sweep in seasonManager
+        after this method returns; a coach who has just been replaced is not in
+        that sweep, so this is their only chance to record the season they
+        actually coached.
+        """
+        if coachId is None:
+            return
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return
+        try:
+            from database.models import Coach as DBCoach
+            dbCoach = self.db_session.get(DBCoach, coachId)
+            if dbCoach is not None:
+                dbCoach.seasons_coached = int(seasons or 0)
+                self.db_session.flush()
+        except Exception as e:
+            self.logger.warning(
+                f"_persistCoachTenure: could not bank tenure for coach {coachId}: {e}")
+
+    def _recordCoachChange(self, team, exitKind: str, retiringName: str,
+                           retiringSeasons: int) -> None:
+        """Put a GM change into the Season Recap.
+
+        ⚠️ NOTHING RECORDED THESE UNTIL 2026-08-13, and the whole reading half
+        was already built: `SeasonRecapEvent` documents `coach_fire | coach_hire`
+        as valid types, the frontend declares them, and `SeasonRecap.tsx` renders
+        a COACHING CHANGES block that colors them and prints "Fired"/"Hired".
+        `_recordOffseasonEvent` was simply never called with either, so the
+        section rendered NOTHING from the day it shipped — `announce()` returns
+        null on an empty list, so it looked absent rather than broken. The only
+        trace a GM change left anywhere was a server log line no user can read.
+        (Fourth instance of this pattern in the codebase; the dead fantasy roster
+        tables account for three.)
+
+        It matters more now that a fired GM lands in the pool and can resurface
+        at a rival with their tenure intact — that is a story the sim generates
+        and used to throw away.
+
+        Only a genuine FIRING records `coach_fire`; the frontend prints that type
+        as the literal word "Fired", so routing a retirement or a resignation
+        through it would state something untrue. Those carry their reason in the
+        hire line instead, which is why every exit records a hire and only one
+        kind records a departure.
+        """
+        seasonManager = None
+        try:
+            seasonManager = self.serviceContainer.getService('season_manager')
+        except Exception:
+            pass
+        if seasonManager is None or not hasattr(seasonManager, '_recordOffseasonEvent'):
+            return
+
+        def _plural(n, word):
+            return f"{n} {word}{'s' if n != 1 else ''}"
+
+        try:
+            if exitKind == 'fired':
+                seasonManager._recordOffseasonEvent(
+                    'coach_fire', team=team,
+                    detail=f"{retiringName} after {_plural(retiringSeasons, 'season')}")
+
+            arrived = getattr(team.coach, 'name', 'a new GM')
+            prior = int(getattr(team.coach, 'seasonsCoached', 0) or 0)
+            # Prior tenure is the interesting part of a market hire: it is how a
+            # reader spots the GM they watched get fired turning up somewhere else.
+            if prior > 0:
+                arrived = f"{arrived} ({_plural(prior, 'prior season')})"
+            if exitKind == 'retired':
+                detail = f"{arrived}, replacing {retiringName} (retired)"
+            elif exitKind == 'left':
+                detail = f"{arrived}, replacing {retiringName} (stepped down)"
+            else:
+                detail = arrived
+            seasonManager._recordOffseasonEvent('coach_hire', team=team, detail=detail)
+        except Exception as e:
+            # A recap line is never worth failing an offseason over.
+            self.logger.warning(f"_recordCoachChange failed for {team.name}: {e}")
+
+    def _coachIsLinked(self, team) -> bool:
+        """Is this club's coach actually persisted AND pointed at by the club?
+
+        `Team.coach_id` is the single source of truth, so an in-memory
+        `team.coach` proves nothing on its own.
+        """
+        if getattr(team, 'coach', None) is None:
+            return False
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return True                     # no DB to disagree with
+        try:
+            from database.models import Team as DBTeam
+            dbTeam = self.db_session.get(DBTeam, team.id)
+            return bool(dbTeam is not None and dbTeam.coach_id
+                        and dbTeam.coach_id == getattr(team.coach, 'id', None))
+        except Exception:
+            return False
+
+    def _hireReplacementCoach(self, team, excludeCoachId=None):
+        """Fill a vacancy from the unassigned GM pool, or generate if it's empty.
+
+        THE POOL COMES FIRST, and that is the point: fired and departed GMs land
+        there, so a club that sacks its GM in one offseason can watch them turn
+        up at a rival in the next. Generating a fresh coach every time made
+        turnover a reroll — a name appeared, a name vanished, and nothing carried
+        between clubs.
+
+        It also stops the name leak. A generated coach draws from the SAME
+        `unused_names` pool players use and nothing ever recycles a coach's name,
+        so every turnover used to burn one permanently. Hiring from the pool
+        draws nothing.
+
+        ⚠️ The pick is RANDOM among those available, deliberately. Ranking the
+        market would mean ranking `Coach.overallRating`, which the class itself
+        documents as carrying almost no signal — since Part B made coaches
+        SPECIALISTS, the central limit drags that average to the middle for
+        everyone, and it excludes `scouting` and `attitude`, the two most
+        GM-critical traits. There is no scalar worth sorting on, which is the
+        same reason the plan calls a replacement "better-or-worse per dimension,
+        not simply up or down". A random draw from the market IS that gamble.
+
+        ⚠️ `excludeCoachId` is the GM who just left THIS club. They are on the
+        market — for everyone else. A club immediately re-hiring the person it
+        just fired would read as a bug whatever their attributes say.
+        """
+        # ⚠️ IN USE IN MEMORY COUNTS AS TAKEN. `getAvailableCoaches` asks only
+        # whether a row is referenced by `Team.coach_id`, so a club holding a
+        # coach whose link was never persisted (coach_id NULL) leaves that row
+        # looking free — and another club hires the GM it is already using.
+        # Caught in a production-shaped rehearsal: two clubs sat on NULL
+        # coach_id while their GMs were handed to Broads and Monuments, putting
+        # the same two names on four clubs. The stale link is a pre-existing
+        # fault; generating a fresh coach every time used to hide it, because
+        # pool rows were never hired at all.
+        inUse = {getattr(getattr(t, 'coach', None), 'id', None) for t in self.teams}
+        inUse.discard(None)
+        candidates = []
+        try:
+            candidates = [c for c in self.getAvailableCoaches()
+                          if c.id not in inUse
+                          and (excludeCoachId is None or c.id != excludeCoachId)]
+        except Exception as e:
+            self.logger.warning(f"_hireReplacementCoach: pool unavailable: {e}")
+        if not candidates:
+            return self.generateCoach()
+
+        pick = _random.choice(candidates)
+        coach = FloosCoach.Coach()
+        coach.id = pick.id
+        coach.name = pick.name
+        coach.seasonsCoached = getattr(pick, 'seasons_coached', 0) or 0
+        coach.offensiveMind = pick.offensive_mind
+        coach.defensiveMind = pick.defensive_mind
+        coach.adaptability = pick.adaptability
+        coach.aggressiveness = pick.aggressiveness
+        coach.clockManagement = pick.clock_management
+        coach.playerDevelopment = pick.player_development
+        coach.scouting = getattr(pick, 'scouting', 80) or 80
+        coach.attitude = getattr(pick, 'attitude', 80) or 80
+        coach.fanTrust = getattr(pick, 'fan_trust', 80) or 80
+        self.logger.info(
+            f"{team.name} hires {coach.name} off the GM market "
+            f"({coach.seasonsCoached} prior season(s))")
+        return coach
 
     def generateCoachPool(self, count: int = 12) -> None:
         """Top up the unassigned coach pool to `count` entries.
