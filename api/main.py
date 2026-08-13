@@ -4319,68 +4319,72 @@ async def get_history_team_records(response: Response, limit: int = Query(defaul
 async def get_history_user_records(response: Response, limit: int = Query(default=10, ge=1, le=50)):
     """Top-N fantasy records across users.
 
-    weeklyFP — best single-week FP total (roster player FP + card bonus)
+    weeklyFP — best single-week FP total (lineup player FP + card bonus)
     seasonFP — best single-season FP total
-    Both pull from WeeklyPlayerFP (per player per week) joined to a user's
-    locked FantasyRoster, summed with WeeklyCardBonus. Swap nuance is
-    ignored for record-book purposes; the order is dominated by
-    consistent-roster users either way.
+
+    ⚠️ THIS READ TABLES THE FUSION LEFT UNWRITTEN. It joined `fantasy_rosters` to
+    `fantasy_roster_players`, and the fantasy/cards fusion made the EQUIPPED CARDS the
+    roster — both tables hold ZERO rows, so both lists came back empty and the Fantasy
+    Records page showed nothing. Reported exactly that way. This is the THIRD time those
+    tables have silently emptied a feature: they also took Field General's backfill and
+    the Veteran achievement.
+
+    ⚠️ THE BANKED RECORD IS `weekly_card_bonuses`, not the equipped rows. Its
+    `breakdowns_json` is written once when a week settles and never revised, and it
+    carries the `playerId` of every slot — so it is the only honest answer to "who did
+    this user field in week N". `equipped_cards` is the LIVE lineup and is carried
+    forward, so reading it would score every past week against today's hand. Same rule
+    the fantasy leaderboards had to learn.
     """
     response.headers["Cache-Control"] = "public, max-age=300"
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
+    import json as _json
     from sqlalchemy import text
     from database.connection import get_session
     from database.models import User
     session = get_session()
     try:
-        # Weekly per-user player FP totals (sum across the user's roster).
-        weeklyPlayerRows = session.execute(text("""
-            SELECT fr.user_id AS user_id, fr.season AS season, wpf.week AS week,
-                   SUM(wpf.fantasy_points) AS player_fp
-            FROM fantasy_rosters fr
-            JOIN fantasy_roster_players frp ON frp.roster_id = fr.id
-            JOIN weekly_player_fp wpf ON wpf.player_id = frp.player_id AND wpf.season = fr.season
-            GROUP BY fr.user_id, fr.season, wpf.week
+        # Every settled week a user fielded a lineup, with the lineup itself.
+        bonusRows = session.execute(text("""
+            SELECT user_id, season, week, bonus_fp, breakdowns_json
+            FROM weekly_card_bonuses
         """)).fetchall()
-        # Weekly card bonuses keyed by (user, season, week).
-        cardWeekRows = session.execute(text("""
-            SELECT user_id, season, week, bonus_fp FROM weekly_card_bonuses
+
+        # Player FP for the weeks in play, keyed by (player, season, week).
+        fpRows = session.execute(text("""
+            SELECT player_id, season, week, fantasy_points FROM weekly_player_fp
         """)).fetchall()
-        cardByWeek: Dict[tuple, float] = {
-            (r.user_id, r.season, r.week): float(r.bonus_fp or 0) for r in cardWeekRows
+        fpByPlayerWeek: Dict[tuple, float] = {
+            (r.player_id, r.season, r.week): float(r.fantasy_points or 0) for r in fpRows
         }
 
         weeklyTotals = []
-        for r in weeklyPlayerRows:
-            cb = cardByWeek.get((r.user_id, r.season, r.week), 0.0)
-            weeklyTotals.append((r.user_id, r.season, r.week, float(r.player_fp or 0) + cb))
+        seasonAcc: Dict[tuple, float] = {}
+        for r in bonusRows:
+            try:
+                breakdowns = _json.loads(r.breakdowns_json or '[]')
+            except (ValueError, TypeError):
+                breakdowns = []
+            # ⚠️ A row with no breakdown is LEGACY (pre-snapshot-storage), not an empty
+            # lineup — skip it rather than record a 0, which would read as a user who
+            # fielded a team and scored nothing.
+            playerIds = [b.get('playerId') for b in breakdowns if b.get('playerId')]
+            if not playerIds:
+                continue
+            playerFp = sum(fpByPlayerWeek.get((pid, r.season, r.week), 0.0)
+                           for pid in set(playerIds))
+            total = playerFp + float(r.bonus_fp or 0)
+            weeklyTotals.append((r.user_id, r.season, r.week, total))
+            seasonAcc[(r.user_id, r.season)] = seasonAcc.get((r.user_id, r.season), 0.0) + total
+
         weeklyTotals.sort(key=lambda t: t[3], reverse=True)
         weeklyTotals = weeklyTotals[:limit]
 
-        # Season totals: sum across weeks.
-        seasonPlayerRows = session.execute(text("""
-            SELECT fr.user_id AS user_id, fr.season AS season,
-                   SUM(wpf.fantasy_points) AS player_fp
-            FROM fantasy_rosters fr
-            JOIN fantasy_roster_players frp ON frp.roster_id = fr.id
-            JOIN weekly_player_fp wpf ON wpf.player_id = frp.player_id AND wpf.season = fr.season
-            GROUP BY fr.user_id, fr.season
-        """)).fetchall()
-        cardSeasonRows = session.execute(text("""
-            SELECT user_id, season, SUM(bonus_fp) AS bonus_fp
-            FROM weekly_card_bonuses
-            GROUP BY user_id, season
-        """)).fetchall()
-        cardBySeason: Dict[tuple, float] = {
-            (r.user_id, r.season): float(r.bonus_fp or 0) for r in cardSeasonRows
-        }
-        seasonTotals = []
-        for r in seasonPlayerRows:
-            cb = cardBySeason.get((r.user_id, r.season), 0.0)
-            seasonTotals.append((r.user_id, r.season, float(r.player_fp or 0) + cb))
-        seasonTotals.sort(key=lambda t: t[2], reverse=True)
-        seasonTotals = seasonTotals[:limit]
+        seasonTotals = sorted(
+            ((uid, sea, v) for (uid, sea), v in seasonAcc.items()),
+            key=lambda t: t[2], reverse=True,
+        )[:limit]
 
         # Resolve usernames in one batch
         userIds = {uid for (uid, *_rest) in weeklyTotals} | {uid for (uid, *_rest) in seasonTotals}
