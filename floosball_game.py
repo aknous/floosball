@@ -5151,6 +5151,42 @@ class Game:
                     self.play.playType = PlayType.Punt
                     return
 
+            # ⚠️ NEEDING POINTS WITH NO CLOCK AND NOBODY TO PUNT TO — TAKE A SHOT.
+            #
+            # Declining to punt was only ever a REFUSAL: the play then came from the normal
+            # down-and-distance table, so an offense that had decided it must score kept
+            # calling whatever 2nd-and-7 usually calls. With a budget measured in one or
+            # two snaps that is a slow walk into a lockout.
+            #
+            # Fires only where the situation is unambiguous: the budget is nearly gone, the
+            # DEFENSE is locked out (so there is no punt to make and no answering drive to
+            # fear), and the offense is not ahead — points are the only thing left to play
+            # for. Owner: "teams with little time remaining, the other team is out, and
+            # needing to score, they should be taking deep shots to gain yards fast."
+            #
+            # Depth scales with the distance left: `deep` (27 air yards) when the end zone
+            # is far and yards matter more than completion, `long` (17) once inside
+            # striking distance, where catching it is worth more than heaving it.
+            if (self._chessClockLow(50)
+                    and self.down < self.gameRules.downsPerSeries
+                    and self.format.suppressPunt(self)
+                    and scoreDiff <= 0
+                    and not self._isGarbageTime(scoreDiff)
+                    and self.yardsToEndzone > 5
+                    and self._lastSnapBeforeBreak()):
+                _shot = 'deep' if self.yardsToEndzone > CHESS_CLOCK_STRIKE_YARDS else 'long'
+                self.play.insights['clockMgmt'] = {
+                    'decision': 'chessClockStrike',
+                    'reason': 'Budget nearly out, nobody to punt to, and points needed — '
+                              'take a shot downfield',
+                    'clockRemaining': self.gameClockSeconds,
+                    'yardsToEndzone': self.yardsToEndzone,
+                    'depth': _shot,
+                }
+                self.play.passPlay(self._selectPassPlay(_shot))
+                self.play.targetSideline = False
+                return
+
             # Drive Clock about to expire (roughly one play left) and in makeable FG
             # range: take the points NOW on ANY down, rather than run a play and turn
             # it over with zero. Skips goal-to-go (a near-certain TD is worth more)

@@ -129,6 +129,38 @@ class ChessClockPuntTests(unittest.TestCase):
         block = head[head.rindex('if ('):]
         self.assertNotIn('suppressPunt', block)
 
+    def testTheStrikeIsARealCALLNotJustARefusal(self):
+        """⚠️ Declining to punt was only ever a REFUSAL — the play then came from the
+        normal down-and-distance table, so an offense that had decided it must score kept
+        calling whatever 2nd-and-7 usually calls. With a budget measured in one or two
+        snaps that is a slow walk into a lockout. Owner: "teams with little time
+        remaining, the other team is out, and needing to score, they should be taking deep
+        shots to gain yards fast."
+
+        Measured over 150 chess-clock games: 73 shots, 55 deep and 18 long."""
+        with open(os.path.join(HERE, 'floosball_game.py')) as fh:
+            src = fh.read()
+        i = src.index("'decision': 'chessClockStrike'")
+        head = src[max(0, i - 1400):i]
+        block = head[head.rindex('if ('):]
+        # It fires only where the situation is unambiguous.
+        self.assertIn('self.format.suppressPunt(self)', block)   # nobody to punt to
+        self.assertIn('scoreDiff <= 0', block)                   # points are needed
+        self.assertIn('_lastSnapBeforeBreak()', block)           # the budget is going
+        self.assertIn('_isGarbageTime', block)
+        # And it actually CALLS the shot rather than falling through.
+        tail = src[i:i + 700]
+        self.assertIn('passPlay(self._selectPassPlay(_shot))', tail)
+        self.assertIn("'deep' if self.yardsToEndzone > CHESS_CLOCK_STRIKE_YARDS else 'long'", src)
+
+    def testTheStrikeDoesNotTargetTheSideline(self):
+        """Getting out of bounds stops the GAME clock, which is not the deadline here —
+        the budget is. Yards are the whole point, so the sideline bias comes off."""
+        with open(os.path.join(HERE, 'floosball_game.py')) as fh:
+            src = fh.read()
+        i = src.index("'decision': 'chessClockStrike'")
+        self.assertIn('targetSideline = False', src[i:i + 700])
+
     def testGarbageTimeIsExcluded(self):
         self.assertIn('_isGarbageTime', _block())
 
