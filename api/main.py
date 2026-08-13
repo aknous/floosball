@@ -4315,6 +4315,35 @@ async def get_history_team_records(response: Response, limit: int = Query(defaul
         session.close()
 
 
+def _parseBreakdowns(rawJson):
+    """The per-slot card breakdowns out of a `weekly_card_bonuses` row.
+
+    ⚠️ THERE ARE TWO STORED SHAPES AND BOTH ARE LIVE.
+      - legacy: a bare LIST of breakdown dicts
+      - current: a DICT, `{"breakdowns": [...], "equationSummary": {...}}`
+
+    Iterating the parsed value directly works on the first and silently walks the
+    KEYS of the second — yielding the strings "breakdowns" and "equationSummary",
+    so `b.get(...)` raises `AttributeError: 'str' object has no attribute 'get'`.
+    That took `/api/history/user-records` down with a 500 in production on
+    2026-08-13, because every row written by the current code is the dict shape.
+
+    `fantasyTracker._weekBonusRows` has handled both since the format changed;
+    this is the same rule, kept in one place so a third reader cannot repeat it.
+    Anything unrecognized reads as no breakdown, which callers already treat as
+    "legacy row, skip" rather than as a scoreless week.
+    """
+    if not rawJson:
+        return []
+    try:
+        parsed = json.loads(rawJson)
+    except (ValueError, TypeError):
+        return []
+    if isinstance(parsed, dict):
+        parsed = parsed.get('breakdowns', [])
+    return parsed if isinstance(parsed, list) else []
+
+
 @app.get("/api/history/user-records")
 async def get_history_user_records(response: Response, limit: int = Query(default=10, ge=1, le=50)):
     """Top-N fantasy records across users.
@@ -4362,14 +4391,12 @@ async def get_history_user_records(response: Response, limit: int = Query(defaul
         weeklyTotals = []
         seasonAcc: Dict[tuple, float] = {}
         for r in bonusRows:
-            try:
-                breakdowns = _json.loads(r.breakdowns_json or '[]')
-            except (ValueError, TypeError):
-                breakdowns = []
+            breakdowns = _parseBreakdowns(r.breakdowns_json)
             # ⚠️ A row with no breakdown is LEGACY (pre-snapshot-storage), not an empty
             # lineup — skip it rather than record a 0, which would read as a user who
             # fielded a team and scored nothing.
-            playerIds = [b.get('playerId') for b in breakdowns if b.get('playerId')]
+            playerIds = [b.get('playerId') for b in breakdowns
+                         if isinstance(b, dict) and b.get('playerId')]
             if not playerIds:
                 continue
             playerFp = sum(fpByPlayerWeek.get((pid, r.season, r.week), 0.0)
