@@ -2129,13 +2129,22 @@ class Game:
         # ⚠️ And the timeout shortcut does not apply here either: stopping the game clock
         # does NOT stop the budget, so there is no version of this where the huddle is free.
         if getattr(self.format, 'key', '') == 'chess_clock':
-            try:
-                _intent, huddle = self._classifyTempoIntent()
-            except Exception:
-                huddle = CHESS_CLOCK_STOPPED_HUDDLE_DRAIN
-            # The tempo's own huddle is the honest per-snap cost; the stopped-clock drain
-            # is the floor, since even a free-looking snap costs that much budget.
-            need = max(float(huddle or 0), float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN))
+            # ⚠️ WHICH COST APPLIES DEPENDS ON THE GAME CLOCK, and taking the larger of
+            # the two punts far too early. A running clock is charged the tempo's own
+            # pre-snap (`calculatePreSnapTime`); a STOPPED one is charged the flat
+            # `CHESS_CLOCK_STOPPED_HUDDLE_DRAIN` instead — see the pre-snap block, where
+            # they are an if/elif and never both. Flooring the tempo at the stopped drain
+            # charged a HURRYING offense 25 for a snap that costs it 12, so it punted with
+            # a snap's worth of budget still in hand. Owner: "what I want to avoid is a
+            # team punting and they still have a few seconds left on their clock."
+            if self.clockRunning:
+                try:
+                    _intent, huddle = self._classifyTempoIntent()
+                    need = float(huddle or 0)
+                except Exception:
+                    need = float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
+            else:
+                need = float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
             return secs < need + LAST_SNAP_LIVE_SECS + FINAL_SNAP_SECS
 
         timeoutsLeft = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
@@ -10836,6 +10845,19 @@ class Game:
         if getattr(self.format, 'key', '') == 'chess_clock':
             from constants import (CHESS_CLOCK_NEUTRAL_HUDDLE, CHESS_CLOCK_RELAXED_HUDDLE,
                                    CHESS_CLOCK_CONSERVE_SECS)
+            # ⚠️ A NEARLY-EMPTY BUDGET OVERRIDES "GAME IN HAND". The relax branch below
+            # used to come first, so a team up two scores kept its 35s huddle right down
+            # to an empty budget — and then could not fit a snap at all, so it punted with
+            # ~37s still showing. Owner: "what I want to avoid is a team punting and they
+            # still have a few seconds left on their clock."
+            #
+            # Running out is not a scoreboard question: a lockout is a turnover AT THE
+            # SPOT whatever the lead, so the last of the budget is worth spending quickly
+            # rather than strolling into a giveaway. This sits ABOVE the relax check for
+            # that reason.
+            from constants import CHESS_CLOCK_LAST_GASP_SECS
+            if self._chessClockLow(CHESS_CLOCK_LAST_GASP_SECS):
+                return ('hurryUp', 12)
             # Relax (normal pace) when the clock no longer matters: up big (game in hand)
             # OR trailing with no realistic budget left to catch up (out of reach).
             if scoreDiff > 2 * self._oneScore() or not self._chessClockCatchUpPossible(scoreDiff):

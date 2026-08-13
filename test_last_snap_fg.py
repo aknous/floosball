@@ -141,13 +141,25 @@ class ChessClockSnapCostTests(unittest.TestCase):
         g._classifyTempoIntent = lambda: ('neutral', huddle)
         return g
 
-    def testTheReportedBandIsTheLastSnap(self):
-        """20-30s of budget is where ARI were, and where the old rule said another snap
-        would fit."""
+    def testTheReportedSituationIsTheLastSnap(self):
+        """ARI\'s actual state in game 349: they took over after an incompletion, so the
+        game clock was STOPPED, and they had only enough budget for the one snap they
+        ran. Under the old standard-format numbers that read as room for another."""
+        from constants import CHESS_CLOCK_STOPPED_HUDDLE_DRAIN as STOP
+        g = self._game(17, 12)          # one snap's worth of budget, hurry-up tempo
+        g.clockRunning = False          # stopped: the flat drain applies
+        self.assertTrue(g._lastSnapBeforeBreak())
+        # And the old rule would have said otherwise — 17 is comfortably above 7/19.
+        self.assertGreater(17, 7)
+
+    def testASnapThatFitsIsNotTheLastOne(self):
+        """⚠️ The point of the cost model is to punt LATE, not early. Owner: "what I want
+        to avoid is a team punting and they still have a few seconds left on their
+        clock." At a neutral huddle a snap costs 20+5+2, so 30s of budget still holds
+        one and must NOT trigger the punt."""
         from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU
-        for budget in (20, 25, 30):
-            self.assertTrue(self._game(budget, NEU)._lastSnapBeforeBreak(),
-                            f'{budget}s of budget still reads as room for another snap')
+        self.assertFalse(self._game(30, NEU)._lastSnapBeforeBreak())
+        self.assertTrue(self._game(25, NEU)._lastSnapBeforeBreak())
 
     def testAGenuinelyRoomyBudgetIsNotTheLastSnap(self):
         from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU
@@ -160,20 +172,32 @@ class ChessClockSnapCostTests(unittest.TestCase):
         self.assertTrue(self._game(38, REL)._lastSnapBeforeBreak())
         self.assertFalse(self._game(38, NEU)._lastSnapBeforeBreak())
 
-    def testTheStoppedDrainIsAFloor(self):
-        """⚠️ Stopping the game clock does NOT stop the budget, so there is no version of
-        this where the huddle is free — a tiny reported huddle must not undercut the
-        drain a snap actually costs."""
+    def testAStoppedClockIsChargedTheFlatDrain(self):
+        """⚠️ WHICH COST APPLIES DEPENDS ON THE CLOCK, and they are never both. A running
+        clock pays the tempo\'s own pre-snap; a stopped one pays the flat drain instead —
+        an if/elif in the pre-snap block. Taking the LARGER of the two was tried and
+        punted far too early: it charged a hurrying offense 25 for a snap costing it 12."""
         from constants import CHESS_CLOCK_STOPPED_HUDDLE_DRAIN as STOP
-        self.assertTrue(self._game(STOP, 1)._lastSnapBeforeBreak(),
-                        'a snap is being priced below the stopped-clock drain')
+        need = STOP + 5 + 2
+        g = self._game(need - 1, 12)
+        g.clockRunning = False
+        self.assertTrue(g._lastSnapBeforeBreak(), 'the stopped drain is not being charged')
+        g2 = self._game(need + 1, 12)
+        g2.clockRunning = False
+        self.assertFalse(g2._lastSnapBeforeBreak())
+        # Running, hurrying: the same budget comfortably holds a snap, so no punt.
+        g3 = self._game(need - 1, 12)
+        g3.clockRunning = True
+        self.assertFalse(g3._lastSnapBeforeBreak(),
+                         'a hurrying offense is being charged the stopped-clock price')
 
     def testTimeoutsDoNotBuyASnapHere(self):
         """The standard rule lets a timeout skip the huddle. A timeout cannot pause a
-        possession budget, so that shortcut must not apply."""
-        from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU
-        g = self._game(25, NEU)
-        g.clockRunning = False          # game clock stopped
+        possession budget, so that shortcut must not apply — a stopped clock here still
+        costs the drain."""
+        from constants import CHESS_CLOCK_STOPPED_HUDDLE_DRAIN as STOP
+        g = self._game(STOP - 1, 12)
+        g.clockRunning = False
         g.homeTimeoutsRemaining = 3
         self.assertTrue(g._lastSnapBeforeBreak())
 

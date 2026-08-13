@@ -2420,6 +2420,14 @@ CHESS_CLOCK_CONSERVE_SECS = 180
 # (drains nothing) — that's the intentional conservation tool; this is for the cheap,
 # unchosen stops.
 CHESS_CLOCK_STOPPED_HUDDLE_DRAIN = 25
+
+# Budget at which a chess-clock offense hurries REGARDLESS of the score. The tempo logic
+# otherwise relaxes when the game is in hand, which kept a 35s huddle on a nearly-empty
+# budget — the offense then could not fit a snap at all and punted with ~37s still
+# showing. Running out is not a scoreboard question: a lockout is a turnover at the spot
+# whatever the lead. Sized at roughly two hurried snaps, so the last of the budget gets
+# spent rather than strolled away.
+CHESS_CLOCK_LAST_GASP_SECS = 60
 # Budget a scoring drive costs, used to decide whether a TRAILING chess-clock team can
 # still realistically catch up: it needs (scoresNeeded x TD-drive) of budget, OR just a
 # short FG-drive when a field goal ties/wins. These are OPTIMISTIC — a well-executed
