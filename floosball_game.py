@@ -5183,8 +5183,12 @@ class Game:
                     'yardsToEndzone': self.yardsToEndzone,
                     'depth': _shot,
                 }
+                # ⚠️ The sideline is NOT forced off here. It was, on the reasoning that
+                # stopping the game clock does nothing for a possession budget — which is
+                # wrong: a stopped clock is charged the smaller of the stopped drain and
+                # the tempo huddle, so getting out of bounds genuinely preserves budget.
+                # The normal sideline logic decides.
                 self.play.passPlay(self._selectPassPlay(_shot))
-                self.play.targetSideline = False
                 return
 
             # Drive Clock about to expire (roughly one play left) and in makeable FG
@@ -7841,9 +7845,30 @@ class Game:
                     # free (which explodes the play count in pass-heavy games). A deliberate
                     # TIMEOUT still fully preserves the budget (the intentional tool); this
                     # floor is only for the cheap, unchosen stops.
-                    from constants import CHESS_CLOCK_STOPPED_HUDDLE_DRAIN
+                    # ⚠️ A CEILING, NOT A FLAT RATE. This charged a flat 25 whenever the
+                    # game clock was already stopped, on the reasoning that clock-stopping
+                    # plays should not be "nearly free" (which explodes the play count in
+                    # pass-heavy games). But the running cost is the TEMPO's huddle — 12
+                    # hurrying, 20 neutral, 35 relaxed — so a flat 25 meant stopping the
+                    # clock SAVED a relaxed team 10 and COST a hurrying team 13, i.e. it
+                    # penalised exactly the offense that most needs to get out of bounds.
+                    #
+                    # It is now a FRACTION of the tempo's own huddle, capped by the old
+                    # flat drain: always a saving, never free. A hurrying offense gets a
+                    # real reward for getting out of bounds, and a slow one still cannot
+                    # pay more for a stopped clock than a running one. Owner: "the chess clock should stop when the game clock does, so
+                    # going out of bounds should be a strategy." It is not free here —
+                    # possession time is still spent — but it can no longer be a penalty.
+                    from constants import (CHESS_CLOCK_STOPPED_HUDDLE_DRAIN,
+                                           CHESS_CLOCK_STOPPED_HUDDLE_FRACTION)
+                    try:
+                        _i, _running = self._classifyTempoIntent()
+                        _drain = min(float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN),
+                                     float(_running or 0) * CHESS_CLOCK_STOPPED_HUDDLE_FRACTION)
+                    except Exception:
+                        _drain = float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
                     self._inPreSnap = True
-                    self.consumeGameTime(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
+                    self.consumeGameTime(_drain)
                     self._inPreSnap = False
                     if self.gameClockSeconds <= 0:
                         break

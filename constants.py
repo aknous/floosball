@@ -2421,6 +2421,14 @@ CHESS_CLOCK_CONSERVE_SECS = 180
 # unchosen stops.
 CHESS_CLOCK_STOPPED_HUDDLE_DRAIN = 25
 
+# What a snap costs, as a fraction of the tempo's normal huddle, when the game clock is
+# already STOPPED (an incompletion or a catch out of bounds). Stopping the clock has to be
+# a STRATEGY — it must always save budget — but it must not be free, or a pass-heavy
+# offense buys near-unlimited snaps and the play count explodes. 0.6 makes getting out of
+# bounds worth roughly 40% of a snap, capped by CHESS_CLOCK_STOPPED_HUDDLE_DRAIN above so
+# a slow offense cannot pay more for a stopped clock than a running one.
+CHESS_CLOCK_STOPPED_HUDDLE_FRACTION = 0.6
+
 # Budget at which a chess-clock offense hurries REGARDLESS of the score. The tempo logic
 # otherwise relaxes when the game is in hand, which kept a 35s huddle on a nearly-empty
 # budget — the offense then could not fit a snap at all and punted with ~37s still
