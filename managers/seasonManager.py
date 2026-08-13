@@ -4697,16 +4697,34 @@ class SeasonManager:
     # ── Playoff bracket challenge hooks ──────────────────────────────────
     def _freezePlayoffSeeds(self, playoffTeamsByConf) -> None:
         """Freeze the bracket field when seeding locks so the challenge can
-        project matchups. playoffTeamsByConf: {confName: [Team,...] best-first};
-        top 2 per conference are byes."""
+        project matchups. playoffTeamsByConf: {confName: [Team,...] best-first}.
+
+        ⚠️ BYES ARE DERIVED FROM THE FIELD SIZE, NOT HARDCODED. This used to stamp
+        `bye: i < 2` — the top two seeds per league, always — which was right when the
+        field was six a side and is wrong now. At 32 clubs the top HALF of each league
+        qualifies, so the field is **8 per league: a power of two, and nobody sits out**.
+        The bracket challenge read that flag literally and drew a tree with two teams
+        waiting in round 2, against a real postseason of four clean rounds.
+
+        The rule is the one the seeding itself already follows: a bye exists only to pad
+        a field up to the next power of two, so a field that IS one has none. Keeping it
+        derived means the bracket follows the league if the qualifier count moves again.
+        """
         try:
             seeds = {"conferences": {}}
             for confName, teams in playoffTeamsByConf.items():
+                # Seeds that must sit out round 1 for the tree to be balanced: 0 when the
+                # field is already a power of two (8 -> 0), 2 at the old six-team field.
+                _n = len(teams)
+                _bracketSize = 1
+                while _bracketSize < max(1, _n):
+                    _bracketSize *= 2
+                _byeCount = _bracketSize - _n
                 seeds["conferences"][confName] = [
                     {
                         "teamId": t.id,
                         "seed": i + 1,
-                        "bye": i < 2,
+                        "bye": i < _byeCount,
                         "winPct": round(t.seasonTeamStats.get('winPerc', 0), 4),
                         "scoreDiff": t.seasonTeamStats.get('scoreDiff', 0),
                         "teamName": t.name,
