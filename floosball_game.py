@@ -2049,6 +2049,16 @@ class Game:
         # Realistic spike budget — using more would forfeit too many downs.
         # Down 1 or 2 → 1 spike between productive plays; 3rd down → 0.
         spikesAvailable = 1 if self.down < self.gameRules.downsPerSeries - 1 else 0
+        # ⚠️ THIS LOOP COUNTS A PLAY THAT DOES NOT FIT, ON PURPOSE — FOR NOW. It enters on
+        # `secs > FINAL_SNAP_SECS` (2) and only then subtracts the 7 a play costs, so at
+        # 0:15 it reports 2 plays when one run (a ~12s hurry-up huddle plus 4-6s live)
+        # does not fit once. Tightening it to `secs >= 7` was tried and MEASURED WORSE:
+        # over 40 games a side, late FG attempts fell 33 -> 18 at four downs and halves
+        # ending in range rose 21 -> 24. The count feeds eight decisions with opposite
+        # senses — `<= 1` kicks, `>= 2` hurries up, `>= 1` allows a spike — so lowering it
+        # buys a few kicks and loses the clock management that gets a drive into range at
+        # all. Re-tune the whole set together or not at all; the end-of-half kick is
+        # handled directly instead (see `_lastSnapBeforeBreak`).
         plays = 0
         while secs > FINAL_SNAP_SECS:
             plays += 1
@@ -2064,6 +2074,51 @@ class Game:
             else:
                 secs -= 18
         return plays
+
+    def _lastSnapBeforeBreak(self) -> bool:
+        """Is this the last snap the offense gets before the half or the game ends?
+
+        ⚠️ THE DOWN NUMBER DOES NOT ANSWER THIS. The engine splits play-calling on
+        `down < downsPerSeries` (clock management) vs `down == downsPerSeries`
+        (`_fourthDownCaller`), and only the second branch knows how to end a half — it
+        kicks a makeable field goal once the clock dips inside ~15-35s. So "is this my
+        last chance" was really being asked as "is this my last DOWN", and those are
+        different questions.
+
+        `downsPerSeries` is a MUTABLE RULE (3 to 5). At five downs a 4th down is no
+        longer the final down, so it takes the clock-management branch, which had no
+        end-of-half kick of its own — reported from a live game as 4th and 3 on the
+        opponent's 11, a ~28 yard kick, run for a single yard as the clock hit 0:00. The
+        half ended with the ball in range and no points. Owner: "the play was genuinely
+        the last play of the half, so down should not have mattered."
+
+        ⚠️ THE WINDOW IS NOT ONE NUMBER — a stopped clock changes the cost of a snap
+        entirely. Running the clock with no timeout left, another play costs a hurry-up
+        huddle (~12s) plus the live ball (~5s) before the kick can even be snapped, so
+        the last chance arrives around 19s. With the clock already stopped, or a timeout
+        in hand to stop it, the huddle is skipped and a play plus the kick fit inside
+        ~7s.
+
+        A fixed value was tried first (18s) and is wrong in both directions: it kicks
+        while a well-managed offense could still fit a sideline throw AND the kick, and
+        it is barely enough for one that cannot stop the clock at all. Owner: "18 seconds
+        seems like a lot of time, I would expect it to be around the 8 second mark" —
+        which is exactly the stopped-clock case, and the point that an offense arriving
+        here with timeouts unspent has earned the wider set of options.
+        """
+        from constants import (FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS,
+                               LAST_SNAP_LIVE_SECS)
+        secs = self._offenseEffectiveSecs()
+        if secs <= 0:
+            return True
+        timeoutsLeft = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
+                        else self.awayTimeoutsRemaining)
+        # The huddle is only paid when the clock is running AND cannot be stopped.
+        canStopClock = (not self.clockRunning) or timeoutsLeft > 0
+        need = LAST_SNAP_LIVE_SECS + FINAL_SNAP_SECS
+        if not canStopClock:
+            need += LAST_SNAP_HUDDLE_SECS
+        return secs < need
 
     def leadEaseOffFactor(self) -> float:
         """Multiplier on the DEFENSE's effective ratings when that defense's own
@@ -4394,8 +4449,12 @@ class Game:
         runFocus = getattr(defGp, 'runStopFocus', 0.5) if defGp is not None else 0.5
         if runFocus < SNEAK_LOOK_MIN_RUNFOCUS:
             return None      # the box isn't sold on the sneak — nothing to exploit
-        # 4th down is the wrong time to get cute: a stuffed fake ends the drive.
-        if self.down >= 4:
+        # The LAST down is the wrong time to get cute: a stuffed fake ends the drive.
+        # ⚠️ This read `down >= 4`, which is only the last down when the ruleset happens
+        # to run four. `downsPerSeries` is mutable (3 or 5): at 3 the guard never fired at
+        # all and the fake could be called on the down that ends the drive — the precise
+        # case it exists to prevent.
+        if self.down >= self.gameRules.downsPerSeries:
             return None
         commit = (runFocus - SNEAK_LOOK_MIN_RUNFOCUS) / max(0.01, 0.80 - SNEAK_LOOK_MIN_RUNFOCUS)
         scouting = getattr(coach, 'scouting', 80) if coach else 80
@@ -4598,6 +4657,53 @@ class Game:
                 }
         self.play.insights['_prePlayComposure'] = prePlayComposure
 
+        # ⚠️ LAST SNAP OF A HALF, IN RANGE — KICK IT, ON ANY DOWN. This sits ABOVE the
+        # `down < downsPerSeries` split deliberately: everything below is one branch for
+        # non-final downs and another for the final one, and only the second knows how to
+        # end a half. That is fine while the last down IS the fourth, and wrong the moment
+        # the ruleset says otherwise. Taking the free three when there is no snap after
+        # this one is not a down-dependent decision, so it is not asked as one.
+        #
+        # Guarded to a kick that is worth taking: a real half boundary, a makeable
+        # distance for THIS kicker, and a score where three points still mean something.
+        # ⚠️ THE DEADLINE IS NOT ALWAYS A QUARTER. `_lastSnapBeforeBreak` already reads
+        # the right clock — `_offenseEffectiveSecs` returns the chess-clock BUDGET and the
+        # frame deadline, not just the game clock — but gating on Q2/Q4 alone shut both
+        # formats out of the rule entirely. A chess-clock offense whose budget runs dry has
+        # exactly the same last snap, and so does a frame about to close. Mirrors the
+        # deadline test the late-game FG branch below already uses.
+        _atDeadline = (self.currentQuarter in (2, 4) or self.currentQuarter >= 5
+                       or self._chessClockLow(60) or self._frameEndSoon(60))
+        # ⚠️ `_isGarbageTime` ONLY LOOKS DOWNWARD — it returns False the moment `scoreDiff
+        # >= 0`, so it suppresses a hopeless chase and never a settled rout. A team three
+        # scores UP has nothing to gain from scrambling a kick in as the clock or its
+        # possession budget expires, and it reads as the sim not knowing the game is over.
+        # Owner, on chess clock: "unless the score is a blowout I suppose".
+        _routIsOn = scoreDiff > 3 * self._oneScore()
+        if (_atDeadline and self._lastSnapBeforeBreak()
+                and not self._isGarbageTime(scoreDiff) and not _routIsOn):
+            _lastKicker = self.offensiveTeam.rosterDict.get('k')
+            _lastMax = ((_lastKicker.maxFgDistance - self.gameRules.fgSnapDistance)
+                        if _lastKicker else 0)
+            # Inside the 5 a touchdown is the better end to a half, and Q4 keeps its own
+            # drain/desperation logic below when a field goal cannot settle it.
+            # Q2 takes the points at ANY score because the possession is free — the clock
+            # resets at the break, so there is no lead to protect. Everywhere else
+            # (including a chess-clock lockout and a closing frame) three points have to
+            # actually be worth having.
+            _fgSettles = self.currentQuarter == 2 or scoreDiff >= -self._fgValue()
+            if 5 < self.yardsToEndzone <= _lastMax and _fgSettles:
+                self.play.insights['clockMgmt'] = {
+                    'decision': 'lastSnapFG',
+                    'reason': 'No snap after this one — take the makeable FG',
+                    'clockRemaining': self.gameClockSeconds,
+                    'down': self.down,
+                    'downsPerSeries': self.gameRules.downsPerSeries,
+                    'yardsToEndzone': self.yardsToEndzone,
+                }
+                self.play.playType = PlayType.FieldGoal
+                return
+
         # Clock management — evaluated before any play selection on non-final downs
         if self.down < self.gameRules.downsPerSeries:
             # Kneel: Q4/OT, leading — only when guaranteed to drain the clock
@@ -4702,16 +4808,31 @@ class Game:
             # score-gated). Garbage time (a blowout) is excluded.
             _eohKicker = self.offensiveTeam.rosterDict.get('k')
             _eohKickerMax = (_eohKicker.maxFgDistance - self.gameRules.fgSnapDistance) if _eohKicker else 0
-            endOfHalfPush = (self.currentQuarter == 2
-                             and self._offenseEffectiveSecs() <= 120
-                             and not self._isGarbageTime(scoreDiff)
+            # ⚠️ TWO DIFFERENT QUESTIONS, so two flags. Taking the free three on the last
+            # play needs the ball to be somewhere a kick can reach; deciding to STOP THE
+            # CLOCK does not — a team on its own 30 with 1:40 left stops the clock
+            # precisely so it can get somewhere worth kicking from. One flag did both, so
+            # its field-position gate silently suppressed the timeouts too, and the drive
+            # that would have earned the field position never got going. Measured: 83% of
+            # halves that expired with the ball in range still had a timeout in hand,
+            # averaging 2.3 unspent.
+            endOfHalfDrive = (self.currentQuarter == 2
+                              and self._offenseEffectiveSecs() <= 120
+                              and not self._isGarbageTime(scoreDiff))
+            endOfHalfPush = (endOfHalfDrive
                              and self.yardsToEndzone <= _eohKickerMax + 25)
             # Goal-to-go (inside the 5): go for the TD, not a FG — a near-certain 7 beats a
             # 3, even on the last play of the half.
             if (endOfHalfPush and self._offenseEffectiveSecs() <= 45
                     and 5 < self.yardsToEndzone <= _eohKickerMax):
                 eohPlaysAvailable = self._estimateAvailablePlays()
-                if self.down == self.gameRules.downsPerSeries or eohPlaysAvailable <= 1:
+                # ⚠️ This block only runs on NON-FINAL downs (see the `down <
+                # downsPerSeries` gate above), so the `down == downsPerSeries` test that
+                # used to sit here could never be true — the final down reaches
+                # `_fourthDownCaller` instead, which has its own end-of-half branch. Only
+                # the play count decides it here, which is why that count being right
+                # matters so much.
+                if eohPlaysAvailable <= 1:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'endOfHalfFG',
                         'reason': 'End of half, take the FG on the last play (any score)',
@@ -4901,6 +5022,50 @@ class Game:
                     self.play.playType = PlayType.FieldGoal
                     return
 
+            # ⚠️ OUT OF RANGE ON THE LAST SNAP: PUNT, don't just let the budget die.
+            #
+            # A chess-clock lockout is a turnover AT THE SPOT — `_chessClockDepletionTurnover`
+            # calls `turnover(..., self.yardsToSafety)` — so an offense that lets its budget
+            # run out on its own 8 hands the opponent the ball on the 8. Reported: teams
+            # deep in their own end simply playing on until the clock died and gifting an
+            # easy score.
+            #
+            # The possession is lost EITHER WAY, so the only thing still on the table is
+            # field position, and a punt is worth ~40 yards of it for free. That makes this
+            # the exact counterpart of the in-range block above: same trigger, and where a
+            # kick would have banked points, a punt banks field.
+            #
+            # ⚠️ TRAILING IS THE EXCEPTION. Once the budget is gone the offense never
+            # possesses again, so a trailing team's last snap is its last chance to score —
+            # a punt there concedes the game to buy field position it will never use. Only
+            # a team that is level or ahead punts; anyone behind plays on and takes the shot.
+            #
+            # Gated on the coach: recognising that the clock, not the down, is what ends
+            # this drive is clock management, so a sharp staff does it near-always and a
+            # poor one gets caught playing the down.
+            from constants import CHESS_CLOCK_PUNT_ENABLED
+            if (CHESS_CLOCK_PUNT_ENABLED
+                    and self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
+                    and scoreDiff >= 0
+                    and not self._isGarbageTime(scoreDiff)
+                    and self._lastSnapBeforeBreak()):
+                _ppK = self.offensiveTeam.rosterDict.get('k')
+                _ppCharged = self._awakenedReadyFor(_ppK, 'kick')
+                _ppKMax = (self._chargedKickerMaxFg(_ppK) if _ppCharged
+                           else ((_ppK.maxFgDistance - self.gameRules.fgSnapDistance) if _ppK else 0))
+                # Only out of range — in range the block above already took the points.
+                if self.yardsToEndzone > _ppKMax and _random.random() < (0.4 + 0.6 * gameIQ):
+                    self.play.insights['clockMgmt'] = {
+                        'decision': 'chessClockPunt',
+                        'reason': 'Budget nearly out and no kick available — punt rather '
+                                  'than hand the ball over at this spot',
+                        'clockRemaining': self.gameClockSeconds,
+                        'yardsToEndzone': self.yardsToEndzone,
+                        'coachClockIQ': round(gameIQ, 2),
+                    }
+                    self.play.playType = PlayType.Punt
+                    return
+
             # Drive Clock about to expire (roughly one play left) and in makeable FG
             # range: take the points NOW on ANY down, rather than run a play and turn
             # it over with zero. Skips goal-to-go (a near-certain TD is worth more)
@@ -5069,7 +5234,7 @@ class Game:
             # Q2: stop the clock regardless of score (endOfHalfPush) — a leading
             # team still wants to score before the break. Q4/OT stays trailing/
             # tied-gated so a leading team drains the clock instead.
-            if (isLateGame and (scoreDiff <= 0 or endOfHalfPush) and self.clockRunning
+            if (isLateGame and (scoreDiff <= 0 or endOfHalfDrive) and self.clockRunning
                     and timeoutsLeft > 0 and not self._isGarbageTime(scoreDiff)
                     and not twoMinImminent and not self._clockStoppedByWarning
                     and secs <= toWindow):
@@ -5088,7 +5253,7 @@ class Game:
                 if _random.random() < toChance:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'timeout',
-                        'reason': ('Stop clock to score before the half' if (endOfHalfPush and scoreDiff > 0)
+                        'reason': ('Stop clock to score before the half' if (endOfHalfDrive and scoreDiff > 0)
                                    else 'Stop clock while trailing/tied'),
                         'clockRemaining': secs,
                         'timeoutsLeft': timeoutsLeft,
@@ -7569,17 +7734,27 @@ class Game:
                 # Drive Clock (plays unit): one snap spent (seconds unit drains via
                 # consumeGameTime). No-op unless the mechanic is on.
                 self._tickDriveClockPlays()
+                # ⚠️ THESE TWO STATS ARE POSITIONAL, NOT LITERAL. "Third down" means the
+                # last chance to keep the series alive normally and "fourth down" means
+                # the one that ends it — but `downsPerSeries` is mutable (3 to 5), so the
+                # hardcoded 3 and 4 measured the wrong downs the moment the Cores changed
+                # the rule. At 5 downs the fourth-down counter logged a routine down where
+                # going for it is unremarkable; at 3 downs it could never log anything at
+                # all, and the third-down counter was silently counting the FINAL down.
+                _lastDown = self.gameRules.downsPerSeries
+                _setupDown = _lastDown - 1
+                _goingForIt = self.play.playType not in (PlayType.Punt, PlayType.FieldGoal)
                 if self.offensiveTeam is self.homeTeam:
                     self.homePlaysTotal += 1
-                    if self.down == 3:
+                    if self.down == _setupDown:
                         self.home3rdDownAtt += 1
-                    elif self.down == 4 and self.play.playType not in (PlayType.Punt, PlayType.FieldGoal):
+                    elif self.down == _lastDown and _goingForIt:
                         self.home4thDownAtt += 1
                 if self.offensiveTeam is self.awayTeam:
                     self.awayPlaysTotal += 1
-                    if self.down == 3:
+                    if self.down == _setupDown:
                         self.away3rdDownAtt += 1
-                    elif self.down == 4 and self.play.playType not in (PlayType.Punt, PlayType.FieldGoal):
+                    elif self.down == _lastDown and _goingForIt:
                         self.away4thDownAtt += 1
 
                 # PLAY EXECUTION: Handle different play types
@@ -8056,14 +8231,18 @@ class Game:
                         downBefore = self.down
                         self.play.down = downBefore  # Store pre-play down for clutch/choke evaluation
                         self.down = 1
+                        # ⚠️ Positional, exactly like the ATTEMPT counters — and it has to
+                        # match them or the rate is computed from two different downs.
+                        _lastDown = self.gameRules.downsPerSeries
+                        _setupDown = _lastDown - 1
                         if self.offensiveTeam is self.homeTeam:
                             self.home1stDownsTotal += 1
-                            if downBefore == 3: self.home3rdDownConv += 1
-                            elif downBefore == 4: self.home4thDownConv += 1
+                            if downBefore == _setupDown: self.home3rdDownConv += 1
+                            elif downBefore == _lastDown: self.home4thDownConv += 1
                         elif self.offensiveTeam is self.awayTeam:
                             self.away1stDownsTotal += 1
-                            if downBefore == 3: self.away3rdDownConv += 1
-                            elif downBefore == 4: self.away4thDownConv += 1
+                            if downBefore == _setupDown: self.away3rdDownConv += 1
+                            elif downBefore == _lastDown: self.away4thDownConv += 1
                         if self.yardsToEndzone < self.gameRules.firstDownDistance:
                             self.yardsToFirstDown = self.yardsToEndzone
                         else:
@@ -10648,8 +10827,22 @@ class Game:
             return ('burnClock', 40)
         if (q >= 4) and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0 and not garbageTime:
             return ('hurryUp', 12)  # Q4/OT trailing or tied under 2:00
-        if q == 2 and secs <= self.gameRules.timeoutClockThreshold and scoreDiff <= 0:
-            return ('hurryUp', 15)  # End-of-half trailing or tied
+        # ⚠️ END OF THE HALF IS URGENT AT ANY SCORE, and this is the lever that matters
+        # most — the intent sets the HUDDLE, so a team not hurrying burns 25-40s a snap
+        # and the drive never happens. It used to require `scoreDiff <= 0`, so a LEADING
+        # team played the end of the half at a stroll.
+        #
+        # Q4 is score-gated for a real reason: a lead there is worth protecting, and
+        # draining the clock wins the game. In Q2 there is no lead to protect — the clock
+        # resets at the break, so the possession is free and the only question is whether
+        # you can score with it. Owner: "teams no matter winning or losing should be
+        # trying to score as the clock winds down in the 2nd quarter... it should be the
+        # same clock management as if its late in the 4th and they need to score."
+        #
+        # Same 12s huddle as Q4 now, not 15 — it is the same drill, so it gets the same
+        # tempo. Garbage time still opts out, matching Q4.
+        if q == 2 and secs <= self.gameRules.timeoutClockThreshold and not garbageTime:
+            return ('hurryUp', 12)  # End of half — score before the break, any score
         if q >= 3 and secs <= 300 and scoreDiff < 0 and not garbageTime:
             return ('hurryUp', 15 if scoreDiff <= -self._maxPossession() else 25)  # Mid-late deficit
         # Burn-clock only kicks in late Q3 / Q4 onward. The clock resets to

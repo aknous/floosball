@@ -1291,6 +1291,29 @@ class CardManager:
         donorEffect = self._effectName(donor)
         if not donorEffect or donorEffect in ('none', ''):
             raise ValueError("The donor card has no effect to transplant")
+        # ⚠️ THE DONOR MUST BE FROM THIS SEASON. Nothing checked it, so a previous
+        # season's card could be fed in to graft its effect onto a live one — which
+        # turned every expired card into a parts bin and defeated two separate rules at
+        # once:
+        #
+        #   1. Only current-season cards can be equipped or score. An old card is a
+        #      collectible (Vault / Showcase), not a reusable effect token.
+        #   2. A RETIRED effect is dropped from the MINT POOL, not deleted — its compute
+        #      and existing templates stay so owned copies still score. But a transplant
+        #      mints with `forceEffect=`, which bypasses the pool entirely, so an old
+        #      donor could put a deliberately-retired effect back into live play, freshly
+        #      priced at today's values. Verified against the live map: comeback_kid,
+        #      domination, castaway and reclamation are all absent from `effectPoolFor`
+        #      and all four force-mint without complaint.
+        #
+        # Gating the DONOR closes both, because an effect retired at a season boundary
+        # cannot appear on a card minted this season.
+        #
+        # The TARGET is deliberately NOT gated: transplanting onto an old card produces a
+        # template that still cannot score, so it is a waste of Floobits rather than an
+        # exploit, and a collector may want it for a Vault or Showcase piece.
+        if dt.season_created != currentSeason:
+            raise ValueError("The donor card is from a previous season")
         if dt.edition != tt.edition:
             raise ValueError("Both cards must be the same edition")
         # Position-specific effects can only land on a player whose position they're

@@ -2345,6 +2345,27 @@ LEAGUE_COMPRESSION_MEAN = 84        # Center of the curve
 # undercounted the last snap in tight windows.
 FINAL_SNAP_SECS = 2
 
+# "There is no snap after this one" — the window `_lastSnapBeforeBreak` uses to take a
+# makeable end-of-half field goal on ANY down (`downsPerSeries` is mutable, 3 to 5, so
+# "the final down" and "the last chance" are not the same question).
+#
+# ⚠️ IT IS NOT ONE NUMBER, because a stopped clock changes the cost of a snap entirely:
+#
+#   clock running, no timeout : huddle (~12s) + live ball (~5s) + the FG snap = ~19s
+#   clock stopped or a timeout in hand : huddle skipped, live ball + FG snap  = ~7s
+#
+# A fixed value is wrong in both directions — 18 kicks while a well-managed offense
+# could still fit a sideline throw AND the kick, and it is barely enough for one that
+# cannot stop the clock at all. So the window is built from these two parts instead, and
+# an offense that has managed its clock keeps the wider set of options it earned.
+# Chess clock: punt on the last snap the budget allows when no field goal is available,
+# rather than let the clock die and hand the opponent the ball AT THE SPOT (a lockout is
+# `turnover(..., yardsToSafety)`). Off restores the old behaviour exactly.
+CHESS_CLOCK_PUNT_ENABLED = True
+
+LAST_SNAP_HUDDLE_SECS = 12   # hurry-up pre-snap; 9-15 across the coach clock-IQ range
+LAST_SNAP_LIVE_SECS = 5      # snap to whistle on a run (4-6)
+
 # ── Chess-clock timeouts ──────────────────────────────────────────────────
 # In the Chess Clock format the offense's possession budget IS its real clock,
 # and a timeout stops the pre-snap huddle drain — so a team preserves its budget
