@@ -4136,7 +4136,9 @@ async def get_history_records(response: Response, limit: int = Query(default=10,
                 entries.append({
                     "playerId": pid,
                     "playerName": p.name if p else "Unknown",
+                    "teamId": tid if t else None,
                     "teamAbbr": t.abbr if t else None,
+                    "teamColor": t.color if t else None,
                     "value": int(v) if v is not None else 0,
                     "season": season,
                     "week": week,
@@ -4165,7 +4167,9 @@ async def get_history_records(response: Response, limit: int = Query(default=10,
                     entries.append({
                         "playerId": r.player_id,
                         "playerName": p.name if p else "Unknown",
+                        "teamId": r.team_id if t else None,
                         "teamAbbr": t.abbr if t else None,
+                        "teamColor": t.color if t else None,
                         "value": int(r.v),
                         "season": r.season,
                     })
@@ -4187,9 +4191,16 @@ async def get_history_records(response: Response, limit: int = Query(default=10,
                     if not r.total:
                         continue
                     p = session.get(DBPlayer, r.player_id)
+                    # ⚠️ A career total spans clubs, so there is no single team that owns
+                    # it. This is the player's CURRENT club — the way the rest of the app
+                    # identifies them — not a claim about where the record was set.
+                    ct = session.get(DBTeam, p.team_id) if p and p.team_id else None
                     entries.append({
                         "playerId": r.player_id,
                         "playerName": p.name if p else "Unknown",
+                        "teamId": p.team_id if ct else None,
+                        "teamAbbr": ct.abbr if ct else None,
+                        "teamColor": ct.color if ct else None,
                         "value": int(r.total),
                         "seasons": int(r.seasons_count),
                     })
@@ -4254,6 +4265,7 @@ async def get_history_team_records(response: Response, limit: int = Query(defaul
                 "teamId": teamId,
                 "teamName": f"{t.city} {t.name}".strip() if t and getattr(t, 'city', None) else (t.name if t else "Unknown"),
                 "teamAbbr": t.abbr if t else None,
+                "teamColor": t.color if t else None,
             }
 
         # ⚠️ `status` is stored lowercase ('final'), and comparing against 'Final' silently
