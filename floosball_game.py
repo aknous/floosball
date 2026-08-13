@@ -2107,10 +2107,37 @@ class Game:
         here with timeouts unspent has earned the wider set of options.
         """
         from constants import (FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS,
-                               LAST_SNAP_LIVE_SECS)
+                               LAST_SNAP_LIVE_SECS, CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
         secs = self._offenseEffectiveSecs()
         if secs <= 0:
             return True
+
+        # ⚠️ CHESS CLOCK CHARGES A COMPLETELY DIFFERENT PRICE FOR A SNAP, and this helper
+        # was quoting the standard one. `_offenseEffectiveSecs` correctly returns the
+        # possession BUDGET there — so the clock being read was right — but the cost
+        # compared against it was 7s (stoppable) or 19s (running), the standard-format
+        # huddle. A chess-clock snap drains the budget by its huddle: 20s neutral, 35s
+        # relaxed, and 25s even when the game clock is already STOPPED, because possession
+        # time is spent regardless.
+        #
+        # So at ~25s of budget the helper said "there is another snap", the offense ran one,
+        # the snap cost more than the budget held, and the possession was forfeited at the
+        # spot. Reported from production game 349: ARI, LEADING 14-7, 1st and 10 on their
+        # own 20 at Q4 3:20 — ran for 4 and handed MEX the ball on the 20, with no
+        # clock-management decision recorded at all.
+        #
+        # ⚠️ And the timeout shortcut does not apply here either: stopping the game clock
+        # does NOT stop the budget, so there is no version of this where the huddle is free.
+        if getattr(self.format, 'key', '') == 'chess_clock':
+            try:
+                _intent, huddle = self._classifyTempoIntent()
+            except Exception:
+                huddle = CHESS_CLOCK_STOPPED_HUDDLE_DRAIN
+            # The tempo's own huddle is the honest per-snap cost; the stopped-clock drain
+            # is the floor, since even a free-looking snap costs that much budget.
+            need = max(float(huddle or 0), float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN))
+            return secs < need + LAST_SNAP_LIVE_SECS + FINAL_SNAP_SECS
+
         timeoutsLeft = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
                         else self.awayTimeoutsRemaining)
         # The huddle is only paid when the clock is running AND cannot be stopped.
@@ -5035,18 +5062,33 @@ class Game:
             # the exact counterpart of the in-range block above: same trigger, and where a
             # kick would have banked points, a punt banks field.
             #
-            # ⚠️ TRAILING IS THE EXCEPTION. Once the budget is gone the offense never
-            # possesses again, so a trailing team's last snap is its last chance to score —
-            # a punt there concedes the game to buy field position it will never use. Only
-            # a team that is level or ahead punts; anyone behind plays on and takes the shot.
+            # ⚠️ TRAILING IS ONLY AN EXCEPTION WHERE SCORING IS ACTUALLY POSSIBLE. This
+            # first shipped as a flat `scoreDiff >= 0` — anyone behind plays on — on the
+            # reasoning that once the budget is gone the offense never possesses again, so
+            # its last snap is its last chance to score.
+            #
+            # That is true at the opponent's 35 and a fiction on your own 20: no single play
+            # scores from 80 yards out, so "going for it" there concedes the field position
+            # and gets nothing for it.
+            #
+            # ⚠️ This is NOT what caused game 349 — that team was LEADING, so this gate let
+            # the punt through and a different bug stopped it (the snap-cost one in
+            # `_lastSnapBeforeBreak`). Kept because the reasoning stands on its own, not
+            # because it fixed the report.
+            #
+            # So the test is DISTANCE, not score: a trailing team goes for it only from
+            # inside `CHESS_CLOCK_STRIKE_YARDS`, where one play could plausibly reach the
+            # end zone. Everyone else punts, at any score.
             #
             # Gated on the coach: recognising that the clock, not the down, is what ends
             # this drive is clock management, so a sharp staff does it near-always and a
             # poor one gets caught playing the down.
-            from constants import CHESS_CLOCK_PUNT_ENABLED
+            from constants import CHESS_CLOCK_PUNT_ENABLED, CHESS_CLOCK_STRIKE_YARDS
+            _canStrike = self.yardsToEndzone <= CHESS_CLOCK_STRIKE_YARDS
+            _puntHelps = scoreDiff >= 0 or not _canStrike
             if (CHESS_CLOCK_PUNT_ENABLED
                     and self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
-                    and scoreDiff >= 0
+                    and _puntHelps
                     and not self._isGarbageTime(scoreDiff)
                     and self._lastSnapBeforeBreak()):
                 _ppK = self.offensiveTeam.rosterDict.get('k')

@@ -60,11 +60,43 @@ class ChessClockPuntTests(unittest.TestCase):
         self.assertIn('maxFgDistance', block)
         self.assertIn('_chargedKickerMaxFg', block)
 
-    def testATrailingTeamDoesNotPunt(self):
-        """⚠️ The exception that makes this correct rather than merely tidy. Once the
-        budget is gone the offense never possesses again, so punting while behind concedes
-        the game for field position it will never use."""
-        self.assertIn('scoreDiff >= 0', _block())
+    def testTheTrailingExceptionIsDistanceNotScore(self):
+        """⚠️ THE SECOND BUG, and it shipped. The exception first read `scoreDiff >= 0` —
+        anyone behind plays on — on the reasoning that a trailing team's last snap is its
+        last chance to score. True at the opponent\'s 35, a fiction on your own 20.
+
+        Reported from production game 349 (ARI 14 MEX 7, Q4 3:30): a trailing team ran a
+        play from its own 20, ran the budget out, and handed the ball back at the 20 — the
+        exact giveaway this rule exists to stop, waved through by its own exception.
+
+        ⚠️ Asserting the substring `scoreDiff >= 0` is NOT enough: it survives inside the
+        corrected expression, so that assertion passed under both rules and tested
+        nothing. The distance term is what has to be there."""
+        block = _block()
+        self.assertIn('CHESS_CLOCK_STRIKE_YARDS', block)
+        self.assertIn('_canStrike', block)
+        self.assertIn('_puntHelps = scoreDiff >= 0 or not _canStrike', block)
+
+    def testTheReportedSituationNowPunts(self):
+        """The decision, run rather than grepped."""
+        from constants import CHESS_CLOCK_STRIKE_YARDS as S
+
+        def punts(scoreDiff, yardsToEndzone):
+            canStrike = yardsToEndzone <= S
+            return scoreDiff >= 0 or not canStrike
+
+        # Game 349: trailing by 7 on their own 20 — 80 yards out, nothing scores from
+        # there on one snap.
+        self.assertTrue(punts(-7, 80), 'the reported giveaway is still allowed')
+        self.assertTrue(punts(-3, 80), 'a field goal cannot help from 80 either')
+        # Still goes for it where a single play could genuinely reach the end zone.
+        self.assertFalse(punts(-7, 40))
+        self.assertFalse(punts(-1, S))
+        # Level or ahead always punts, at any distance — field position is all that is
+        # left and the possession is lost either way.
+        for ytez in (10, 40, 80):
+            self.assertTrue(punts(0, ytez))
+            self.assertTrue(punts(+7, ytez))
 
     def testItIsTheLastSnapAndTheCoachSeesIt(self):
         """It fires only on the last snap the budget allows, and recognising that the

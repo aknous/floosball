@@ -52,6 +52,9 @@ class StubGame:
     _lastSnapBeforeBreak = fg.Game._lastSnapBeforeBreak
 
     def __init__(self, secs, clockRunning=True, timeouts=0):
+        # The real Game always has a `format` (it is a property resolving from gameRules),
+        # so a stub without one is the stub being wrong. None reads as standard.
+        self.format = None
         self.gameClockSeconds = secs
         self.clockRunning = clockRunning
         self.homeTimeoutsRemaining = self.awayTimeoutsRemaining = timeouts
@@ -103,6 +106,76 @@ class LastSnapWindowTests(unittest.TestCase):
         self.assertNotIn('self.down', src)
         self.assertNotIn('downsPerSeries', src.split('"""')[-1],
                          'the executable body must not branch on the ruleset')
+
+
+class ChessClockSnapCostTests(unittest.TestCase):
+    """⚠️ CHESS CLOCK CHARGES A DIFFERENT PRICE FOR A SNAP, and this helper quoted the
+    standard one.
+
+    `_offenseEffectiveSecs` correctly returns the possession BUDGET in chess clock, so the
+    clock being read was right — but the cost compared against it was 7s (stoppable) or
+    19s (running), which are standard-format huddle numbers. A chess-clock snap drains the
+    budget by its huddle: 20s neutral, 35s relaxed, and 25s even with the game clock
+    STOPPED, because possession time is spent regardless.
+
+    So in the 20-30s band the helper said "there is another snap", the offense ran one, the
+    snap cost more than the budget held, and the possession was forfeited AT THE SPOT.
+
+    Reported from production game 349: ARI, LEADING 14-7, 1st and 10 on their own 20 at
+    Q4 3:20 — ran for 4 and handed MEX the ball on the 20, with `clockMgmt` recorded as
+    None, i.e. no decision was reached at all.
+
+    Measured over 120 chess-clock games a side after the fix: lockouts 50 -> 18 and gifts
+    from inside the offense's own 40 30 -> 9, with the punt firing 73 times against 17
+    before — it had barely been triggering.
+    """
+
+    class _Fmt:
+        key = 'chess_clock'
+
+    def _game(self, budget, huddle):
+        g = StubGame(budget)
+        g.format = self._Fmt()
+        g.clockRunning = True
+        g.homeTimeoutsRemaining = g.awayTimeoutsRemaining = 3
+        g._classifyTempoIntent = lambda: ('neutral', huddle)
+        return g
+
+    def testTheReportedBandIsTheLastSnap(self):
+        """20-30s of budget is where ARI were, and where the old rule said another snap
+        would fit."""
+        from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU
+        for budget in (20, 25, 30):
+            self.assertTrue(self._game(budget, NEU)._lastSnapBeforeBreak(),
+                            f'{budget}s of budget still reads as room for another snap')
+
+    def testAGenuinelyRoomyBudgetIsNotTheLastSnap(self):
+        from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU
+        self.assertFalse(self._game(60, NEU)._lastSnapBeforeBreak())
+
+    def testARelaxedHuddleCostsMoreAndTriggersEarlier(self):
+        """The cost is the tempo's OWN huddle, so a relaxed offense runs out sooner."""
+        from constants import (CHESS_CLOCK_NEUTRAL_HUDDLE as NEU,
+                               CHESS_CLOCK_RELAXED_HUDDLE as REL)
+        self.assertTrue(self._game(38, REL)._lastSnapBeforeBreak())
+        self.assertFalse(self._game(38, NEU)._lastSnapBeforeBreak())
+
+    def testTheStoppedDrainIsAFloor(self):
+        """⚠️ Stopping the game clock does NOT stop the budget, so there is no version of
+        this where the huddle is free — a tiny reported huddle must not undercut the
+        drain a snap actually costs."""
+        from constants import CHESS_CLOCK_STOPPED_HUDDLE_DRAIN as STOP
+        self.assertTrue(self._game(STOP, 1)._lastSnapBeforeBreak(),
+                        'a snap is being priced below the stopped-clock drain')
+
+    def testTimeoutsDoNotBuyASnapHere(self):
+        """The standard rule lets a timeout skip the huddle. A timeout cannot pause a
+        possession budget, so that shortcut must not apply."""
+        from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU
+        g = self._game(25, NEU)
+        g.clockRunning = False          # game clock stopped
+        g.homeTimeoutsRemaining = 3
+        self.assertTrue(g._lastSnapBeforeBreak())
 
 
 class PlacementTests(unittest.TestCase):

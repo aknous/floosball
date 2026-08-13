@@ -2363,6 +2363,17 @@ FINAL_SNAP_SECS = 2
 # `turnover(..., yardsToSafety)`). Off restores the old behaviour exactly.
 CHESS_CLOCK_PUNT_ENABLED = True
 
+# How close the end zone has to be for ONE desperation play to plausibly reach it — the
+# only situation in which a TRAILING offense should spend its last snap going for it
+# rather than punting. Beyond this a heave is not a chance, it is a giveaway: the drive
+# ends either way and the only thing still on the table is where the opponent starts.
+#
+# ⚠️ Set from the losing case, not the winning one. At 45 a deep shot plus YAC can score;
+# at 80 (a team on its own 20 — the reported game) nothing can, and the old rule sent them
+# out to try anyway.
+CHESS_CLOCK_STRIKE_YARDS = 45
+
+
 LAST_SNAP_HUDDLE_SECS = 12   # hurry-up pre-snap; 9-15 across the coach clock-IQ range
 LAST_SNAP_LIVE_SECS = 5      # snap to whistle on a run (4-6)
 
