@@ -141,6 +141,51 @@ def test_winning_the_division_auto_clinches_the_berth():
     print("PASS winning the division auto-clinches a berth")
 
 
+def test_a_division_winner_is_never_eliminated():
+    """⚠️ REPORTED FROM THE LIVE BOARD: a club that had WON ITS DIVISION was greyed
+    out as eliminated, because its record was poor enough that `spots` rivals sat
+    above it. That is precisely what a guaranteed division seed exists to prevent.
+    The mirror of the auto-clinch, and it was missed alongside it."""
+    divisions = {i: ('North' if i < 4 else ('South' if i < 8 else
+                     ('East' if i < 12 else 'West'))) for i in range(16)}
+    # A weak North: leader 6-16 but its rivals are buried and cannot reach it.
+    # Everyone outside North is 18-4 and far beyond the leader's ceiling.
+    records = [(6, 16), (0, 22), (0, 22), (0, 22)] + [(18, 4)] * 12
+    teams = _league(records, divisions)
+    status = clinchStatus(teams, totalGames=28)
+    assert status[0]['clinchedDivision'] is True
+    assert status[0]['eliminated'] is False, \
+        'a division winner was eliminated on record'
+    assert status[0]['clinchedPlayoffs'] is True
+    print("PASS a division winner is never eliminated")
+
+
+def test_a_live_division_race_keeps_a_club_alive():
+    """Not yet won, but still winnable: the club is far down the league table and
+    cannot wildcard in, yet the division is a road and it is not out."""
+    divisions = {i: ('North' if i < 4 else ('South' if i < 8 else
+                     ('East' if i < 12 else 'West'))) for i in range(16)}
+    # North is a two-way race at 6-16 and 7-15; the rest of the league is 18-4.
+    records = [(6, 16), (7, 15), (0, 22), (0, 22)] + [(18, 4)] * 12
+    teams = _league(records, divisions)
+    status = clinchStatus(teams, totalGames=28)
+    assert status[0]['eliminated'] is False, \
+        'eliminated while its division was still winnable'
+    print("PASS a winnable division keeps a club alive")
+
+
+def test_losing_the_division_and_the_wildcard_is_elimination():
+    """Both roads gone: a division rival is out of reach AND the field is full."""
+    divisions = {i: ('North' if i < 4 else ('South' if i < 8 else
+                     ('East' if i < 12 else 'West'))) for i in range(16)}
+    # This club is 0-26 with 2 to play; its own division rival is 20-6.
+    records = [(0, 26), (20, 6), (20, 6), (20, 6)] + [(18, 8)] * 12
+    teams = _league(records, divisions)
+    status = clinchStatus(teams, totalGames=28)
+    assert status[0]['eliminated'] is True
+    print("PASS losing both roads is elimination")
+
+
 # ---------------------------------------------------------------- top seed
 
 def test_the_top_seed_needs_the_division_too():
