@@ -196,7 +196,13 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
             ceiling(t) <= floor for t in divisionRivals)
 
         out[tid] = {
-            'clinchedPlayoffs': canPassMe < spots,
+            # ⚠️ WINNING THE DIVISION IS AN AUTO-CLINCH (owner). A division winner
+            # takes a guaranteed top-four seed, so the berth does not depend on
+            # the record race at all — a club can win a weak division while more
+            # than `spots` league rivals could still finish above it, and it is
+            # in regardless. Computing the two independently missed that and held
+            # the berth badge back behind a test that no longer applies.
+            'clinchedPlayoffs': (canPassMe < spots) or divisionClinched,
             'clinchedDivision': divisionClinched,
             # ⚠️ The top seed needs the DIVISION as well as the record. Division
             # winners take the top four seeds, so a club with the best record in

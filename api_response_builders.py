@@ -945,6 +945,11 @@ class LeagueResponseBuilder(ResponseBuilder):
                 # ⚠️ CLINCHED is a different claim from SEEDED. A seed is where the club
                 # would land if the season stopped now; clinched means no remaining result
                 # can take it away. The board shows both, and they disagree all season.
+                # ⚠️ OVERRIDES the `clinchedPlayoffs` buildBasicTeamDict already set from
+                # `team.clinchedPlayoffs`. That attribute is only written during playoff
+                # SEEDING — every qualifier at once on the final day — so it is false all
+                # season and then true for everyone. This update runs after, so the
+                # computed value wins; do not reorder them.
                 'clinchedPlayoffs': bool(_clinch.get('clinchedPlayoffs')),
                 'clinchedDivision': bool(_clinch.get('clinchedDivision')),
                 'clinchedTopSeed': bool(_clinch.get('clinchedTopSeed')),

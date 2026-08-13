@@ -124,6 +124,23 @@ def test_no_division_stamp_means_no_division_clinch():
     print("PASS an undivisioned league claims no division titles")
 
 
+def test_winning_the_division_auto_clinches_the_berth():
+    """⚠️ A division winner takes a GUARANTEED top-four seed, so the berth does not
+    depend on the record race. This club wins a weak division while plenty of
+    league rivals could still finish above it on record — it is in anyway."""
+    divisions = {i: ('North' if i < 4 else ('South' if i < 8 else
+                     ('East' if i < 12 else 'West'))) for i in range(16)}
+    # North is settled: leader 10-8, rivals buried. Everyone OUTSIDE North is
+    # 14-4 and could finish above the leader on record.
+    records = [(10, 8), (0, 18), (0, 18), (0, 18)] + [(14, 4)] * 12
+    teams = _league(records, divisions)
+    status = clinchStatus(teams, totalGames=28)
+    assert status[0]['clinchedDivision'] is True
+    assert status[0]['clinchedPlayoffs'] is True, \
+        'a division winner must be in the field regardless of the record race'
+    print("PASS winning the division auto-clinches a berth")
+
+
 # ---------------------------------------------------------------- top seed
 
 def test_the_top_seed_needs_the_division_too():
