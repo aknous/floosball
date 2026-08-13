@@ -106,6 +106,29 @@ class ChessClockPuntTests(unittest.TestCase):
         self.assertIn('self._lastSnapBeforeBreak()', block)
         self.assertIn('gameIQ', block)
 
+    def testItIsSuppressedWhenTheDEFENSEIsLockedOut(self):
+        """⚠️ A punt achieves nothing when the other side is also out of budget: a
+        locked-out defense cannot do anything with the ball, and `possessionReceiver`
+        hands it straight back. So punting spends a down for no field position while the
+        offense still has budget to score with.
+
+        `suppressPunt` already encodes this for chess clock and the drive-clock punt below
+        has always consulted it; this block did not. Owner: "the clock running out also
+        assumes the other team has time remaining. if they don't... they'd keep trying to
+        score."""
+        self.assertIn('self.format.suppressPunt(self)', _block())
+
+    def testTheFieldGoalBranchIsNotSuppressed(self):
+        """⚠️ Deliberately asymmetric. A punt is a giveaway and is pointless against a
+        locked-out defense; a FIELD GOAL is points, and points are worth having whoever
+        holds the ball next."""
+        with open(os.path.join(HERE, 'floosball_game.py')) as fh:
+            src = fh.read()
+        i = src.index("'decision': 'chessClockFG'")
+        head = src[max(0, i - 1600):i]
+        block = head[head.rindex('if ('):]
+        self.assertNotIn('suppressPunt', block)
+
     def testGarbageTimeIsExcluded(self):
         self.assertIn('_isGarbageTime', _block())
 

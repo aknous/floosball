@@ -5121,9 +5121,17 @@ class Game:
             from constants import CHESS_CLOCK_PUNT_ENABLED, CHESS_CLOCK_STRIKE_YARDS
             _canStrike = self.yardsToEndzone <= CHESS_CLOCK_STRIKE_YARDS
             _puntHelps = scoreDiff >= 0 or not _canStrike
+            # ⚠️ A PUNT IS POINTLESS WHEN THE OTHER SIDE IS ALSO LOCKED OUT. `suppressPunt`
+            # already encodes this for chess clock — a locked-out defense cannot do
+            # anything with the ball, and `possessionReceiver` hands it straight back — so
+            # punting spends a down to achieve nothing while the offense still has budget
+            # to score with. The drive-clock punt below has always consulted it; this block
+            # did not. Owner: "if they don't [have time], the team with the ball wouldn't
+            # punt, they'd keep trying to score."
             if (CHESS_CLOCK_PUNT_ENABLED
                     and self._chessClockLow(50) and self.down < self.gameRules.downsPerSeries
                     and _puntHelps
+                    and not self.format.suppressPunt(self)
                     and not self._isGarbageTime(scoreDiff)
                     and self._lastSnapBeforeBreak()):
                 _ppK = self.offensiveTeam.rosterDict.get('k')
