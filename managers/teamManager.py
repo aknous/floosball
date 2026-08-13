@@ -1608,6 +1608,16 @@ class TeamManager:
                                 f"handleCoachRetirement: failed to delete retired "
                                 f"coach {retiringName} (id={retiringId}): {e}"
                             )
+                else:
+                    # ⚠️ BANK THE SEASON THEY JUST COACHED BEFORE THEY LEAVE.
+                    # `seasonsCoached += 1` at the top of this loop is in memory
+                    # only, and the save below writes the INCOMING coach — so a
+                    # departing GM's final season was never persisted and they
+                    # entered the market showing stale tenure. That is precisely
+                    # the field the carousel is meant to surface, so without this
+                    # a GM fired after three seasons is hired elsewhere reading
+                    # as a first-timer.
+                    self._persistCoachTenure(retiringId, retiringSeasons)
                 # ⚠️ A FIRED OR DEPARTED GM IS **KEPT** (owner, 2026-08-13).
                 # Their row survives and becomes unassigned the moment
                 # _saveCoachToDatabase repoints Team.coach_id, so another club
@@ -1634,12 +1644,94 @@ class TeamManager:
                     team.coach = self.generateCoach()
                     self._saveCoachToDatabase(team)
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")
+                self._recordCoachChange(team, exitKind, retiringName, retiringSeasons)
 
         total = sum(exits.values())
         if total:
             self.logger.info(
                 f"GM turnover: {total} change(s) — {exits['retired']} retired, "
                 f"{exits['fired']} fired, {exits['left']} stepped down")
+
+    def _persistCoachTenure(self, coachId, seasons: int) -> None:
+        """Write a departing GM's season count to their row.
+
+        Surviving coaches get theirs persisted by the sweep in seasonManager
+        after this method returns; a coach who has just been replaced is not in
+        that sweep, so this is their only chance to record the season they
+        actually coached.
+        """
+        if coachId is None:
+            return
+        if not (DATABASE_AVAILABLE and USE_DATABASE and self.db_session):
+            return
+        try:
+            from database.models import Coach as DBCoach
+            dbCoach = self.db_session.get(DBCoach, coachId)
+            if dbCoach is not None:
+                dbCoach.seasons_coached = int(seasons or 0)
+                self.db_session.flush()
+        except Exception as e:
+            self.logger.warning(
+                f"_persistCoachTenure: could not bank tenure for coach {coachId}: {e}")
+
+    def _recordCoachChange(self, team, exitKind: str, retiringName: str,
+                           retiringSeasons: int) -> None:
+        """Put a GM change into the Season Recap.
+
+        ⚠️ NOTHING RECORDED THESE UNTIL 2026-08-13, and the whole reading half
+        was already built: `SeasonRecapEvent` documents `coach_fire | coach_hire`
+        as valid types, the frontend declares them, and `SeasonRecap.tsx` renders
+        a COACHING CHANGES block that colors them and prints "Fired"/"Hired".
+        `_recordOffseasonEvent` was simply never called with either, so the
+        section rendered NOTHING from the day it shipped — `announce()` returns
+        null on an empty list, so it looked absent rather than broken. The only
+        trace a GM change left anywhere was a server log line no user can read.
+        (Fourth instance of this pattern in the codebase; the dead fantasy roster
+        tables account for three.)
+
+        It matters more now that a fired GM lands in the pool and can resurface
+        at a rival with their tenure intact — that is a story the sim generates
+        and used to throw away.
+
+        Only a genuine FIRING records `coach_fire`; the frontend prints that type
+        as the literal word "Fired", so routing a retirement or a resignation
+        through it would state something untrue. Those carry their reason in the
+        hire line instead, which is why every exit records a hire and only one
+        kind records a departure.
+        """
+        seasonManager = None
+        try:
+            seasonManager = self.serviceContainer.getService('season_manager')
+        except Exception:
+            pass
+        if seasonManager is None or not hasattr(seasonManager, '_recordOffseasonEvent'):
+            return
+
+        def _plural(n, word):
+            return f"{n} {word}{'s' if n != 1 else ''}"
+
+        try:
+            if exitKind == 'fired':
+                seasonManager._recordOffseasonEvent(
+                    'coach_fire', team=team,
+                    detail=f"{retiringName} after {_plural(retiringSeasons, 'season')}")
+
+            arrived = getattr(team.coach, 'name', 'a new GM')
+            prior = int(getattr(team.coach, 'seasonsCoached', 0) or 0)
+            # Prior tenure is the interesting part of a market hire: it is how a
+            # reader spots the GM they watched get fired turning up somewhere else.
+            if prior > 0:
+                arrived = f"{arrived} ({_plural(prior, 'prior season')})"
+            if exitKind == 'retired':
+                detail = f"{arrived}, replacing {retiringName} (retired)"
+            elif exitKind == 'left':
+                detail = f"{arrived}, replacing {retiringName} (stepped down)"
+            else:
+                detail = arrived
+            seasonManager._recordOffseasonEvent('coach_hire', team=team, detail=detail)
+        except Exception as e:
+            # A recap line is never worth failing an offseason over.
+            self.logger.warning(f"_recordCoachChange failed for {team.name}: {e}")
 
     def _coachIsLinked(self, team) -> bool:
         """Is this club's coach actually persisted AND pointed at by the club?
