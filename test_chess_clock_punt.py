@@ -60,43 +60,85 @@ class ChessClockPuntTests(unittest.TestCase):
         self.assertIn('maxFgDistance', block)
         self.assertIn('_chargedKickerMaxFg', block)
 
-    def testTheTrailingExceptionIsDistanceNotScore(self):
-        """⚠️ THE SECOND BUG, and it shipped. The exception first read `scoreDiff >= 0` —
-        anyone behind plays on — on the reasoning that a trailing team's last snap is its
-        last chance to score. True at the opponent\'s 35, a fiction on your own 20.
+    def testATrailingTeamNeverPuntsAtAnyDistance(self):
+        """⚠️ REPORTED FROM A LIVE GAME 2026-08-13: a LOSING team ran its possession budget
+        out and punted on its last play.
 
-        Reported from production game 349 (ARI 14 MEX 7, Q4 3:30): a trailing team ran a
-        play from its own 20, ran the budget out, and handed the ball back at the 20 — the
-        exact giveaway this rule exists to stop, waved through by its own exception.
+        The rule briefly carried a DISTANCE carve-out — a trailing team punted from outside
+        CHESS_CLOCK_STRIKE_YARDS — on the reasoning that no single play scores from 80
+        yards, so going for it there concedes field position for nothing.
 
-        ⚠️ Asserting the substring `scoreDiff >= 0` is NOT enough: it survives inside the
-        corrected expression, so that assertion passed under both rules and tested
-        nothing. The distance term is what has to be there."""
+        That reasoning misses what the punt is worth. Once the budget is gone the offense
+        NEVER POSSESSES AGAIN, so field position buys this team nothing: the only points
+        still available to it are a safety or a defensive score, and a punt does almost
+        nothing for either. It improves the MARGIN, not the RESULT — and playing for the
+        margin while losing is what reads as surrender.
+
+        ⚠️ The carve-out was never load-bearing. Game 349 was a LEADING team, stopped by
+        the snap-cost bug in `_lastSnapBeforeBreak`; the carve-out was kept anyway because
+        the argument "stood on its own", and this is the bug that bought."""
         block = _block()
-        self.assertIn('CHESS_CLOCK_STRIKE_YARDS', block)
-        self.assertIn('_canStrike', block)
-        self.assertIn('_puntHelps = scoreDiff >= 0 or not _canStrike', block)
+        self.assertIn('_puntHelps = scoreDiff >= 0', block)
+        self.assertNotIn('_canStrike', block,
+                         'the distance carve-out let a losing team punt its game away')
+        self.assertNotIn('or not', block.split('_puntHelps =')[1].split('\n')[0])
 
-    def testTheReportedSituationNowPunts(self):
-        """The decision, run rather than grepped."""
-        from constants import CHESS_CLOCK_STRIKE_YARDS as S
+    def testTheDecisionByScoreAndDistance(self):
+        """The three-way rule, run rather than grepped.
 
-        def punts(scoreDiff, yardsToEndzone):
-            canStrike = yardsToEndzone <= S
-            return scoreDiff >= 0 or not canStrike
+        Losing never punts at any distance. Leading always does. TIED depends on what a
+        giveaway hands the opponent: deep in your own end it is a chip shot and the game,
+        near midfield it is a 60+ yard kick and therefore nothing.
+        """
+        from constants import CHESS_CLOCK_TIED_PIN_YARDS as PIN
 
-        # Game 349: trailing by 7 on their own 20 — 80 yards out, nothing scores from
-        # there on one snap.
-        self.assertTrue(punts(-7, 80), 'the reported giveaway is still allowed')
-        self.assertTrue(punts(-3, 80), 'a field goal cannot help from 80 either')
-        # Still goes for it where a single play could genuinely reach the end zone.
-        self.assertFalse(punts(-7, 40))
-        self.assertFalse(punts(-1, S))
-        # Level or ahead always punts, at any distance — field position is all that is
-        # left and the possession is lost either way.
-        for ytez in (10, 40, 80):
-            self.assertTrue(punts(0, ytez))
-            self.assertTrue(punts(+7, ytez))
+        def puntHelps(scoreDiff):
+            return scoreDiff >= 0
+
+        def tiedChoice(scoreDiff, ytez):
+            return scoreDiff == 0 and ytez < PIN
+
+        # Behind by anything, anywhere: play on.
+        for ytez in (10, 40, 55, 80, 95):
+            self.assertFalse(puntHelps(-1), f'trailing punted from {ytez}')
+            self.assertFalse(puntHelps(-21), f'trailing punted from {ytez}')
+
+        # Ahead: always punt, and never dampened — the lead is what is being protected.
+        for ytez in (55, 80, 95):
+            self.assertTrue(puntHelps(+3))
+            self.assertFalse(tiedChoice(+3, ytez), 'a lead must not take the tied discount')
+
+        # Tied and pinned deep (own 25 and back): a giveaway is makeable field goal
+        # range, so this is not a choice.
+        for ytez in (75, 85, 95):
+            self.assertTrue(puntHelps(0))
+            self.assertFalse(tiedChoice(0, ytez),
+                             f'tied at ytez {ytez} should be an automatic punt')
+
+        # Tied near midfield: a real choice, weighted toward pinning.
+        for ytez in (50, 60, 71):
+            self.assertTrue(puntHelps(0))
+            self.assertTrue(tiedChoice(0, ytez),
+                            f'tied at ytez {ytez} should be a weighted choice')
+
+    def testTheTiedChoiceStillLeansToPunting(self):
+        """"More heavily weighted to punting though" — the discount must not turn the
+        near-midfield case into a coin flip against punting."""
+        from constants import CHESS_CLOCK_TIED_MIDFIELD_PUNT as D
+        self.assertGreater(D, 0.5, 'the tied choice must still favor pinning')
+        self.assertLess(D, 1.0, 'at 1.0 it is not a choice at all')
+        for gameIQ, label in ((0.0, 'poor'), (0.5, 'average'), (1.0, 'elite')):
+            base = 0.4 + 0.6 * gameIQ
+            self.assertGreaterEqual(base * D, 0.3,
+                                    f'a {label} staff barely punts near midfield')
+
+    def testTheTiedDiscountIsOneRollNotTwo(self):
+        """A second independent roll would compound into a much lower punt rate than
+        either number suggests, and make the behavior unreadable from the constants."""
+        block = _block()
+        self.assertIn('CHESS_CLOCK_TIED_MIDFIELD_PUNT if _tiedChoice else 1.0', block)
+        self.assertEqual(block.count('_random.random()'), 1,
+                         'the punt decision must resolve on a single roll')
 
     def testItIsTheLastSnapAndTheCoachSeesIt(self):
         """It fires only on the last snap the budget allows, and recognising that the

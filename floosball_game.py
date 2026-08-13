@@ -5086,30 +5086,52 @@ class Game:
             # the exact counterpart of the in-range block above: same trigger, and where a
             # kick would have banked points, a punt banks field.
             #
-            # ⚠️ TRAILING IS ONLY AN EXCEPTION WHERE SCORING IS ACTUALLY POSSIBLE. This
-            # first shipped as a flat `scoreDiff >= 0` — anyone behind plays on — on the
-            # reasoning that once the budget is gone the offense never possesses again, so
-            # its last snap is its last chance to score.
+            # ⚠️ A TRAILING TEAM NEVER PUNTS HERE, AT ANY DISTANCE.
             #
-            # That is true at the opponent's 35 and a fiction on your own 20: no single play
-            # scores from 80 yards out, so "going for it" there concedes the field position
-            # and gets nothing for it.
+            # This briefly carried a DISTANCE carve-out — a trailing team punted from
+            # outside `CHESS_CLOCK_STRIKE_YARDS` — on the reasoning that no single play
+            # scores from 80 yards out, so going for it there concedes field position for
+            # nothing. Reported from a live game 2026-08-13: a LOSING team ran its budget
+            # out and punted on its last play, which is the read that reasoning misses.
             #
-            # ⚠️ This is NOT what caused game 349 — that team was LEADING, so this gate let
-            # the punt through and a different bug stopped it (the snap-cost one in
-            # `_lastSnapBeforeBreak`). Kept because the reasoning stands on its own, not
-            # because it fixed the report.
+            # Owner, 2026-08-13: "if the possession budget runs out and they're losing,
+            # then they lose, so no sense in punting. it's only if they're winning and
+            # their budget is about to run out and they have to play defense is when they
+            # should punt it." The test is `>= 0` rather than `> 0` because a TIED team is
+            # in exactly the position that clause describes — it cannot score again, so it
+            # has to play defense, and handing the ball over on its own 8 loses outright.
+            # Losing is the only state where field position buys nothing.
             #
-            # So the test is DISTANCE, not score: a trailing team goes for it only from
-            # inside `CHESS_CLOCK_STRIKE_YARDS`, where one play could plausibly reach the
-            # end zone. Everyone else punts, at any score.
+            # Field position is worth nothing to this team. Once the budget is gone the
+            # offense NEVER POSSESSES AGAIN (`_chessClockDepletionTurnover` hands the ball
+            # over and any future possession locks out immediately), so the only points
+            # still available to it are a safety or a defensive score — neither of which a
+            # punt meaningfully buys. A punt therefore improves the MARGIN, not the RESULT,
+            # and playing for the margin while losing is what reads as surrender.
+            #
+            # ⚠️ The carve-out was never load-bearing: game 349 was a LEADING team, stopped
+            # by the snap-cost bug in `_lastSnapBeforeBreak`, and this comment said so at
+            # the time. It was kept because the argument "stood on its own". It did not.
             #
             # Gated on the coach: recognising that the clock, not the down, is what ends
             # this drive is clock management, so a sharp staff does it near-always and a
             # poor one gets caught playing the down.
-            from constants import CHESS_CLOCK_PUNT_ENABLED, CHESS_CLOCK_STRIKE_YARDS
-            _canStrike = self.yardsToEndzone <= CHESS_CLOCK_STRIKE_YARDS
-            _puntHelps = scoreDiff >= 0 or not _canStrike
+            # ⚠️ TIED IS A FIELD POSITION QUESTION, NOT A YES/NO (owner, 2026-08-13).
+            # A tied team cannot score again either, so it is playing for the tie — and
+            # what a giveaway costs it depends entirely on WHERE. Deep in its own end,
+            # handing the ball over is handing over a chip-shot field goal and the game
+            # with it, so it always punts. Near midfield the opponent gets nothing from
+            # the spot (a 60+ yard kick), so pinning them and taking a shot are both real
+            # options, weighted toward pinning.
+            #
+            # CHESS_CLOCK_STRIKE_YARDS is read by the strike block below, which shares
+            # this import rather than repeating it.
+            from constants import (CHESS_CLOCK_PUNT_ENABLED, CHESS_CLOCK_STRIKE_YARDS,
+                                   CHESS_CLOCK_TIED_PIN_YARDS, CHESS_CLOCK_TIED_MIDFIELD_PUNT)
+            _puntHelps = scoreDiff >= 0
+            # Tied and close enough to midfield that a turnover on downs is not a gift.
+            _tiedChoice = (scoreDiff == 0
+                           and self.yardsToEndzone < CHESS_CLOCK_TIED_PIN_YARDS)
             # ⚠️ A PUNT IS POINTLESS WHEN THE OTHER SIDE IS ALSO LOCKED OUT. `suppressPunt`
             # already encodes this for chess clock — a locked-out defense cannot do
             # anything with the ball, and `possessionReceiver` hands it straight back — so
@@ -5127,8 +5149,13 @@ class Game:
                 _ppCharged = self._awakenedReadyFor(_ppK, 'kick')
                 _ppKMax = (self._chargedKickerMaxFg(_ppK) if _ppCharged
                            else ((_ppK.maxFgDistance - self.gameRules.fgSnapDistance) if _ppK else 0))
+                # ⚠️ ONE roll, not two: the tied near-midfield case DAMPENS the coach's
+                # acceptance rather than rolling separately, so a snap still resolves on a
+                # single decision and the rates stay legible.
+                _accept = ((0.4 + 0.6 * gameIQ)
+                           * (CHESS_CLOCK_TIED_MIDFIELD_PUNT if _tiedChoice else 1.0))
                 # Only out of range — in range the block above already took the points.
-                if self.yardsToEndzone > _ppKMax and _random.random() < (0.4 + 0.6 * gameIQ):
+                if self.yardsToEndzone > _ppKMax and _random.random() < _accept:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'chessClockPunt',
                         'reason': 'Budget nearly out and no kick available — punt rather '

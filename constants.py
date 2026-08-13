@@ -2423,10 +2423,32 @@ CHESS_CLOCK_PUNT_ENABLED = True
 # rather than punting. Beyond this a heave is not a chance, it is a giveaway: the drive
 # ends either way and the only thing still on the table is where the opponent starts.
 #
-# ⚠️ Set from the losing case, not the winning one. At 45 a deep shot plus YAC can score;
-# at 80 (a team on its own 20 — the reported game) nothing can, and the old rule sent them
-# out to try anyway.
+# ⚠️ This is now used ONLY to pick the DEPTH of the desperation throw (deep vs long). It
+# used to also gate whether a TRAILING team punted, which is what let a losing team punt
+# its last possession away — see the punt block in floosball_game for why that was wrong.
 CHESS_CLOCK_STRIKE_YARDS = 45
+
+# ---- Chess clock: the TIED punt decision ----
+# Losing teams never punt (they cannot score again, so field position is worthless to
+# them) and leading teams always do. Tied is the interesting case, and it comes down to
+# what a giveaway actually hands the opponent (owner, 2026-08-13).
+#
+# `yardsToEndzone` is distance to the opponent's end zone, so a giveaway leaves them
+# `100 - ytez` yards out and kicking from about 17 yards further back:
+#     ytez 85 (own 15) -> a 32 yard chip shot
+#     ytez 75 (own 25) -> a 42 yard kick, still very makeable
+#     ytez 65 (own 35) -> a 52 yarder
+#     ytez 50 (midfield) -> a 67 yarder, i.e. nothing
+# At or beyond PIN_YARDS a turnover on downs is a gift of makeable field goal range, so a
+# tied team always punts. Closer to midfield it is a genuine choice between pinning them
+# and taking a shot — "probably more heavily weighted to punting though".
+CHESS_CLOCK_TIED_PIN_YARDS = 72
+
+# How much the tied near-midfield case DAMPENS the coach's punt decision. It multiplies
+# the existing acceptance rather than adding a second roll, so there is still exactly one
+# decision per snap. Net punt rate near midfield when tied: about 56% for an average staff
+# and 80% for an elite one, against 70%/100% when pinned deep.
+CHESS_CLOCK_TIED_MIDFIELD_PUNT = 0.8
 
 
 LAST_SNAP_HUDDLE_SECS = 12   # hurry-up pre-snap; 9-15 across the coach clock-IQ range
