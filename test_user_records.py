@@ -34,6 +34,11 @@ logging.disable(logging.CRITICAL)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+# ⚠️ Import order matters: `api.main` pulled in first hits a circular import via
+# floosball_game, so the managers are imported ahead of it.
+import managers.seasonManager  # noqa: F401,E402
+from api.main import _parseBreakdowns  # noqa: E402
+
 
 def _endpoint() -> str:
     with open(os.path.join(HERE, 'api', 'main.py')) as fh:
@@ -72,10 +77,46 @@ class SourceTests(unittest.TestCase):
         self.assertIn('breakdowns_json', code)
         self.assertIn('weekly_player_fp', code)
 
+    def testItUsesTheSharedBreakdownParser(self):
+        """Hand-rolling the decode is what produced the 500; a third reader must
+        not reintroduce it."""
+        self.assertIn('_parseBreakdowns', _endpoint())
+
     def testItDoesNotReadTheLiveLineup(self):
         """⚠️ `equipped_cards` is carried forward week to week, so scoring a PAST week
         from it prices that week against today's hand."""
         self.assertNotIn('equipped_cards', _code(_endpoint()))
+
+
+class ShapeTests(unittest.TestCase):
+    """⚠️ THE 500. `weekly_card_bonuses.breakdowns_json` has TWO live shapes — a
+    legacy bare LIST, and the current DICT `{"breakdowns": [...],
+    "equationSummary": {...}}`. Iterating the parsed value directly walks the
+    DICT'S KEYS, so `b.get(...)` gets the string "breakdowns" and raises
+    `AttributeError: 'str' object has no attribute 'get'`. That took this
+    endpoint down in production, and the tests below did not catch it because
+    every synthetic row was written in the LEGACY shape — a format the sim has
+    stopped producing."""
+
+    @staticmethod
+    def _parse(raw):
+        return _parseBreakdowns(raw)
+
+    def testTheCurrentDictShapeYieldsItsBreakdowns(self):
+        raw = json.dumps({'breakdowns': [{'playerId': 10}, {'playerId': 11}],
+                          'equationSummary': {'weekRawFP': 12.0}})
+        self.assertEqual(self._parse(raw), [{'playerId': 10}, {'playerId': 11}])
+
+    def testTheLegacyListShapeStillWorks(self):
+        raw = json.dumps([{'playerId': 10}])
+        self.assertEqual(self._parse(raw), [{'playerId': 10}])
+
+    def testADictWithNoBreakdownsKeyIsEmptyNotAKeyWalk(self):
+        self.assertEqual(self._parse(json.dumps({'equationSummary': {}})), [])
+
+    def testUnrecognizedShapesReadAsNoBreakdown(self):
+        for raw in ('null', '"a string"', '42', '{not json', None, ''):
+            self.assertEqual(self._parse(raw), [], raw)
 
 
 class AggregationTests(unittest.TestCase):
@@ -86,11 +127,9 @@ class AggregationTests(unittest.TestCase):
         """Mirrors the endpoint: per banked week, sum the lineup's FP and add the bonus."""
         weekly, seasonAcc = [], {}
         for r in bonusRows:
-            try:
-                breakdowns = json.loads(r['breakdowns_json'] or '[]')
-            except (ValueError, TypeError):
-                breakdowns = []
-            playerIds = [b.get('playerId') for b in breakdowns if b.get('playerId')]
+            breakdowns = _parseBreakdowns(r['breakdowns_json'])
+            playerIds = [b.get('playerId') for b in breakdowns
+                         if isinstance(b, dict) and b.get('playerId')]
             if not playerIds:
                 continue
             playerFp = sum(fpByPlayerWeek.get((pid, r['season'], r['week']), 0.0)
