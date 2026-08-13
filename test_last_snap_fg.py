@@ -109,117 +109,70 @@ class LastSnapWindowTests(unittest.TestCase):
 
 
 class ChessClockSnapCostTests(unittest.TestCase):
-    """⚠️ CHESS CLOCK CHARGES A DIFFERENT PRICE FOR A SNAP, and this helper quoted the
-    standard one.
+    """A chess-clock budget is whatever ticks off the GAME clock while you hold the ball.
 
-    `_offenseEffectiveSecs` correctly returns the possession BUDGET in chess clock, so the
-    clock being read was right — but the cost compared against it was 7s (stoppable) or
-    19s (running), which are standard-format huddle numbers. A chess-clock snap drains the
-    budget by its huddle: 20s neutral, 35s relaxed, and 25s even with the game clock
-    STOPPED, because possession time is spent regardless.
+    ⚠️ THE FORMAT USED TO RUN THIS BACKWARDS: the budget was the real clock and the
+    displayed game clock was DERIVED from it, a quarter ending once totalBudget/4 of
+    offense time had been spent. That inversion is why cheap snaps stalled the period —
+    less budget spent meant less game clock — and it forced a flat "stopped clock" charge
+    so clock-stopping plays would not be free.
 
-    So in the 20-30s band the helper said "there is another snap", the offense ran one, the
-    snap cost more than the budget held, and the possession was forfeited AT THE SPOT.
+    Owner's model, which is the simple one: a normal game clock, and each team's own clock
+    ticking down by exactly what the game clock ticks while they have the ball. Two things
+    fall out — a stopped clock costs NOBODY anything, because nothing is ticking, and the
+    period ends on the game clock like every other format, so no amount of cheap snaps can
+    stall it.
 
-    Reported from production game 349: ARI, LEADING 14-7, 1st and 10 on their own 20 at
-    Q4 3:20 — ran for 4 and handed MEX the ball on the 20, with `clockMgmt` recorded as
-    None, i.e. no decision was reached at all.
-
-    Measured over 120 chess-clock games a side after the fix: lockouts 50 -> 18 and gifts
-    from inside the offense's own 40 30 -> 9, with the punt firing 73 times against 17
-    before — it had barely been triggering.
+    So the cost of a snap here is just the cost of a snap anywhere:
+        clock RUNNING -> huddle + live ball
+        clock STOPPED -> live ball only (the clock restarts at the snap)
     """
 
     class _Fmt:
         key = 'chess_clock'
 
-    def _game(self, budget, huddle):
+    def _game(self, budget, huddle, running=True):
         g = StubGame(budget)
         g.format = self._Fmt()
-        g.clockRunning = True
+        g.clockRunning = running
         g.homeTimeoutsRemaining = g.awayTimeoutsRemaining = 3
         g._classifyTempoIntent = lambda: ('neutral', huddle)
         return g
 
-    def testTheReportedSituationIsTheLastSnap(self):
-        """ARI\'s actual state in game 349: they took over after an incompletion, so the
-        game clock was STOPPED, and they had only enough budget for the one snap they
-        ran. Under the old standard-format numbers that read as room for another."""
-        from constants import CHESS_CLOCK_STOPPED_HUDDLE_DRAIN as STOP
-        g = self._game(17, 12)          # one snap's worth of budget, hurry-up tempo
-        g.clockRunning = False          # stopped: the flat drain applies
-        self.assertTrue(g._lastSnapBeforeBreak())
-        # And the old rule would have said otherwise — 17 is comfortably above 7/19.
-        self.assertGreater(17, 7)
-
-    def testASnapThatFitsIsNotTheLastOne(self):
-        """⚠️ The point of the cost model is to punt LATE, not early. Owner: "what I want
-        to avoid is a team punting and they still have a few seconds left on their clock."
-
-        ⚠️ The threshold is DERIVED here, not restated. Writing the arithmetic out by hand
-        is what made two of these tests fail the moment the model was corrected — they
-        were pinning a number rather than the rule."""
+    def testARunningClockPaysTheHuddleAndTheBall(self):
         from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU, LAST_SNAP_LIVE_SECS as LIVE
         need = NEU + LIVE
-        self.assertFalse(self._game(need + 1, NEU)._lastSnapBeforeBreak(),
-                         'punting while a snap still fits')
         self.assertTrue(self._game(need - 1, NEU)._lastSnapBeforeBreak())
+        self.assertFalse(self._game(need + 1, NEU)._lastSnapBeforeBreak())
 
-    def testAPuntNeedsOnlyToBeSNAPPED(self):
-        """⚠️ NO CLOSING-SNAP RESERVE in this branch. `FINAL_SNAP_SECS` keeps room for a
-        closing FIELD GOAL, and there is no such kick here — the punt IS the play.
-        `_lockedOut` is `budget <= 0` and `_chessClockDepletionTurnover` runs AFTER the
-        play resolves, so a punt started with a single second left completes and
-        possession changes through the punt. Owner: "as long as there's 1 second left they
-        can punt still."
+    def testAStoppedClockPaysOnlyTheBall(self):
+        """⚠️ The huddle is FREE with the clock stopped — that is what a chess clock means,
+        and it is why getting out of bounds is a strategy. Owner: "the budget cost of a
+        snap when the clock is stopped is just the length of the play. the clock doesn't
+        run when they're huddling."""
+        from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU, LAST_SNAP_LIVE_SECS as LIVE
+        self.assertTrue(self._game(LIVE - 1, NEU, running=False)._lastSnapBeforeBreak())
+        self.assertFalse(self._game(LIVE + 1, NEU, running=False)._lastSnapBeforeBreak())
+        # And the same budget with the clock RUNNING cannot fit a snap, because the huddle
+        # now costs — which is the whole difference.
+        self.assertTrue(self._game(LIVE + 1, NEU, running=True)._lastSnapBeforeBreak())
 
-        So the only thing that must FIT is the productive play being decided against."""
+    def testTheTempoSetsTheRunningCost(self):
+        """A relaxed offense runs out sooner than a hurrying one, because its huddle is
+        what it is paying."""
         from constants import (CHESS_CLOCK_NEUTRAL_HUDDLE as NEU,
-                               LAST_SNAP_LIVE_SECS as LIVE, FINAL_SNAP_SECS as SNAP)
-        # A budget that holds the play but not the play-plus-reserve must NOT punt.
-        self.assertFalse(self._game(NEU + LIVE + SNAP - 1, NEU)._lastSnapBeforeBreak(),
-                         'a closing-snap reserve is being charged where no kick follows')
+                               CHESS_CLOCK_RELAXED_HUDDLE as REL, LAST_SNAP_LIVE_SECS as LIVE)
+        budget = REL          # enough for a neutral snap, not a relaxed one
+        self.assertTrue(self._game(budget, REL)._lastSnapBeforeBreak())
+        self.assertFalse(self._game(budget, NEU)._lastSnapBeforeBreak())
 
-    def testAGenuinelyRoomyBudgetIsNotTheLastSnap(self):
-        from constants import CHESS_CLOCK_NEUTRAL_HUDDLE as NEU
-        self.assertFalse(self._game(60, NEU)._lastSnapBeforeBreak())
-
-    def testARelaxedHuddleCostsMoreAndTriggersEarlier(self):
-        """The cost is the tempo's OWN huddle, so a relaxed offense runs out sooner."""
-        from constants import (CHESS_CLOCK_NEUTRAL_HUDDLE as NEU,
-                               CHESS_CLOCK_RELAXED_HUDDLE as REL)
-        self.assertTrue(self._game(38, REL)._lastSnapBeforeBreak())
-        self.assertFalse(self._game(38, NEU)._lastSnapBeforeBreak())
-
-    def testAStoppedClockIsChargedTheFlatDrain(self):
-        """⚠️ WHICH COST APPLIES DEPENDS ON THE CLOCK, and they are never both. A running
-        clock pays the tempo\'s own pre-snap; a stopped one pays the flat drain instead —
-        an if/elif in the pre-snap block. Taking the LARGER of the two was tried and
-        punted far too early: it charged a hurrying offense 25 for a snap costing it 12."""
-        from constants import (CHESS_CLOCK_STOPPED_HUDDLE_DRAIN as STOP,
-                               LAST_SNAP_LIVE_SECS as LIVE)
-        need = STOP + LIVE
-        g = self._game(need - 1, 12)
-        g.clockRunning = False
-        self.assertTrue(g._lastSnapBeforeBreak(), 'the stopped drain is not being charged')
-        g2 = self._game(need + 1, 12)
-        g2.clockRunning = False
-        self.assertFalse(g2._lastSnapBeforeBreak())
-        # Running, hurrying: the same budget comfortably holds a snap, so no punt.
-        g3 = self._game(need - 1, 12)
-        g3.clockRunning = True
-        self.assertFalse(g3._lastSnapBeforeBreak(),
-                         'a hurrying offense is being charged the stopped-clock price')
-
-    def testTimeoutsDoNotBuyASnapHere(self):
-        """The standard rule lets a timeout skip the huddle. A timeout cannot pause a
-        possession budget, so that shortcut must not apply — a stopped clock here still
-        costs the drain."""
-        from constants import CHESS_CLOCK_STOPPED_HUDDLE_DRAIN as STOP
-        g = self._game(STOP - 1, 12)
-        g.clockRunning = False
-        g.homeTimeoutsRemaining = 3
-        self.assertTrue(g._lastSnapBeforeBreak())
+    def testNoFlatStoppedDrainRemains(self):
+        """⚠️ The flat drain belonged to the inverted model and must not come back — it
+        charged a hurrying offense more for a stopped clock than a running one."""
+        import inspect
+        src = inspect.getsource(fg.Game._lastSnapBeforeBreak)
+        body = src.split('"""')[-1]
+        self.assertNotIn('CHESS_CLOCK_STOPPED_HUDDLE_DRAIN', body)
 
 
 class PlacementTests(unittest.TestCase):

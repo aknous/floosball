@@ -2107,7 +2107,7 @@ class Game:
         here with timeouts unspent has earned the wider set of options.
         """
         from constants import (FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS,
-                               LAST_SNAP_LIVE_SECS, CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
+                               LAST_SNAP_LIVE_SECS)
         secs = self._offenseEffectiveSecs()
         if secs <= 0:
             return True
@@ -2129,35 +2129,24 @@ class Game:
         # ⚠️ And the timeout shortcut does not apply here either: stopping the game clock
         # does NOT stop the budget, so there is no version of this where the huddle is free.
         if getattr(self.format, 'key', '') == 'chess_clock':
-            # ⚠️ WHICH COST APPLIES DEPENDS ON THE GAME CLOCK, and taking the larger of
-            # the two punts far too early. A running clock is charged the tempo's own
-            # pre-snap (`calculatePreSnapTime`); a STOPPED one is charged the flat
-            # `CHESS_CLOCK_STOPPED_HUDDLE_DRAIN` instead — see the pre-snap block, where
-            # they are an if/elif and never both. Flooring the tempo at the stopped drain
-            # charged a HURRYING offense 25 for a snap that costs it 12, so it punted with
-            # a snap's worth of budget still in hand. Owner: "what I want to avoid is a
-            # team punting and they still have a few seconds left on their clock."
+            # ⚠️ A team's budget is whatever ticks off the GAME clock while it holds the
+            # ball, so a snap costs exactly what a snap costs in any other format:
+            #
+            #   clock RUNNING  -> the huddle burns clock, so huddle + live ball
+            #   clock STOPPED  -> the huddle is FREE (nothing is ticking); the clock
+            #                     restarts at the snap, so only the live ball costs
+            #
+            # Earlier versions charged a flat stopped-clock drain here, back when the
+            # budget was the real clock and the game clock was derived from it. With that
+            # inverted the drain no longer exists and neither does the charge.
             if self.clockRunning:
                 try:
                     _intent, huddle = self._classifyTempoIntent()
                     need = float(huddle or 0)
                 except Exception:
-                    need = float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
+                    need = float(LAST_SNAP_HUDDLE_SECS)
             else:
-                need = float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
-            # ⚠️ NO CLOSING-SNAP RESERVE HERE, unlike the standard branch below.
-            #
-            # `FINAL_SNAP_SECS` exists to keep room for a closing FIELD GOAL — the kick
-            # has to be snappable after the last productive play. There is no such kick in
-            # this branch: the punt IS the play, and a punt needs only to be SNAPPED.
-            # `_lockedOut` is `budget <= 0` and `_chessClockDepletionTurnover` runs AFTER
-            # the play resolves, so a punt started with a single second left completes and
-            # possession changes through the punt — the lockout then has nothing to take.
-            # Owner: "as long as there's 1 second left they can punt still."
-            #
-            # So the only thing that must FIT is the productive play we are deciding
-            # against: if it would exhaust the budget, it still completes and THEN the ball
-            # is forfeited at the spot, which is the giveaway this rule exists to prevent.
+                need = 0.0
             return secs < need + LAST_SNAP_LIVE_SECS
 
         timeoutsLeft = (self.homeTimeoutsRemaining if self.offensiveTeam is self.homeTeam
@@ -7836,40 +7825,13 @@ class Game:
                     # Check if clock expired during pre-snap
                     if self.gameClockSeconds <= 0:
                         break
-                elif (getattr(self.format, 'key', '') == 'chess_clock'
-                        and not getattr(self, '_timeoutCalled', False)
-                        and self.play.playType not in (PlayType.Kneel, PlayType.Spike)):
-                    # Chess clock: even with the game clock already STOPPED (incompletion /
-                    # out of bounds), running a play still uses possession time — drain a
-                    # reduced huddle from the budget so clock-stopping plays aren't nearly
-                    # free (which explodes the play count in pass-heavy games). A deliberate
-                    # TIMEOUT still fully preserves the budget (the intentional tool); this
-                    # floor is only for the cheap, unchosen stops.
-                    # ⚠️ A CEILING, NOT A FLAT RATE. This charged a flat 25 whenever the
-                    # game clock was already stopped, on the reasoning that clock-stopping
-                    # plays should not be "nearly free" (which explodes the play count in
-                    # pass-heavy games). But the running cost is the TEMPO's huddle — 12
-                    # hurrying, 20 neutral, 35 relaxed — so a flat 25 meant stopping the
-                    # clock SAVED a relaxed team 10 and COST a hurrying team 13, i.e. it
-                    # penalised exactly the offense that most needs to get out of bounds.
-                    #
-                    # It is now a FRACTION of the tempo's own huddle, capped by the old
-                    # flat drain: always a saving, never free. A hurrying offense gets a
-                    # real reward for getting out of bounds, and a slow one still cannot
-                    # pay more for a stopped clock than a running one. Owner: "the chess clock should stop when the game clock does, so
-                    # going out of bounds should be a strategy." It is not free here —
-                    # possession time is still spent — but it can no longer be a penalty.
-                    from constants import (CHESS_CLOCK_STOPPED_HUDDLE_DRAIN,
-                                           CHESS_CLOCK_STOPPED_HUDDLE_FRACTION)
-                    try:
-                        _i, _running = self._classifyTempoIntent()
-                        _drain = min(float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN),
-                                     float(_running or 0) * CHESS_CLOCK_STOPPED_HUDDLE_FRACTION)
-                    except Exception:
-                        _drain = float(CHESS_CLOCK_STOPPED_HUDDLE_DRAIN)
-                    self._inPreSnap = True
-                    self.consumeGameTime(_drain)
-                    self._inPreSnap = False
+                # ⚠️ NO STOPPED-CLOCK CHARGE ANY MORE. This used to drain the budget even
+                # with the game clock stopped, so that clock-stopping plays "aren't nearly
+                # free". Under the corrected time model they ARE free, and correctly so: a
+                # team's budget is whatever ticks off the GAME clock while it has the ball,
+                # and a stopped clock ticks nothing. The play count is no longer at risk
+                # from this either — the period now ends on the game clock rather than on
+                # budget spent, so cheap snaps cannot stall it.
                     if self.gameClockSeconds <= 0:
                         break
                 self.totalPlays += 1

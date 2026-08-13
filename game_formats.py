@@ -371,45 +371,37 @@ class ChessClockFormat(GameFormat):
         return False
 
     def consumeTime(self, game, seconds: int) -> None:
+        """The game clock runs exactly as in a standard game; the OFFENSE's budget ticks
+        down by the same amount.
+
+        ⚠️ THIS USED TO RUN THE OTHER WAY ROUND — the budget was the real clock and the
+        displayed game clock was DERIVED from it (`_chessQuarterSpent`, a quarter ending
+        when totalBudget/4 of offense time had been spent). That inversion is why a
+        cheaper snap stalled the period: less budget spent meant less game clock, so
+        making clock-stopping plays cheap ran the play count from 110 to 143 a game.
+
+        Owner's model, which is the simple one: "there's a regular game clock, just like a
+        standard rule game; each team has their own clock which is the amount of time they
+        can spend on offensive plays; whatever time ticks off the game clock when a team is
+        on offense is the amount that ticks off their chess clock." So the chess clock is a
+        MIRROR of the game clock while you have the ball, not a second timer driving it.
+
+        Two things fall out for free. A stopped game clock costs NOBODY anything — the
+        huddle is free because the clock is not running, which is what a chess clock
+        actually means. And the period ends on the game clock like every other format, so
+        no amount of cheap snaps can stall it.
+        """
         if seconds <= 0:
             return
+        # The clock the whole game runs on, standard behaviour.
+        game.gameClockSeconds = max(0, game.gameClockSeconds - seconds)
         if game.currentQuarter >= 5:
-            # OT: budgets are spent; advance the synthetic OT clock by full seconds.
-            counted = seconds
-        else:
-            # Drain the possessing team's budget, FLOORED at 0. Only the portion within
-            # their remaining budget advances the shared synthetic clock — a locked-out
-            # team's overshoot plays are "free" so they can't end the game early and the
-            # opponent still gets its full budget.
-            if game.offensiveTeam is game.homeTeam:
-                before = self._homeBudget(game)
-                counted = min(seconds, max(0, before))
-                game._chessHomeBudget = max(0, before - seconds)
-            elif game.offensiveTeam is game.awayTeam:
-                before = self._awayBudget(game)
-                counted = min(seconds, max(0, before))
-                game._chessAwayBudget = max(0, before - seconds)
-            else:
-                counted = seconds
-        # Advance the game clock from budget spent this period, so a period ends when
-        # its share (totalBudget/4) of offense time is used.
-        game._chessQuarterSpent = getattr(game, '_chessQuarterSpent', 0) + counted
-        quarterBudget = self._totalBudget(game) / 4.0
-        if game.currentQuarter >= 5:
-            # OT: budgets are already spent — scale the OT clock to its display length.
-            frac = min(1.0, game._chessQuarterSpent / quarterBudget) if quarterBudget else 1.0
-            game.gameClockSeconds = max(0, round(game.gameRules.overtimeLengthSeconds * (1.0 - frac)))
-        else:
-            # Regulation: the game clock counts DOWN 1:1 with possession time spent — a
-            # play that costs 20s of the offense's budget takes the same 20s off the game
-            # clock, so the two clocks deplete together during a drive. Each quarter is
-            # therefore totalBudget/4 of REAL offense time (no 15:00-scaled display).
-            game.gameClockSeconds = max(0, round(quarterBudget - game._chessQuarterSpent))
-        # Both budgets spent in regulation → force the period to end so Q4 resolves
-        # (the all-free plays would otherwise freeze the synthetic clock).
-        if (game.currentQuarter < 5 and self._homeBudget(game) <= 0
-                and self._awayBudget(game) <= 0):
-            game.gameClockSeconds = 0
+            return          # OT: budgets are already spent
+        # ...and the same seconds off whoever is holding the ball.
+        if game.offensiveTeam is game.homeTeam:
+            game._chessHomeBudget = max(0, self._homeBudget(game) - seconds)
+        elif game.offensiveTeam is game.awayTeam:
+            game._chessAwayBudget = max(0, self._awayBudget(game) - seconds)
 
     def _lockedOut(self, game, team) -> bool:
         if team is game.homeTeam:

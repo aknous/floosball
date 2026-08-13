@@ -149,17 +149,19 @@ class ChessClockPuntTests(unittest.TestCase):
         self.assertIn('_lastSnapBeforeBreak()', block)           # the budget is going
         self.assertIn('_isGarbageTime', block)
         # And it actually CALLS the shot rather than falling through.
-        tail = src[i:i + 700]
+        tail = src[i:i + 900]
         self.assertIn('passPlay(self._selectPassPlay(_shot))', tail)
         self.assertIn("'deep' if self.yardsToEndzone > CHESS_CLOCK_STRIKE_YARDS else 'long'", src)
 
-    def testTheStrikeDoesNotTargetTheSideline(self):
-        """Getting out of bounds stops the GAME clock, which is not the deadline here —
-        the budget is. Yards are the whole point, so the sideline bias comes off."""
+    def testTheStrikeDoesNotOverrideSidelineTargeting(self):
+        """⚠️ This forced `targetSideline = False` on the reasoning that stopping the GAME
+        clock does nothing for a possession budget. That is wrong — a stopped clock is
+        charged less, so getting out of bounds genuinely preserves budget and is a
+        strategy. The override is gone; the normal sideline logic decides."""
         with open(os.path.join(HERE, 'floosball_game.py')) as fh:
             src = fh.read()
         i = src.index("'decision': 'chessClockStrike'")
-        self.assertIn('targetSideline = False', src[i:i + 700])
+        self.assertNotIn('targetSideline = False', src[i:i + 700])
 
     def testGarbageTimeIsExcluded(self):
         self.assertIn('_isGarbageTime', _block())
