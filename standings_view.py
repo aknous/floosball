@@ -142,33 +142,51 @@ def _played(team) -> int:
                + (stats.get('ties', 0) or 0))
 
 
+def _projected(team, winsOut: bool, totalGames: int) -> '_TeamShim':
+    """This club's record if it wins (or loses) every game it has left."""
+    stats = dict(getattr(team, 'seasonTeamStats', {}) or {})
+    remaining = max(0, totalGames - _played(team))
+    wins = (stats.get('wins', 0) or 0) + (remaining if winsOut else 0)
+    losses = (stats.get('losses', 0) or 0) + (0 if winsOut else remaining)
+    ties = stats.get('ties', 0) or 0
+    played = wins + losses + ties
+    stats['wins'], stats['losses'] = wins, losses
+    stats['winPerc'] = ((wins + 0.5 * ties) / played) if played else 0.0
+    return _TeamShim(getattr(team, 'id', None), getattr(team, 'division', None), stats)
+
+
 def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]]:
     """Who is mathematically IN, who has won their division, who owns the top seed.
 
     `{teamId: {'clinchedPlayoffs', 'clinchedDivision', 'clinchedTopSeed',
     'eliminated'}}`.
 
-    The test is "can this club still be caught": a rival's CEILING is its current
-    points plus a win in every game it has left, and this club's FLOOR is its
-    points now. Anyone whose ceiling cannot reach the floor is out of the race.
+    ⚠️ THE TEST RUNS THE REAL SEEDING, not a count of who is above you. It used to
+    ask "can fewer than `spots` clubs finish ahead of me on record", which is wrong
+    the moment divisions exist: a DIVISION WINNER takes a guaranteed top-four seed
+    with any record at all, so it occupies a berth without ever appearing above you
+    in the table. Measured on the live board — BOS, DET and PHI all finished 14-14
+    with only seven clubs holding more points, so all three read as CLINCHED while
+    actually missing the field, because 13-15 MIN had won its division and taken
+    seed 4.
 
-    ⚠️ DELIBERATELY CONSERVATIVE, and the direction matters. It ignores head to
-    head, division records and every other tiebreaker, and it lets every rival
-    win out at once even where they play each other. So a club may be shown as
-    clinched a little LATE — never early. A badge that appears and then has to be
-    taken away is worse than one that appears a week after the fact.
+    So each club is seeded twice through `seedLeague`, the same chain the playoffs
+    run on:
+      * WORST case (this club loses out, every rival wins out) — still seeded means
+        nothing can take the berth away, so it is CLINCHED.
+      * BEST case (this club wins out, every rival loses out) — not seeded even
+        then means there is no road left, so it is ELIMINATED.
 
-    ⚠️ It also does NOT reuse `leagueManager.checkPlayoffClinching`, which is dead
-    code and unsafe here: that takes the top half BY RECORD as the playoff field,
-    which stopped being true when divisions arrived — a division winner is
-    guaranteed a top-four seed regardless of record, so the field and the record
-    order are different sets. Seeding lives in `seedLeague`, so clinching lives
-    beside it and the two cannot contradict each other.
+    That gets the division rule, the seeding order and the tiebreakers for free, and
+    it cannot contradict the seeds the board is showing beside it.
+
+    ⚠️ Still CONSERVATIVE by construction: every rival winning out at once is not
+    actually possible where they play each other, so a badge can appear a week LATE
+    and never early. A badge that has to be taken away reads as the table lying.
     """
     out: Dict[int, Dict[str, bool]] = {}
     if not teams:
         return out
-    spots = playoffSpots(len(teams))
     divisions = divisionsOf(teams)
     divisionOf = {getattr(t, 'id', None): name
                   for name, members in divisions.items() for t in members}
@@ -180,66 +198,36 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
         tid = getattr(team, 'id', None)
         floor = _points(team)
         myCeiling = ceiling(team)
-        rivals = [t for t in teams if getattr(t, 'id', None) != tid]
 
-        # Clubs that can still finish above this one. If fewer than the number of
-        # berths can pass it, it is in whatever they all do.
-        canPassMe = sum(1 for t in rivals if ceiling(t) > floor)
-        # Clubs this one can no longer catch. Once that many sit above it, the
-        # berths are gone.
-        cannotBeCaught = sum(1 for t in rivals if _points(t) > myCeiling)
+        # Everyone else at their best, this club at its worst.
+        worstSeeds = seedLeague([_projected(t, t is not team, totalGames)
+                                 for t in teams])['seeds']
+        # This club at its best, everyone else at their worst.
+        bestSeeds = seedLeague([_projected(t, t is team, totalGames)
+                                for t in teams])['seeds']
 
         myDivision = divisionOf.get(tid)
         divisionRivals = [t for t in divisions.get(myDivision, [])
                           if getattr(t, 'id', None) != tid] if myDivision else []
+        # A title is won when no rival can reach this club, and lost once one is
+        # beyond reach. Both are within-division questions, so they stay a points
+        # comparison rather than a re-seed.
         divisionClinched = bool(myDivision) and all(
             ceiling(t) <= floor for t in divisionRivals)
-        # ⚠️ THE DIVISION IS A SECOND ROAD IN, so it also decides elimination. The
-        # title is lost only once a rival is beyond reach; while it is winnable a
-        # club is alive no matter how far down the league table it sits.
-        divisionLost = bool(myDivision) and any(
-            _points(t) > myCeiling for t in divisionRivals)
+
+        seededAtWorst = worstSeeds.get(tid)
+        seededAtBest = bestSeeds.get(tid)
 
         out[tid] = {
-            # ⚠️ WINNING THE DIVISION IS AN AUTO-CLINCH (owner). A division winner
-            # takes a guaranteed top-four seed, so the berth does not depend on
-            # the record race at all — a club can win a weak division while more
-            # than `spots` league rivals could still finish above it, and it is
-            # in regardless. Computing the two independently missed that and held
-            # the berth badge back behind a test that no longer applies.
-            'clinchedPlayoffs': (canPassMe < spots) or divisionClinched,
+            # A guaranteed division seed is already inside the worst-case seeding,
+            # so this needs no separate auto-clinch term.
+            'clinchedPlayoffs': seededAtWorst is not None,
             'clinchedDivision': divisionClinched,
-            # ⚠️ The top seed needs the DIVISION as well as the record. Division
-            # winners take the top four seeds, so a club with the best record in
-            # the league is not the 1 seed until its own division is settled —
-            # it could still be seeded behind a winner it out-performed.
-            'clinchedTopSeed': divisionClinched and canPassMe == 0,
-            # ⚠️ ELIMINATED MEANS NO ROAD IN AT ALL, not "too far down the table".
-            # Reported from the live board: a club that had WON ITS DIVISION was
-            # being greyed out as eliminated, because its record was poor enough
-            # that `spots` rivals sat above it — which is exactly the situation a
-            # guaranteed division seed exists to protect. A club is out only when
-            # the wildcard is gone AND the division is lost; an undivisioned
-            # league has only the one road, so the wildcard test stands alone.
-            # This is the mirror of the auto-clinch above and was missed with it.
-            'eliminated': (cannotBeCaught >= spots
-                           and (divisionLost or not myDivision)),
+            # The top seed has to survive the worst case as seed 1 specifically.
+            'clinchedTopSeed': seededAtWorst is not None and seededAtWorst[0] == 1,
+            'eliminated': seededAtBest is None,
         }
     return out
-
-
-def gamesBackFrom(cutTeam, team) -> float:
-    """Games behind the club holding the LAST playoff spot.
-
-    Signed so the column reads as a race rather than a ranking: negative is ahead of the
-    cut, 0 is the club on it, positive is chasing. Half-games are real — one club playing
-    a game the other has not shifts the gap by a half.
-    """
-    if cutTeam is None:
-        return 0.0
-    cutW, cutL = _record(cutTeam)
-    w, l = _record(team)
-    return ((cutW - w) + (l - cutL)) / 2.0
 
 
 def _emptyStats() -> Dict[str, Any]:
