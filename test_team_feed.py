@@ -20,7 +20,8 @@ from database.repositories.sentiment_repository import (
 )
 from database.models import CoachSentimentVote
 from constants import (
-    FEED_POST_CATALOG, FEED_POST_TTL_HOURS, FEED_MAX_POSTS_PER_WINDOW,
+    FEED_POST_CATALOG, GAME_FEED_CATALOG, FEED_POST_TTL_HOURS,
+    FEED_MAX_POSTS_PER_WINDOW, FEED_POST_COOLDOWN_SECONDS,
     SENTIMENT_MIN_RATERS, FEED_AUTOPOST_BY_RATING, GM_SENTIMENT_MIN_VOTERS,
 )
 
@@ -84,18 +85,25 @@ def test_name_token_is_rendered():
 # ---------------------------------------------------------- rate limit
 
 def test_rate_limit_bounds_the_spam():
-    r = _repo()
-    for _ in range(FEED_MAX_POSTS_PER_WINDOW):
-        r.addPost(1, 1, 'believe')
-    r.session.commit()
-    assert r.remainingPosts(1) == 0
+    # ⚠️ The COOLDOWN sits in front of the window cap, so filling the window means
+    # stepping the clock past it between posts. Posting them all at a frozen clock
+    # trips the cooldown on the second one and never reaches the limit under test.
+    session = _session()
+    step = FEED_POST_COOLDOWN_SECONDS + 1
+    for i in range(FEED_MAX_POSTS_PER_WINDOW):
+        _repo(session, now=NOW + timedelta(seconds=i * step)).addPost(1, 1, 'believe')
+    session.commit()
+
+    # Far enough past every cooldown that only the WINDOW can still refuse.
+    after = _repo(session, now=NOW + timedelta(seconds=FEED_MAX_POSTS_PER_WINDOW * step))
+    assert after.remainingPosts(1) == 0
     try:
-        r.addPost(1, 1, 'believe')
+        after.addPost(1, 1, 'believe')
         raise AssertionError("rate limit not enforced")
     except FeedError:
         pass
     # a DIFFERENT fan is unaffected
-    assert r.remainingPosts(2) == FEED_MAX_POSTS_PER_WINDOW
+    assert after.remainingPosts(2) == FEED_MAX_POSTS_PER_WINDOW
     print(f"PASS rate limited to {FEED_MAX_POSTS_PER_WINDOW} per window, per fan")
 
 
@@ -129,12 +137,57 @@ def test_player_and_gm_lines_cannot_be_posted_manually():
 
 
 def test_general_lines_are_postable():
-    r = _repo()
-    for key in ('believe', 'not_good'):
-        r.addPost(1, 1, key)
-    r.session.commit()
-    assert len(r.getFeed(1)) == 2
+    # ⚠️ ONE POST PER USER PER COOLDOWN, so two lines in a row need either two
+    # fans or a clock that moves. This posted both as user 1 at a frozen clock and
+    # tripped FEED_POST_COOLDOWN_SECONDS, which read as the LINE being rejected
+    # when it was the RATE.
+    session = _session()
+    _repo(session).addPost(1, 1, 'believe')
+    _repo(session, now=NOW + timedelta(seconds=FEED_POST_COOLDOWN_SECONDS + 1)) \
+        .addPost(1, 1, 'not_good')
+    session.commit()
+    assert len(_repo(session).getFeed(1)) == 2
     print("PASS general support/frustration lines post fine")
+
+
+def test_a_line_in_both_catalogs_posts_to_either_feed():
+    """⚠️ THE REGRESSION, reported live. 'believe' ("Believe!") is deliberately in
+    BOTH catalogs — it is a reasonable thing to shout at a game and about a season.
+
+    Scope used to be decided by `postKey in GAME_FEED_CATALOG`, which treats game
+    membership as EXCLUSIVE, so a shared key was claimed entirely by the game side
+    and the club feed answered "that post belongs to a game". The two catalogs are
+    separate vocabularies, not disjoint ones."""
+    assert 'believe' in FEED_POST_CATALOG and 'believe' in GAME_FEED_CATALOG
+
+    # Club feed: no game in sight.
+    teamSession = _session()
+    _repo(teamSession).addPost(1, 1, 'believe')
+    teamSession.commit()
+    assert len(_repo(teamSession).getFeed(1)) == 1
+
+    # And the same line at a game.
+    gameSession = _session()
+    _repo(gameSession).addPost(1, 1, 'believe', gameId=99)
+    gameSession.commit()
+    assert len(_repo(gameSession).getGameFeed(99)) == 1
+    # ...and it does NOT leak into the club stand, which is the point of the split.
+    assert _repo(gameSession).getFeed(1) == []
+    print("PASS a line in both catalogs posts to either feed")
+
+
+def test_a_game_only_line_still_belongs_to_a_game():
+    """The guard must still hold for a key that really is game-only."""
+    gameOnly = [k for k in GAME_FEED_CATALOG if k not in FEED_POST_CATALOG]
+    assert gameOnly, 'no game-only key to test with'
+    r = _repo()
+    try:
+        r.addPost(1, 1, gameOnly[0])
+    except FeedError as e:
+        assert 'belongs to a game' in str(e), e
+        print("PASS a game-only line is still refused by the club feed")
+        return
+    raise AssertionError(f"{gameOnly[0]} was postable to the club feed")
 
 
 # --------------------------------------------------------- auto posts

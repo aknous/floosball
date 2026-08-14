@@ -70,18 +70,35 @@ class FeedRepository:
         `gameId` scopes the post to one match — that is what keeps a shout at
         tonight's game out of tomorrow's stand.
         """
-        isGamePost = postKey in GAME_FEED_CATALOG
-        entry = catalogEntry(postKey)
-        if entry is None:
+        # ⚠️ SCOPE IS DECIDED BY THE CONTEXT, NOT BY WHICH CATALOG HOLDS THE KEY.
+        # This read `isGamePost = postKey in GAME_FEED_CATALOG`, which treats game
+        # membership as EXCLUSIVE — so a line that exists in BOTH catalogs was
+        # claimed entirely by the game side and could never be posted to a club
+        # feed. Reported live for 'believe' ("Believe!"), which is a perfectly
+        # reasonable thing to shout at a game AND about a season, and is
+        # deliberately in both. The two catalogs are separate vocabularies, not
+        # disjoint ones.
+        inGameCatalog = postKey in GAME_FEED_CATALOG
+        inTeamCatalog = postKey in FEED_POST_CATALOG
+        if not inGameCatalog and not inTeamCatalog:
             raise FeedError(f"unknown post '{postKey}'")
-        _text, target, _valence = entry
 
-        # A game line only exists in the context of a game, and a club line is
-        # about the season — neither belongs in the other's composer.
-        if isGamePost and gameId is None:
+        # A line only belongs where its catalog says it does — but a shared key
+        # belongs in both, so only the ABSENT side is an error.
+        if gameId is None and not inTeamCatalog:
             raise FeedError("that post belongs to a game")
-        if gameId is not None and not isGamePost:
+        if gameId is not None and not inGameCatalog:
             raise FeedError("that post is about the club, not this game")
+
+        isGamePost = gameId is not None
+        # ⚠️ Resolve from the catalog matching the CONTEXT. `catalogEntry` prefers
+        # the TEAM entry, so a shared key posted at a game would otherwise carry
+        # the club entry's target and valence. Harmless while the two agree, and a
+        # silent mismatch the moment they diverge.
+        entry = ((GAME_FEED_CATALOG.get(postKey) if isGamePost else None)
+                 or FEED_POST_CATALOG.get(postKey)
+                 or GAME_FEED_CATALOG.get(postKey))
+        _text, target, _valence = entry
 
         # Only general team posts are manually postable. Opinions about a
         # specific player or the GM arrive by rating / voting, which generates
