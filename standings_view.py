@@ -230,6 +230,20 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
     return out
 
 
+def gamesBackFrom(cutTeam, team) -> float:
+    """Games behind the club holding the LAST playoff spot.
+
+    Signed so the column reads as a race rather than a ranking: negative is ahead of the
+    cut, 0 is the club on it, positive is chasing. Half-games are real — one club playing
+    a game the other has not shifts the gap by a half.
+    """
+    if cutTeam is None:
+        return 0.0
+    cutW, cutL = _record(cutTeam)
+    w, l = _record(team)
+    return ((cutW - w) + (l - cutL)) / 2.0
+
+
 def _emptyStats() -> Dict[str, Any]:
     return {
         'wins': 0, 'losses': 0, 'ties': 0,
