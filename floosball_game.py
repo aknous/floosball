@@ -12141,6 +12141,17 @@ class Game:
 
         # Pass plays
         if self.play.playType == PlayType.Pass:
+            # ⚠️ A SACK IS NOT A DEAD BALL — the quarterback was tackled in the field
+            # of play, so the clock keeps running exactly as it does on a run. Without
+            # this the sack falls through to the incompletion branch below (a sack is
+            # a pass play that never completed) and stops the clock. That cost far
+            # more than the runoff: the pre-snap huddle is only charged while the
+            # clock is running, so a sack also made the NEXT huddle free — 25-35s of
+            # game clock handed back per sack, and a team taking a dozen of them
+            # played several extra minutes of football. Scores, turnovers and
+            # sack-fumbles are already handled by the branches above.
+            if self.play.isSack and self.play.isInBounds:
+                return True
             if self.play.isPassCompletion:
                 # Completed pass - in bounds keeps the clock; out of bounds is a dead
                 # ball (stops it) unless the running-clock rule suppresses that.
@@ -14292,19 +14303,26 @@ class Play():
         # Dropback depth increases sack risk (3-step=1, 5-step=2, 7-step=3)
         rushDifferential += (dropbackDepth - 1) * 2
 
-        # Base sack rate at even matchup (differential = 0) is ~3%
-        # Logistic function: probability increases smoothly with rush advantage
-        from constants import SACK_BASE_RATE, SACK_PROB_CAP
+        # The curve is centered so a differential of 0 reads baseSackRate. That is NOT
+        # the realized league rate — protection systematically outweighs the rush, so
+        # the typical differential is around -17 and the logistic lands near 6%.
+        # ⚠️ STEEPNESS SETS HOW MUCH THE MATCHUP MATTERS, and it used to be hardcoded
+        # here at 0.15, which made a 20-point attribute gap worth a 4x sack rate. See
+        # the note on SACK_PROB_CAP for the measurements — cap and steepness have to be
+        # tuned together, and against the SPREAD rather than against the mean.
+        from constants import SACK_BASE_RATE, SACK_PROB_CAP, SACK_CURVE_STEEPNESS
         baseSackRate = SACK_BASE_RATE
-        steepness = 0.15
+        steepness = SACK_CURVE_STEEPNESS
 
         # Shift the curve so 0 differential = baseSackRate
         probability = (baseSackRate * 2) / (1 + np.exp(-steepness * rushDifferential))
 
         # Extra-long dropbacks (Hail Mary) leave QB exposed in pocket much
-        # longer than normal — the standard 15% cap underestimates real risk.
-        # Lift cap to 28% so a strong rush against thin protection can wreck
-        # the play before it leaves the QB's hand.
+        # longer than normal — the standard cap underestimates real risk. Lift it
+        # so a strong rush against thin protection can wreck the play before it
+        # leaves the QB's hand. ⚠️ This 28 is written against a ~15 standard cap and
+        # is meant to be a LIFT; while SACK_PROB_CAP sat at 30 it was silently a
+        # REDUCTION, doing the opposite of what it says. Move the two together.
         capMax = 28 if dropbackDepth >= 6 else SACK_PROB_CAP
         return max(0.5, min(capMax, probability))
 

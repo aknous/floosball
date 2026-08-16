@@ -1063,7 +1063,35 @@ PUNT_MUFF_RECOVER_KICKING = 0.50    # who comes up with a muffed ball
 # rushDifferential is negative and the logistic lands well below this number. 14.0
 # yields ~6.0% of dropbacks, i.e. a real-world 2.48 sacks per team per game.
 SACK_BASE_RATE = float(_os.environ.get('FLOOS_SACK_BASE', '14.0'))  # curve param, not the rate
-SACK_PROB_CAP = float(_os.environ.get('FLOOS_SACK_CAP', '30'))      # ceiling on a normal dropback
+# ⚠️ THE CAP AND THE STEEPNESS ARE WHAT SET THE SPREAD, and both were wrong while the
+# base rate above was right. Reported as an explosion of sacks (19 by one team in a
+# Floos Bowl) — but measured over 1,511 logged games the league AVERAGE was already on
+# target at 2.85/team/game, 6.1% per dropback. The TAIL was the fault: p99 game rate
+# 16.3%, top games 19%. At cap 30 with steepness 0.15 a 90 pass rush against a
+# 70-mobility QB sat at 22.9% per dropback FOR THE WHOLE GAME (24.9% on a long
+# dropback), so a 20-point attribute gap was worth a 4x sack rate against real
+# football's ~2x, and ~42 dropbacks made the high teens an ordinary outcome rather
+# than a freak one. Retuned by modelling the curve over the REAL 32-team roster (every
+# team's derived pass rush against every other team's QB mobility and blocking) across
+# the REAL 24-play pass playbook, so the blocker mix and the dropback depths are the
+# ones the sim actually calls: expected team-game sacks p99 **10.6 -> 7.6**, max
+# 11.3 -> 7.7, with the mean HELD at 3.47 -> 3.43 and the base rate UNCHANGED — nothing
+# was ever wrong with it, and the league average was the one number already on target.
+# ⚠️ THE PASS RUSH MUST STILL MATTER, so tune against the SPREAD, never the mean. The
+# p90/p10 team-game ratio lands at 10.1x, halved from 19.4x and a long way from flat.
+# Pushing the cap lower forces the base rate up to hold the mean, which parks most
+# plays AT the ceiling and flattens the curve into "pass rush quality is irrelevant" —
+# measured at cap 10 the spread collapses while the mean still reads fine.
+# ⚠️ Do NOT tune this against a synthetic harness of uniformly-seeded teams. One was
+# tried first and its matchup spread does not resemble a real league's (differentials
+# spanning -72..+65 against the real -41..+31), so it reproduced neither the real mean
+# nor the real tail and ranked candidates differently. Read real rosters out of a
+# database — `player_attributes` plus the derivations in `floosball_player` is enough,
+# no app boot required.
+SACK_PROB_CAP = float(_os.environ.get('FLOOS_SACK_CAP', '16'))      # ceiling on a normal dropback
+# Logistic steepness over the raw rush-vs-protection differential. Was hardcoded in
+# `Game.calculateSackProbability`, which is why it was never a tuning candidate.
+SACK_CURVE_STEEPNESS = float(_os.environ.get('FLOOS_SACK_STEEPNESS', '0.12'))
 # Air-yard means per pass tier. The old bands were compressed -- "medium" at 6.5
 # air yards is really a short throw -- which held league aDOT at 6.29 against a
 # real-world ~7.8 and made every completion tiny.
