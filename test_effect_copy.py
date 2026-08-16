@@ -58,6 +58,37 @@ def rendered():
 RENDERED = rendered()
 
 
+class ThresholdsMustBeReachable(unittest.TestCase):
+    """⚠️ GROUP PROJECT COUNTS *OTHER* CARDS, NOT SEATS, AND AT 6 IT COULD NOT FIRE.
+
+    `_computeBonusRound` reads first-pass breakdowns (which exclude this card, a
+    second-pass effect) plus other second-pass cards — so the most it can ever count is
+    `len(FUSION_BASE_SLOTS) - 1`, five at the standard lineup. The fusion raised the
+    threshold to 6 on a note reading "with a 6-7 card lineup", counting SEATS where the
+    compute counts OTHERS. Measured over 200 real-hand trials: hit rate 0%.
+
+    Matching the text to the constant (below) would have kept a truthful description of
+    an impossible card. This is the check that actually mattered.
+    """
+
+    def testBonusRoundCanFireAtTheStandardLineupSize(self):
+        from managers.cardManager import FUSION_BASE_SLOTS
+        others = len(FUSION_BASE_SLOTS) - 1
+        self.assertLessEqual(
+            CE._BONUS_ROUND_THRESHOLD, others,
+            f'_BONUS_ROUND_THRESHOLD is {CE._BONUS_ROUND_THRESHOLD} but a standard '
+            f'{len(FUSION_BASE_SLOTS)}-slot lineup only has {others} OTHER cards — '
+            f'the card cannot fire without FLEX. Compare against the count of others, '
+            f'never the seat count.')
+
+    def testItDoesNotRequireEveryOtherCardToFire(self):
+        """At exactly `others` it is reachable but demands a perfect hand, which is the
+        same non-payoff in practice. Leave headroom."""
+        from managers.cardManager import FUSION_BASE_SLOTS
+        self.assertLess(CE._BONUS_ROUND_THRESHOLD, len(FUSION_BASE_SLOTS) - 1,
+                        'threshold requires literally every other card to trigger')
+
+
 class ConstantsOwnTheirNumbers(unittest.TestCase):
     """⚠️ A number the CODE decides must not be retyped into prose."""
 

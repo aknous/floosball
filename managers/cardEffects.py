@@ -972,7 +972,7 @@ EFFECT_TOOLTIPS = {
     "stacked_deck": "Multiply the multipliers. FPx for every other FPx card in your hand.",
     "copycat": "Copies the best. FP equal to the highest flat FP bonus from your other cards.",
     "chain_reaction": "Cards feeding cards. FPx that scales with how many of your other cards produced a non-zero bonus.",
-    "bonus_round": "Everyone chipped in. FP if 6 or more of your other cards triggered a non-zero bonus this week.",
+    "bonus_round": "Everyone chipped in. FP if 4 or more of your other cards triggered a non-zero bonus this week.",
     "winners_circle": "Back the winners. Floobits whenever this player's real team wins their game this week.",
     "no_passengers": "Depth pays. FPx that scales with your lowest-scoring roster player, so a lineup with no weak link earns more.",
     "franchise": "Build around your guy. FPx when this player is your single highest scorer this week.",
@@ -1163,7 +1163,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "stacked_deck": "+{perCardMult} FPx for each other FPx card in your hand",
     "copycat": "+FP equal to highest flat FP bonus from your other cards",
     "chain_reaction": "+{perCardXMult} FPx for every other card in your lineup that produced a non-zero bonus this week",
-    "bonus_round": "+{rewardValue} FP when 6 or more of your other cards produced a non-zero bonus this week",
+    "bonus_round": "+{rewardValue} FP when 4 or more of your other cards produced a non-zero bonus this week",
     "winners_circle": "{winFloobits} Floobits when this player's team wins this week",
     "no_passengers": "+{perFloorFP} FPx per FP scored by your lowest roster player (max +{maxDelta})",
     "franchise": "+{topScorerDelta} FPx when this player is your top scorer this week",
@@ -4948,9 +4948,24 @@ def _computeChainReaction(primary, ctx, cardPlayerId, eqId):
     return EffectResult(equation=eq)
 
 
-_BONUS_ROUND_THRESHOLD = 6  # Fusion: raised 4->6. With a 6-7 card lineup, 4+ cards
-                            # triggering was ~guaranteed; 6 means nearly the whole hand
-                            # must pop, keeping it a real "everything fires" payoff.
+# ⚠️ THIS COUNTS *OTHER* CARDS, NOT SEATS, AND AT 6 IT WAS UNREACHABLE.
+# `_computeBonusRound` reads first-pass breakdowns (which exclude this card, a
+# second-pass effect) plus other second-pass cards. The standard lineup is
+# `FUSION_BASE_SLOTS` = 6, so there are only **5** other cards. A threshold of 6 could
+# not be met at all; it became merely possible with FLEX unlocked (an MVP card or an
+# Accession powerup, 7 seats -> 6 others) and only if literally every other card fired.
+# Measured over 200 real-hand trials before the revert: hit rate 0%.
+#
+# The fusion note that raised it 4 -> 6 said "with a 6-7 card lineup, 4+ cards triggering
+# was ~guaranteed" — it counted SEATS where the compute counts OTHERS, and that
+# off-by-one is the whole bug. Against 5 others, 4 is not near-guaranteed either; it
+# needs four of five to pop.
+#
+# Owner call 2026-08-16: back to 4, because 6 would include Group Project itself at the
+# typical hand size and "every card in the hand fires" is not a payoff anyone reaches.
+# ⚠️ Any future raise must be checked against `len(FUSION_BASE_SLOTS) - 1`, not against
+# the seat count. `test_effect_copy.py` asserts it stays reachable.
+_BONUS_ROUND_THRESHOLD = 4
 
 _FULL_HOUSE_MIN_CARDS = 5   # Full House (full_roster) needs at least this many first-pass
                             # gated (effect) cards present AND all ON to fire. A full 6-slot
