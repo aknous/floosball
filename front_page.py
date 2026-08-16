@@ -23,6 +23,11 @@ logger = logging.getLogger('floosball.frontPage')
 # Ordered by how much a fan cares. Decides which of the eligible items leads, and breaks
 # ties between items published in the same tick.
 CATEGORY_PRIORITY = [
+    # One row a season, and the only result the whole league was playing for. It also
+    # PINS itself (`seasonManager._publishChampionNews`), which is what actually holds it
+    # at the top through the offseason — this ranking is what takes over once next
+    # season's champion unpins it.
+    'champion',
     'announcement',
     'criticality',
     'record',
@@ -63,7 +68,7 @@ NEVER_LEAD = {'cores', 'schedule'}
 # surface for the anomaly is deliberately number-free, so that it reads as a mood rather
 # than a progress bar. The raw aggregate and threshold live only in the debug endpoint and
 # the ephemeral control room.
-LEAD_WITHOUT_STATS = {'rules', 'criticality', 'announcement'}
+LEAD_WITHOUT_STATS = {'rules', 'criticality', 'announcement', 'champion'}
 
 # An announcement is written by a person who chose to write it, so it is RESERVED ahead of
 # everything else — a cap that can drop it defeats the point of having posted it. Taken in

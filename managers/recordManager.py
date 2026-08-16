@@ -1320,7 +1320,15 @@ class RecordManager:
         """
         Check and update team game records
         Replaces checkTeamGameRecords() function from floosball.py
+
+        ⚠️ REGULAR SEASON ONLY. A record is a regular-season body of work — the same
+        rule `processPostGameStats` applies to season totals. This guard is here rather
+        than only at the call site because this method HAS the game and can defend
+        itself; `checkPlayerGameRecords` takes no game at all (it sweeps every active
+        player's `gameStatsDict`), so that one has to be gated by its caller.
         """
+        if not getattr(game, 'isRegularSeasonGame', False):
+            return
         # Use internal records if no external dict provided
         if allTimeRecordsDict is None:
             allTimeRecordsDict = self.getRecords()
