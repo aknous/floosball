@@ -4068,6 +4068,24 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
         carriedBase = baseReward
 
     if not conditionMet:
+        # ⚠️ NOT MET *YET* IS NOT THE SAME AS NOT MET. While the week is still running,
+        # `liveStreakConditionsMet` is False from kickoff until the moment the condition
+        # actually fires — so this branch used to resolve the streak the instant the week
+        # opened, banking the full broken-streak peak before the player had taken a snap.
+        # Measured on Metronome at a carried streak of 6 (base 41.6): 53.1 FP at kickoff,
+        # and 53.1 FP after a week that genuinely failed. The two moments were identical,
+        # and the first one is a payout for an outcome that had not happened.
+        #
+        # A streak resolves exactly twice: when the condition is MET (the branch below
+        # this one, which increments and pays the active value), or when the WEEK ENDS
+        # without it (this branch, paying the decaying peak). Until one of those, the
+        # streak portion outputs nothing.
+        #
+        # Projection is unaffected: `liveStreakConditionsMet` is empty there, so
+        # `conditionMet` defaults True and the forward-looking panel keeps showing the
+        # active-streak value rather than pricing every streak card as pending.
+        if getattr(ctx, 'gamesActive', False):
+            return EffectResult(equation="streak unresolved, this week is still running")
         if streakCount > 0:
             # Streak just broke this week. Pay the peak the streak achieved:
             # carriedBase (the locked base) + growth × (priorCount - 1).
@@ -5516,13 +5534,24 @@ def _ladderStat(ctx, cardPlayerId, group, key):
     return (sub or {}).get(key, 0) if isinstance(sub, dict) else 0
 
 
-def _streakClause(count, carried):
-    """How the streak reads in a breakdown. A BROKEN streak says so rather than printing
-    "0 wk streak", which is indistinguishable from never having had one — and the user
-    who just lost a six-week run is exactly the one asking what happened."""
+def _streakClause(count, carried, ctx=None):
+    """How the streak reads in a breakdown.
+
+    Three states, not two. A BROKEN streak says so rather than printing "0 wk streak",
+    which is indistinguishable from never having had one, and the user who just lost a
+    six-week run is exactly the one asking what happened.
+
+    ⚠️ And a streak is not broken until the WEEK is over. While games are still running
+    the condition simply has not fired yet, so calling it broken at kickoff tells a user
+    they lost a run that is still very much alive.
+    """
     if count:
         return f"{count} wk streak"
-    return "streak broken" if carried else "no streak"
+    if not carried:
+        return "no streak"
+    if getattr(ctx, 'gamesActive', False):
+        return "streak unresolved"
+    return "streak broken"
 
 
 def _ladderStreakDelta(primary, ctx, eqId):
@@ -5592,7 +5621,7 @@ def _computeDominion(primary, ctx, cardPlayerId, eqId):
     if delta <= 0:
         return EffectResult(equation="no receiving yards")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({yards} yds, {_streakClause(count, carried)})")
+                        equation=f"+{delta:.2f} FPx ({yards} yds, {_streakClause(count, carried, ctx)})")
 
 
 # ── Yards after contact: Freight -> Grinder -> Landslide ──
@@ -5631,7 +5660,7 @@ def _computeLandslide(primary, ctx, cardPlayerId, eqId):
     if delta <= 0:
         return EffectResult(equation="no yards after contact")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({yac} yds, {_streakClause(count, carried)})")
+                        equation=f"+{delta:.2f} FPx ({yac} yds, {_streakClause(count, carried, ctx)})")
 
 
 # ── Punt placement: Pinpoint -> Coffin Corner -> Undertaker ──
@@ -5667,7 +5696,7 @@ def _computeUndertaker(primary, ctx, cardPlayerId, eqId):
     if delta <= 0:
         return EffectResult(equation="no punts inside the 20")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({pins} pinned, {_streakClause(count, carried)})")
+                        equation=f"+{delta:.2f} FPx ({pins} pinned, {_streakClause(count, carried, ctx)})")
 
 
 # ── Receiving TDs: Paydirt -> End Zone -> Promised Land ──
@@ -5839,7 +5868,7 @@ def _computeStratosphere(primary, ctx, cardPlayerId, eqId):
     if delta <= 0:
         return EffectResult(equation="no passing yards")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({yards} yds, {_streakClause(count, carried)})")
+                        equation=f"+{delta:.2f} FPx ({yards} yds, {_streakClause(count, carried, ctx)})")
 
 
 # ── Throw quality: Gunslinger -> Marksman -> Dead Eye ──
@@ -5871,7 +5900,7 @@ def _computeDeadEye(primary, ctx, cardPlayerId, eqId):
     if delta <= 0:
         return EffectResult(equation="no well-placed throws")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({good} well-placed, {_streakClause(count, carried)})")
+                        equation=f"+{delta:.2f} FPx ({good} well-placed, {_streakClause(count, carried, ctx)})")
 
 
 # ── Completions: Cadence -> Rhythm -> Clockwork ──
@@ -5909,7 +5938,7 @@ def _ladderRateStreak(primary, ctx, cardPlayerId, eqId, group, key, rateKey, uni
     if delta <= 0:
         return EffectResult(equation=f"no {label}")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({val} {label}, {_streakClause(count, carried)})")
+                        equation=f"+{delta:.2f} FPx ({val} {label}, {_streakClause(count, carried, ctx)})")
 
 
 def _computeRhythm(primary, ctx, cardPlayerId, eqId):

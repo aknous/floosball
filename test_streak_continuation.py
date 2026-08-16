@@ -175,6 +175,93 @@ class BreakdownTellsTheUser(unittest.TestCase):
         self.assertIn('5 wk streak', live.equation)
 
 
+class NothingResolvesUntilTheWeekDoes(unittest.TestCase):
+    """⚠️ NOT MET *YET* IS NOT THE SAME AS NOT MET, and the generic handler could not
+    tell the difference. `liveStreakConditionsMet` reads False from kickoff until the
+    moment the condition actually fires, so the break branch resolved the streak the
+    instant the week opened — banking the full broken-streak peak before the player had
+    taken a snap.
+
+    Measured on Metronome at a carried streak of 6 (base 41.6 FP):
+
+        games running, condition not met yet    53.1 FP   "streak broke, paying peak"
+        week over, condition never met          53.1 FP   "streak broke, paying peak"
+
+    Identical. The first is a payout for an outcome that had not happened.
+
+    A streak resolves exactly twice: when the condition is MET, or when the WEEK ENDS
+    without it. Until one of those, the streak portion outputs nothing.
+    """
+
+    GENERIC = ('metronome', 'snowball_fight', 'momentum', 'complacency', 'bandwagon_express')
+
+    def _generic(self, effect, streakCount, conditionMet, gamesActive):
+        cfg = buildEffectConfig('prismatic', 85, 1, 10, forceEffect=effect)
+        tmpl = NS(player_id=1, edition='prismatic', position=1, player_name='P',
+                  player_rating=85, effect_config=cfg, classification=None, team_id=10)
+        eq = NS(id=EQ_ID, slot_number=1, user_card=NS(card_template=tmpl, tier=1))
+        ctx = CardCalcContext()
+        ctx.gamesActive = gamesActive
+        ctx.isProjection = False
+        ctx.rosterPlayerIds = {1}
+        ctx.rosterPlayerPositions = {1: 1}
+        ctx.rosterPlayerTeamIds = {1: 10}
+        ctx.rosterPlayerRatings = {1: 85}
+        ctx.weekPlayerStats = {1: {'fantasyPoints': 21.0,
+                                   'passing_stats': {'comp': 26, 'yards': 270,
+                                                     'passYards': 270, 'tds': 2,
+                                                     'goodThrows': 19, 'badThrows': 2,
+                                                     'throws': 35}}}
+        ctx.weekRawFP = 21.0
+        ctx.teamResults = {10: True}
+        ctx.streakCounts = {EQ_ID: streakCount}
+        ctx.liveStreakConditionsMet = {EQ_ID: conditionMet}
+        return next(b for b in calculateWeekCardBonuses([eq], ctx).cardBreakdowns
+                    if b.effectName == effect)
+
+    def testAStreakPaysNothingWhileTheWeekIsStillRunning(self):
+        """⚠️ The reported bug."""
+        for effect in self.GENERIC:
+            with self.subTest(effect=effect):
+                live = self._generic(effect, 6, False, gamesActive=True)
+                self.assertEqual(live.totalFP, 0,
+                                 f'{effect} banked FP at kickoff: {live.equation}')
+                self.assertLessEqual(live.primaryMult, 1.0,
+                                     f'{effect} banked FPx at kickoff: {live.equation}')
+
+    def testTheBrokenStreakStillPaysItsPeakOnceTheWeekIsOver(self):
+        """The hold must not delete the payout, only defer it. The decaying peak is what
+        keeps these cards viable instead of cliffing to base."""
+        for effect in self.GENERIC:
+            with self.subTest(effect=effect):
+                settled = self._generic(effect, 6, False, gamesActive=False)
+                self.assertTrue(settled.totalFP > 0 or settled.primaryMult > 1.0,
+                                f'{effect} pays nothing after a failed week')
+
+    def testMeetingTheConditionMidWeekPaysImmediately(self):
+        """Holding applies only to the UNRESOLVED case. Once the condition fires the
+        counter has incremented and there is nothing left to wait for."""
+        for effect in self.GENERIC:
+            with self.subTest(effect=effect):
+                met = self._generic(effect, 7, True, gamesActive=True)
+                self.assertTrue(met.totalFP > 0 or met.primaryMult > 1.0,
+                                f'{effect} withheld a streak it had already continued')
+
+    def testALadderCardCallsItUnresolvedRatherThanBroken(self):
+        """Same mistake one level down: telling a user their six-week run is broken while
+        the week is still live."""
+        _, primary = score('clockwork', 1, 'passing_stats', 'comp', 1, 1, True)
+        bar = int(primary['threshold'])
+        live, _ = score('clockwork', 1, 'passing_stats', 'comp', bar - 8, 6, False)
+        self.assertIn('streak', live.equation)
+        # score() builds a settled context, so assert the wording contract directly.
+        from managers.cardEffects import _streakClause
+        self.assertEqual(_streakClause(0, 6, NS(gamesActive=True)), 'streak unresolved')
+        self.assertEqual(_streakClause(0, 6, NS(gamesActive=False)), 'streak broken')
+        self.assertEqual(_streakClause(0, 0, NS(gamesActive=False)), 'no streak')
+        self.assertEqual(_streakClause(4, 4, NS(gamesActive=False)), '4 wk streak')
+
+
 class UnknownConditionDefaultsToActive(unittest.TestCase):
     def testAnEmptyConditionMapDoesNotSilentlyBreakEveryStreak(self):
         """Projection contexts carry no live conditions. Defaulting to broken would price
