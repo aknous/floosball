@@ -5516,15 +5516,48 @@ def _ladderStat(ctx, cardPlayerId, group, key):
     return (sub or {}).get(key, 0) if isinstance(sub, dict) else 0
 
 
+def _streakClause(count, carried):
+    """How the streak reads in a breakdown. A BROKEN streak says so rather than printing
+    "0 wk streak", which is indistinguishable from never having had one — and the user
+    who just lost a six-week run is exactly the one asking what happened."""
+    if count:
+        return f"{count} wk streak"
+    return "streak broken" if carried else "no streak"
+
+
 def _ladderStreakDelta(primary, ctx, eqId):
     """The streak half of a prismatic rung: growth per week the bar has been cleared.
 
     Kept separate from the base rate so the prismatic rung literally contains the
     metallic one — the base pays every week and this rides on top.
+
+    ⚠️ THE GROWTH PAYS ONLY ON A WEEK THE STREAK WAS CONTINUED. This used to read the
+    carried `streakCounts` and pay `growth × (count - 1)` unconditionally, so a player who
+    had a six-week run and then MISSED the bar still collected the whole six weeks of
+    growth for the miss — the streak was only reset afterwards, at week end. Reported from
+    production as the streak bonus paying out on a week the condition was not met.
+
+    Measured on Clockwork (bar 32 completions, growth 0.03, streak carried at 6): at 31
+    completions, one short, the card paid +0.15 FPx of growth — identical to clearing the
+    bar at 32. Only the base rate term moved across the bar.
+
+    ⚠️ It hid because the CARD GATE masks the extremes. On a genuinely blank week the gate
+    closes and the whole card pays nothing, so the leak is invisible; on a big week the
+    bar is cleared anyway, so it looks correct. It paid full value through the entire
+    middle band, which is where real weeks land.
+
+    `liveStreakConditionsMet` is populated for these cards already — they are category
+    `streak` and `fantasyTracker._evaluateLiveStreakConditions` evaluates every one of
+    their reset conditions. Nothing was reading it. Defaults to True to match
+    `_computeStreakEffect`, which keeps projection contexts (where the dict is empty)
+    showing an active streak rather than silently pricing every card as broken.
     """
     growth = primary.get("growthPerTick", 0.0) or 0.0
     count = max(0, (ctx.streakCounts.get(eqId, 1) or 1) - 1)
-    return round(growth * count, 3), count
+    conditionMet = (getattr(ctx, 'liveStreakConditionsMet', None) or {}).get(eqId, True)
+    if not conditionMet:
+        return 0.0, 0, count
+    return round(growth * count, 3), count, count
 
 
 # ── Receiving yards: Frontier -> Territory -> Dominion ──
@@ -5554,12 +5587,12 @@ def _computeDominion(primary, ctx, cardPlayerId, eqId):
     """FPx per 50 receiving yards, plus a streak of hundred-yard weeks."""
     per50 = primary.get("per50Mult", 0.03)
     yards = _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvYards")
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = per50 * (yards / 50.0) + streak
     if delta <= 0:
         return EffectResult(equation="no receiving yards")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({yards} yds + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({yards} yds, {_streakClause(count, carried)})")
 
 
 # ── Yards after contact: Freight -> Grinder -> Landslide ──
@@ -5593,12 +5626,12 @@ def _computeLandslide(primary, ctx, cardPlayerId, eqId):
     """FPx per 50 contact yards, plus a streak of hundred-yard weeks."""
     per50 = primary.get("per50Mult", 0.03)
     yac = _ladderStat(ctx, cardPlayerId, "rushing_stats", "yardsAfterContact")
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = per50 * (yac / 50.0) + streak
     if delta <= 0:
         return EffectResult(equation="no yards after contact")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({yac} yds + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({yac} yds, {_streakClause(count, carried)})")
 
 
 # ── Punt placement: Pinpoint -> Coffin Corner -> Undertaker ──
@@ -5629,12 +5662,12 @@ def _computeUndertaker(primary, ctx, cardPlayerId, eqId):
     """FPx per pin, plus a streak of multi-pin weeks."""
     perPunt = primary.get("perPuntMult", 0.03)
     pins = _ladderStat(ctx, cardPlayerId, "kicking_stats", "puntsInside20")
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = perPunt * pins + streak
     if delta <= 0:
         return EffectResult(equation="no punts inside the 20")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({pins} pinned + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({pins} pinned, {_streakClause(count, carried)})")
 
 
 # ── Receiving TDs: Paydirt -> End Zone -> Promised Land ──
@@ -5801,12 +5834,12 @@ def _computeStratosphere(primary, ctx, cardPlayerId, eqId):
     """FPx per 100 passing yards, plus a streak of big weeks."""
     per100 = primary.get("per100Mult", 0.02)
     yards = _ladderStat(ctx, cardPlayerId, "passing_stats", "passYards")
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = per100 * (yards / 100.0) + streak
     if delta <= 0:
         return EffectResult(equation="no passing yards")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({yards} yds + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({yards} yds, {_streakClause(count, carried)})")
 
 
 # ── Throw quality: Gunslinger -> Marksman -> Dead Eye ──
@@ -5833,12 +5866,12 @@ def _computeDeadEye(primary, ctx, cardPlayerId, eqId):
     """FPx per well-placed ball, plus a streak of clean sheets."""
     per5 = primary.get("per5Mult", 0.02)
     good = _ladderStat(ctx, cardPlayerId, "passing_stats", "goodThrows")
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = per5 * (good / 5.0) + streak
     if delta <= 0:
         return EffectResult(equation="no well-placed throws")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({good} well-placed + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({good} well-placed, {_streakClause(count, carried)})")
 
 
 # ── Completions: Cadence -> Rhythm -> Clockwork ──
@@ -5871,12 +5904,12 @@ def _ladderRateStreak(primary, ctx, cardPlayerId, eqId, group, key, rateKey, uni
     """Shared prismatic shape: a rate on the stat, plus the streak riding on top."""
     rate = primary.get(rateKey, 0.03)
     val = _ladderStat(ctx, cardPlayerId, group, key)
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = rate * (val / float(unit)) + streak
     if delta <= 0:
         return EffectResult(equation=f"no {label}")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({val} {label} + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({val} {label}, {_streakClause(count, carried)})")
 
 
 def _computeRhythm(primary, ctx, cardPlayerId, eqId):
