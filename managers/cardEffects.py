@@ -858,7 +858,7 @@ EFFECT_TOOLTIPS = {
     "houdini": "FP on every rushing yard, and a shot at more every time a tackle gets broken.",
     "custodian": "The throw was bad. The catch was made anyway. FP per catch, and a bonus for rescuing a bad ball.",
     "slipstream": "The ball hangs and the yards pile up. FPx scaling with passing yards.",
-    "updraft": "Some days the ball just carries. FP on every passing yard, with more at 300, 400 and 500.",
+    "updraft": "Some days the ball just carries. FP on every passing yard, with more at each yardage milestone.",
     "stratosphere": "Territory most passers never see. FPx on passing yards, plus a streak for every big week.",
     "marksman": "FPx on every well-placed ball, and more for a week without a single bad throw.",
     "dead_eye": "FPx on well-placed balls, plus a streak for every week with nothing off target.",
@@ -971,8 +971,8 @@ EFFECT_TOOLTIPS = {
     "gold_rush": "Floobits cards amplify each other. Floobits bonus for each other floobits card in your hand.",
     "stacked_deck": "Multiply the multipliers. FPx for every other FPx card in your hand.",
     "copycat": "Copies the best. FP equal to the highest flat FP bonus from your other cards.",
-    "chain_reaction": "Cards feeding cards. FPx that scales with how many of your other 4 cards produced a non-zero bonus.",
-    "bonus_round": "Everyone chipped in. FP if 4 or more of your other cards triggered a non-zero bonus this week.",
+    "chain_reaction": "Cards feeding cards. FPx that scales with how many of your other cards produced a non-zero bonus.",
+    "bonus_round": "Everyone chipped in. FP if 6 or more of your other cards triggered a non-zero bonus this week.",
     "winners_circle": "Back the winners. Floobits whenever this player's real team wins their game this week.",
     "no_passengers": "Depth pays. FPx that scales with your lowest-scoring roster player, so a lineup with no weak link earns more.",
     "franchise": "Build around your guy. FPx when this player is your single highest scorer this week.",
@@ -1048,7 +1048,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "houdini": "+{perYardFP} FP per rushing yard, plus a chance at {bonusFP} FP filling from broken tackles",
     "custodian": "+{perReceptionFP} FP per reception, +{bonusFP} per bailout",
     "slipstream": "+{per100Mult} FPx per 100 passing yards by this player",
-    "updraft": "+{perYardFP} FP per passing yard, +{gateFP} bonus at each of {gates}",
+    "updraft": "+{perYardFP} FP per passing yard, +{gateFP} bonus at each passing-yard milestone ({gatesText})",
     "stratosphere": "+{per100Mult} FPx per 100 passing yards, plus a streak growing {growthPerTick} FPx per week past {threshold}",
     "marksman": "+{per5Mult} FPx per 5 well-placed throws, +{cleanSheetMult} more on 0 bad throws",
     "dead_eye": "+{per5Mult} FPx per 5 well-placed throws, plus a streak growing {growthPerTick} FPx per clean sheet",
@@ -1063,10 +1063,10 @@ EFFECT_DETAIL_TEMPLATES = {
     "undertaker": "+{perPuntMult} FPx per punt inside the 20, plus a streak growing {growthPerTick} FPx per week past {threshold}",
     "paydirt": "+{perTdMult} FPx for every receiving TD by this player",
     "end_zone": "+{perTdFP} FP per receiving TD, +{bonusFP} bonus at {threshold}+",
-    "promised_land": "+{perTdFP} FP per receiving TD, plus escalating odds at {bonusFP} FP on each one",
+    "promised_land": "+{perTdFP} FP per receiving TD. Each one also rolls for a +{bonusFP} FP bonus, and the odds rise every time it misses",
     "bombardier": "+{perTdMult} FPx for every passing TD by this player",
     "salvo": "+{perTdFP} FP per passing TD, +{bonusFP} bonus at {threshold}+",
-    "barrage": "+{perTdFP} FP per passing TD, plus escalating odds at {bonusFP} FP on each one",
+    "barrage": "+{perTdFP} FP per passing TD. Each one also rolls for a +{bonusFP} FP bonus, and the odds rise every time it misses",
     # Flat FP (WR)
     "freebie": "+{baseFP} FP per week",
     "entourage": "+{perPlayerFP} FP for every roster player with {minStars}★+",
@@ -1077,12 +1077,12 @@ EFFECT_DETAIL_TEMPLATES = {
     "garbage_time": "+{perPlayerFP} FP for every roster player with 0 TDs",
     "loyalty_bonus": "+{perStreakFP} FP per win in your favorite team's win streak",
     "windfall": "+{perPlayerFloobits}F per overperforming roster player",
-    "rng": "Random +{minFP}–{maxFP} FP each week",
+    "rng": "Random +{minFP} to {maxFP} FP each week",
     "snake_eyes": "FPx that grows the WORSE this player's game is. A blank stat line pays the most.",
     "avalanche": "Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing",
     "hedge": "Tops this player up to a {floorSoloFP} FP floor if they have a quiet week.",
     "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged.",
-    "spotlight_moment": "+{rewardValue} FP when this player scores a TD. WR counts either WR scoring a TD.",
+    "spotlight_moment": "+{rewardValue} FP when this player scores a TD. On a WR card, a TD by either of your WRs counts.",
     "ace_up_the_sleeve": "+{baseFP} FP base, +{rewardValue} bonus if this player combines for {threshold}+ {statDisplay}",
     # Multiplier (QB) — FPx
     "cornucopia": "FPx that grows as your roster scores TDs.",
@@ -1140,7 +1140,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "jailbreak": "+{baseFP} FP base, +{rewardValue} bonus if this player racks up {threshold}+ yards after catch in a game",
     "safety_blanket": "+{perReceptionFP} FP per reception by this player in a game",
     "industrious": "{perReceptionFloobits} Floobits per reception by this player in a game",
-    "lead_blocker": "+{perTdFP} FP per TE TD in a game. Rushing touchdowns by the TE team's RB count as TE TDs",
+    "lead_blocker": "+{perTdFP} FP per TD by this player. A rushing TD by a running back on this player's team counts too",
     "mismatch": "+{perTdFP} FP per TD by this player, +{bonusFP} bonus at {tdThreshold}+ TDs",
     "sniper": "+{perFgFP} FP per 40+ yard FG by this player in a game",
     "spectacle": "+{perPointFP} FP per point this player overperforms by",
@@ -1162,8 +1162,8 @@ EFFECT_DETAIL_TEMPLATES = {
     "gold_rush": "{perCardFloobits} Floobits per other Floobits card in your hand",
     "stacked_deck": "+{perCardMult} FPx for each other FPx card in your hand",
     "copycat": "+FP equal to highest flat FP bonus from your other cards",
-    "chain_reaction": "+{perCardXMult} FPx for every card in your hand that produced a non-zero bonus this week",
-    "bonus_round": "+{rewardValue} FP when 4 or more of your other cards produced a non-zero bonus this week",
+    "chain_reaction": "+{perCardXMult} FPx for every other card in your lineup that produced a non-zero bonus this week",
+    "bonus_round": "+{rewardValue} FP when 6 or more of your other cards produced a non-zero bonus this week",
     "winners_circle": "{winFloobits} Floobits when this player's team wins this week",
     "no_passengers": "+{perFloorFP} FPx per FP scored by your lowest roster player (max +{maxDelta})",
     "franchise": "+{topScorerDelta} FPx when this player is your top scorer this week",
@@ -1187,7 +1187,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "vagabond": "+{perSwapXMult} FPx per roster swap used this season",
     "fat_cat": "+1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP)",
     "surplus": "+{flatBonus}F added to weekly earnings while equipped",
-    "bonsai": "+{baseFP} FP guaranteed. This player's {triggerLabel} scale the chance to grow the base by +{growthFP} FP at week's end. Every grow slows the next.",
+    "bonsai": "+{baseFP} FP guaranteed. This player's {triggerLabel} set the chance that the base grows by +{growthFP} FP at week's end. Each time it grows, the next growth gets harder.",
     # ── New cards (FP/FPx rebalance) ──
     "anthem": "+{tier3FP} FP with 3 flat-FP cards equipped, +{tier4FP} with 4, +{tier5FP} with 5",
     "conductor": "Boosts each other flat-FP card's output by +{boostPct}%",
@@ -1835,9 +1835,15 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
                 "bonusFP": round(_LADDER_FP_ANCHOR * 2.2, 1), "isChanceEffect": True}
     if effectName == "updraft":
         vol = _ladderVolume("passYards", position, 229.9)
+        gates = [int(round(vol * m)) for m in (1.3, 1.7, 2.1)]
+        # ⚠️ `gates` is a LIST and the detail used to interpolate it directly, so the card
+        # face read "bonus at each of [299, 391, 483]" — a Python repr in front of a user.
+        # `gatesText` is the display copy; the compute still reads `gates`. Existing
+        # templates get it from connection._backfillEffectParams.
         return {"perYardFP": round(_LADDER_FP_ANCHOR / vol, 3),
                 "gateFP": round(_LADDER_FP_ANCHOR * 0.35, 1),
-                "gates": [int(round(vol * m)) for m in (1.3, 1.7, 2.1)]}
+                "gates": gates,
+                "gatesText": f"{', '.join(str(g) for g in gates[:-1])} and {gates[-1]}"}
     if effectName == "frontier":
         return {"perYardFP": _ladderFpRate("recYards", position, 83.5, 0.004, rn)}
     if effectName == "freight":

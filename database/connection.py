@@ -1876,7 +1876,24 @@ def _backfillEffectParams(primary: dict, effectName: str) -> bool:
             from managers.cardEffects import HONOR_ROLL_BASE_SHARE
             primary['baseMult'] = round(1 + (maxMult - 1) * HONOR_ROLL_BASE_SHARE, 2)
             return True
+    # Updraft's detail used to interpolate `gates` directly, which put a raw Python list
+    # on the card face: "bonus at each of [299, 391, 483]". `gatesText` is the same
+    # numbers written as prose. Derived from what IS stored, so an already-minted card
+    # keeps the exact gates it was minted with.
+    if effectName == 'updraft' and 'gatesText' not in primary:
+        gates = primary.get('gates')
+        if isinstance(gates, (list, tuple)) and gates:
+            primary['gatesText'] = _joinNumbers(gates)
+            return True
     return False
+
+
+def _joinNumbers(values) -> str:
+    """`[299, 391, 483]` -> `"299, 391 and 483"`. Card text, not a repr."""
+    nums = [str(int(v)) for v in values]
+    if len(nums) == 1:
+        return nums[0]
+    return f"{', '.join(nums[:-1])} and {nums[-1]}"
 
 
 def _refreshCardEffectText():
@@ -1924,6 +1941,18 @@ def _refreshCardEffectText():
         # detail promised FP per 100 passing yards, and asked for a param no
         # currently-minted card has.
         "gunslinger",
+        # Legibility sweep (2026-08-16) — text only, no mechanic moved. Bonus Round
+        # advertised a threshold of 4 that the fusion had raised to 6, so a user who
+        # assembled exactly 4 triggers was told they had earned it and paid nothing.
+        # Chain Reaction's detail said "every card in your hand" where the compute counts
+        # OTHERS, and its tooltip named a stale hand size. Updraft put a raw Python list
+        # on the card face and its tooltip quoted round numbers the detail contradicted
+        # (300/400/500 against 299/391/483). The rest were garbled or fragmentary.
+        # ⚠️ Updraft needs `gatesText`, a NEW key — `_backfillEffectParams` derives it
+        # from the stored `gates`, so already-minted cards re-render with their own
+        # numbers instead of a `?`.
+        "bonus_round", "chain_reaction", "updraft", "lead_blocker",
+        "spotlight_moment", "bonsai", "barrage", "promised_land", "rng",
     }
 
     # Same FullMult → Delta synthesis buildEffectConfig does. Keep these
