@@ -1000,6 +1000,11 @@ class Game:
         # next snap. Blocks teams from burning a timeout on the dead clock right
         # after the warning (the warning already gave a free stop).
         self._clockStoppedByWarning = False
+        # Which team is currently in no-huddle, so the feed announces ENTERING the
+        # state once rather than on every snap inside it. Holds the team rather than a
+        # bool: a flag would survive a turnover and swallow the next offense's own
+        # first no-huddle snap.
+        self._noHuddleTeam = None
 
         self.homePlaysTotal = 0
         self.awayPlaysTotal = 0
@@ -2075,6 +2080,53 @@ class Game:
                 secs -= 18
         return plays
 
+    def _isNoHuddle(self) -> bool:
+        """Is the offense staying at the line instead of huddling?
+
+        ⚠️ DERIVED, NOT STORED, and that is deliberate. The trigger is the CLOCK (owner,
+        2026-08-12): if the clock did not stop on the last play and the offense is in
+        hurry-up, they stay at the line. Both halves are already engine state —
+        `clockRunning` after the previous play, and the `hurryUp` intent — so this needs
+        no new attribute, no new decision, and nothing to keep in sync.
+
+        ⚠️ IT IS ALSO WHY `_classifyTempoIntent` KEEPS ITS 2-TUPLE. Three sites unpack that
+        return, including `_lastSnapBeforeBreak`'s chess-clock branch, so adding a fourth
+        intent or a third element would break callers for no gain. No-huddle is a different
+        AXIS from huddle length, not another point on it — the existing intents all map to
+        how long the huddle takes, and this is the state of having no huddle at all.
+
+        A stopped clock means they may huddle: there is nothing to save by rushing.
+        """
+        from constants import NO_HUDDLE_ENABLED
+        if not NO_HUDDLE_ENABLED:
+            return False
+        if not self.clockRunning:
+            return False
+        try:
+            intent, _base = self._classifyTempoIntent()
+        except Exception:
+            return False
+        return intent == 'hurryUp'
+
+    def _noHuddlePreSnapSecs(self) -> int:
+        """The pre-snap drain for a no-huddle snap.
+
+        Kept separate from `calculatePreSnapTime`'s huddle math because the shape differs,
+        not just the magnitude: the coach's clock IQ still matters (a sharp staff gets
+        lined up faster) but at half the spread, and the jitter is tighter because a
+        no-huddle snap is a rehearsed, repeated action rather than a fresh huddle call.
+
+        ⚠️ It floors BELOW the 8s floor in `calculatePreSnapTime`. That floor exists to
+        stop a huddle being unrealistically quick, and this is the state of not huddling.
+        """
+        from constants import (NO_HUDDLE_PRESNAP_SECS, NO_HUDDLE_PRESNAP_FLOOR,
+                               NO_HUDDLE_IQ_SPREAD, NO_HUDDLE_JITTER)
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        gameIQ = self._coachClockIQ(coach)
+        iqOffset = round(-NO_HUDDLE_IQ_SPREAD * (gameIQ - 0.5))
+        jitter = batched_randint(-NO_HUDDLE_JITTER, NO_HUDDLE_JITTER)
+        return max(NO_HUDDLE_PRESNAP_FLOOR, NO_HUDDLE_PRESNAP_SECS + iqOffset + jitter)
+
     def _lastSnapBeforeBreak(self) -> bool:
         """Is this the last snap the offense gets before the half or the game ends?
 
@@ -2155,7 +2207,15 @@ class Game:
         canStopClock = (not self.clockRunning) or timeoutsLeft > 0
         need = LAST_SNAP_LIVE_SECS + FINAL_SNAP_SECS
         if not canStopClock:
-            need += LAST_SNAP_HUDDLE_SECS
+            # ⚠️ A NO-HUDDLE SNAP DOES NOT COST A HUDDLE, and this branch used to charge one
+            # unconditionally. The chess-clock fix (2026-08-13) already made the branch
+            # above read the tempo's own cost; this is the same correction for the standard
+            # format, which had been left charging a flat 12s whatever the offense was
+            # doing. Overcharging here makes the helper declare the LAST snap early, which
+            # ends drives that had another play in them — the exact failure the chess-clock
+            # version was fixed for, in the opposite direction.
+            need += (self._noHuddlePreSnapSecs() if self._isNoHuddle()
+                     else LAST_SNAP_HUDDLE_SECS)
         return secs < need
 
     def leadEaseOffFactor(self) -> float:
@@ -2362,6 +2422,17 @@ class Game:
             return
         if self.play.playType in (PlayType.Punt, PlayType.Kneel, PlayType.Spike):
             return  # not trying to preserve time for a score
+        # ⚠️ CHECK NO-HUDDLE BEFORE SPENDING A TIMEOUT. Standing at the line is the cheaper
+        # way to save a snap, and it is free. Without this the offense burns its timeouts
+        # doing what the tempo was already doing for nothing — and it is the same drive
+        # that will want those timeouts to stop the clock after a completion inbounds.
+        # Only spend one when even the no-huddle snap does not fit.
+        # ⚠️ Chess clock is exempt: there the timeout is not saving the SNAP, it is
+        # preserving the possession BUDGET, which no amount of tempo can do.
+        if (self._isNoHuddle() and getattr(self.format, 'key', '') != 'chess_clock'):
+            from constants import LAST_SNAP_LIVE_SECS
+            if self.gameClockSeconds > self._noHuddlePreSnapSecs() + LAST_SNAP_LIVE_SECS:
+                return
         # Chess clock: the possession budget IS the offense's clock and a timeout
         # skips the huddle drain, so PRESERVING budget kicks in earlier (a wider
         # window). Other formats keep the tight save-the-last-snap window — a
@@ -6618,7 +6689,46 @@ class Game:
             label = CONTEST_TYPE_LABELS.get(self.play.contestType, 'Contest')
             text = f"{label}: {body}"
 
-        self.play.playText = text
+        self.play.playText = self._prependPreSnapBeat(text)
+
+    def _prependPreSnapBeat(self, text: str) -> str:
+        """Put what happened BEFORE the snap in front of the play that followed it.
+
+        ⚠️ THREE LAYERS OF DECISION RESOLVE BETWEEN THE WHISTLE AND THE SNAP AND THE FEED
+        REPORTED NONE OF THEM. Built without this the whole tempo/audible system is
+        invisible work — the offense goes no-huddle, the QB checks the play, and a reader
+        sees a 6-yard gain with no idea why.
+
+        ⚠️ A PREFIX, NOT ITS OWN FEED ENTRY (owner, 2026-08-16), and only for beats that
+        are FACTS. Going no-huddle and calling an audible are things the offense did, so
+        there is no tension between the beat and the outcome and one sentence reads better.
+        It is also structurally cheaper: this is the single place `playText` is assigned
+        (`_puntPlayText` returns into the same variable, so punts are covered), a prefix
+        rides its own play so the silent timing modes suppress it for free, and it cannot
+        be orphaned or mis-sorted the way a separate entry can.
+
+        ⚠️ THE DISGUISE BEAT MUST NOT COME THROUGH HERE. "They're showing blitz" is a LIE
+        the play text exists to reveal, and prepending puts the lie and its reveal in one
+        sentence — the reader stops being fooled alongside the quarterback, which is the
+        whole point of the reveal rule. That beat needs the separate pre-snap entry.
+
+        ⚠️ At most ONE line per snap, taking the most significant. The Bleachers already
+        taught this: a beat per event buried the feed under its own chatter.
+        """
+        if not text:
+            return text
+        play = getattr(self, 'play', None)
+        if play is None:
+            return text
+
+        # Most significant first. An audible is a decision; no-huddle is a state change,
+        # and it only ever announces on the snap it begins.
+        if getattr(play, 'audibleText', None):
+            return f"{play.audibleText} {text}"
+        if getattr(play, 'enteringNoHuddle', False):
+            team = getattr(self.offensiveTeam, 'name', None) or 'The offense'
+            return f"{team} goes no-huddle. {text}"
+        return text
 
     def _evaluateClutchChoke(self):
         """Evaluate whether the current play qualifies as a clutch or choke moment.
@@ -11014,9 +11124,25 @@ class Game:
             return
         intent, baseTime = self._classifyTempoIntent()
         coach = getattr(self.offensiveTeam, 'coach', None)
+
+        # ⚠️ THE NO-HUDDLE STATE IS CAPTURED HERE, NOT READ LATER. `_isNoHuddle()` depends
+        # on `clockRunning`, which the play itself changes — by the time `formatPlayText`
+        # runs it reflects the state AFTER the snap, so asking there gives the wrong
+        # answer. This runs in the pre-snap block, before anything moves.
+        noHuddle = self._isNoHuddle()
+        # ⚠️ ANNOUNCE ON ENTERING, ONCE — a six-play drill saying "goes no-huddle" six
+        # times is noise, and the cadence rule is one pre-snap line per snap. The latch
+        # holds the TEAM rather than a bool: a plain flag would stay set through a
+        # turnover and silently swallow the new offense's own first no-huddle snap.
+        entering = noHuddle and self._noHuddleTeam is not self.offensiveTeam
+        self._noHuddleTeam = self.offensiveTeam if noHuddle else None
+        self.play.noHuddle = noHuddle
+        self.play.enteringNoHuddle = entering
+
         self.play.insights['tempo'] = {
             'intent': intent,
             'baseTime': baseTime,
+            'noHuddle': noHuddle,
             'coachClockIQ': round(self._coachClockIQ(coach), 2),
         }
 
@@ -11032,6 +11158,20 @@ class Game:
         Always called after recordTempoIntent has stamped the intent, so this
         method just augments the existing insight with the time math.
         """
+        # ⚠️ NO-HUDDLE SHORT-CIRCUITS THE HUDDLE MATH ENTIRELY. Everything below models a
+        # huddle — its length, its 8-second floor, its wide jitter — and the point of
+        # standing at the line is that none of that happens. Falling through with a
+        # smaller base would still inherit the floor and the huddle's spread.
+        if self._isNoHuddle() and self.play is not None \
+                and self.play.playType not in (PlayType.Kneel, PlayType.Spike):
+            finalTime = self._noHuddlePreSnapSecs()
+            if 0 < self.gameClockSeconds <= finalTime:
+                finalTime = max(0, self.gameClockSeconds - 1)
+            if hasattr(self, 'play') and self.play is not None and 'tempo' in self.play.insights:
+                self.play.insights['tempo']['noHuddle'] = True
+                self.play.insights['tempo']['finalSeconds'] = finalTime
+            return finalTime
+
         intent, baseTime = self._classifyTempoIntent()
         coach = getattr(self.offensiveTeam, 'coach', None)
         gameIQ = self._coachClockIQ(coach)

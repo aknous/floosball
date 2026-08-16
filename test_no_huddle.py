@@ -1,0 +1,229 @@
+"""No-huddle: the offense stays at the line, and a snap stops costing a huddle.
+
+⚠️ THE OFFENSE HAD NO PRESENCE BETWEEN THE WHISTLE AND THE SNAP. Tempo was one
+coach-scaled number, so "hurry-up" meant a 12-second huddle instead of a 25-40 second one
+and the team ALWAYS huddled — there was no state in which they did not.
+
+The trigger is the CLOCK, not a coach preference (owner, 2026-08-12): if the clock did not
+stop on the last play and the offense is in hurry-up, they stay at the line. Both halves
+are state the engine already had.
+
+Measured, step 1 of `docs/NO_HUDDLE_AUDIBLES_PLAN.md`:
+
+    pre-snap drain      12.0s  ->  6.0s
+    snaps in a 110s drill  6.0  ->  9.5   (+58%)
+
+⚠️ THAT IS THE PURCHASE, NOT THE BALANCE. No-huddle is supposed to buy ~6 seconds a snap
+and pay for it by being predictable — step 3 of the plan adds that cost as a negative
+disguise in `_applyPreSnapRead`. Until it lands, no-huddle is a free win, and these tests
+deliberately assert the PURCHASE so the later step has a fixed baseline to be measured
+against.
+
+Run: .venv/bin/python test_no_huddle.py
+"""
+
+import logging
+import os
+import re
+import sys
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+logging.disable(logging.CRITICAL)
+
+import constants  # noqa: E402
+from scenario import Scenario  # noqa: E402
+
+
+def drill(clock=110, offScore=14, defScore=21, quarter=4, timeouts=1):
+    """A trailing offense in a two-minute drill with the clock running."""
+    s = Scenario()
+    s.situation(quarter=quarter, clock=clock, offense='home',
+                offScore=offScore, defScore=defScore,
+                down=1, distance=10, ballOn=60,
+                offTimeouts=timeouts, defTimeouts=3)
+    s.game.clockRunning = True
+    return s.game
+
+
+class TheTriggerIsTheClock(unittest.TestCase):
+    def testHurryUpWithARunningClockIsNoHuddle(self):
+        g = drill()
+        self.assertEqual(g._classifyTempoIntent()[0], 'hurryUp')
+        self.assertTrue(g._isNoHuddle())
+
+    def testAStoppedClockMeansTheyMayHuddle(self):
+        """Nothing is saved by rushing when the clock is not moving."""
+        g = drill()
+        g.clockRunning = False
+        self.assertFalse(g._isNoHuddle())
+
+    def testANeutralTempoIsNeverNoHuddle(self):
+        g = drill(clock=800, offScore=21, defScore=21, quarter=1)
+        self.assertNotEqual(g._classifyTempoIntent()[0], 'hurryUp')
+        self.assertFalse(g._isNoHuddle())
+
+    def testTheFlagTurnsItOffEntirely(self):
+        g = drill()
+        original = constants.NO_HUDDLE_ENABLED
+        try:
+            constants.NO_HUDDLE_ENABLED = False
+            self.assertFalse(g._isNoHuddle())
+        finally:
+            constants.NO_HUDDLE_ENABLED = original
+
+
+class TheCostModel(unittest.TestCase):
+    def testANoHuddleSnapCostsAboutHalfAHurryUpHuddle(self):
+        g = drill()
+        noHuddle = [g._noHuddlePreSnapSecs() for _ in range(200)]
+        self.assertLess(max(noHuddle), constants.LAST_SNAP_HUDDLE_SECS,
+                        'a no-huddle snap should never cost a full hurry-up huddle')
+        self.assertLessEqual(sum(noHuddle) / len(noHuddle), 8.0)
+        self.assertGreaterEqual(min(noHuddle), constants.NO_HUDDLE_PRESNAP_FLOOR)
+
+    def testItGoesBelowTheHuddleFloor(self):
+        """⚠️ `calculatePreSnapTime` floors at 8s, and that floor models a HUDDLE being
+        unrealistically quick. This is the state of not huddling, so it must be allowed
+        under it — otherwise no-huddle buys almost nothing."""
+        self.assertLess(constants.NO_HUDDLE_PRESNAP_FLOOR, 8)
+        g = drill()
+        self.assertLess(min(g._noHuddlePreSnapSecs() for _ in range(200)), 8)
+
+    def testTheDrainRunsThroughCalculatePreSnapTime(self):
+        """The short-circuit has to be in the real entry point, or nothing consumes it."""
+        g = drill()
+        g.recordTempoIntent()
+        self.assertLessEqual(g.calculatePreSnapTime(), 8)
+
+    def testASharpClockManagerLinesUpFaster(self):
+        """Coach IQ still matters at the line, at half the huddle's spread."""
+        self.assertGreater(constants.NO_HUDDLE_IQ_SPREAD, 0)
+        self.assertLess(constants.NO_HUDDLE_IQ_SPREAD, 6)
+
+
+class TheLastSnapHelperReadsTheTempo(unittest.TestCase):
+    """⚠️ The chess-clock fix (2026-08-13) already made this helper tempo-aware in ITS
+    branch, while the standard branch kept charging a flat 12s whatever the offense was
+    doing. Overcharging makes the helper declare the LAST snap early, ending drives that
+    had another play in them."""
+
+    def testItChargesTheNoHuddleCostNotTheHuddle(self):
+        # No timeouts and a running clock is the branch that pays a huddle.
+        g = drill(clock=14, timeouts=0)
+        self.assertTrue(g._isNoHuddle())
+        self.assertFalse(g._lastSnapBeforeBreak(),
+                         'at 14s a no-huddle snap plus the live ball still fits')
+
+    def testAHuddlingOffenseStillPaysTheHuddle(self):
+        g = drill(clock=14, timeouts=0)
+        original = constants.NO_HUDDLE_ENABLED
+        try:
+            constants.NO_HUDDLE_ENABLED = False
+            self.assertTrue(g._lastSnapBeforeBreak(),
+                            'at 14s a 12s huddle plus the live ball does not fit')
+        finally:
+            constants.NO_HUDDLE_ENABLED = original
+
+
+class TheAnnouncementLatch(unittest.TestCase):
+    """⚠️ Announce on ENTERING, once. A six-play drill saying "goes no-huddle" six times is
+    noise, and the cadence rule is one pre-snap line per snap."""
+
+    def testItAnnouncesOnlyOnTheFirstSnapOfTheState(self):
+        g = drill()
+        g.recordTempoIntent()
+        self.assertTrue(g.play.enteringNoHuddle)
+        for _ in range(4):
+            g._newPlay() if hasattr(g, '_newPlay') else None
+            g.recordTempoIntent()
+            self.assertFalse(g.play.enteringNoHuddle,
+                             'no-huddle re-announced inside the same state')
+
+    def testANewOffenseAnnouncesItsOwn(self):
+        """⚠️ The latch holds the TEAM, not a bool. A plain flag would survive a turnover
+        and silently swallow the next offense's own first no-huddle snap.
+
+        ⚠️ TIED, not trailing. A trailing offense that turns the ball over hands it to a
+        LEADING one, which classifies as `burnClock` and is correctly never no-huddle — so
+        that setup tests nothing. Tied under 2:00 is the state where BOTH teams hurry, and
+        it is the only one where this latch can actually be wrong.
+        """
+        g = drill(offScore=21, defScore=21)
+        g.recordTempoIntent()
+        self.assertTrue(g.play.enteringNoHuddle)
+        g.offensiveTeam, g.defensiveTeam = g.defensiveTeam, g.offensiveTeam
+        g.recordTempoIntent()
+        self.assertTrue(g.play.noHuddle, 'a tied offense late should also be hurrying')
+        self.assertTrue(g.play.enteringNoHuddle,
+                        'the new offense never got its own announcement')
+
+    def testLeavingTheStateClearsTheLatch(self):
+        g = drill()
+        g.recordTempoIntent()
+        self.assertTrue(g.play.enteringNoHuddle)
+        g.clockRunning = False           # they huddle
+        g.recordTempoIntent()
+        self.assertFalse(g.play.noHuddle)
+        g.clockRunning = True            # and go back to the line
+        g.recordTempoIntent()
+        self.assertTrue(g.play.enteringNoHuddle, 're-entering should announce again')
+
+
+class TheFeedPrefix(unittest.TestCase):
+    def testEnteringNoHuddlePrependsToThePlayText(self):
+        g = drill()
+        g.recordTempoIntent()
+        out = g._prependPreSnapBeat('Hands off to Tuck Marlow for 6 yards.')
+        self.assertIn('no-huddle', out.lower())
+        self.assertTrue(out.endswith('Hands off to Tuck Marlow for 6 yards.'))
+
+    def testASnapInsideTheStateGetsNoPrefix(self):
+        g = drill()
+        g.recordTempoIntent()
+        g.recordTempoIntent()          # second snap, same state
+        self.assertEqual(g._prependPreSnapBeat('Run for 3.'), 'Run for 3.')
+
+    def testAnAudibleOutranksTheTempoLine(self):
+        """⚠️ At most one pre-snap line per snap, taking the most significant. They can
+        collide only on the first no-huddle snap, but the rule has to exist."""
+        g = drill()
+        g.recordTempoIntent()
+        g.play.audibleText = 'Vance calls an audible!'
+        out = g._prependPreSnapBeat('Run for 3.')
+        self.assertTrue(out.startswith('Vance calls an audible!'))
+        self.assertNotIn('no-huddle', out.lower())
+
+    def testEmptyTextIsLeftAlone(self):
+        g = drill()
+        g.recordTempoIntent()
+        self.assertEqual(g._prependPreSnapBeat(''), '')
+
+
+class TheDocumentedTraps(unittest.TestCase):
+    def testClassifyTempoIntentStillReturnsATwoTuple(self):
+        """⚠️ Three sites unpack this, including `_lastSnapBeforeBreak`'s chess-clock
+        branch. No-huddle is a different AXIS from huddle length, which is why it is a
+        derived helper rather than a fourth intent."""
+        g = drill()
+        result = g._classifyTempoIntent()
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 2)
+
+    def testTheTimeoutHelperChecksNoHuddleFirst(self):
+        """⚠️ Standing at the line is the cheaper way to save a snap, and it is free.
+        Without this the offense burns timeouts doing what the tempo already did — on the
+        same drive that will want them to stop the clock after a completion inbounds."""
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'floosball_game.py')) as fh:
+            src = fh.read()
+        start = src.index('def _maybeCallTimeoutToSaveSnap')
+        body = src[start:src.index('\n    def ', start + 10)]
+        self.assertIn('_isNoHuddle()', body)
+        # ...and it must not short-circuit the chess clock, where a timeout preserves the
+        # possession BUDGET, which no amount of tempo can do.
+        self.assertIn('chess_clock', body)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

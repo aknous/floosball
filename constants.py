@@ -2538,6 +2538,29 @@ CHESS_CLOCK_TIED_MIDFIELD_PUNT = 0.8
 LAST_SNAP_HUDDLE_SECS = 12   # hurry-up pre-snap; 9-15 across the coach clock-IQ range
 LAST_SNAP_LIVE_SECS = 5      # snap to whistle on a run (4-6)
 
+# ── No-huddle ─────────────────────────────────────────────────────────────
+# ⚠️ THE OFFENSE HAD NO PRESENCE BETWEEN THE WHISTLE AND THE SNAP. Tempo was one
+# coach-scaled number, so "hurry-up" meant a 12-second huddle instead of a 25-40 second
+# one and the team ALWAYS huddled. There was no state in which they did not.
+#
+# The trigger is the CLOCK, not a coach preference (owner, 2026-08-12): if the clock did
+# not stop on the last play and the offense is in hurry-up, they stay at the line. That
+# falls straight out of state the engine already has — `clockRunning` and the `hurryUp`
+# intent — so it needs no new attribute and no new decision.
+#
+# ⚠️ These numbers are the whole cost model, and the pre-snap drain nearly vanishing is
+# the entire point of the state:
+#     huddle, neutral   25-40s
+#     huddle, hurry-up  ~12s   (LAST_SNAP_HUDDLE_SECS)
+#     no-huddle         ~4-9s  (here)
+# The tighter jitter is deliberate: a no-huddle snap is a repeated, rehearsed action, so
+# it should not vary as much as a huddle call does.
+NO_HUDDLE_ENABLED = True
+NO_HUDDLE_PRESNAP_SECS = 6    # base; coach clock IQ moves it +/-2 and jitter +/-1
+NO_HUDDLE_PRESNAP_FLOOR = 4   # below the 8s huddle floor on purpose — that floor IS a huddle
+NO_HUDDLE_IQ_SPREAD = 4       # +/-2 across the clock-IQ range, half the huddle's spread
+NO_HUDDLE_JITTER = 1          # +/-1, against the huddle's +/-3
+
 # ── Chess-clock timeouts ──────────────────────────────────────────────────
 # In the Chess Clock format the offense's possession budget IS its real clock,
 # and a timeout stops the pre-snap huddle drain — so a team preserves its budget

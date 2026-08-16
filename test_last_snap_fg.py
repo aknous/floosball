@@ -51,7 +51,7 @@ RUNNING = STOPPABLE + LAST_SNAP_HUDDLE_SECS                            # ~19s
 class StubGame:
     _lastSnapBeforeBreak = fg.Game._lastSnapBeforeBreak
 
-    def __init__(self, secs, clockRunning=True, timeouts=0):
+    def __init__(self, secs, clockRunning=True, timeouts=0, noHuddle=False):
         # The real Game always has a `format` (it is a property resolving from gameRules),
         # so a stub without one is the stub being wrong. None reads as standard.
         self.format = None
@@ -60,9 +60,22 @@ class StubGame:
         self.homeTimeoutsRemaining = self.awayTimeoutsRemaining = timeouts
         self.offensiveTeam = self.homeTeam = object()
         self.awayTeam = object()
+        self._noHuddle = noHuddle
 
     def _offenseEffectiveSecs(self):
         return self.gameClockSeconds
+
+    # ⚠️ The helper now asks the TEMPO what a snap costs, so the stub has to answer.
+    # No-huddle changes the price of the thing this whole helper is measuring: the
+    # standard branch used to charge a flat hurry-up huddle whatever the offense was
+    # doing, which declares the last snap early and ends drives with a play still in
+    # them. These tests pin the HUDDLING case, so the default is False.
+    def _isNoHuddle(self):
+        return self._noHuddle
+
+    def _noHuddlePreSnapSecs(self):
+        from constants import NO_HUDDLE_PRESNAP_SECS
+        return NO_HUDDLE_PRESNAP_SECS
 
 
 class LastSnapWindowTests(unittest.TestCase):
