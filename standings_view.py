@@ -155,6 +155,41 @@ def _projected(team, winsOut: bool, totalGames: int) -> '_TeamShim':
     return _TeamShim(getattr(team, 'id', None), getattr(team, 'division', None), stats)
 
 
+def regularSeasonWeeks(schedule) -> int:
+    """How many REGULAR-SEASON weeks a season's schedule holds — i.e. how many games
+    each club plays, which is what clinching is measured against.
+
+    ⚠️ `seasonManager._simulatePlayoffRounds` APPENDS each playoff round to the very
+    same `currentSeason.schedule` list, so a plain `len(schedule)` climbs 28 -> 29 ->
+    30 -> 31 -> 32 across the postseason. Every one of those phantom weeks reads to
+    `clinchStatus` as a game still in hand, and its whole method is "can anyone still
+    catch me" — so the badges dissolve exactly when the season is most settled.
+    Measured on a played-out 16-club league: at 32 the clinched count fell 8 -> 4,
+    eliminated 8 -> 4, division winners 4 -> 2 and the top seed 1 -> 0, which is the
+    board showing no eliminations, no division trophies, and seeds still reading as
+    projections after the Floos Bowl.
+
+    A week counts when it holds a regular-season game. Playoff games are stamped
+    `isRegularSeasonGame = False` at creation, so this reads the flag rather than
+    assuming a week count — the season length has already moved once (24 clubs / 14
+    weeks -> 32 / 28) and a hardcoded 28 would rot the same way.
+
+    Returns 0 for an empty or unusable schedule; callers treat that as "unknown" and
+    skip clinching rather than badging off a guess.
+    """
+    if not schedule:
+        return 0
+    weeks = 0
+    for entry in schedule:
+        try:
+            games = entry.get('games') or [] if hasattr(entry, 'get') else []
+        except Exception:
+            continue
+        if any(getattr(g, 'isRegularSeasonGame', False) for g in games):
+            weeks += 1
+    return weeks
+
+
 def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]]:
     """Who is mathematically IN, who has won their division, who owns the top seed.
 

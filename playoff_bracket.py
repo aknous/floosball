@@ -31,6 +31,42 @@ ROUND_POINTS = {ROUND_1: 1, ROUND_2: 2, ROUND_LEAGUE_CHAMPIONSHIP: 4, ROUND_FLOO
 CHAMPION_BONUS = 5
 
 
+def byeCount(fieldSize: int) -> int:
+    """How many seeds must sit out round 1 for the tree to be balanced.
+
+    A bye exists ONLY to pad a field up to the next power of two, so a field that IS
+    one has none: 8 -> 0, the old 6 -> 2.
+    """
+    if fieldSize <= 0:
+        return 0
+    size = 1
+    while size < fieldSize:
+        size *= 2
+    return size - fieldSize
+
+
+def normalizeByes(conferences: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
+    """Recompute every entry's `bye` from its conference's field size.
+
+    ⚠️ READ-TIME, DELIBERATELY. The flag is frozen INTO `seasons.playoff_seeds` when
+    seeding locks, so a season seeded before the derived-bye fix keeps `bye: seed <= 2`
+    forever and there is no backfill. That is not cosmetic: the projected tree honors
+    the flag literally, so an 8-club field came out as **3 round-1 games with the top
+    two seeds sitting out** against a real postseason of 4 — and then reshaped
+    completely once round 1 resolved and four actual winners came back, which is the
+    bracket "breaking" mid-playoffs.
+
+    Deriving here instead of trusting the blob fixes the season already frozen, and
+    keeps the tree following the league if the qualifier count moves again — it has
+    moved once already (6 a side -> 8).
+    """
+    out = {}
+    for conf, teams in conferences.items():
+        n = byeCount(len(teams))
+        out[conf] = [{**t, "bye": i < n} for i, t in enumerate(teams)]
+    return out
+
+
 def _seedSort(entries: List[Dict]) -> List[Dict]:
     """Engine's ordering: best record first (winPct, then scoreDiff), with a
     stable teamId tiebreak so projection never diverges from the sim on ties."""
