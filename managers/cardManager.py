@@ -7,6 +7,7 @@ from logger_config import get_logger
 from managers.cardEffects import (buildEffectConfig as _buildEffectConfig, getEffectOutputType,
                                   effectValidPositions as _effectValidPositions,
                                   effectPoolFor as _effectPoolFor,
+                                  trackedStatsFor as _trackedStatsFor,
                                   withLiveCategory)
 
 logger = get_logger("floosball.cardManager")
@@ -991,6 +992,15 @@ class CardManager:
             # Positions this effect can validly land on via a transplant (shared effects
             # span all five; position-specific ones only their own).
             "validPositions": sorted(_effectValidPositions(effectName)),
+            # ⚠️ THE STAT THIS CARD IS WATCHING. Around twenty effects score off numbers
+            # that appear on no ordinary box score, so a card could read "+FP per
+            # well-placed throw" with nowhere to go and look one up. Sent as
+            # `[{group, key, label}]` and resolved against the player's own line by
+            # whichever surface is showing it — the card back uses the season, the weekly
+            # breakdown uses the game. Empty for roster-wide effects (hand composition,
+            # favorite team, chance synergy): there is no single figure to point at, and
+            # inventing one reads worse than showing nothing.
+            "trackedStats": _trackedStatsFor(effectName),
             "sellValue": sellValue,
             "combineValue": getCardValue(userCard, currentSeason),
             "isActive": isActive,
@@ -1594,7 +1604,8 @@ class CardManager:
         session.flush()
         return {"reordered": pos}
 
-    def buildPlayerSeasonStats(self, session, playerId: int, season: int, position: int):
+    def buildPlayerSeasonStats(self, session, playerId: int, season: int, position: int,
+                               effectName: str = ""):
         """High-level stat line for a vaulted card's back — the player's numbers
         for the season the card is from. A vaulted card drops its effect and
         becomes a keepsake, so the back shows who the player actually was that
@@ -1640,6 +1651,31 @@ class CardManager:
                 add("XP", k.get('xps'))
             if k.get('fgAvg'):
                 add("Avg", f"{k.get('fgAvg')} yd")
+        # ⚠️ THE STAT THE CARD IS ACTUALLY WATCHING, appended last so it reads as the
+        # card's own line rather than part of the box score. Roughly twenty effects score
+        # off numbers that appear nowhere else in the app — well-placed throws, yards
+        # after contact, contested catches, bailouts, punt placement — so a card back
+        # could describe a payout and show none of the figures driving it.
+        #
+        # ⚠️ The blobs here are DB shape and the tracked keys are CARD shape, which are
+        # not the same vocabulary (`fg40+` against `fg40plus`, receiving `yards` against
+        # `rcvYards`). Convert first, or every exotic stat silently reads 0.
+        tracked = _trackedStatsFor(effectName) if effectName else []
+        if tracked:
+            from managers.fantasyTracker import _dbStatsToCardFormat
+            cardShape = _dbStatsToCardFormat(
+                row.passing_stats or {}, row.rushing_stats or {},
+                row.receiving_stats or {}, row.kicking_stats or {},
+                returningStats=getattr(row, 'returning_stats', None) or {},
+            )
+            for stat in tracked:
+                blob = cardShape.get(f"{stat['group']}_stats") or {}
+                # `tracked` is True on these so the client can mark them as the card's
+                # own, rather than having to match labels back against the map.
+                lines.append({"label": stat['label'],
+                              "value": blob.get(stat['key'], 0) or 0,
+                              "tracked": True})
+
         # ⚠️ PER GAME, alongside the total (users asked). A season total answers "how
         # much did this player produce" and hides "how good were they" — a 14-game
         # injury-shortened year and a full one are not comparable on the total, and the
@@ -2316,6 +2352,7 @@ class CardManager:
         if session is not None and template.player_id:
             stats = self.buildPlayerSeasonStats(
                 session, template.player_id, template.season_created, template.position,
+                effectName=(template.effect_config or {}).get("effectName", ""),
             )
             if stats:
                 result["playerStats"] = stats
@@ -2682,6 +2719,7 @@ class CardManager:
             if t.player_id:
                 stats = self.buildPlayerSeasonStats(
                     session, t.player_id, t.season_created, t.position,
+                    effectName=(t.effect_config or {}).get("effectName", ""),
                 )
                 if stats:
                     card["playerStats"] = stats

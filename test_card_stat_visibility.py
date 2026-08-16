@@ -113,6 +113,112 @@ class TheApiSendsThem(unittest.TestCase):
                           f'{group} is no longer forwarded whole')
 
 
+class TheCardNamesTheStatItWatches(unittest.TestCase):
+    """`EFFECT_TRACKED_STATS` is the ONE definition of "which stat drives this card",
+    shared by the card back, the weekly breakdown and the player page. Deriving it
+    per surface is how they drift."""
+
+    def testAnEffectScoringOffAStatDeclaresIt(self):
+        import managers.cardEffects as CE
+        for effect in ('gunslinger', 'marksman', 'dead_eye', 'freight', 'landslide',
+                       'houdini', 'highpoint', 'custodian', 'slippery', 'getaway',
+                       'pinpoint', 'undertaker', 'coffin_corner', 'sniper',
+                       'runback', 'house_call', 'altitude'):
+            self.assertTrue(CE.trackedStatsFor(effect),
+                            f'{effect} scores off a non-obvious stat and declares none')
+
+    def testRosterWideEffectsDeclareNothing(self):
+        """⚠️ Deliberate. Hand composition, favorite team and chance synergy have no
+        single figure to point at, and inventing one reads worse than showing nothing."""
+        import managers.cardEffects as CE
+        for effect in ('diversified', 'anthem', 'gold_rush', 'stacked_deck', 'bandwagon',
+                       'entourage', 'showoff', 'wanderer', 'charmed'):
+            self.assertEqual(CE.trackedStatsFor(effect), [],
+                             f'{effect} reads the roster, so it has no one stat to name')
+
+    def testEveryDeclaredStatIsOneTheSimRecords(self):
+        import managers.cardEffects as CE
+        for effect, stats in CE.EFFECT_TRACKED_STATS.items():
+            for group, key, _label in stats:
+                blob = playerStatsDict.get(group) or {}
+                card = _dbStatsToCardFormat({}, {}, {}, {}, 0).get(f'{group}_stats') or {}
+                self.assertTrue(
+                    key in blob or key in card,
+                    f'{effect} declares {group}.{key}, which the sim does not record')
+
+    def testEveryDeclaredEffectIsStillMintable(self):
+        import managers.cardEffects as CE
+        pool = set()
+        for edition in ('metallic', 'holographic', 'prismatic', 'diamond'):
+            for pos in (1, 2, 3, 4, 5):
+                pool |= set(CE.effectPoolFor(edition, pos))
+        for effect in CE.EFFECT_TRACKED_STATS:
+            self.assertIn(effect, pool, f'{effect} is mapped but no longer mintable')
+
+    def testBothSpellingsAreCarried(self):
+        """⚠️ TWO VOCABULARIES, AND CLIENTS SEE BOTH. Card code reads card shape; the
+        fantasy snapshot ships RAW blobs. Ten keys differ, and using the wrong one does
+        not raise — it reads 0, which looks like a quiet week."""
+        import managers.cardEffects as CE
+        cases = {'sniper': ('fg40plus', 'fg40+'),
+                 'breakaway': ('runYards', 'yards'),
+                 'haymaker': ('passYards', 'yards'),
+                 'promised_land': ('rcvTds', 'tds')}
+        for effect, (cardKey, dbKey) in cases.items():
+            stat = next(s for s in CE.trackedStatsFor(effect) if s['key'] == cardKey)
+            self.assertEqual(stat['dbKey'], dbKey,
+                             f'{effect}: {cardKey} must resolve to {dbKey} on a raw blob')
+
+    def testTheRenameTableMatchesTheConverter(self):
+        """The table is derived from `_buildCardStatFormat`, so it cannot be allowed to
+        drift from it."""
+        import re
+        import managers.cardEffects as CE
+        with open(os.path.join(HERE, 'managers', 'fantasyTracker.py')) as fh:
+            src = fh.read()
+        block = src[src.index('def _buildCardStatFormat'):src.index('def _dbStatsToCardFormat')]
+        actual = {}
+        for group in ('passing', 'rushing', 'receiving', 'kicking', 'returning'):
+            m = re.search(r'"' + group + r'_stats": \{(.*?)\n        \},', block, re.S)
+            if not m:
+                continue
+            for cardKey, dbKey in re.findall(r'"(\w+)":\s*\w+\.get\(\s*"([\w+]+)"', m.group(1)):
+                if cardKey != dbKey:
+                    actual[(group, cardKey)] = dbKey
+        self.assertEqual(CE._DB_KEY_FOR_CARD_KEY, actual,
+                         'the rename table no longer matches _buildCardStatFormat')
+
+
+class TheSurfacesCarryIt(unittest.TestCase):
+    def testTheWeeklyBreakdownSendsTrackedStats(self):
+        with open(os.path.join(HERE, 'managers', 'fantasyTracker.py')) as fh:
+            src = fh.read()
+        self.assertIn('"trackedStats": _trackedStatsFor(b.effectName)', src)
+
+    def testTheBreakdownAlsoShipsReturnProduction(self):
+        """Two cards score off return yards, and `playerGameStats` used to omit the group
+        entirely, so the client had nothing to resolve against."""
+        with open(os.path.join(HERE, 'managers', 'fantasyTracker.py')) as fh:
+            src = fh.read()
+        self.assertEqual(src.count('"returning": dict('), 2,
+                         'both raw-stat branches must carry the returning group')
+
+    def testTheCardPayloadSendsTrackedStats(self):
+        with open(os.path.join(HERE, 'managers', 'cardManager.py')) as fh:
+            src = fh.read()
+        self.assertIn('"trackedStats": _trackedStatsFor(effectName)', src)
+
+    def testTheCardBackConvertsBeforeReadingTheStat(self):
+        """⚠️ The card back holds DB blobs and the tracked keys are card shape. Reading
+        one against the other silently yields 0 for every exotic stat."""
+        with open(os.path.join(HERE, 'managers', 'cardManager.py')) as fh:
+            src = fh.read()
+        block = src[src.index('def buildPlayerSeasonStats'):]
+        block = block[:block.index('\n    def ', 10)]
+        self.assertIn('_dbStatsToCardFormat', block,
+                      'the card back reads tracked stats without converting shape')
+
+
 @unittest.skipUnless(os.path.exists(PLAYER_PAGE), 'frontend repo not checked out alongside')
 class ThePlayerPageShowsThem(unittest.TestCase):
     """Half two: the view cannot drift into a column that is permanently blank."""

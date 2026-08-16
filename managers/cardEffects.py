@@ -2720,6 +2720,138 @@ _ALL_IN_STUD_LINE = {1: 22, 2: 22, 3: 20, 4: 14, 5: 15}
 
 # ─── Config Builder ──────────────────────────────────────────────────────────
 
+# ─── The stat a card is watching ────────────────────────────────────────────
+# ⚠️ A CARD CAN PAY ON A NUMBER THE GAME NEVER SHOWS YOU. Roughly twenty effects score
+# off stats that appear on no ordinary box score — well-placed and bad throws, air yards,
+# yards after contact, broken tackles, contested catches, bailouts, punt placement,
+# return yards. A card reading "+0.03 FPx per 5 well-placed throws" gave a reader no way
+# to find out how many their quarterback had.
+#
+# This is the ONE definition of "which stat drives this card", shared by every surface
+# that shows it: the card back's season line, the weekly scoring breakdown's game line,
+# and the player page. Deriving it separately per surface is how they drift.
+#
+# Keys are CARD FORMAT, the shape `fantasyTracker._buildCardStatFormat` produces — the
+# same names the compute functions read. ⚠️ That is NOT the DB shape: the database stores
+# `fg40+` where a card asks for `fg40plus`, and the receiving group's `yards` is `rcvYards`
+# here. Anything resolving these against a raw stat blob must convert first.
+#
+# Standard box-score stats are listed too, not just the exotic ones. The point is to show
+# the number driving the payout, and "which of these figures is the card actually reading"
+# is a fair question even when the figure is already on screen.
+EFFECT_TRACKED_STATS = {
+    # ── Passing ──
+    'gunslinger':   [('passing', 'goodThrows', 'Well-placed')],
+    'marksman':     [('passing', 'goodThrows', 'Well-placed'), ('passing', 'badThrows', 'Bad throws')],
+    'dead_eye':     [('passing', 'goodThrows', 'Well-placed'), ('passing', 'badThrows', 'Bad throws')],
+    'altitude':     [('passing', 'airYardsSum', 'Air yards'), ('passing', 'throws', 'Throws')],
+    'cadence':      [('passing', 'comp', 'Completions')],
+    'rhythm':       [('passing', 'comp', 'Completions')],
+    'clockwork':    [('passing', 'comp', 'Completions')],
+    'slipstream':   [('passing', 'passYards', 'Pass yards')],
+    'updraft':      [('passing', 'passYards', 'Pass yards')],
+    'stratosphere': [('passing', 'passYards', 'Pass yards')],
+    'haymaker':     [('passing', 'passYards', 'Pass yards'), ('passing', 'twentyPlus', '20+ plays')],
+    'air_raid':     [('passing', 'tds', 'Pass TD')],
+    'bombardier':   [('passing', 'tds', 'Pass TD')],
+    'salvo':        [('passing', 'tds', 'Pass TD')],
+    'barrage':      [('passing', 'tds', 'Pass TD')],
+    # ── Rushing ──
+    'workhorse':        [('rushing', 'carries', 'Carries')],
+    'beast_of_burden':  [('rushing', 'carries', 'Carries')],
+    'iron_man':         [('rushing', 'carries', 'Carries')],
+    'expedition':       [('rushing', 'runYards', 'Rush yards')],
+    'stampede':         [('rushing', 'runYards', 'Rush yards')],
+    'odyssey':          [('rushing', 'runYards', 'Rush yards')],
+    'freight':          [('rushing', 'yardsAfterContact', 'Yds after contact')],
+    'grinder':          [('rushing', 'yardsAfterContact', 'Yds after contact')],
+    'landslide':        [('rushing', 'yardsAfterContact', 'Yds after contact')],
+    'houdini':          [('rushing', 'runYards', 'Rush yards'), ('rushing', 'brokenTackles', 'Broken tackles')],
+    'breakaway':        [('rushing', 'runYards', 'Rush yards'), ('rushing', 'twentyPlus', '20+ runs')],
+    'battering_ram':      [('rushing', 'runTds', 'Rush TD')],
+    'goal_line_vulture':  [('rushing', 'runTds', 'Rush TD')],
+    # ── Receiving ──
+    'possession':     [('receiving', 'receptions', 'Receptions')],
+    'safety_blanket': [('receiving', 'receptions', 'Receptions')],
+    'industrious':    [('receiving', 'receptions', 'Receptions')],
+    'custody':        [('receiving', 'receptions', 'Receptions')],
+    'tenure':         [('receiving', 'receptions', 'Receptions')],
+    'attention':      [('receiving', 'targets', 'Targets')],
+    'frontier':       [('receiving', 'rcvYards', 'Rec yards')],
+    'territory':      [('receiving', 'rcvYards', 'Rec yards')],
+    'dominion':       [('receiving', 'rcvYards', 'Rec yards')],
+    'slippery':       [('receiving', 'yac', 'YAC')],
+    'jailbreak':      [('receiving', 'yac', 'YAC')],
+    'getaway':        [('receiving', 'yac', 'YAC')],
+    'highpoint':      [('receiving', 'receptions', 'Receptions'), ('receiving', 'contestedCatches', 'Contested')],
+    'custodian':      [('receiving', 'receptions', 'Receptions'), ('receiving', 'bailouts', 'Bailouts')],
+    'paydirt':        [('receiving', 'rcvTds', 'Rec TD')],
+    'end_zone':       [('receiving', 'rcvTds', 'Rec TD')],
+    'promised_land':  [('receiving', 'rcvTds', 'Rec TD')],
+    # ── Kicking and punting ──
+    'sniper':        [('kicking', 'fg40plus', 'FG 40+')],
+    'three_pointer': [('kicking', 'fgs', 'FG made')],
+    'pinpoint':      [('kicking', 'puntsInside20', 'Punts inside 20')],
+    'undertaker':    [('kicking', 'puntsInside20', 'Punts inside 20')],
+    'coffin_corner': [('kicking', 'puntsInside20', 'Punts inside 20'),
+                      ('kicking', 'puntsInside10', 'Punts inside 10')],
+    # ── Returns ──
+    'runback':    [('returning', 'puntReturnYards', 'Return yards')],
+    'house_call': [('returning', 'puntReturnYards', 'Return yards'),
+                   ('returning', 'puntReturnTds', 'Return TD')],
+}
+
+
+# ⚠️ TWO VOCABULARIES, AND CLIENTS SEE BOTH. Card code reads CARD shape; the fantasy
+# snapshot's `playerGameStats` ships RAW DB blobs, because its compact stat line was
+# written against those names. So a tracked stat carries both spellings and each surface
+# uses the one matching the payload it already has. Only these ten differ — every other
+# key is spelled the same in both — and the list is derived from the converter rather
+# than retyped, so it cannot drift from `_buildCardStatFormat`.
+_DB_KEY_FOR_CARD_KEY = {
+    ('passing', 'passYards'): 'yards',
+    ('passing', 'twentyPlus'): '20+',
+    ('rushing', 'runYards'): 'yards',
+    ('rushing', 'runTds'): 'tds',
+    ('rushing', 'twentyPlus'): '20+',
+    ('receiving', 'rcvYards'): 'yards',
+    ('receiving', 'rcvTds'): 'tds',
+    ('receiving', 'twentyPlus'): '20+',
+    ('kicking', 'fg40plus'): 'fg40+',
+    ('kicking', 'fg45plus'): 'fg45+',
+}
+
+
+def trackedStatsFor(effectName: str) -> list:
+    """The stat(s) this card is watching, as `[{group, key, dbKey, label}]`.
+
+    `key` is CARD shape, what the compute functions read. `dbKey` is the same stat as the
+    raw blobs spell it — equal to `key` for all but ten. A surface resolves against
+    whichever it holds; getting this wrong does not raise, it silently reads 0, which is
+    indistinguishable from a quiet week.
+
+    Empty for effects that read the ROSTER rather than one player's box score (hand
+    composition, favorite-team, chance synergy) — there is no single figure to point at,
+    and inventing one would be worse than showing nothing.
+    """
+    return [{'group': group, 'key': key, 'label': label,
+             'dbKey': _DB_KEY_FOR_CARD_KEY.get((group, key), key)}
+            for group, key, label in EFFECT_TRACKED_STATS.get(effectName or '', [])]
+
+
+def trackedStatValues(effectName: str, cardFormatStats: dict) -> list:
+    """`trackedStatsFor` with each stat's value read out of a CARD-FORMAT stat dict.
+
+    ⚠️ `cardFormatStats` must be the shape `_buildCardStatFormat` produces, keyed
+    `<group>_stats` — not a raw DB blob, whose names differ.
+    """
+    out = []
+    for stat in trackedStatsFor(effectName):
+        blob = (cardFormatStats or {}).get(f"{stat['group']}_stats") or {}
+        out.append({**stat, 'value': blob.get(stat['key'], 0) or 0})
+    return out
+
+
 def effectPoolFor(edition: str, position: int) -> list:
     """Every effect mintable at this edition for this position.
 

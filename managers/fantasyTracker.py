@@ -665,6 +665,10 @@ class FantasyTracker:
                                     "rushing": dict(rawStats.get("rushing", {})),
                                     "receiving": dict(rawStats.get("receiving", {})),
                                     "kicking": dict(rawStats.get("kicking", {})),
+                                    # Runback and House Call score off return yards, so a
+                                    # breakdown that omits this group cannot show the
+                                    # figure driving those two cards.
+                                    "returning": dict(rawStats.get("returning", {})),
                                     "fantasyPoints": rawStats.get("fantasyPoints", 0),
                                 }
                 else:
@@ -683,6 +687,7 @@ class FantasyTracker:
                                 "rushing": dict(gps.rushing_stats or {}),
                                 "receiving": dict(gps.receiving_stats or {}),
                                 "kicking": dict(gps.kicking_stats or {}),
+                                "returning": dict(getattr(gps, 'returning_stats', None) or {}),
                                 "fantasyPoints": gps.fantasy_points or 0,
                             }
 
@@ -1829,6 +1834,7 @@ class FantasyTracker:
     @staticmethod
     def _breakdownToDict(b) -> dict:
         """Convert a CardBreakdown dataclass to a serializable dict."""
+        from managers.cardEffects import trackedStatsFor as _trackedStatsFor
         return {
             "slotNumber": b.slotNumber,
             "edition": b.edition,
@@ -1838,6 +1844,13 @@ class FantasyTracker:
             "effectName": b.effectName,
             "displayName": b.displayName,
             "detail": b.detail,
+            # ⚠️ THE STAT THIS CARD IS BEING PAID ON. Around twenty effects score off
+            # numbers that appear on no box score, so a breakdown could show a payout
+            # beside a game line holding none of the figures behind it. Sent as
+            # `[{group, key, dbKey, label}]` and resolved by the client against
+            # `playerGameStats`, which ships RAW blobs — so the client must read `dbKey`,
+            # not `key`. Empty for roster-wide effects, which have no single figure.
+            "trackedStats": _trackedStatsFor(b.effectName),
             "category": b.category,
             "outputType": b.outputType,
             "primaryFP": b.primaryFP,

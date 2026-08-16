@@ -9224,6 +9224,7 @@ def getCardCollection(
             if tpl.player_id:
                 stats = cardManager.buildPlayerSeasonStats(
                     session, tpl.player_id, tpl.season_created, tpl.position,
+                    effectName=(tpl.effect_config or {}).get("effectName", ""),
                 )
                 if stats:
                     data["playerStats"] = stats
@@ -9666,7 +9667,8 @@ def _buildShowcasePayload(session, cardManager, userId, currentSeason):
                 tpl = uc.card_template
                 if tpl.player_id:
                     stats = cardManager.buildPlayerSeasonStats(
-                        session, tpl.player_id, tpl.season_created, tpl.position)
+                        session, tpl.player_id, tpl.season_created, tpl.position,
+                        effectName=(tpl.effect_config or {}).get("effectName", ""))
                     if stats:
                         cardData["playerStats"] = stats
                 infos.append(showcaseManager.cardInfo(uc))
@@ -10032,6 +10034,7 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
             try:
                 _ps = cardManager.buildPlayerSeasonStats(
                     session, template.player_id, template.season_created, template.position,
+                    effectName=(template.effect_config or {}).get("effectName", ""),
                 ) if template.player_id else None
                 if _ps:
                     cardData["playerStats"] = _ps
