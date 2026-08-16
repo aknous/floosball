@@ -414,6 +414,107 @@ class TheTightEndIsTheSecurityBlanket(unittest.TestCase):
                       'the TE bonus must apply to perceived openness, not actual')
 
 
+class ThePredictabilityPenalty(unittest.TestCase):
+    """⚠️ THE BALANCE GATE. No-huddle buys ~6 seconds a snap and +58% snaps in a drill; it
+    has to pay for that by being readable. The offense at the line can only throw short or
+    medium at the sideline, and a defense that knows this reads it — so the telegraph is a
+    NEGATIVE disguise, the same quantity a fake subtracts, pointed the other way.
+
+    Measured paired (one set of rosters, arms differing only by the flag), n=8000:
+
+        arm                        ypp   +/-se   20+ rate
+        huddled hurry-up          6.69    0.08      6.5%
+        no-huddle, no telegraph   6.26    0.08      4.9%
+        no-huddle + telegraph     5.87    0.07      4.4%
+
+    Menu restriction alone -0.43 ypp; the telegraph adds another -0.39. Total -0.82 ypp
+    (-12%) and explosive plays down 32%. Read accuracy 52% -> 79%.
+
+    ⚠️ THE FIRST THREE MEASUREMENTS OF THIS WERE NOISE. `Scenario()` generates teams, so
+    arms that each built their own were comparing ROSTERS, not tempos — run-to-run spread
+    was 0.6-0.9 ypp against an effect of 0.4. The same trap the runner-move measurement
+    recorded. Pair the arms on one Scenario and take n>=8000.
+    """
+
+    def testTheTelegraphRaisesTheDefensiveRead(self):
+        g = drill(clock=100)
+        g.recordTempoIntent()
+        self.assertTrue(g.play.noHuddle)
+        scheme = {'passDefMult': 1.0}
+        hits = 0
+        for _ in range(2000):
+            sc = dict(scheme)
+            g.play.noHuddle = True
+            g.play._applyPreSnapRead(sc, isRun=False)
+            hits += bool(g.play.preSnapRead['correct'])
+        self.assertGreater(hits / 2000, 0.65,
+                           'a telegraphed drill should be read far more often than a coin flip')
+
+    def testAHuddlingOffenseIsNotTelegraphed(self):
+        g = drill(clock=100)
+        g.recordTempoIntent()
+        scheme = {'passDefMult': 1.0}
+        hits = 0
+        for _ in range(2000):
+            sc = dict(scheme)
+            g.play.noHuddle = False
+            g.play._applyPreSnapRead(sc, isRun=False)
+            hits += bool(g.play.preSnapRead['correct'])
+        self.assertLess(hits / 2000, 0.62,
+                        'the telegraph leaked onto a huddling offense')
+
+    def testItIsSizedAlongsideTheFakesItMirrors(self):
+        from constants import PRESNAP_DISGUISE, NO_HUDDLE_TELEGRAPH
+        self.assertGreaterEqual(NO_HUDDLE_TELEGRAPH, min(PRESNAP_DISGUISE.values()))
+        self.assertLessEqual(NO_HUDDLE_TELEGRAPH, max(PRESNAP_DISGUISE.values()))
+
+
+class TheCapturedFlagIsWhatGetsRead(unittest.TestCase):
+    """⚠️ THE TRAP I DOCUMENTED IN STEP 1 AND THEN WALKED INTO TWICE.
+
+    `_isNoHuddle()` depends on `clockRunning`, and the play resolution MOVES it — measured,
+    it was already False on five snaps in six by the time the pre-snap read ran. So a live
+    call silently dropped the telegraph on most plays (read accuracy 56% against the 78% it
+    should have been) and would have dropped the tight-end nudge the same way. Both were
+    written live and both were wrong.
+
+    `recordTempoIntent` stamps `play.noHuddle` in the pre-snap block, before anything
+    moves. Everything downstream must read that.
+    """
+
+    def testTheReadUsesTheCapturedFlag(self):
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'floosball_game.py')) as fh:
+            src = fh.read()
+        start = src.index('def _applyPreSnapRead')
+        body = src[start:src.index('\n    def ', start + 10)]
+        self.assertIn("getattr(self, 'noHuddle'", body,
+                      'the pre-snap read is deriving no-huddle live again')
+
+    def testTheTightEndNudgeUsesTheCapturedFlag(self):
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'floosball_game.py')) as fh:
+            src = fh.read()
+        start = src.index('NO_HUDDLE_TE_OPENNESS_BONUS')
+        window = src[max(0, start - 900):start]
+        self.assertIn("self.noHuddle", window,
+                      'the tight-end nudge is deriving no-huddle live again')
+
+    def testAStampedFalseBeatsALiveTrue(self):
+        """The capture must WIN over the live state, not merely default to it."""
+        g = drill(clock=100)
+        g.recordTempoIntent()
+        self.assertTrue(g._isNoHuddle())        # live says yes
+        g.play.noHuddle = False                 # but the snap was stamped huddling
+        scheme = {'passDefMult': 1.0}
+        hits = 0
+        for _ in range(1500):
+            sc = dict(scheme)
+            g.play._applyPreSnapRead(sc, isRun=False)
+            hits += bool(g.play.preSnapRead['correct'])
+        self.assertLess(hits / 1500, 0.62, 'the live state overrode the captured one')
+
+
 class TheDocumentedTraps(unittest.TestCase):
     def testClassifyTempoIntentStillReturnsATwoTuple(self):
         """⚠️ Three sites unpack this, including `_lastSnapBeforeBreak`'s chess-clock

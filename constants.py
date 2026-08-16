@@ -486,6 +486,23 @@ PRESNAP_DISGUISE = {
 # happened. They already get their payoff in the concept-edge channel. If the
 # layer ever grows a directional commit, this is where they'd earn one.
 PRESNAP_CONCEPT_DISGUISE = {'draw': 0.24}
+# ⚠️ THE NO-HUDDLE TELEGRAPH — a NEGATIVE disguise, and the thing that pays for the tempo.
+# An offense standing at the line can only throw short or medium at the sideline (see
+# `_applyNoHuddleMenu`), and a defense that knows this reads it. Without this, no-huddle
+# is a free win: measured, it buys 12.0s -> 6.0s of pre-snap drain and 6.0 -> 9.5 snaps in
+# a 110-second drill, and nothing charged for the predictability.
+#
+# Sized alongside the fakes it mirrors (playAction .22, sneakLook .28, rpo .30, trick .32)
+# because it is the same quantity pointed the other way: a fake subtracts from the
+# defense's accuracy, a telegraph adds to it. At this value a league-average defense reads
+# a no-huddle snap right about 78% of the time instead of 50%.
+#
+# ⚠️ This is the ONE place the pre-snap read is deliberately NOT zero-sum. Everywhere else
+# `PRESNAP_READ_BASE` 0.50 means an average defense nets nothing and the layer only
+# redistributes between sharp and poor staffs. Here the offense has chosen a state that
+# tells the defense what is coming, so the defense SHOULD net a gain — that gain is the
+# price of the extra snaps.
+NO_HUDDLE_TELEGRAPH = 0.28
 # Scaled by how well this back sells it (_runConceptExecQ, deterministic from
 # attributes): a shifty, cerebral back disguises a draw; a plodder telegraphs it.
 # Range is this floor to 1.0 of the nominal value above.

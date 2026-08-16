@@ -14651,6 +14651,36 @@ class Play():
                 _sell = _runConceptExecQ(self.runner, self.runConcept) if self.runner else 0.5
                 floor = PRESNAP_CONCEPT_DISGUISE_FLOOR
                 disguise = max(disguise, _cd * (floor + (1 - floor) * _sell))
+        # ⚠️ NO-HUDDLE IS A NEGATIVE DISGUISE, and it is what pays for the tempo. An
+        # offense at the line can only throw short or medium at the sideline, and a
+        # defense that knows this reads it — so the same quantity a fake SUBTRACTS from
+        # recognition, a telegraph ADDS. Applied after the fakes rather than through the
+        # `max()` chain above, because it is not competing with them: it is the opposite
+        # sign, and on the rare snap that is somehow both, the two should partly cancel
+        # rather than one winning outright.
+        #
+        # ⚠️ This is the one place the read is deliberately NOT zero-sum. Everywhere else a
+        # league-average defense nets nothing from it. Here the offense has chosen a state
+        # that announces what is coming, so the defense should net a gain — and that gain
+        # is the price of the extra snaps.
+        # ⚠️ READ THE CAPTURED FLAG, NEVER `_isNoHuddle()` LIVE. That helper depends on
+        # `clockRunning`, and by the time this runs the play resolution has already moved
+        # it — measured, it was False on five snaps in six here, so a live call silently
+        # dropped the telegraph on most plays and the penalty barely registered (read
+        # accuracy 56% against the 78% it should be). `recordTempoIntent` stamps
+        # `play.noHuddle` in the pre-snap block, before anything moves, for exactly this
+        # reason. Falling back to the live call keeps the harnesses that drive a play
+        # without the pre-snap block honest.
+        if getattr(self, 'noHuddle', None) is None:
+            try:
+                _noHuddle = game._isNoHuddle()
+            except Exception:
+                _noHuddle = False
+        else:
+            _noHuddle = bool(self.noHuddle)
+        if _noHuddle:
+            from constants import NO_HUDDLE_TELEGRAPH
+            disguise -= NO_HUDDLE_TELEGRAPH
         accuracy = max(0.05, min(0.95, accuracy - disguise))
 
         correct = _random.random() < accuracy
@@ -15322,10 +15352,16 @@ class Play():
         # safer than it is — a covered tight end stays covered and the ball can still be
         # broken up. That matters, because this fires in exactly the situation the defense
         # is about to start reading (step 3).
+        # ⚠️ CAPTURED FLAG, NOT A LIVE CALL — same trap as the telegraph in
+        # `_applyPreSnapRead`. `_isNoHuddle()` reads `clockRunning`, which the play
+        # resolution has already changed by the time a target is selected, so asking live
+        # drops the nudge on most snaps. `play.noHuddle` is stamped pre-snap.
         teBonus = 0
         teReceiver = None
         try:
-            if self.game._isNoHuddle():
+            _nh = self.noHuddle if getattr(self, 'noHuddle', None) is not None \
+                else self.game._isNoHuddle()
+            if _nh:
                 from constants import NO_HUDDLE_TE_OPENNESS_BONUS
                 teBonus = NO_HUDDLE_TE_OPENNESS_BONUS
                 teReceiver = self.game.offensiveTeam.rosterDict.get('te')
