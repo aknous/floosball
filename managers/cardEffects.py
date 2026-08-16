@@ -2718,6 +2718,31 @@ _TRAVERSE_POSITION_TUNING = {
 _ALL_IN_STUD_LINE = {1: 22, 2: 22, 3: 20, 4: 14, 5: 15}
 
 
+def allInStudLine(position: int, classification: str = None) -> int:
+    """The FP line Bet Big pays above — and the line its power bar is set to.
+
+    ⚠️ THE BAR AND THE PAYOUT HAVE TO BE THE SAME NUMBER ON THIS CARD. Every other card
+    is gated on a generic per-position FP threshold, which is fine when the gate is just
+    "did this player show up". Bet Big's whole effect IS an FP threshold, so a generic
+    gate put two different lines on one card: the bar filled at the generic number and
+    the payout did not start until the stud line, which is 7 to 11 FP higher at every
+    position (QB 13 against 22, RB 11 against 22, WR 12 against 20, TE 6 against 14,
+    K 8 against 15). A user watched the bar fill, read the card as unlocked, and got
+    nothing — reported exactly that way.
+
+    ⚠️ All-Pro moves BOTH or neither. The classification lowers a card's gate because an
+    individual accolade buys individual reliability; applying that to the bar alone would
+    re-open the same gap it is being closed to fix. Lowering both keeps the two equal AND
+    keeps the accolade worth something on this card — an All-Pro Bet Big starts paying
+    sooner, which is what the accolade is for.
+    """
+    line = _ALL_IN_STUD_LINE.get(position, 20)
+    if classification and 'all_pro' in classification:
+        from constants import CARD_GATE_ALLPRO_MULT
+        line = max(1, round(line * CARD_GATE_ALLPRO_MULT))
+    return line
+
+
 # ─── Config Builder ──────────────────────────────────────────────────────────
 
 # ─── The stat a card is watching ────────────────────────────────────────────
@@ -2945,8 +2970,10 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
         primary["chancePerStep"] = chancePerStep
         primary["yardType"] = yardType
     if effectName == "all_in":
-        # Bet Big: freeze the position-aware stud line the payout scales above.
-        primary["studLine"] = _ALL_IN_STUD_LINE.get(position, 20)
+        # Bet Big: freeze the position-aware stud line the payout scales above. ⚠️ The
+        # card's power bar is set to this SAME number in buildGateSpec — see
+        # allInStudLine for why they cannot be allowed to differ.
+        primary["studLine"] = allInStudLine(position, classification)
     if effectName == "bonsai":
         # The builder picks the growth trigger position-blind; re-pick it from ONLY the stats
         # the card player's position produces (a WR keys off receptions/YAC, a RB off carries,
@@ -6575,6 +6602,13 @@ def buildGateSpec(effectName: str, position: int, classification: str = None,
     allPro = bool(classification) and 'all_pro' in classification
     if allPro:
         threshold = max(1, round(threshold * CARD_GATE_ALLPRO_MULT))
+    # ⚠️ BET BIG SETS ITS OWN BAR, because its effect IS an FP threshold. A generic gate
+    # put two different lines on one card — the bar filled 7 to 11 FP before the payout
+    # began — so the card read "unlocked" and paid nothing. `allInStudLine` already
+    # applies the All-Pro adjustment, so it is taken AFTER the block above rather than
+    # being adjusted twice.
+    if effectName == "all_in":
+        threshold = allInStudLine(position, classification)
     inverse = effectName in _INVERSE_GATE_EFFECTS
     apNote = " (All-Pro)" if allPro else ""
     if inverse:
