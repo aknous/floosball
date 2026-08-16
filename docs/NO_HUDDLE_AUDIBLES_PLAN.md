@@ -223,6 +223,50 @@ Everything else stays silent. ⚠️ The Bleachers taught this lesson already: a
 
 ⚠️ **The broadcast path must be checked.** `_presnapBeat` fires between plays, and the timing modes that suppress game events (`turbo-silent`, `fast-weekly`) must suppress these too, or a silent sim starts narrating.
 
+### ⚠️ Two delivery mechanisms, not one (owner, 2026-08-16)
+
+The audible and no-huddle beats are **prepended to the play text**, not emitted as their
+own feed entry:
+
+> *"Rodrigo Vance calls an audible! Hands off to Tuck Marlow for 6 yards."*
+> *"Buffalo goes no-huddle. Quick out to Sim Pallas for 8."*
+
+**This is better than a separate entry for these two, and the reason is the reveal rule.**
+An audible and a tempo change are FACTS about what the offense did. They are not lies, so
+there is no tension to preserve between the beat and the outcome — putting them in one
+sentence loses nothing and reads better.
+
+It is also structurally cheaper, in ways that matter:
+
+- **One hook.** `self.play.playText = text` (`floosball_game.py:6621`) is the single
+  assignment point, and every play type flows through it — `_puntPlayText` returns into
+  the same `text` variable, so punts are covered without a second site.
+- **No broadcast-suppression path.** The plan flagged that `turbo-silent` and
+  `fast-weekly` must suppress pre-snap beats or a silent sim starts narrating. A prefix
+  rides its own play, so those modes already handle it. A separate feed entry would need
+  its own guard.
+- **Cannot be orphaned or mis-sorted.** The beat is physically attached to the play it
+  describes; a separate entry has to be ordered correctly against it.
+- **The one-line-per-snap cadence rule enforces itself** — one play text, one prefix.
+
+⚠️ **IT DOES NOT EXTEND TO THE DISGUISE BEAT.** "They're showing blitz" is a LIE that the
+play text exists to reveal. Prepending puts the lie and its reveal in the same sentence,
+read at once, and the tension the reveal rule was designed around evaporates:
+
+> prepended:  *"The defense shows blitz! They dropped eight and Vance never saw it."*
+> as written: *"They're showing blitz…"* → snap → *"…and they dropped eight."*
+
+So **Part 3 keeps the separate pre-snap entry** described above. That splits the work along
+its natural seam: Parts 1-2 get the cheap prefix, Part 3 gets the entry it actually needs.
+
+⚠️ **No-huddle announces on ENTERING the state, once.** The cadence table already says so,
+and a prefix makes it easy to get wrong — a six-play drill would otherwise say "goes
+no-huddle" six times. Needs a latch cleared on possession change and on leaving the state.
+
+⚠️ **When both would fire on one snap, the audible wins.** They can collide only on the
+first no-huddle snap (since no-huddle announces once), but the rule has to exist: an
+audible is the more significant event, and the cadence rule is one line per snap.
+
 ## Measurement
 
 The clock work this week established the pattern: a **low-variance targeted probe** beats a noisy aggregate. Per-arm, before/after:
