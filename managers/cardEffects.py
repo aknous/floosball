@@ -211,10 +211,19 @@ EFFECT_OUTPUT_TYPE = {
     "touchdown_jackpot": "floobits", "indemnity": "floobits",
     "gold_rush": "floobits",
     # Intentionally NOT listed (resolve to NULL → excluded from themed packs):
-    #   advantage   — meta amplifier, no direct payout
-    #   conductor   — structural amplifier, multiplies other cards
-    #   copycat     — copies another card's output (any type)
-    #   catalyst    — chance amplifier + small Floobits base (mixed primary)
+    #   advantage    — meta amplifier, no direct payout
+    #   conductor    — structural amplifier, multiplies other cards
+    #   copycat      — copies another card's output (any type)
+    #   catalyst     — chance amplifier + small Floobits base (mixed primary)
+    #   captain      — overshoot amplifier, boosts every OTHER card
+    #   doubler      — counts roster TDs 2x for other cards
+    #   surveyor     — counts roster yards 1.5x for other cards
+    #   sharpshooter — counts roster FGs 2x for other cards
+    # ⚠️ The last four were omitted correctly but were NOT listed here, so the only
+    # record that they are deliberate was their absence — which is indistinguishable
+    # from having been forgotten. All four carry `isAmplifier` and pay nothing of their
+    # own, so NULL is right; an "output" themed pack promising a payout type could not
+    # honour it. Keep this list in step with the map: a bare omission reads as a bug.
 }
 
 
@@ -1578,7 +1587,33 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale, position=N
                 "perFPxShown": round(_perFPx, 2),  # display copy (2-decimal cap)
                 "maxXBonus": round((1.4 + rn * 0.02) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "diversified":
-        return {"rewardType": "fp", "perTypeFP": round((63.0 + rn * 1.5) * editionScale * _BAL_FP_MULT, 1)}
+        # ⚠️ THIS PAYS A COUNT, SO IT NEEDS A THIRD OF A SINGLE-PAYOUT CARD'S CONSTANT.
+        # There are only three output types, and a real six-card hand holds all three
+        # 63% of the time and at least two 98% of the time (measured over 4,000 sampled
+        # hands drawn at real pack weights, mean 2.61 types). So the "variety" condition
+        # is very nearly free, and whatever this mints is collected ~2.6x over.
+        #
+        # It was written as if it paid once. At `holographic`'s EDITION_POWER_SCALE the
+        # old constants minted ~69.5/type at rating 85, i.e. a mean of 181 FP and a
+        # ceiling of 208 — measured in a hand of REAL cards at 144.5 mean / 208.5 p90 /
+        # 347.5 max, against a holographic median effect of 13.0 FP and a best mintable
+        # peer around 47. It out-paid every PRISMATIC cross card several times over
+        # (Anthem 28.4, Copycat 39.9, Last Resort 49.3), which is backwards.
+        #
+        # ⚠️ THE SPREAD HARNESS CANNOT SEE THIS. simcheck_effect_spread fills the other
+        # five slots with no-effect floor prints, whose output type is blank and counts
+        # as nothing — so it scores this card at ONE type and reported a tame 38.0 FP.
+        # Any card that reads the HAND has to be measured in a hand.
+        #
+        # ⚠️ It was not always wrong: prod's season-16/17 templates carry 17.4-19.9/type,
+        # which lands 52-60 FP at three types — squarely in the peer band. The
+        # holographic EDITION_POWER_SCALE retune (0.47 -> 1.70, 2026-08-06) multiplied it
+        # 3.6x, and a card that collects its constant 2.6x over is exactly where a global
+        # dial change does the most damage. Sized back to that measured-correct band.
+        #
+        # Fixing this also pulls COPYCAT's tail down, since it copies the highest flat-FP
+        # bonus in the hand and had been copying this one (max 228.7).
+        return {"rewardType": "fp", "perTypeFP": round((17.0 + rn * 0.40) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "gold_rush":
         # Floobits output — leave untouched
         return {"rewardType": "floobits", "perCardFloobits": int(round((6 + rn * 0.3) * editionScale))}
