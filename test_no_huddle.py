@@ -200,6 +200,128 @@ class TheFeedPrefix(unittest.TestCase):
         self.assertEqual(g._prependPreSnapBeat(''), '')
 
 
+class TheMenuShrinks(unittest.TestCase):
+    """⚠️ THE RESTRICTION IS THE BALANCE, NOT A LIMITATION TO ENGINEER AROUND. No-huddle
+    buys ~6 seconds a snap; if it cost nothing every trailing offense would always do it
+    and the two-minute drill would be solved. The extra snaps have to be WORSE snaps.
+
+    Measured over 600 weight sets, trailing in Q4 with the clock live:
+
+        run     19.4%  ->   0.0%
+        short   28.3%  ->  48.7%
+        medium  29.8%  ->  51.3%
+        long    17.4%  ->   0.0%
+        deep     5.1%  ->   0.0%
+        sideline   40%  ->   100%
+    """
+
+    def _weights(self, enabled):
+        original = constants.NO_HUDDLE_ENABLED
+        try:
+            constants.NO_HUDDLE_ENABLED = enabled
+            g = drill(clock=100)
+            g.recordTempoIntent()
+            coach = getattr(g.offensiveTeam, 'coach', None)
+            return g._computePlayWeights(g.homeScore - g.awayScore, coach), g, coach
+        finally:
+            constants.NO_HUDDLE_ENABLED = original
+
+    def testDepthIsGone(self):
+        w, _g, _c = self._weights(True)
+        self.assertEqual(w.get('long', 0), 0, 'long needs a protection call')
+        self.assertEqual(w.get('deep', 0), 0, 'deep needs a route stem')
+
+    def testTheRunGameIsGone(self):
+        w, _g, _c = self._weights(True)
+        self.assertEqual(w.get('run', 0), 0)
+
+    def testShortAndMediumSurvive(self):
+        w, _g, _c = self._weights(True)
+        self.assertGreater(w.get('short', 0) + w.get('medium', 0), 0,
+                           'the restriction emptied the menu')
+
+    def testAHuddlingOffenseKeepsTheWholePlaybook(self):
+        w, _g, _c = self._weights(False)
+        for key in ('run', 'short', 'medium', 'long', 'deep'):
+            self.assertGreater(w.get(key, 0), 0, f'{key} vanished with the flag off')
+
+    def testSidelineIsSetNotRolled(self):
+        """⚠️ Getting out of bounds is the POINT of the play, not a probability. Left as a
+        roll the drill sometimes forgets why it is hurrying — and step 3's predictability
+        penalty depends on the sideline route being reliable, not occasional."""
+        _w, g, coach = self._weights(True)
+        for _ in range(40):
+            self.assertTrue(g._shouldTargetSideline(g.homeScore - g.awayScore, coach))
+
+    def testTheRestrictionIsAppliedLast(self):
+        """⚠️ Placement is the point. The situational, matchup, coach, gameplan and
+        drive-clock layers all reach for long/deep when an offense is behind and hurrying —
+        which is exactly when no-huddle fires. Restricting earlier lets them put it back."""
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'floosball_game.py')) as fh:
+            src = fh.read()
+        start = src.index('def _computePlayWeights')
+        body = src[start:src.index('\n    def _applyNoHuddleMenu', start)]
+        self.assertIn('return self._applyNoHuddleMenu(weights)', body,
+                      'the menu restriction is no longer the final pass')
+
+    def testTheSneakLookDeclines(self):
+        """A fake is a huddle call — it sells one thing and does another, which needs the
+        whole offense briefed."""
+        _w, g, _c = self._weights(True)
+        self.assertIsNone(g._selectSneakLook())
+
+    def testTheMenuDoesNotReachIntoTheSneak(self):
+        """The sneak is injected by `_selectRunConcept` on its own trigger and is never
+        carried in these weights, so zeroing `run` neither keeps nor removes it. The menu
+        must not try."""
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'floosball_game.py')) as fh:
+            src = fh.read()
+        start = src.index('def _applyNoHuddleMenu')
+        body = src[start:src.index('\n    def ', start + 10)]
+        self.assertNotIn('sneak', body.split('"""')[-1],
+                         'the menu must not reach into the sneak at all')
+
+    def testTheSneakIsAlreadyOffInADrill(self):
+        """⚠️ THE PLAN CLAIMED THE SNEAK STAYS AVAILABLE IN NO-HUDDLE. It does not, and
+        should not: `_isSneakSituation()` has bailed on `_isHurryUp()` since the sneak
+        shipped, because a sneak burns clock and stays in bounds — the opposite of what a
+        two-minute drill wants. That reason is better than the plan's ("it needs no
+        call"), and this pins the real behavior against the doc."""
+        g = drill(clock=95)
+        g.down, g.yardsToFirstDown, g.yardsToEndzone = 3, 1, 40
+        self.assertTrue(g._isNoHuddle())
+        self.assertFalse(g._isSneakSituation(),
+                         'a sneak in a two-minute drill wastes the clock it is racing')
+
+
+class TheTriggerIsTheDrillNotJustADeficit(unittest.TestCase):
+    """⚠️ `hurryUp` COVERS TWO DIFFERENT THINGS. Seven of the classifier's eight hurry-up
+    branches return a base of 12 — the genuine two-minute drill. The eighth is "mid-late
+    deficit" and returns 15 or 25, which is a SHORTER HUDDLE, not the absence of one: down
+    17 in Q3 with 5:00 left an offense pushes tempo and still huddles, because it has time
+    to call a play.
+
+    Reading the intent alone put the offense at the line for a third of a game, and would
+    have charged the menu restriction in situations where a huddle was available.
+    """
+
+    def testAMidLateDeficitIsNotNoHuddle(self):
+        g = drill(clock=240, offScore=7, defScore=21, quarter=4)
+        intent, base = g._classifyTempoIntent()
+        self.assertEqual(intent, 'hurryUp')
+        self.assertGreater(base, constants.LAST_SNAP_HUDDLE_SECS,
+                           'this case is meant to be a slower hurry-up')
+        self.assertFalse(g._isNoHuddle(), 'a 25-second huddle is still a huddle')
+
+    def testTheRealDrillStillQualifies(self):
+        g = drill(clock=95)
+        intent, base = g._classifyTempoIntent()
+        self.assertEqual((intent, base), ('hurryUp', constants.LAST_SNAP_HUDDLE_SECS))
+        self.assertTrue(g._isNoHuddle())
+
+
 class TheDocumentedTraps(unittest.TestCase):
     def testClassifyTempoIntentStillReturnsATwoTuple(self):
         """⚠️ Three sites unpack this, including `_lastSnapBeforeBreak`'s chess-clock

@@ -2097,16 +2097,29 @@ class Game:
 
         A stopped clock means they may huddle: there is nothing to save by rushing.
         """
-        from constants import NO_HUDDLE_ENABLED
+        from constants import NO_HUDDLE_ENABLED, LAST_SNAP_HUDDLE_SECS
         if not NO_HUDDLE_ENABLED:
             return False
         if not self.clockRunning:
             return False
         try:
-            intent, _base = self._classifyTempoIntent()
+            intent, base = self._classifyTempoIntent()
         except Exception:
             return False
-        return intent == 'hurryUp'
+        # ⚠️ `hurryUp` COVERS TWO DIFFERENT THINGS, and only one of them is no-huddle.
+        # Seven of the classifier's eight hurry-up branches return a base of 12 — the
+        # genuine two-minute drill. The eighth is "mid-late deficit" and returns 15 or 25,
+        # which is a SHORTER HUDDLE, not the absence of one: down 17 in Q3 with 5:00 left
+        # an offense pushes tempo and still huddles, because it has time to call a play.
+        #
+        # Reading the intent alone therefore put the offense at the line for a third of a
+        # game, which is both wrong and the difference between a feature and a exploit —
+        # the menu restriction that pays for no-huddle would have been charged in
+        # situations where a huddle was perfectly available.
+        #
+        # The base time is the classifier's own statement of how much of a hurry this is,
+        # so gate on it rather than re-deriving the urgency from score and clock.
+        return intent == 'hurryUp' and base <= LAST_SNAP_HUDDLE_SECS
 
     def _noHuddlePreSnapSecs(self) -> int:
         """The pre-snap drain for a no-huddle snap.
@@ -2298,6 +2311,16 @@ class Game:
         Also fires — any quarter/score — to PRESERVE a draining Drive Clock
         (seconds unit), since stopping the game clock pauses the drive clock.
         """
+        # ⚠️ IN NO-HUDDLE THIS IS NOT A ROLL. Getting out of bounds is the POINT of the
+        # play — the offense is at the line precisely because the clock is running and it
+        # needs the clock stopped. Leaving it as a probability means the drill sometimes
+        # forgets why it is hurrying, and it also under-charges the tempo: the predictability
+        # the defense reads (step 3) depends on the sideline route being reliable, not
+        # occasional. Owner: "exclusively short-medium passes that target the sideline to
+        # stop the clock."
+        if self._isNoHuddle():
+            return True
+
         # Drive Clock (seconds): a low drive clock is its own reason to get out of
         # bounds — a stopped game clock pauses the drive clock, so the next huddle
         # doesn't burn it and the offense buys more plays to score. Applies any
@@ -3676,6 +3699,49 @@ class Game:
             weights['medium'] = weights.get('medium', 0) * 0.3
             weights['long'] = weights.get('long', 0) * 0.15
             weights['deep'] = weights.get('deep', 0) * 0.05
+        return self._applyNoHuddleMenu(weights)
+
+    def _applyNoHuddleMenu(self, weights: dict) -> dict:
+        """The no-huddle playbook: short and medium passes, and nothing else.
+
+        ⚠️ THE RESTRICTION IS THE BALANCE, NOT A LIMITATION TO ENGINEER AROUND. No-huddle
+        buys about six seconds a snap (measured 12.0s -> 6.0s, and 6.0 -> 9.5 snaps in a
+        110-second drill). If it cost nothing, every trailing offense would always do it
+        and the two-minute drill would be a solved problem. The extra snaps have to be
+        WORSE snaps.
+
+        It is also simply true to the sport: `long` and `deep` need protection calls and
+        route stems the offense has not lined up for, so an offense that never huddled
+        cannot run them. Owner: "exclusively short-medium passes that target the sideline
+        to stop the clock".
+
+        ⚠️ APPLIED LAST, AFTER EVERY OTHER MOD, and that placement is the point. The
+        situational, matchup, coach, gameplan and drive-clock layers all reach for `long`
+        and `deep` when an offense is behind and hurrying — which is exactly when
+        no-huddle fires. Restricting anywhere earlier would let those layers put the depth
+        straight back.
+
+        ⚠️ THE PLAN SAID THE QB SNEAK SURVIVES HERE. IT DOES NOT, AND SHOULD NOT.
+        Zeroing `run` cannot touch it either way — the sneak is injected by
+        `_selectRunConcept` on its own short-yardage trigger and never carried in these
+        weights. But `_isSneakSituation()` has bailed on `_isHurryUp()` since the sneak
+        shipped, for a better reason than "it needs no call": a sneak burns clock and stays
+        in bounds, which is the opposite of what a two-minute drill wants. Verified — in a
+        drill on 3rd-and-1, `_isNoHuddle` is True and `_isSneakSituation` is False.
+
+        Measured for scale, since it decides how much this matters: the sneak is ~1.25 QB
+        carries per game league-wide, and the concept selector takes it about 46% of the
+        time on 3rd-and-1 at midfield. It is a rare situational call, not a staple.
+        """
+        if not self._isNoHuddle():
+            return weights
+        for key in ('long', 'deep', 'run'):
+            if key in weights:
+                weights[key] = 0.0
+        # If the restriction emptied the menu (a weight set that had no short/medium to
+        # begin with), fall back rather than hand `_executeWeightedPlay` all zeros.
+        if not any(weights.get(k, 0) for k in ('short', 'medium')):
+            weights['short'] = 1.0
         return weights
 
     def _applyDriveClockMods(self, weights: dict, coach) -> dict:
@@ -4547,6 +4613,16 @@ class Game:
                                SNEAK_LOOK_MIN_RUNFOCUS, SNEAK_LOOK_AGGR_PIVOT,
                                SNEAK_LOOK_PITCH_SHARE)
         if not SNEAK_LOOK_ENABLED:
+            return None
+        # ⚠️ A FAKE IS A HUDDLE CALL. The sneak-look sells one thing and does another,
+        # which needs the whole offense briefed — an offense standing at the line calling
+        # it on a hand signal is not the play. It DECLINES rather than being weighted
+        # down, so the restriction is visible here rather than buried in a weight.
+        # ⚠️ The other gadget selectors (`_selectTrickPlay`, `_selectRpo`,
+        # `_selectRunConcept`) already guard on `_isHurryUp()`, which is a DIFFERENT and
+        # not-quite-overlapping test — measured diverging from the tempo intent in half of
+        # a six-case sample — so this guard is explicit rather than assumed.
+        if self._isNoHuddle():
             return None
         coach = getattr(self.offensiveTeam, 'coach', None)
         aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
