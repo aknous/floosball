@@ -134,10 +134,19 @@ Pricing anchors, measured on production user-weeks (seasons 12+):
 | existing transplant cost | 40 / 70 / 120 / 180 by edition |
 | Accession, the priciest powerup | 200, limit 2/season |
 
-At 1-3/day availability, a consumable much above **~200 F** is roughly one build a week
-for a typical player. **Open:** does the consumable replace the existing
-`TRANSPLANT_COST_BY_EDITION` charge or stack on top of it? Stacking makes a diamond
-wildcard 380 F, which is more than four median weeks.
+⚠️ **The consumable STACKS on top of `TRANSPLANT_COST_BY_EDITION`** (owner, 2026-08-16).
+It is not a fee, it is **the gate** — the thing that stops a user grinding this until they
+hold the best roster with the best effects on every slot. The Floobit cost alone cannot do
+that job, because Floobits accumulate; a per-day item does not.
+
+So a wildcard build costs `consumable + 40/70/120/180` by the effect's tier. At a 200 F
+consumable a diamond wildcard is **380 F**, more than four median user-weeks, and the
+daily cap means the ceiling on roster-building is *days elapsed*, not Floobits banked.
+
+That has a design consequence worth stating: because availability is the real constraint,
+the Floobit price is free to be modest. Pricing it high as well would punish the same
+behavior twice and push the feature out of reach of exactly the newer users the friction
+report came from.
 
 It should live in `POWERUP_CATALOG` beside Accession and Annulment, and the daily
 availability wants its own rotation slot rather than riding
@@ -145,12 +154,24 @@ availability wants its own rotation slot rather than riding
 
 ## Second-order effects to decide before building
 
-1. **Hand-composition cards get more reliable.** Assembling a specific seven-effect hand
-   becomes much easier, which strengthens Diversified, Anthem, Stacked Deck, Chain
-   Reaction and Fortitude. ⚠️ Diversified was resized on **2026-08-16** against a
-   semi-random hand — measured 63% of hands holding all three output types, mean 2.61 —
-   and it pays a COUNT, so wildcards push it toward its ceiling every week. Re-measure the
-   cross family once wildcards exist; that resize is the first thing this invalidates.
+1. **Hand-composition cards reach their ceiling more often.** Assembling a specific
+   seven-effect hand becomes easier, which lifts Diversified, Anthem, Stacked Deck, Chain
+   Reaction and Fortitude toward the top of their range.
+
+   ⚠️ **This does NOT invalidate the Diversified resize** (an earlier draft of this doc
+   claimed it did — wrong). Diversified pays a count of distinct output types, max three.
+   Wildcards move it from 48.8 FP expected to **56.1 FP**, which is +15% and is exactly
+   the ceiling the resize was sized against and deliberately kept inside the peer band
+   (best mintable holographic ~47; prismatic Anthem 28.4 mean / 76.5 max). The sizing
+   holds, and `test_diversified_sizing.py` already pins the CEILING rather than the mean —
+   precisely because 63% of hands reached it even without wildcards.
+
+   ⚠️ The real caveat is against the measurement, not the card. The 2.61 mean was sampled
+   from **random pulls at pack weights**, which was never the population that matters: a
+   user who owns Diversified curates their lineup and was probably already near 2.9.
+   Wildcards make the ceiling the TYPICAL case rather than the COMMON one. Re-measure the
+   cross family against curated hands once this exists; expect a modest lift, not a
+   re-break.
 2. **Effect-supply guarantees get routed around.** `_assignEffects` deliberately mints one
    template per effect where a bucket has fewer players than effects, so every effect
    exists somewhere. Wildcards let a user ignore bucket scarcity entirely. Not a bug —
