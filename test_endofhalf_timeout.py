@@ -29,6 +29,28 @@ class StubGame:
     _callTimeout = fg.Game._callTimeout
     _isGarbageTime = fg.Game._isGarbageTime
 
+    # ⚠️ The timeout helper now checks NO-HUDDLE before spending one — standing at the
+    # line is the cheaper way to save a snap and it is free, so an offense that can do it
+    # should not burn a timeout doing the same job. These tests cover the HUDDLING path,
+    # so the stub answers False.
+    def _isNoHuddle(self):
+        return False
+
+    def _noHuddlePreSnapSecs(self):
+        from constants import NO_HUDDLE_PRESNAP_SECS
+        return NO_HUDDLE_PRESNAP_SECS
+
+    # The real Game always has a `format` (a property resolving from gameRules), so a
+    # stub without one is the stub being wrong. None reads as standard — same convention
+    # as test_last_snap_fg's stub.
+    format = None
+
+    def _offenseEffectiveSecs(self):
+        return self.gameClockSeconds
+
+    def _maxPossession(self):
+        return 8
+
     def __init__(self, *, quarter, secs, homeScore, awayScore, timeouts=3,
                  clockRunning=True, playType=PlayType.FieldGoal, offenseIsHome=True):
         self.homeTeam = Team('HOME')

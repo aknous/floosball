@@ -322,6 +322,98 @@ class TheTriggerIsTheDrillNotJustADeficit(unittest.TestCase):
         self.assertTrue(g._isNoHuddle())
 
 
+class TheTightEndIsTheSecurityBlanket(unittest.TestCase):
+    """The tight end should be the reliable short-medium target in a drill.
+
+    ⚠️ THE MENU RESTRICTION DID NOT DELIVER THIS ON ITS OWN, which is worth recording
+    because it looked like it would: the TE appears in 5 of 8 short plays and 9 of 14
+    medium ones and in ZERO long or deep plays, so cutting the deep game should have
+    raised his share. Measured, it moved TE involvement only 67.2% -> 64.8% of called
+    plays — because most plays already list all three receivers, so which receiver a play
+    NAMES was never the lever. Who the quarterback LOOKS AT is.
+
+    From an equal-openness three-man read, the nudge takes the TE from 32.8% to 63.4%.
+
+    ⚠️ AND IT MUST LOSE TO REAL SEPARATION, or it is a compulsion rather than a tendency:
+
+        WR open 85 vs TE 45  ->  TE chosen   0.0%
+        WR      75 vs    50  ->             12.8%
+        WR      65 vs    55  ->             47.8%
+        WR      55 vs    55  ->             76.2%
+        WR      45 vs    60  ->             97.3%
+    """
+
+    def _read(self, wrOpen, teOpen, n=800):
+        g = drill(clock=100)
+        g.recordTempoIntent()
+        self.assertTrue(g._isNoHuddle())
+        rd = g.offensiveTeam.rosterDict
+        qb, te = rd['qb'], rd['te']
+        chosen = 0
+        for _ in range(n):
+            targets = [
+                {'receiver': rd['wr1'], 'openness': wrOpen, 'route': 'go',
+                 'coveringDefender': None, 'routeQuality': 70},
+                {'receiver': te, 'openness': teOpen, 'route': 'seam',
+                 'coveringDefender': None, 'routeQuality': 70},
+            ]
+            sel, _threw = g.play.selectPassTarget(
+                targets, qb.attributes.vision, qb.attributes.discipline)
+            if sel and sel['receiver'] is te:
+                chosen += 1
+        return chosen / n
+
+    def testTheQbLooksAtTheTightEndOnAnEvenRead(self):
+        self.assertGreater(self._read(55, 55), 0.55,
+                           'the tight end should win a coin-flip read in a drill')
+
+    def testAWideOpenReceiverStillWins(self):
+        """⚠️ The guardrail. A nudge that beats real separation is not a tendency."""
+        self.assertLess(self._read(85, 45), 0.10,
+                        'the nudge overrode a genuinely open receiver')
+
+    def testItOnlyAppliesInNoHuddle(self):
+        """Outside a drill the TE's share should come from the playbook and the matchup,
+        where it already does."""
+        g = drill(clock=800, offScore=21, defScore=21, quarter=1)
+        g.recordTempoIntent()
+        self.assertFalse(g._isNoHuddle())
+        rd = g.offensiveTeam.rosterDict
+        qb, te = rd['qb'], rd['te']
+        chosen = 0
+        for _ in range(800):
+            targets = [
+                {'receiver': rd['wr1'], 'openness': 55, 'route': 'go',
+                 'coveringDefender': None, 'routeQuality': 70},
+                {'receiver': te, 'openness': 55, 'route': 'seam',
+                 'coveringDefender': None, 'routeQuality': 70},
+            ]
+            sel, _t = g.play.selectPassTarget(
+                targets, qb.attributes.vision, qb.attributes.discipline)
+            if sel and sel['receiver'] is te:
+                chosen += 1
+        self.assertLess(chosen / 800, 0.60, 'the drill bonus leaked outside a drill')
+
+    def testItIsSmallerThanTheAwakenedNudge(self):
+        """It shares that mechanism deliberately, and must stay the quieter of the two —
+        a powered-up receiver should still out-draw a tendency."""
+        from constants import AWAKENED_RECEIVER_OPENNESS_BONUS
+        self.assertLess(constants.NO_HUDDLE_TE_OPENNESS_BONUS,
+                        AWAKENED_RECEIVER_OPENNESS_BONUS)
+
+    def testItMovesPerceptionNotSafety(self):
+        """⚠️ It nudges PERCEIVED openness only, so it never makes the throw safer than it
+        is — a covered tight end stays covered and the ball can still be broken up. That
+        matters because this fires in exactly the situation the defense starts reading."""
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'floosball_game.py')) as fh:
+            src = fh.read()
+        start = src.index('NO_HUDDLE_TE_OPENNESS_BONUS')
+        window = src[start:start + 600]
+        self.assertIn('perceivedOpenness', window,
+                      'the TE bonus must apply to perceived openness, not actual')
+
+
 class TheDocumentedTraps(unittest.TestCase):
     def testClassifyTempoIntentStillReturnsATwoTuple(self):
         """⚠️ Three sites unpack this, including `_lastSnapBeforeBreak`'s chess-clock

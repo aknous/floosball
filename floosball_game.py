@@ -15311,6 +15311,27 @@ class Play():
             from constants import AWAKENED_RECEIVER_OPENNESS_BONUS
             awakenedBonus = AWAKENED_RECEIVER_OPENNESS_BONUS
 
+        # ⚠️ IN A NO-HUDDLE DRILL THE QB LOOKS FOR HIS TIGHT END FIRST. Restricting the
+        # menu to short/medium was not enough on its own — it moved TE involvement only
+        # 67.2% -> 64.8% of called plays, because most plays already list all three
+        # receivers, so which receiver a play NAMES was never the lever. Who the
+        # quarterback LOOKS AT is.
+        #
+        # Same mechanism as the awakened nudge above and deliberately smaller: a tendency,
+        # not a compulsion. It moves PERCEIVED openness only, so it never makes the throw
+        # safer than it is — a covered tight end stays covered and the ball can still be
+        # broken up. That matters, because this fires in exactly the situation the defense
+        # is about to start reading (step 3).
+        teBonus = 0
+        teReceiver = None
+        try:
+            if self.game._isNoHuddle():
+                from constants import NO_HUDDLE_TE_OPENNESS_BONUS
+                teBonus = NO_HUDDLE_TE_OPENNESS_BONUS
+                teReceiver = self.game.offensiveTeam.rosterDict.get('te')
+        except Exception:
+            teBonus, teReceiver = 0, None
+
         # Create perceived targets with vision-adjusted openness
         perceivedTargets = []
         for target in targetList:
@@ -15319,6 +15340,8 @@ class Play():
             perceivedOpenness = max(0, min(100, actualOpenness + visionError))
             if awakenedBonus and getattr(target['receiver'], 'id', None) in awakenedCharge:
                 perceivedOpenness = min(100, perceivedOpenness + awakenedBonus)
+            if teBonus and teReceiver is not None and target['receiver'] is teReceiver:
+                perceivedOpenness = min(100, perceivedOpenness + teBonus)
 
             perceivedTargets.append({
                 'receiver': target['receiver'],

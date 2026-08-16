@@ -2561,6 +2561,21 @@ NO_HUDDLE_PRESNAP_FLOOR = 4   # below the 8s huddle floor on purpose — that fl
 NO_HUDDLE_IQ_SPREAD = 4       # +/-2 across the clock-IQ range, half the huddle's spread
 NO_HUDDLE_JITTER = 1          # +/-1, against the huddle's +/-3
 
+# ⚠️ THE TIGHT END IS THE SECURITY BLANKET, and the menu restriction alone did not make
+# him one. Restricting to short/medium moved TE involvement only 67.2% -> 64.8% of called
+# plays, because most plays list all three receivers anyway — so which receiver the play
+# NAMES was never the lever. The lever is who the quarterback LOOKS AT.
+#
+# A perceived-openness nudge, the same mechanism `AWAKENED_RECEIVER_OPENNESS_BONUS` uses
+# to make a powered-up receiver draw the read. Sized well below it (22): this is a
+# tendency, not a compulsion, and the TE should still lose a read to a genuinely wide-open
+# receiver. It nudges the QB's PERCEPTION, so it never makes the throw safer than it is —
+# a covered TE stays covered and the ball can still be broken up.
+#
+# ⚠️ It rides on the no-huddle state only. Outside a drill the TE's share should come from
+# the playbook and the matchup, where it already does.
+NO_HUDDLE_TE_OPENNESS_BONUS = 10
+
 # ── Chess-clock timeouts ──────────────────────────────────────────────────
 # In the Chess Clock format the offense's possession budget IS its real clock,
 # and a timeout stops the pre-snap huddle drain — so a team preserves its budget
