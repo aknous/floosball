@@ -892,7 +892,7 @@ EFFECT_TOOLTIPS = {
     "avalanche": "Momentum builds with every score. Each roster TD pays more FP than the last.",
     "hedge": "Insurance policy. Tops this player up to an FP floor on a quiet week.",
     "complacency": "Put the phone down. FP that grows each week you don't touch your roster. Stacking streak cards accelerates growth.",
-    "spotlight_moment": "Lights, camera, action. FP whenever this player scores a TD. For WR, either counts.",
+    "spotlight_moment": "Lights, camera, action. FP whenever the receiver on this card scores a touchdown.",
     "ace_up_the_sleeve": "Pocket Rockets. Base FP every week, plus bonus FP when this player hits a combined stat threshold.",
     # Multiplier (QB)
     "big_deal": "Don't you know who I am? Flat FPx on your total score.",
@@ -1082,7 +1082,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "avalanche": "Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing",
     "hedge": "Tops this player up to a {floorSoloFP} FP floor if they have a quiet week.",
     "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged.",
-    "spotlight_moment": "+{rewardValue} FP when this player scores a TD. On a WR card, a TD by either of your WRs counts.",
+    "spotlight_moment": "+{rewardValue} FP when this player scores a TD",
     "ace_up_the_sleeve": "+{baseFP} FP base, +{rewardValue} bonus if this player combines for {threshold}+ {statDisplay}",
     # Multiplier (QB) — FPx
     "cornucopia": "FPx that grows as your roster scores TDs.",
@@ -1290,7 +1290,9 @@ SHARED_EFFECT_POOL = [
     "fairweather_fan", "bandwagon_express", "touchdown_jackpot",
     "odometer", "complacency", "momentum",
     # position-keyed (generic concept, adapts to card position)
-    "luminary", "squire", "spotlight_moment",
+    # NOTE: "spotlight_moment" is no longer here — it is WR-EXCLUSIVE (owner call
+    # 2026-08-16). See POSITION_EXCLUSIVE_POOLS[3].
+    "luminary", "squire",
     # cross-position
     # NOTE: "indemnity" retired in the fusion chance rework (owner call 2026-07-26) — its odds
     # grew as THIS player underperformed, the direct inverse of "clear your bar to raise your
@@ -1370,6 +1372,16 @@ POSITION_EXCLUSIVE_POOLS = {
         "custody", "tenure", "getaway", "attention", "highpoint", "custodian",
         "runback", "house_call",
         "slippery", "jailbreak",
+        # ⚠️ WR-exclusive as of 2026-08-16 (owner call), previously shared across
+        # QB/RB/WR/TE. Its detail carried a pre-fusion clause — "a TD by either of your
+        # WRs counts" — from when the fantasy roster was separate from the cards and a WR
+        # card read BOTH WR slots. The compute never did that: `_computeSpotlightMoment`
+        # has always read `_getCardPlayerStats(ctx, cardPlayerId)`, the card's own player.
+        # So only the text was wrong, and pinning the card to WR is what makes the
+        # remaining sentence mean one thing. It was also the least differentiated of four
+        # holographic TD cards — Hype Man, Mismatch and Cha-Ching all pay per TD by this
+        # player — so QB/RB/TE keep three and WR gains a card of its own.
+        "spotlight_moment",
         "ace_up_the_sleeve", "crescendo", "traverse"],
     4: ["safety_blanket", "industrious", "lead_blocker",
         "frontier", "territory", "dominion", "paydirt", "end_zone", "promised_land",
@@ -1386,7 +1398,10 @@ POSITION_EXCLUSIVE_POOLS = {
 # TD-dependent effects are dead on K (kickers never score TDs)
 POSITION_EXCLUDED_EFFECTS = {
     4: {"crescendo"},  # TE: too few TDs for escalating mechanic
-    5: {"spotlight_moment", "squire", "cha_ching", "mismatch", "double_trouble",
+    # ⚠️ This filters the SHARED pool only (see effectPoolFor), so listing a
+    # position-EXCLUSIVE effect here does nothing. "spotlight_moment" was dropped from
+    # this set when it became WR-exclusive.
+    5: {"squire", "cha_ching", "mismatch", "double_trouble",
         "traverse", "closer"},  # K: no meaningful yardage or Q4 stats
 }
 

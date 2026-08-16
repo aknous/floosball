@@ -1953,6 +1953,12 @@ def _refreshCardEffectText():
         # numbers instead of a `?`.
         "bonus_round", "chain_reaction", "updraft", "lead_blocker",
         "spotlight_moment", "bonsai", "barrage", "promised_land", "rng",
+        # ⚠️ spotlight_moment is doing double duty in this set. Its old detail carried a
+        # PRE-FUSION clause ("a TD by either of your WRs counts") describing behavior the
+        # compute never had, and the card is now WR-exclusive. Templates already minted on
+        # QB/RB/TE keep scoring — the compute reads the card's own player at any position,
+        # so they are correct, just no longer obtainable — and this refresh is what stops
+        # them describing a two-WR rule that was never real.
     }
 
     # Same FullMult → Delta synthesis buildEffectConfig does. Keep these

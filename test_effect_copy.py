@@ -89,6 +89,46 @@ class ThresholdsMustBeReachable(unittest.TestCase):
                         'threshold requires literally every other card to trigger')
 
 
+class NoPreFusionRemnants(unittest.TestCase):
+    """⚠️ CARD TEXT MUST DESCRIBE ONE PLAYER: THE ONE ON THE CARD.
+
+    Before the fusion the fantasy roster was separate from the cards, so a WR card could
+    reasonably speak about both WR slots. Spotlight Moment's detail still did —
+    "a TD by either of your WRs counts" — describing behavior `_computeSpotlightMoment`
+    never had: it has always read `_getCardPlayerStats(ctx, cardPlayerId)`.
+
+    So the compute was right and only the prose was stale, which is the hardest kind of
+    copy bug to notice: nothing misbehaves, the card just tells you it does something
+    generous that it does not.
+
+    Double Trouble is the deliberate exception and is NOT covered here. Reading both WR
+    slots is its entire premise, and it is WR-exclusive already.
+    """
+
+    def testSpotlightMomentIsWrOnly(self):
+        """Its sentence only means one thing if the card can only be a receiver."""
+        self.assertEqual(CE.effectValidPositions('spotlight_moment'), {3})
+        self.assertNotIn('spotlight_moment', CE.SHARED_EFFECT_POOL)
+
+    def testSpotlightMomentTextDoesNotSpeakAboutOtherSlots(self):
+        for text in RENDERED['spotlight_moment']:
+            for phrase in ('either', 'both', 'your WRs', 'WR card'):
+                self.assertNotIn(phrase, text,
+                                 f'pre-fusion multi-slot phrasing is back: {text}')
+
+    def testCardPlayerEffectsDoNotClaimToReadOtherSlots(self):
+        """A card that speaks about "either of your" anything is describing the roster,
+        not itself. Double Trouble is allowed; it is built that way on purpose."""
+        allowed = {'double_trouble'}
+        for eff, (detail, tooltip) in RENDERED.items():
+            if eff in allowed:
+                continue
+            for text in (detail, tooltip):
+                self.assertIsNone(
+                    re.search(r'either of your', text, re.I),
+                    f'{eff} claims to read another slot: {text}')
+
+
 class ConstantsOwnTheirNumbers(unittest.TestCase):
     """⚠️ A number the CODE decides must not be retyped into prose."""
 
