@@ -1959,6 +1959,16 @@ def _refreshCardEffectText():
         # QB/RB/TE keep scoring — the compute reads the card's own player at any position,
         # so they are correct, just no longer obtainable — and this refresh is what stops
         # them describing a two-WR rule that was never real.
+        # The stat-ladder families (2026-08-16). `threshold` is a WEEKLY BAR the card's
+        # own player must clear for the streak to survive, enforced at week end via
+        # STREAK_CONFIGS.resetCondition — and the old wording, "a streak growing X FPx
+        # per week past 32", conveyed none of that. It left the number unitless (32 what?)
+        # and "per week past N" reads as though the GROWTH is per-week rather than the
+        # bar. Same unitless-N problem one clause shorter on the holo two-tier cards.
+        # Text only; no threshold or rate moved.
+        "clockwork", "dead_eye", "dominion", "getaway", "iron_man", "landslide",
+        "odyssey", "stratosphere", "tenure", "undertaker",
+        "beast_of_burden", "custody", "rhythm",
     }
 
     # Same FullMult → Delta synthesis buildEffectConfig does. Keep these

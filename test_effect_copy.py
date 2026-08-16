@@ -129,6 +129,52 @@ class NoPreFusionRemnants(unittest.TestCase):
                     f'{eff} claims to read another slot: {text}')
 
 
+class StatLadderWording(unittest.TestCase):
+    """⚠️ A BARE NUMBER IS NOT A RULE. The stat-ladder cards used to end on one:
+    "plus a streak growing 0.03 FPx per week past 32". Thirty-two what? And "per week
+    past N" reads as though the GROWTH is per-week, when N is a weekly BAR the card's own
+    player has to clear for the streak to survive (STREAK_CONFIGS.resetCondition, checked
+    at week end). Two wrong readings from one clause.
+
+    Thirteen effects shared the phrasing, so it is pinned as a family rather than
+    individually — a fourteenth added later inherits the check.
+    """
+
+    STREAK_FAMILY = ('clockwork', 'dead_eye', 'dominion', 'getaway', 'iron_man',
+                     'landslide', 'odyssey', 'stratosphere', 'tenure', 'undertaker')
+    TWO_TIER_FAMILY = ('beast_of_burden', 'custody', 'rhythm')
+
+    def testNoBareThresholdSurvives(self):
+        """'past 32' with nothing after it. The unit has to be named."""
+        for eff in self.STREAK_FAMILY + self.TWO_TIER_FAMILY:
+            detail = RENDERED[eff][0]
+            self.assertIsNone(
+                re.search(r'past \d+\s*$', detail),
+                f'{eff} still ends on a unitless threshold: {detail}')
+            self.assertNotIn('per week past', detail,
+                             f'{eff} still reads as though the growth is per-week: {detail}')
+
+    def testEveryStreakCardSaysWhatKeepsTheStreakAlive(self):
+        for eff in self.STREAK_FAMILY:
+            detail = RENDERED[eff][0]
+            self.assertIn('Streak:', detail, f'{eff} does not label its streak clause')
+            self.assertIn('straight week', detail,
+                          f'{eff} does not say the weeks must be consecutive: {detail}')
+
+    def testTheTwoTierCardsNameTheUnitOnTheirBonusTier(self):
+        for eff in self.TWO_TIER_FAMILY:
+            detail = RENDERED[eff][0]
+            self.assertIn('in a week with', detail,
+                          f'{eff} does not say when the extra applies: {detail}')
+
+    def testNoSoccerJargon(self):
+        """'clean sheet' was carrying the Dead Eye streak condition."""
+        for eff, (detail, tooltip) in RENDERED.items():
+            for text in (detail, tooltip):
+                self.assertNotIn('clean sheet', text.lower(),
+                                 f'{eff} uses a soccer term in a football game: {text}')
+
+
 class ConstantsOwnTheirNumbers(unittest.TestCase):
     """⚠️ A number the CODE decides must not be retyped into prose."""
 
