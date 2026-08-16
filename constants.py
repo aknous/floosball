@@ -753,6 +753,62 @@ ROSTER_MIN_PLAYERS = 3
 #  3000 FP → 565 F
 WEEKLY_FP_FLOOBIT_SCALE = 1.10
 WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
+# ---- Tail knee ----
+# ⚠️ THE TAPER WAS WORKING AND THE TAIL WAS STILL RUNNING AWAY. Measured over 2,221 real
+# user-weeks (production, seasons 12+, which is post-card-rebalance): the power curve
+# compresses an FP spread of 30.7x (p50 261 FP, p99 8,006 FP) down to 14.5x in Floobits —
+# so the taper does its job — but the ABSOLUTE tail is still p99 1,219 F and a maximum of
+# 5,165 F for a single week, against a median week of 84 F. A pack costs 40-100 F, so one
+# outlier week bought 12-50 of them.
+#
+# ⚠️ SHARPENING THE EXPONENT IS THE WRONG LEVER, and it is the obvious one. The exponent
+# applies from the very first point, so it cannot touch the tail without dragging typical
+# play down with it: 0.78 -> 0.70 takes the MEDIAN week 84 F -> 54 F and total payout to
+# 56%; 0.65 takes it to 41 F and 40%. That would undo the deliberate ~2.3x lift above,
+# which exists because actually playing fantasy earned ~830 F/season against ~5k from
+# parking Floobit-output cards. The median is the number that lift was bought for.
+#
+# ⚠️ A HARD CAP IS ALSO WRONG, AND WAS ALREADY TRIED — `2bf171b` ("replace cap with log
+# curve") removed one. A cap makes every week past it pay identically, so a great week and
+# an absurd week are indistinguishable and the incentive to keep playing dies at the cap.
+# Modelled at 400 F it holds the median but flattens everything above p93 onto one value.
+#
+# So the taper gets a SECOND, harsher taper above a knee. Below the knee nothing changes
+# at all (p25/p50/p75 are identical by construction); above it each doubling of FP pays
+# 2^0.45 instead of 2^0.78. It is continuous at the knee and strictly monotonic, so a
+# bigger week always pays more — the property the cap gave up.
+#
+# Measured effect, same 2,221 user-weeks:
+#   p25/p50/p75   50 / 84 / 183 F   unchanged
+#   p90          363 -> 349 F       (-4%)
+#   p99        1,219 -> 702 F       (-42%)
+#   max        5,165 -> 1,614 F     (-69%)
+#   spread p99/p50  14.5x -> 8.4x ·  total payout 86% of current
+#
+# The knee sits just below p90 (1,696 FP), so it bites roughly the top decile of weeks and
+# leaves everything a normal player experiences alone. Lower it toward 1,000 to bite the
+# top fifth (p90 -16%, total 81%); raise it to leave more of the tail intact.
+#
+# ⚠️ THIS IS DOWNSTREAM OF CARD BALANCE. The FP tail is manufactured by FPx multipliers
+# compounding, so an overtuned card shows up here as an economy problem. Prefer fixing the
+# card (see Diversified) over steepening this; the knee is a backstop, not the cure.
+WEEKLY_FP_FLOOBIT_KNEE = 1500.0      # FP at which the second taper starts
+WEEKLY_FP_FLOOBIT_TAIL_EXPONENT = 0.45   # exponent applied to FP past the knee
+
+
+def weeklyFpFloobits(weekFp: float) -> int:
+    """Floobits for a week's fantasy points. THE single definition of the curve.
+
+    Power curve up to `WEEKLY_FP_FLOOBIT_KNEE`, then a harsher one past it. Continuous at
+    the knee (both branches agree there) and monotonic everywhere, so a bigger week is
+    always worth more.
+    """
+    if weekFp <= 0:
+        return 0
+    if weekFp <= WEEKLY_FP_FLOOBIT_KNEE:
+        return round(WEEKLY_FP_FLOOBIT_SCALE * (weekFp ** WEEKLY_FP_FLOOBIT_EXPONENT))
+    atKnee = WEEKLY_FP_FLOOBIT_SCALE * (WEEKLY_FP_FLOOBIT_KNEE ** WEEKLY_FP_FLOOBIT_EXPONENT)
+    return round(atKnee * ((weekFp / WEEKLY_FP_FLOOBIT_KNEE) ** WEEKLY_FP_FLOOBIT_TAIL_EXPONENT))
 # Endowment (income_boost powerup): a flat +25% on ANYTHING credited to the bank
 # while it's active — fantasy, pick-em, showcase + supporter dividends, etc. Applied
 # once at the choke point (CurrencyRepository.addFunds), so every income stream is

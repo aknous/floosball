@@ -9086,8 +9086,14 @@ class SeasonManager:
                 pass
 
     def _awardWeeklyFpFloobits(self, season: int, week: int) -> None:
-        """Award Floobits via the FP→F curve: scale × FP^exponent (Endowment shifts to flatter taper)."""
-        from constants import WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT
+        """Award Floobits via the FP→F curve.
+
+        The curve itself lives in `constants.weeklyFpFloobits` — a power taper with a
+        second, harsher taper past a knee, so the tail stops running away without moving
+        typical play. Endowment's +25% is NOT applied here; it rides on every income
+        stream uniformly at `addFunds`.
+        """
+        from constants import weeklyFpFloobits
 
         fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
         if not fantasyTracker:
@@ -9142,7 +9148,7 @@ class SeasonManager:
                     # up the boost here purely to stamp the notification's `boosted`
                     # flag accurately.
                     activeBoost = shopRepo.getActiveIncomeBoost(userId, season, week)
-                    base = round(WEEKLY_FP_FLOOBIT_SCALE * (weekFp ** WEEKLY_FP_FLOOBIT_EXPONENT))
+                    base = weeklyFpFloobits(weekFp)
                     prosperity = prosperityBonuses.get(userId, 0)
                     reward = int(base + prosperity)
                     if reward <= 0:
