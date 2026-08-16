@@ -1297,6 +1297,12 @@ async def get_player(player_id: int, response: Response):
                     'receiving': row.receiving_stats or {},
                     'kicking': row.kicking_stats or {},
                     'defense': row.defense_stats or {},
+                    # ⚠️ Return production was the one group this row dropped, and two
+                    # cards score off it (Runback and House Call, both on punt return
+                    # yards). Without it a profile could not show the stat its own card
+                    # is paying on. It is credited to the RETURNER, so it is a group of
+                    # its own rather than part of the kicker's line.
+                    'returning': getattr(row, 'returning_stats', None) or {},
                     # How the season went. Null for seasons that ended before
                     # the column existed — the profile shows a dash there
                     # rather than inventing a number.
