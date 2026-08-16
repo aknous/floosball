@@ -515,6 +515,174 @@ class TheCapturedFlagIsWhatGetsRead(unittest.TestCase):
         self.assertLess(hits / 1500, 0.62, 'the live state overrode the captured one')
 
 
+class TheAudible(unittest.TestCase):
+    """The offensive mirror of `_applyPreSnapRead` — the QB looks at the box and changes
+    the call, or does not.
+
+    Measured over 4,000 snaps per profile, paired on one roster set:
+
+        QB profile                   checks   good    bad   stood pat
+        sharp + disciplined (95/95)     14%     9%     5%       35%
+        sharp + gunslinger  (95/62)     39%    26%    13%        9%
+        blind + disciplined (64/95)     14%     7%     7%       36%
+        blind + gunslinger  (64/62)     39%    19%    21%       10%
+
+    Discipline drives the RATE (14% against 39%); instinct drives the SPLIT (2:1 good/bad
+    when sharp, 1:1 when blind). The trap cell is 4x bigger for a blind gunslinger than a
+    sharp disciplined QB, which is the whole design.
+
+    ⚠️ AND A GOOD CHECK IS WORTH REAL YARDS, but only measurably in one direction. Holding
+    the resulting play type fixed, over 40,000 snaps with the box driven:
+
+        checked to RUN    good 6.88   bad 6.07   diff +0.81 +/- 0.20
+        checked to PASS   good 6.22   bad 6.11   diff +0.11 +/- 0.15
+
+    Reading a light box and running is worth most of a yard; checking into the quick game
+    against a stacked box is near-neutral. Recorded rather than tuned — the plan is
+    explicit that a miscalibrated audible and a miscalibrated disguise mask each other, so
+    this waits for step 5.
+
+    ⚠️ YARDS PER PLAY ALONE CANNOT MEASURE THIS. A good check into a light box produces a
+    RUN, and runs average well under a pass, so a CORRECT read lowers raw ypp while being
+    the right call. The first measurement said a blind QB outperformed a sharp one for
+    exactly that reason.
+    """
+
+    def _game(self, instinct=80, discipline=80, runStopFocus=0.30, quarter=2, clock=600):
+        s = Scenario()
+        s.situation(quarter=quarter, clock=clock, offense='home', offScore=14, defScore=14,
+                    down=1, distance=10, ballOn=55, offTimeouts=3, defTimeouts=3)
+        g = s.game
+        g.clockRunning = True
+        qb = g.homeTeam.rosterDict['qb']
+        for holder in (qb.attributes, getattr(qb, 'gameAttributes', None)):
+            if holder is not None:
+                holder.instinct = instinct
+                holder.discipline = discipline
+        gp = g.awayDefGameplan if g.offensiveTeam is g.homeTeam else g.homeDefGameplan
+        if gp is not None:
+            gp.runStopFocus = runStopFocus
+        return s, g
+
+    def _rates(self, n=1500, **kw):
+        s, g = self._game(**kw)
+        out = {'checked': 0, 'good': 0, 'bad': 0, 'total': 0}
+        for _ in range(n):
+            s.situation(quarter=2, clock=600, offense='home', offScore=14, defScore=14,
+                        down=1, distance=10, ballOn=55, offTimeouts=3, defTimeouts=3)
+            g.clockRunning = True
+            gpx = g.awayDefGameplan if g.offensiveTeam is g.homeTeam else g.homeDefGameplan
+            if gpx is not None:
+                gpx.runStopFocus = kw.get('runStopFocus', 0.30)
+            s._newPlay()
+            g.recordTempoIntent()
+            try:
+                g.playCaller()
+            except Exception:
+                continue
+            a = g.play.insights.get('audible')
+            if not a:
+                continue
+            out['total'] += 1
+            if a.get('checked'):
+                out['checked'] += 1
+                out['good' if a['readRight'] else 'bad'] += 1
+        return out
+
+    def testDisciplineDrivesHowOftenHeChecks(self):
+        """⚠️ Willingness is `_undiscipline`, NOT `flairOf` — settled against 34 QBs,
+        where flairOf correlates +0.77 with instinct and collapses the grid."""
+        gun = self._rates(discipline=62)
+        pro = self._rates(discipline=95)
+        self.assertGreater(gun['checked'] / max(1, gun['total']),
+                           2 * pro['checked'] / max(1, pro['total']),
+                           'a gunslinger should check far more often than a pro')
+
+    def testInstinctDrivesWhetherTheCheckIsRight(self):
+        sharp = self._rates(instinct=95, discipline=62)
+        blind = self._rates(instinct=64, discipline=62)
+        sharpRatio = sharp['good'] / max(1, sharp['bad'])
+        blindRatio = blind['good'] / max(1, blind['bad'])
+        self.assertGreater(sharpRatio, blindRatio,
+                           'reading ability made no difference to check quality')
+
+    def testTheTrapCellIsRealForABoldBlindQb(self):
+        """⚠️ AN AUDIBLE MUST BE ABLE TO LOSE. A QB who never audibles is safer than one
+        who audibles badly — that is what makes this a skill rather than a bonus."""
+        blind = self._rates(instinct=64, discipline=62)
+        self.assertGreater(blind['bad'] / max(1, blind['total']), 0.10,
+                           'the bad check barely happens, so nothing is at risk')
+
+    def testTheFlagTurnsItOff(self):
+        original = constants.AUDIBLE_ENABLED
+        try:
+            constants.AUDIBLE_ENABLED = False
+            out = self._rates(discipline=62)
+            self.assertEqual(out['checked'], 0)
+        finally:
+            constants.AUDIBLE_ENABLED = original
+
+    def testNoHuddleForbidsCheckingIntoARun(self):
+        """⚠️ The tempo closed the run game; an audible must not reopen it."""
+        s, g = self._game(discipline=62, runStopFocus=0.30, quarter=4, clock=95)
+        g.homeScore, g.awayScore = 14, 21
+        checkedToRun = 0
+        for _ in range(600):
+            s.situation(quarter=4, clock=95, offense='home', offScore=14, defScore=21,
+                        down=1, distance=10, ballOn=55, offTimeouts=1, defTimeouts=3)
+            g.clockRunning = True
+            gpx = g.awayDefGameplan if g.offensiveTeam is g.homeTeam else g.homeDefGameplan
+            if gpx is not None:
+                gpx.runStopFocus = 0.30
+            s._newPlay()
+            g.recordTempoIntent()
+            if not g.play.noHuddle:
+                continue
+            try:
+                g.playCaller()
+            except Exception:
+                continue
+            a = g.play.insights.get('audible') or {}
+            if a.get('checked') and a.get('to') == 'run':
+                checkedToRun += 1
+        self.assertEqual(checkedToRun, 0, 'an audible reopened the run game in no-huddle')
+
+    def testACheckNamesTheQuarterbackInTheFeed(self):
+        s, g = self._game(discipline=62)
+        for _ in range(400):
+            s.situation(quarter=2, clock=600, offense='home', offScore=14, defScore=14,
+                        down=1, distance=10, ballOn=55, offTimeouts=3, defTimeouts=3)
+            g.clockRunning = True
+            s._newPlay()
+            g.recordTempoIntent()
+            try:
+                g.playCaller()
+            except Exception:
+                continue
+            a = g.play.insights.get('audible') or {}
+            if a.get('checked'):
+                self.assertTrue(getattr(g.play, 'audibleText', None))
+                out = g._prependPreSnapBeat('Run for 4 yards.')
+                self.assertIn('audible', out.lower())
+                self.assertIn(g.offensiveTeam.rosterDict['qb'].name, out)
+                return
+        self.skipTest('no check occurred in 400 snaps')
+
+    def testUndisciplineIsCalledOnThePlayNotTheGame(self):
+        """⚠️ `_undiscipline` lives on Play. Calling it on Game raised on every snap and
+        made the whole layer silently absent — the same class-boundary slip that made
+        `calculateSackProbability` look missing earlier this session."""
+        import floosball_game as _fg
+        self.assertTrue(hasattr(_fg.Play, '_undiscipline'))
+        self.assertFalse(hasattr(_fg.Game, '_undiscipline'))
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'floosball_game.py')) as fh:
+            src = fh.read()
+        start = src.index('def _maybeAudible')
+        body = src[start:src.index('\n    def ', start + 10)]
+        self.assertIn('self.play._undiscipline(', body)
+
+
 class TheDocumentedTraps(unittest.TestCase):
     def testClassifyTempoIntentStillReturnsATwoTuple(self):
         """⚠️ Three sites unpack this, including `_lastSnapBeforeBreak`'s chess-clock

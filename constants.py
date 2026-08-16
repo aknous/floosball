@@ -503,6 +503,36 @@ PRESNAP_CONCEPT_DISGUISE = {'draw': 0.24}
 # tells the defense what is coming, so the defense SHOULD net a gain — that gain is the
 # price of the extra snaps.
 NO_HUDDLE_TELEGRAPH = 0.28
+
+# ── Audibles ──────────────────────────────────────────────────────────────
+# ⚠️ THE OFFENSIVE MIRROR OF `_applyPreSnapRead`. The defense has committed run-or-pass
+# before the snap since the pre-snap recognition layer shipped; the offense had no
+# equivalent. Every deception in this sim is an offensive EXECUTION roll against the
+# defense's standing numbers, and nothing let the quarterback look at what he sees and
+# change it.
+#
+# What he reads is the box: `runStopFocus`, the defense's own run-vs-pass tilt, which
+# measures 0.26-0.73 across generated defenses with a median near 0.46.
+AUDIBLE_ENABLED = True
+AUDIBLE_BOX_STACKED = 0.55        # above this the box is sold on the run; below, it is light
+# Accuracy of the read. 0.5 would be a coin flip; a league-average QB should be better than
+# that at simply seeing a stacked box, so the base sits above it and skill moves it.
+AUDIBLE_READ_BASE = 0.62
+AUDIBLE_READ_SKILL = 0.30         # swing across the attribute range
+# ⚠️ THE QB DOMINATES, and that asymmetry is the point. The defense's read is coach 60 /
+# players 40 (he installed the checks and the LB/S execute); the audible is the one place
+# in the sim where the PLAYER, not the coach, makes the call.
+AUDIBLE_QB_WEIGHT = 0.70
+AUDIBLE_COACH_WEIGHT = 0.30
+# ⚠️ WILLINGNESS IS `_undiscipline`, NOT `flairOf` (settled 2026-08-16 against 34 QBs).
+# Every QB mental attribute correlates 0.65-0.77 with every other, and `flairOf` sits at
+# +0.77 with `instinct` — so using it collapses the 2x2 onto its diagonal and the mind
+# game degenerates into a rating check. Discipline correlates only +0.42 AND in the
+# helpful direction: willingness is LOW discipline, so it runs NEGATIVELY against reading
+# ability. Sharp QBs are disciplined and stand pat; blind QBs are gunslingers and check
+# anyway. Measured, that takes the trap cell (bold + blind) from 6% of QBs to 26%.
+AUDIBLE_WILLINGNESS_BASE = 0.30   # a fully disciplined QB still checks sometimes
+AUDIBLE_WILLINGNESS_SWING = 0.55  # a gunslinger checks far more often
 # Scaled by how well this back sells it (_runConceptExecQ, deterministic from
 # attributes): a shifty, cerebral back disguises a draw; a plodder telegraphs it.
 # Range is this floor to 1.0 of the nominal value above.

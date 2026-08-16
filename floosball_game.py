@@ -4152,6 +4152,103 @@ class Game:
                 weights[tier] = weights.get(tier, 0) * AWAKENED_PLAYCALL_PASS_BIAS
         return weights
 
+    def _maybeAudible(self, playCall: str) -> str:
+        """The QB looks at the box and changes the call, or does not.
+
+        ⚠️ THE OFFENSIVE MIRROR OF `_applyPreSnapRead`. The defense has committed
+        run-or-pass before the snap since the pre-snap recognition layer shipped, and the
+        offense had no equivalent — every other deception in this sim is an offensive
+        EXECUTION roll against the defense's standing numbers, and nothing let the
+        quarterback look at what he sees and change it.
+
+        THREE OUTCOMES, not two:
+          * good check — he reads the box right and flips into its weakness;
+          * no check   — he does not see it, or will not pull the trigger;
+          * bad check  — he reads it WRONG and flips into its strength.
+
+        ⚠️ AN AUDIBLE MUST BE ABLE TO LOSE, or it is a bonus rather than a skill. The bad
+        check is the whole reason `instinct` matters: a QB who never audibles is safer
+        than one who audibles badly.
+
+        ⚠️ THE FLIP CARRIES ITS OWN CONSEQUENCE — no new multiplier. `runStopFocus` already
+        tilts run defense against pass defense, so running into a light box is genuinely
+        good and throwing into a coverage shell is genuinely bad. Adding a bonus on top
+        would pay the read twice.
+
+        ⚠️ WILLINGNESS IS `_undiscipline`, NOT `flairOf`. Measured over 34 production QBs,
+        every mental attribute correlates 0.65-0.77 with every other and `flairOf` sits at
+        +0.77 with `instinct` — so it collapses the 2x2 onto its diagonal and the mind game
+        becomes a rating check. Discipline correlates only +0.42 and in the useful
+        direction: willingness is LOW discipline, which runs negatively against reading
+        ability, so the trap cell goes from 6% of QBs to 26%.
+        """
+        from constants import (AUDIBLE_ENABLED, AUDIBLE_BOX_STACKED, AUDIBLE_READ_BASE,
+                               AUDIBLE_READ_SKILL, AUDIBLE_QB_WEIGHT, AUDIBLE_COACH_WEIGHT,
+                               AUDIBLE_WILLINGNESS_BASE, AUDIBLE_WILLINGNESS_SWING,
+                               COACH_ATTR_NEUTRAL)
+        if not AUDIBLE_ENABLED:
+            return playCall
+        qb = self.offensiveTeam.rosterDict.get('qb')
+        if qb is None:
+            return playCall
+
+        isHome = self.offensiveTeam is self.homeTeam
+        defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
+        if defGp is None:
+            return playCall
+        runFocus = getattr(defGp, 'runStopFocus', 0.5)
+
+        # ── Can he see it? QB first, coach second — the inverse of the defense's read,
+        # and that asymmetry is deliberate: this is the one call the PLAYER makes.
+        a = getattr(qb, 'gameAttributes', None) or qb.attributes
+        qbQ = (getattr(a, 'instinct', 80) * 0.6 + getattr(a, 'focus', 80) * 0.4)
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        coachQ = getattr(coach, 'offensiveMind', COACH_ATTR_NEUTRAL) if coach else COACH_ATTR_NEUTRAL
+        skill = (((qbQ - 80) / 20.0) * AUDIBLE_QB_WEIGHT
+                 + ((coachQ - 80) / 20.0) * AUDIBLE_COACH_WEIGHT)
+        accuracy = AUDIBLE_READ_BASE + AUDIBLE_READ_SKILL * max(-1.0, min(1.0, skill))
+
+        boxStacked = runFocus >= AUDIBLE_BOX_STACKED
+        readRight = _random.random() < max(0.05, min(0.95, accuracy))
+        perceivedStacked = boxStacked if readRight else (not boxStacked)
+
+        # ── Is the call already right for what he thinks he sees? Then there is nothing
+        # to check out of, and a QB who likes his call keeps it.
+        callIsRun = (playCall == 'run')
+        wantsRun = not perceivedStacked
+        if callIsRun == wantsRun:
+            return playCall
+
+        # ── Will he pull the trigger?
+        # ⚠️ `_undiscipline` is a Play method, not a Game one — the same class-boundary
+        # slip that made `calculateSackProbability` look missing earlier.
+        undis = self.play._undiscipline(qb)
+        willing = AUDIBLE_WILLINGNESS_BASE + AUDIBLE_WILLINGNESS_SWING * undis
+        if _random.random() >= willing:
+            self.play.insights['audible'] = {'checked': False, 'sawStacked': perceivedStacked,
+                                             'readRight': readRight}
+            return playCall
+
+        # ── The check. In no-huddle he cannot check INTO a run — there is no run in the
+        # menu at all, and an audible must not reopen what the tempo closed.
+        if wantsRun:
+            if getattr(self.play, 'noHuddle', False) or self._isNoHuddle():
+                self.play.insights['audible'] = {'checked': False, 'blockedByTempo': True,
+                                                 'readRight': readRight}
+                return playCall
+            newCall = 'run'
+        else:
+            # Out of a run and into the quick game — the throw a stacked box invites.
+            newCall = 'short' if _random.random() < 0.6 else 'medium'
+
+        self.play.audibleText = f"{qb.name} calls an audible!"
+        self.play.insights['audible'] = {
+            'checked': True, 'from': playCall, 'to': newCall,
+            'readRight': readRight, 'sawStacked': perceivedStacked,
+            'boxStacked': boxStacked, 'runStopFocus': round(runFocus, 3),
+        }
+        return newCall
+
     def _executeWeightedPlay(self, weights: dict, targetSideline: bool = False):
         """Sample from the weight distribution and execute the chosen play."""
         playCall = _random.choices(
@@ -4159,6 +4256,8 @@ class Game:
             weights=[weights['run'], weights['short'], weights['medium'],
                      weights['long'], weights.get('deep', 0)]
         )[0]
+
+        playCall = self._maybeAudible(playCall)
 
         self.play.insights['playCall'] = playCall
         # Reset per-play RPO / trick state (set only by _executeRpo / _executeTrickPlay).
