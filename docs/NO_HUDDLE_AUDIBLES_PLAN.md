@@ -253,9 +253,118 @@ Flags: `NO_HUDDLE_ENABLED`, `AUDIBLE_ENABLED`, `DEFENSIVE_DISGUISE_ENABLED`, eac
 
 ## Open questions (owner)
 
-1. **Does a bad QB decline to audible, or audible badly?** Declining is safer and more realistic; audibling badly is more fun and gives `xFactor` somewhere to hurt. Current lean: **both**, split by `instinct` (sees it or not) vs `flairOf` (acts on it or not) — a bold QB who cannot read is the interesting failure case.
-2. **Should no-huddle be available OUTSIDE a two-minute drill?** Real offenses use it as a tempo weapon on any down. The clock-driven trigger says no. A `hurryUp`-only rule is simpler and matches the reported need; a coach-preference version is a later layer and would need its own attribute.
-3. **Does the defense get to substitute?** Real no-huddle's edge is that it prevents defensive personnel changes. The sim has no personnel packages, so there is nothing to model — noting it so it is not mistaken for an oversight.
-4. ~~**Should a disguise be visible to the READER even when it fools the QB?**~~ **SETTLED by Part 4:** the pre-snap line reports what the QB SEES (the lie included) and the play text reveals the truth. The reader is fooled alongside him and learns with him.
-5. **Can the offense bait too?** A QB who reads a disguise could hard-count to make the defense declare. That is a fourth layer and almost certainly a step too far — noting it so it is a deliberate omission rather than an oversight.
-6. **Fatigue.** No-huddle should tire the offense faster. The sim has a fatigue model applied pre-game; a within-game tempo cost is a separate piece of work and is out of scope here.
+All settled 2026-08-16, against measurements taken on the production roster (34 active
+QBs) and a 1,620-sample sweep of the tempo classifier's state space.
+
+### 1. Does a bad QB decline to audible, or audible badly? — **SETTLED: both, and the
+willingness term is `_undiscipline`, NOT `flairOf`**
+
+⚠️ **`flairOf` COLLAPSES THE GRID, because willingness and reading ability are the same
+axis in this league.** Measured correlation with `instinct` across 34 QBs:
+
+| candidate willingness term | r with `instinct` |
+|---|---|
+| `flairOf` (creativity + xFactor) | **+0.77** |
+| focus | +0.74 |
+| creativity | +0.74 |
+| xFactor | +0.65 |
+| `discipline` | **+0.42** |
+
+Every QB mental attribute correlates 0.65-0.77 with every other, because generation makes
+good players good at everything. So the 2x2 the design depends on lands almost entirely on
+its diagonal, and the mind game degenerates into a rating check — good QBs audible well,
+bad QBs do not audible.
+
+The resulting grids, same 34 QBs, split at the median of each term:
+
+| cell | willingness = `flairOf` | willingness = LOW discipline |
+|---|---|---|
+| bold + sharp | 44% | 24% |
+| **bold + blind — THE TRAP** | **6%** | **26%** |
+| cautious + sharp | 9% | 29% |
+| cautious + blind | 41% | 21% |
+
+⚠️ **The direction is why this works, not merely the weaker correlation.** Willingness is
+LOW discipline, and discipline correlates *positively* with instinct — so willingness
+correlates NEGATIVELY with reading ability. Sharp QBs tend to be disciplined and stand pat;
+blind QBs tend to be gunslingers and check anyway. The trap becomes a common outcome
+rather than a 6% rarity, and all four cells are populated.
+
+**Use the existing `_undiscipline`** (`floosball_game.py`, `(80 - discipline) / 20` clamped
+0..1). Its docstring already describes this exact job — *"0 (controlled) .. 1 (gunslinger).
+The gate that turns confidence into either production or chaos."* No new helper, and no
+inversion of the attribute's meaning: it is already the sim's will-do-something-risky term,
+carried by runner moves as the risk of attempting.
+
+⚠️ **`flairOf` is therefore NOT the audible's willingness gate.** If creativity/xFactor
+should still consume here, put them on the QUALITY of a good check rather than on whether
+he pulls the trigger — otherwise they re-introduce the correlation through the back door.
+
+### 2. Should no-huddle be available OUTSIDE a two-minute drill? — **SETTLED: no, keep the clock trigger**
+
+Measured over 1,620 sampled game states:
+
+| quarter | hurryUp | burnClock | neutral |
+|---|---|---|---|
+| Q1 | **0.0%** | 0.0% | 100% |
+| Q2 | 13.3% | 0.0% | 86.7% |
+| Q3 | 14.8% | 3.7% | 81.5% |
+| Q4 | 14.8% | 29.6% | 55.6% |
+| all | **10.7%** | 8.3% | 80.9% |
+
+⚠️ That is STATE-SPACE coverage, not play coverage — real games do not spend equal time in
+every cell, and since Q1 is 0% the true play share is likely LOWER than 10.7%.
+
+⚠️ **Only Part 1 lives in that window.** Audibles and defensive disguise are not gated on
+no-huddle; they fire on every snap. So the narrow window bounds the tempo feature, not the
+system. Part 1 is also the cheapest piece (see the build note on `_lastSnapBeforeBreak`
+below) and the most legible thing in real football, so it does not need to carry the rest.
+A coach-preference version needs its own attribute and is tuning surface for a marginal
+gain.
+
+### 3. Does the defense get to substitute? — **SETTLED: nothing to model**
+
+Re-confirmed 2026-08-16. No personnel packages exist. Deliberate omission, not an oversight.
+
+### 4. ~~Should a disguise be visible to the READER even when it fools the QB?~~ — **SETTLED by Part 4**
+
+The pre-snap line reports what the QB SEES (the lie included) and the play text reveals the
+truth. The reader is fooled alongside him and learns with him.
+
+### 5. Can the offense bait too (hard count)? — **SETTLED: no**
+
+Four layers already resolve before the snap, and the plan's own over-engineering warning
+applies hardest here (the run gate model took seven tuning passes; its first build ran ypc
+to 9.61). A fifth reciprocal layer buys a rare moment for real calibration risk. Deliberate
+omission.
+
+### 6. Fatigue — **SETTLED: out of scope, structurally**
+
+⚠️ Not a scoping preference. Fatigue is applied ONCE pre-game from a season-accumulated
+value and never mutates during a game, so there is no within-game fatigue state for a tempo
+cost to attach to. Adding one is a separate subsystem.
+
+---
+
+## ⚠️ Build notes added 2026-08-16 (the code moved after this plan was written)
+
+Verified against `floosball_game.py`: all nine hooks named above still exist.
+
+**Item 6 of Part 1 is HALF BUILT.** The chess-clock fix (2026-08-13) already made
+`_lastSnapBeforeBreak` tempo-aware — but only in its chess-clock branch, which reads
+`_intent, huddle = self._classifyTempoIntent()` and charges that huddle. The
+standard-format branch still charges a flat `LAST_SNAP_HUDDLE_SECS` (12) regardless of
+tempo. So the pattern to copy is already in the file, and the remaining work is one branch.
+
+**⚠️ DO NOT change `_classifyTempoIntent`'s return arity.** Three sites unpack it as a
+2-tuple, including that chess-clock branch, which was written after this plan. The
+no-huddle state is derivable anyway (hurry-up AND the clock did not stop), so it wants a
+separate `_isNoHuddle()` helper rather than a fourth intent or a changed signature — and
+that gives the menu restriction, the disguise penalty and the snap cost one thing to read.
+
+**⚠️ The measurement harness this plan leans on is GONE.** Part 1's measure cites
+`scratchpad/q2_tempo.py`; scratchpads are session-scoped and no `simcheck_*tempo*` survives
+in the repo. Since step 3 is the balance gate (*"if no-huddle yards per play is not
+measurably LOWER, the drill is a free win"*), rebuild the probe as part of step 1 rather
+than discovering it missing at step 3. `scenario.py` is the right instrument — it builds a
+real `Game` in a target state and was used for the tempo sweep above.
