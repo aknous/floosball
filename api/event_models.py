@@ -511,11 +511,20 @@ class CurrencyEvent:
 
     @staticmethod
     def received(amount: int, transactionType: str, description: Optional[str],
-                 balanceAfter: int, season: Optional[int], week: Optional[int]) -> Dict[str, Any]:
+                 balanceAfter: int, season: Optional[int], week: Optional[int],
+                 boostBonus: int = 0) -> Dict[str, Any]:
         """Sent to a specific user when they receive a passive Floobits grant.
 
         Excludes user-initiated grants (no surprise factor) and achievement
-        grants (which already trigger their own toast)."""
+        grants (which already trigger their own toast).
+
+        ⚠️ `boostBonus` is how much of `amount` came from an active Endowment, as its own
+        number. It is ALSO written into `description` as a trailing "(+N Endowment)", but
+        that suffix is the ledger record and is not readable by the client: the toast
+        clips the description to roughly 19 characters, and the tag is always last. A
+        client that has to find the boost by parsing prose will get it wrong; hand it the
+        number. 0 means no boost was applied, which is a fact worth sending rather than
+        an absence to infer."""
         return {
             'event': EventType.FLOOBITS_RECEIVED.value,
             'timestamp': datetime.now().isoformat(),
@@ -525,6 +534,7 @@ class CurrencyEvent:
             'balanceAfter': balanceAfter,
             'season': season,
             'week': week,
+            'boostBonus': int(boostBonus or 0),
         }
 
 

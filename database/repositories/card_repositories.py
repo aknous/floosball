@@ -349,6 +349,28 @@ class CurrencyRepository:
         # go through refundFunds/spendFunds and never reach here). The boost is folded
         # into `amount` so the balance, the logged tx, the achievement hooks and the
         # toast all reflect the boosted value.
+        #
+        # ⚠️ THE BONUS IS ALSO RETURNED AS ITS OWN NUMBER, not only as a suffix on the
+        # description. The suffix is the LEDGER record — it belongs on the transaction row,
+        # where the full string is read. It is NOT a display channel: the toast renders the
+        # description on one clipped line about 19 characters wide (Press Start 2P is a
+        # full-em pixel font), and the tag is appended at the END of every description, so
+        # it was clipped in 100% of real grants. Reported by a user who claimed a boosted
+        # supporter dividend and saw nothing saying it had been boosted, and reasonably
+        # concluded the powerup might not be firing at all. It was: production shows
+        # `supporter_dividend ... 'Supporter dividend claimed (+38 Endowment)'`.
+        #
+        # ⚠️ Do NOT fix this by shortening the description — that trades the ledger's
+        # legibility for a display constraint, and the next description to grow past the
+        # window puts the bug straight back. The client should be handed the fact.
+        #
+        # So the two channels are kept separate: the LEDGER row gets the prose with the
+        # suffix (`description`), the WIRE gets the prose without it plus the number
+        # (`plainDescription` + `boostBonus`). Sending both the suffix and the field would
+        # print the boost twice in the toast, and stripping the suffix on the client means
+        # parsing prose to recover a number the server already had.
+        boostBonus = 0
+        plainDescription = description
         if amount > 0 and season and week:
             try:
                 from constants import INCOME_BOOST_MULTIPLIER
@@ -356,10 +378,10 @@ class CurrencyRepository:
                 if ShopPurchaseRepository(self.session).getActiveIncomeBoost(userId, season, week):
                     boosted = round(amount * INCOME_BOOST_MULTIPLIER)
                     if boosted > amount:
-                        bonus = boosted - amount
+                        boostBonus = boosted - amount
                         amount = boosted
-                        description = (f"{description} (+{bonus} Endowment)"
-                                       if description else f"+{bonus} Endowment")
+                        description = (f"{description} (+{boostBonus} Endowment)"
+                                       if description else f"+{boostBonus} Endowment")
             except Exception:
                 pass  # never break a credit over the boost check
 
@@ -398,10 +420,11 @@ class CurrencyRepository:
                 event = CurrencyEvent.received(
                     amount=amount,
                     transactionType=transactionType,
-                    description=description,
+                    description=plainDescription,
                     balanceAfter=int(currency.balance),
                     season=season,
                     week=week,
+                    boostBonus=boostBonus,
                 )
                 broadcaster.broadcast_to_user_sync(userId, event)
             except Exception:
