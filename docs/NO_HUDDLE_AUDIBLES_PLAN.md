@@ -267,6 +267,56 @@ no-huddle" six times. Needs a latch cleared on possession change and on leaving 
 first no-huddle snap (since no-huddle announces once), but the rule has to exist: an
 audible is the more significant event, and the cadence rule is one line per snap.
 
+## ⚠️ Measuring this at all — four defects, found the hard way (2026-08-16)
+
+The step 3 gate took FOUR attempts. Every one of the first three gave a confident,
+wrong answer, and each failed differently. Any future measurement here must clear all
+four or it is measuring something else.
+
+1. **The harness had no team defense.** `scenario.py` builds teams by hand and never
+   called `deriveDefenseFromRoster`, so `defensePassCoverageRating` was **0** against a
+   real 71-81. Zone coverage blends `individualCoverage * 0.4 + effectivePassDef * 0.6`,
+   so **60% of the coverage a receiver faced was zero** and receivers were permanently
+   wide open. Fixed in `scenario.py`. ⚠️ It also produced a false conclusion that
+   `runStopFocus` "stops the run but does not open the pass" — it is symmetric
+   (-1.78 ypc against +1.60 ypp), and nothing needed changing.
+2. **Arms built their own rosters**, so they compared TEAMS rather than tempos.
+   Run-to-run spread was 0.6-0.9 ypp against an effect of 0.4.
+3. **Only yards per play was measured.** The menu restriction removes RUNS, which
+   average below passes, so restricting mechanically RAISES ypp regardless of whether
+   the drill got harder. Explosive-play rate is the metric that actually moves.
+4. **⚠️ ARMS RAN IN BLOCKS.** Player state drifts across a long run, so whichever arm
+   went LAST looked better. Reversing the arm order flipped the telegraph's measured
+   effect from **+0.183 to -0.343** — which is how this was caught, and it is the one
+   that would have gone unnoticed.
+
+**The design that survives:** one roster, arms ROTATED EVERY SNAP so drift lands on all
+three equally, differences taken WITHIN a roster, averaged across a dozen rosters, and
+at least one metric the restriction cannot game.
+
+### The result
+
+12 rosters x 4,200 interleaved snaps:
+
+| comparison | ypp | 20+ rate |
+|---|---|---|
+| no-huddle, no telegraph, vs huddling | **-0.204 +/- 0.070** | **-1.08% +/- 0.21%** |
+| no-huddle + telegraph, vs huddling | -0.165 +/- 0.074 | -0.98% +/- 0.19% |
+| **what the telegraph itself costs** | **+0.039 +/- 0.081** | +0.11% +/- 0.14% |
+
+⚠️ **THE GATE PASSES, BUT NOT ON THE MECHANISM BUILT FOR IT.** The MENU RESTRICTION is
+doing all of the work; the telegraph contributes nothing distinguishable from zero.
+
+It is not that the telegraph fails to fire — instrumented, it moves read accuracy
+**46% -> 76%** and `passDefMult` **1.066 -> 1.092** exactly as designed. That swing is
+simply too small to matter: at the measured elasticity it is worth about -0.14 ypp,
+which sits inside the noise floor. The binding constraint is `PRESNAP_READ_EDGE`
+(**0.09**), deliberately small because that layer is a zero-sum redistribution for the
+whole sim.
+
+So charging more for predictability needs its own lever rather than a bigger disguise
+number — `NO_HUDDLE_TELEGRAPH` is already near the accuracy clamp. Owner call.
+
 ## Measurement
 
 The clock work this week established the pattern: a **low-variance targeted probe** beats a noisy aggregate. Per-arm, before/after:
