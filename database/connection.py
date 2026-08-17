@@ -977,6 +977,27 @@ def _runPendingMigrations():
         # tenure pressure read off that would blame a new GM for a predecessor's drought.
         # Existing rows seed from the career count, exact for anyone who has only ever had
         # one job — true of every coach in production when this landed.
+        # ⚠️ Sentiment ratings carry the season they were cast, so an old verdict decays
+        # toward neutral instead of counting forever at full strength. Existing rows are
+        # stamped with the CURRENT season — dating them 0 would decay every rating in the
+        # league to the floor on the first boot after this ships, silently wiping the
+        # standing of every player and GM fans have actually rated.
+        try:
+            cur = conn.execute(text(
+                "SELECT COALESCE((SELECT current_season FROM simulation_state ORDER BY id LIMIT 1),"
+                " (SELECT MAX(season_number) FROM seasons), 1)")).scalar() or 1
+            for tbl in ("player_sentiment_ratings", "coach_sentiment_votes"):
+                try:
+                    conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN season INTEGER DEFAULT 0"))
+                    conn.execute(text(f"UPDATE {tbl} SET season = :s WHERE COALESCE(season, 0) = 0"),
+                                 {"s": int(cur)})
+                except Exception:
+                    pass
+            conn.commit()
+            logger.info(f"  Migration: added season to sentiment ratings (seeded {cur})")
+        except Exception:
+            conn.rollback()
+
         try:
             conn.execute(text("ALTER TABLE coaches ADD COLUMN seasons_with_team INTEGER DEFAULT 0"))
             conn.execute(text("UPDATE coaches SET seasons_with_team = COALESCE(seasons_coached, 0)"))

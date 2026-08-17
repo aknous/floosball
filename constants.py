@@ -1780,6 +1780,20 @@ FEED_AUTOPOST_BY_RATING = {5: 1, 4: 1, 3: None, 2: -1, 1: -1}
 # floor. A GM is rated by the club's fans, so the same "a small club must still
 # be able to speak" argument applies verbatim; see SENTIMENT_MIN_RATERS.
 # (Kept as its own name so a GM-specific floor stays possible later.)
+# ⚠️ A RATING GOES STALE. A fan casts one standing opinion per subject and can change it
+# whenever they like, but nothing ever expired it — a 1-star cast in season 1 counted at
+# full weight in season 5, against a GM who had since won two titles. Each season of age
+# shrinks a rating's pull TOWARD NEUTRAL; re-rating restores it to full.
+#
+# ⚠️ IT SHRINKS THE DEVIATION, NOT THE WEIGHT IN AN AVERAGE. A weighted mean over voters
+# who are all equally stale is identical to the plain mean — the weights cancel and decay
+# does nothing. So each vote's normalized sentiment is scaled individually and the mean is
+# taken over the RATER COUNT, which is what actually pulls an aged verdict back to 0.
+SENTIMENT_DECAY_PER_SEASON = 0.6
+# Never all the way to nothing: a fan who felt strongly and never came back still counts
+# for something, and a hard 0 would make old clubs read as unanimously indifferent.
+SENTIMENT_DECAY_FLOOR = 0.15
+
 GM_SENTIMENT_MIN_VOTERS = 1
 
 # ---- GM turnover: fired / retire / leave (AFO plan Part C) ----

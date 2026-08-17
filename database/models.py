@@ -2148,7 +2148,10 @@ class PlayerSentimentRating(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
-    rating: Mapped[int] = mapped_column(Integer, nullable=False)   # 1..5
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Season this rating was last cast. Sentiment decays toward neutral with its
+    # age, so re-rating refreshes a fan's verdict rather than merely replacing it.
+    season: Mapped[int] = mapped_column(Integer, default=0, nullable=False)   # 1..5
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -2186,6 +2189,9 @@ class CoachSentimentVote(Base):
     coach_id: Mapped[int] = mapped_column(Integer, ForeignKey("coaches.id"), nullable=False)
     # 1-5, same scale as players
     rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Season this rating was last cast. Sentiment decays toward neutral with its
+    # age, so re-rating refreshes a fan's verdict rather than merely replacing it.
+    season: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
