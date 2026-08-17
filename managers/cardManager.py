@@ -2487,8 +2487,7 @@ class CardManager:
         purchased flag and the daily refresh all reuse the existing plumbing.
         """
         from database.models import FeaturedShopCard
-        from datetime import datetime, timedelta
-        from constants import DAILY_RESET_HOUR_UTC
+        from datetime import datetime
 
         rows = (
             session.query(FeaturedShopCard)
@@ -2497,13 +2496,14 @@ class CardManager:
             .all()
         )
 
-        # Daily refresh, anchored to the same reset hour the fantasy shop uses.
+        # ⚠️ NO DAILY REFRESH HERE EITHER (owner, 2026-08-16) — the collection shelf keeps
+        # whatever it is showing until the user rerolls, for the same reason the fantasy
+        # slate does: a shelf that rotates on its own cannot be saved toward. The reroll
+        # deletes every unpurchased `FeaturedShopCard` for the season regardless of `kind`,
+        # so this shelf is restocked by the same (first-of-day free) reroll.
         now = datetime.utcnow()
-        resetToday = now.replace(hour=DAILY_RESET_HOUR_UTC, minute=0, second=0, microsecond=0)
-        lastReset = resetToday if now >= resetToday else resetToday - timedelta(days=1)
-        stale = any((r.generated_at or datetime.min) < lastReset for r in rows)
 
-        if not rows or stale:
+        if not rows:
             session.query(FeaturedShopCard).filter_by(
                 user_id=userId, season=currentSeason, kind='collection',
                 purchased=False,
@@ -2576,8 +2576,7 @@ class CardManager:
         """
         from database.models import FeaturedShopCard, CardTemplate
         from database.repositories.card_repositories import CardTemplateRepository
-        from datetime import datetime, date, timedelta
-        from constants import SWAP_CYCLE_WEEKS, DAILY_RESET_HOUR_UTC
+        from datetime import datetime, date
 
         # Check for existing selection
         existing = (
@@ -2586,23 +2585,20 @@ class CardManager:
             .all()
         )
 
-        # ── Daily refresh check ──
+        # ⚠️ THE SLATE DOES NOT REPOPULATE ON ITS OWN (owner, 2026-08-16). It used to
+        # refresh every day (scheduled mode) or every 7-week cycle (otherwise), which meant
+        # a user saving up for a specific single would find it simply gone the next
+        # morning — reported as the shop "making the card they're trying to buy disappear".
+        # Saving toward a card only works if the card is still there when you have the
+        # Floobits, so the slate now persists until the USER changes it: a reroll
+        # (`forceRegenerate`, and the first one each day is free — see
+        # `constants.shopRerollCost`) or a new season, since these rows are season-scoped.
+        #
+        # ⚠️ Do not "fix" the resulting empty shelf by reinstating a refresh. Buying a card
+        # marks its row purchased, so the shelf legitimately shrinks as it is bought out,
+        # and the free daily reroll is what restocks it. An automatic top-up would put the
+        # disappearing-card bug straight back.
         needsRefresh = False
-        if existing and currentWeek > 0:
-            sampleRow = existing[0]
-            if sampleRow.generated_at is not None:
-                if isScheduledMode:
-                    # Refresh if generated before the most recent daily reset boundary
-                    now = datetime.utcnow()
-                    todayReset = now.replace(hour=DAILY_RESET_HOUR_UTC, minute=0, second=0, microsecond=0)
-                    boundary = todayReset if now >= todayReset else todayReset - timedelta(days=1)
-                    needsRefresh = sampleRow.generated_at < boundary
-                else:
-                    # Refresh if generated in a previous 7-week cycle
-                    currentCycle = (currentWeek - 1) // SWAP_CYCLE_WEEKS + 1
-                    genWeek = sampleRow.generated_at_week or 0
-                    genCycle = (genWeek - 1) // SWAP_CYCLE_WEEKS + 1 if genWeek > 0 else 0
-                    needsRefresh = currentCycle > genCycle
 
         if needsRefresh:
             # Delete unpurchased and regenerate

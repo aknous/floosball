@@ -2864,6 +2864,27 @@ POWERUP_CATALOG = {
 # Shop reroll (not a powerup — lives in the Daily Selection section)
 SHOP_REROLL_BASE_COST = 10
 SHOP_REROLL_COST_INCREMENT = 5   # Each reroll costs 5 more than the last
+SHOP_REROLL_FREE_PER_DAY = 1     # the first reroll of each shop day costs nothing
+
+
+def shopRerollCost(rerollCount: int) -> int:
+    """Cost of the NEXT featured-card reroll, given how many have been used today.
+
+    ⚠️ THE FIRST REROLL OF THE DAY IS FREE, AND IT IS THE REPLACEMENT FOR THE DAILY
+    AUTO-REFRESH, not a bonus on top of it. The shop used to repopulate its card slate on
+    its own every day, which meant a user saving up for a specific single would find it
+    simply gone the next morning — reported as the shop "making the card they're trying to
+    buy disappear". The slate now persists until the user chooses to change it, and the
+    free reroll is what lets them change it without paying to undo an unwanted refresh.
+
+    The paid ladder is unchanged, just shifted one place right: free, then 10, 15, 20 ...
+    So a user who rerolls once a day never pays, and someone churning the shelf inside a
+    single day pays exactly what they used to from their second roll on.
+    """
+    paid = max(0, rerollCount - SHOP_REROLL_FREE_PER_DAY)
+    if rerollCount < SHOP_REROLL_FREE_PER_DAY:
+        return 0
+    return SHOP_REROLL_BASE_COST + paid * SHOP_REROLL_COST_INCREMENT
 
 # Themed pack rotation reroll — pricier than the featured-card reroll because
 # the rotation pool includes the higher pack tiers. Rerolling for a premium pack

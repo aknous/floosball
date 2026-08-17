@@ -10992,7 +10992,7 @@ def getRerollCost(user: _User = Depends(_getCurrentUser)):
     """Get the current reroll cost (escalates with each reroll today)."""
     from database.connection import get_session
     from database.repositories.shop_repository import ShopPurchaseRepository
-    from constants import SHOP_REROLL_BASE_COST, SHOP_REROLL_COST_INCREMENT
+    from constants import shopRerollCost, SHOP_REROLL_FREE_PER_DAY
 
     session = get_session()
     try:
@@ -11010,8 +11010,15 @@ def getRerollCost(user: _User = Depends(_getCurrentUser)):
             rerollCount = shopRepo.getPurchasesForCycle(
                 user.id, currentSeasonNum, "shop_reroll", cycleStartWeek, cycleEndWeek
             )
-        cost = SHOP_REROLL_BASE_COST + (rerollCount * SHOP_REROLL_COST_INCREMENT)
-        return build_success_response({"cost": cost, "rerollCount": rerollCount})
+        cost = shopRerollCost(rerollCount)
+        # `free` is surfaced so the button can say so rather than reading "0 Floobits",
+        # and because a 0 cost is otherwise indistinguishable from a pricing bug.
+        return build_success_response({
+            "cost": cost,
+            "rerollCount": rerollCount,
+            "free": cost == 0,
+            "freePerDay": SHOP_REROLL_FREE_PER_DAY,
+        })
     finally:
         session.close()
 
@@ -11025,7 +11032,7 @@ def rerollFeaturedCards(user: _User = Depends(_getCurrentUser)):
     from database.repositories.shop_repository import ShopPurchaseRepository
     from database.models import FeaturedShopCard
     from managers.cardManager import CardManager
-    from constants import SHOP_REROLL_BASE_COST, SHOP_REROLL_COST_INCREMENT
+    from constants import shopRerollCost
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
@@ -11050,17 +11057,22 @@ def rerollFeaturedCards(user: _User = Depends(_getCurrentUser)):
             rerollCount = shopRepo.getPurchasesForCycle(
                 user.id, currentSeasonNum, "shop_reroll", cycleStartWeek, cycleEndWeek
             )
-        cost = SHOP_REROLL_BASE_COST + (rerollCount * SHOP_REROLL_COST_INCREMENT)
+        cost = shopRerollCost(rerollCount)
 
-        # Deduct
-        result = currencyRepo.spendFunds(
-            userId=user.id, amount=cost,
-            transactionType="shop_reroll",
-            description=f"Daily Selection reroll #{rerollCount + 1}",
-            season=currentSeasonNum, week=currentWeek,
-        )
-        if result is None:
-            raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {cost})")
+        # Deduct — but a FREE reroll must not go through spendFunds at all. Spending 0
+        # writes a 0-Floobit CurrencyTransaction into the ledger and fires the Magnate
+        # (season floobits spent) achievement hook for a purchase that never happened.
+        if cost > 0:
+            result = currencyRepo.spendFunds(
+                userId=user.id, amount=cost,
+                transactionType="shop_reroll",
+                description=f"Daily Selection reroll #{rerollCount + 1}",
+                season=currentSeasonNum, week=currentWeek,
+            )
+            if result is None:
+                raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {cost})")
+        else:
+            result = currencyRepo.getOrCreate(user.id)
 
         # Record purchase so next reroll costs more
         shopRepo.createPurchase(
@@ -11103,7 +11115,9 @@ def rerollFeaturedCards(user: _User = Depends(_getCurrentUser)):
             forceRegenerate=True,
         )
 
-        nextCost = cost + SHOP_REROLL_COST_INCREMENT
+        # ⚠️ Not `cost + INCREMENT` — that was wrong the moment the first roll became
+        # free, quoting 5 for a roll that costs 10. Ask the one cost function instead.
+        nextCost = shopRerollCost(rerollCount + 1)
         session.commit()
         return build_success_response({
             "featuredCards": featured,
