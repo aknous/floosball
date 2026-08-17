@@ -29,6 +29,11 @@ class Coach:
         self.id = None
         self.name = ""
         self.seasonsCoached = 0
+        # ⚠️ Seasons at THIS club, distinct from the career counter above. A fired GM
+        # joins the pool and can be hired elsewhere, carrying `seasonsCoached` with
+        # them — judging tenure off that would blame a new GM for their predecessor's
+        # drought at a club they had just arrived at.
+        self.seasonsWithTeam = 0
 
         # Attributes (60–100)
         self.offensiveMind = 80

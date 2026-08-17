@@ -972,6 +972,19 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # ⚠️ Seasons at THIS club, distinct from the career `seasons_coached`. A fired GM
+        # joins the pool and can be hired elsewhere carrying the career count with them, so
+        # tenure pressure read off that would blame a new GM for a predecessor's drought.
+        # Existing rows seed from the career count, exact for anyone who has only ever had
+        # one job — true of every coach in production when this landed.
+        try:
+            conn.execute(text("ALTER TABLE coaches ADD COLUMN seasons_with_team INTEGER DEFAULT 0"))
+            conn.execute(text("UPDATE coaches SET seasons_with_team = COALESCE(seasons_coached, 0)"))
+            conn.commit()
+            logger.info("  Migration: added coaches.seasons_with_team")
+        except Exception:
+            conn.rollback()
+
         # Starter pack + selection mechanic (feature/pack-revamp)
         try:
             conn.execute(text("ALTER TABLE users ADD COLUMN starter_pack_claimed_season INTEGER"))

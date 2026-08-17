@@ -140,6 +140,7 @@ class Coach(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     seasons_coached: Mapped[int] = mapped_column(Integer, default=0)
+    seasons_with_team: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     offensive_mind: Mapped[int] = mapped_column(Integer, default=80)
     defensive_mind: Mapped[int] = mapped_column(Integer, default=80)
     adaptability: Mapped[int] = mapped_column(Integer, default=80)

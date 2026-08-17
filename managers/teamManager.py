@@ -1409,6 +1409,7 @@ class TeamManager:
                 dbCoach = DBCoach(name=team.coach.name)
             dbCoach.name = team.coach.name
             dbCoach.seasons_coached = team.coach.seasonsCoached
+            dbCoach.seasons_with_team = getattr(team.coach, 'seasonsWithTeam', 0)
             dbCoach.offensive_mind = team.coach.offensiveMind
             dbCoach.defensive_mind = team.coach.defensiveMind
             dbCoach.adaptability = team.coach.adaptability
@@ -1453,6 +1454,7 @@ class TeamManager:
             coach.id = dbCoach.id
             coach.name = dbCoach.name
             coach.seasonsCoached = dbCoach.seasons_coached
+            coach.seasonsWithTeam = getattr(dbCoach, 'seasons_with_team', 0) or 0
             # Backfill seasonsCoached if it was never incremented (pre-fix data)
             if coach.seasonsCoached == 0:
                 from database.models import Season as DBSeason
@@ -1570,6 +1572,8 @@ class TeamManager:
         for team in self.teams:
             if team.coach:
                 team.coach.seasonsCoached += 1
+                # Tenure AT THIS CLUB — what the fire pressure is judged on.
+                team.coach.seasonsWithTeam = getattr(team.coach, 'seasonsWithTeam', 0) + 1
 
             # Retirement takes precedence — a GM going out on their own terms
             # isn't also fired. Then roll the sim-decided exits (plan Part C).
@@ -1579,7 +1583,8 @@ class TeamManager:
             elif team.coach:
                 rolled = turnover.evaluateExit(
                     team, team.coach,
-                    sentiment=gmHeat.get(getattr(team.coach, 'id', None), 0.0))
+                    sentiment=gmHeat.get(getattr(team.coach, 'id', None), 0.0),
+                    history=self._gmTenureHistory(team))
                 if rolled:
                     exitKind = 'fired' if rolled == EXIT_FIRED else 'left'
                     self.logger.info(turnover.describeExit(rolled, team.coach, team))
@@ -1642,6 +1647,13 @@ class TeamManager:
                     self.logger.warning(
                         f"{team.name}: pool hire did not stick — generating instead")
                     team.coach = self.generateCoach()
+                    self._saveCoachToDatabase(team)
+                # ⚠️ A NEW HIRE STARTS AT ZERO TENURE HERE, whatever their career count
+                # says. Pool hires bring `seasonsCoached` from a previous club, and tenure
+                # pressure is judged on time at THIS club — without this reset an incoming
+                # GM would inherit the drought that got the last one fired.
+                if team.coach is not None:
+                    team.coach.seasonsWithTeam = 0
                     self._saveCoachToDatabase(team)
                 self.logger.info(f"{team.name} hires new coach {team.coach.name}")
                 self._recordCoachChange(team, exitKind, retiringName, retiringSeasons)
@@ -1750,6 +1762,52 @@ class TeamManager:
                         and dbTeam.coach_id == getattr(team.coach, 'id', None))
         except Exception:
             return False
+
+    def _gmTenureHistory(self, team):
+        """Newest-first season records for the CURRENT GM's time at this club.
+
+        Feeds `GmTurnover.tenurePressure`, which asks how long it has been since this GM
+        got anywhere — so the window is their tenure AT THIS CLUB (`seasonsWithTeam`), not
+        the career counter a pool hire carries in from a previous job.
+
+        Each entry: {'winPct', 'madePlayoffs', 'wonPlayoffRound'}. A missing or unreadable
+        history returns [] and the pressure term is simply 0 — never gate a GM's job on a
+        query that failed.
+        """
+        coach = getattr(team, 'coach', None)
+        tenure = int(getattr(coach, 'seasonsWithTeam', 0) or 0) if coach else 0
+        if tenure <= 0 or self.db_session is None:
+            return []
+        try:
+            from database.models import TeamSeasonStats
+            rows = (self.db_session.query(TeamSeasonStats)
+                    .filter(TeamSeasonStats.team_id == team.id)
+                    .order_by(TeamSeasonStats.season.desc())
+                    .limit(tenure).all())
+            if not rows:
+                return []
+            # Deepest playoff round reached, per season. Winning a round is what resets the
+            # stall clock, and `made_playoffs` alone cannot say whether they won one.
+            advanced = set()
+            try:
+                from playoff_history import buildPlayoffHistory
+                for entry in buildPlayoffHistory(self.db_session, team.id):
+                    if int(entry.get('deepestRound') or 0) >= 2:
+                        advanced.add(int(entry['season']))
+            except Exception as e:
+                self.logger.debug(f"GM tenure: playoff history unavailable for {team.name}: {e}")
+            out = []
+            for r in rows:
+                played = float((r.wins or 0) + (r.losses or 0))
+                out.append({
+                    'winPct': (float(r.wins or 0) / played) if played > 0 else 0.5,
+                    'madePlayoffs': bool(r.made_playoffs),
+                    'wonPlayoffRound': int(r.season) in advanced,
+                })
+            return out
+        except Exception as e:
+            self.logger.warning(f"GM tenure history unavailable for {team.name}: {e}")
+            return []
 
     def _hireReplacementCoach(self, team, excludeCoachId=None):
         """Fill a vacancy from the unassigned GM pool, or generate if it's empty.

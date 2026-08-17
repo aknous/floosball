@@ -1812,6 +1812,36 @@ GM_FIRE_MAX_CHANCE = 0.75     # even a catastrophe isn't a certainty
 
 # Voluntary departure — independent of record, so a hostile fanbase can drive out
 # a GM who is WINNING. Sentiment weights are dormant until plan Part D.
+# ⚠️ TENURE PRESSURE — one bad season is not the only way to lose a job, and until this
+# existed it was the ONLY way. `fireChance`'s deficit term reads the LATEST season alone,
+# so a GM parked just above the 0.45 baseline generated exactly 0.0% risk forever: a club
+# going 13-15 every year had an 86% chance of keeping the same GM across five seasons, and
+# a reliably-slightly-below-average GM was the most secure in the league.
+#
+# These accumulate over a GM's tenure AT THIS CLUB and are added to the single-season
+# deficit, then the whole thing is capped by GM_FIRE_MAX_CHANCE as before.
+#
+# ⚠️ A PLAYOFF WIN RESETS THE STALL CLOCK, nothing else does. That is what separates the
+# two failure modes the owner named: missing the postseason entirely is worse per season
+# than reaching it and going out immediately, but neither counts as getting anywhere.
+GM_FIRE_STALL_GRACE = 2        # seasons without a playoff win before pressure starts
+GM_FIRE_DROUGHT_STEP = 0.07    # per season MISSING the playoffs, past the grace
+GM_FIRE_STAGNATION_STEP = 0.04 # per season reaching them and not winning a round
+# Treading water on RECORD, a separate axis from the postseason. The band is deliberately
+# centred on .500 and stops below the fire baseline (0.45), so a season bad enough to
+# trigger the deficit term is not also counted here.
+# ⚠️ The upper bound is a WINNING season's floor, not a nice round number. At 0.575 a
+# 16-12 club sat inside the band, so a GM winning playoff rounds every year still accrued
+# "treading water" pressure — caught by test_gm_tenure. 0.54 is 15-13 over 28 games: the
+# top of the plateau, below which nobody would call the season a success.
+GM_FIRE_MEDIOCRITY_BAND = (0.45, 0.54)
+GM_FIRE_MEDIOCRITY_GRACE = 3   # three .500-ish seasons is a plateau, not yet a verdict
+GM_FIRE_MEDIOCRITY_STEP = 0.03
+# ⚠️ Ceiling on the whole tenure contribution. Accumulated mediocrity must never rival a
+# catastrophic season -- 4-24 is a firing offence on its own, and a long grey tenure is a
+# reason to be at risk, not a certainty.
+GM_FIRE_TENURE_MAX = 0.30
+
 GM_LEAVE_BASE_CHANCE = 0.03
 GM_LEAVE_SENTIMENT_WEIGHT = 0.35
 GM_FIRE_SENTIMENT_WEIGHT = 0.25
