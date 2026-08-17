@@ -1103,9 +1103,11 @@ async def get_players(
             player_dict['rank'] = player.serviceTime.value if hasattr(player.serviceTime, 'value') else player.serviceTime
             player_dict['seasons'] = player.seasonsPlayed
 
-            # Merge season + in-game stats for live accuracy
-            sd = player.seasonStatsDict
-            gd = player.gameStatsDict
+            # Merge season + in-game stats for live accuracy. Out of season the season
+            # half comes from the archive — see `_seasonStatsFor` — and the in-game half
+            # is dropped, since there is no game and the dict still holds the last one.
+            sd, sdLive = _seasonStatsFor(player)
+            gd = player.gameStatsDict if sdLive else {}
             fantasyPts = round(sd.get('fantasyPoints', 0) + gd.get('fantasyPoints', 0), 1)
 
             passing = sd.get('passing', {})
@@ -1295,6 +1297,12 @@ async def get_player(player_id: int, response: Response):
                     'receiving': row.receiving_stats or {},
                     'kicking': row.kicking_stats or {},
                     'defense': row.defense_stats or {},
+                    # ⚠️ Return production was the one group this row dropped, and two
+                    # cards score off it (Runback and House Call, both on punt return
+                    # yards). Without it a profile could not show the stat its own card
+                    # is paying on. It is credited to the RETURNER, so it is a group of
+                    # its own rather than part of the kicker's line.
+                    'returning': getattr(row, 'returning_stats', None) or {},
                     # How the season went. Null for seasons that ended before
                     # the column existed — the profile shows a dash there
                     # rather than inventing a number.
@@ -3522,9 +3530,14 @@ async def get_standings(response: Response):
         # against. Read off the schedule rather than hardcoded, because the season length
         # has already moved once (24 clubs / 14 weeks -> 32 / 28) and a stale constant
         # would quietly clinch everyone early.
+        # ⚠️ COUNT ONLY THE REGULAR-SEASON WEEKS. `_simulatePlayoffRounds` APPENDS each
+        # playoff round to the same `currentSeason.schedule`, so a plain len() climbed
+        # 28 -> 32 across the postseason and handed every club up to four phantom games
+        # in hand — see `standings_view.regularSeasonWeeks`.
         try:
+            from standings_view import regularSeasonWeeks
             _sched = getattr(sm.currentSeason, 'schedule', None) if sm and sm.currentSeason else None
-            totalGames = len(_sched) if _sched else None
+            totalGames = regularSeasonWeeks(_sched)
         except Exception:
             totalGames = None
         leagues = floosball_app.leagueManager.leagues
@@ -4513,7 +4526,10 @@ def _playoffBracketTemplate(season: int, repo) -> Optional[Dict[str, Any]]:
     seeds = repo.getFrozenSeeds(season)
     if not seeds:
         return None
-    confs = seeds.get('conferences', {})
+    # ⚠️ Byes are DERIVED here, never read off the frozen blob — a season seeded before
+    # the derived-bye fix carries `bye` on its top two seeds forever, and the tree honors
+    # that literally. See `playoff_bracket.normalizeByes`.
+    confs = pb.normalizeByes(seeds.get('conferences', {}))
     field = [
         {"teamId": t["teamId"], "winPct": t.get("winPct", 0),
          "scoreDiff": t.get("scoreDiff", 0), "conference": conf, "seed": t.get("seed", 0)}
@@ -4661,12 +4677,19 @@ async def get_stat_leaders(
         raise HTTPException(status_code=503, detail="Application not initialized")
 
     try:
+        # Out of season the live dict is blank — `_seasonStatsFor` serves the archived
+        # row instead, and reports whether it did.
+        statsSource = _seasonStatsFor
+
         def extractStat(player, cat: str) -> float:
-            sd = player.seasonStatsDict
+            sd, isLive = statsSource(player)
             # fantasyPoints is only flushed to seasonStatsDict at game end;
-            # add the current game's running total so the leaderboard stays live
+            # add the current game's running total so the leaderboard stays live.
+            # ⚠️ Only while LIVE — against an archived row that would add the Floos
+            # Bowl's own points to a total the playoffs never fed in the first place.
             if cat == 'fantasy_points':
-                return sd.get('fantasyPoints', 0) + player.gameStatsDict.get('fantasyPoints', 0)
+                inGame = player.gameStatsDict.get('fantasyPoints', 0) if isLive else 0
+                return sd.get('fantasyPoints', 0) + inGame
             if cat == 'passing_yards':    return sd.get('passing', {}).get('yards', 0)
             if cat == 'passing_tds':      return sd.get('passing', {}).get('tds', 0)
             if cat == 'completions':      return sd.get('passing', {}).get('comp', 0)
@@ -4706,7 +4729,11 @@ async def get_stat_leaders(
 
         leaders = []
         for rank, player in enumerate(filtered[:limit], 1):
-            sd = player.seasonStatsDict
+            # ⚠️ THE SAME SOURCE THE SORT USED. An earlier pass fixed `extractStat` and
+            # left this line reading the live dict, which sorted the board correctly and
+            # then printed every number on it as 0 — the worse failure of the two,
+            # because a wrong ORDER looks wrong and a wrong VALUE looks authoritative.
+            sd, _sdLive = statsSource(player)
             entry = {
                 'rank': rank,
                 'id': player.id,
@@ -4720,7 +4747,10 @@ async def get_stat_leaders(
                 'ratingStars': PlayerResponseBuilder.calculateStarRating(player.playerRating),
                 'gamesPlayed': player.gamesPlayed,
                 'statValue': extractStat(player, category),
-                'fantasyPoints': sd.get('fantasyPoints', 0) + player.gameStatsDict.get('fantasyPoints', 0),
+                # The in-game addend only while LIVE — against an archived row it adds
+                # the Floos Bowl's points to a total the playoffs never fed into.
+                'fantasyPoints': sd.get('fantasyPoints', 0) + (
+                    player.gameStatsDict.get('fantasyPoints', 0) if _sdLive else 0),
                 'awakened': player.id in awakenedIds,
             }
             # Include relevant secondary stats per position
@@ -4822,6 +4852,40 @@ def _perGame(blobs: Dict[str, Dict[str, Any]], games: int) -> Dict[str, Dict[str
         }
         for group, stats in blobs.items()
     }
+
+
+def _seasonStatsFor(player) -> tuple:
+    """`(statsDict, isLive)` — the right season stat line for a player, right now.
+
+    ⚠️ THE SEASON DICT IS WIPED THE MOMENT THE SEASON ENDS.
+    `seasonManager._handlePlayerSeasonProgression` archives every `seasonStatsDict` into
+    `seasonStatsArchive` and then RESETS it to the blank template. The season number does
+    not advance until the next season starts, so for the whole offseason every surface
+    reading the live dict served zeros for a season that had just been played in full.
+    Reported 2026-08-14 as all season player stats being cleared once the season ended.
+
+    ⚠️ `isLive` is not decoration — callers add `gameStatsDict` on top for a
+    mid-game-accurate figure, and against an ARCHIVED row that adds the Floos Bowl's own
+    numbers to a total the playoffs never fed into. Every caller must gate that addend on
+    it. It is the reason the Top Players panel showed one row reading 42 while the rest
+    read zero: fantasy points alone carried the addend, so it was the only category that
+    looked alive, and the value it showed was a single game's.
+
+    ⚠️ Surfaces with a DB path should prefer it instead of calling this. `savePlayerData()`
+    runs immediately before the reset, so `PlayerSeasonStats` holds the finished season in
+    full — the stats page just had to stop taking its in-memory branch. This helper is for
+    the surfaces that have no such path.
+    """
+    sm = floosball_app.seasonManager if floosball_app else None
+    cs = getattr(sm, 'currentSeason', None) if sm else None
+    if cs is not None and getattr(cs, 'isComplete', False):
+        seasonNumber = getattr(cs, 'seasonNumber', None)
+        for row in reversed(getattr(player, 'seasonStatsArchive', None) or []):
+            # Matched on season rather than taken off the end, so a player who missed
+            # the year cannot serve an older season as if it were this one.
+            if seasonNumber is None or row.get('season') == seasonNumber:
+                return row, False
+    return player.seasonStatsDict, True
 
 
 def _awakenedPlayerIds() -> set:
@@ -4989,7 +5053,17 @@ async def get_stats_players(
             selected = [p for p in candidates if _playerStatus(p, pm) == wanted]
 
         rows = []
-        liveSeason = (not scopeIsCareer and seasonNumber == currentSeason)
+        # ⚠️ "LIVE" MEANS STILL BEING PLAYED, NOT "the current season number". This read
+        # `seasonNumber == currentSeason` alone, and the season number does not advance
+        # until the NEXT season starts — so all through the offseason the page took the
+        # in-memory branch below, where `_handlePlayerSeasonProgression` has already
+        # archived every `seasonStatsDict` and reset it to blank. Reported as all season
+        # player stats being cleared once the season ended.
+        # The DB branch is the fix rather than a fallback: `savePlayerData()` runs
+        # immediately BEFORE that reset, so `PlayerSeasonStats` already holds the finished
+        # season in full — the page just never asked it.
+        _smComplete = bool(getattr(getattr(sm, 'currentSeason', None), 'isComplete', False)) if sm else False
+        liveSeason = (not scopeIsCareer and seasonNumber == currentSeason and not _smComplete)
 
         if liveSeason:
             # From memory: the only place a game in progress exists.
@@ -9150,6 +9224,7 @@ def getCardCollection(
             if tpl.player_id:
                 stats = cardManager.buildPlayerSeasonStats(
                     session, tpl.player_id, tpl.season_created, tpl.position,
+                    effectName=(tpl.effect_config or {}).get("effectName", ""),
                 )
                 if stats:
                     data["playerStats"] = stats
@@ -9592,7 +9667,8 @@ def _buildShowcasePayload(session, cardManager, userId, currentSeason):
                 tpl = uc.card_template
                 if tpl.player_id:
                     stats = cardManager.buildPlayerSeasonStats(
-                        session, tpl.player_id, tpl.season_created, tpl.position)
+                        session, tpl.player_id, tpl.season_created, tpl.position,
+                        effectName=(tpl.effect_config or {}).get("effectName", ""))
                     if stats:
                         cardData["playerStats"] = stats
                 infos.append(showcaseManager.cardInfo(uc))
@@ -9958,6 +10034,7 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
             try:
                 _ps = cardManager.buildPlayerSeasonStats(
                     session, template.player_id, template.season_created, template.position,
+                    effectName=(template.effect_config or {}).get("effectName", ""),
                 ) if template.player_id else None
                 if _ps:
                     cardData["playerStats"] = _ps
@@ -10915,7 +10992,7 @@ def getRerollCost(user: _User = Depends(_getCurrentUser)):
     """Get the current reroll cost (escalates with each reroll today)."""
     from database.connection import get_session
     from database.repositories.shop_repository import ShopPurchaseRepository
-    from constants import SHOP_REROLL_BASE_COST, SHOP_REROLL_COST_INCREMENT
+    from constants import shopRerollCost, SHOP_REROLL_FREE_PER_DAY
 
     session = get_session()
     try:
@@ -10933,8 +11010,15 @@ def getRerollCost(user: _User = Depends(_getCurrentUser)):
             rerollCount = shopRepo.getPurchasesForCycle(
                 user.id, currentSeasonNum, "shop_reroll", cycleStartWeek, cycleEndWeek
             )
-        cost = SHOP_REROLL_BASE_COST + (rerollCount * SHOP_REROLL_COST_INCREMENT)
-        return build_success_response({"cost": cost, "rerollCount": rerollCount})
+        cost = shopRerollCost(rerollCount)
+        # `free` is surfaced so the button can say so rather than reading "0 Floobits",
+        # and because a 0 cost is otherwise indistinguishable from a pricing bug.
+        return build_success_response({
+            "cost": cost,
+            "rerollCount": rerollCount,
+            "free": cost == 0,
+            "freePerDay": SHOP_REROLL_FREE_PER_DAY,
+        })
     finally:
         session.close()
 
@@ -10948,7 +11032,7 @@ def rerollFeaturedCards(user: _User = Depends(_getCurrentUser)):
     from database.repositories.shop_repository import ShopPurchaseRepository
     from database.models import FeaturedShopCard
     from managers.cardManager import CardManager
-    from constants import SHOP_REROLL_BASE_COST, SHOP_REROLL_COST_INCREMENT
+    from constants import shopRerollCost
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
@@ -10973,17 +11057,22 @@ def rerollFeaturedCards(user: _User = Depends(_getCurrentUser)):
             rerollCount = shopRepo.getPurchasesForCycle(
                 user.id, currentSeasonNum, "shop_reroll", cycleStartWeek, cycleEndWeek
             )
-        cost = SHOP_REROLL_BASE_COST + (rerollCount * SHOP_REROLL_COST_INCREMENT)
+        cost = shopRerollCost(rerollCount)
 
-        # Deduct
-        result = currencyRepo.spendFunds(
-            userId=user.id, amount=cost,
-            transactionType="shop_reroll",
-            description=f"Daily Selection reroll #{rerollCount + 1}",
-            season=currentSeasonNum, week=currentWeek,
-        )
-        if result is None:
-            raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {cost})")
+        # Deduct — but a FREE reroll must not go through spendFunds at all. Spending 0
+        # writes a 0-Floobit CurrencyTransaction into the ledger and fires the Magnate
+        # (season floobits spent) achievement hook for a purchase that never happened.
+        if cost > 0:
+            result = currencyRepo.spendFunds(
+                userId=user.id, amount=cost,
+                transactionType="shop_reroll",
+                description=f"Daily Selection reroll #{rerollCount + 1}",
+                season=currentSeasonNum, week=currentWeek,
+            )
+            if result is None:
+                raise HTTPException(status_code=402, detail=f"Insufficient Floobits (need {cost})")
+        else:
+            result = currencyRepo.getOrCreate(user.id)
 
         # Record purchase so next reroll costs more
         shopRepo.createPurchase(
@@ -11026,7 +11115,9 @@ def rerollFeaturedCards(user: _User = Depends(_getCurrentUser)):
             forceRegenerate=True,
         )
 
-        nextCost = cost + SHOP_REROLL_COST_INCREMENT
+        # ⚠️ Not `cost + INCREMENT` — that was wrong the moment the first roll became
+        # free, quoting 5 for a roll that costs 10. Ask the one cost function instead.
+        nextCost = shopRerollCost(rerollCount + 1)
         session.commit()
         return build_success_response({
             "featuredCards": featured,

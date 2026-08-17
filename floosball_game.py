@@ -1000,6 +1000,11 @@ class Game:
         # next snap. Blocks teams from burning a timeout on the dead clock right
         # after the warning (the warning already gave a free stop).
         self._clockStoppedByWarning = False
+        # Which team is currently in no-huddle, so the feed announces ENTERING the
+        # state once rather than on every snap inside it. Holds the team rather than a
+        # bool: a flag would survive a turnover and swallow the next offense's own
+        # first no-huddle snap.
+        self._noHuddleTeam = None
 
         self.homePlaysTotal = 0
         self.awayPlaysTotal = 0
@@ -2031,10 +2036,12 @@ class Game:
           - Sideline / incomplete pass (~18s — partial drain mixed with clock
             stops, not always achievable)
 
-        Each productive play burns ~7s of execution. Spikes count as zero-yard
-        clock-stoppers between productive plays, not as productive plays.
+        Each productive play burns ~7s of execution, plus the pre-snap drain in
+        front of it — a huddle, and only when the clock is running and cannot be
+        stopped. Spikes count as zero-yard clock-stoppers between productive
+        plays, not as productive plays.
         """
-        from constants import FINAL_SNAP_SECS
+        from constants import FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS
         # The closing FG only needs to be SNAPPED before 0:00 (the kick can finish after),
         # so reserve just a snap for it — not a whole play's ~7s. Same for the last
         # productive snap: it's counted below on the basis of being snappable (clock >
@@ -2049,16 +2056,34 @@ class Game:
         # Realistic spike budget — using more would forfeit too many downs.
         # Down 1 or 2 → 1 spike between productive plays; 3rd down → 0.
         spikesAvailable = 1 if self.down < self.gameRules.downsPerSeries - 1 else 0
-        # ⚠️ THIS LOOP COUNTS A PLAY THAT DOES NOT FIT, ON PURPOSE — FOR NOW. It enters on
-        # `secs > FINAL_SNAP_SECS` (2) and only then subtracts the 7 a play costs, so at
-        # 0:15 it reports 2 plays when one run (a ~12s hurry-up huddle plus 4-6s live)
-        # does not fit once. Tightening it to `secs >= 7` was tried and MEASURED WORSE:
-        # over 40 games a side, late FG attempts fell 33 -> 18 at four downs and halves
-        # ending in range rose 21 -> 24. The count feeds eight decisions with opposite
-        # senses — `<= 1` kicks, `>= 2` hurries up, `>= 1` allows a spike — so lowering it
-        # buys a few kicks and loses the clock management that gets a drive into range at
-        # all. Re-tune the whole set together or not at all; the end-of-half kick is
-        # handled directly instead (see `_lastSnapBeforeBreak`).
+        # ⚠️ THE FIRST SNAP PAYS ITS PRE-SNAP DRAIN TOO, and for a long time it did not.
+        # The loop below charges every snap AFTER the first an inter-play gap (3s on a
+        # timeout, 5s on a spike, 18s otherwise), but entered on `secs > FINAL_SNAP_SECS`
+        # and charged the first snap only its 7s of execution — so the huddle in front of
+        # it was free. That is the whole "counts a play that does not fit" defect: at 0:15
+        # with the clock running and no timeout, a snap really costs a ~12s hurry-up huddle
+        # plus the live ball, and the helper reported room for two.
+        #
+        # ⚠️ TIGHTENING THE LOOP CONDITION IS THE WRONG FIX AND MEASURED WORSE. `secs >= 7`
+        # was tried: late FG attempts fell 33 -> 18 over 40 games a side and halves ending
+        # in range rose 21 -> 24. The count feeds six decisions with OPPOSITE senses —
+        # `<= 1` kicks, `>= 2` and `>= 1` allow a clock-stopper — so a blunt reduction buys
+        # a kick and loses the clock management that gets a drive into range at all.
+        # Measured over a 1,728-state sweep, that attempt moved 8.3% of states; charging
+        # the first snap moves 1.4-1.7%, because it removes exactly one phantom play and
+        # only where one was really phantom. Both gates shift in the SAME direction — the
+        # offense has one fewer play than it thought — which is why this does not reproduce
+        # the earlier regression.
+        #
+        # The cost model is `_lastSnapBeforeBreak`'s, deliberately: a huddle is only paid
+        # when the clock is RUNNING and cannot be stopped, and a no-huddle snap pays its
+        # own (much smaller) pre-snap time rather than a flat huddle.
+        canStopClock = (not self.clockRunning) or timeoutsLeft > 0
+        if not canStopClock:
+            secs -= (self._noHuddlePreSnapSecs() if self._isNoHuddle()
+                     else LAST_SNAP_HUDDLE_SECS)
+            if secs <= FINAL_SNAP_SECS:
+                return 0
         plays = 0
         while secs > FINAL_SNAP_SECS:
             plays += 1
@@ -2074,6 +2099,66 @@ class Game:
             else:
                 secs -= 18
         return plays
+
+    def _isNoHuddle(self) -> bool:
+        """Is the offense staying at the line instead of huddling?
+
+        ⚠️ DERIVED, NOT STORED, and that is deliberate. The trigger is the CLOCK (owner,
+        2026-08-12): if the clock did not stop on the last play and the offense is in
+        hurry-up, they stay at the line. Both halves are already engine state —
+        `clockRunning` after the previous play, and the `hurryUp` intent — so this needs
+        no new attribute, no new decision, and nothing to keep in sync.
+
+        ⚠️ IT IS ALSO WHY `_classifyTempoIntent` KEEPS ITS 2-TUPLE. Three sites unpack that
+        return, including `_lastSnapBeforeBreak`'s chess-clock branch, so adding a fourth
+        intent or a third element would break callers for no gain. No-huddle is a different
+        AXIS from huddle length, not another point on it — the existing intents all map to
+        how long the huddle takes, and this is the state of having no huddle at all.
+
+        A stopped clock means they may huddle: there is nothing to save by rushing.
+        """
+        from constants import NO_HUDDLE_ENABLED, LAST_SNAP_HUDDLE_SECS
+        if not NO_HUDDLE_ENABLED:
+            return False
+        if not self.clockRunning:
+            return False
+        try:
+            intent, base = self._classifyTempoIntent()
+        except Exception:
+            return False
+        # ⚠️ `hurryUp` COVERS TWO DIFFERENT THINGS, and only one of them is no-huddle.
+        # Seven of the classifier's eight hurry-up branches return a base of 12 — the
+        # genuine two-minute drill. The eighth is "mid-late deficit" and returns 15 or 25,
+        # which is a SHORTER HUDDLE, not the absence of one: down 17 in Q3 with 5:00 left
+        # an offense pushes tempo and still huddles, because it has time to call a play.
+        #
+        # Reading the intent alone therefore put the offense at the line for a third of a
+        # game, which is both wrong and the difference between a feature and a exploit —
+        # the menu restriction that pays for no-huddle would have been charged in
+        # situations where a huddle was perfectly available.
+        #
+        # The base time is the classifier's own statement of how much of a hurry this is,
+        # so gate on it rather than re-deriving the urgency from score and clock.
+        return intent == 'hurryUp' and base <= LAST_SNAP_HUDDLE_SECS
+
+    def _noHuddlePreSnapSecs(self) -> int:
+        """The pre-snap drain for a no-huddle snap.
+
+        Kept separate from `calculatePreSnapTime`'s huddle math because the shape differs,
+        not just the magnitude: the coach's clock IQ still matters (a sharp staff gets
+        lined up faster) but at half the spread, and the jitter is tighter because a
+        no-huddle snap is a rehearsed, repeated action rather than a fresh huddle call.
+
+        ⚠️ It floors BELOW the 8s floor in `calculatePreSnapTime`. That floor exists to
+        stop a huddle being unrealistically quick, and this is the state of not huddling.
+        """
+        from constants import (NO_HUDDLE_PRESNAP_SECS, NO_HUDDLE_PRESNAP_FLOOR,
+                               NO_HUDDLE_IQ_SPREAD, NO_HUDDLE_JITTER)
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        gameIQ = self._coachClockIQ(coach)
+        iqOffset = round(-NO_HUDDLE_IQ_SPREAD * (gameIQ - 0.5))
+        jitter = batched_randint(-NO_HUDDLE_JITTER, NO_HUDDLE_JITTER)
+        return max(NO_HUDDLE_PRESNAP_FLOOR, NO_HUDDLE_PRESNAP_SECS + iqOffset + jitter)
 
     def _lastSnapBeforeBreak(self) -> bool:
         """Is this the last snap the offense gets before the half or the game ends?
@@ -2155,7 +2240,15 @@ class Game:
         canStopClock = (not self.clockRunning) or timeoutsLeft > 0
         need = LAST_SNAP_LIVE_SECS + FINAL_SNAP_SECS
         if not canStopClock:
-            need += LAST_SNAP_HUDDLE_SECS
+            # ⚠️ A NO-HUDDLE SNAP DOES NOT COST A HUDDLE, and this branch used to charge one
+            # unconditionally. The chess-clock fix (2026-08-13) already made the branch
+            # above read the tempo's own cost; this is the same correction for the standard
+            # format, which had been left charging a flat 12s whatever the offense was
+            # doing. Overcharging here makes the helper declare the LAST snap early, which
+            # ends drives that had another play in them — the exact failure the chess-clock
+            # version was fixed for, in the opposite direction.
+            need += (self._noHuddlePreSnapSecs() if self._isNoHuddle()
+                     else LAST_SNAP_HUDDLE_SECS)
         return secs < need
 
     def leadEaseOffFactor(self) -> float:
@@ -2238,6 +2331,16 @@ class Game:
         Also fires — any quarter/score — to PRESERVE a draining Drive Clock
         (seconds unit), since stopping the game clock pauses the drive clock.
         """
+        # ⚠️ IN NO-HUDDLE THIS IS NOT A ROLL. Getting out of bounds is the POINT of the
+        # play — the offense is at the line precisely because the clock is running and it
+        # needs the clock stopped. Leaving it as a probability means the drill sometimes
+        # forgets why it is hurrying, and it also under-charges the tempo: the predictability
+        # the defense reads (step 3) depends on the sideline route being reliable, not
+        # occasional. Owner: "exclusively short-medium passes that target the sideline to
+        # stop the clock."
+        if self._isNoHuddle():
+            return True
+
         # Drive Clock (seconds): a low drive clock is its own reason to get out of
         # bounds — a stopped game clock pauses the drive clock, so the next huddle
         # doesn't burn it and the offense buys more plays to score. Applies any
@@ -2362,6 +2465,17 @@ class Game:
             return
         if self.play.playType in (PlayType.Punt, PlayType.Kneel, PlayType.Spike):
             return  # not trying to preserve time for a score
+        # ⚠️ CHECK NO-HUDDLE BEFORE SPENDING A TIMEOUT. Standing at the line is the cheaper
+        # way to save a snap, and it is free. Without this the offense burns its timeouts
+        # doing what the tempo was already doing for nothing — and it is the same drive
+        # that will want those timeouts to stop the clock after a completion inbounds.
+        # Only spend one when even the no-huddle snap does not fit.
+        # ⚠️ Chess clock is exempt: there the timeout is not saving the SNAP, it is
+        # preserving the possession BUDGET, which no amount of tempo can do.
+        if (self._isNoHuddle() and getattr(self.format, 'key', '') != 'chess_clock'):
+            from constants import LAST_SNAP_LIVE_SECS
+            if self.gameClockSeconds > self._noHuddlePreSnapSecs() + LAST_SNAP_LIVE_SECS:
+                return
         # Chess clock: the possession budget IS the offense's clock and a timeout
         # skips the huddle drain, so PRESERVING budget kicks in earlier (a wider
         # window). Other formats keep the tight save-the-last-snap window — a
@@ -3441,7 +3555,7 @@ class Game:
             if _random.random() < goChance:
                 self.play.insights['fourthDown']['decision'] = 'goForIt'
                 self.play.insights['fourthDown']['reason'] = (
-                    'tied Q4 with time — aggressive push to advance FG'
+                    'tied Q4 with time, aggressive push to advance FG'
                 )
                 if self.yardsToFirstDown <= 2:
                     self.play.runPlay()
@@ -3605,6 +3719,49 @@ class Game:
             weights['medium'] = weights.get('medium', 0) * 0.3
             weights['long'] = weights.get('long', 0) * 0.15
             weights['deep'] = weights.get('deep', 0) * 0.05
+        return self._applyNoHuddleMenu(weights)
+
+    def _applyNoHuddleMenu(self, weights: dict) -> dict:
+        """The no-huddle playbook: short and medium passes, and nothing else.
+
+        ⚠️ THE RESTRICTION IS THE BALANCE, NOT A LIMITATION TO ENGINEER AROUND. No-huddle
+        buys about six seconds a snap (measured 12.0s -> 6.0s, and 6.0 -> 9.5 snaps in a
+        110-second drill). If it cost nothing, every trailing offense would always do it
+        and the two-minute drill would be a solved problem. The extra snaps have to be
+        WORSE snaps.
+
+        It is also simply true to the sport: `long` and `deep` need protection calls and
+        route stems the offense has not lined up for, so an offense that never huddled
+        cannot run them. Owner: "exclusively short-medium passes that target the sideline
+        to stop the clock".
+
+        ⚠️ APPLIED LAST, AFTER EVERY OTHER MOD, and that placement is the point. The
+        situational, matchup, coach, gameplan and drive-clock layers all reach for `long`
+        and `deep` when an offense is behind and hurrying — which is exactly when
+        no-huddle fires. Restricting anywhere earlier would let those layers put the depth
+        straight back.
+
+        ⚠️ THE PLAN SAID THE QB SNEAK SURVIVES HERE. IT DOES NOT, AND SHOULD NOT.
+        Zeroing `run` cannot touch it either way — the sneak is injected by
+        `_selectRunConcept` on its own short-yardage trigger and never carried in these
+        weights. But `_isSneakSituation()` has bailed on `_isHurryUp()` since the sneak
+        shipped, for a better reason than "it needs no call": a sneak burns clock and stays
+        in bounds, which is the opposite of what a two-minute drill wants. Verified — in a
+        drill on 3rd-and-1, `_isNoHuddle` is True and `_isSneakSituation` is False.
+
+        Measured for scale, since it decides how much this matters: the sneak is ~1.25 QB
+        carries per game league-wide, and the concept selector takes it about 46% of the
+        time on 3rd-and-1 at midfield. It is a rare situational call, not a staple.
+        """
+        if not self._isNoHuddle():
+            return weights
+        for key in ('long', 'deep', 'run'):
+            if key in weights:
+                weights[key] = 0.0
+        # If the restriction emptied the menu (a weight set that had no short/medium to
+        # begin with), fall back rather than hand `_executeWeightedPlay` all zeros.
+        if not any(weights.get(k, 0) for k in ('short', 'medium')):
+            weights['short'] = 1.0
         return weights
 
     def _applyDriveClockMods(self, weights: dict, coach) -> dict:
@@ -4015,6 +4172,192 @@ class Game:
                 weights[tier] = weights.get(tier, 0) * AWAKENED_PLAYCALL_PASS_BIAS
         return weights
 
+    def _resolveDisguise(self, actualRunFocus: float) -> tuple:
+        """What the defense SHOWS, which need not be what it does.
+
+        Returns `(shownRunFocus, disguised, tipped)`.
+
+        ⚠️ THIS IS THE PIECE THAT MAKES THE REST A SYSTEM. Without it the quarterback reads
+        an honest defense and an audible is a skill check the good QB always passes. With
+        it, the look and the call come apart: a fooled QB checks into a trap and a sharp
+        one sniffs it out.
+
+        Three separate questions, deliberately, because collapsing them removes the
+        interesting failures:
+          * CAN IT LIE — the coordinator's `defensiveMind`. A sharp staff installs and
+            calls disguises; a poor one plays what it lines up in. This is that attribute
+            finally doing per-play work on its own side of the ball.
+          * DOES IT HOLD — the defenders' `discipline` and `focus`. A disciplined unit
+            holds the look to the snap; a sloppy one TIPS it early.
+          * ⚠️ A TIPPED DISGUISE IS WORSE THAN NO DISGUISE. The QB gets a free, honest
+            read AND the defense has still paid to be out of position. That is what makes
+            discipline worth having rather than a rounding error.
+
+        ⚠️ A DISGUISE MUST COST SOMETHING, or every defense disguises every play. Showing
+        blitz and dropping means being slightly wrong-footed for anything the disguise did
+        not prepare for, charged through `play.disguiseCost`.
+        """
+        from constants import (DEFENSIVE_DISGUISE_ENABLED, DISGUISE_BASE_RATE,
+                               DISGUISE_COACH_SWING, DISGUISE_HOLD_BASE,
+                               DISGUISE_HOLD_SWING, AUDIBLE_BOX_STACKED,
+                               COACH_ATTR_NEUTRAL)
+        if not DEFENSIVE_DISGUISE_ENABLED:
+            return actualRunFocus, False, False
+
+        defTeam = self.defensiveTeam
+        coach = getattr(defTeam, 'coach', None)
+        defMind = getattr(coach, 'defensiveMind', COACH_ATTR_NEUTRAL) if coach else COACH_ATTR_NEUTRAL
+        rate = DISGUISE_BASE_RATE + DISGUISE_COACH_SWING * ((defMind - 80) / 20.0)
+        if _random.random() >= max(0.0, min(0.95, rate)):
+            return actualRunFocus, False, False
+
+        # Hold it, or tip it. The on-field unit, not the coach.
+        holders = [defTeam.rosterDict.get('rb'), defTeam.rosterDict.get('qb'),
+                   defTeam.rosterDict.get('te')]
+        vals = []
+        for h in holders:
+            if h is None:
+                continue
+            a = getattr(h, 'gameAttributes', None) or h.attributes
+            vals.append(getattr(a, 'discipline', 80) * 0.6 + getattr(a, 'focus', 80) * 0.4)
+        holdQ = (sum(vals) / len(vals)) if vals else 80.0
+        hold = DISGUISE_HOLD_BASE + DISGUISE_HOLD_SWING * ((holdQ - 80) / 20.0)
+        tipped = _random.random() >= max(0.05, min(0.98, hold))
+        if tipped:
+            # The look broke early: the QB sees the truth, and the defense still paid.
+            return actualRunFocus, True, True
+
+        # The lie: it shows the other side of the box question.
+        stacked = actualRunFocus >= AUDIBLE_BOX_STACKED
+        shown = (AUDIBLE_BOX_STACKED - 0.20) if stacked else (AUDIBLE_BOX_STACKED + 0.20)
+        return shown, True, False
+
+    # ⚠️ A DISGUISE DEGRADES RECOGNITION OF THE TRUTH — it does not redefine what "right"
+    # means. An earlier build had the QB read the SHOWN box and called a correct reading of
+    # it `readRight`, which inverted every label: a QB who "read right" had in fact been
+    # FOOLED, and the measurement duly reported fooled quarterbacks outperforming sharp
+    # ones by 1.24 yards a carry. The box question is always about what the defense is
+    # ACTUALLY doing; the lie just makes it harder to see, exactly as `PRESNAP_DISGUISE`
+    # works for the defense's own read.
+    DISGUISE_READ_PENALTY = 0.30
+
+    def _maybeAudible(self, playCall: str) -> str:
+        """The QB looks at the box and changes the call, or does not.
+
+        ⚠️ THE OFFENSIVE MIRROR OF `_applyPreSnapRead`. The defense has committed
+        run-or-pass before the snap since the pre-snap recognition layer shipped, and the
+        offense had no equivalent — every other deception in this sim is an offensive
+        EXECUTION roll against the defense's standing numbers, and nothing let the
+        quarterback look at what he sees and change it.
+
+        THREE OUTCOMES, not two:
+          * good check — he reads the box right and flips into its weakness;
+          * no check   — he does not see it, or will not pull the trigger;
+          * bad check  — he reads it WRONG and flips into its strength.
+
+        ⚠️ AN AUDIBLE MUST BE ABLE TO LOSE, or it is a bonus rather than a skill. The bad
+        check is the whole reason `instinct` matters: a QB who never audibles is safer
+        than one who audibles badly.
+
+        ⚠️ THE FLIP CARRIES ITS OWN CONSEQUENCE — no new multiplier. `runStopFocus` already
+        tilts run defense against pass defense, so running into a light box is genuinely
+        good and throwing into a coverage shell is genuinely bad. Adding a bonus on top
+        would pay the read twice.
+
+        ⚠️ WILLINGNESS IS `_undiscipline`, NOT `flairOf`. Measured over 34 production QBs,
+        every mental attribute correlates 0.65-0.77 with every other and `flairOf` sits at
+        +0.77 with `instinct` — so it collapses the 2x2 onto its diagonal and the mind game
+        becomes a rating check. Discipline correlates only +0.42 and in the useful
+        direction: willingness is LOW discipline, which runs negatively against reading
+        ability, so the trap cell goes from 6% of QBs to 26%.
+        """
+        from constants import (AUDIBLE_ENABLED, AUDIBLE_BOX_STACKED, AUDIBLE_READ_BASE,
+                               AUDIBLE_READ_SKILL, AUDIBLE_QB_WEIGHT, AUDIBLE_COACH_WEIGHT,
+                               AUDIBLE_WILLINGNESS_BASE, AUDIBLE_WILLINGNESS_SWING,
+                               COACH_ATTR_NEUTRAL)
+        if not AUDIBLE_ENABLED:
+            return playCall
+        qb = self.offensiveTeam.rosterDict.get('qb')
+        if qb is None:
+            return playCall
+
+        isHome = self.offensiveTeam is self.homeTeam
+        defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
+        if defGp is None:
+            return playCall
+        actualRunFocus = getattr(defGp, 'runStopFocus', 0.5)
+        # ⚠️ THE QUESTION IS ALWAYS ABOUT THE REAL BOX. A disguise makes the truth HARDER
+        # TO SEE; it does not change what the right answer is. Reading the shown value as
+        # if it were the truth inverts every label — a QB who "read the look correctly"
+        # has actually been fooled — and the first build did exactly that, then measured
+        # fooled quarterbacks beating sharp ones by 1.24 yards a carry.
+        shownRunFocus, disguised, tipped = self._resolveDisguise(actualRunFocus)
+        if disguised:
+            from constants import (DISGUISE_ALIGNMENT_COST, DISGUISE_TIPPED_EXTRA_COST)
+            self.play.disguiseCost = (DISGUISE_ALIGNMENT_COST
+                                      + (DISGUISE_TIPPED_EXTRA_COST if tipped else 0.0))
+            self.play.insights['disguise'] = {
+                'shown': 'light box' if shownRunFocus < AUDIBLE_BOX_STACKED else 'stacked box',
+                'actual': 'light box' if actualRunFocus < AUDIBLE_BOX_STACKED else 'stacked box',
+                'tipped': tipped,
+            }
+
+        # ── Can he see it? QB first, coach second — the inverse of the defense's read,
+        # and that asymmetry is deliberate: this is the one call the PLAYER makes.
+        a = getattr(qb, 'gameAttributes', None) or qb.attributes
+        qbQ = (getattr(a, 'instinct', 80) * 0.6 + getattr(a, 'focus', 80) * 0.4)
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        coachQ = getattr(coach, 'offensiveMind', COACH_ATTR_NEUTRAL) if coach else COACH_ATTR_NEUTRAL
+        skill = (((qbQ - 80) / 20.0) * AUDIBLE_QB_WEIGHT
+                 + ((coachQ - 80) / 20.0) * AUDIBLE_COACH_WEIGHT)
+        accuracy = AUDIBLE_READ_BASE + AUDIBLE_READ_SKILL * max(-1.0, min(1.0, skill))
+        # A HELD disguise is what makes the truth hard to see. A TIPPED one does not —
+        # the look broke, so the QB gets an honest read and the defense paid anyway.
+        if disguised and not tipped:
+            accuracy -= self.DISGUISE_READ_PENALTY
+
+        boxStacked = actualRunFocus >= AUDIBLE_BOX_STACKED
+        readRight = _random.random() < max(0.05, min(0.95, accuracy))
+        perceivedStacked = boxStacked if readRight else (not boxStacked)
+
+        # ── Is the call already right for what he thinks he sees? Then there is nothing
+        # to check out of, and a QB who likes his call keeps it.
+        callIsRun = (playCall == 'run')
+        wantsRun = not perceivedStacked
+        if callIsRun == wantsRun:
+            return playCall
+
+        # ── Will he pull the trigger?
+        # ⚠️ `_undiscipline` is a Play method, not a Game one — the same class-boundary
+        # slip that made `calculateSackProbability` look missing earlier.
+        undis = self.play._undiscipline(qb)
+        willing = AUDIBLE_WILLINGNESS_BASE + AUDIBLE_WILLINGNESS_SWING * undis
+        if _random.random() >= willing:
+            self.play.insights['audible'] = {'checked': False, 'sawStacked': perceivedStacked,
+                                             'readRight': readRight}
+            return playCall
+
+        # ── The check. In no-huddle he cannot check INTO a run — there is no run in the
+        # menu at all, and an audible must not reopen what the tempo closed.
+        if wantsRun:
+            if getattr(self.play, 'noHuddle', False) or self._isNoHuddle():
+                self.play.insights['audible'] = {'checked': False, 'blockedByTempo': True,
+                                                 'readRight': readRight}
+                return playCall
+            newCall = 'run'
+        else:
+            # Out of a run and into the quick game — the throw a stacked box invites.
+            newCall = 'short' if _random.random() < 0.6 else 'medium'
+
+        self.play.audibleText = f"{qb.name} calls an audible!"
+        self.play.insights['audible'] = {
+            'checked': True, 'from': playCall, 'to': newCall,
+            'readRight': readRight, 'sawStacked': perceivedStacked,
+            'boxStacked': boxStacked, 'runStopFocus': round(actualRunFocus, 3),
+            'shownRunFocus': round(shownRunFocus, 3), 'disguised': disguised,
+        }
+        return newCall
+
     def _executeWeightedPlay(self, weights: dict, targetSideline: bool = False):
         """Sample from the weight distribution and execute the chosen play."""
         playCall = _random.choices(
@@ -4022,6 +4365,8 @@ class Game:
             weights=[weights['run'], weights['short'], weights['medium'],
                      weights['long'], weights.get('deep', 0)]
         )[0]
+
+        playCall = self._maybeAudible(playCall)
 
         self.play.insights['playCall'] = playCall
         # Reset per-play RPO / trick state (set only by _executeRpo / _executeTrickPlay).
@@ -4477,6 +4822,16 @@ class Game:
                                SNEAK_LOOK_PITCH_SHARE)
         if not SNEAK_LOOK_ENABLED:
             return None
+        # ⚠️ A FAKE IS A HUDDLE CALL. The sneak-look sells one thing and does another,
+        # which needs the whole offense briefed — an offense standing at the line calling
+        # it on a hand signal is not the play. It DECLINES rather than being weighted
+        # down, so the restriction is visible here rather than buried in a weight.
+        # ⚠️ The other gadget selectors (`_selectTrickPlay`, `_selectRpo`,
+        # `_selectRunConcept`) already guard on `_isHurryUp()`, which is a DIFFERENT and
+        # not-quite-overlapping test — measured diverging from the tempo intent in half of
+        # a six-case sample — so this guard is explicit rather than assumed.
+        if self._isNoHuddle():
+            return None
         coach = getattr(self.offensiveTeam, 'coach', None)
         aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
         aggrLean = max(0.0, (aggr - SNEAK_LOOK_AGGR_PIVOT) / (100.0 - SNEAK_LOOK_AGGR_PIVOT))
@@ -4733,7 +5088,7 @@ class Game:
             if 5 < self.yardsToEndzone <= _lastMax and _fgSettles:
                 self.play.insights['clockMgmt'] = {
                     'decision': 'lastSnapFG',
-                    'reason': 'No snap after this one — take the makeable FG',
+                    'reason': 'No snap after this one, take the makeable FG',
                     'clockRemaining': self.gameClockSeconds,
                     'down': self.down,
                     'downsPerSeries': self.gameRules.downsPerSeries,
@@ -5158,7 +5513,7 @@ class Game:
                 if self.yardsToEndzone > _ppKMax and _random.random() < _accept:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'chessClockPunt',
-                        'reason': 'Budget nearly out and no kick available — punt rather '
+                        'reason': 'Budget nearly out and no kick available, punt rather '
                                   'than hand the ball over at this spot',
                         'clockRemaining': self.gameClockSeconds,
                         'yardsToEndzone': self.yardsToEndzone,
@@ -5193,7 +5548,7 @@ class Game:
                 _shot = 'deep' if self.yardsToEndzone > CHESS_CLOCK_STRIKE_YARDS else 'long'
                 self.play.insights['clockMgmt'] = {
                     'decision': 'chessClockStrike',
-                    'reason': 'Budget nearly out, nobody to punt to, and points needed — '
+                    'reason': 'Budget nearly out, nobody to punt to, and points needed, '
                               'take a shot downfield',
                     'clockRemaining': self.gameClockSeconds,
                     'yardsToEndzone': self.yardsToEndzone,
@@ -5556,7 +5911,7 @@ class Game:
                 self.play.insights['clockMgmt'] = {
                     'decision': 'hailMary',
                     'reason': ('Drive clock expiring, heave for the score' if _driveHailMary
-                               else 'Desperation — need a miracle score'),
+                               else 'Desperation, need a miracle score'),
                     'clockRemaining': self.gameClockSeconds,
                     'yardsToEndzone': self.yardsToEndzone,
                     'scoreDiff': scoreDiff,
@@ -6618,7 +6973,46 @@ class Game:
             label = CONTEST_TYPE_LABELS.get(self.play.contestType, 'Contest')
             text = f"{label}: {body}"
 
-        self.play.playText = text
+        self.play.playText = self._prependPreSnapBeat(text)
+
+    def _prependPreSnapBeat(self, text: str) -> str:
+        """Put what happened BEFORE the snap in front of the play that followed it.
+
+        ⚠️ THREE LAYERS OF DECISION RESOLVE BETWEEN THE WHISTLE AND THE SNAP AND THE FEED
+        REPORTED NONE OF THEM. Built without this the whole tempo/audible system is
+        invisible work — the offense goes no-huddle, the QB checks the play, and a reader
+        sees a 6-yard gain with no idea why.
+
+        ⚠️ A PREFIX, NOT ITS OWN FEED ENTRY (owner, 2026-08-16), and only for beats that
+        are FACTS. Going no-huddle and calling an audible are things the offense did, so
+        there is no tension between the beat and the outcome and one sentence reads better.
+        It is also structurally cheaper: this is the single place `playText` is assigned
+        (`_puntPlayText` returns into the same variable, so punts are covered), a prefix
+        rides its own play so the silent timing modes suppress it for free, and it cannot
+        be orphaned or mis-sorted the way a separate entry can.
+
+        ⚠️ THE DISGUISE BEAT MUST NOT COME THROUGH HERE. "They're showing blitz" is a LIE
+        the play text exists to reveal, and prepending puts the lie and its reveal in one
+        sentence — the reader stops being fooled alongside the quarterback, which is the
+        whole point of the reveal rule. That beat needs the separate pre-snap entry.
+
+        ⚠️ At most ONE line per snap, taking the most significant. The Bleachers already
+        taught this: a beat per event buried the feed under its own chatter.
+        """
+        if not text:
+            return text
+        play = getattr(self, 'play', None)
+        if play is None:
+            return text
+
+        # Most significant first. An audible is a decision; no-huddle is a state change,
+        # and it only ever announces on the snap it begins.
+        if getattr(play, 'audibleText', None):
+            return f"{play.audibleText} {text}"
+        if getattr(play, 'enteringNoHuddle', False):
+            team = getattr(self.offensiveTeam, 'name', None) or 'The offense'
+            return f"{team} goes no-huddle. {text}"
+        return text
 
     def _evaluateClutchChoke(self):
         """Evaluate whether the current play qualifies as a clutch or choke moment.
@@ -11014,9 +11408,25 @@ class Game:
             return
         intent, baseTime = self._classifyTempoIntent()
         coach = getattr(self.offensiveTeam, 'coach', None)
+
+        # ⚠️ THE NO-HUDDLE STATE IS CAPTURED HERE, NOT READ LATER. `_isNoHuddle()` depends
+        # on `clockRunning`, which the play itself changes — by the time `formatPlayText`
+        # runs it reflects the state AFTER the snap, so asking there gives the wrong
+        # answer. This runs in the pre-snap block, before anything moves.
+        noHuddle = self._isNoHuddle()
+        # ⚠️ ANNOUNCE ON ENTERING, ONCE — a six-play drill saying "goes no-huddle" six
+        # times is noise, and the cadence rule is one pre-snap line per snap. The latch
+        # holds the TEAM rather than a bool: a plain flag would stay set through a
+        # turnover and silently swallow the new offense's own first no-huddle snap.
+        entering = noHuddle and self._noHuddleTeam is not self.offensiveTeam
+        self._noHuddleTeam = self.offensiveTeam if noHuddle else None
+        self.play.noHuddle = noHuddle
+        self.play.enteringNoHuddle = entering
+
         self.play.insights['tempo'] = {
             'intent': intent,
             'baseTime': baseTime,
+            'noHuddle': noHuddle,
             'coachClockIQ': round(self._coachClockIQ(coach), 2),
         }
 
@@ -11032,6 +11442,20 @@ class Game:
         Always called after recordTempoIntent has stamped the intent, so this
         method just augments the existing insight with the time math.
         """
+        # ⚠️ NO-HUDDLE SHORT-CIRCUITS THE HUDDLE MATH ENTIRELY. Everything below models a
+        # huddle — its length, its 8-second floor, its wide jitter — and the point of
+        # standing at the line is that none of that happens. Falling through with a
+        # smaller base would still inherit the floor and the huddle's spread.
+        if self._isNoHuddle() and self.play is not None \
+                and self.play.playType not in (PlayType.Kneel, PlayType.Spike):
+            finalTime = self._noHuddlePreSnapSecs()
+            if 0 < self.gameClockSeconds <= finalTime:
+                finalTime = max(0, self.gameClockSeconds - 1)
+            if hasattr(self, 'play') and self.play is not None and 'tempo' in self.play.insights:
+                self.play.insights['tempo']['noHuddle'] = True
+                self.play.insights['tempo']['finalSeconds'] = finalTime
+            return finalTime
+
         intent, baseTime = self._classifyTempoIntent()
         coach = getattr(self.offensiveTeam, 'coach', None)
         gameIQ = self._coachClockIQ(coach)
@@ -12141,6 +12565,17 @@ class Game:
 
         # Pass plays
         if self.play.playType == PlayType.Pass:
+            # ⚠️ A SACK IS NOT A DEAD BALL — the quarterback was tackled in the field
+            # of play, so the clock keeps running exactly as it does on a run. Without
+            # this the sack falls through to the incompletion branch below (a sack is
+            # a pass play that never completed) and stops the clock. That cost far
+            # more than the runoff: the pre-snap huddle is only charged while the
+            # clock is running, so a sack also made the NEXT huddle free — 25-35s of
+            # game clock handed back per sack, and a team taking a dozen of them
+            # played several extra minutes of football. Scores, turnovers and
+            # sack-fumbles are already handled by the branches above.
+            if self.play.isSack and self.play.isInBounds:
+                return True
             if self.play.isPassCompletion:
                 # Completed pass - in bounds keeps the clock; out of bounds is a dead
                 # ball (stops it) unless the running-clock rule suppresses that.
@@ -13303,6 +13738,13 @@ class Play():
         # a clock indicator next to each play in the feed.
         self.clockStopped = False
         self.targetSideline = False  # True when play caller targets sideline routes
+        # What the defense paid for showing one thing and doing another, charged in
+        # `_applyPreSnapRead`. A fresh Play per snap means this needs no reset elsewhere —
+        # and it must NOT be added to `_executeWeightedPlay`'s reset block, which runs
+        # AFTER `_maybeAudible` has already resolved the disguise and set it.
+        self.disguiseCost = 0.0
+        self.audibleText = None
+        self.noHuddle = None
         # NOTE: do NOT initialize self.down here — line 7488 above already
         # captures the pre-play down from game.down at construction time.
         # An earlier `self.down = 0` here was overwriting that and shipping
@@ -14292,19 +14734,26 @@ class Play():
         # Dropback depth increases sack risk (3-step=1, 5-step=2, 7-step=3)
         rushDifferential += (dropbackDepth - 1) * 2
 
-        # Base sack rate at even matchup (differential = 0) is ~3%
-        # Logistic function: probability increases smoothly with rush advantage
-        from constants import SACK_BASE_RATE, SACK_PROB_CAP
+        # The curve is centered so a differential of 0 reads baseSackRate. That is NOT
+        # the realized league rate — protection systematically outweighs the rush, so
+        # the typical differential is around -17 and the logistic lands near 6%.
+        # ⚠️ STEEPNESS SETS HOW MUCH THE MATCHUP MATTERS, and it used to be hardcoded
+        # here at 0.15, which made a 20-point attribute gap worth a 4x sack rate. See
+        # the note on SACK_PROB_CAP for the measurements — cap and steepness have to be
+        # tuned together, and against the SPREAD rather than against the mean.
+        from constants import SACK_BASE_RATE, SACK_PROB_CAP, SACK_CURVE_STEEPNESS
         baseSackRate = SACK_BASE_RATE
-        steepness = 0.15
+        steepness = SACK_CURVE_STEEPNESS
 
         # Shift the curve so 0 differential = baseSackRate
         probability = (baseSackRate * 2) / (1 + np.exp(-steepness * rushDifferential))
 
         # Extra-long dropbacks (Hail Mary) leave QB exposed in pocket much
-        # longer than normal — the standard 15% cap underestimates real risk.
-        # Lift cap to 28% so a strong rush against thin protection can wreck
-        # the play before it leaves the QB's hand.
+        # longer than normal — the standard cap underestimates real risk. Lift it
+        # so a strong rush against thin protection can wreck the play before it
+        # leaves the QB's hand. ⚠️ This 28 is written against a ~15 standard cap and
+        # is meant to be a LIFT; while SACK_PROB_CAP sat at 30 it was silently a
+        # REDUCTION, doing the opposite of what it says. Move the two together.
         capMax = 28 if dropbackDepth >= 6 else SACK_PROB_CAP
         return max(0.5, min(capMax, probability))
 
@@ -14417,6 +14866,36 @@ class Play():
                 _sell = _runConceptExecQ(self.runner, self.runConcept) if self.runner else 0.5
                 floor = PRESNAP_CONCEPT_DISGUISE_FLOOR
                 disguise = max(disguise, _cd * (floor + (1 - floor) * _sell))
+        # ⚠️ NO-HUDDLE IS A NEGATIVE DISGUISE, and it is what pays for the tempo. An
+        # offense at the line can only throw short or medium at the sideline, and a
+        # defense that knows this reads it — so the same quantity a fake SUBTRACTS from
+        # recognition, a telegraph ADDS. Applied after the fakes rather than through the
+        # `max()` chain above, because it is not competing with them: it is the opposite
+        # sign, and on the rare snap that is somehow both, the two should partly cancel
+        # rather than one winning outright.
+        #
+        # ⚠️ This is the one place the read is deliberately NOT zero-sum. Everywhere else a
+        # league-average defense nets nothing from it. Here the offense has chosen a state
+        # that announces what is coming, so the defense should net a gain — and that gain
+        # is the price of the extra snaps.
+        # ⚠️ READ THE CAPTURED FLAG, NEVER `_isNoHuddle()` LIVE. That helper depends on
+        # `clockRunning`, and by the time this runs the play resolution has already moved
+        # it — measured, it was False on five snaps in six here, so a live call silently
+        # dropped the telegraph on most plays and the penalty barely registered (read
+        # accuracy 56% against the 78% it should be). `recordTempoIntent` stamps
+        # `play.noHuddle` in the pre-snap block, before anything moves, for exactly this
+        # reason. Falling back to the live call keeps the harnesses that drive a play
+        # without the pre-snap block honest.
+        if getattr(self, 'noHuddle', None) is None:
+            try:
+                _noHuddle = game._isNoHuddle()
+            except Exception:
+                _noHuddle = False
+        else:
+            _noHuddle = bool(self.noHuddle)
+        if _noHuddle:
+            from constants import NO_HUDDLE_TELEGRAPH
+            disguise -= NO_HUDDLE_TELEGRAPH
         accuracy = max(0.05, min(0.95, accuracy - disguise))
 
         correct = _random.random() < accuracy
@@ -14424,6 +14903,18 @@ class Play():
         swing = PRESNAP_READ_EDGE * leverage
         key = 'runDefMult' if isRun else 'passDefMult'
         scheme[key] = scheme.get(key, 1.0) * ((1 + swing) if correct else (1 - swing))
+
+        # ⚠️ THE PRICE OF LYING. A defense that showed blitz and dropped is, for this snap,
+        # slightly out of position against whatever the disguise did not prepare for — so
+        # the alignment cost lands on BOTH multipliers regardless of what the offense ran.
+        # Without it every defense would disguise every play and the layer would just be a
+        # free accuracy tax on the offense. A TIPPED disguise pays more: the look broke,
+        # the QB got an honest read, and the defense is still out of position.
+        cost = getattr(self, 'disguiseCost', 0.0) or 0.0
+        if cost:
+            for k in ('runDefMult', 'passDefMult'):
+                if k in scheme:
+                    scheme[k] *= (1.0 - cost)
 
         self.preSnapRead = {'predicted': ('run' if (correct == isRun) else 'pass'),
                             'correct': correct,
@@ -15077,6 +15568,33 @@ class Play():
             from constants import AWAKENED_RECEIVER_OPENNESS_BONUS
             awakenedBonus = AWAKENED_RECEIVER_OPENNESS_BONUS
 
+        # ⚠️ IN A NO-HUDDLE DRILL THE QB LOOKS FOR HIS TIGHT END FIRST. Restricting the
+        # menu to short/medium was not enough on its own — it moved TE involvement only
+        # 67.2% -> 64.8% of called plays, because most plays already list all three
+        # receivers, so which receiver a play NAMES was never the lever. Who the
+        # quarterback LOOKS AT is.
+        #
+        # Same mechanism as the awakened nudge above and deliberately smaller: a tendency,
+        # not a compulsion. It moves PERCEIVED openness only, so it never makes the throw
+        # safer than it is — a covered tight end stays covered and the ball can still be
+        # broken up. That matters, because this fires in exactly the situation the defense
+        # is about to start reading (step 3).
+        # ⚠️ CAPTURED FLAG, NOT A LIVE CALL — same trap as the telegraph in
+        # `_applyPreSnapRead`. `_isNoHuddle()` reads `clockRunning`, which the play
+        # resolution has already changed by the time a target is selected, so asking live
+        # drops the nudge on most snaps. `play.noHuddle` is stamped pre-snap.
+        teBonus = 0
+        teReceiver = None
+        try:
+            _nh = self.noHuddle if getattr(self, 'noHuddle', None) is not None \
+                else self.game._isNoHuddle()
+            if _nh:
+                from constants import NO_HUDDLE_TE_OPENNESS_BONUS
+                teBonus = NO_HUDDLE_TE_OPENNESS_BONUS
+                teReceiver = self.game.offensiveTeam.rosterDict.get('te')
+        except Exception:
+            teBonus, teReceiver = 0, None
+
         # Create perceived targets with vision-adjusted openness
         perceivedTargets = []
         for target in targetList:
@@ -15085,6 +15603,8 @@ class Play():
             perceivedOpenness = max(0, min(100, actualOpenness + visionError))
             if awakenedBonus and getattr(target['receiver'], 'id', None) in awakenedCharge:
                 perceivedOpenness = min(100, perceivedOpenness + awakenedBonus)
+            if teBonus and teReceiver is not None and target['receiver'] is teReceiver:
+                perceivedOpenness = min(100, perceivedOpenness + teBonus)
 
             perceivedTargets.append({
                 'receiver': target['receiver'],

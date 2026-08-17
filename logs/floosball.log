@@ -61969,3 +61969,110 @@ Shutting down API server...
 2026-08-10 22:29:01 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
 2026-08-10 22:29:06 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
 2026-08-10 22:29:27 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Monuments' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Pops' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Sodas' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Waffles' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Extras' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Bees' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Tuesdays' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Raccoons' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Curd' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Buffalo' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Midnights' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Grillmeisters' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Trains' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - teamDistribution lists 'Exoticos' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - 6 club(s) are in `teams` but were placed in NO league: Drivers, Blouses, Moonlight, Bachelorettes, Lattes, Babies. Leagues are now uneven and the schedule cannot be generated correctly.
+2026-08-16 15:04:44 - floosball.leagueManager - ERROR - Leagues are uneven after distribution: {'Corduroy League': 12, 'Flannel League': 6}
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Monuments' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Pops' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Sodas' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Waffles' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Extras' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Bees' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Tuesdays' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Raccoons' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Curd' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Buffalo' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Midnights' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Grillmeisters' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Trains' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - teamDistribution lists 'Exoticos' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - 6 club(s) are in `teams` but were placed in NO league: Drivers, Blouses, Moonlight, Bachelorettes, Lattes, Babies. Leagues are now uneven and the schedule cannot be generated correctly.
+2026-08-16 15:09:36 - floosball.leagueManager - ERROR - Leagues are uneven after distribution: {'Corduroy League': 12, 'Flannel League': 6}
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Monuments' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Pops' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Sodas' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Waffles' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Extras' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Bees' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Tuesdays' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Raccoons' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Curd' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Buffalo' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Midnights' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Grillmeisters' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Trains' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - teamDistribution lists 'Exoticos' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - 6 club(s) are in `teams` but were placed in NO league: Drivers, Blouses, Moonlight, Bachelorettes, Lattes, Babies. Leagues are now uneven and the schedule cannot be generated correctly.
+2026-08-16 15:10:31 - floosball.leagueManager - ERROR - Leagues are uneven after distribution: {'Corduroy League': 12, 'Flannel League': 6}
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Monuments' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Pops' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Sodas' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Waffles' under Corduroy League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Extras' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Bees' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Tuesdays' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Raccoons' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Curd' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Buffalo' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Midnights' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Grillmeisters' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Trains' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - teamDistribution lists 'Exoticos' under Flannel League, but no club has that name. Check it against the `teams` array — a rename in one place and not the other leaves a league short and breaks scheduling.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - 6 club(s) are in `teams` but were placed in NO league: Drivers, Blouses, Moonlight, Bachelorettes, Lattes, Babies. Leagues are now uneven and the schedule cannot be generated correctly.
+2026-08-16 15:11:35 - floosball.leagueManager - ERROR - Leagues are uneven after distribution: {'Corduroy League': 12, 'Flannel League': 6}
+2026-08-16 15:13:12 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:13:14 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:13:16 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:18:00 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:24:38 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:25:29 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:25:30 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:25:35 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:35:25 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:35:26 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:35:31 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:38:24 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:38:24 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:38:28 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:39:10 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:39:11 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:39:14 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:52:17 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:52:17 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:52:21 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:53:19 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:53:20 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 15:53:24 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 16:11:59 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 16:12:00 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 16:12:03 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 16:12:07 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 16:28:35 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 16:28:35 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 16:28:39 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 16:28:42 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 16:45:27 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 16:45:30 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 17:02:01 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 17:02:05 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 17:02:08 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 17:02:09 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 17:09:59 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 17:10:02 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 17:10:06 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 17:10:07 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 18:18:31 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-16 18:18:31 - floosball.timingManager - INFO - TimingManager initialized in fast mode

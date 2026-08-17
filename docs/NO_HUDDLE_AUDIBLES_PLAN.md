@@ -223,6 +223,156 @@ Everything else stays silent. ⚠️ The Bleachers taught this lesson already: a
 
 ⚠️ **The broadcast path must be checked.** `_presnapBeat` fires between plays, and the timing modes that suppress game events (`turbo-silent`, `fast-weekly`) must suppress these too, or a silent sim starts narrating.
 
+### ⚠️ Two delivery mechanisms, not one (owner, 2026-08-16)
+
+The audible and no-huddle beats are **prepended to the play text**, not emitted as their
+own feed entry:
+
+> *"Rodrigo Vance calls an audible! Hands off to Tuck Marlow for 6 yards."*
+> *"Buffalo goes no-huddle. Quick out to Sim Pallas for 8."*
+
+**This is better than a separate entry for these two, and the reason is the reveal rule.**
+An audible and a tempo change are FACTS about what the offense did. They are not lies, so
+there is no tension to preserve between the beat and the outcome — putting them in one
+sentence loses nothing and reads better.
+
+It is also structurally cheaper, in ways that matter:
+
+- **One hook.** `self.play.playText = text` (`floosball_game.py:6621`) is the single
+  assignment point, and every play type flows through it — `_puntPlayText` returns into
+  the same `text` variable, so punts are covered without a second site.
+- **No broadcast-suppression path.** The plan flagged that `turbo-silent` and
+  `fast-weekly` must suppress pre-snap beats or a silent sim starts narrating. A prefix
+  rides its own play, so those modes already handle it. A separate feed entry would need
+  its own guard.
+- **Cannot be orphaned or mis-sorted.** The beat is physically attached to the play it
+  describes; a separate entry has to be ordered correctly against it.
+- **The one-line-per-snap cadence rule enforces itself** — one play text, one prefix.
+
+⚠️ **IT DOES NOT EXTEND TO THE DISGUISE BEAT.** "They're showing blitz" is a LIE that the
+play text exists to reveal. Prepending puts the lie and its reveal in the same sentence,
+read at once, and the tension the reveal rule was designed around evaporates:
+
+> prepended:  *"The defense shows blitz! They dropped eight and Vance never saw it."*
+> as written: *"They're showing blitz…"* → snap → *"…and they dropped eight."*
+
+So **Part 3 keeps the separate pre-snap entry** described above. That splits the work along
+its natural seam: Parts 1-2 get the cheap prefix, Part 3 gets the entry it actually needs.
+
+⚠️ **No-huddle announces on ENTERING the state, once.** The cadence table already says so,
+and a prefix makes it easy to get wrong — a six-play drill would otherwise say "goes
+no-huddle" six times. Needs a latch cleared on possession change and on leaving the state.
+
+⚠️ **When both would fire on one snap, the audible wins.** They can collide only on the
+first no-huddle snap (since no-huddle announces once), but the rule has to exist: an
+audible is the more significant event, and the cadence rule is one line per snap.
+
+## ⚠️ Measuring this at all — four defects, found the hard way (2026-08-16)
+
+The step 3 gate took FOUR attempts. Every one of the first three gave a confident,
+wrong answer, and each failed differently. Any future measurement here must clear all
+four or it is measuring something else.
+
+1. **The harness had no team defense.** `scenario.py` builds teams by hand and never
+   called `deriveDefenseFromRoster`, so `defensePassCoverageRating` was **0** against a
+   real 71-81. Zone coverage blends `individualCoverage * 0.4 + effectivePassDef * 0.6`,
+   so **60% of the coverage a receiver faced was zero** and receivers were permanently
+   wide open. Fixed in `scenario.py`. ⚠️ It also produced a false conclusion that
+   `runStopFocus` "stops the run but does not open the pass" — it is symmetric
+   (-1.78 ypc against +1.60 ypp), and nothing needed changing.
+2. **Arms built their own rosters**, so they compared TEAMS rather than tempos.
+   Run-to-run spread was 0.6-0.9 ypp against an effect of 0.4.
+3. **Only yards per play was measured.** The menu restriction removes RUNS, which
+   average below passes, so restricting mechanically RAISES ypp regardless of whether
+   the drill got harder. Explosive-play rate is the metric that actually moves.
+4. **⚠️ ARMS RAN IN BLOCKS.** Player state drifts across a long run, so whichever arm
+   went LAST looked better. Reversing the arm order flipped the telegraph's measured
+   effect from **+0.183 to -0.343** — which is how this was caught, and it is the one
+   that would have gone unnoticed.
+
+**The design that survives:** one roster, arms ROTATED EVERY SNAP so drift lands on all
+three equally, differences taken WITHIN a roster, averaged across a dozen rosters, and
+at least one metric the restriction cannot game.
+
+### The result
+
+12 rosters x 4,200 interleaved snaps:
+
+| comparison | ypp | 20+ rate |
+|---|---|---|
+| no-huddle, no telegraph, vs huddling | **-0.204 +/- 0.070** | **-1.08% +/- 0.21%** |
+| no-huddle + telegraph, vs huddling | -0.165 +/- 0.074 | -0.98% +/- 0.19% |
+| **what the telegraph itself costs** | **+0.039 +/- 0.081** | +0.11% +/- 0.14% |
+
+⚠️ **THE GATE PASSES, BUT NOT ON THE MECHANISM BUILT FOR IT.** The MENU RESTRICTION is
+doing all of the work; the telegraph contributes nothing distinguishable from zero.
+
+It is not that the telegraph fails to fire — instrumented, it moves read accuracy
+**46% -> 76%** and `passDefMult` **1.066 -> 1.092** exactly as designed. That swing is
+simply too small to matter: at the measured elasticity it is worth about -0.14 ypp,
+which sits inside the noise floor. The binding constraint is `PRESNAP_READ_EDGE`
+(**0.09**), deliberately small because that layer is a zero-sum redistribution for the
+whole sim.
+
+So charging more for predictability needs its own lever rather than a bigger disguise
+number — `NO_HUDDLE_TELEGRAPH` is already near the accuracy clamp. Owner call.
+
+### Steps 4 and 5, re-measured (2026-08-16)
+
+⚠️ **NOT BY OUTCOME BUCKET.** Comparing "good check" against "bad check" looks natural
+and is riddled with selection effects: the two happen in DIFFERENT box states and produce
+DIFFERENT play types, so the buckets differ by more than the read. Two attempts died on
+this. The answerable question is whether the layer makes an offense better and whether
+PLAYER QUALITY drives it, so the arms are the FLAGS, interleaved every snap.
+
+10 rosters x 4,800 interleaved snaps, differenced within roster:
+
+| step 4 — audibles, honest defense | off | on | gain |
+|---|---|---|---|
+| sharp + gunslinger (95/62) | 5.04 | 4.99 | -0.046 +/- 0.054 |
+| blind + gunslinger (64/62) | 5.03 | 4.92 | **-0.111 +/- 0.028** |
+| sharp + disciplined (95/95) | 4.90 | 4.94 | +0.034 +/- 0.056 |
+
+| step 5 — defensive disguise | off | on | offense gain |
+|---|---|---|---|
+| sharp + gunslinger | 5.21 | 5.25 | +0.038 +/- 0.051 |
+| blind + gunslinger | 4.79 | 4.81 | +0.026 +/- 0.052 |
+
+⚠️ **THE TRAP WORKS AND THE PAYOFF DOES NOT.** Audibles make a blind gunslinger
+measurably worse (4 se) — exactly the design goal, a bold QB who cannot read is a real
+liability. But no profile GAINS from audibling, and the disguise has no measurable effect
+on anyone.
+
+The arithmetic says it should. At a light box the sim pays run 4.79 against pass 4.20; at
+a stacked box, pass 5.80 against run 3.01. So a correct check is worth +0.6 to +2.8 yards
+and a sharp QB reads right ~72% of the time — which should net around +0.28 ypp. It does
+not, and the likely reason is that the baseline play-caller ALREADY responds to the
+situation, so the mismatches the audible fires on are largely cases where the original
+call was fine and the quarterback is second-guessing it.
+
+⚠️ **SETTLED (owner, 2026-08-16): THE NARRATIVE IS THE DELIVERABLE, NOT THE YARDAGE.**
+*"The narrative is what the fans see."* Both layers ship as they are. They are
+structurally correct, they cost the offense nothing except in the hands of a quarterback
+who should be losing yards, and what they produce is the thing Part 4 always said was the
+point: three layers of decision resolving before the snap, now visible to a reader.
+
+That is consistent with the plan's own framing rather than a concession to a
+disappointing measurement — Part 4 opens by insisting the commentary "IS NOT POLISH, IT
+IS THE DELIVERABLE", because built without it the whole system is invisible work. The
+measurement says the reverse also holds: built WITH it, the system earns its keep even
+where the yardage is neutral.
+
+⚠️ **IT RE-PRIORITISES WHAT IS LEFT.** If the narrative is the product, the one beat that
+is still invisible — the DISGUISE line — is now the highest-value remaining item, not a
+tail-end nicety. It is also the only one that cannot use the cheap prefix: "they're
+showing blitz" is a lie the play text exists to reveal, so it needs the separate pre-snap
+entry and the reveal rule that goes with it.
+
+A CONVICTION THRESHOLD is still the right idea if the yardage is ever wanted — the
+audible currently fires whenever the call disagrees with the perceived box, which is too
+often, so it trades good calls for merely-different ones. Recorded as a future option
+rather than a pending task.
+
 ## Measurement
 
 The clock work this week established the pattern: a **low-variance targeted probe** beats a noisy aggregate. Per-arm, before/after:
@@ -234,7 +384,7 @@ The clock work this week established the pattern: a **low-variance targeted prob
 5. **Disguise** — rate, and the split of QB outcomes against a disguised look versus an honest one, by QB `instinct`. The trap cell (fooled + audibled) must be measurably WORSE than standing pat, or the mind game has no teeth. Also the league-wide multiplier: a league-average defense should net ~1.0 from disguise, the way the pre-snap read nets 1.0016.
 6. **Guardrail** — league scoring and end-of-half points. ⚠️ The rating-multiplier → win-probability transfer is **1.619**, so a layer that looks small can move wins hard; measure before tuning.
 
-⚠️ **`_estimateAvailablePlays` is a known landmine here.** It counts a play that does not fit (documented in the engine), and no-huddle changes the per-play cost it is silently wrong about. Any tuning of it must be done across all eight call sites at once — tightening it alone measured WORSE (late FG attempts 33 → 18). Best handled as its own pass, after no-huddle lands, when the true per-play cost is actually known per tempo state.
+⚠️ **`_estimateAvailablePlays` was a known landmine here — DONE 2026-08-16, after no-huddle landed and the per-tempo cost became knowable.** The defect turned out to be narrower than "counts a play that does not fit": the loop charges every snap after the first an inter-play gap and charged the **first snap nothing**, so the huddle in front of it was free. It now pays `_lastSnapBeforeBreak`'s cost — huddle only when the clock is running and cannot be stopped, `_noHuddlePreSnapSecs()` in no-huddle — so the two helpers share one model. Blast radius **1.4-1.7%** of a 1,728-state sweep against the failed tightening's **8.3%**, and both gate directions move the same way, so the earlier regression does not reproduce. Outcome effect measured at **zero** over 500 games a side at four downs and five, which is expected: `_lastSnapBeforeBreak` now takes the end-of-half kick directly and already catches what the over-count used to break. Regression: `test_available_plays.py`.
 
 ---
 
@@ -253,9 +403,118 @@ Flags: `NO_HUDDLE_ENABLED`, `AUDIBLE_ENABLED`, `DEFENSIVE_DISGUISE_ENABLED`, eac
 
 ## Open questions (owner)
 
-1. **Does a bad QB decline to audible, or audible badly?** Declining is safer and more realistic; audibling badly is more fun and gives `xFactor` somewhere to hurt. Current lean: **both**, split by `instinct` (sees it or not) vs `flairOf` (acts on it or not) — a bold QB who cannot read is the interesting failure case.
-2. **Should no-huddle be available OUTSIDE a two-minute drill?** Real offenses use it as a tempo weapon on any down. The clock-driven trigger says no. A `hurryUp`-only rule is simpler and matches the reported need; a coach-preference version is a later layer and would need its own attribute.
-3. **Does the defense get to substitute?** Real no-huddle's edge is that it prevents defensive personnel changes. The sim has no personnel packages, so there is nothing to model — noting it so it is not mistaken for an oversight.
-4. ~~**Should a disguise be visible to the READER even when it fools the QB?**~~ **SETTLED by Part 4:** the pre-snap line reports what the QB SEES (the lie included) and the play text reveals the truth. The reader is fooled alongside him and learns with him.
-5. **Can the offense bait too?** A QB who reads a disguise could hard-count to make the defense declare. That is a fourth layer and almost certainly a step too far — noting it so it is a deliberate omission rather than an oversight.
-6. **Fatigue.** No-huddle should tire the offense faster. The sim has a fatigue model applied pre-game; a within-game tempo cost is a separate piece of work and is out of scope here.
+All settled 2026-08-16, against measurements taken on the production roster (34 active
+QBs) and a 1,620-sample sweep of the tempo classifier's state space.
+
+### 1. Does a bad QB decline to audible, or audible badly? — **SETTLED: both, and the
+willingness term is `_undiscipline`, NOT `flairOf`**
+
+⚠️ **`flairOf` COLLAPSES THE GRID, because willingness and reading ability are the same
+axis in this league.** Measured correlation with `instinct` across 34 QBs:
+
+| candidate willingness term | r with `instinct` |
+|---|---|
+| `flairOf` (creativity + xFactor) | **+0.77** |
+| focus | +0.74 |
+| creativity | +0.74 |
+| xFactor | +0.65 |
+| `discipline` | **+0.42** |
+
+Every QB mental attribute correlates 0.65-0.77 with every other, because generation makes
+good players good at everything. So the 2x2 the design depends on lands almost entirely on
+its diagonal, and the mind game degenerates into a rating check — good QBs audible well,
+bad QBs do not audible.
+
+The resulting grids, same 34 QBs, split at the median of each term:
+
+| cell | willingness = `flairOf` | willingness = LOW discipline |
+|---|---|---|
+| bold + sharp | 44% | 24% |
+| **bold + blind — THE TRAP** | **6%** | **26%** |
+| cautious + sharp | 9% | 29% |
+| cautious + blind | 41% | 21% |
+
+⚠️ **The direction is why this works, not merely the weaker correlation.** Willingness is
+LOW discipline, and discipline correlates *positively* with instinct — so willingness
+correlates NEGATIVELY with reading ability. Sharp QBs tend to be disciplined and stand pat;
+blind QBs tend to be gunslingers and check anyway. The trap becomes a common outcome
+rather than a 6% rarity, and all four cells are populated.
+
+**Use the existing `_undiscipline`** (`floosball_game.py`, `(80 - discipline) / 20` clamped
+0..1). Its docstring already describes this exact job — *"0 (controlled) .. 1 (gunslinger).
+The gate that turns confidence into either production or chaos."* No new helper, and no
+inversion of the attribute's meaning: it is already the sim's will-do-something-risky term,
+carried by runner moves as the risk of attempting.
+
+⚠️ **`flairOf` is therefore NOT the audible's willingness gate.** If creativity/xFactor
+should still consume here, put them on the QUALITY of a good check rather than on whether
+he pulls the trigger — otherwise they re-introduce the correlation through the back door.
+
+### 2. Should no-huddle be available OUTSIDE a two-minute drill? — **SETTLED: no, keep the clock trigger**
+
+Measured over 1,620 sampled game states:
+
+| quarter | hurryUp | burnClock | neutral |
+|---|---|---|---|
+| Q1 | **0.0%** | 0.0% | 100% |
+| Q2 | 13.3% | 0.0% | 86.7% |
+| Q3 | 14.8% | 3.7% | 81.5% |
+| Q4 | 14.8% | 29.6% | 55.6% |
+| all | **10.7%** | 8.3% | 80.9% |
+
+⚠️ That is STATE-SPACE coverage, not play coverage — real games do not spend equal time in
+every cell, and since Q1 is 0% the true play share is likely LOWER than 10.7%.
+
+⚠️ **Only Part 1 lives in that window.** Audibles and defensive disguise are not gated on
+no-huddle; they fire on every snap. So the narrow window bounds the tempo feature, not the
+system. Part 1 is also the cheapest piece (see the build note on `_lastSnapBeforeBreak`
+below) and the most legible thing in real football, so it does not need to carry the rest.
+A coach-preference version needs its own attribute and is tuning surface for a marginal
+gain.
+
+### 3. Does the defense get to substitute? — **SETTLED: nothing to model**
+
+Re-confirmed 2026-08-16. No personnel packages exist. Deliberate omission, not an oversight.
+
+### 4. ~~Should a disguise be visible to the READER even when it fools the QB?~~ — **SETTLED by Part 4**
+
+The pre-snap line reports what the QB SEES (the lie included) and the play text reveals the
+truth. The reader is fooled alongside him and learns with him.
+
+### 5. Can the offense bait too (hard count)? — **SETTLED: no**
+
+Four layers already resolve before the snap, and the plan's own over-engineering warning
+applies hardest here (the run gate model took seven tuning passes; its first build ran ypc
+to 9.61). A fifth reciprocal layer buys a rare moment for real calibration risk. Deliberate
+omission.
+
+### 6. Fatigue — **SETTLED: out of scope, structurally**
+
+⚠️ Not a scoping preference. Fatigue is applied ONCE pre-game from a season-accumulated
+value and never mutates during a game, so there is no within-game fatigue state for a tempo
+cost to attach to. Adding one is a separate subsystem.
+
+---
+
+## ⚠️ Build notes added 2026-08-16 (the code moved after this plan was written)
+
+Verified against `floosball_game.py`: all nine hooks named above still exist.
+
+**Item 6 of Part 1 is HALF BUILT.** The chess-clock fix (2026-08-13) already made
+`_lastSnapBeforeBreak` tempo-aware — but only in its chess-clock branch, which reads
+`_intent, huddle = self._classifyTempoIntent()` and charges that huddle. The
+standard-format branch still charges a flat `LAST_SNAP_HUDDLE_SECS` (12) regardless of
+tempo. So the pattern to copy is already in the file, and the remaining work is one branch.
+
+**⚠️ DO NOT change `_classifyTempoIntent`'s return arity.** Three sites unpack it as a
+2-tuple, including that chess-clock branch, which was written after this plan. The
+no-huddle state is derivable anyway (hurry-up AND the clock did not stop), so it wants a
+separate `_isNoHuddle()` helper rather than a fourth intent or a changed signature — and
+that gives the menu restriction, the disguise penalty and the snap cost one thing to read.
+
+**⚠️ The measurement harness this plan leans on is GONE.** Part 1's measure cites
+`scratchpad/q2_tempo.py`; scratchpads are session-scoped and no `simcheck_*tempo*` survives
+in the repo. Since step 3 is the balance gate (*"if no-huddle yards per play is not
+measurably LOWER, the drill is a free win"*), rebuild the probe as part of step 1 rather
+than discovering it missing at step 3. `scenario.py` is the right instrument — it builds a
+real `Game` in a target state and was used for the tempo sweep above.

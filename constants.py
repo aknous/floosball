@@ -486,6 +486,79 @@ PRESNAP_DISGUISE = {
 # happened. They already get their payoff in the concept-edge channel. If the
 # layer ever grows a directional commit, this is where they'd earn one.
 PRESNAP_CONCEPT_DISGUISE = {'draw': 0.24}
+# ⚠️ THE NO-HUDDLE TELEGRAPH — a NEGATIVE disguise, and the thing that pays for the tempo.
+# An offense standing at the line can only throw short or medium at the sideline (see
+# `_applyNoHuddleMenu`), and a defense that knows this reads it. Without this, no-huddle
+# is a free win: measured, it buys 12.0s -> 6.0s of pre-snap drain and 6.0 -> 9.5 snaps in
+# a 110-second drill, and nothing charged for the predictability.
+#
+# Sized alongside the fakes it mirrors (playAction .22, sneakLook .28, rpo .30, trick .32)
+# because it is the same quantity pointed the other way: a fake subtracts from the
+# defense's accuracy, a telegraph adds to it. At this value a league-average defense reads
+# a no-huddle snap right about 78% of the time instead of 50%.
+#
+# ⚠️ This is the ONE place the pre-snap read is deliberately NOT zero-sum. Everywhere else
+# `PRESNAP_READ_BASE` 0.50 means an average defense nets nothing and the layer only
+# redistributes between sharp and poor staffs. Here the offense has chosen a state that
+# tells the defense what is coming, so the defense SHOULD net a gain — that gain is the
+# price of the extra snaps.
+NO_HUDDLE_TELEGRAPH = 0.28
+
+# ── Audibles ──────────────────────────────────────────────────────────────
+# ⚠️ THE OFFENSIVE MIRROR OF `_applyPreSnapRead`. The defense has committed run-or-pass
+# before the snap since the pre-snap recognition layer shipped; the offense had no
+# equivalent. Every deception in this sim is an offensive EXECUTION roll against the
+# defense's standing numbers, and nothing let the quarterback look at what he sees and
+# change it.
+#
+# What he reads is the box: `runStopFocus`, the defense's own run-vs-pass tilt, which
+# measures 0.26-0.73 across generated defenses with a median near 0.46.
+AUDIBLE_ENABLED = True
+AUDIBLE_BOX_STACKED = 0.55        # above this the box is sold on the run; below, it is light
+# Accuracy of the read. 0.5 would be a coin flip; a league-average QB should be better than
+# that at simply seeing a stacked box, so the base sits above it and skill moves it.
+AUDIBLE_READ_BASE = 0.62
+AUDIBLE_READ_SKILL = 0.30         # swing across the attribute range
+# ⚠️ THE QB DOMINATES, and that asymmetry is the point. The defense's read is coach 60 /
+# players 40 (he installed the checks and the LB/S execute); the audible is the one place
+# in the sim where the PLAYER, not the coach, makes the call.
+AUDIBLE_QB_WEIGHT = 0.70
+AUDIBLE_COACH_WEIGHT = 0.30
+# ⚠️ WILLINGNESS IS `_undiscipline`, NOT `flairOf` (settled 2026-08-16 against 34 QBs).
+# Every QB mental attribute correlates 0.65-0.77 with every other, and `flairOf` sits at
+# +0.77 with `instinct` — so using it collapses the 2x2 onto its diagonal and the mind
+# game degenerates into a rating check. Discipline correlates only +0.42 AND in the
+# helpful direction: willingness is LOW discipline, so it runs NEGATIVELY against reading
+# ability. Sharp QBs are disciplined and stand pat; blind QBs are gunslingers and check
+# anyway. Measured, that takes the trap cell (bold + blind) from 6% of QBs to 26%.
+AUDIBLE_WILLINGNESS_BASE = 0.30   # a fully disciplined QB still checks sometimes
+AUDIBLE_WILLINGNESS_SWING = 0.55  # a gunslinger checks far more often
+
+# ── Defensive disguise ────────────────────────────────────────────────────
+# ⚠️ THE PIECE THAT MAKES THE OTHERS A SYSTEM. Without it the QB reads an honest defense
+# and an audible is just a skill check the good QB always passes. With it, what the
+# defense SHOWS and what it DOES come apart: a fooled quarterback checks into a trap and a
+# sharp one sniffs it out.
+#
+# It also gives `defensiveMind` a genuine two-sided role — reading the offense's intent
+# (shipped with the pre-snap read) and hiding its own (here). A staff strong in one and
+# weak in the other should feel different to play against.
+DEFENSIVE_DISGUISE_ENABLED = True
+# How often a defense lies, before coaching. A sharp staff installs and calls disguises; a
+# poor one plays what it lines up in.
+DISGUISE_BASE_RATE = 0.18
+DISGUISE_COACH_SWING = 0.30       # defensiveMind takes it roughly 0.03 -> 0.48
+# ⚠️ HOLDING THE LOOK IS A SEPARATE CHECK, and a blown one is WORSE than never lying: the
+# QB gets a free read AND the defense has committed late. Discipline and focus hold it.
+DISGUISE_HOLD_BASE = 0.72
+DISGUISE_HOLD_SWING = 0.24        # ~0.60 for a sloppy unit, ~0.84 for a disciplined one
+# ⚠️ A DISGUISE MUST COST SOMETHING, OR EVERY DEFENSE DISGUISES EVERY PLAY. A defense
+# showing blitz and dropping is, for that snap, slightly out of position against what it
+# did not prepare for. Small on purpose — it is a tax on lying, not a reason never to.
+DISGUISE_ALIGNMENT_COST = 0.06
+# A tipped disguise pays the cost anyway AND hands over the read, which is what makes
+# `discipline` worth having on a defense.
+DISGUISE_TIPPED_EXTRA_COST = 0.04
 # Scaled by how well this back sells it (_runConceptExecQ, deterministic from
 # attributes): a shifty, cerebral back disguises a draw; a plodder telegraphs it.
 # Range is this floor to 1.0 of the nominal value above.
@@ -753,6 +826,62 @@ ROSTER_MIN_PLAYERS = 3
 #  3000 FP → 565 F
 WEEKLY_FP_FLOOBIT_SCALE = 1.10
 WEEKLY_FP_FLOOBIT_EXPONENT = 0.78
+# ---- Tail knee ----
+# ⚠️ THE TAPER WAS WORKING AND THE TAIL WAS STILL RUNNING AWAY. Measured over 2,221 real
+# user-weeks (production, seasons 12+, which is post-card-rebalance): the power curve
+# compresses an FP spread of 30.7x (p50 261 FP, p99 8,006 FP) down to 14.5x in Floobits —
+# so the taper does its job — but the ABSOLUTE tail is still p99 1,219 F and a maximum of
+# 5,165 F for a single week, against a median week of 84 F. A pack costs 40-100 F, so one
+# outlier week bought 12-50 of them.
+#
+# ⚠️ SHARPENING THE EXPONENT IS THE WRONG LEVER, and it is the obvious one. The exponent
+# applies from the very first point, so it cannot touch the tail without dragging typical
+# play down with it: 0.78 -> 0.70 takes the MEDIAN week 84 F -> 54 F and total payout to
+# 56%; 0.65 takes it to 41 F and 40%. That would undo the deliberate ~2.3x lift above,
+# which exists because actually playing fantasy earned ~830 F/season against ~5k from
+# parking Floobit-output cards. The median is the number that lift was bought for.
+#
+# ⚠️ A HARD CAP IS ALSO WRONG, AND WAS ALREADY TRIED — `2bf171b` ("replace cap with log
+# curve") removed one. A cap makes every week past it pay identically, so a great week and
+# an absurd week are indistinguishable and the incentive to keep playing dies at the cap.
+# Modelled at 400 F it holds the median but flattens everything above p93 onto one value.
+#
+# So the taper gets a SECOND, harsher taper above a knee. Below the knee nothing changes
+# at all (p25/p50/p75 are identical by construction); above it each doubling of FP pays
+# 2^0.45 instead of 2^0.78. It is continuous at the knee and strictly monotonic, so a
+# bigger week always pays more — the property the cap gave up.
+#
+# Measured effect, same 2,221 user-weeks:
+#   p25/p50/p75   50 / 84 / 183 F   unchanged
+#   p90          363 -> 349 F       (-4%)
+#   p99        1,219 -> 702 F       (-42%)
+#   max        5,165 -> 1,614 F     (-69%)
+#   spread p99/p50  14.5x -> 8.4x ·  total payout 86% of current
+#
+# The knee sits just below p90 (1,696 FP), so it bites roughly the top decile of weeks and
+# leaves everything a normal player experiences alone. Lower it toward 1,000 to bite the
+# top fifth (p90 -16%, total 81%); raise it to leave more of the tail intact.
+#
+# ⚠️ THIS IS DOWNSTREAM OF CARD BALANCE. The FP tail is manufactured by FPx multipliers
+# compounding, so an overtuned card shows up here as an economy problem. Prefer fixing the
+# card (see Diversified) over steepening this; the knee is a backstop, not the cure.
+WEEKLY_FP_FLOOBIT_KNEE = 1500.0      # FP at which the second taper starts
+WEEKLY_FP_FLOOBIT_TAIL_EXPONENT = 0.45   # exponent applied to FP past the knee
+
+
+def weeklyFpFloobits(weekFp: float) -> int:
+    """Floobits for a week's fantasy points. THE single definition of the curve.
+
+    Power curve up to `WEEKLY_FP_FLOOBIT_KNEE`, then a harsher one past it. Continuous at
+    the knee (both branches agree there) and monotonic everywhere, so a bigger week is
+    always worth more.
+    """
+    if weekFp <= 0:
+        return 0
+    if weekFp <= WEEKLY_FP_FLOOBIT_KNEE:
+        return round(WEEKLY_FP_FLOOBIT_SCALE * (weekFp ** WEEKLY_FP_FLOOBIT_EXPONENT))
+    atKnee = WEEKLY_FP_FLOOBIT_SCALE * (WEEKLY_FP_FLOOBIT_KNEE ** WEEKLY_FP_FLOOBIT_EXPONENT)
+    return round(atKnee * ((weekFp / WEEKLY_FP_FLOOBIT_KNEE) ** WEEKLY_FP_FLOOBIT_TAIL_EXPONENT))
 # Endowment (income_boost powerup): a flat +25% on ANYTHING credited to the bank
 # while it's active — fantasy, pick-em, showcase + supporter dividends, etc. Applied
 # once at the choke point (CurrencyRepository.addFunds), so every income stream is
@@ -1063,7 +1192,35 @@ PUNT_MUFF_RECOVER_KICKING = 0.50    # who comes up with a muffed ball
 # rushDifferential is negative and the logistic lands well below this number. 14.0
 # yields ~6.0% of dropbacks, i.e. a real-world 2.48 sacks per team per game.
 SACK_BASE_RATE = float(_os.environ.get('FLOOS_SACK_BASE', '14.0'))  # curve param, not the rate
-SACK_PROB_CAP = float(_os.environ.get('FLOOS_SACK_CAP', '30'))      # ceiling on a normal dropback
+# ⚠️ THE CAP AND THE STEEPNESS ARE WHAT SET THE SPREAD, and both were wrong while the
+# base rate above was right. Reported as an explosion of sacks (19 by one team in a
+# Floos Bowl) — but measured over 1,511 logged games the league AVERAGE was already on
+# target at 2.85/team/game, 6.1% per dropback. The TAIL was the fault: p99 game rate
+# 16.3%, top games 19%. At cap 30 with steepness 0.15 a 90 pass rush against a
+# 70-mobility QB sat at 22.9% per dropback FOR THE WHOLE GAME (24.9% on a long
+# dropback), so a 20-point attribute gap was worth a 4x sack rate against real
+# football's ~2x, and ~42 dropbacks made the high teens an ordinary outcome rather
+# than a freak one. Retuned by modelling the curve over the REAL 32-team roster (every
+# team's derived pass rush against every other team's QB mobility and blocking) across
+# the REAL 24-play pass playbook, so the blocker mix and the dropback depths are the
+# ones the sim actually calls: expected team-game sacks p99 **10.6 -> 7.6**, max
+# 11.3 -> 7.7, with the mean HELD at 3.47 -> 3.43 and the base rate UNCHANGED — nothing
+# was ever wrong with it, and the league average was the one number already on target.
+# ⚠️ THE PASS RUSH MUST STILL MATTER, so tune against the SPREAD, never the mean. The
+# p90/p10 team-game ratio lands at 10.1x, halved from 19.4x and a long way from flat.
+# Pushing the cap lower forces the base rate up to hold the mean, which parks most
+# plays AT the ceiling and flattens the curve into "pass rush quality is irrelevant" —
+# measured at cap 10 the spread collapses while the mean still reads fine.
+# ⚠️ Do NOT tune this against a synthetic harness of uniformly-seeded teams. One was
+# tried first and its matchup spread does not resemble a real league's (differentials
+# spanning -72..+65 against the real -41..+31), so it reproduced neither the real mean
+# nor the real tail and ranked candidates differently. Read real rosters out of a
+# database — `player_attributes` plus the derivations in `floosball_player` is enough,
+# no app boot required.
+SACK_PROB_CAP = float(_os.environ.get('FLOOS_SACK_CAP', '16'))      # ceiling on a normal dropback
+# Logistic steepness over the raw rush-vs-protection differential. Was hardcoded in
+# `Game.calculateSackProbability`, which is why it was never a tuning candidate.
+SACK_CURVE_STEEPNESS = float(_os.environ.get('FLOOS_SACK_STEEPNESS', '0.12'))
 # Air-yard means per pass tier. The old bands were compressed -- "medium" at 6.5
 # air yards is really a short throw -- which held league aDOT at 6.29 against a
 # real-world ~7.8 and made every completion tiny.
@@ -1328,6 +1485,20 @@ FACILITY_DECAY_LEVELS = 1
 # 15F, a max-level build 255F, and a max-level hold 120F a season — small enough that a
 # new league can get moving, big enough that building means spending.
 FACILITY_SHARE_UNIT_FLOOR = 300.0
+
+# ⚠️ CLIP EACH USER'S CONTRIBUTION BEFORE AVERAGING THE FAUCET. A share unit is a mean,
+# and a mean is exactly what one outlier breaks. Measured on the season-1 production
+# database: one user earned 79,237F of a 212,614F faucet (37% of the league's season),
+# 89% of it from a SINGLE week -- 1,453,601 FP in week 27, a Criticality week where Pyre's
+# Equation and Amplify stacked. That one week raised every facility price for all 32 teams
+# by 50% (a full L5 build 7,195F -> 10,764F) while giving the other 31 teams nothing to
+# spend. Capping at the 95th percentile takes one user's influence on the unit from
+# +59.4% to +10.2% and still SUMS everyone's real contribution, so the unit keeps tracking
+# genuine league-wide growth -- unlike a median, which throws away the whole upper half.
+FACILITY_SHARE_CAP_PERCENTILE = 95.0
+# Below this many earning users a percentile is computed from too few points to mean
+# anything, and clipping would just lower the unit rather than de-skew it.
+FACILITY_SHARE_CAP_MIN_USERS = 8
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
@@ -2454,6 +2625,44 @@ CHESS_CLOCK_TIED_MIDFIELD_PUNT = 0.8
 LAST_SNAP_HUDDLE_SECS = 12   # hurry-up pre-snap; 9-15 across the coach clock-IQ range
 LAST_SNAP_LIVE_SECS = 5      # snap to whistle on a run (4-6)
 
+# ── No-huddle ─────────────────────────────────────────────────────────────
+# ⚠️ THE OFFENSE HAD NO PRESENCE BETWEEN THE WHISTLE AND THE SNAP. Tempo was one
+# coach-scaled number, so "hurry-up" meant a 12-second huddle instead of a 25-40 second
+# one and the team ALWAYS huddled. There was no state in which they did not.
+#
+# The trigger is the CLOCK, not a coach preference (owner, 2026-08-12): if the clock did
+# not stop on the last play and the offense is in hurry-up, they stay at the line. That
+# falls straight out of state the engine already has — `clockRunning` and the `hurryUp`
+# intent — so it needs no new attribute and no new decision.
+#
+# ⚠️ These numbers are the whole cost model, and the pre-snap drain nearly vanishing is
+# the entire point of the state:
+#     huddle, neutral   25-40s
+#     huddle, hurry-up  ~12s   (LAST_SNAP_HUDDLE_SECS)
+#     no-huddle         ~4-9s  (here)
+# The tighter jitter is deliberate: a no-huddle snap is a repeated, rehearsed action, so
+# it should not vary as much as a huddle call does.
+NO_HUDDLE_ENABLED = True
+NO_HUDDLE_PRESNAP_SECS = 6    # base; coach clock IQ moves it +/-2 and jitter +/-1
+NO_HUDDLE_PRESNAP_FLOOR = 4   # below the 8s huddle floor on purpose — that floor IS a huddle
+NO_HUDDLE_IQ_SPREAD = 4       # +/-2 across the clock-IQ range, half the huddle's spread
+NO_HUDDLE_JITTER = 1          # +/-1, against the huddle's +/-3
+
+# ⚠️ THE TIGHT END IS THE SECURITY BLANKET, and the menu restriction alone did not make
+# him one. Restricting to short/medium moved TE involvement only 67.2% -> 64.8% of called
+# plays, because most plays list all three receivers anyway — so which receiver the play
+# NAMES was never the lever. The lever is who the quarterback LOOKS AT.
+#
+# A perceived-openness nudge, the same mechanism `AWAKENED_RECEIVER_OPENNESS_BONUS` uses
+# to make a powered-up receiver draw the read. Sized well below it (22): this is a
+# tendency, not a compulsion, and the TE should still lose a read to a genuinely wide-open
+# receiver. It nudges the QB's PERCEPTION, so it never makes the throw safer than it is —
+# a covered TE stays covered and the ball can still be broken up.
+#
+# ⚠️ It rides on the no-huddle state only. Outside a drill the TE's share should come from
+# the playbook and the matchup, where it already does.
+NO_HUDDLE_TE_OPENNESS_BONUS = 10
+
 # ── Chess-clock timeouts ──────────────────────────────────────────────────
 # In the Chess Clock format the offense's possession budget IS its real clock,
 # and a timeout stops the pre-snap huddle drain — so a team preserves its budget
@@ -2669,6 +2878,27 @@ POWERUP_CATALOG = {
 # Shop reroll (not a powerup — lives in the Daily Selection section)
 SHOP_REROLL_BASE_COST = 10
 SHOP_REROLL_COST_INCREMENT = 5   # Each reroll costs 5 more than the last
+SHOP_REROLL_FREE_PER_DAY = 1     # the first reroll of each shop day costs nothing
+
+
+def shopRerollCost(rerollCount: int) -> int:
+    """Cost of the NEXT featured-card reroll, given how many have been used today.
+
+    ⚠️ THE FIRST REROLL OF THE DAY IS FREE, AND IT IS THE REPLACEMENT FOR THE DAILY
+    AUTO-REFRESH, not a bonus on top of it. The shop used to repopulate its card slate on
+    its own every day, which meant a user saving up for a specific single would find it
+    simply gone the next morning — reported as the shop "making the card they're trying to
+    buy disappear". The slate now persists until the user chooses to change it, and the
+    free reroll is what lets them change it without paying to undo an unwanted refresh.
+
+    The paid ladder is unchanged, just shifted one place right: free, then 10, 15, 20 ...
+    So a user who rerolls once a day never pays, and someone churning the shelf inside a
+    single day pays exactly what they used to from their second roll on.
+    """
+    paid = max(0, rerollCount - SHOP_REROLL_FREE_PER_DAY)
+    if rerollCount < SHOP_REROLL_FREE_PER_DAY:
+        return 0
+    return SHOP_REROLL_BASE_COST + paid * SHOP_REROLL_COST_INCREMENT
 
 # Themed pack rotation reroll — pricier than the featured-card reroll because
 # the rotation pool includes the higher pack tiers. Rerolling for a premium pack
@@ -2846,11 +3076,45 @@ SHOWCASE_DIVIDEND_RATE = 0.13
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7
 
+# ⚠️ HOW SOON THE NEXT GAME DAY OPENS. A game day is 7 rounds on the hour, 12:00-18:00
+# ET; the next day's first round is 12:00 ET, so a cross-day boundary is an 18-hour gap.
+# This is the lead BEFORE that next kickoff at which the week rolls over — which is what
+# publishes the next day's slate for pick-em and advances `shopDay` for the pack rotation.
+#
+# 1020 = 17h, i.e. 19:00 ET the evening before, roughly 15 minutes after the day's last
+# game ends. It was 480 (8h), which lands at 04:00 ET on the game day itself — so the next
+# slate stayed hidden for ~9 hours after the day's games finished, which is what users
+# reported. ⚠️ Both this file and the engine comment described 480 as "the prior evening";
+# it never was. Measured against the real schedule, 480 -> 04:00 ET, 1020 -> 19:00 ET.
+#
+# ⚠️ Do NOT raise this past ~1035 (18:45 ET). The lead is measured back from kickoff, and
+# the day's last game starts at 18:00 ET; a round must finish inside 45 minutes because
+# the intra-day rollover is 15 minutes before the next hourly round. Past that the rollover
+# time lands while the final game is still being played. It is self-limiting rather than
+# unsafe — the wait no-ops when its moment has already passed, so the rollover simply
+# happens as soon as the slate finishes — but the intent is a real buffer, not a race.
+#
+# ⚠️ DST-STABLE, unlike a fixed UTC hour: the lead is subtracted from an ET-anchored
+# kickoff, so 1020 is 19:00 ET in both EDT and EST.
+CROSS_DAY_ROLLOVER_LEAD_MINUTES = 1020
+
 # Daily refresh boundary for SCHEDULED mode (UTC hour).
 # The "floosball day" rolls over at this hour so daily limits and shop refreshes
-# don't clash with live games.  10 AM UTC = 5 AM EST / 6 AM EDT — safely between
-# the last game ending (~midnight UTC) and the first game starting (5 PM UTC / noon ET).
-DAILY_RESET_HOUR_UTC = 10
+# don't clash with live games. This drives the FEATURED SHOP CARDS (fantasy + collection)
+# and the daily reroll allowance — a separate path from the pack rotation, which follows
+# `shopDay` off the week rollover above. Both have to move together or the shop only
+# half-refreshes: new packs, yesterday's cards.
+#
+# ⚠️ 0 (midnight UTC) = 20:00 EDT / 19:00 EST, just after the day's last game ends
+# (18:00 ET kickoff, done by ~18:45 ET). It was 10, i.e. 06:00 ET — a fresh shop arrived
+# 11 hours after the games it followed.
+#
+# ⚠️ A FIXED UTC HOUR CANNOT TRACK AN ET-ANCHORED SCHEDULE ACROSS DST, so this needs
+# slack on both sides rather than a tight fit. Midnight UTC is the choice that keeps it:
+# it sits after the final whistle in EDT (22:45 UTC) AND in EST (23:45 UTC). 23:00 UTC was
+# rejected for exactly this — it reads as 19:00 ET in summer but 18:00 ET in winter, which
+# is the moment the last game KICKS OFF.
+DAILY_RESET_HOUR_UTC = 0
 
 # ─── GM Mode ────────────────────────────────────────────────────────────────────
 

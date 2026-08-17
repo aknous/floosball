@@ -615,10 +615,22 @@ class SeasonManager:
             # Wait for rollover BEFORE clearing previous week's results.
             # In scheduled mode this keeps completedWeekGames visible until
             # shortly before the next game start.
-            # Cross-day transitions (weeks 8, 15, 22) have ~18-hour gaps;
-            # roll over 8 hours early so the next slate shows up the evening before.
+            #
+            # Cross-day transitions (weeks 8, 15, 22) span an 18-hour gap — the day's last
+            # round is 18:00 ET and the next day's first is 12:00 ET. Rolling over early is
+            # what publishes the next day's slate for pick-em and advances `shopDay` for the
+            # pack rotation, so the lead is really "how long after the games do users wait
+            # for tomorrow to open". `CROSS_DAY_ROLLOVER_LEAD_MINUTES` puts it at 19:00 ET,
+            # just after the final whistle, rather than the 04:00 ET it used to land on.
+            #
+            # ⚠️ Clearing `completedWeekGames` here no longer costs the reader the results.
+            # A finished game keeps its box score (`games.team_stats` + `game_player_stats`,
+            # served by `GET /api/games/{id}` and `/api/weekGames`), so the day's results stay
+            # reachable after the slate flips. That is what makes an early rollover safe; it
+            # would not have been before those were persisted.
+            from constants import CROSS_DAY_ROLLOVER_LEAD_MINUTES
             isCrossDayTransition = nextWeek in (8, 15, 22)
-            earlyMinutes = 480 if isCrossDayTransition else 15  # 8 hours vs 15 min
+            earlyMinutes = CROSS_DAY_ROLLOVER_LEAD_MINUTES if isCrossDayTransition else 15
             weekSetupTime = weekStartTime - datetime.timedelta(minutes=earlyMinutes)
 
             # For the very first week, advance currentWeek before the wait so that
@@ -4597,6 +4609,70 @@ class SeasonManager:
         except Exception as e:
             logger.debug(f"Team news publish skipped ({category}): {e}")
 
+    def _publishChampionNews(self, champion, runnerUp, game) -> None:
+        """Put the Floos Bowl winner in the league-news feed, PINNED as the lead.
+
+        ⚠️ THE CHAMPION WAS NEVER IN THE FEED AT ALL (reported 2026-08-14). The crowning
+        block wrote `_champText` into `leagueHighlights` and pushed one ephemeral socket
+        event — neither of which is the persisted feed — so the single biggest result of
+        the season left no row behind. `leagueHighlights` is deliberately NOT persisted
+        (89 call sites, overwhelmingly play highlights), which is exactly why a story
+        that belongs in the feed has to publish itself.
+
+        ⚠️ PINNED, and this is the FIRST thing in the sim that pins itself — the rule was
+        "nothing pins itself", written when pinning was an admin gesture. A championship
+        earns the exception the rule was protecting: the lead is otherwise the biggest
+        story of the most recent MOMENT, and the offseason keeps publishing after the
+        bowl, so a weight alone would let a rule change or a Cores line push the champion
+        off the front page within the day. Pinning is what makes it stay.
+
+        Exactly ONE champion is ever pinned: the previous season's row is unpinned here
+        rather than left to accumulate against `PINNED_MAX`. It stays in the feed, it
+        just stops holding the top.
+        """
+        try:
+            from league_news import publish, stat
+            from database.models import LeagueNewsItem
+            season = getattr(self.currentSeason, 'seasonNumber', 0) or 0
+            # Last season's champion steps aside. The row survives; only the pin goes.
+            try:
+                (self.db_session.query(LeagueNewsItem)
+                 .filter(LeagueNewsItem.event_type == 'floosbowl_champion',
+                         LeagueNewsItem.pinned.is_(True))
+                 .update({'pinned': False}, synchronize_session=False))
+            except Exception as e:
+                logger.debug(f"Unpinning the previous champion skipped: {e}")
+
+            champScore = game.homeScore if game.homeTeam is champion else game.awayScore
+            loseScore = game.awayScore if game.homeTeam is champion else game.homeScore
+            s = getattr(champion, 'seasonTeamStats', {}) or {}
+            titles = len(getattr(champion, 'floosbowlChampionships', []) or [])
+            publish(
+                self.db_session,
+                season=season,
+                week=getattr(self, 'currentWeek', 0) or 0,
+                category='champion',
+                event_type='floosbowl_champion',
+                text='{0} {1} are Floos Bowl champions.'.format(
+                    getattr(champion, 'city', ''), champion.name).strip(),
+                teamId=champion.id,
+                pinned=True,
+                stats=[
+                    stat('FINAL', '{0}-{1}'.format(round(champScore), round(loseScore))),
+                    stat('BEAT', getattr(runnerUp, 'abbr', None) or runnerUp.name),
+                    stat('RECORD', '{0}-{1}'.format(s.get('wins', 0) or 0, s.get('losses', 0) or 0)),
+                    stat('TITLES', titles),
+                ],
+                # Above every other publisher's ceiling. Pinning already wins the lead;
+                # this is what ranks it once the pin is dropped next season.
+                leadWeight=100.0,
+                # The crowning block broadcasts this line itself — publishing would
+                # send it twice.
+                broadcast=False,
+            )
+        except Exception as e:
+            logger.error(f"Champion news publish failed: {e}")
+
     def _applyDivisionSeeding(self, qualifiers, league):
         """Division winners take the top seeds, the wildcards by record behind them.
 
@@ -5459,6 +5535,9 @@ class SeasonManager:
                 self.currentSeason.leagueHighlights.insert(0, {'event': {'text': _champText}})
                 if BROADCASTING_AVAILABLE and broadcaster.is_enabled() and LeagueNewsEvent:
                     await broadcaster.broadcast_season_event(LeagueNewsEvent.leagueNews(_champText))
+                # ⚠️ `leagueHighlights` is NOT the persisted feed and the broadcast above is
+                # ephemeral, so without this the biggest result of the season leaves no row.
+                self._publishChampionNews(self.currentSeason.champion, runnerUp, game)
 
                 # Bracket challenge: final scoring + floobit prizes to top brackets.
                 self._awardPlayoffBracketPrizes()
@@ -5627,11 +5706,18 @@ class SeasonManager:
                     getattr(gameInstance, 'preGameAwayWinProbability', None)
                 )
 
-            # Check for records. Snapshot first so a break can be diffed out and
-            # published to the news feed.
+            # ⚠️ NO RECORD CHECK ON A PLAYOFF GAME. Records are a REGULAR-SEASON body of
+            # work — the same rule `processPostGameStats` already applies to season
+            # totals, which it gates on `isRegularSeasonGame` so the standings never
+            # absorb playoff results. The game-record checks were the hole: they ran on
+            # this path identically to the regular-season one, and `checkPlayerGameRecords`
+            # cannot defend itself because it takes no game at all — it just sweeps every
+            # active player's `gameStatsDict`. So a Floos Bowl performance set all-time
+            # single-game records. SEASON and CAREER records were never at risk (they
+            # read `seasonStatsDict`, which playoff games do not accumulate into).
+            # The news snapshot goes with it: a record that cannot break has nothing to
+            # publish, and the upset story is regular-season-gated already.
             _recordsBefore = self._snapshotRecords()
-            self.recordsManager.checkPlayerGameRecords()
-            self.recordsManager.checkTeamGameRecords(gameInstance)
             self._publishGameNews(gameInstance, _recordsBefore)
 
             # Resolve pick-em picks for this playoff game
@@ -9012,8 +9098,14 @@ class SeasonManager:
                 pass
 
     def _awardWeeklyFpFloobits(self, season: int, week: int) -> None:
-        """Award Floobits via the FP→F curve: scale × FP^exponent (Endowment shifts to flatter taper)."""
-        from constants import WEEKLY_FP_FLOOBIT_SCALE, WEEKLY_FP_FLOOBIT_EXPONENT
+        """Award Floobits via the FP→F curve.
+
+        The curve itself lives in `constants.weeklyFpFloobits` — a power taper with a
+        second, harsher taper past a knee, so the tail stops running away without moving
+        typical play. Endowment's +25% is NOT applied here; it rides on every income
+        stream uniformly at `addFunds`.
+        """
+        from constants import weeklyFpFloobits
 
         fantasyTracker = self.serviceContainer.getService('fantasy_tracker')
         if not fantasyTracker:
@@ -9068,7 +9160,7 @@ class SeasonManager:
                     # up the boost here purely to stamp the notification's `boosted`
                     # flag accurately.
                     activeBoost = shopRepo.getActiveIncomeBoost(userId, season, week)
-                    base = round(WEEKLY_FP_FLOOBIT_SCALE * (weekFp ** WEEKLY_FP_FLOOBIT_EXPONENT))
+                    base = weeklyFpFloobits(weekFp)
                     prosperity = prosperityBonuses.get(userId, 0)
                     reward = int(base + prosperity)
                     if reward <= 0:

@@ -1597,6 +1597,7 @@ def _runPendingMigrations():
     _backfillChampionRosterSnapshots()
     _backfillTeamPeakStreaks()
     _backfillCoachFanTrust()
+    _backfillCurrencyTransactionSeason()
     _migrateEditionRename()          # rename slugs BEFORE any edition-keyed backfill
     _backfillCardTemplateOutputType()
     _backfillFloorTemplates()
@@ -1876,7 +1877,24 @@ def _backfillEffectParams(primary: dict, effectName: str) -> bool:
             from managers.cardEffects import HONOR_ROLL_BASE_SHARE
             primary['baseMult'] = round(1 + (maxMult - 1) * HONOR_ROLL_BASE_SHARE, 2)
             return True
+    # Updraft's detail used to interpolate `gates` directly, which put a raw Python list
+    # on the card face: "bonus at each of [299, 391, 483]". `gatesText` is the same
+    # numbers written as prose. Derived from what IS stored, so an already-minted card
+    # keeps the exact gates it was minted with.
+    if effectName == 'updraft' and 'gatesText' not in primary:
+        gates = primary.get('gates')
+        if isinstance(gates, (list, tuple)) and gates:
+            primary['gatesText'] = _joinNumbers(gates)
+            return True
     return False
+
+
+def _joinNumbers(values) -> str:
+    """`[299, 391, 483]` -> `"299, 391 and 483"`. Card text, not a repr."""
+    nums = [str(int(v)) for v in values]
+    if len(nums) == 1:
+        return nums[0]
+    return f"{', '.join(nums[:-1])} and {nums[-1]}"
 
 
 def _refreshCardEffectText():
@@ -1924,6 +1942,34 @@ def _refreshCardEffectText():
         # detail promised FP per 100 passing yards, and asked for a param no
         # currently-minted card has.
         "gunslinger",
+        # Legibility sweep (2026-08-16) — text only, no mechanic moved. Bonus Round
+        # advertised a threshold of 4 that the fusion had raised to 6, so a user who
+        # assembled exactly 4 triggers was told they had earned it and paid nothing.
+        # Chain Reaction's detail said "every card in your hand" where the compute counts
+        # OTHERS, and its tooltip named a stale hand size. Updraft put a raw Python list
+        # on the card face and its tooltip quoted round numbers the detail contradicted
+        # (300/400/500 against 299/391/483). The rest were garbled or fragmentary.
+        # ⚠️ Updraft needs `gatesText`, a NEW key — `_backfillEffectParams` derives it
+        # from the stored `gates`, so already-minted cards re-render with their own
+        # numbers instead of a `?`.
+        "bonus_round", "chain_reaction", "updraft", "lead_blocker",
+        "spotlight_moment", "bonsai", "barrage", "promised_land", "rng",
+        # ⚠️ spotlight_moment is doing double duty in this set. Its old detail carried a
+        # PRE-FUSION clause ("a TD by either of your WRs counts") describing behavior the
+        # compute never had, and the card is now WR-exclusive. Templates already minted on
+        # QB/RB/TE keep scoring — the compute reads the card's own player at any position,
+        # so they are correct, just no longer obtainable — and this refresh is what stops
+        # them describing a two-WR rule that was never real.
+        # The stat-ladder families (2026-08-16). `threshold` is a WEEKLY BAR the card's
+        # own player must clear for the streak to survive, enforced at week end via
+        # STREAK_CONFIGS.resetCondition — and the old wording, "a streak growing X FPx
+        # per week past 32", conveyed none of that. It left the number unitless (32 what?)
+        # and "per week past N" reads as though the GROWTH is per-week rather than the
+        # bar. Same unitless-N problem one clause shorter on the holo two-tier cards.
+        # Text only; no threshold or rate moved.
+        "clockwork", "dead_eye", "dominion", "getaway", "iron_man", "landslide",
+        "odyssey", "stratosphere", "tenure", "undertaker",
+        "beast_of_burden", "custody", "rhythm",
     }
 
     # Same FullMult → Delta synthesis buildEffectConfig does. Keep these
@@ -2003,6 +2049,67 @@ def _refreshCardEffectText():
     except Exception as e:
         conn.rollback()
         logger.warning(f"  Migration: failed to refresh card effect text: {e}")
+    finally:
+        conn.close()
+
+
+def _backfillCurrencyTransactionSeason():
+    """Stamp a season onto grants that were written without one.
+
+    ⚠️ `currency_transactions.season` is nullable and four grant paths never passed it,
+    so nothing ever complained. Measured on production: 1,100 positive grants worth
+    82,534F carried NULL against 212,614F stamped to season 1 — a 28% UNDERCOUNT of the
+    faucet. `facilitiesManager.computeShareUnit` is exactly "last season's grants / team
+    count", so every unstamped grant quietly made every facility in the league cheaper
+    than the economy warranted. Sources were `achievement` (883 rows), `starter_bonus`
+    (185) and `card_sell` (32); `addFunds` now defaults the season so this cannot recur.
+
+    A row is assigned to the LATEST season that had already started when it was written
+    (`seasons.start_date <= created_at`). That is the same question the sim would have
+    answered at the time, it needs no heuristic about season boundaries, and it is
+    deterministic — re-running it can only ever produce the same answer.
+
+    ⚠️ Only touches rows where season IS NULL, so it can never rewrite a stamped grant,
+    and it is additionally gated on a marker so a healthy database does no work. Rows
+    written BEFORE the first season started keep their NULL: there is no season they
+    could honestly belong to, and inventing one would put pre-league grants into the
+    faucet that prices season 1.
+    """
+    from sqlalchemy import text
+    from datetime import datetime as _dt
+    conn = engine.connect()
+    try:
+        done = conn.execute(text(
+            "SELECT value FROM app_settings WHERE key = 'currency_season_backfilled_v1'"
+        )).fetchone()
+        if done:
+            return
+        seasons = conn.execute(text(
+            "SELECT season_number, start_date FROM seasons "
+            "WHERE start_date IS NOT NULL ORDER BY start_date")).fetchall()
+        if not seasons:
+            return  # nothing to date rows against; leave them and try again next boot
+        updated = 0
+        for i, (num, start) in enumerate(seasons):
+            nextStart = seasons[i + 1][1] if i + 1 < len(seasons) else None
+            if nextStart is None:
+                res = conn.execute(text(
+                    "UPDATE currency_transactions SET season = :n "
+                    "WHERE season IS NULL AND created_at >= :s"), {"n": num, "s": start})
+            else:
+                res = conn.execute(text(
+                    "UPDATE currency_transactions SET season = :n "
+                    "WHERE season IS NULL AND created_at >= :s AND created_at < :e"),
+                    {"n": num, "s": start, "e": nextStart})
+            updated += res.rowcount or 0
+        conn.execute(text(
+            "INSERT OR REPLACE INTO app_settings (key, value, updated_at) "
+            "VALUES ('currency_season_backfilled_v1', '1', :ts)"), {"ts": _dt.utcnow()})
+        conn.commit()
+        logger.info(f"  Backfill: stamped a season onto {updated} currency transactions")
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"  Backfill: currency transaction season skipped: {e}")
     finally:
         conn.close()
 

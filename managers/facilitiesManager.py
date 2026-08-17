@@ -11,7 +11,8 @@ from logging import getLogger
 from constants import (FACILITY_CATALOG, FACILITY_MAX_LEVEL,
                        FACILITY_UPGRADE_COST_SHARES, FACILITY_UPKEEP_SHARES,
                        FACILITY_DECAY_LEVELS, APPEAL_LEVEL_WEIGHTS,
-                       FACILITY_SHARE_UNIT_FLOOR)
+                       FACILITY_SHARE_UNIT_FLOOR, FACILITY_SHARE_CAP_PERCENTILE,
+                       FACILITY_SHARE_CAP_MIN_USERS)
 
 logger = getLogger("floosball.facilities")
 
@@ -149,6 +150,30 @@ def computeShareUnit(session, lastSeason: int, numTeams: int = None) -> float:
     ⚠️ The team count is COUNTED, not assumed. It defaulted to 24 and no caller ever
     passed it, so after the league grew to 32 every share was 33% too large and every
     facility 33% too expensive.
+
+    ⚠️ EACH USER'S CONTRIBUTION IS CAPPED BEFORE SUMMING, because this is a MEAN and a
+    mean is exactly what one outlier breaks. Measured on the season-1 production database:
+    ONE user earned 79,237F of a 212,614F faucet — 37% of the league's entire season — and
+    89% of that was a single week (1,453,601 FP in week 27, a Criticality week where Pyre's
+    Equation and Amplify stacked). That one week raised the price of every facility for all
+    32 teams by 50%: a full level-5 build went 7,195F -> 10,764F and a season of level-5
+    upkeep 1,777F -> 2,658F. Nobody else got any richer.
+
+    The cap is what the estimator needs to survive that. A windfall is real income for the
+    user who earned it, but it does not give the other 31 teams a single extra Floobit to
+    spend, and the share unit exists to express what a typical team can afford. Measured
+    over the same data, one user moves the raw total by +59.4% and the capped sum by
+    +10.2%. `FACILITY_SHARE_CAP_PERCENTILE` (95) clips roughly the top user or two while
+    still SUMMING everyone's real contribution, so the unit still tracks genuine league-wide
+    growth — unlike a median, which discards the whole upper half of the distribution.
+
+    ⚠️ Do not "fix" this by dropping the single largest earner: it is arbitrary, and it
+    fails the moment two users spike in the same season.
+
+    ⚠️ This is the second line of defence, not the first. `constants.weeklyFpFloobits` has a
+    knee past which each doubling of FP pays far less; that alone would have turned this
+    grant from 70,486F into 7,288F and left the faucet within 5% of clean. The cap is what
+    catches a windfall the curve still lets through.
     """
     from sqlalchemy import text
     if numTeams is None:
@@ -161,13 +186,32 @@ def computeShareUnit(session, lastSeason: int, numTeams: int = None) -> float:
     total = 0
     if lastSeason is not None and lastSeason >= 1:
         try:
-            total = session.execute(text(
+            perUser = [float(r[0]) for r in session.execute(text(
                 "SELECT COALESCE(SUM(amount), 0) FROM currency_transactions "
-                "WHERE season = :s AND amount > 0"), {'s': lastSeason}).scalar() or 0
+                "WHERE season = :s AND amount > 0 GROUP BY user_id"), {'s': lastSeason})
+                if r[0]]
+            total = _cappedFaucetTotal(perUser)
         except Exception as e:
             logger.warning(f"computeShareUnit failed: {e}")
             total = 0
     return max(FACILITY_SHARE_UNIT_FLOOR, float(total) / numTeams)
+
+
+def _cappedFaucetTotal(perUser: list) -> float:
+    """Sum per-user season earnings with each user clipped to the Pth percentile.
+
+    Small leagues are left alone: below `FACILITY_SHARE_CAP_MIN_USERS` a percentile is
+    computed from too few points to mean anything, and clipping there would simply lower
+    the unit rather than de-skew it.
+    """
+    n = len(perUser)
+    if n < FACILITY_SHARE_CAP_MIN_USERS:
+        return float(sum(perUser))
+    ordered = sorted(perUser)
+    k = (n - 1) * (FACILITY_SHARE_CAP_PERCENTILE / 100.0)
+    lo, hi = int(k), min(int(k) + 1, n - 1)
+    capValue = ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
+    return float(sum(min(v, capValue) for v in perUser))
 
 
 def getTreasury(session, teamId: int) -> int:

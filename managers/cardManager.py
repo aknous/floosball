@@ -7,6 +7,7 @@ from logger_config import get_logger
 from managers.cardEffects import (buildEffectConfig as _buildEffectConfig, getEffectOutputType,
                                   effectValidPositions as _effectValidPositions,
                                   effectPoolFor as _effectPoolFor,
+                                  trackedStatsFor as _trackedStatsFor,
                                   withLiveCategory)
 
 logger = get_logger("floosball.cardManager")
@@ -101,17 +102,43 @@ def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
     here would push cycleStart ~48 days into the future on day 2 and
     silently zero the counter.
 
+    ⚠️ THE CYCLE BOUNDARY HAS TO BE THE WEEK ROLLOVER, because that is the
+    moment `shopDay` actually advances (it is derived from `currentWeek`). A
+    naive `start_date + days` puts the boundary at 04:00 UTC, which worked only
+    while the cross-day rollover ran at 08:00 UTC. Moving the rollover to the
+    evening before (19:00 ET / 23:00 UTC) puts that naive anchor ~5 hours into
+    the FUTURE — and a future cycleStart trips the clamp below, which reaches a
+    year back and counts every paid open of the season. The per-cycle cap would
+    then read as already exhausted and the shop would refuse to sell anything
+    for the first five hours of every new game day. Deriving the boundary from
+    the same kickoff-minus-lead the rollover uses keeps the two in step.
+
     A late safety clamp guards against the start_date itself sitting in
     the future (e.g. scheduled mode anchoring to next Monday during the
     pre-start window).
     """
     import datetime as _dt
     from database.models import Season
+    from constants import CROSS_DAY_ROLLOVER_LEAD_MINUTES
+    from managers.timingManager import _isEdtDate
     season = session.query(Season).filter(Season.season_number == currentSeason).first()
     if not season or not season.start_date:
         return None
     shopDay = shopDayOfSeason(currentWeek)
-    cycleStart = season.start_date + _dt.timedelta(days=shopDay - 1)
+    if shopDay <= 1:
+        # Day 1 opens with the season itself — week 1 is not a cross-day
+        # transition and gets only the 15-minute lead, so there is no early
+        # rollover to align to.
+        cycleStart = season.start_date
+    else:
+        # The rollover is `firstKickoffOfThatDay - lead`, and the first round of
+        # every game day is 12:00 ET. Convert by hand rather than via tzdata, the
+        # same way `seasonManager.getWeekStartTime` does.
+        targetDate = (season.start_date + _dt.timedelta(days=shopDay - 1)).date()
+        utcOffset = 4 if _isEdtDate(targetDate) else 5
+        kickoffUtc = _dt.datetime(targetDate.year, targetDate.month, targetDate.day,
+                                  12 + utcOffset)
+        cycleStart = kickoffUtc - _dt.timedelta(minutes=CROSS_DAY_ROLLOVER_LEAD_MINUTES)
     now = _dt.datetime.utcnow()
     if cycleStart > now:
         # Pre-start window — anchor far enough back that every recent
@@ -991,6 +1018,15 @@ class CardManager:
             # Positions this effect can validly land on via a transplant (shared effects
             # span all five; position-specific ones only their own).
             "validPositions": sorted(_effectValidPositions(effectName)),
+            # ⚠️ THE STAT THIS CARD IS WATCHING. Around twenty effects score off numbers
+            # that appear on no ordinary box score, so a card could read "+FP per
+            # well-placed throw" with nowhere to go and look one up. Sent as
+            # `[{group, key, label}]` and resolved against the player's own line by
+            # whichever surface is showing it — the card back uses the season, the weekly
+            # breakdown uses the game. Empty for roster-wide effects (hand composition,
+            # favorite team, chance synergy): there is no single figure to point at, and
+            # inventing one reads worse than showing nothing.
+            "trackedStats": _trackedStatsFor(effectName),
             "sellValue": sellValue,
             "combineValue": getCardValue(userCard, currentSeason),
             "isActive": isActive,
@@ -1594,7 +1630,8 @@ class CardManager:
         session.flush()
         return {"reordered": pos}
 
-    def buildPlayerSeasonStats(self, session, playerId: int, season: int, position: int):
+    def buildPlayerSeasonStats(self, session, playerId: int, season: int, position: int,
+                               effectName: str = ""):
         """High-level stat line for a vaulted card's back — the player's numbers
         for the season the card is from. A vaulted card drops its effect and
         becomes a keepsake, so the back shows who the player actually was that
@@ -1640,6 +1677,31 @@ class CardManager:
                 add("XP", k.get('xps'))
             if k.get('fgAvg'):
                 add("Avg", f"{k.get('fgAvg')} yd")
+        # ⚠️ THE STAT THE CARD IS ACTUALLY WATCHING, appended last so it reads as the
+        # card's own line rather than part of the box score. Roughly twenty effects score
+        # off numbers that appear nowhere else in the app — well-placed throws, yards
+        # after contact, contested catches, bailouts, punt placement — so a card back
+        # could describe a payout and show none of the figures driving it.
+        #
+        # ⚠️ The blobs here are DB shape and the tracked keys are CARD shape, which are
+        # not the same vocabulary (`fg40+` against `fg40plus`, receiving `yards` against
+        # `rcvYards`). Convert first, or every exotic stat silently reads 0.
+        tracked = _trackedStatsFor(effectName) if effectName else []
+        if tracked:
+            from managers.fantasyTracker import _dbStatsToCardFormat
+            cardShape = _dbStatsToCardFormat(
+                row.passing_stats or {}, row.rushing_stats or {},
+                row.receiving_stats or {}, row.kicking_stats or {},
+                returningStats=getattr(row, 'returning_stats', None) or {},
+            )
+            for stat in tracked:
+                blob = cardShape.get(f"{stat['group']}_stats") or {}
+                # `tracked` is True on these so the client can mark them as the card's
+                # own, rather than having to match labels back against the map.
+                lines.append({"label": stat['label'],
+                              "value": blob.get(stat['key'], 0) or 0,
+                              "tracked": True})
+
         # ⚠️ PER GAME, alongside the total (users asked). A season total answers "how
         # much did this player produce" and hides "how good were they" — a 14-game
         # injury-shortened year and a full one are not comparable on the total, and the
@@ -2316,6 +2378,7 @@ class CardManager:
         if session is not None and template.player_id:
             stats = self.buildPlayerSeasonStats(
                 session, template.player_id, template.season_created, template.position,
+                effectName=(template.effect_config or {}).get("effectName", ""),
             )
             if stats:
                 result["playerStats"] = stats
@@ -2424,8 +2487,7 @@ class CardManager:
         purchased flag and the daily refresh all reuse the existing plumbing.
         """
         from database.models import FeaturedShopCard
-        from datetime import datetime, timedelta
-        from constants import DAILY_RESET_HOUR_UTC
+        from datetime import datetime
 
         rows = (
             session.query(FeaturedShopCard)
@@ -2434,13 +2496,14 @@ class CardManager:
             .all()
         )
 
-        # Daily refresh, anchored to the same reset hour the fantasy shop uses.
+        # ⚠️ NO DAILY REFRESH HERE EITHER (owner, 2026-08-16) — the collection shelf keeps
+        # whatever it is showing until the user rerolls, for the same reason the fantasy
+        # slate does: a shelf that rotates on its own cannot be saved toward. The reroll
+        # deletes every unpurchased `FeaturedShopCard` for the season regardless of `kind`,
+        # so this shelf is restocked by the same (first-of-day free) reroll.
         now = datetime.utcnow()
-        resetToday = now.replace(hour=DAILY_RESET_HOUR_UTC, minute=0, second=0, microsecond=0)
-        lastReset = resetToday if now >= resetToday else resetToday - timedelta(days=1)
-        stale = any((r.generated_at or datetime.min) < lastReset for r in rows)
 
-        if not rows or stale:
+        if not rows:
             session.query(FeaturedShopCard).filter_by(
                 user_id=userId, season=currentSeason, kind='collection',
                 purchased=False,
@@ -2513,8 +2576,7 @@ class CardManager:
         """
         from database.models import FeaturedShopCard, CardTemplate
         from database.repositories.card_repositories import CardTemplateRepository
-        from datetime import datetime, date, timedelta
-        from constants import SWAP_CYCLE_WEEKS, DAILY_RESET_HOUR_UTC
+        from datetime import datetime, date
 
         # Check for existing selection
         existing = (
@@ -2523,23 +2585,20 @@ class CardManager:
             .all()
         )
 
-        # ── Daily refresh check ──
+        # ⚠️ THE SLATE DOES NOT REPOPULATE ON ITS OWN (owner, 2026-08-16). It used to
+        # refresh every day (scheduled mode) or every 7-week cycle (otherwise), which meant
+        # a user saving up for a specific single would find it simply gone the next
+        # morning — reported as the shop "making the card they're trying to buy disappear".
+        # Saving toward a card only works if the card is still there when you have the
+        # Floobits, so the slate now persists until the USER changes it: a reroll
+        # (`forceRegenerate`, and the first one each day is free — see
+        # `constants.shopRerollCost`) or a new season, since these rows are season-scoped.
+        #
+        # ⚠️ Do not "fix" the resulting empty shelf by reinstating a refresh. Buying a card
+        # marks its row purchased, so the shelf legitimately shrinks as it is bought out,
+        # and the free daily reroll is what restocks it. An automatic top-up would put the
+        # disappearing-card bug straight back.
         needsRefresh = False
-        if existing and currentWeek > 0:
-            sampleRow = existing[0]
-            if sampleRow.generated_at is not None:
-                if isScheduledMode:
-                    # Refresh if generated before the most recent daily reset boundary
-                    now = datetime.utcnow()
-                    todayReset = now.replace(hour=DAILY_RESET_HOUR_UTC, minute=0, second=0, microsecond=0)
-                    boundary = todayReset if now >= todayReset else todayReset - timedelta(days=1)
-                    needsRefresh = sampleRow.generated_at < boundary
-                else:
-                    # Refresh if generated in a previous 7-week cycle
-                    currentCycle = (currentWeek - 1) // SWAP_CYCLE_WEEKS + 1
-                    genWeek = sampleRow.generated_at_week or 0
-                    genCycle = (genWeek - 1) // SWAP_CYCLE_WEEKS + 1 if genWeek > 0 else 0
-                    needsRefresh = currentCycle > genCycle
 
         if needsRefresh:
             # Delete unpurchased and regenerate
@@ -2682,6 +2741,7 @@ class CardManager:
             if t.player_id:
                 stats = self.buildPlayerSeasonStats(
                     session, t.player_id, t.season_created, t.position,
+                    effectName=(t.effect_config or {}).get("effectName", ""),
                 )
                 if stats:
                     card["playerStats"] = stats

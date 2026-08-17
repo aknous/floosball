@@ -83,6 +83,10 @@ def setupGame(homeScore=0, awayScore=0, quarter=2, clock=450,
             pass
 
     g = StubGame()
+    # ⚠️ Skipping Game.__init__ means every attribute the engine grows has to be declared
+    # here. `clockRunning` is read by `_isNoHuddle`, which `_shouldTargetSideline` now
+    # consults — a huddling default, since these cases are not two-minute drills.
+    g.clockRunning = False
     g.homeTeam = home
     g.awayTeam = away
     g.homeScore = homeScore

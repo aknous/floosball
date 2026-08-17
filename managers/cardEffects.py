@@ -211,10 +211,19 @@ EFFECT_OUTPUT_TYPE = {
     "touchdown_jackpot": "floobits", "indemnity": "floobits",
     "gold_rush": "floobits",
     # Intentionally NOT listed (resolve to NULL → excluded from themed packs):
-    #   advantage   — meta amplifier, no direct payout
-    #   conductor   — structural amplifier, multiplies other cards
-    #   copycat     — copies another card's output (any type)
-    #   catalyst    — chance amplifier + small Floobits base (mixed primary)
+    #   advantage    — meta amplifier, no direct payout
+    #   conductor    — structural amplifier, multiplies other cards
+    #   copycat      — copies another card's output (any type)
+    #   catalyst     — chance amplifier + small Floobits base (mixed primary)
+    #   captain      — overshoot amplifier, boosts every OTHER card
+    #   doubler      — counts roster TDs 2x for other cards
+    #   surveyor     — counts roster yards 1.5x for other cards
+    #   sharpshooter — counts roster FGs 2x for other cards
+    # ⚠️ The last four were omitted correctly but were NOT listed here, so the only
+    # record that they are deliberate was their absence — which is indistinguishable
+    # from having been forgotten. All four carry `isAmplifier` and pay nothing of their
+    # own, so NULL is right; an "output" themed pack promising a payout type could not
+    # honour it. Keep this list in step with the map: a bare omission reads as a bug.
 }
 
 
@@ -849,10 +858,10 @@ EFFECT_TOOLTIPS = {
     "houdini": "FP on every rushing yard, and a shot at more every time a tackle gets broken.",
     "custodian": "The throw was bad. The catch was made anyway. FP per catch, and a bonus for rescuing a bad ball.",
     "slipstream": "The ball hangs and the yards pile up. FPx scaling with passing yards.",
-    "updraft": "Some days the ball just carries. FP on every passing yard, with more at 300, 400 and 500.",
+    "updraft": "Some days the ball just carries. FP on every passing yard, with more at each yardage milestone.",
     "stratosphere": "Territory most passers never see. FPx on passing yards, plus a streak for every big week.",
     "marksman": "FPx on every well-placed ball, and more for a week without a single bad throw.",
-    "dead_eye": "FPx on well-placed balls, plus a streak for every week with nothing off target.",
+    "dead_eye": "FPx on well-placed balls, and a streak that grows for every straight week this player throws no bad balls.",
     "frontier": "Every yard is new ground. FP for every receiving yard.",
     "territory": "FPx on every receiving yard, with more at 75, 125 and 175.",
     "dominion": "FPx on receiving yards, plus a streak for every hundred-yard week.",
@@ -883,7 +892,7 @@ EFFECT_TOOLTIPS = {
     "avalanche": "Momentum builds with every score. Each roster TD pays more FP than the last.",
     "hedge": "Insurance policy. Tops this player up to an FP floor on a quiet week.",
     "complacency": "Put the phone down. FP that grows each week you don't touch your roster. Stacking streak cards accelerates growth.",
-    "spotlight_moment": "Lights, camera, action. FP whenever this player scores a TD. For WR, either counts.",
+    "spotlight_moment": "Lights, camera, action. FP whenever the receiver on this card scores a touchdown.",
     "ace_up_the_sleeve": "Pocket Rockets. Base FP every week, plus bonus FP when this player hits a combined stat threshold.",
     # Multiplier (QB)
     "big_deal": "Don't you know who I am? Flat FPx on your total score.",
@@ -962,7 +971,7 @@ EFFECT_TOOLTIPS = {
     "gold_rush": "Floobits cards amplify each other. Floobits bonus for each other floobits card in your hand.",
     "stacked_deck": "Multiply the multipliers. FPx for every other FPx card in your hand.",
     "copycat": "Copies the best. FP equal to the highest flat FP bonus from your other cards.",
-    "chain_reaction": "Cards feeding cards. FPx that scales with how many of your other 4 cards produced a non-zero bonus.",
+    "chain_reaction": "Cards feeding cards. FPx that scales with how many of your other cards produced a non-zero bonus.",
     "bonus_round": "Everyone chipped in. FP if 4 or more of your other cards triggered a non-zero bonus this week.",
     "winners_circle": "Back the winners. Floobits whenever this player's real team wins their game this week.",
     "no_passengers": "Depth pays. FPx that scales with your lowest-scoring roster player, so a lineup with no weak link earns more.",
@@ -1020,15 +1029,15 @@ EFFECT_TOOLTIPS = {
 EFFECT_DETAIL_TEMPLATES = {
     # Stat ladder families
     "cadence": "+{perCompletionFP} FP for every completion by this player",
-    "rhythm": "+{per25Mult} FPx per 25 completions, +{bonusMult} more past {threshold}",
-    "clockwork": "+{per25Mult} FPx per 25 completions, plus a streak growing {growthPerTick} FPx per week past {threshold}",
-    "beast_of_burden": "+{per25Mult} FPx per 25 carries, +{bonusMult} more past {threshold}",
-    "iron_man": "+{per25Mult} FPx per 25 carries, plus a streak growing {growthPerTick} FPx per week past {threshold}",
-    "odyssey": "+{per50Mult} FPx per 50 rushing yards, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "rhythm": "+{per25Mult} FPx per 25 completions, +{bonusMult} more in a week with {threshold}+ completions",
+    "clockwork": "+{per25Mult} FPx per 25 completions. Streak: +{growthPerTick} FPx for each straight week this player clears {threshold} completions",
+    "beast_of_burden": "+{per25Mult} FPx per 25 carries, +{bonusMult} more in a week with {threshold}+ carries",
+    "iron_man": "+{per25Mult} FPx per 25 carries. Streak: +{growthPerTick} FPx for each straight week this player clears {threshold} carries",
+    "odyssey": "+{per50Mult} FPx per 50 rushing yards. Streak: +{growthPerTick} FPx for each straight week this player clears {threshold} rushing yards",
     "battering_ram": "+{perTdMult} FPx for every rushing TD by this player",
-    "custody": "+{per5Mult} FPx per 5 receptions, +{bonusMult} more past {threshold}",
-    "tenure": "+{per5Mult} FPx per 5 receptions, plus a streak growing {growthPerTick} FPx per week past {threshold}",
-    "getaway": "+{per10Mult} FPx per 10 YAC, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "custody": "+{per5Mult} FPx per 5 receptions, +{bonusMult} more in a week with {threshold}+ receptions",
+    "tenure": "+{per5Mult} FPx per 5 receptions. Streak: +{growthPerTick} FPx for each straight week this player clears {threshold} receptions",
+    "getaway": "+{per10Mult} FPx per 10 yards after the catch. Streak: +{growthPerTick} FPx for each straight week this player clears {threshold} yards after the catch",
     "runback": "+{perYardFP} FP per punt return yard by this player",
     "house_call": "+{perYardFP} FP per return yard, plus a chance at {bonusFP} FP on a return TD",
     "attention": "+{per5Mult} FPx per 5 targets by this player",
@@ -1039,25 +1048,25 @@ EFFECT_DETAIL_TEMPLATES = {
     "houdini": "+{perYardFP} FP per rushing yard, plus a chance at {bonusFP} FP filling from broken tackles",
     "custodian": "+{perReceptionFP} FP per reception, +{bonusFP} per bailout",
     "slipstream": "+{per100Mult} FPx per 100 passing yards by this player",
-    "updraft": "+{perYardFP} FP per passing yard, +{gateFP} bonus at each of {gates}",
-    "stratosphere": "+{per100Mult} FPx per 100 passing yards, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "updraft": "+{perYardFP} FP per passing yard, +{gateFP} bonus at each passing-yard milestone ({gatesText})",
+    "stratosphere": "+{per100Mult} FPx per 100 passing yards. Streak: +{growthPerTick} FPx for each straight week this player clears {threshold} passing yards",
     "marksman": "+{per5Mult} FPx per 5 well-placed throws, +{cleanSheetMult} more on 0 bad throws",
-    "dead_eye": "+{per5Mult} FPx per 5 well-placed throws, plus a streak growing {growthPerTick} FPx per clean sheet",
+    "dead_eye": "+{per5Mult} FPx per 5 well-placed throws. Streak: +{growthPerTick} FPx for each straight week this player throws no bad balls",
     "frontier": "+{perYardFP} FP per receiving yard by this player",
     "territory": "+{per50Mult} FPx per 50 receiving yards, +{gateMult} more at 75, 125 and 175",
-    "dominion": "+{per50Mult} FPx per 50 receiving yards, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "dominion": "+{per50Mult} FPx per 50 receiving yards. Streak: +{growthPerTick} FPx for each straight week this player clears {threshold} receiving yards",
     "freight": "+{perYardFP} FP per yard after contact by this player",
     "grinder": "+{per50Mult} FPx per 50 yards after contact, +{ratioMult} more when they exceed half the total",
-    "landslide": "+{per50Mult} FPx per 50 yards after contact, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "landslide": "+{per50Mult} FPx per 50 yards after contact. Streak: +{growthPerTick} FPx for each straight week this player clears {threshold} yards after contact",
     "pinpoint": "+{perPuntFP} FP per punt downed inside the 20",
     "coffin_corner": "+{perPuntMult} FPx per punt inside the 20, +{bonusMult} more for inside the 10",
-    "undertaker": "+{perPuntMult} FPx per punt inside the 20, plus a streak growing {growthPerTick} FPx per week past {threshold}",
+    "undertaker": "+{perPuntMult} FPx per punt inside the 20. Streak: +{growthPerTick} FPx for each straight week this player clears {threshold} punts inside the 20",
     "paydirt": "+{perTdMult} FPx for every receiving TD by this player",
     "end_zone": "+{perTdFP} FP per receiving TD, +{bonusFP} bonus at {threshold}+",
-    "promised_land": "+{perTdFP} FP per receiving TD, plus escalating odds at {bonusFP} FP on each one",
+    "promised_land": "+{perTdFP} FP per receiving TD. Each one also rolls for a +{bonusFP} FP bonus, and the odds rise every time it misses",
     "bombardier": "+{perTdMult} FPx for every passing TD by this player",
     "salvo": "+{perTdFP} FP per passing TD, +{bonusFP} bonus at {threshold}+",
-    "barrage": "+{perTdFP} FP per passing TD, plus escalating odds at {bonusFP} FP on each one",
+    "barrage": "+{perTdFP} FP per passing TD. Each one also rolls for a +{bonusFP} FP bonus, and the odds rise every time it misses",
     # Flat FP (WR)
     "freebie": "+{baseFP} FP per week",
     "entourage": "+{perPlayerFP} FP for every roster player with {minStars}★+",
@@ -1068,12 +1077,12 @@ EFFECT_DETAIL_TEMPLATES = {
     "garbage_time": "+{perPlayerFP} FP for every roster player with 0 TDs",
     "loyalty_bonus": "+{perStreakFP} FP per win in your favorite team's win streak",
     "windfall": "+{perPlayerFloobits}F per overperforming roster player",
-    "rng": "Random +{minFP}–{maxFP} FP each week",
+    "rng": "Random +{minFP} to {maxFP} FP each week",
     "snake_eyes": "FPx that grows the WORSE this player's game is. A blank stat line pays the most.",
     "avalanche": "Roster TDs pay escalating FP: 1st={td1}, 2nd={td2}, 3rd={td3}, 4th={td4} then diminishing",
     "hedge": "Tops this player up to a {floorSoloFP} FP floor if they have a quiet week.",
     "complacency": "+{baseReward} FP, +{growthPerTick} per week roster is unchanged.",
-    "spotlight_moment": "+{rewardValue} FP when this player scores a TD. WR counts either WR scoring a TD.",
+    "spotlight_moment": "+{rewardValue} FP when this player scores a TD",
     "ace_up_the_sleeve": "+{baseFP} FP base, +{rewardValue} bonus if this player combines for {threshold}+ {statDisplay}",
     # Multiplier (QB) — FPx
     "cornucopia": "FPx that grows as your roster scores TDs.",
@@ -1131,7 +1140,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "jailbreak": "+{baseFP} FP base, +{rewardValue} bonus if this player racks up {threshold}+ yards after catch in a game",
     "safety_blanket": "+{perReceptionFP} FP per reception by this player in a game",
     "industrious": "{perReceptionFloobits} Floobits per reception by this player in a game",
-    "lead_blocker": "+{perTdFP} FP per TE TD in a game. Rushing touchdowns by the TE team's RB count as TE TDs",
+    "lead_blocker": "+{perTdFP} FP per TD by this player. A rushing TD by a running back on this player's team counts too",
     "mismatch": "+{perTdFP} FP per TD by this player, +{bonusFP} bonus at {tdThreshold}+ TDs",
     "sniper": "+{perFgFP} FP per 40+ yard FG by this player in a game",
     "spectacle": "+{perPointFP} FP per point this player overperforms by",
@@ -1153,7 +1162,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "gold_rush": "{perCardFloobits} Floobits per other Floobits card in your hand",
     "stacked_deck": "+{perCardMult} FPx for each other FPx card in your hand",
     "copycat": "+FP equal to highest flat FP bonus from your other cards",
-    "chain_reaction": "+{perCardXMult} FPx for every card in your hand that produced a non-zero bonus this week",
+    "chain_reaction": "+{perCardXMult} FPx for every other card in your lineup that produced a non-zero bonus this week",
     "bonus_round": "+{rewardValue} FP when 4 or more of your other cards produced a non-zero bonus this week",
     "winners_circle": "{winFloobits} Floobits when this player's team wins this week",
     "no_passengers": "+{perFloorFP} FPx per FP scored by your lowest roster player (max +{maxDelta})",
@@ -1178,7 +1187,7 @@ EFFECT_DETAIL_TEMPLATES = {
     "vagabond": "+{perSwapXMult} FPx per roster swap used this season",
     "fat_cat": "+1 FP per {floobitsPerFP} Floobits in your balance (max {maxFP} FP)",
     "surplus": "+{flatBonus}F added to weekly earnings while equipped",
-    "bonsai": "+{baseFP} FP guaranteed. This player's {triggerLabel} scale the chance to grow the base by +{growthFP} FP at week's end. Every grow slows the next.",
+    "bonsai": "+{baseFP} FP guaranteed. This player's {triggerLabel} set the chance that the base grows by +{growthFP} FP at week's end. Each time it grows, the next growth gets harder.",
     # ── New cards (FP/FPx rebalance) ──
     "anthem": "+{tier3FP} FP with 3 flat-FP cards equipped, +{tier4FP} with 4, +{tier5FP} with 5",
     "conductor": "Boosts each other flat-FP card's output by +{boostPct}%",
@@ -1281,7 +1290,9 @@ SHARED_EFFECT_POOL = [
     "fairweather_fan", "bandwagon_express", "touchdown_jackpot",
     "odometer", "complacency", "momentum",
     # position-keyed (generic concept, adapts to card position)
-    "luminary", "squire", "spotlight_moment",
+    # NOTE: "spotlight_moment" is no longer here — it is WR-EXCLUSIVE (owner call
+    # 2026-08-16). See POSITION_EXCLUSIVE_POOLS[3].
+    "luminary", "squire",
     # cross-position
     # NOTE: "indemnity" retired in the fusion chance rework (owner call 2026-07-26) — its odds
     # grew as THIS player underperformed, the direct inverse of "clear your bar to raise your
@@ -1361,6 +1372,16 @@ POSITION_EXCLUSIVE_POOLS = {
         "custody", "tenure", "getaway", "attention", "highpoint", "custodian",
         "runback", "house_call",
         "slippery", "jailbreak",
+        # ⚠️ WR-exclusive as of 2026-08-16 (owner call), previously shared across
+        # QB/RB/WR/TE. Its detail carried a pre-fusion clause — "a TD by either of your
+        # WRs counts" — from when the fantasy roster was separate from the cards and a WR
+        # card read BOTH WR slots. The compute never did that: `_computeSpotlightMoment`
+        # has always read `_getCardPlayerStats(ctx, cardPlayerId)`, the card's own player.
+        # So only the text was wrong, and pinning the card to WR is what makes the
+        # remaining sentence mean one thing. It was also the least differentiated of four
+        # holographic TD cards — Hype Man, Mismatch and Cha-Ching all pay per TD by this
+        # player — so QB/RB/TE keep three and WR gains a card of its own.
+        "spotlight_moment",
         "ace_up_the_sleeve", "crescendo", "traverse"],
     4: ["safety_blanket", "industrious", "lead_blocker",
         "frontier", "territory", "dominion", "paydirt", "end_zone", "promised_land",
@@ -1377,7 +1398,10 @@ POSITION_EXCLUSIVE_POOLS = {
 # TD-dependent effects are dead on K (kickers never score TDs)
 POSITION_EXCLUDED_EFFECTS = {
     4: {"crescendo"},  # TE: too few TDs for escalating mechanic
-    5: {"spotlight_moment", "squire", "cha_ching", "mismatch", "double_trouble",
+    # ⚠️ This filters the SHARED pool only (see effectPoolFor), so listing a
+    # position-EXCLUSIVE effect here does nothing. "spotlight_moment" was dropped from
+    # this set when it became WR-exclusive.
+    5: {"squire", "cha_ching", "mismatch", "double_trouble",
         "traverse", "closer"},  # K: no meaningful yardage or Q4 stats
 }
 
@@ -1578,7 +1602,33 @@ def _buildCrossPositionParams(effectName, playerRating, editionScale, position=N
                 "perFPxShown": round(_perFPx, 2),  # display copy (2-decimal cap)
                 "maxXBonus": round((1.4 + rn * 0.02) * editionScale * _BAL_FPX_MULT, 2)}
     if effectName == "diversified":
-        return {"rewardType": "fp", "perTypeFP": round((63.0 + rn * 1.5) * editionScale * _BAL_FP_MULT, 1)}
+        # ⚠️ THIS PAYS A COUNT, SO IT NEEDS A THIRD OF A SINGLE-PAYOUT CARD'S CONSTANT.
+        # There are only three output types, and a real six-card hand holds all three
+        # 63% of the time and at least two 98% of the time (measured over 4,000 sampled
+        # hands drawn at real pack weights, mean 2.61 types). So the "variety" condition
+        # is very nearly free, and whatever this mints is collected ~2.6x over.
+        #
+        # It was written as if it paid once. At `holographic`'s EDITION_POWER_SCALE the
+        # old constants minted ~69.5/type at rating 85, i.e. a mean of 181 FP and a
+        # ceiling of 208 — measured in a hand of REAL cards at 144.5 mean / 208.5 p90 /
+        # 347.5 max, against a holographic median effect of 13.0 FP and a best mintable
+        # peer around 47. It out-paid every PRISMATIC cross card several times over
+        # (Anthem 28.4, Copycat 39.9, Last Resort 49.3), which is backwards.
+        #
+        # ⚠️ THE SPREAD HARNESS CANNOT SEE THIS. simcheck_effect_spread fills the other
+        # five slots with no-effect floor prints, whose output type is blank and counts
+        # as nothing — so it scores this card at ONE type and reported a tame 38.0 FP.
+        # Any card that reads the HAND has to be measured in a hand.
+        #
+        # ⚠️ It was not always wrong: prod's season-16/17 templates carry 17.4-19.9/type,
+        # which lands 52-60 FP at three types — squarely in the peer band. The
+        # holographic EDITION_POWER_SCALE retune (0.47 -> 1.70, 2026-08-06) multiplied it
+        # 3.6x, and a card that collects its constant 2.6x over is exactly where a global
+        # dial change does the most damage. Sized back to that measured-correct band.
+        #
+        # Fixing this also pulls COPYCAT's tail down, since it copies the highest flat-FP
+        # bonus in the hand and had been copying this one (max 228.7).
+        return {"rewardType": "fp", "perTypeFP": round((17.0 + rn * 0.40) * editionScale * _BAL_FP_MULT, 1)}
     if effectName == "gold_rush":
         # Floobits output — leave untouched
         return {"rewardType": "floobits", "perCardFloobits": int(round((6 + rn * 0.3) * editionScale))}
@@ -1800,9 +1850,15 @@ def _buildFlatFPParams(effectName, playerRating, editionScale, position=None):
                 "bonusFP": round(_LADDER_FP_ANCHOR * 2.2, 1), "isChanceEffect": True}
     if effectName == "updraft":
         vol = _ladderVolume("passYards", position, 229.9)
+        gates = [int(round(vol * m)) for m in (1.3, 1.7, 2.1)]
+        # ⚠️ `gates` is a LIST and the detail used to interpolate it directly, so the card
+        # face read "bonus at each of [299, 391, 483]" — a Python repr in front of a user.
+        # `gatesText` is the display copy; the compute still reads `gates`. Existing
+        # templates get it from connection._backfillEffectParams.
         return {"perYardFP": round(_LADDER_FP_ANCHOR / vol, 3),
                 "gateFP": round(_LADDER_FP_ANCHOR * 0.35, 1),
-                "gates": [int(round(vol * m)) for m in (1.3, 1.7, 2.1)]}
+                "gates": gates,
+                "gatesText": f"{', '.join(str(g) for g in gates[:-1])} and {gates[-1]}"}
     if effectName == "frontier":
         return {"perYardFP": _ladderFpRate("recYards", position, 83.5, 0.004, rn)}
     if effectName == "freight":
@@ -2662,7 +2718,164 @@ _TRAVERSE_POSITION_TUNING = {
 _ALL_IN_STUD_LINE = {1: 22, 2: 22, 3: 20, 4: 14, 5: 15}
 
 
+def allInStudLine(position: int, classification: str = None) -> int:
+    """The FP line Bet Big pays above — and the line its power bar is set to.
+
+    ⚠️ THE BAR AND THE PAYOUT HAVE TO BE THE SAME NUMBER ON THIS CARD. Every other card
+    is gated on a generic per-position FP threshold, which is fine when the gate is just
+    "did this player show up". Bet Big's whole effect IS an FP threshold, so a generic
+    gate put two different lines on one card: the bar filled at the generic number and
+    the payout did not start until the stud line, which is 7 to 11 FP higher at every
+    position (QB 13 against 22, RB 11 against 22, WR 12 against 20, TE 6 against 14,
+    K 8 against 15). A user watched the bar fill, read the card as unlocked, and got
+    nothing — reported exactly that way.
+
+    ⚠️ All-Pro moves BOTH or neither. The classification lowers a card's gate because an
+    individual accolade buys individual reliability; applying that to the bar alone would
+    re-open the same gap it is being closed to fix. Lowering both keeps the two equal AND
+    keeps the accolade worth something on this card — an All-Pro Bet Big starts paying
+    sooner, which is what the accolade is for.
+    """
+    line = _ALL_IN_STUD_LINE.get(position, 20)
+    if classification and 'all_pro' in classification:
+        from constants import CARD_GATE_ALLPRO_MULT
+        line = max(1, round(line * CARD_GATE_ALLPRO_MULT))
+    return line
+
+
 # ─── Config Builder ──────────────────────────────────────────────────────────
+
+# ─── The stat a card is watching ────────────────────────────────────────────
+# ⚠️ A CARD CAN PAY ON A NUMBER THE GAME NEVER SHOWS YOU. Roughly twenty effects score
+# off stats that appear on no ordinary box score — well-placed and bad throws, air yards,
+# yards after contact, broken tackles, contested catches, bailouts, punt placement,
+# return yards. A card reading "+0.03 FPx per 5 well-placed throws" gave a reader no way
+# to find out how many their quarterback had.
+#
+# This is the ONE definition of "which stat drives this card", shared by every surface
+# that shows it: the card back's season line, the weekly scoring breakdown's game line,
+# and the player page. Deriving it separately per surface is how they drift.
+#
+# Keys are CARD FORMAT, the shape `fantasyTracker._buildCardStatFormat` produces — the
+# same names the compute functions read. ⚠️ That is NOT the DB shape: the database stores
+# `fg40+` where a card asks for `fg40plus`, and the receiving group's `yards` is `rcvYards`
+# here. Anything resolving these against a raw stat blob must convert first.
+#
+# Standard box-score stats are listed too, not just the exotic ones. The point is to show
+# the number driving the payout, and "which of these figures is the card actually reading"
+# is a fair question even when the figure is already on screen.
+EFFECT_TRACKED_STATS = {
+    # ── Passing ──
+    'gunslinger':   [('passing', 'goodThrows', 'Well-placed')],
+    'marksman':     [('passing', 'goodThrows', 'Well-placed'), ('passing', 'badThrows', 'Bad throws')],
+    'dead_eye':     [('passing', 'goodThrows', 'Well-placed'), ('passing', 'badThrows', 'Bad throws')],
+    'altitude':     [('passing', 'airYardsSum', 'Air yards'), ('passing', 'throws', 'Throws')],
+    'cadence':      [('passing', 'comp', 'Completions')],
+    'rhythm':       [('passing', 'comp', 'Completions')],
+    'clockwork':    [('passing', 'comp', 'Completions')],
+    'slipstream':   [('passing', 'passYards', 'Pass yards')],
+    'updraft':      [('passing', 'passYards', 'Pass yards')],
+    'stratosphere': [('passing', 'passYards', 'Pass yards')],
+    'haymaker':     [('passing', 'passYards', 'Pass yards'), ('passing', 'twentyPlus', '20+ plays')],
+    'air_raid':     [('passing', 'tds', 'Pass TD')],
+    'bombardier':   [('passing', 'tds', 'Pass TD')],
+    'salvo':        [('passing', 'tds', 'Pass TD')],
+    'barrage':      [('passing', 'tds', 'Pass TD')],
+    # ── Rushing ──
+    'workhorse':        [('rushing', 'carries', 'Carries')],
+    'beast_of_burden':  [('rushing', 'carries', 'Carries')],
+    'iron_man':         [('rushing', 'carries', 'Carries')],
+    'expedition':       [('rushing', 'runYards', 'Rush yards')],
+    'stampede':         [('rushing', 'runYards', 'Rush yards')],
+    'odyssey':          [('rushing', 'runYards', 'Rush yards')],
+    'freight':          [('rushing', 'yardsAfterContact', 'Yds after contact')],
+    'grinder':          [('rushing', 'yardsAfterContact', 'Yds after contact')],
+    'landslide':        [('rushing', 'yardsAfterContact', 'Yds after contact')],
+    'houdini':          [('rushing', 'runYards', 'Rush yards'), ('rushing', 'brokenTackles', 'Broken tackles')],
+    'breakaway':        [('rushing', 'runYards', 'Rush yards'), ('rushing', 'twentyPlus', '20+ runs')],
+    'battering_ram':      [('rushing', 'runTds', 'Rush TD')],
+    'goal_line_vulture':  [('rushing', 'runTds', 'Rush TD')],
+    # ── Receiving ──
+    'possession':     [('receiving', 'receptions', 'Receptions')],
+    'safety_blanket': [('receiving', 'receptions', 'Receptions')],
+    'industrious':    [('receiving', 'receptions', 'Receptions')],
+    'custody':        [('receiving', 'receptions', 'Receptions')],
+    'tenure':         [('receiving', 'receptions', 'Receptions')],
+    'attention':      [('receiving', 'targets', 'Targets')],
+    'frontier':       [('receiving', 'rcvYards', 'Rec yards')],
+    'territory':      [('receiving', 'rcvYards', 'Rec yards')],
+    'dominion':       [('receiving', 'rcvYards', 'Rec yards')],
+    'slippery':       [('receiving', 'yac', 'YAC')],
+    'jailbreak':      [('receiving', 'yac', 'YAC')],
+    'getaway':        [('receiving', 'yac', 'YAC')],
+    'highpoint':      [('receiving', 'receptions', 'Receptions'), ('receiving', 'contestedCatches', 'Contested')],
+    'custodian':      [('receiving', 'receptions', 'Receptions'), ('receiving', 'bailouts', 'Bailouts')],
+    'paydirt':        [('receiving', 'rcvTds', 'Rec TD')],
+    'end_zone':       [('receiving', 'rcvTds', 'Rec TD')],
+    'promised_land':  [('receiving', 'rcvTds', 'Rec TD')],
+    # ── Kicking and punting ──
+    'sniper':        [('kicking', 'fg40plus', 'FG 40+')],
+    'three_pointer': [('kicking', 'fgs', 'FG made')],
+    'pinpoint':      [('kicking', 'puntsInside20', 'Punts inside 20')],
+    'undertaker':    [('kicking', 'puntsInside20', 'Punts inside 20')],
+    'coffin_corner': [('kicking', 'puntsInside20', 'Punts inside 20'),
+                      ('kicking', 'puntsInside10', 'Punts inside 10')],
+    # ── Returns ──
+    'runback':    [('returning', 'puntReturnYards', 'Return yards')],
+    'house_call': [('returning', 'puntReturnYards', 'Return yards'),
+                   ('returning', 'puntReturnTds', 'Return TD')],
+}
+
+
+# ⚠️ TWO VOCABULARIES, AND CLIENTS SEE BOTH. Card code reads CARD shape; the fantasy
+# snapshot's `playerGameStats` ships RAW DB blobs, because its compact stat line was
+# written against those names. So a tracked stat carries both spellings and each surface
+# uses the one matching the payload it already has. Only these ten differ — every other
+# key is spelled the same in both — and the list is derived from the converter rather
+# than retyped, so it cannot drift from `_buildCardStatFormat`.
+_DB_KEY_FOR_CARD_KEY = {
+    ('passing', 'passYards'): 'yards',
+    ('passing', 'twentyPlus'): '20+',
+    ('rushing', 'runYards'): 'yards',
+    ('rushing', 'runTds'): 'tds',
+    ('rushing', 'twentyPlus'): '20+',
+    ('receiving', 'rcvYards'): 'yards',
+    ('receiving', 'rcvTds'): 'tds',
+    ('receiving', 'twentyPlus'): '20+',
+    ('kicking', 'fg40plus'): 'fg40+',
+    ('kicking', 'fg45plus'): 'fg45+',
+}
+
+
+def trackedStatsFor(effectName: str) -> list:
+    """The stat(s) this card is watching, as `[{group, key, dbKey, label}]`.
+
+    `key` is CARD shape, what the compute functions read. `dbKey` is the same stat as the
+    raw blobs spell it — equal to `key` for all but ten. A surface resolves against
+    whichever it holds; getting this wrong does not raise, it silently reads 0, which is
+    indistinguishable from a quiet week.
+
+    Empty for effects that read the ROSTER rather than one player's box score (hand
+    composition, favorite-team, chance synergy) — there is no single figure to point at,
+    and inventing one would be worse than showing nothing.
+    """
+    return [{'group': group, 'key': key, 'label': label,
+             'dbKey': _DB_KEY_FOR_CARD_KEY.get((group, key), key)}
+            for group, key, label in EFFECT_TRACKED_STATS.get(effectName or '', [])]
+
+
+def trackedStatValues(effectName: str, cardFormatStats: dict) -> list:
+    """`trackedStatsFor` with each stat's value read out of a CARD-FORMAT stat dict.
+
+    ⚠️ `cardFormatStats` must be the shape `_buildCardStatFormat` produces, keyed
+    `<group>_stats` — not a raw DB blob, whose names differ.
+    """
+    out = []
+    for stat in trackedStatsFor(effectName):
+        blob = (cardFormatStats or {}).get(f"{stat['group']}_stats") or {}
+        out.append({**stat, 'value': blob.get(stat['key'], 0) or 0})
+    return out
+
 
 def effectPoolFor(edition: str, position: int) -> list:
     """Every effect mintable at this edition for this position.
@@ -2757,8 +2970,10 @@ def buildEffectConfig(edition: str, playerRating: int, position: int, teamId=Non
         primary["chancePerStep"] = chancePerStep
         primary["yardType"] = yardType
     if effectName == "all_in":
-        # Bet Big: freeze the position-aware stud line the payout scales above.
-        primary["studLine"] = _ALL_IN_STUD_LINE.get(position, 20)
+        # Bet Big: freeze the position-aware stud line the payout scales above. ⚠️ The
+        # card's power bar is set to this SAME number in buildGateSpec — see
+        # allInStudLine for why they cannot be allowed to differ.
+        primary["studLine"] = allInStudLine(position, classification)
     if effectName == "bonsai":
         # The builder picks the growth trigger position-blind; re-pick it from ONLY the stats
         # the card player's position produces (a WR keys off receptions/YAC, a RB off carries,
@@ -4012,6 +4227,24 @@ def _computeStreakEffect(primary, ctx, cardPlayerId, eqId):
         carriedBase = baseReward
 
     if not conditionMet:
+        # ⚠️ NOT MET *YET* IS NOT THE SAME AS NOT MET. While the week is still running,
+        # `liveStreakConditionsMet` is False from kickoff until the moment the condition
+        # actually fires — so this branch used to resolve the streak the instant the week
+        # opened, banking the full broken-streak peak before the player had taken a snap.
+        # Measured on Metronome at a carried streak of 6 (base 41.6): 53.1 FP at kickoff,
+        # and 53.1 FP after a week that genuinely failed. The two moments were identical,
+        # and the first one is a payout for an outcome that had not happened.
+        #
+        # A streak resolves exactly twice: when the condition is MET (the branch below
+        # this one, which increments and pays the active value), or when the WEEK ENDS
+        # without it (this branch, paying the decaying peak). Until one of those, the
+        # streak portion outputs nothing.
+        #
+        # Projection is unaffected: `liveStreakConditionsMet` is empty there, so
+        # `conditionMet` defaults True and the forward-looking panel keeps showing the
+        # active-streak value rather than pricing every streak card as pending.
+        if getattr(ctx, 'gamesActive', False):
+            return EffectResult(equation="streak unresolved, this week is still running")
         if streakCount > 0:
             # Streak just broke this week. Pay the peak the streak achieved:
             # carriedBase (the locked base) + growth × (priorCount - 1).
@@ -4907,9 +5140,24 @@ def _computeChainReaction(primary, ctx, cardPlayerId, eqId):
     return EffectResult(equation=eq)
 
 
-_BONUS_ROUND_THRESHOLD = 6  # Fusion: raised 4->6. With a 6-7 card lineup, 4+ cards
-                            # triggering was ~guaranteed; 6 means nearly the whole hand
-                            # must pop, keeping it a real "everything fires" payoff.
+# ⚠️ THIS COUNTS *OTHER* CARDS, NOT SEATS, AND AT 6 IT WAS UNREACHABLE.
+# `_computeBonusRound` reads first-pass breakdowns (which exclude this card, a
+# second-pass effect) plus other second-pass cards. The standard lineup is
+# `FUSION_BASE_SLOTS` = 6, so there are only **5** other cards. A threshold of 6 could
+# not be met at all; it became merely possible with FLEX unlocked (an MVP card or an
+# Accession powerup, 7 seats -> 6 others) and only if literally every other card fired.
+# Measured over 200 real-hand trials before the revert: hit rate 0%.
+#
+# The fusion note that raised it 4 -> 6 said "with a 6-7 card lineup, 4+ cards triggering
+# was ~guaranteed" — it counted SEATS where the compute counts OTHERS, and that
+# off-by-one is the whole bug. Against 5 others, 4 is not near-guaranteed either; it
+# needs four of five to pop.
+#
+# Owner call 2026-08-16: back to 4, because 6 would include Group Project itself at the
+# typical hand size and "every card in the hand fires" is not a payoff anyone reaches.
+# ⚠️ Any future raise must be checked against `len(FUSION_BASE_SLOTS) - 1`, not against
+# the seat count. `test_effect_copy.py` asserts it stays reachable.
+_BONUS_ROUND_THRESHOLD = 4
 
 _FULL_HOUSE_MIN_CARDS = 5   # Full House (full_roster) needs at least this many first-pass
                             # gated (effect) cards present AND all ON to fire. A full 6-slot
@@ -5445,15 +5693,59 @@ def _ladderStat(ctx, cardPlayerId, group, key):
     return (sub or {}).get(key, 0) if isinstance(sub, dict) else 0
 
 
+def _streakClause(count, carried, ctx=None):
+    """How the streak reads in a breakdown.
+
+    Three states, not two. A BROKEN streak says so rather than printing "0 wk streak",
+    which is indistinguishable from never having had one, and the user who just lost a
+    six-week run is exactly the one asking what happened.
+
+    ⚠️ And a streak is not broken until the WEEK is over. While games are still running
+    the condition simply has not fired yet, so calling it broken at kickoff tells a user
+    they lost a run that is still very much alive.
+    """
+    if count:
+        return f"{count} wk streak"
+    if not carried:
+        return "no streak"
+    if getattr(ctx, 'gamesActive', False):
+        return "streak unresolved"
+    return "streak broken"
+
+
 def _ladderStreakDelta(primary, ctx, eqId):
     """The streak half of a prismatic rung: growth per week the bar has been cleared.
 
     Kept separate from the base rate so the prismatic rung literally contains the
     metallic one — the base pays every week and this rides on top.
+
+    ⚠️ THE GROWTH PAYS ONLY ON A WEEK THE STREAK WAS CONTINUED. This used to read the
+    carried `streakCounts` and pay `growth × (count - 1)` unconditionally, so a player who
+    had a six-week run and then MISSED the bar still collected the whole six weeks of
+    growth for the miss — the streak was only reset afterwards, at week end. Reported from
+    production as the streak bonus paying out on a week the condition was not met.
+
+    Measured on Clockwork (bar 32 completions, growth 0.03, streak carried at 6): at 31
+    completions, one short, the card paid +0.15 FPx of growth — identical to clearing the
+    bar at 32. Only the base rate term moved across the bar.
+
+    ⚠️ It hid because the CARD GATE masks the extremes. On a genuinely blank week the gate
+    closes and the whole card pays nothing, so the leak is invisible; on a big week the
+    bar is cleared anyway, so it looks correct. It paid full value through the entire
+    middle band, which is where real weeks land.
+
+    `liveStreakConditionsMet` is populated for these cards already — they are category
+    `streak` and `fantasyTracker._evaluateLiveStreakConditions` evaluates every one of
+    their reset conditions. Nothing was reading it. Defaults to True to match
+    `_computeStreakEffect`, which keeps projection contexts (where the dict is empty)
+    showing an active streak rather than silently pricing every card as broken.
     """
     growth = primary.get("growthPerTick", 0.0) or 0.0
     count = max(0, (ctx.streakCounts.get(eqId, 1) or 1) - 1)
-    return round(growth * count, 3), count
+    conditionMet = (getattr(ctx, 'liveStreakConditionsMet', None) or {}).get(eqId, True)
+    if not conditionMet:
+        return 0.0, 0, count
+    return round(growth * count, 3), count, count
 
 
 # ── Receiving yards: Frontier -> Territory -> Dominion ──
@@ -5483,12 +5775,12 @@ def _computeDominion(primary, ctx, cardPlayerId, eqId):
     """FPx per 50 receiving yards, plus a streak of hundred-yard weeks."""
     per50 = primary.get("per50Mult", 0.03)
     yards = _ladderStat(ctx, cardPlayerId, "receiving_stats", "rcvYards")
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = per50 * (yards / 50.0) + streak
     if delta <= 0:
         return EffectResult(equation="no receiving yards")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({yards} yds + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({yards} yds, {_streakClause(count, carried, ctx)})")
 
 
 # ── Yards after contact: Freight -> Grinder -> Landslide ──
@@ -5522,12 +5814,12 @@ def _computeLandslide(primary, ctx, cardPlayerId, eqId):
     """FPx per 50 contact yards, plus a streak of hundred-yard weeks."""
     per50 = primary.get("per50Mult", 0.03)
     yac = _ladderStat(ctx, cardPlayerId, "rushing_stats", "yardsAfterContact")
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = per50 * (yac / 50.0) + streak
     if delta <= 0:
         return EffectResult(equation="no yards after contact")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({yac} yds + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({yac} yds, {_streakClause(count, carried, ctx)})")
 
 
 # ── Punt placement: Pinpoint -> Coffin Corner -> Undertaker ──
@@ -5558,12 +5850,12 @@ def _computeUndertaker(primary, ctx, cardPlayerId, eqId):
     """FPx per pin, plus a streak of multi-pin weeks."""
     perPunt = primary.get("perPuntMult", 0.03)
     pins = _ladderStat(ctx, cardPlayerId, "kicking_stats", "puntsInside20")
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = perPunt * pins + streak
     if delta <= 0:
         return EffectResult(equation="no punts inside the 20")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({pins} pinned + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({pins} pinned, {_streakClause(count, carried, ctx)})")
 
 
 # ── Receiving TDs: Paydirt -> End Zone -> Promised Land ──
@@ -5730,12 +6022,12 @@ def _computeStratosphere(primary, ctx, cardPlayerId, eqId):
     """FPx per 100 passing yards, plus a streak of big weeks."""
     per100 = primary.get("per100Mult", 0.02)
     yards = _ladderStat(ctx, cardPlayerId, "passing_stats", "passYards")
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = per100 * (yards / 100.0) + streak
     if delta <= 0:
         return EffectResult(equation="no passing yards")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({yards} yds + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({yards} yds, {_streakClause(count, carried, ctx)})")
 
 
 # ── Throw quality: Gunslinger -> Marksman -> Dead Eye ──
@@ -5762,12 +6054,12 @@ def _computeDeadEye(primary, ctx, cardPlayerId, eqId):
     """FPx per well-placed ball, plus a streak of clean sheets."""
     per5 = primary.get("per5Mult", 0.02)
     good = _ladderStat(ctx, cardPlayerId, "passing_stats", "goodThrows")
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = per5 * (good / 5.0) + streak
     if delta <= 0:
         return EffectResult(equation="no well-placed throws")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({good} well-placed + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({good} well-placed, {_streakClause(count, carried, ctx)})")
 
 
 # ── Completions: Cadence -> Rhythm -> Clockwork ──
@@ -5800,12 +6092,12 @@ def _ladderRateStreak(primary, ctx, cardPlayerId, eqId, group, key, rateKey, uni
     """Shared prismatic shape: a rate on the stat, plus the streak riding on top."""
     rate = primary.get(rateKey, 0.03)
     val = _ladderStat(ctx, cardPlayerId, group, key)
-    streak, count = _ladderStreakDelta(primary, ctx, eqId)
+    streak, count, carried = _ladderStreakDelta(primary, ctx, eqId)
     delta = rate * (val / float(unit)) + streak
     if delta <= 0:
         return EffectResult(equation=f"no {label}")
     return EffectResult(multBonus=round(1.0 + delta, 3),
-                        equation=f"+{delta:.2f} FPx ({val} {label} + {count} wk streak)")
+                        equation=f"+{delta:.2f} FPx ({val} {label}, {_streakClause(count, carried, ctx)})")
 
 
 def _computeRhythm(primary, ctx, cardPlayerId, eqId):
@@ -6310,6 +6602,13 @@ def buildGateSpec(effectName: str, position: int, classification: str = None,
     allPro = bool(classification) and 'all_pro' in classification
     if allPro:
         threshold = max(1, round(threshold * CARD_GATE_ALLPRO_MULT))
+    # ⚠️ BET BIG SETS ITS OWN BAR, because its effect IS an FP threshold. A generic gate
+    # put two different lines on one card — the bar filled 7 to 11 FP before the payout
+    # began — so the card read "unlocked" and paid nothing. `allInStudLine` already
+    # applies the All-Pro adjustment, so it is taken AFTER the block above rather than
+    # being adjusted twice.
+    if effectName == "all_in":
+        threshold = allInStudLine(position, classification)
     inverse = effectName in _INVERSE_GATE_EFFECTS
     apNote = " (All-Pro)" if allPro else ""
     if inverse:

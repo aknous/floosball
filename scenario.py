@@ -87,6 +87,21 @@ class Scenario:
                 pl.gameAttributes = copy.deepcopy(pl.attributes)
                 pl.reset_game_stats()
             t.gameDefenseStats = copy.deepcopy(_FT.teamStatsDict['Defense'])
+            # ⚠️ WITHOUT THIS THE DEFENSE HAS NO TEAM RATINGS AND EVERY PASS-COVERAGE
+            # MEASUREMENT TAKEN THROUGH THIS HARNESS IS WRONG. A real game derives them at
+            # roster setup (`Team.updateRatings` -> `deriveDefenseFromRoster`); building a
+            # team by hand skips that, leaving `defensePassCoverageRating` at 0 against a
+            # real 71.
+            #
+            # It is not a small distortion. Zone coverage blends
+            # `individualCoverage * 0.4 + effectivePassDef * 0.6`, and
+            # `effectivePassDef` IS that team rating — so 60% of the coverage a receiver
+            # faces was zero. Measured, `rcvDefRating` averaged 29-40 against receiver
+            # route-running of 79, which makes receivers permanently wide open, pins
+            # openness near its clamp, and flattens every downstream effect. It is what
+            # made pass defense look inert and led to a false conclusion that
+            # `runStopFocus` could not open the pass game.
+            t.deriveDefenseFromRoster()
         self.game.offensiveTeam = self.home
         self.game.defensiveTeam = self.away
         self._offenseSide = 'home'

@@ -20,14 +20,22 @@ import logging
 
 logging.disable(logging.CRITICAL)
 
-from standings_view import clinchStatus, playoffSpots
+from standings_view import clinchStatus, playoffSpots, seedLeague
 
 
 class Team:
     def __init__(self, tid, wins, losses, ties=0, division=None):
         self.id = tid
         self.division = division
-        self.seasonTeamStats = {'wins': wins, 'losses': losses, 'ties': ties}
+        # ⚠️ `winPerc` IS REQUIRED. `seeding._baseKey` sorts on it, so a fixture
+        # without it gives every club 0 and the whole league ties — which silently
+        # seeded 2-26 clubs ahead of 19-9 ones and made a regression test look like
+        # a bug in the code under test.
+        played = wins + losses + ties
+        self.seasonTeamStats = {
+            'wins': wins, 'losses': losses, 'ties': ties,
+            'winPerc': ((wins + 0.5 * ties) / played) if played else 0.0,
+        }
 
 
 def _league(records, divisions=None, size=16):
@@ -116,12 +124,19 @@ def test_a_division_rival_still_alive_blocks_it():
 
 def test_no_division_stamp_means_no_division_clinch():
     """Divisions are persisted but a league mid-migration may have none. Absent a
-    division there is no title to win, and the badge must not appear."""
+    division there is no title to win, and that badge must not appear.
+
+    ⚠️ The TOP SEED still can be clinched though: with no division winners there is
+    nobody who can be seeded above this club on a guarantee, so an uncatchable
+    record IS the 1 seed. The old rule required a division clinch and so could
+    never award it here, which was a limitation of the record-count test rather
+    than a fact about the league."""
     teams = _league([(20, 0)] + [(0, 20)] * 15)
     status = clinchStatus(teams, totalGames=28)
     assert status[0]['clinchedDivision'] is False
-    assert status[0]['clinchedTopSeed'] is False
-    print("PASS an undivisioned league claims no division titles")
+    assert status[0]['clinchedTopSeed'] is True
+    assert status[0]['clinchedPlayoffs'] is True
+    print("PASS an undivisioned league claims no division titles, but does seed")
 
 
 def test_winning_the_division_auto_clinches_the_berth():
@@ -184,6 +199,37 @@ def test_losing_the_division_and_the_wildcard_is_elimination():
     status = clinchStatus(teams, totalGames=28)
     assert status[0]['eliminated'] is True
     print("PASS losing both roads is elimination")
+
+
+def test_a_division_winner_takes_a_berth_from_a_better_record():
+    """⚠️ REPORTED FROM THE LIVE BOARD. Counting "clubs above me on record" misses
+    that a DIVISION WINNER holds a guaranteed top-four seed with any record at all,
+    so it occupies a berth without ever appearing above you in the table.
+
+    Measured on production: BOS, DET and PHI all finished 14-14 with only seven
+    clubs holding more points, so a `canPassMe < spots` test read all three as
+    CLINCHED — while 13-15 MIN had won its division, taken seed 4, and pushed them
+    out of the field entirely."""
+    divisions = {i: ('North' if i < 4 else ('South' if i < 8 else
+                     ('East' if i < 12 else 'West'))) for i in range(16)}
+    # North's winner is 13-15. Seven clubs are better than the 14-14 pack.
+    records = [(13, 15), (2, 26), (2, 26), (2, 26)]      # North: weak winner
+    records += [(20, 8), (19, 9), (18, 10), (18, 10)]    # South: strong
+    records += [(16, 12), (15, 13), (15, 13), (14, 14)]  # East
+    records += [(14, 14), (14, 14), (12, 16), (11, 17)]  # West
+    teams = _league(records, divisions)
+    status = clinchStatus(teams, totalGames=28)
+
+    assert status[0]['clinchedDivision'] is True, 'the weak division winner'
+    assert status[0]['clinchedPlayoffs'] is True, 'a division winner is in the field'
+
+    # A 14-14 club outside the field must NOT read as clinched.
+    seeded = seedLeague(teams)['seeds']
+    for tid, st in status.items():
+        if tid not in seeded:
+            assert st['clinchedPlayoffs'] is False, \
+                f'team {tid} is not seeded yet reads as clinched'
+    print("PASS a division winner takes a berth from better records")
 
 
 # ---------------------------------------------------------------- top seed
