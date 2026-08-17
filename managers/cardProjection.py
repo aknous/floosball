@@ -164,12 +164,21 @@ def _amplifierDescription(effectName: str, primary: dict, active: bool, breakdow
     if effectName == "double_down":
         if not active:
             return "Needs another card"
+        # ⚠️ NEVER DESCRIBE LEMONS AS AN FPx. Its multiplier is a structural marker the
+        # post-pass uses to multiply ONE card's flat FP; it is not a multiplier on your
+        # lineup and never reaches the global FPx aggregation (`_applyTradeoffEffects`
+        # zeroes it). Rendered through the generic mult formatter it printed
+        # "+0.75 FPx" for a x1.75 card — a real number in a frame that means something
+        # else entirely, reported by a user who reasonably read it as a nerf.
         boost = _lemonsBoostFP(primary, breakdowns)
         if boost > 0:
+            # Settled: say what it actually added, and to what.
             return f"+{boost} FP on lowest card"
-        # Fallback when we can't compute a boost (no breakdowns yet)
+        # Projection: no week yet to measure, so state the operation. Uses the same
+        # "× N" notation as the affected card's own `(Lemons)` equation tag, so the two
+        # read as one thing rather than two formats for the same multiply.
         reward = primary.get("rewardValue", 0)
-        return f"{reward}x lowest-earning card"
+        return f"×{reward} lowest card"
     if effectName == "providence":
         bonus = int(round((primary.get("chanceBonus", 0) or 0) * 100))
         return f"+{bonus}% to chance cards" if active else "Needs chance card"
