@@ -128,5 +128,40 @@ class MeasuredOverRealGames(unittest.TestCase):
         self.assertEqual(missed[:3], [], f'{len(missed)} of {seen[0]} mentions unhighlighted')
 
 
+class BothPayloadBuildersCarryIt(unittest.TestCase):
+    """⚠️ THERE ARE TWO PAYLOADS AND THE FEED USES THE OTHER ONE. The names first went onto
+    `broadcastGameState`'s live lastPlay only, which looked right in isolation and left
+    EVERY play in the feed with nothing to emphasise — reported as no name bolding at all,
+    after the first fix. `gameData.plays` is built by a separate loop over historical play
+    objects, which is why the helper takes one."""
+
+    def test_theHelperAcceptsAPlayObject(self):
+        game = _game()
+        class Historical:
+            playText = 'nobody here'
+        self.assertEqual(game._involvedPlayerNames(Historical()), [])
+
+    def test_theReportedSentenceResolves(self):
+        game = _game()
+        game.homeTeam.rosterDict['qb'].name = 'Troubador Mernandez'
+        game.homeTeam.rosterDict['rb'].name = 'Knees Aioli'
+        game.awayTeam.rosterDict['wr1'].name = 'Bernie Plackett'
+
+        class Reported:
+            playText = ('Troubador Mernandez calls an audible! Knees Aioli takes the counter '
+                        'and squeezes through the line for 1 yards, tackled by Bernie Plackett')
+        got = game._involvedPlayerNames(Reported())
+        for name in ('Troubador Mernandez', 'Knees Aioli', 'Bernie Plackett'):
+            self.assertIn(name, got)
+
+    def test_bothBuildersEmitTheField(self):
+        with open('floosball_game.py') as fh:
+            src = fh.read()
+        self.assertEqual(src.count("'involvedPlayers':"), 2,
+                         'both the feed play-list and the live lastPlay must carry it')
+        self.assertIn("'involvedPlayers': self._involvedPlayerNames(playObj)", src,
+                      'the feed list builder must pass its historical play object')
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

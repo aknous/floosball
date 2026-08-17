@@ -2021,7 +2021,7 @@ class Game:
         except Exception:
             pass
 
-    def _involvedPlayerNames(self) -> list:
+    def _involvedPlayerNames(self, playObj=None) -> list:
         """Every player named in this play's text, longest name first.
 
         ⚠️ READ OFF THE TEXT, NOT OFF A LIST OF ATTRIBUTES. Listing `passer/receiver/runner/
@@ -2038,7 +2038,7 @@ class Game:
         Longest name first: a highlighter walking these in order must not let a short name
         sitting inside a longer one claim the span first.
         """
-        play = getattr(self, 'play', None)
+        play = playObj if playObj is not None else getattr(self, 'play', None)
         if play is None:
             return []
         text = getattr(play, 'playText', '') or ''
@@ -11136,6 +11136,11 @@ class Game:
                     'returnYards': getattr(playObj, 'returnYardage', 0) or 0,
                     'returnerName': getattr(getattr(playObj, 'returner', None), 'name', None),
                     'description': getattr(playObj, 'playText', ''),
+                    # ⚠️ THE FEED RENDERS THIS LIST, NOT THE LIVE lastPlay PAYLOAD. Adding
+                    # the names to `broadcastGameState` alone left every play in the feed
+                    # with nothing to emphasise, so no name bolded at all — reported after
+                    # the first fix looked correct in isolation. Two builders, one field.
+                    'involvedPlayers': self._involvedPlayerNames(playObj),
                     'playResult': playObj.playResult.value if hasattr(playObj, 'playResult') and playObj.playResult else None,
                     'hoopPair': getattr(playObj, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                     'conversionPoints': getattr(playObj, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
