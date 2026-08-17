@@ -25,6 +25,14 @@ def expect(desc, cond):
 
 WR = 3
 WR_THR = CARD_GATE_FP_THRESHOLDS[WR]  # 8
+# ⚠️ FULL HOUSE IS A DIAMOND CARD, so its OWN player faces the diamond bar (14 for a WR),
+# not the generic one. The fixture used to give every player WR_THR + 5 = 13, which clears
+# the generic bar and MISSES the diamond one — so Full House's own gate zeroed a multiplier
+# it had correctly computed, and this file failed for a reason that had nothing to do with
+# the behaviour under test. It was failing that way at HEAD, which is exactly the kind of
+# red that stops meaning anything.
+from constants import CARD_GATE_FP_THRESHOLDS_BY_EDITION as _BY_ED
+FH_THR = _BY_ED.get('diamond', {}).get(WR, WR_THR)  # 14
 
 
 def mkCard(eqId, pid, cfg, pos=WR, tier=1, edition='base', rating=80):
@@ -60,12 +68,14 @@ def runLineup(cards, fpByPid):
 
 print("0. Wiring")
 expect("full_roster is a second-pass effect", 'full_roster' in _SECOND_PASS_EFFECTS)
-expect(f"_FULL_HOUSE_MIN_CARDS == 5", _FULL_HOUSE_MIN_CARDS == 5)
+expect(f"_FULL_HOUSE_MIN_CARDS == 4 (5 was unreachable with any cross card)",
+       _FULL_HOUSE_MIN_CARDS == 4)
 
 print("\n1. Full lineup, every card clears its bar -> Full House FIRES")
 # 5 value cards (players 1-5) + Full House (player 6), all FP >= threshold.
 cards = [valueCard(i, i) for i in range(1, 6)] + [fullHouseCard(6, 6)]
-fp = {i: WR_THR + 5 for i in range(1, 7)}
+fp = {i: WR_THR + 5 for i in range(1, 6)}
+fp[6] = FH_THR + 5   # Full House's own player must clear the DIAMOND bar
 res, fh, ctx = runLineup(cards, fp)
 expect(f"snapshot counted 5 first-pass gated cards (got {ctx._firstPassGatedCount})",
        ctx._firstPassGatedCount == 5)
@@ -80,13 +90,29 @@ expect(f"snapshot: 4/5 on (got {ctx._firstPassGatedOn}/{ctx._firstPassGatedCount
 expect(f"Full House did NOT fire  (x{fh.primaryMult})", fh and fh.primaryMult <= 1.0)
 
 print("\n3. Below the min-card floor -> can't fire even if all on")
-# Only 4 value cards + Full House = 4 first-pass gated cards (< 5).
-cards4 = [valueCard(i, i) for i in range(1, 5)] + [fullHouseCard(6, 6)]
-fp4 = {i: WR_THR + 5 for i in (1, 2, 3, 4, 6)}
-res, fh, ctx = runLineup(cards4, fp4)
+# 3 value cards + Full House = 3 first-pass gated cards (< 4).
+cards3 = [valueCard(i, i) for i in range(1, 4)] + [fullHouseCard(6, 6)]
+fp3 = {i: WR_THR + 5 for i in (1, 2, 3)}
+fp3[6] = FH_THR + 5
+res, fh, ctx = runLineup(cards3, fp3)
 expect(f"only {ctx._firstPassGatedCount} first-pass gated cards (< {_FULL_HOUSE_MIN_CARDS})",
-       ctx._firstPassGatedCount == 4)
+       ctx._firstPassGatedCount == 3)
 expect(f"Full House did NOT fire  (x{fh.primaryMult})", fh and fh.primaryMult <= 1.0)
+
+print("\n3b. THE REPORTED LINEUP: 4 gated cards + a cross card -> it FIRES")
+# ⚠️ Why the floor moved. A 6-slot lineup holding Full House and ONE cross card (Copycat,
+# Lemons, Chain Reaction, ...) leaves exactly 4 first-pass gated cards. At a floor of 5 that
+# was mathematically unable to fire, silently — reported by a user whose lineup was
+# touchdown_pinata / Full House / allowance / diversified / copycat / alchemy.
+cards4 = [valueCard(i, i) for i in range(1, 5)] + [fullHouseCard(6, 6)]
+fp4 = {i: WR_THR + 5 for i in (1, 2, 3, 4)}
+fp4[6] = FH_THR + 5
+res, fh, ctx = runLineup(cards4, fp4)
+expect(f"exactly {ctx._firstPassGatedCount} first-pass gated cards (== floor)",
+       ctx._firstPassGatedCount == 4)
+expect(f"all 4 cleared (got {ctx._firstPassGatedOn})", ctx._firstPassGatedOn == 4)
+expect(f"Full House FIRES on the realistic lineup  (x{fh.primaryMult})",
+       fh and fh.primaryMult > 1.0)
 
 print("\n4. Full House's OWN player must also show up (central gate)")
 # All 5 value cards on, but Full House's own depicted player is cold -> its own gate zeros it.
