@@ -4211,8 +4211,9 @@ class SeasonManager:
             return f'{self.RECORD_SCOPES.get(scope, scope)} team {statLabel}'
         return None
 
-    def _snapshotRecords(self) -> Dict[str, Any]:
-        """Flatten the records tree to `{path: value}` so a break can be diffed generically.
+    def _snapshotRecords(self, tree: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Flatten a records tree to `{path: (value, name, id)}` so a break can be diffed
+        generically. Defaults to the live tree; `tree` is for the tie scratch pass below.
 
         Deliberately NOT instrumented at each comparison site: the record checks are dozens
         of near-identical `if stat > record` blocks spread over five methods, and a new
@@ -4230,10 +4231,91 @@ class SeasonManager:
                     walk(child, f'{path}.{key}' if path else key)
 
         try:
-            walk(self.recordsManager.getRecords(), '')
+            walk(self.recordsManager.getRecords() if tree is None else tree, '')
         except Exception as e:
             logger.debug(f"Record snapshot skipped: {e}")
         return flat
+
+    # How far a mark is nudged down for the tie scratch pass. Small enough that no real
+    # stat can sit inside it (fantasy points are the finest-grained at one decimal place),
+    # large enough to survive float representation.
+    _TIE_EPSILON = 1e-6
+
+    def _detectRecordTies(self, game, recordsBefore: Dict[str, Any]) -> Dict[str, Any]:
+        """`{path: (value, name, id, previousHolderName, previousSeason)}` for records this
+        game MATCHED without beating.
+
+        ⚠️ A TIE LEAVES NO DIFF, WHICH IS WHY IT NEEDED ITS OWN DETECTOR. Every comparison
+        in `recordManager` is a strict `>`, so a player who equals the mark changes nothing
+        at all — the tree is identical before and after, and the before/after diff that
+        finds breaks is blind to it by construction. Measured on production: the game
+        records for pass TDs (9), rush TDs (5) and receiving TDs (6) are ALREADY shared by
+        two, two and three players, none of whom were ever mentioned.
+
+        ⚠️ IT DOES NOT INSTRUMENT THE COMPARISON SITES, for the same reason the break diff
+        does not: there are dozens of them and a record type added later would silently
+        skip the feed. Instead the real check methods are re-run against a scratch copy of
+        the tree whose marks have each been nudged down by an epsilon, so a stat that
+        merely EQUALS the record now clears the bar and writes itself in. A path whose
+        scratch value comes back exactly equal to the standing mark, under a different
+        holder, was tied. One that comes back higher was broken, and belongs to the diff.
+        This is safe to run because the check methods are pure with respect to the dict
+        they are handed — no DB writes, no mutation of the player or game objects — so the
+        second pass cannot disturb the first.
+
+        ⚠️ KNOWN LIMIT: at most one tie is reported per record per game. If two players
+        both reach the mark in the same slate, the first one the check loop meets claims
+        the scratch record and the second is invisible; and if the incumbent re-achieves
+        their own mark they claim it too, which correctly reports nothing. Both need two
+        players on the exact same value in one game, which is rare enough to leave.
+        """
+        import copy
+        ties: Dict[str, Any] = {}
+        try:
+            scratch = copy.deepcopy(self.recordsManager.getRecords())
+
+            def nudge(node):
+                if not isinstance(node, dict):
+                    return
+                value = node.get('value')
+                if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                        and value > 0 and not isinstance(node.get('value'), dict)):
+                    node['value'] = value - self._TIE_EPSILON
+                for child in node.values():
+                    nudge(child)
+
+            nudge(scratch)
+            self.recordsManager.checkPlayerGameRecords(scratch)
+            self.recordsManager.checkTeamGameRecords(game, scratch)
+
+            for path, (value, name, holderId) in self._snapshotRecords(scratch).items():
+                previous = recordsBefore.get(path)
+                if not previous or not previous[0] or not name:
+                    continue
+                prevValue, prevName, prevId = previous
+                # Exactly equal = matched. A miss leaves the nudged mark behind (a whole
+                # epsilon away) and a break leaves something larger, so the equality test
+                # separates all three cleanly.
+                if abs(value - prevValue) > self._TIE_EPSILON / 2:
+                    continue
+                if holderId == prevId:
+                    continue  # the holder re-achieving their own mark is not news
+                node = self._recordNode(path)
+                ties[path] = (value, name, holderId, prevName,
+                              (node or {}).get('season'))
+        except Exception as e:
+            logger.debug(f"Record tie detection skipped: {e}")
+        return ties
+
+    def _recordNode(self, path: str) -> Optional[Dict[str, Any]]:
+        """The live tree node behind a flattened path, or None."""
+        try:
+            node = self.recordsManager.getRecords()
+            for key in path.split('.'):
+                node = node[key]
+            return node if isinstance(node, dict) else None
+        except Exception:
+            return None
 
     def _publishGameNews(self, game, recordsBefore: Optional[Dict[str, Any]] = None) -> None:
         """Publish everything a finished game just made newsworthy.
@@ -4317,6 +4399,48 @@ class SeasonManager:
                              (value / prevValue) * self.RECORD_SCOPE_WEIGHT.get(scope, 1.0)))
             except Exception as e:
                 logger.debug(f"Record news skipped: {e}")
+
+            # ── Or a record was only MATCHED ─────────────────────────────────
+            # ⚠️ Equalling a mark is a different event from taking it, and until now the
+            # league had no way to say so: every comparison is a strict `>`, so a tie
+            # changed nothing and went unreported. Owner call — the Record Book still
+            # credits the original holder alone, so this feed line is the ONLY place a
+            # co-holder is ever named. That is deliberate: the book answers "what is the
+            # record", the feed answers "what just happened".
+            try:
+                for path, (value, name, holderId, prevName, prevSeason) in \
+                        self._detectRecordTies(game, recordsBefore).items():
+                    label = self._recordLabel(path)
+                    if not label:
+                        continue
+                    isPlayer = path.startswith('players.')
+                    scope = self._recordScope(path)
+                    # ⚠️ NO 'BEATEN BY' CELL, because nothing was beaten — the story is
+                    # the mark and whose company they just joined. The season cell only
+                    # appears when the tree actually knows it (a record loaded from the DB
+                    # carries one; one set in this process does not), rather than
+                    # inventing a date to reach three cells.
+                    tieStats = [
+                        stat('MARK', round(value), positive=True),
+                        stat('SET BY', prevName or 'unknown'),
+                    ]
+                    if prevSeason:
+                        tieStats.append(stat('SINCE', f'Season {prevSeason}'))
+                    # ⚠️ A tie can never LEAD, and that falls out rather than being
+                    # special-cased twice over. Its ratio is exactly 1.0 — the floor for
+                    # this category, since any break is strictly greater — and with two
+                    # cells it sits under `front_page.LEAD_MIN_STATS` anyway. It is a row,
+                    # which is what matching someone else's record is worth.
+                    emit(category='record', eventType=f'{path}.tie',
+                         text=f'{name} tied the {label} record at {round(value)}',
+                         teamId=None if isPlayer else holderId,
+                         playerId=holderId if isPlayer else None,
+                         playerName=name if isPlayer else None,
+                         stats=tieStats,
+                         leadWeight=self._leadWeight(
+                             'record', 1.0 * self.RECORD_SCOPE_WEIGHT.get(scope, 1.0)))
+            except Exception as e:
+                logger.debug(f"Record tie news skipped: {e}")
 
         # ── An upset ─────────────────────────────────────────────────────────
         # Judged on PRE-GAME ELO, captured before the result moved it. Reading the live
