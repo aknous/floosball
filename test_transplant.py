@@ -118,5 +118,45 @@ try:
 except ValueError as e:
     expect(f"same donor accepted once current-season  (got {e})", False)
 
+
+
+# ── The All-Pro gate survives a transplant ────────────────────────────────────
+#
+# ⚠️ THE ROW KNEW IT WAS ALL-PRO AND THE GATE DID NOT. `_createUpgradedTemplate`
+# (transplant + promote) and `blendCards` stamped `classification` onto the new template
+# row but never passed it to `buildEffectConfig`. The gate is FROZEN into effect_config at
+# mint and `buildGateSpec` applies the All-Pro discount only if it is told, so the card
+# wore the All-Pro badge with an undiscounted bar: a prismatic WR Copycat gated at 12 FP
+# instead of 8. It also left `gate.allPro` false, the flag the lineup reads to draw the AP
+# accent and the "All-Pro: bar lowered 30%" note. Reported by a user who transplanted
+# Copycat onto an All-Pro card and found that text missing.
+#
+# ⚠️ Long-standing, but unreachable until season 2: `all_pro` comes from the PRIOR season's
+# All-Pro team, so a league's first season mints none. Production ended season 1 with 823
+# `rookie` templates and zero `all_pro`.
+print()
+print("All-Pro gate")
+
+_plain = buildEffectConfig('holographic', 88, 3, None, forceEffect='copycat')
+_ap = buildEffectConfig('holographic', 88, 3, None, forceEffect='copycat',
+                        classification='all_pro')
+expect("All-Pro lowers its own bar",
+       _ap['gate']['threshold'] < _plain['gate']['threshold'])
+expect("gate.allPro set (drives the accent + the lowered-bar note)",
+       bool(_ap['gate'].get('allPro')))
+
+_src = open('managers/cardManager.py').read()
+expect("transplant/promote passes the classification",
+       'classification=sourceTemplate.classification,\n            forceEffect=forceEffect' in _src)
+expect("blend passes the classification",
+       'classification=resultClassification,\n        )' in _src)
+
+# ⚠️ The repair is scoped to All-Pro on purpose. A blanket gate recompute would also
+# rewrite cards frozen under older rules -- production has six all_in rookie templates in
+# exactly that state. Those are owned cards; re-pricing them is a balance change.
+_conn = open('database/connection.py').read().split('def _backfillAllProGates')[1].split('\ndef ')[0]
+expect("backfill only touches All-Pro templates", "LIKE '%all_pro%'" in _conn)
+expect("backfill leaves non-All-Pro gates alone", "want.get('allPro')" in _conn)
+
 print(f"\n{'ALL PASS' if not failures else f'{len(failures)} FAILED: ' + '; '.join(failures)}")
 sys.exit(1 if failures else 0)

@@ -778,7 +778,12 @@ class CardManager:
             for player, effectName in plan:
                 rating = getattr(player, 'playerRating', None)
                 teamId = teamById.get(player.id)
+                # Passed for consistency with every other mint path, so the frozen gate
+                # is always built from the same classification the row is stamped with.
+                # Inert today ("rookie" carries no gate adjustment; only All-Pro does),
+                # but this is exactly the omission that broke transplant and blend.
                 effectConfig = _buildEffectConfig(edition, rating, positionValue, teamId,
+                                                  classification="rookie",
                                                   forceEffect=effectName)
                 rarityWeight = computeRarityWeight(edition, rating)
                 sellValue = getSellValue(edition, isActive=True)
@@ -1142,9 +1147,18 @@ class CardManager:
         from database.models import CardTemplate
         from database.repositories.card_repositories import CardTemplateRepository
 
+        # ⚠️ PASS THE CLASSIFICATION. The row below carries it, but the GATE is frozen
+        # into effect_config at mint and `buildGateSpec` applies the All-Pro discount
+        # (CARD_GATE_ALLPRO_MULT) only if it is told. Omitting it here produced a card
+        # that WORE the All-Pro badge while its power bar was built as an ordinary card:
+        # measured on a prismatic WR Copycat, gated at 12 FP instead of 8. It also drops
+        # `gate.allPro`, which is the flag the lineup reads to draw the AP accent and the
+        # "All-Pro: bar lowered 30%" note — reported by a user who transplanted onto an
+        # All-Pro card and found that text missing. This is the transplant AND promote path.
         effectConfig = _buildEffectConfig(
             newEdition, sourceTemplate.player_rating,
             sourceTemplate.position, sourceTemplate.team_id,
+            classification=sourceTemplate.classification,
             forceEffect=forceEffect,
         )
         isActive = sourceTemplate.season_created == currentSeason
@@ -1235,10 +1249,14 @@ class CardManager:
             mvpPlayerId, championPlayerIds, allProPlayerIds, resultEdition,
         )
 
-        # Create new template (random effect — no forceEffect)
+        # Create new template (random effect — no forceEffect).
+        # ⚠️ Built with `resultClassification`, the SAME value stamped on the row below,
+        # so the frozen gate agrees with the badge the card wears. See
+        # `_createUpgradedTemplate` for what omitting it costs.
         effectConfig = _buildEffectConfig(
             resultEdition, sourceTemplate.player_rating,
             sourceTemplate.position, sourceTemplate.team_id,
+            classification=resultClassification,
         )
         isActive = sourceTemplate.season_created == currentSeason
         newTemplate = CardTemplate(

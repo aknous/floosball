@@ -1578,6 +1578,7 @@ def _runPendingMigrations():
     _recomputeFundingTiers()
 
     # Refresh stale effect_config text on reworked card effects
+    _backfillAllProGates()      # before the text refresh: all_in / honor_roll print the threshold
     _refreshCardEffectText()
 
     # One-time data backfills: reconstruct missing data from GamePlayerStats
@@ -2049,6 +2050,77 @@ def _refreshCardEffectText():
     except Exception as e:
         conn.rollback()
         logger.warning(f"  Migration: failed to refresh card effect text: {e}")
+    finally:
+        conn.close()
+
+
+def _backfillAllProGates():
+    """Repair the frozen power-bar gate on All-Pro cards built by a path that dropped the tag.
+
+    ⚠️ THE ROW KNEW IT WAS ALL-PRO AND THE GATE DID NOT. `_createUpgradedTemplate`
+    (transplant and promote) and `blendCards` stamped `classification` onto the new
+    template row but never passed it to `buildEffectConfig`, so the gate frozen inside
+    `effect_config` was built as if the card were ordinary. The card WORE the All-Pro badge
+    while its bar was undiscounted: measured on a prismatic WR Copycat, 12 FP instead of 8.
+    It also left `gate.allPro` false, which is the flag the lineup reads to draw the AP
+    accent and the "All-Pro: bar lowered 30%" note — which is how it was reported.
+
+    ⚠️ Long-standing, but only reachable from season 2. `all_pro` is stamped from the
+    PRIOR season's All-Pro team, so a league's first season mints none: production had 823
+    `rookie` templates and zero `all_pro` when season 1 ended. The bug could not be hit
+    until season 2's templates existed.
+
+    ⚠️ SCOPED TO THE ALL-PRO DISCREPANCY ON PURPOSE. A blanket "recompute every gate" would
+    also rewrite cards whose gate legitimately differs because it was frozen under older
+    rules — production has six `all_in` rookie templates in exactly that state, left from
+    before Bet Big's bar was made to match its payout line. Those are owned cards frozen at
+    mint, and re-pricing them is a balance change, not a repair.
+
+    Runs before `_refreshCardEffectText`, so effects that print the threshold in their own
+    text (`all_in`, `honor_roll` — both already in its refresh set) re-render against the
+    corrected gate on the same boot.
+    """
+    import json as _json
+    from sqlalchemy import text
+    from datetime import datetime as _dt
+    conn = engine.connect()
+    try:
+        done = conn.execute(text(
+            "SELECT value FROM app_settings WHERE key = 'allpro_gate_backfilled_v1'"
+        )).fetchone()
+        if done:
+            return
+        from managers.cardEffects import buildGateSpec
+        rows = conn.execute(text(
+            "SELECT id, edition, position, classification, effect_config FROM card_templates "
+            "WHERE classification LIKE '%all_pro%' AND effect_config IS NOT NULL")).fetchall()
+        fixed = 0
+        for tid, edition, position, classification, cfgRaw in rows:
+            try:
+                cfg = _json.loads(cfgRaw) if isinstance(cfgRaw, str) else cfgRaw
+            except Exception:
+                continue
+            stored = (cfg or {}).get('gate')
+            if not stored:
+                continue
+            want = buildGateSpec(cfg.get('effectName'), position, classification, edition)
+            if not want or not want.get('allPro'):
+                continue
+            if stored.get('threshold') == want.get('threshold') and stored.get('allPro'):
+                continue
+            cfg['gate'] = want
+            conn.execute(text("UPDATE card_templates SET effect_config = :c WHERE id = :i"),
+                         {"c": _json.dumps(cfg), "i": tid})
+            fixed += 1
+        conn.execute(text(
+            "INSERT OR REPLACE INTO app_settings (key, value, updated_at) "
+            "VALUES ('allpro_gate_backfilled_v1', '1', :ts)"), {"ts": _dt.utcnow()})
+        conn.commit()
+        if fixed:
+            logger.info(f"  Backfill: restored the All-Pro discount on {fixed} card gates")
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"  Backfill: All-Pro gate repair skipped: {e}")
     finally:
         conn.close()
 
