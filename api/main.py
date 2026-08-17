@@ -11000,7 +11000,10 @@ def getRerollCost(user: _User = Depends(_getCurrentUser)):
         sm = floosball_app.seasonManager if floosball_app else None
         isScheduledMode = sm and sm.timingManager and sm.timingManager._isScheduledMode
         if isScheduledMode:
-            rerollCount = shopRepo.getPurchasesToday(user.id, "shop_reroll")
+            # includeFree: the free first reroll IS the first use of the allowance,
+            # so it must count or the ladder never leaves step one.
+            rerollCount = shopRepo.getPurchasesToday(user.id, "shop_reroll",
+                                                     includeFree=True)
         else:
             currentSeasonNum = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
             currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
@@ -11008,7 +11011,8 @@ def getRerollCost(user: _User = Depends(_getCurrentUser)):
             cycleStartWeek = max(1, ((currentWeek - 1) // cycleLen) * cycleLen + 1)
             cycleEndWeek = cycleStartWeek + cycleLen - 1
             rerollCount = shopRepo.getPurchasesForCycle(
-                user.id, currentSeasonNum, "shop_reroll", cycleStartWeek, cycleEndWeek
+                user.id, currentSeasonNum, "shop_reroll", cycleStartWeek, cycleEndWeek,
+                includeFree=True,
             )
         cost = shopRerollCost(rerollCount)
         # `free` is surfaced so the button can say so rather than reading "0 Floobits",
@@ -11049,13 +11053,17 @@ def rerollFeaturedCards(user: _User = Depends(_getCurrentUser)):
 
         # Calculate escalating cost
         if isScheduledMode:
-            rerollCount = shopRepo.getPurchasesToday(user.id, "shop_reroll")
+            # includeFree: the free first reroll IS the first use of the allowance,
+            # so it must count or the ladder never leaves step one.
+            rerollCount = shopRepo.getPurchasesToday(user.id, "shop_reroll",
+                                                     includeFree=True)
         else:
             cycleLen = 7
             cycleStartWeek = max(1, ((currentWeek - 1) // cycleLen) * cycleLen + 1)
             cycleEndWeek = cycleStartWeek + cycleLen - 1
             rerollCount = shopRepo.getPurchasesForCycle(
-                user.id, currentSeasonNum, "shop_reroll", cycleStartWeek, cycleEndWeek
+                user.id, currentSeasonNum, "shop_reroll", cycleStartWeek, cycleEndWeek,
+                includeFree=True,
             )
         cost = shopRerollCost(rerollCount)
 

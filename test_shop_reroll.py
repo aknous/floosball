@@ -50,6 +50,79 @@ class TheFirstRerollEachDayIsFree(unittest.TestCase):
         self.assertEqual(shopRerollCost(-3), 0)
 
 
+class TheLadderActuallyClimbs(unittest.TestCase):
+    """⚠️ THE PRICE IS A FUNCTION OF A COUNT, AND THE COUNT DID NOT COUNT THE FREE ONE.
+
+    `getPurchasesToday` filters `price_paid > 0` on purpose, so a free achievement grant
+    does not burn a user's daily buy limit. The free reroll records `price_paid = 0`, so
+    it was never counted: the count stayed at 0 forever, every reroll re-priced as the
+    first, and nothing was ever charged. Shipped to production and reported.
+
+    ⚠️ THE CLASS ABOVE DID NOT CATCH IT, AND COULD NOT HAVE. It tests `shopRerollCost` in
+    isolation, which was correct the whole time — the defect was in the argument. A pure
+    function passing says nothing about the value being handed to it, so this exercises
+    the counter and the price together, the way the endpoint does.
+    """
+
+    def setUp(self):
+        import os, tempfile
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from database.models import Base
+        self.tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+        self.tmp.close()
+        self.engine = create_engine(f'sqlite:///{self.tmp.name}')
+        Base.metadata.create_all(bind=self.engine)
+        self.session = sessionmaker(bind=self.engine)()
+        from database.repositories.shop_repository import ShopPurchaseRepository
+        self.repo = ShopPurchaseRepository(self.session)
+
+    def tearDown(self):
+        import os
+        self.session.close()
+        self.engine.dispose()
+        os.unlink(self.tmp.name)
+
+    def _reroll(self):
+        """One reroll exactly as the endpoint does it: count, price, record."""
+        count = self.repo.getPurchasesToday(1, 'shop_reroll', includeFree=True)
+        cost = shopRerollCost(count)
+        self.repo.createPurchase(userId=1, itemSlug='shop_reroll', season=1,
+                                 week=1, pricePaid=cost)
+        self.session.commit()
+        return cost
+
+    def test_sixRerollsChargeTheWholeLadder(self):
+        charged = [self._reroll() for _ in range(6)]
+        self.assertEqual(charged, [0, SHOP_REROLL_BASE_COST,
+                                   SHOP_REROLL_BASE_COST + SHOP_REROLL_COST_INCREMENT,
+                                   SHOP_REROLL_BASE_COST + 2 * SHOP_REROLL_COST_INCREMENT,
+                                   SHOP_REROLL_BASE_COST + 3 * SHOP_REROLL_COST_INCREMENT,
+                                   SHOP_REROLL_BASE_COST + 4 * SHOP_REROLL_COST_INCREMENT],
+                         'the ladder is not climbing — the free roll is uncounted again')
+
+    def test_onlyTheFirstIsFree(self):
+        charged = [self._reroll() for _ in range(5)]
+        self.assertEqual(charged.count(0), 1, f'more than one free reroll: {charged}')
+
+    def test_aFreePowerupGrantStillDoesNotBurnTheBuyLimit(self):
+        """⚠️ The default must NOT change. For a powerup the two meanings genuinely
+        differ: claiming a reward should not spend the allowance you could buy with."""
+        self.repo.createPurchase(userId=2, itemSlug='temp_card_slot', season=1,
+                                 week=1, pricePaid=0)
+        self.session.commit()
+        self.assertEqual(self.repo.getPurchasesToday(2, 'temp_card_slot'), 0)
+        self.assertEqual(self.repo.getPurchasesToday(2, 'temp_card_slot', includeFree=True), 1)
+
+    def test_bothEndpointCountersAskForTheFreeOne(self):
+        """Four call sites: cost and reroll, each with a scheduled and a cycle branch."""
+        with open('api/main.py') as fh:
+            src = fh.read()
+        seg = src[src.index('def getRerollCost'):src.index('# THEMED PACK REROLL')]
+        self.assertEqual(seg.count('includeFree=True'), 4,
+                         'a reroll counter is still excluding the free roll')
+
+
 class TheSlateDoesNotRepopulateItself(unittest.TestCase):
 
     def _src(self):
