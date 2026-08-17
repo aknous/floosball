@@ -429,13 +429,20 @@ def _provisionStarterPack(session, user, currentSeason: Optional[int] = None):
         )
         session.add(currency)
 
-        # Log the starter bonus transaction
+        # Log the starter bonus transaction.
+        # ⚠️ Stamp the season. This row is built directly rather than through
+        # `CurrencyRepository.addFunds`, so it does not get that method's season
+        # default — and 185 of these landed on production with `season = NULL`,
+        # 18,400F that counted toward no season's faucet and so quietly discounted
+        # every team's facilities. See addFunds for the wider undercount.
+        from database.repositories.card_repositories import CurrencyRepository
         tx = CurrencyTransaction(
             user_id=user.id,
             amount=STARTER_FLOOBITS,
             balance_after=STARTER_FLOOBITS,
             transaction_type='starter_bonus',
             description='Welcome bonus',
+            season=CurrencyRepository(session)._currentSeasonNumber(),
         )
         session.add(tx)
 

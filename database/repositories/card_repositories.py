@@ -302,9 +302,46 @@ class CurrencyRepository:
             self.session.flush()
         return currency
 
+    def _currentSeasonNumber(self):
+        """The sim's own notion of 'now', for stamping a grant that didn't say.
+
+        Returns None if it cannot be determined — a grant must never fail over this.
+        """
+        from sqlalchemy import text
+        try:
+            n = self.session.execute(
+                text("SELECT current_season FROM simulation_state ORDER BY id LIMIT 1")).scalar()
+            if n and int(n) >= 1:
+                return int(n)
+        except Exception:
+            pass
+        try:
+            n = self.session.execute(text("SELECT MAX(season_number) FROM seasons")).scalar()
+            return int(n) if n and int(n) >= 1 else None
+        except Exception:
+            return None
+
     def addFunds(self, userId: int, amount: int, transactionType: str,
                  description: str = None, season: int = None, week: int = None) -> UserCurrency:
-        """Add Floobits to a user's balance and log the transaction."""
+        """Add Floobits to a user's balance and log the transaction.
+
+        ⚠️ `season` IS DEFAULTED HERE, NOT AT THE CALL SITES, because four of them forgot
+        it and the column is nullable so nothing ever complained. Measured on production:
+        1,100 grants worth 82,534F carried `season = NULL` against 212,614F stamped to
+        season 1 — a **28% undercount** of the faucet. That matters because the facility
+        share unit is exactly "last season's grants / team count", so every unstamped
+        grant silently made every facility in the league cheaper than the economy warranted.
+        `achievement` (883 rows), `starter_bonus` (185) and `card_sell` (32) never passed it;
+        the 13 stamped `achievement` rows came from the one call site that did.
+        Defaulting at this choke point also covers every grant site added in future.
+
+        ⚠️ It also un-skips two things that were gated on `season` being present: the
+        Tycoon per-season achievement hook below, and (for callers that pass a week) the
+        Endowment boost. The Endowment gate needs season AND week, and these sites pass
+        no week, so nothing starts paying more than it did.
+        """
+        if season is None:
+            season = self._currentSeasonNumber()
         # Endowment (income_boost powerup): a flat +25% on ANYTHING credited to the
         # bank while it's active — fantasy, pick-em, showcase + supporter dividends,
         # etc. Applied here at the single choke point so every income stream is

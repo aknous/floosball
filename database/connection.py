@@ -1597,6 +1597,7 @@ def _runPendingMigrations():
     _backfillChampionRosterSnapshots()
     _backfillTeamPeakStreaks()
     _backfillCoachFanTrust()
+    _backfillCurrencyTransactionSeason()
     _migrateEditionRename()          # rename slugs BEFORE any edition-keyed backfill
     _backfillCardTemplateOutputType()
     _backfillFloorTemplates()
@@ -2048,6 +2049,67 @@ def _refreshCardEffectText():
     except Exception as e:
         conn.rollback()
         logger.warning(f"  Migration: failed to refresh card effect text: {e}")
+    finally:
+        conn.close()
+
+
+def _backfillCurrencyTransactionSeason():
+    """Stamp a season onto grants that were written without one.
+
+    ⚠️ `currency_transactions.season` is nullable and four grant paths never passed it,
+    so nothing ever complained. Measured on production: 1,100 positive grants worth
+    82,534F carried NULL against 212,614F stamped to season 1 — a 28% UNDERCOUNT of the
+    faucet. `facilitiesManager.computeShareUnit` is exactly "last season's grants / team
+    count", so every unstamped grant quietly made every facility in the league cheaper
+    than the economy warranted. Sources were `achievement` (883 rows), `starter_bonus`
+    (185) and `card_sell` (32); `addFunds` now defaults the season so this cannot recur.
+
+    A row is assigned to the LATEST season that had already started when it was written
+    (`seasons.start_date <= created_at`). That is the same question the sim would have
+    answered at the time, it needs no heuristic about season boundaries, and it is
+    deterministic — re-running it can only ever produce the same answer.
+
+    ⚠️ Only touches rows where season IS NULL, so it can never rewrite a stamped grant,
+    and it is additionally gated on a marker so a healthy database does no work. Rows
+    written BEFORE the first season started keep their NULL: there is no season they
+    could honestly belong to, and inventing one would put pre-league grants into the
+    faucet that prices season 1.
+    """
+    from sqlalchemy import text
+    from datetime import datetime as _dt
+    conn = engine.connect()
+    try:
+        done = conn.execute(text(
+            "SELECT value FROM app_settings WHERE key = 'currency_season_backfilled_v1'"
+        )).fetchone()
+        if done:
+            return
+        seasons = conn.execute(text(
+            "SELECT season_number, start_date FROM seasons "
+            "WHERE start_date IS NOT NULL ORDER BY start_date")).fetchall()
+        if not seasons:
+            return  # nothing to date rows against; leave them and try again next boot
+        updated = 0
+        for i, (num, start) in enumerate(seasons):
+            nextStart = seasons[i + 1][1] if i + 1 < len(seasons) else None
+            if nextStart is None:
+                res = conn.execute(text(
+                    "UPDATE currency_transactions SET season = :n "
+                    "WHERE season IS NULL AND created_at >= :s"), {"n": num, "s": start})
+            else:
+                res = conn.execute(text(
+                    "UPDATE currency_transactions SET season = :n "
+                    "WHERE season IS NULL AND created_at >= :s AND created_at < :e"),
+                    {"n": num, "s": start, "e": nextStart})
+            updated += res.rowcount or 0
+        conn.execute(text(
+            "INSERT OR REPLACE INTO app_settings (key, value, updated_at) "
+            "VALUES ('currency_season_backfilled_v1', '1', :ts)"), {"ts": _dt.utcnow()})
+        conn.commit()
+        logger.info(f"  Backfill: stamped a season onto {updated} currency transactions")
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"  Backfill: currency transaction season skipped: {e}")
     finally:
         conn.close()
 
