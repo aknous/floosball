@@ -350,12 +350,28 @@ not, and the likely reason is that the baseline play-caller ALREADY responds to 
 situation, so the mismatches the audible fires on are largely cases where the original
 call was fine and the quarterback is second-guessing it.
 
-**That is the open question for this layer**: the audible currently fires whenever the
-call disagrees with the perceived box, which is too often. It probably wants a
-CONVICTION threshold — check only when the mismatch is large — so it stops trading good
-calls for merely-different ones. Until then both layers are structurally correct and
-economically inert, and are best left flagged on for the narrative (the feed line, the
-insights) rather than for the yardage.
+⚠️ **SETTLED (owner, 2026-08-16): THE NARRATIVE IS THE DELIVERABLE, NOT THE YARDAGE.**
+*"The narrative is what the fans see."* Both layers ship as they are. They are
+structurally correct, they cost the offense nothing except in the hands of a quarterback
+who should be losing yards, and what they produce is the thing Part 4 always said was the
+point: three layers of decision resolving before the snap, now visible to a reader.
+
+That is consistent with the plan's own framing rather than a concession to a
+disappointing measurement — Part 4 opens by insisting the commentary "IS NOT POLISH, IT
+IS THE DELIVERABLE", because built without it the whole system is invisible work. The
+measurement says the reverse also holds: built WITH it, the system earns its keep even
+where the yardage is neutral.
+
+⚠️ **IT RE-PRIORITISES WHAT IS LEFT.** If the narrative is the product, the one beat that
+is still invisible — the DISGUISE line — is now the highest-value remaining item, not a
+tail-end nicety. It is also the only one that cannot use the cheap prefix: "they're
+showing blitz" is a lie the play text exists to reveal, so it needs the separate pre-snap
+entry and the reveal rule that goes with it.
+
+A CONVICTION THRESHOLD is still the right idea if the yardage is ever wanted — the
+audible currently fires whenever the call disagrees with the perceived box, which is too
+often, so it trades good calls for merely-different ones. Recorded as a future option
+rather than a pending task.
 
 ## Measurement
 
