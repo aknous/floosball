@@ -2036,10 +2036,12 @@ class Game:
           - Sideline / incomplete pass (~18s — partial drain mixed with clock
             stops, not always achievable)
 
-        Each productive play burns ~7s of execution. Spikes count as zero-yard
-        clock-stoppers between productive plays, not as productive plays.
+        Each productive play burns ~7s of execution, plus the pre-snap drain in
+        front of it — a huddle, and only when the clock is running and cannot be
+        stopped. Spikes count as zero-yard clock-stoppers between productive
+        plays, not as productive plays.
         """
-        from constants import FINAL_SNAP_SECS
+        from constants import FINAL_SNAP_SECS, LAST_SNAP_HUDDLE_SECS
         # The closing FG only needs to be SNAPPED before 0:00 (the kick can finish after),
         # so reserve just a snap for it — not a whole play's ~7s. Same for the last
         # productive snap: it's counted below on the basis of being snappable (clock >
@@ -2054,16 +2056,34 @@ class Game:
         # Realistic spike budget — using more would forfeit too many downs.
         # Down 1 or 2 → 1 spike between productive plays; 3rd down → 0.
         spikesAvailable = 1 if self.down < self.gameRules.downsPerSeries - 1 else 0
-        # ⚠️ THIS LOOP COUNTS A PLAY THAT DOES NOT FIT, ON PURPOSE — FOR NOW. It enters on
-        # `secs > FINAL_SNAP_SECS` (2) and only then subtracts the 7 a play costs, so at
-        # 0:15 it reports 2 plays when one run (a ~12s hurry-up huddle plus 4-6s live)
-        # does not fit once. Tightening it to `secs >= 7` was tried and MEASURED WORSE:
-        # over 40 games a side, late FG attempts fell 33 -> 18 at four downs and halves
-        # ending in range rose 21 -> 24. The count feeds eight decisions with opposite
-        # senses — `<= 1` kicks, `>= 2` hurries up, `>= 1` allows a spike — so lowering it
-        # buys a few kicks and loses the clock management that gets a drive into range at
-        # all. Re-tune the whole set together or not at all; the end-of-half kick is
-        # handled directly instead (see `_lastSnapBeforeBreak`).
+        # ⚠️ THE FIRST SNAP PAYS ITS PRE-SNAP DRAIN TOO, and for a long time it did not.
+        # The loop below charges every snap AFTER the first an inter-play gap (3s on a
+        # timeout, 5s on a spike, 18s otherwise), but entered on `secs > FINAL_SNAP_SECS`
+        # and charged the first snap only its 7s of execution — so the huddle in front of
+        # it was free. That is the whole "counts a play that does not fit" defect: at 0:15
+        # with the clock running and no timeout, a snap really costs a ~12s hurry-up huddle
+        # plus the live ball, and the helper reported room for two.
+        #
+        # ⚠️ TIGHTENING THE LOOP CONDITION IS THE WRONG FIX AND MEASURED WORSE. `secs >= 7`
+        # was tried: late FG attempts fell 33 -> 18 over 40 games a side and halves ending
+        # in range rose 21 -> 24. The count feeds six decisions with OPPOSITE senses —
+        # `<= 1` kicks, `>= 2` and `>= 1` allow a clock-stopper — so a blunt reduction buys
+        # a kick and loses the clock management that gets a drive into range at all.
+        # Measured over a 1,728-state sweep, that attempt moved 8.3% of states; charging
+        # the first snap moves 1.4-1.7%, because it removes exactly one phantom play and
+        # only where one was really phantom. Both gates shift in the SAME direction — the
+        # offense has one fewer play than it thought — which is why this does not reproduce
+        # the earlier regression.
+        #
+        # The cost model is `_lastSnapBeforeBreak`'s, deliberately: a huddle is only paid
+        # when the clock is RUNNING and cannot be stopped, and a no-huddle snap pays its
+        # own (much smaller) pre-snap time rather than a flat huddle.
+        canStopClock = (not self.clockRunning) or timeoutsLeft > 0
+        if not canStopClock:
+            secs -= (self._noHuddlePreSnapSecs() if self._isNoHuddle()
+                     else LAST_SNAP_HUDDLE_SECS)
+            if secs <= FINAL_SNAP_SECS:
+                return 0
         plays = 0
         while secs > FINAL_SNAP_SECS:
             plays += 1

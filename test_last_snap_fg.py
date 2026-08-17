@@ -19,12 +19,15 @@ At four downs, where `_fourthDownCaller` already covered the final down, attempt
 89 -> 110 and wasted halves were flat.
 
 ⚠️ A SECOND FIX WAS TRIED AND REVERTED, and the reason is recorded in the engine:
-`_estimateAvailablePlays` counts a play that does not fit (it enters on `secs > 2` then
-subtracts the 7 a play costs), so at 0:15 it reports two plays when one run does not fit
-once. Tightening it measured WORSE — late FG attempts 33 -> 18 at four downs — because
-that count feeds eight decisions with opposite senses (`<= 1` kicks, `>= 2` hurries up,
-`>= 1` allows a spike), so lowering it buys a kick and loses the clock management that
-gets a drive into range at all.
+tightening `_estimateAvailablePlays`'s loop condition to `secs >= 7` measured WORSE —
+late FG attempts 33 -> 18 at four downs — because that count feeds six decisions with
+opposite senses (`<= 1` kicks, `>= 2` and `>= 1` allow a clock-stopper), so lowering it
+buys a kick and loses the clock management that gets a drive into range at all. The
+underlying defect was fixed properly on 2026-08-16 by charging the FIRST snap its
+pre-snap drain (every snap after it already paid an inter-play gap); see
+`test_available_plays.py`. That correction moves 1.4-1.7% of states against the failed
+attempt's 8.3%, and its measured outcome effect is zero — because this file's fix,
+`_lastSnapBeforeBreak`, already takes the end-of-half kick directly.
 
 Run: .venv/bin/python test_last_snap_fg.py
 """
