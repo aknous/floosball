@@ -317,6 +317,46 @@ whole sim.
 So charging more for predictability needs its own lever rather than a bigger disguise
 number — `NO_HUDDLE_TELEGRAPH` is already near the accuracy clamp. Owner call.
 
+### Steps 4 and 5, re-measured (2026-08-16)
+
+⚠️ **NOT BY OUTCOME BUCKET.** Comparing "good check" against "bad check" looks natural
+and is riddled with selection effects: the two happen in DIFFERENT box states and produce
+DIFFERENT play types, so the buckets differ by more than the read. Two attempts died on
+this. The answerable question is whether the layer makes an offense better and whether
+PLAYER QUALITY drives it, so the arms are the FLAGS, interleaved every snap.
+
+10 rosters x 4,800 interleaved snaps, differenced within roster:
+
+| step 4 — audibles, honest defense | off | on | gain |
+|---|---|---|---|
+| sharp + gunslinger (95/62) | 5.04 | 4.99 | -0.046 +/- 0.054 |
+| blind + gunslinger (64/62) | 5.03 | 4.92 | **-0.111 +/- 0.028** |
+| sharp + disciplined (95/95) | 4.90 | 4.94 | +0.034 +/- 0.056 |
+
+| step 5 — defensive disguise | off | on | offense gain |
+|---|---|---|---|
+| sharp + gunslinger | 5.21 | 5.25 | +0.038 +/- 0.051 |
+| blind + gunslinger | 4.79 | 4.81 | +0.026 +/- 0.052 |
+
+⚠️ **THE TRAP WORKS AND THE PAYOFF DOES NOT.** Audibles make a blind gunslinger
+measurably worse (4 se) — exactly the design goal, a bold QB who cannot read is a real
+liability. But no profile GAINS from audibling, and the disguise has no measurable effect
+on anyone.
+
+The arithmetic says it should. At a light box the sim pays run 4.79 against pass 4.20; at
+a stacked box, pass 5.80 against run 3.01. So a correct check is worth +0.6 to +2.8 yards
+and a sharp QB reads right ~72% of the time — which should net around +0.28 ypp. It does
+not, and the likely reason is that the baseline play-caller ALREADY responds to the
+situation, so the mismatches the audible fires on are largely cases where the original
+call was fine and the quarterback is second-guessing it.
+
+**That is the open question for this layer**: the audible currently fires whenever the
+call disagrees with the perceived box, which is too often. It probably wants a
+CONVICTION threshold — check only when the mismatch is large — so it stops trading good
+calls for merely-different ones. Until then both layers are structurally correct and
+economically inert, and are best left flagged on for the narrative (the feed line, the
+insights) rather than for the yardage.
+
 ## Measurement
 
 The clock work this week established the pattern: a **low-variance targeted probe** beats a noisy aggregate. Per-arm, before/after:
