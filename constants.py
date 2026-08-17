@@ -533,6 +533,32 @@ AUDIBLE_COACH_WEIGHT = 0.30
 # anyway. Measured, that takes the trap cell (bold + blind) from 6% of QBs to 26%.
 AUDIBLE_WILLINGNESS_BASE = 0.30   # a fully disciplined QB still checks sometimes
 AUDIBLE_WILLINGNESS_SWING = 0.55  # a gunslinger checks far more often
+
+# ── Defensive disguise ────────────────────────────────────────────────────
+# ⚠️ THE PIECE THAT MAKES THE OTHERS A SYSTEM. Without it the QB reads an honest defense
+# and an audible is just a skill check the good QB always passes. With it, what the
+# defense SHOWS and what it DOES come apart: a fooled quarterback checks into a trap and a
+# sharp one sniffs it out.
+#
+# It also gives `defensiveMind` a genuine two-sided role — reading the offense's intent
+# (shipped with the pre-snap read) and hiding its own (here). A staff strong in one and
+# weak in the other should feel different to play against.
+DEFENSIVE_DISGUISE_ENABLED = True
+# How often a defense lies, before coaching. A sharp staff installs and calls disguises; a
+# poor one plays what it lines up in.
+DISGUISE_BASE_RATE = 0.18
+DISGUISE_COACH_SWING = 0.30       # defensiveMind takes it roughly 0.03 -> 0.48
+# ⚠️ HOLDING THE LOOK IS A SEPARATE CHECK, and a blown one is WORSE than never lying: the
+# QB gets a free read AND the defense has committed late. Discipline and focus hold it.
+DISGUISE_HOLD_BASE = 0.72
+DISGUISE_HOLD_SWING = 0.24        # ~0.60 for a sloppy unit, ~0.84 for a disciplined one
+# ⚠️ A DISGUISE MUST COST SOMETHING, OR EVERY DEFENSE DISGUISES EVERY PLAY. A defense
+# showing blitz and dropping is, for that snap, slightly out of position against what it
+# did not prepare for. Small on purpose — it is a tax on lying, not a reason never to.
+DISGUISE_ALIGNMENT_COST = 0.06
+# A tipped disguise pays the cost anyway AND hands over the read, which is what makes
+# `discipline` worth having on a defense.
+DISGUISE_TIPPED_EXTRA_COST = 0.04
 # Scaled by how well this back sells it (_runConceptExecQ, deterministic from
 # attributes): a shifty, cerebral back disguises a draw; a plodder telegraphs it.
 # Range is this floor to 1.0 of the nominal value above.

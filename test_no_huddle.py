@@ -683,6 +683,113 @@ class TheAudible(unittest.TestCase):
         self.assertIn('self.play._undiscipline(', body)
 
 
+class TheDefensiveDisguise(unittest.TestCase):
+    """What the defense SHOWS, split from what it DOES.
+
+    ⚠️ A DISGUISE DEGRADES RECOGNITION OF THE TRUTH — it does not redefine what "right"
+    means. The first build had the QB read the SHOWN box and called a correct reading of
+    it `readRight`, which inverted every label: a quarterback who "read right" had in fact
+    been FOOLED. Measured, it reported fooled QBs beating sharp ones by 1.24 yards a carry
+    against a held disguise, which is what exposed it. The box question is always about
+    what the defense is ACTUALLY doing; the lie only makes it harder to see, exactly as
+    `PRESNAP_DISGUISE` works for the defense's own read.
+
+    After the fix, checks against a held disguise, resulting call held fixed:
+
+        checked to RUN    saw through 7.03   fooled 6.82   +0.21 +/- 0.52
+        checked to PASS   saw through 5.86   fooled 5.55   +0.32 +/- 0.32
+
+    Both directions now correct, neither yet significant — see the asymmetry note in the
+    commit; it is bounded by `runStopFocus` not opening the pass game.
+    """
+
+    def _game(self, runStopFocus=0.72):
+        s = Scenario()
+        s.situation(quarter=2, clock=600, offense='home', offScore=14, defScore=14,
+                    down=1, distance=10, ballOn=55, offTimeouts=3, defTimeouts=3)
+        g = s.game
+        g.clockRunning = True
+        gp = g.awayDefGameplan if g.offensiveTeam is g.homeTeam else g.homeDefGameplan
+        if gp is not None:
+            gp.runStopFocus = runStopFocus
+        return s, g, gp
+
+    def testTheReadIsAgainstTheActualBoxNotTheShownOne(self):
+        """⚠️ The inversion regression. `boxStacked` must come from the real defense."""
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'floosball_game.py')) as fh:
+            src = fh.read()
+        start = src.index('def _maybeAudible')
+        body = src[start:src.index('\n    def ', start + 10)]
+        self.assertIn('boxStacked = actualRunFocus >=', body,
+                      'the audible is reading the shown box as if it were the truth again')
+
+    def testAHeldDisguiseMakesTheTruthHarderToSee(self):
+        s, g, _gp = self._game()
+        self.assertGreater(g.DISGUISE_READ_PENALTY, 0)
+
+    def testADisguiseCostsTheDefenseSomething(self):
+        """⚠️ Or every defense disguises every play."""
+        from constants import DISGUISE_ALIGNMENT_COST, DISGUISE_TIPPED_EXTRA_COST
+        self.assertGreater(DISGUISE_ALIGNMENT_COST, 0)
+        self.assertGreater(DISGUISE_TIPPED_EXTRA_COST, 0)
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'floosball_game.py')) as fh:
+            src = fh.read()
+        start = src.index('def _applyPreSnapRead')
+        body = src[start:src.index('\n    def ', start + 10)]
+        self.assertIn("getattr(self, 'disguiseCost'", body,
+                      'the alignment cost is no longer charged')
+
+    def testATippedDisguisePaysMoreAndHidesNothing(self):
+        """A blown look is WORSE than never lying: the QB gets a free read and the defense
+        is still out of position. That is what makes `discipline` worth having."""
+        from constants import DISGUISE_ALIGNMENT_COST, DISGUISE_TIPPED_EXTRA_COST
+        self.assertGreater(DISGUISE_ALIGNMENT_COST + DISGUISE_TIPPED_EXTRA_COST,
+                           DISGUISE_ALIGNMENT_COST)
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'floosball_game.py')) as fh:
+            src = fh.read()
+        start = src.index('def _maybeAudible')
+        body = src[start:src.index('\n    def ', start + 10)]
+        self.assertIn('if disguised and not tipped:', body,
+                      'a tipped disguise must not still be hiding the truth')
+
+    def testTheFlagTurnsItOff(self):
+        original = constants.DEFENSIVE_DISGUISE_ENABLED
+        try:
+            constants.DEFENSIVE_DISGUISE_ENABLED = False
+            s, g, _gp = self._game()
+            for _ in range(200):
+                shown, disguised, tipped = g._resolveDisguise(0.72)
+                self.assertFalse(disguised)
+                self.assertEqual(shown, 0.72)
+        finally:
+            constants.DEFENSIVE_DISGUISE_ENABLED = original
+
+    def testASharpStaffDisguisesMoreOften(self):
+        s, g, _gp = self._game()
+        rates = {}
+        for mind in (62, 98):
+            g.defensiveTeam.coach.defensiveMind = mind
+            hits = sum(1 for _ in range(3000) if g._resolveDisguise(0.72)[1])
+            rates[mind] = hits / 3000
+        self.assertGreater(rates[98], rates[62] * 1.5,
+                           'defensiveMind does not drive whether the defense lies')
+
+    def testTheShownLookIsTheOtherSideOfTheBox(self):
+        from constants import AUDIBLE_BOX_STACKED
+        s, g, _gp = self._game()
+        g.defensiveTeam.coach.defensiveMind = 100
+        for actual, wantStacked in ((0.72, False), (0.30, True)):
+            for _ in range(400):
+                shown, disguised, tipped = g._resolveDisguise(actual)
+                if disguised and not tipped:
+                    self.assertEqual(shown >= AUDIBLE_BOX_STACKED, wantStacked,
+                                     'a disguise showed the same thing it was doing')
+                    break
+
+
 class TheDocumentedTraps(unittest.TestCase):
     def testClassifyTempoIntentStillReturnsATwoTuple(self):
         """⚠️ Three sites unpack this, including `_lastSnapBeforeBreak`'s chess-clock

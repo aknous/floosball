@@ -4152,6 +4152,75 @@ class Game:
                 weights[tier] = weights.get(tier, 0) * AWAKENED_PLAYCALL_PASS_BIAS
         return weights
 
+    def _resolveDisguise(self, actualRunFocus: float) -> tuple:
+        """What the defense SHOWS, which need not be what it does.
+
+        Returns `(shownRunFocus, disguised, tipped)`.
+
+        ⚠️ THIS IS THE PIECE THAT MAKES THE REST A SYSTEM. Without it the quarterback reads
+        an honest defense and an audible is a skill check the good QB always passes. With
+        it, the look and the call come apart: a fooled QB checks into a trap and a sharp
+        one sniffs it out.
+
+        Three separate questions, deliberately, because collapsing them removes the
+        interesting failures:
+          * CAN IT LIE — the coordinator's `defensiveMind`. A sharp staff installs and
+            calls disguises; a poor one plays what it lines up in. This is that attribute
+            finally doing per-play work on its own side of the ball.
+          * DOES IT HOLD — the defenders' `discipline` and `focus`. A disciplined unit
+            holds the look to the snap; a sloppy one TIPS it early.
+          * ⚠️ A TIPPED DISGUISE IS WORSE THAN NO DISGUISE. The QB gets a free, honest
+            read AND the defense has still paid to be out of position. That is what makes
+            discipline worth having rather than a rounding error.
+
+        ⚠️ A DISGUISE MUST COST SOMETHING, or every defense disguises every play. Showing
+        blitz and dropping means being slightly wrong-footed for anything the disguise did
+        not prepare for, charged through `play.disguiseCost`.
+        """
+        from constants import (DEFENSIVE_DISGUISE_ENABLED, DISGUISE_BASE_RATE,
+                               DISGUISE_COACH_SWING, DISGUISE_HOLD_BASE,
+                               DISGUISE_HOLD_SWING, AUDIBLE_BOX_STACKED,
+                               COACH_ATTR_NEUTRAL)
+        if not DEFENSIVE_DISGUISE_ENABLED:
+            return actualRunFocus, False, False
+
+        defTeam = self.defensiveTeam
+        coach = getattr(defTeam, 'coach', None)
+        defMind = getattr(coach, 'defensiveMind', COACH_ATTR_NEUTRAL) if coach else COACH_ATTR_NEUTRAL
+        rate = DISGUISE_BASE_RATE + DISGUISE_COACH_SWING * ((defMind - 80) / 20.0)
+        if _random.random() >= max(0.0, min(0.95, rate)):
+            return actualRunFocus, False, False
+
+        # Hold it, or tip it. The on-field unit, not the coach.
+        holders = [defTeam.rosterDict.get('rb'), defTeam.rosterDict.get('qb'),
+                   defTeam.rosterDict.get('te')]
+        vals = []
+        for h in holders:
+            if h is None:
+                continue
+            a = getattr(h, 'gameAttributes', None) or h.attributes
+            vals.append(getattr(a, 'discipline', 80) * 0.6 + getattr(a, 'focus', 80) * 0.4)
+        holdQ = (sum(vals) / len(vals)) if vals else 80.0
+        hold = DISGUISE_HOLD_BASE + DISGUISE_HOLD_SWING * ((holdQ - 80) / 20.0)
+        tipped = _random.random() >= max(0.05, min(0.98, hold))
+        if tipped:
+            # The look broke early: the QB sees the truth, and the defense still paid.
+            return actualRunFocus, True, True
+
+        # The lie: it shows the other side of the box question.
+        stacked = actualRunFocus >= AUDIBLE_BOX_STACKED
+        shown = (AUDIBLE_BOX_STACKED - 0.20) if stacked else (AUDIBLE_BOX_STACKED + 0.20)
+        return shown, True, False
+
+    # ⚠️ A DISGUISE DEGRADES RECOGNITION OF THE TRUTH — it does not redefine what "right"
+    # means. An earlier build had the QB read the SHOWN box and called a correct reading of
+    # it `readRight`, which inverted every label: a QB who "read right" had in fact been
+    # FOOLED, and the measurement duly reported fooled quarterbacks outperforming sharp
+    # ones by 1.24 yards a carry. The box question is always about what the defense is
+    # ACTUALLY doing; the lie just makes it harder to see, exactly as `PRESNAP_DISGUISE`
+    # works for the defense's own read.
+    DISGUISE_READ_PENALTY = 0.30
+
     def _maybeAudible(self, playCall: str) -> str:
         """The QB looks at the box and changes the call, or does not.
 
@@ -4196,7 +4265,22 @@ class Game:
         defGp = self.awayDefGameplan if isHome else self.homeDefGameplan
         if defGp is None:
             return playCall
-        runFocus = getattr(defGp, 'runStopFocus', 0.5)
+        actualRunFocus = getattr(defGp, 'runStopFocus', 0.5)
+        # ⚠️ THE QUESTION IS ALWAYS ABOUT THE REAL BOX. A disguise makes the truth HARDER
+        # TO SEE; it does not change what the right answer is. Reading the shown value as
+        # if it were the truth inverts every label — a QB who "read the look correctly"
+        # has actually been fooled — and the first build did exactly that, then measured
+        # fooled quarterbacks beating sharp ones by 1.24 yards a carry.
+        shownRunFocus, disguised, tipped = self._resolveDisguise(actualRunFocus)
+        if disguised:
+            from constants import (DISGUISE_ALIGNMENT_COST, DISGUISE_TIPPED_EXTRA_COST)
+            self.play.disguiseCost = (DISGUISE_ALIGNMENT_COST
+                                      + (DISGUISE_TIPPED_EXTRA_COST if tipped else 0.0))
+            self.play.insights['disguise'] = {
+                'shown': 'light box' if shownRunFocus < AUDIBLE_BOX_STACKED else 'stacked box',
+                'actual': 'light box' if actualRunFocus < AUDIBLE_BOX_STACKED else 'stacked box',
+                'tipped': tipped,
+            }
 
         # ── Can he see it? QB first, coach second — the inverse of the defense's read,
         # and that asymmetry is deliberate: this is the one call the PLAYER makes.
@@ -4207,8 +4291,12 @@ class Game:
         skill = (((qbQ - 80) / 20.0) * AUDIBLE_QB_WEIGHT
                  + ((coachQ - 80) / 20.0) * AUDIBLE_COACH_WEIGHT)
         accuracy = AUDIBLE_READ_BASE + AUDIBLE_READ_SKILL * max(-1.0, min(1.0, skill))
+        # A HELD disguise is what makes the truth hard to see. A TIPPED one does not —
+        # the look broke, so the QB gets an honest read and the defense paid anyway.
+        if disguised and not tipped:
+            accuracy -= self.DISGUISE_READ_PENALTY
 
-        boxStacked = runFocus >= AUDIBLE_BOX_STACKED
+        boxStacked = actualRunFocus >= AUDIBLE_BOX_STACKED
         readRight = _random.random() < max(0.05, min(0.95, accuracy))
         perceivedStacked = boxStacked if readRight else (not boxStacked)
 
@@ -4245,7 +4333,8 @@ class Game:
         self.play.insights['audible'] = {
             'checked': True, 'from': playCall, 'to': newCall,
             'readRight': readRight, 'sawStacked': perceivedStacked,
-            'boxStacked': boxStacked, 'runStopFocus': round(runFocus, 3),
+            'boxStacked': boxStacked, 'runStopFocus': round(actualRunFocus, 3),
+            'shownRunFocus': round(shownRunFocus, 3), 'disguised': disguised,
         }
         return newCall
 
@@ -13629,6 +13718,13 @@ class Play():
         # a clock indicator next to each play in the feed.
         self.clockStopped = False
         self.targetSideline = False  # True when play caller targets sideline routes
+        # What the defense paid for showing one thing and doing another, charged in
+        # `_applyPreSnapRead`. A fresh Play per snap means this needs no reset elsewhere —
+        # and it must NOT be added to `_executeWeightedPlay`'s reset block, which runs
+        # AFTER `_maybeAudible` has already resolved the disguise and set it.
+        self.disguiseCost = 0.0
+        self.audibleText = None
+        self.noHuddle = None
         # NOTE: do NOT initialize self.down here — line 7488 above already
         # captures the pre-play down from game.down at construction time.
         # An earlier `self.down = 0` here was overwriting that and shipping
@@ -14787,6 +14883,18 @@ class Play():
         swing = PRESNAP_READ_EDGE * leverage
         key = 'runDefMult' if isRun else 'passDefMult'
         scheme[key] = scheme.get(key, 1.0) * ((1 + swing) if correct else (1 - swing))
+
+        # ⚠️ THE PRICE OF LYING. A defense that showed blitz and dropped is, for this snap,
+        # slightly out of position against whatever the disguise did not prepare for — so
+        # the alignment cost lands on BOTH multipliers regardless of what the offense ran.
+        # Without it every defense would disguise every play and the layer would just be a
+        # free accuracy tax on the offense. A TIPPED disguise pays more: the look broke,
+        # the QB got an honest read, and the defense is still out of position.
+        cost = getattr(self, 'disguiseCost', 0.0) or 0.0
+        if cost:
+            for k in ('runDefMult', 'passDefMult'):
+                if k in scheme:
+                    scheme[k] *= (1.0 - cost)
 
         self.preSnapRead = {'predicted': ('run' if (correct == isRun) else 'pass'),
                             'correct': correct,
