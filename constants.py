@@ -1485,6 +1485,20 @@ FACILITY_DECAY_LEVELS = 1
 # 15F, a max-level build 255F, and a max-level hold 120F a season — small enough that a
 # new league can get moving, big enough that building means spending.
 FACILITY_SHARE_UNIT_FLOOR = 300.0
+
+# ⚠️ CLIP EACH USER'S CONTRIBUTION BEFORE AVERAGING THE FAUCET. A share unit is a mean,
+# and a mean is exactly what one outlier breaks. Measured on the season-1 production
+# database: one user earned 79,237F of a 212,614F faucet (37% of the league's season),
+# 89% of it from a SINGLE week -- 1,453,601 FP in week 27, a Criticality week where Pyre's
+# Equation and Amplify stacked. That one week raised every facility price for all 32 teams
+# by 50% (a full L5 build 7,195F -> 10,764F) while giving the other 31 teams nothing to
+# spend. Capping at the 95th percentile takes one user's influence on the unit from
+# +59.4% to +10.2% and still SUMS everyone's real contribution, so the unit keeps tracking
+# genuine league-wide growth -- unlike a median, which throws away the whole upper half.
+FACILITY_SHARE_CAP_PERCENTILE = 95.0
+# Below this many earning users a percentile is computed from too few points to mean
+# anything, and clipping would just lower the unit rather than de-skew it.
+FACILITY_SHARE_CAP_MIN_USERS = 8
 # Rookie draft vote — reuses existing GM_VOTE_COST/GM_VOTES_PER_SEASON infra
 GM_ROOKIE_DRAFT_MAX_RANKINGS = 12  # Fans may rank up to this many rookies
 
