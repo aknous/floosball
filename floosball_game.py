@@ -3555,7 +3555,7 @@ class Game:
             if _random.random() < goChance:
                 self.play.insights['fourthDown']['decision'] = 'goForIt'
                 self.play.insights['fourthDown']['reason'] = (
-                    'tied Q4 with time — aggressive push to advance FG'
+                    'tied Q4 with time, aggressive push to advance FG'
                 )
                 if self.yardsToFirstDown <= 2:
                     self.play.runPlay()
@@ -5088,7 +5088,7 @@ class Game:
             if 5 < self.yardsToEndzone <= _lastMax and _fgSettles:
                 self.play.insights['clockMgmt'] = {
                     'decision': 'lastSnapFG',
-                    'reason': 'No snap after this one — take the makeable FG',
+                    'reason': 'No snap after this one, take the makeable FG',
                     'clockRemaining': self.gameClockSeconds,
                     'down': self.down,
                     'downsPerSeries': self.gameRules.downsPerSeries,
@@ -5513,7 +5513,7 @@ class Game:
                 if self.yardsToEndzone > _ppKMax and _random.random() < _accept:
                     self.play.insights['clockMgmt'] = {
                         'decision': 'chessClockPunt',
-                        'reason': 'Budget nearly out and no kick available — punt rather '
+                        'reason': 'Budget nearly out and no kick available, punt rather '
                                   'than hand the ball over at this spot',
                         'clockRemaining': self.gameClockSeconds,
                         'yardsToEndzone': self.yardsToEndzone,
@@ -5548,7 +5548,7 @@ class Game:
                 _shot = 'deep' if self.yardsToEndzone > CHESS_CLOCK_STRIKE_YARDS else 'long'
                 self.play.insights['clockMgmt'] = {
                     'decision': 'chessClockStrike',
-                    'reason': 'Budget nearly out, nobody to punt to, and points needed — '
+                    'reason': 'Budget nearly out, nobody to punt to, and points needed, '
                               'take a shot downfield',
                     'clockRemaining': self.gameClockSeconds,
                     'yardsToEndzone': self.yardsToEndzone,
@@ -5911,7 +5911,7 @@ class Game:
                 self.play.insights['clockMgmt'] = {
                     'decision': 'hailMary',
                     'reason': ('Drive clock expiring, heave for the score' if _driveHailMary
-                               else 'Desperation — need a miracle score'),
+                               else 'Desperation, need a miracle score'),
                     'clockRemaining': self.gameClockSeconds,
                     'yardsToEndzone': self.yardsToEndzone,
                     'scoreDiff': scoreDiff,
