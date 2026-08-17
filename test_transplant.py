@@ -137,6 +137,43 @@ except ValueError as e:
 print()
 print("All-Pro gate")
 
+# ⚠️ RUN A REAL TRANSPLANT, not just the config builder. The reroll regression earlier in
+# this cycle passed its unit test for exactly this reason: the pure function was correct
+# and the ARGUMENT reaching it was not. A source-string assertion cannot see that either.
+def mkApTemplate(player, effect):
+    """A template that is All-Pro on the ROW and correctly gated in its config."""
+    cfg = buildEffectConfig(HOLO, 85, WR, None, forceEffect=effect, classification='all_pro')
+    t = CardTemplate(player_id=player.id, edition=HOLO, season_created=1,
+                     player_name=player.name, player_rating=85, position=WR,
+                     effect_config=cfg, rarity_weight=10, sell_value=20,
+                     classification='all_pro')
+    s.add(t); s.flush(); return t
+
+pAp = Player(name='All Pro Guy'); pDon2 = Player(name='Donor Two'); s.add_all([pAp, pDon2]); s.flush()
+tAp = mkApTemplate(pAp, 'slippery')
+tDon2 = mkTemplate(pDon2, 'copycat')
+apCard = UserCard(user_id=u.id, card_template_id=tAp.id, acquired_via='test')
+don2 = UserCard(user_id=u.id, card_template_id=tDon2.id, acquired_via='test')
+s.add_all([apCard, don2]); s.flush()
+CurrencyRepository(s).addFunds(u.id, 500, transactionType='test', season=1)
+
+apGateBefore = tAp.effect_config['gate']['threshold']
+cm.transplantEffect(s, u.id, don2.id, apCard.id, currentSeason=1, currentWeek=0)
+apAfter = s.get(UserCard, apCard.id).card_template
+
+expect(f"transplanted card keeps the All-Pro tag  got={apAfter.classification}",
+       apAfter.classification == 'all_pro')
+expect(f"transplanted card carries the donor effect  got={apAfter.effect_config.get('effectName')}",
+       apAfter.effect_config.get('effectName') == 'copycat')
+_apGate = apAfter.effect_config.get('gate') or {}
+_plainGate = buildEffectConfig(HOLO, 85, WR, None, forceEffect='copycat')['gate']['threshold']
+expect(f"gate keeps the All-Pro discount  ({_apGate.get('threshold')} < plain {_plainGate})",
+       _apGate.get('threshold') is not None and _apGate['threshold'] < _plainGate)
+expect("gate.allPro survives (drives the accent + the lowered-bar note)",
+       bool(_apGate.get('allPro')))
+expect(f"gate text names it  got={_apGate.get('text')!r}",
+       'All-Pro' in (_apGate.get('text') or ''))
+
 _plain = buildEffectConfig('holographic', 88, 3, None, forceEffect='copycat')
 _ap = buildEffectConfig('holographic', 88, 3, None, forceEffect='copycat',
                         classification='all_pro')
