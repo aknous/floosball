@@ -154,13 +154,35 @@ class BothPayloadBuildersCarryIt(unittest.TestCase):
         for name in ('Troubador Mernandez', 'Knees Aioli', 'Bernie Plackett'):
             self.assertIn(name, got)
 
-    def test_bothBuildersEmitTheField(self):
+    def test_allThreeBuildersEmitTheField(self):
+        """⚠️ THREE PAYLOADS CARRY PLAY TEXT AND EACH NEEDS THE NAMES. Two live in the
+        engine (the websocket `game_state` lastPlay and its own feed list) and a THIRD in
+        `api/main.py:get_game_by_id`, which is what the REST fetch serves.
+
+        This was reported twice for the same reason and diagnosed wrong the first time.
+        Symptom the second time: two plays naming the SAME two players, one bolding and one
+        not — the difference was the TRANSPORT, not the sentence. A play pushed over the
+        websocket had names; the same play fetched over HTTP did not."""
         with open('floosball_game.py') as fh:
-            src = fh.read()
-        self.assertEqual(src.count("'involvedPlayers':"), 2,
-                         'both the feed play-list and the live lastPlay must carry it')
-        self.assertIn("'involvedPlayers': self._involvedPlayerNames(playObj)", src,
+            engine = fh.read()
+        self.assertEqual(engine.count("'involvedPlayers':"), 2,
+                         'the engine needs it on the feed play-list AND the live lastPlay')
+        self.assertIn("'involvedPlayers': self._involvedPlayerNames(playObj)", engine,
                       'the feed list builder must pass its historical play object')
+        with open('api/main.py') as fh:
+            api = fh.read()
+        self.assertIn("'involvedPlayers'", api,
+                      'the REST serializer in get_game_by_id must carry it too')
+        self.assertIn('_involvedPlayerNames(play_data)', api,
+                      'the REST serializer must pass its own play object')
+
+    def test_theRestSerializerSitsBesideTheDescription(self):
+        """Anchor it to the field it belongs with, so a future edit that moves the
+        description has to notice this too."""
+        with open('api/main.py') as fh:
+            api = fh.read()
+        block = api.split("'description': getattr(play_data, 'playText', '')")[1][:900]
+        self.assertIn("'involvedPlayers'", block)
 
 
 if __name__ == '__main__':

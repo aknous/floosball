@@ -2820,6 +2820,15 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'playType': play_data.playType.name if hasattr(play_data, 'playType') and hasattr(play_data.playType, 'name') else 'Unknown',
                                 'yardsGained': getattr(play_data, 'yardage', 0),
                                 'description': getattr(play_data, 'playText', ''),
+                            # ⚠️ THE THIRD BUILDER. The engine has two payloads carrying
+                            # this (the live game_state lastPlay and its own feed list) and
+                            # THIS is the one the REST API serves — so a play fetched over
+                            # HTTP arrived with no names to emphasise while a play pushed
+                            # over the websocket arrived with them. Reported as two plays
+                            # naming the SAME two players, one bolding and one not: the
+                            # difference was never the sentence, it was the transport.
+                            'involvedPlayers': (game._involvedPlayerNames(play_data)
+                                                if hasattr(game, '_involvedPlayerNames') else []),
                                 'playResult': play_data.playResult.value if hasattr(play_data, 'playResult') and play_data.playResult else None,
                                 'conversionPoints': getattr(play_data, 'conversionPoints', None),
                                 'isProvisionalScore': getattr(play_data, 'isProvisionalScore', False),
