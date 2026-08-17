@@ -5270,7 +5270,7 @@ def _computeLemons(primary, ctx, cardPlayerId, eqId):
         # _applyTradeoffEffects (cardEffectCalculator.py). Avoids the
         # earlier mismatch where this row said "+1.50 FPx" while the
         # impacted card showed "× 2.5" — same operation, two formats.
-        eq = f"× {rewardValue} on your lowest-earning card"
+        eq = f"× {rewardValue} on your lowest-earning FP card"
         return EffectResult(multBonus=rewardValue, equation=eq)
     eq = "No FP-earning cards to amplify"
     return EffectResult(equation=eq)

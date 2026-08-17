@@ -173,12 +173,12 @@ def _amplifierDescription(effectName: str, primary: dict, active: bool, breakdow
         boost = _lemonsBoostFP(primary, breakdowns)
         if boost > 0:
             # Settled: say what it actually added, and to what.
-            return f"+{boost} FP on lowest card"
+            return f"+{boost} FP on lowest FP card"
         # Projection: no week yet to measure, so state the operation. Uses the same
         # "× N" notation as the affected card's own `(Lemons)` equation tag, so the two
         # read as one thing rather than two formats for the same multiply.
         reward = primary.get("rewardValue", 0)
-        return f"×{reward} lowest card"
+        return f"×{reward} lowest FP card"
     if effectName == "providence":
         bonus = int(round((primary.get("chanceBonus", 0) or 0) * 100))
         return f"+{bonus}% to chance cards" if active else "Needs chance card"
