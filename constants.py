@@ -3041,11 +3041,45 @@ SHOWCASE_DIVIDEND_RATE = 0.13
 # Swap cycle length (weeks) — used for All-Pro grant cadence and testing-mode daily limits
 SWAP_CYCLE_WEEKS = 7
 
+# ⚠️ HOW SOON THE NEXT GAME DAY OPENS. A game day is 7 rounds on the hour, 12:00-18:00
+# ET; the next day's first round is 12:00 ET, so a cross-day boundary is an 18-hour gap.
+# This is the lead BEFORE that next kickoff at which the week rolls over — which is what
+# publishes the next day's slate for pick-em and advances `shopDay` for the pack rotation.
+#
+# 1020 = 17h, i.e. 19:00 ET the evening before, roughly 15 minutes after the day's last
+# game ends. It was 480 (8h), which lands at 04:00 ET on the game day itself — so the next
+# slate stayed hidden for ~9 hours after the day's games finished, which is what users
+# reported. ⚠️ Both this file and the engine comment described 480 as "the prior evening";
+# it never was. Measured against the real schedule, 480 -> 04:00 ET, 1020 -> 19:00 ET.
+#
+# ⚠️ Do NOT raise this past ~1035 (18:45 ET). The lead is measured back from kickoff, and
+# the day's last game starts at 18:00 ET; a round must finish inside 45 minutes because
+# the intra-day rollover is 15 minutes before the next hourly round. Past that the rollover
+# time lands while the final game is still being played. It is self-limiting rather than
+# unsafe — the wait no-ops when its moment has already passed, so the rollover simply
+# happens as soon as the slate finishes — but the intent is a real buffer, not a race.
+#
+# ⚠️ DST-STABLE, unlike a fixed UTC hour: the lead is subtracted from an ET-anchored
+# kickoff, so 1020 is 19:00 ET in both EDT and EST.
+CROSS_DAY_ROLLOVER_LEAD_MINUTES = 1020
+
 # Daily refresh boundary for SCHEDULED mode (UTC hour).
 # The "floosball day" rolls over at this hour so daily limits and shop refreshes
-# don't clash with live games.  10 AM UTC = 5 AM EST / 6 AM EDT — safely between
-# the last game ending (~midnight UTC) and the first game starting (5 PM UTC / noon ET).
-DAILY_RESET_HOUR_UTC = 10
+# don't clash with live games. This drives the FEATURED SHOP CARDS (fantasy + collection)
+# and the daily reroll allowance — a separate path from the pack rotation, which follows
+# `shopDay` off the week rollover above. Both have to move together or the shop only
+# half-refreshes: new packs, yesterday's cards.
+#
+# ⚠️ 0 (midnight UTC) = 20:00 EDT / 19:00 EST, just after the day's last game ends
+# (18:00 ET kickoff, done by ~18:45 ET). It was 10, i.e. 06:00 ET — a fresh shop arrived
+# 11 hours after the games it followed.
+#
+# ⚠️ A FIXED UTC HOUR CANNOT TRACK AN ET-ANCHORED SCHEDULE ACROSS DST, so this needs
+# slack on both sides rather than a tight fit. Midnight UTC is the choice that keeps it:
+# it sits after the final whistle in EDT (22:45 UTC) AND in EST (23:45 UTC). 23:00 UTC was
+# rejected for exactly this — it reads as 19:00 ET in summer but 18:00 ET in winter, which
+# is the moment the last game KICKS OFF.
+DAILY_RESET_HOUR_UTC = 0
 
 # ─── GM Mode ────────────────────────────────────────────────────────────────────
 

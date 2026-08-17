@@ -615,10 +615,22 @@ class SeasonManager:
             # Wait for rollover BEFORE clearing previous week's results.
             # In scheduled mode this keeps completedWeekGames visible until
             # shortly before the next game start.
-            # Cross-day transitions (weeks 8, 15, 22) have ~18-hour gaps;
-            # roll over 8 hours early so the next slate shows up the evening before.
+            #
+            # Cross-day transitions (weeks 8, 15, 22) span an 18-hour gap — the day's last
+            # round is 18:00 ET and the next day's first is 12:00 ET. Rolling over early is
+            # what publishes the next day's slate for pick-em and advances `shopDay` for the
+            # pack rotation, so the lead is really "how long after the games do users wait
+            # for tomorrow to open". `CROSS_DAY_ROLLOVER_LEAD_MINUTES` puts it at 19:00 ET,
+            # just after the final whistle, rather than the 04:00 ET it used to land on.
+            #
+            # ⚠️ Clearing `completedWeekGames` here no longer costs the reader the results.
+            # A finished game keeps its box score (`games.team_stats` + `game_player_stats`,
+            # served by `GET /api/games/{id}` and `/api/weekGames`), so the day's results stay
+            # reachable after the slate flips. That is what makes an early rollover safe; it
+            # would not have been before those were persisted.
+            from constants import CROSS_DAY_ROLLOVER_LEAD_MINUTES
             isCrossDayTransition = nextWeek in (8, 15, 22)
-            earlyMinutes = 480 if isCrossDayTransition else 15  # 8 hours vs 15 min
+            earlyMinutes = CROSS_DAY_ROLLOVER_LEAD_MINUTES if isCrossDayTransition else 15
             weekSetupTime = weekStartTime - datetime.timedelta(minutes=earlyMinutes)
 
             # For the very first week, advance currentWeek before the wait so that

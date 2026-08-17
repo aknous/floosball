@@ -102,17 +102,43 @@ def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
     here would push cycleStart ~48 days into the future on day 2 and
     silently zero the counter.
 
+    ⚠️ THE CYCLE BOUNDARY HAS TO BE THE WEEK ROLLOVER, because that is the
+    moment `shopDay` actually advances (it is derived from `currentWeek`). A
+    naive `start_date + days` puts the boundary at 04:00 UTC, which worked only
+    while the cross-day rollover ran at 08:00 UTC. Moving the rollover to the
+    evening before (19:00 ET / 23:00 UTC) puts that naive anchor ~5 hours into
+    the FUTURE — and a future cycleStart trips the clamp below, which reaches a
+    year back and counts every paid open of the season. The per-cycle cap would
+    then read as already exhausted and the shop would refuse to sell anything
+    for the first five hours of every new game day. Deriving the boundary from
+    the same kickoff-minus-lead the rollover uses keeps the two in step.
+
     A late safety clamp guards against the start_date itself sitting in
     the future (e.g. scheduled mode anchoring to next Monday during the
     pre-start window).
     """
     import datetime as _dt
     from database.models import Season
+    from constants import CROSS_DAY_ROLLOVER_LEAD_MINUTES
+    from managers.timingManager import _isEdtDate
     season = session.query(Season).filter(Season.season_number == currentSeason).first()
     if not season or not season.start_date:
         return None
     shopDay = shopDayOfSeason(currentWeek)
-    cycleStart = season.start_date + _dt.timedelta(days=shopDay - 1)
+    if shopDay <= 1:
+        # Day 1 opens with the season itself — week 1 is not a cross-day
+        # transition and gets only the 15-minute lead, so there is no early
+        # rollover to align to.
+        cycleStart = season.start_date
+    else:
+        # The rollover is `firstKickoffOfThatDay - lead`, and the first round of
+        # every game day is 12:00 ET. Convert by hand rather than via tzdata, the
+        # same way `seasonManager.getWeekStartTime` does.
+        targetDate = (season.start_date + _dt.timedelta(days=shopDay - 1)).date()
+        utcOffset = 4 if _isEdtDate(targetDate) else 5
+        kickoffUtc = _dt.datetime(targetDate.year, targetDate.month, targetDate.day,
+                                  12 + utcOffset)
+        cycleStart = kickoffUtc - _dt.timedelta(minutes=CROSS_DAY_ROLLOVER_LEAD_MINUTES)
     now = _dt.datetime.utcnow()
     if cycleStart > now:
         # Pre-start window — anchor far enough back that every recent
