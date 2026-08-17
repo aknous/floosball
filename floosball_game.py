@@ -2993,6 +2993,65 @@ class Game:
         isHome = self.offensiveTeam is self.homeTeam
         return (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
 
+    def _framesMatchResultIfAdd(self, points: int):
+        """'win' | 'draw' | 'loss' for the OFFENSE if it scores `points` and the frame ends
+        now. None off frames.
+
+        ⚠️ A SCALAR MARGIN CANNOT EXPRESS THIS FORMAT, which is why `_frameDecisionDiff`
+        alone was not enough. Tying the frame does not tie the match — it HALVES the frame,
+        and halved frames can leave the match level and fall to the points tiebreak, where
+        the offense may still be losing. Found by the stress sweep: frames 2.5-2.5, down 3
+        in the frame and 7 on aggregate, the frame margin reads -3, "a field goal ties it"
+        is true of the FRAME and false of the MATCH. Ask the real question instead.
+        """
+        if getattr(self.format, 'key', '') != 'frames':
+            return None
+        isHome = self.offensiveTeam is self.homeTeam
+        curH = self.homeScore - getattr(self, '_frameStartHome', 0)
+        curA = self.awayScore - getattr(self, '_frameStartAway', 0)
+        if isHome:
+            curH += points
+        else:
+            curA += points
+        # Frame credit, mirroring awardFrames — a tied frame is halved.
+        if curH > curA:
+            creditH, creditA = 1.0, 0.0
+        elif curA > curH:
+            creditH, creditA = 0.0, 1.0
+        else:
+            creditH, creditA = 0.5, 0.5
+        try:
+            n = self.format._frames(self)
+        except Exception:
+            n = None
+        isFinal = n is not None and int(getattr(self, '_frameIndex', 0)) >= n - 1
+        if not isFinal:
+            # Earlier frames: the match is not decidable, and banking the frame IS the win.
+            off, dfn = (creditH, creditA) if isHome else (creditA, creditH)
+            return 'win' if off > dfn else ('draw' if off == dfn else 'loss')
+        fh = float(getattr(self, '_framesWonHome', 0.0)) + creditH
+        fa = float(getattr(self, '_framesWonAway', 0.0)) + creditA
+        off, dfn = (fh, fa) if isHome else (fa, fh)
+        if off > dfn:
+            return 'win'
+        if off < dfn:
+            return 'loss'
+        # Frames level -> total points break it.
+        aggH = self.homeScore + (points if isHome else 0)
+        aggA = self.awayScore + (0 if isHome else points)
+        ao, ad = (aggH, aggA) if isHome else (aggA, aggH)
+        return 'win' if ao > ad else ('draw' if ao == ad else 'loss')
+
+    def _framesFgFutile(self) -> bool:
+        """Frames: three points cannot avoid a loss but a touchdown can, so the kick is a
+        wasted last chance. False off frames, and false whenever the kick still helps."""
+        rank = {'loss': 0, 'draw': 1, 'win': 2}
+        fgRes = self._framesMatchResultIfAdd(self._fgValue())
+        if fgRes is None or fgRes != 'loss':
+            return False
+        tdRes = self._framesMatchResultIfAdd(max(7, self._maxPossession()))
+        return tdRes is not None and rank[tdRes] > rank[fgRes]
+
     def _framesLeadingNow(self):
         """Frames only (else None): would the OFFENSE win if the match ended right now?
         Frames is decided by FRAMES WON — total points only break a frames tie — so a team
@@ -3249,7 +3308,15 @@ class Game:
                         or self._defenseLockedOut() or self._chessClockLow(120)
                         or self._frameEndSoon()
                         or self.format.isLastScoringChance(self, self.offensiveTeam))
-        fgHelps = scoreDiff >= -self._fgValue() or not lateHopeless
+        # ⚠️ IN FRAMES, "WITHIN A FIELD GOAL" DOES NOT MEAN A FIELD GOAL HELPS. The margin
+        # above is the frame's, and tying a frame only HALVES it — which can leave the match
+        # level and fall to the points tiebreak with the offense still behind. `scoreDiff >=
+        # -fgValue` is therefore true of the FRAME and false of the MATCH. Found by the
+        # stress sweep at frames 2.5-2.5, down 3 in-frame and 7 on aggregate: the kick reads
+        # as adequate and loses. `_framesFgFutile` asks the real question and is False in
+        # every other format, so this is a no-op outside frames.
+        fgHelps = ((scoreDiff >= -self._fgValue() or not lateHopeless)
+                   and not self._framesFgFutile())
         inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
         # Darts (bust): never treat a FG as "in range" if it would overshoot X — the
@@ -5861,7 +5928,7 @@ class Game:
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
         if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
-            if -self._fgValue() <= decisionDiff <= self._fgValue() and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
+            if (-self._fgValue() <= decisionDiff <= self._fgValue() and not self._framesFgFutile()) and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
                 canAdvance = self.gameClockSeconds >= 30
                 # A charged kicker's 3 is a sure thing — never gamble it on a conversion.
                 if canAdvance and not kickerCharged and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:

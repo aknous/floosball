@@ -30,6 +30,14 @@ decisions read that variable and several legitimately want the aggregate; three 
 (`_framesLead`, `_comebackDiff`, `_fgDiff`) already compute a frame-aware value with a
 fallback, and this now follows the same pattern.
 
+⚠️ THE MARGIN ALONE WAS NOT ENOUGH. A stress sweep (test_frames_stress.py) found 19 more
+situations of the same family: with frames level, down 3 in the frame and 7 on aggregate,
+the frame margin reads -3 and "a field goal ties it" is true of the FRAME and false of the
+MATCH, because a tied frame is HALVED and halved frames fall to the points tiebreak. No
+scalar can express that, so `_framesFgFutile` asks the real question — does three actually
+avoid a loss — and now gates both the end-game branch and `fgHelps` in the fourth-down
+caller.
+
 ⚠️ This is the THIRD bug of this shape — a decision reading standard-format state while a
 format overlay changes what the number means (chess-clock snap cost, chess-clock FG gating,
 now frames). See docs/format_clock_mgmt_refactor.md.
@@ -131,9 +139,12 @@ class TheFixIsWhereItClaimsToBe(unittest.TestCase):
         body = src.split('def playCaller(self):')[1].split('\n    def ')[0]
         self.assertIn('decisionDiff = self._frameDecisionDiff()', body)
         # the end-of-game FG branch — the one that kicked in game 469
-        self.assertIn('if -self._fgValue() <= decisionDiff <= self._fgValue()', body)
-        self.assertNotIn('if -self._fgValue() <= scoreDiff <= self._fgValue()', body,
+        self.assertIn('-self._fgValue() <= decisionDiff <= self._fgValue()', body)
+        self.assertNotIn('-self._fgValue() <= scoreDiff <= self._fgValue()', body,
                          'the end-of-game FG branch is reading the aggregate again')
+        # ⚠️ and the margin alone is not enough — tying a frame only HALVES it, so the
+        # branch also has to ask whether three points actually avoid a loss.
+        self.assertIn('_framesFgFutile()', body)
         # the last-snap-before-break branch
         self.assertIn('_routIsOn = _lastDiff', body)
         self.assertIn('_isGarbageTime(_lastDiff)', body)
