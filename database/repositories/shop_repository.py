@@ -30,33 +30,48 @@ class ShopPurchaseRepository:
             query = query.filter_by(item_slug=itemSlug)
         return query.all()
 
-    def getPurchasesToday(self, userId: int, itemSlug: str) -> int:
-        """Count PAID purchases since the last daily reset boundary.
+    def getPurchasesToday(self, userId: int, itemSlug: str,
+                          includeFree: bool = False) -> int:
+        """Count purchases since the last daily reset boundary.
 
-        Free grants (achievement-reward claims that insert ShopPurchase with
-        price_paid=0) are excluded so they don't consume the user's daily
-        buy limit — a user who claims an extra_swap reward should still be
-        able to buy one in the shop that day.
+        By default only PAID ones. Free grants (achievement-reward claims that insert
+        ShopPurchase with price_paid=0) are excluded so they don't consume the user's
+        daily buy limit — a user who claims an extra_swap reward should still be able
+        to buy one in the shop that day.
+
+        ⚠️ `includeFree=True` IS REQUIRED BY ANY LADDER WHOSE FIRST STEP IS FREE, and the
+        shop reroll became one. Its price is `f(count of rerolls used today)`, so a free
+        reroll that is not counted leaves the count at 0 forever: every subsequent reroll
+        re-prices as the first, charges nothing and never escalates. Shipped and reported
+        from production. The default stays False because for a POWERUP the two meanings
+        genuinely differ — a free one should not spend your allowance — but for a reroll
+        the free one IS the first use of the allowance.
         """
-        boundary = _dailyResetBoundary()
-        return self.session.query(func.count(ShopPurchase.id)).filter(
+        q = self.session.query(func.count(ShopPurchase.id)).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.item_slug == itemSlug,
-            ShopPurchase.created_at >= boundary,
-            ShopPurchase.price_paid > 0,
-        ).scalar() or 0
+            ShopPurchase.created_at >= _dailyResetBoundary(),
+        )
+        if not includeFree:
+            q = q.filter(ShopPurchase.price_paid > 0)
+        return q.scalar() or 0
 
-    def getPurchasesForCycle(self, userId: int, season: int, itemSlug: str, cycleStartWeek: int, cycleEndWeek: int) -> int:
-        """Count PAID purchases within a swap cycle. Free grants excluded
-        (see getPurchasesToday)."""
-        return self.session.query(func.count(ShopPurchase.id)).filter(
+    def getPurchasesForCycle(self, userId: int, season: int, itemSlug: str,
+                             cycleStartWeek: int, cycleEndWeek: int,
+                             includeFree: bool = False) -> int:
+        """Count purchases within a swap cycle. Free grants excluded by default
+        (see getPurchasesToday, including why a free-first ladder must pass
+        includeFree=True)."""
+        q = self.session.query(func.count(ShopPurchase.id)).filter(
             ShopPurchase.user_id == userId,
             ShopPurchase.item_slug == itemSlug,
             ShopPurchase.season == season,
             ShopPurchase.week >= cycleStartWeek,
             ShopPurchase.week <= cycleEndWeek,
-            ShopPurchase.price_paid > 0,
-        ).scalar() or 0
+        )
+        if not includeFree:
+            q = q.filter(ShopPurchase.price_paid > 0)
+        return q.scalar() or 0
 
     def getSeasonPurchaseCount(self, userId: int, season: int, itemSlug: str) -> int:
         """Count PAID purchases this season. Used for per-season buy
