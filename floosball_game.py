@@ -2021,6 +2021,25 @@ class Game:
         except Exception:
             pass
 
+    def _involvedPlayerNames(self) -> list:
+        """Every player named in this play's text, longest name first.
+
+        Used by the client to emphasise who was involved. Longest-first matters: a
+        highlighter walking these in order must not match a shorter name that happens to
+        sit inside a longer one before the longer one gets its chance.
+        """
+        play = getattr(self, 'play', None)
+        if play is None:
+            return []
+        names = []
+        for attr in ('passer', 'receiver', 'runner', 'kicker', 'returner',
+                     'interceptedBy', 'tackledBy', 'forcedFumbleBy', 'recoveredBy'):
+            who = getattr(play, attr, None)
+            name = getattr(who, 'name', None)
+            if name and name not in names:
+                names.append(name)
+        return sorted(names, key=len, reverse=True)
+
     def _estimateAvailablePlays(self) -> int:
         """Conservative estimate of productive offensive plays remaining before
         regulation ends, RESERVING ~7s for a closing FG attempt.
@@ -5025,6 +5044,19 @@ class Game:
     def playCaller(self):
         isHome = (self.offensiveTeam == self.homeTeam)
         scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        # ⚠️ THE MARGIN AN END-GAME DECISION SHOULD REASON OFF, which in frames is NOT the
+        # aggregate. `scoreDiff` above stays the running total because ~15 decisions below
+        # legitimately want it; this is the frame-aware one, identical to `scoreDiff` in
+        # every other format (`_frameDecisionDiff` returns None off frames).
+        #
+        # Reported from production game 469 (Waffles 17-17 Sodas, frames 2.5-3.5): final
+        # frame, frames LEVEL, offense down a TOUCHDOWN in the frame but only 3 on
+        # aggregate, 4th and goal. The end-of-game field-goal branch below asks "trailing by
+        # <= 3?" — true on aggregate, false in the frame — so it kicked, tied the aggregate,
+        # LOST the frame 3-7 and with it the match, while the opponent knelt the clock out.
+        decisionDiff = self._frameDecisionDiff()
+        if decisionDiff is None:
+            decisionDiff = scoreDiff
         coach = getattr(self.offensiveTeam, 'coach', None)
         timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
 
@@ -5072,9 +5104,18 @@ class Game:
         # scores UP has nothing to gain from scrambling a kick in as the clock or its
         # possession budget expires, and it reads as the sim not knowing the game is over.
         # Owner, on chess clock: "unless the score is a blowout I suppose".
-        _routIsOn = scoreDiff > 3 * self._oneScore()
+        # ⚠️ IN FRAMES, THREE POINTS ARE ONLY WORTH HAVING IF THEY WIN THE FRAME.
+        # `scoreDiff` here is the raw AGGREGATE margin, and this block sits ABOVE the down
+        # split — so on a final down it decides before `_fourthDownCaller`, which is the
+        # caller that already applies the frame hook. Reported from a live game: last frame,
+        # frames level, offense down a TOUCHDOWN in the frame but only 3 on aggregate, 4th
+        # and goal with 0:30 left. The aggregate said a field goal ties it, so it kicked —
+        # losing the frame and with it the match, while the opponent simply knelt out. Every
+        # score test below now reasons off the margin the fourth-down caller would have used.
+        _lastDiff = decisionDiff
+        _routIsOn = _lastDiff > 3 * self._oneScore()
         if (_atDeadline and self._lastSnapBeforeBreak()
-                and not self._isGarbageTime(scoreDiff) and not _routIsOn):
+                and not self._isGarbageTime(_lastDiff) and not _routIsOn):
             _lastKicker = self.offensiveTeam.rosterDict.get('k')
             _lastMax = ((_lastKicker.maxFgDistance - self.gameRules.fgSnapDistance)
                         if _lastKicker else 0)
@@ -5084,7 +5125,7 @@ class Game:
             # resets at the break, so there is no lead to protect. Everywhere else
             # (including a chess-clock lockout and a closing frame) three points have to
             # actually be worth having.
-            _fgSettles = self.currentQuarter == 2 or scoreDiff >= -self._fgValue()
+            _fgSettles = self.currentQuarter == 2 or _lastDiff >= -self._fgValue()
             if 5 < self.yardsToEndzone <= _lastMax and _fgSettles:
                 self.play.insights['clockMgmt'] = {
                     'decision': 'lastSnapFG',
@@ -5820,7 +5861,7 @@ class Game:
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
         if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
-            if -self._fgValue() <= scoreDiff <= self._fgValue() and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
+            if -self._fgValue() <= decisionDiff <= self._fgValue() and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
                 canAdvance = self.gameClockSeconds >= 30
                 # A charged kicker's 3 is a sure thing — never gamble it on a conversion.
                 if canAdvance and not kickerCharged and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
@@ -11076,6 +11117,14 @@ class Game:
                 'puntTouchback': getattr(self.play, 'puntTouchback', False),
                 'returnYards': getattr(self.play, 'returnYardage', 0) or 0,
                 'returnerName': (getattr(getattr(self.play, 'returner', None), 'name', None)),
+                # ⚠️ THE NAMES, SO THE READER DOES NOT HAVE TO FIND THEM. Play text is one
+                # long sentence and the eye has to hunt for who did what. The frontend
+                # emphasises these, and it can only do that safely if the ENGINE says who
+                # was involved — a client guessing at names would have to invent a rule for
+                # what a name looks like, against a pool that includes "Firstname Lastname"
+                # and every joke in config.json. Exact strings, longest first so a surname
+                # inside a full name cannot match on its own.
+                'involvedPlayers': self._involvedPlayerNames(),
                 'hoopPair': getattr(self.play, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                 'conversionPoints': getattr(self.play, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                 'isTouchdown': getattr(self.play, 'isTd', False),
