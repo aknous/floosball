@@ -129,6 +129,30 @@ def buildBoxScore(session, gameId: int) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _postgamePlays(gameRow):
+    """The persisted postgame lines, shaped as the cutaway-carrying plays the live feed
+    produced, so every existing reader works unchanged. Empty for games that finished
+    before the column existed — there is nothing to recover, since these only ever lived
+    in memory."""
+    raw = getattr(gameRow, 'postgame_quotes', None)
+    if not raw:
+        return []
+    try:
+        import json
+        quotes = json.loads(raw) or []
+    except Exception:
+        return []
+    return [{
+        'isSidelineCutaway': True,
+        'sidelineCutaway': q,
+        # These all happened at the whistle; the rail sorts on the stamped time inside
+        # the cutaway, so the ordering here is only a stable tiebreak.
+        'playNumber': 0.9,
+        'quarter': None,
+        'timeRemaining': '0:00',
+    } for q in quotes if isinstance(q, dict)]
+
+
 def buildFinishedGame(session, gameId: int) -> Optional[Dict[str, Any]]:
     """A finished game rebuilt entirely from the database.
 
@@ -177,8 +201,12 @@ def buildFinishedGame(session, gameId: int) -> Optional[Dict[str, Any]]:
             'awayTeam': side(g.away_team_id, g.away_score,
                              [g.away_score_q1, g.away_score_q2, g.away_score_q3,
                               g.away_score_q4, g.away_score_ot]),
-            # Deliberately empty. Plays are never persisted — see the module docstring.
-            'plays': [],
+            # ⚠️ NOT ENTIRELY EMPTY ANY MORE. Plays are still never persisted — the feed
+            # is large and that is a deliberate trade — but the POSTGAME LINES are, and
+            # they are handed back in the cutaway shape the live feed used. That is what
+            # lets the Bleachers rail render them with no client change at all: it reads
+            # cutaways out of `plays`, and cannot tell these came from a column.
+            'plays': _postgamePlays(g),
             'fromArchive': True,
         }
     except Exception as e:

@@ -96,6 +96,16 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()  # column already exists — ignore
 
+        # Postgame personality lines — see the note on Game.postgame_quotes. They used to
+        # live only in the in-memory play feed, which now disappears minutes after the
+        # final whistle.
+        try:
+            conn.execute(text("ALTER TABLE games ADD COLUMN postgame_quotes TEXT"))
+            conn.commit()
+            logger.info("  Migration: added games.postgame_quotes")
+        except Exception:
+            conn.rollback()  # column already exists — ignore
+
         # Who won — see the note on Game.winner_team_id. Formats where points do not
         # decide (frames) make a score comparison the wrong question, so the winner is
         # stored rather than re-derived by every reader.
@@ -2292,6 +2302,12 @@ def _backfillGameWinners():
     NULL by design so it cannot be repeatedly "fixed".
     """
     import json as _json
+    # ⚠️ `text` IS NOT MODULE-LEVEL IN THIS FILE — every neighbouring backfill imports it
+    # inside its own body, and this one did not. It therefore raised NameError on its first
+    # statement on every boot, and the function's own `except Exception` turned that into a
+    # one-line warning, so the migration log looked healthy while zero rows were repaired.
+    # Measured on production after the deploy: 575 final games, 0 with a winner set.
+    from sqlalchemy import text
     session = get_session()
     try:
         rows = session.execute(text(

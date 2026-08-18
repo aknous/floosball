@@ -76,6 +76,14 @@ CONTEXT_STRICT_EVENT_KEYS = frozenset({
     'made_sack',
     'made_int',
     'recovered_fumble',
+    # ⚠️ POSTGAME IS STRICT FOR A DIFFERENT REASON THAN THE TURNOVERS ABOVE. Those are
+    # strict so a generic "wow!" does not land on a pick. These are strict because the
+    # generic pools are reactions to a SNAP — "hands the ball to the referee", "jogs back
+    # to the huddle" — and the game is over, so there is no huddle to jog back to. Falling
+    # back to them is what made the postgame beat read as more play chatter instead of
+    # players taking a result.
+    'won_game',
+    'lost_game',
 })
 
 # Default rate of getting any quirk at all (for personalities that take quirks)

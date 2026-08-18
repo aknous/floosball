@@ -2688,6 +2688,27 @@ class SeasonManager:
         except Exception:
             return {}
 
+    def _applyPostgameQuotesToRow(self, dbRow, game) -> None:
+        """Persist what the players said when the game ended.
+
+        ⚠️ These used to survive only inside the in-memory play feed, which is deliberately
+        never written to the database because it is large. That was fine while a finished
+        game stayed in memory for hours; the cross-day rollover now fires about fifteen
+        minutes after the final whistle, so the game object — and with it the Bleachers
+        rail — disappears almost immediately. Reported as the postgame lines no longer
+        reaching the front end.
+
+        A handful of rows per game, not a whole feed, and they are the closing beat of the
+        story rather than another play.
+        """
+        try:
+            quotes = getattr(game, 'postgameQuotes', None)
+            if quotes:
+                import json
+                dbRow.postgame_quotes = json.dumps(quotes)
+        except Exception:
+            logger.debug("Could not serialize postgame quotes for game", exc_info=True)
+
     def _applyWinnerToRow(self, dbRow, game) -> None:
         """Persist WHO WON, from the format's own rule rather than the scores.
 
@@ -3190,6 +3211,7 @@ class SeasonManager:
                     self._applyFormatStateToRow(db_game, game)
                     self._applyTeamStatsToRow(db_game, game)
                     self._applyWinnerToRow(db_game, game)
+                    self._applyPostgameQuotesToRow(db_game, game)
                     self.db_session.flush()
                     playerStats = self._extractPlayerStatsFromGame(game)
                     if playerStats:
@@ -3227,6 +3249,7 @@ class SeasonManager:
             self._applyFormatStateToRow(db_game, game)
             self._applyTeamStatsToRow(db_game, game)
             self._applyWinnerToRow(db_game, game)
+            self._applyPostgameQuotesToRow(db_game, game)
             self.game_repo.save(db_game)
             self.db_session.flush()  # Get the ID
 
