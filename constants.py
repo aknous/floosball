@@ -2579,6 +2579,28 @@ GAME_FORMAT_PRESETS = [
     # loser's median score in a pre-halftime finish was 6 of 18 and NOT ONE was within 4,
     # against a loser's median of 12 after halftime. The format mercy-rules itself.
     #
+    # ⚠️ THE LAST POINT IS THE HARD ONE, AND THE WAIT IS FIELD POSITION RATHER THAN
+    # MARKSMANSHIP. Measured over 90 games at 21: a team that gets within 2 of the target
+    # sits there a median 30 plays / 8 game-minutes (p90 ~19 minutes), and 39% never land
+    # at all. Per spell it gets only ~2 snaps with a hoop in range out of ~12 stuck, takes
+    # ~2 shots and makes ~1, across ~2.6 drives.
+    #
+    # The diagnosis: 81% of stuck snaps have NO hoop in range. The pairs sit at the 50 and
+    # inside the 18, so a team one point short spends most of its downs in the dead zone
+    # between them with literally nothing to shoot at. It is not hesitancy (61% of in-range
+    # chances are taken) and not accuracy (68% of those go in). If that wait is ever
+    # judged too long, the lever is hoop GEOMETRY — a third pair, or a wider midfield
+    # window — NOT the trigger rates, and darts already has precedent for its own geometry
+    # (`_hoopTarget` lowers the end-zone pair's near edge to the 1 for this format alone).
+    #
+    # The wait is what makes the endgame a contest rather than a formality, and the numbers
+    # say it is a real one: while a team is stuck the chaser scores 58% of the time, closes
+    # the gap 45%, and draws level or goes ahead 10%, with the stuck team going on to lose
+    # 10%. The hoop is the winning play in 56% of all target finishes (field goal 28%,
+    # touchdown 15%), so it is the format's primary win condition and not a consolation.
+    # ⚠️ Deliberately NOT covered by a test — these are emergent distributions with enough
+    # run-to-run spread to make any threshold flaky (see the note in test_darts_format.py).
+    #
     # A TIE AT THE END OF REGULATION GOES TO ORDINARY OVERTIME — `checkEarlyEnd` returns
     # None when nobody has landed, so the standard clock/OT path takes it, and darts
     # scoring still applies inside OT (a busting score is still void, so it is usually
