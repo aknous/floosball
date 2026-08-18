@@ -96,6 +96,16 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()  # column already exists — ignore
 
+        # Per-game chaos ruleset — see the note on Game.chaos_rules. Without it a strange
+        # play in a Criticality game cannot be judged, because the rules it was played
+        # under no longer exist anywhere.
+        try:
+            conn.execute(text("ALTER TABLE games ADD COLUMN chaos_rules TEXT"))
+            conn.commit()
+            logger.info("  Migration: added games.chaos_rules")
+        except Exception:
+            conn.rollback()  # column already exists — ignore
+
         # Postgame personality lines — see the note on Game.postgame_quotes. They used to
         # live only in the in-memory play feed, which now disappears minutes after the
         # final whistle.

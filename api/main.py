@@ -14200,6 +14200,54 @@ async def admin_post_cores_conversation(payload: Dict[str, Any],
         session.close()
 
 
+@app.get("/api/admin/games/{game_id}/rules")
+async def admin_game_chaos_rules(game_id: int, _auth: None = Depends(_checkAdminAuth)):
+    """What ruleset a game was actually played under.
+
+    ⚠️ ADMIN-ONLY ON PURPOSE. Chaos rules are hidden from players by design — a Criticality
+    game is meant to feel wrong without announcing why — but they were hidden from everyone,
+    including whoever has to explain a strange play afterwards. A punt on 5th and goal from
+    the 5 could not be judged, because the league's ruleset has four downs and that game
+    plainly had five, and nothing recorded what it had been playing under.
+
+    Returns the DIFF from the league's rules, which is the whole question, plus the league
+    ruleset for context. `chaos` is null for an ordinary game.
+    """
+    import json as _json
+    from database.connection import get_session
+    from database.models import Game
+
+    session = get_session()
+    try:
+        row = session.query(Game).filter(Game.id == game_id).first()
+        if row is None:
+            raise HTTPException(404, f"No game {game_id}")
+        chaos = None
+        raw = getattr(row, 'chaos_rules', None)
+        if raw:
+            try:
+                chaos = _json.loads(raw)
+            except Exception:
+                chaos = None
+        league = None
+        try:
+            sm = floosball_app.seasonManager if floosball_app else None
+            rules = sm.currentSeason.gameRules if sm and sm.currentSeason else None
+            if rules is not None:
+                from constants import RULE_VOTE_CANDIDATES
+                league = {f: getattr(rules, f, None) for f in RULE_VOTE_CANDIDATES}
+        except Exception:
+            pass
+        return build_success_response({
+            "gameId": game_id,
+            "wasChaos": bool(chaos),
+            "chaos": chaos,
+            "leagueRules": league,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/api/admin/league-news")
 async def admin_list_league_news(limit: int = 25, _auth: None = Depends(_checkAdminAuth)):
     """Announcements posted so far, newest first, with their pin state.

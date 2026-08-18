@@ -740,6 +740,16 @@ class Game(Base):
     # Scores
     home_score: Mapped[int] = mapped_column(Integer, default=0)
     away_score: Mapped[int] = mapped_column(Integer, default=0)
+    # The per-game CHAOS ruleset, as a diff from the season's rules.
+    # ⚠️ A Criticality game gets its own randomized rules, deliberately hidden from
+    # players — and they were never recorded, so once the game ended nobody could say what
+    # it had been played under. That made a strange play in a chaos game undiagnosable
+    # after the fact: a punt on 5th and goal from the 5 could not be judged, because the
+    # league's own rules have four downs and the game plainly had five. Stored as the DIFF
+    # rather than the whole ruleset — what was different is the entire question — and left
+    # out of the public payload, so it stays hidden while remaining answerable.
+    chaos_rules: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # The postgame personality lines — what the players said when it ended.
     # ⚠️ PLAY-BY-PLAY IS DELIBERATELY NOT PERSISTED (owner) because the feed is large, and
     # these rode in it, so they died with the in-memory game. That was survivable while a
