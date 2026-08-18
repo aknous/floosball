@@ -91,13 +91,29 @@ class _Season:
         self._TIE_EPSILON = SeasonManager._TIE_EPSILON
 
 
-def run(players, tree, isRegularSeason=True):
+def mkGame(players, isRegularSeason=True):
+    """A game whose rosters hold `players`.
+
+    ⚠️ THE ROSTERS ARE LOAD-BEARING, not scaffolding. `checkPlayerGameRecords` sweeps EVERY
+    active player in the league and reads `gameStatsDict`, which holds a player's last game
+    until they next play — so a mark set on Monday still equals the record on Tuesday, and
+    the tie republished on every game in between (reported as the same line three times,
+    minutes apart). The detector now credits a tie only to someone who was on the field for
+    THIS game, so a stub game with no rosters correctly yields nothing.
+    """
+    home = SimpleNamespace(id=101, rosterDict={f'p{p.id}': p for p in players})
+    away = SimpleNamespace(id=102, rosterDict={})
+    return SimpleNamespace(isRegularSeasonGame=isRegularSeason,
+                           homeTeam=home, awayTeam=away)
+
+
+def run(players, tree, isRegularSeason=True, game=None):
     """Play out the real sequence: snapshot, run the real checks, detect ties."""
     rm = RecordManager(_Container(players))
     rm.setRecords(tree)
     season = _Season(rm, tree)
     before = season._snapshotRecords()
-    game = SimpleNamespace(isRegularSeasonGame=isRegularSeason)
+    game = game or mkGame(players, isRegularSeason)
     rm.checkPlayerGameRecords()          # the real update pass
     with patch.object(RecordManager, 'checkTeamGameRecords'):   # needs a full Game object
         ties = season._detectRecordTies(game, before)
@@ -192,7 +208,7 @@ class TheScratchPassIsHarmless(unittest.TestCase):
         rm.setRecords(tree)
         season = _Season(rm, tree)
         before = season._snapshotRecords()
-        game = SimpleNamespace(isRegularSeasonGame=True)
+        game = mkGame([])
         with patch.object(RecordManager, 'checkTeamGameRecords'):
             season._detectRecordTies(game, before)
         self.assertEqual(season._snapshotRecords(), before)
@@ -223,7 +239,8 @@ class TheFeedActuallyGetsALine(unittest.TestCase):
         before = sm._snapshotRecords()
         rm.checkPlayerGameRecords()
         published = []
-        game = SimpleNamespace(isRegularSeasonGame=True)
+        # The rosters matter — a tie is credited only to someone who played here.
+        game = mkGame(players)
         with patch.object(RecordManager, 'checkTeamGameRecords'), \
              patch('league_news.publish', side_effect=lambda *a, **k: published.append(k)):
             sm._publishGameNewsInner(game, before)
@@ -293,6 +310,37 @@ class ItNeverBreaksAGame(unittest.TestCase):
         season = _Season(Exploding(), {})
         self.assertEqual(
             season._detectRecordTies(SimpleNamespace(isRegularSeasonGame=True), {}), {})
+
+
+class AStaleLineDoesNotRepublish(unittest.TestCase):
+    """⚠️ THE REPEAT. `checkPlayerGameRecords` walks every active player and reads
+    `gameStatsDict`, which a player keeps until they next play — so a tying line stayed
+    equal to the record all week and republished on every game in the slate. Reported as
+    the same line three times, minutes apart.
+
+    The break diff never had this problem: it compares strictly GREATER, so a stale line
+    cannot beat a record it already set. Equality can, and does, forever."""
+
+    def test_aPlayerWhoDidNotPlayInThisGameIsNotCredited(self):
+        tying = mkPlayer(2, 'Locust Clambake', passing={'att': 30, 'yards': 400})
+        # The player is in the league (so the sweep sees their stale line) but NOT on
+        # either roster for this game.
+        _, _, ties = run([tying], recordsWith(), game=mkGame([]))
+        self.assertEqual(ties, {}, 'a stale line from another day republished the tie')
+
+    def test_thePlayerWhoActuallyPlayedIsStillCredited(self):
+        tying = mkPlayer(2, 'Locust Clambake', passing={'att': 30, 'yards': 400})
+        _, _, ties = run([tying], recordsWith(), game=mkGame([tying]))
+        self.assertIn(PATH, ties)
+
+    def test_theSameTieDoesNotFireTwiceAcrossGames(self):
+        """Play the same stale line through two more games: neither should publish."""
+        tying = mkPlayer(2, 'Locust Clambake', passing={'att': 30, 'yards': 400})
+        first = run([tying], recordsWith(), game=mkGame([tying]))[2]
+        self.assertIn(PATH, first)
+        for _ in range(2):
+            later = run([tying], recordsWith(), game=mkGame([]))[2]
+            self.assertEqual(later, {}, 'the tie republished on a later game')
 
 
 if __name__ == '__main__':

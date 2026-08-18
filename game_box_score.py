@@ -129,6 +129,25 @@ def buildBoxScore(session, gameId: int) -> Optional[Dict[str, Any]]:
         return None
 
 
+def postgamePlaysFor(session, gameId):
+    """The stored postgame lines for one game, in the cutaway shape the live feed used.
+
+    ⚠️ Needed because a FINISHED game can be served from either path. The archive rebuild
+    below uses `_postgamePlays` on the row it already loaded; the LIVE path serves a game
+    still held in memory — and after a restart that object can be a shell with an empty
+    feed, which is exactly what happened: game 607 came back `status: Final`, six quotes
+    sitting in its row, and `plays: []`, because it was found in memory and so never
+    reached the archive rebuild at all. Whichever path serves the game, the lines have to
+    be reachable.
+    """
+    try:
+        from database.models import Game
+        row = session.query(Game).filter(Game.id == gameId).first()
+        return _postgamePlays(row) if row is not None else []
+    except Exception:
+        return []
+
+
 def _postgamePlays(gameRow):
     """The persisted postgame lines, shaped as the cutaway-carrying plays the live feed
     produced, so every existing reader works unchanged. Empty for games that finished

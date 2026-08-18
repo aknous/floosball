@@ -149,13 +149,13 @@ melancholy:
     - 'Everyone''s so happy. I''m glad. I am.'
     - '{name} sits in the locker room fully dressed, long after the others.'
     - 'A good day. They don''t stay.'
-    - '{name} smiles at a teammate and means it, briefly.'
+    - '{name} briefly smiles at a teammate and truly means it.'
   lost_game:
-    - '{name} takes the loss the way they take everything — quietly.'
-    - 'I knew before the half. I always know.'
+    - '{name} takes the loss the way they take everything. Quietly.'
+    - 'I knew before the half. I can sense these things.'
     - '{name} stays on the bench until the lights start going out.'
     - 'It''s fine. It''s just a game. That''s what we say.'
-    - '{name} folds their towel neatly, which nobody asked for.'
+    - '{name} folds their towel neatly and leaves.'
     - 'I''ll think about this one for a while.'
     - '{name} looks back at the field once from the tunnel.'
     - 'We had it. Somewhere in there, we had it.'
@@ -312,8 +312,8 @@ stoic:
     - '{name} shakes every opposing hand before leaving the field.'
     - 'Good. Next week.'
     - '{name} nods once at the scoreboard and walks to the tunnel.'
-    - 'The work held.'
-    - '{name} helps a groundskeeper move a bench, still in pads.'
+    - 'The work paid off.'
+    - '{name} helps a groundskeeper move a bench while still in pads.'
     - 'We did what we said we''d do.'
     - '{name} accepts the game ball, then hands it to a rookie.'
     - 'No speech. {name} simply sits down and unlaces their cleats.'
@@ -321,13 +321,13 @@ stoic:
   lost_game:
     - '{name} shakes every opposing hand before leaving the field.'
     - 'We were beaten. We''ll be better.'
-    - '{name} watches the tape request go in before they shower.'
+    - '{name} puts the tape request in before they shower.'
     - 'Nothing to say that film won''t say louder.'
     - '{name} is the first one dressed and the last one to speak.'
     - 'My fault where it was my fault.'
     - '{name} sits with the rookies rather than alone.'
     - 'It''s a loss. It isn''t the end of anything.'
-    - '{name} folds the loss up and puts it somewhere useful.'
+    - '{name} mentally folds the loss up and puts it somewhere useful.'
   sideline:
     - "{name} is sitting perfectly still, arms folded, watching the field."
     - "{name} is alone at the end of the bench. Not waiting. Just there."
@@ -557,9 +557,9 @@ chill:
     - '{name} shrugs, genuinely unbothered, and gets on the bus.'
     - 'We''ll get ''em. No big deal.'
     - '{name} is somehow the calmest person in a very quiet locker room.'
-    - 'Rough one. Still Tuesday, though.'
+    - 'Rough one. Still just one game though.'
     - '{name} pats a furious teammate on the back and says nothing.'
-    - 'You can''t win ''em. That''s the deal you sign.'
+    - 'You can''t always win ''em. That''s the deal you sign.'
     - '{name} eats a sandwich in full pads, thinking it over.'
     - 'Next one. Same as always.'
   sideline:
@@ -791,7 +791,7 @@ cool:
     - 'Anyone can have a day.'
     - '{name} walks off at exactly the same pace they walked on.'
     - 'I''m not going to pretend it means something.'
-    - '{name} refuses to be photographed on the way in.'
+    - '{name} refuses to be photographed on the way to the locker room.'
     - 'We were the better team. Scoreboard disagrees. It happens.'
     - '{name} watches the winners celebrate with total indifference.'
     - 'One game. Don''t build a story out of it.'
@@ -1478,7 +1478,7 @@ unhinged:
     - '{name} thanks the goalposts individually.'
     - 'They can''t take this. They''ve tried before.'
     - '{name} laughs for slightly too long in the tunnel.'
-    - 'I knew when I woke up. The ceiling told me.'
+    - 'I knew when I woke up. The ceiling fan told me.'
     - '{name} celebrates by lying face-down on the field for a while.'
     - 'This one goes in the collection.'
     - '{name} whispers the final score to themselves, over and over.'
@@ -1489,9 +1489,8 @@ unhinged:
     - 'Somebody moved the field. I felt it move.'
     - '{name} takes off one cleat and carries it into the tunnel.'
     - 'I''ll be dealing with this at three in the morning.'
-    - '{name} says goodbye to the field. Out loud. By name.'
     - 'This is a message. I just have to read it.'
-    - '{name} sits perfectly still in the locker room, eyes open, smiling.'
+    - '{name} sits perfectly still in the locker room, eyes wide open, smiling.'
     - 'We''ll see who''s laughing in a few weeks. I''ll be laughing.'
   sideline:
     - "i can hear the goalpost humming. it's humming a familiar song."
@@ -1662,7 +1661,7 @@ wholesome:
   # a final whistle, which is what made the old postgame beat feel generic.
   won_game:
     - '{name} tells every single teammate they were great, individually.'
-    - 'I''m so proud of these guys. So proud.'
+    - 'I''m so proud of this team. So proud.'
     - '{name} finds the equipment staff to thank them first.'
     - 'Everybody did their part. That''s the whole thing.'
     - '{name} gives the game ball away before anyone can offer it to them.'
@@ -1673,12 +1672,11 @@ wholesome:
   lost_game:
     - '{name} tells every single teammate they were great, individually.'
     - 'That''s on all of us, and I love all of us.'
-    - '{name} checks on the player who made the last mistake, first.'
     - 'Nobody in here needs to hear it twice. They already know.'
     - '{name} still stops to sign for the kids on the way in.'
     - 'We''ll fix it together. That''s the fun part, honestly.'
     - '{name} makes sure the rookies aren''t sitting alone.'
-    - 'I''d rather lose with these guys than win with anyone else.'
+    - 'I''d rather lose with this team than win with anyone else.'
     - '{name} thanks the other team''s players for a clean game.'
   sideline:
     - "How's everyone doing? Everyone good? Everyone hydrated?"
@@ -1885,23 +1883,23 @@ goofy:
   won_game:
     - 'Did we win? We won! I was mostly guessing out there.'
     - '{name} celebrates with the wrong team''s mascot briefly.'
-    - 'I don''t remember the second half at all. Great though.'
-    - '{name} tries a backflip. Does not attempt a second one.'
+    - 'I don''t remember the second half at all. Great game though.'
+    - '{name} tries a backflip. Beefs it. Tries another one.'
     - 'This is the best day since the last best day.'
-    - '{name} puts their jersey on backwards for the walk in. On purpose. Probably.'
-    - 'Somebody tell my mom. Actually she was here. Tell her again.'
-    - '{name} attempts a handshake sequence nobody has agreed to.'
+    - '{name} puts their jersey on backwards for the walk in. Hopefully on purpose.'
+    - 'Somebody tell my mom. Actually she''s here. Hi mom!'
+    - '{name} attempts a handshake sequence nobody understands.'
     - 'Winning is SO much better than the other thing.'
   lost_game:
-    - 'Oh. Oh, we lost. I thought we were up.'
+    - 'Oh. Oh, we lost. I thought we were winning this whole time.'
     - '{name} congratulates two opposing players and one of their own.'
     - 'Wait, is it over? That''s it? Just like that?'
     - '{name} looks for the scoreboard, finds it, sighs, looks again.'
     - 'I was having a great time right up until the end there.'
     - '{name} tries to cheer everyone up and makes it slightly worse.'
-    - 'We''ll just win the next one. That''s allowed, right?'
+    - 'We''ll just win the next one. Easy, right?'
     - '{name} eats an entire orange slice tray by themselves.'
-    - 'Somebody explain what happened. Slowly.'
+    - 'Somebody explain what happened.'
   sideline:
     - "Hey. Hey. Pull my finger."
     - "{name} is wearing a teammate's helmet. The teammate is now wearing nothing."
@@ -2098,8 +2096,8 @@ alien:
   # a final whistle, which is what made the old postgame beat feel generic.
   won_game:
     - 'The colony has prevailed. I am told this is good.'
-    - '{name} attempts the victory embrace. It lasts four seconds too long.'
-    - 'I have observed this ritual. Now I am inside it.'
+    - '{name} attempts the victory embrace. They embrace for a moment too long.'
+    - 'I have observed this ritual. Now I am part of it.'
     - '{name} studies a teammate''s celebration, then reproduces it precisely.'
     - 'Your species enjoys this. I begin to understand why.'
     - '{name} collects a small piece of turf and pockets it.'
@@ -2109,11 +2107,11 @@ alien:
   lost_game:
     - 'The colony has not prevailed. I am told this is bad.'
     - '{name} attempts to comfort a teammate using a gesture from a different species.'
-    - 'Their numbers exceeded ours. The rule is simple. I dislike it.'
+    - 'Their numbers exceeded ours. The rule is simple, but I dislike it.'
     - '{name} remains on the field studying the turf after everyone has gone.'
     - 'I felt something. I have no word for it yet.'
     - '{name} asks a teammate, sincerely, whether this happens often.'
-    - 'We will require a different approach. I have several.'
+    - 'We will require a different approach. I have several in mind.'
     - '{name} records observations on their forearm tape.'
     - 'This will be corrected.'
   sideline:
@@ -2282,10 +2280,10 @@ android:
   # a final whistle, which is what made the old postgame beat feel generic.
   won_game:
     - 'Outcome: favorable. Objective complete.'
-    - '{name} executes the victory protocol. It is a nod, held slightly too long.'
+    - '{name} executes the victory protocol.'
     - 'Performance within acceptable parameters.'
     - '{name} logs the result before removing their helmet.'
-    - 'The desired result was obtained. I note this.'
+    - 'The desired result was obtained. I will note this.'
     - '{name} shakes hands at a perfectly consistent interval down the line.'
     - 'Efficiency was high. Efficiency can be higher.'
     - '{name} declines the celebration and begins reviewing the next opponent.'
@@ -2426,7 +2424,7 @@ prophet:
   won_game:
     - 'I saw this ending. I did not enjoy the waiting.'
     - '{name} watches the celebration as though it already happened.'
-    - 'It was always going to be this. You just hadn''t arrived yet.'
+    - 'It was always going to be this. You just hadn''t arrived to it yet.'
     - '{name} touches the field once before leaving it.'
     - 'The result was fixed. The path was ours to walk.'
     - '{name} tells a teammate exactly what they were about to say.'
@@ -2439,7 +2437,7 @@ prophet:
     - 'It had to happen here so it doesn''t happen later.'
     - '{name} accepts the loss with the calm of someone rereading a book.'
     - 'This is a cost. It buys something. You''ll see.'
-    - '{name} tells a grieving teammate, gently, that it gets better in six weeks.'
+    - '{name} tells a grieving teammate that it gets better in six weeks.'
     - 'Don''t ask me if it was avoidable.'
     - '{name} looks at the scoreboard as if confirming a spelling.'
     - 'The shape of the season is unchanged.'
@@ -2685,11 +2683,10 @@ time_traveler:
   won_game:
     - 'In my time this game is famous. Slightly differently, but famous.'
     - '{name} asks a teammate to remember this exact moment for them.'
-    - 'The record says we won. Good. The record was right.'
-    - '{name} takes a small photograph of the scoreboard. With no camera.'
-    - 'This one holds up. I''ve checked.'
-    - '{name} congratulates a rookie by their eventual nickname.'
-    - 'You''ll all tell this story wrong later. It''s fine.'
+    - 'The record book said we would win. Good. The record was right.'
+    - '{name} takes a small photograph of the scoreboard to remember it.'
+    - '{name} congratulates a rookie by a nickname that won''t be made for them for another century.'
+    - 'The few existing records of this game missed some details, but overall they were correct.'
     - '{name} touches the goalpost like it''s a museum piece.'
     - 'Enjoy it now. Later it''s just a line in a table.'
   lost_game:
@@ -2812,10 +2809,10 @@ sleepwalker:
   # a final whistle, which is what made the old postgame beat feel generic.
   won_game:
     - '{name} is congratulated warmly and does not wake up for any of it.'
-    - 'Did we... is it over? Is it Thursday?'
+    - 'Did we... is it over?'
     - '{name} walks to the tunnel, eyes closed, perfectly on course.'
     - 'I had a great dream about this. Oh. It wasn''t a dream.'
-    - '{name} celebrates about forty seconds after everyone else, briefly.'
+    - '{name} celebrates about forty seconds after everyone else before going back to sleep.'
     - 'Somebody said we won. I''ll take their word for it.'
     - '{name} falls asleep on the bench still holding their helmet.'
     - 'Good game, everyone. Whatever happened.'
@@ -2950,7 +2947,7 @@ superstitious:
     - '{name} keeps the same seat on the bus and glares at anyone near it.'
     - 'Same everything next week. Same everything.'
     - '{name} pockets a blade of turf and won''t explain why.'
-    - 'I didn''t step on a single line today. Not one.'
+    - 'I didn''t step on a single line today. Coincidence? I think not.'
     - '{name} refuses to say the word ''streak'' out loud.'
   lost_game:
     - '{name} retraces the whole pregame routine, looking for the mistake.'
@@ -3068,8 +3065,8 @@ oblivious:
     - '{name} celebrates enthusiastically, one full beat behind everyone.'
     - 'Great game! Great game everybody! What was the score?'
     - '{name} congratulates two players from the other team, warmly.'
-    - 'I thought we had another quarter. This is better.'
-    - '{name} jogs toward the wrong tunnel and corrects, eventually.'
+    - 'I thought we had another quarter still.'
+    - '{name} jogs toward the wrong tunnel.'
     - 'Are we happy? We seem happy. I''m happy.'
     - '{name} is still looking for their helmet, which they are wearing.'
     - 'Somebody tell me what happened at some point.'
@@ -3077,12 +3074,12 @@ oblivious:
   lost_game:
     - '{name} celebrates for a second before noticing nobody else is.'
     - 'Oh, that''s why everyone''s quiet. Got it.'
-    - '{name} asks who won and is told, gently, twice.'
-    - 'I thought that was going great, honestly.'
-    - '{name} congratulates an opposing player at some length.'
+    - '{name} asks who won.'
+    - 'I really thought that was going great, honestly.'
+    - '{name} congratulates an opposing player.'
     - 'Well, I had fun. Was I not supposed to?'
     - '{name} takes their pads off in the wrong locker room.'
-    - 'Next week then! Is it next week?'
+    - 'Next week then! Is it next week yet?'
     - '{name} waves cheerfully at a very unhappy coach.'
   sideline:
     - "{name} is waving at someone they think they recognize on the broadcast crew."
@@ -3189,17 +3186,16 @@ prankster:
     - '{name} switches two teammates'' bags during the celebration.'
     - 'I''ve been saving this one for a good day.'
     - '{name} conducts a fake postgame interview with the water cooler.'
-    - 'We won, which means nobody can be mad at me until Tuesday.'
+    - 'We won, which means nobody can be mad at me until the next game.'
     - '{name} gives a heartfelt speech that turns out to be a movie quote.'
   lost_game:
     - '{name} keeps it quiet. Even they know when to keep it quiet.'
     - 'Not today. I''ve got material, but not today.'
-    - '{name} puts a hand on a teammate''s shoulder, entirely sincerely.'
-    - 'Rough one. I''ll get everybody back on Wednesday.'
+    - '{name} puts a hand on a teammate''s shoulder, entirely sincere.'
     - '{name} sneaks one small harmless prank in anyway. It helps.'
     - 'Somebody''s got to make them laugh eventually. Might as well be me.'
     - '{name} does the fake interview bit and gets one real laugh out of it.'
-    - 'That stunk. Genuinely. No bit.'
+    - 'That stunk. Genuinely.'
     - '{name} carries someone else''s bag to the bus without comment.'
   sideline:
     - "{name} is loosening a teammate's chinstrap when they aren't looking."
@@ -3312,25 +3308,22 @@ vain:
   # Strict pools: the generic play lines read as a reaction to a SNAP, not to
   # a final whistle, which is what made the old postgame beat feel generic.
   won_game:
-    - '{name} fixes their hair before the cameras find them. They find them.'
+    - '{name} fixes their hair before the cameras find them.'
     - 'Winning suits me. Most things do.'
     - '{name} does a slow lap of the field so everyone gets a look.'
-    - 'I''d like a copy of every photograph. Every one.'
+    - 'I''d like a copy of every photograph to review before they print.'
     - '{name} checks their reflection in a visor before the handshakes.'
     - 'This is a good look for the whole organization, frankly.'
     - '{name} arranges their jersey carefully before agreeing to a hug.'
-    - 'Somebody get the angle from the far side. That''s my side.'
-    - '{name} is the last one off the field and knows exactly why.'
   lost_game:
-    - '{name} declines every camera on the way in.'
-    - 'I don''t want this recorded. Any of it.'
+    - '{name} declines every reporter on the way in.'
+    - 'I don''t want this recorded. Delete the tape.'
     - '{name} keeps their helmet on well past the point of usefulness.'
     - 'That''s not what I look like. That''s not how I play.'
     - '{name} fixes their hair anyway, out of pure reflex, and hates it.'
     - 'One bad day does not become the picture of me.'
     - '{name} showers first, dresses fastest, and leaves before the press.'
     - 'I''ll be worth watching again next week.'
-    - '{name} covers a jersey number with a towel walking past the tunnel.'
   sideline:
     - "{name} is checking their reflection in a teammate's visor."
     - "{name} is smoothing their hair very deliberately."
@@ -3456,23 +3449,22 @@ fossil:
   # Strict pools: the generic play lines read as a reaction to a SNAP, not to
   # a final whistle, which is what made the old postgame beat feel generic.
   won_game:
-    - 'I have won this game several hundred times. It stays pleasant.'
-    - '{name} shakes hands with the slow patience of someone with time.'
-    - 'The young ones celebrate harder. They should. It''s newer for them.'
+    - 'I have won this game several hundred times. It never gets old.'
+    - 'The young ones celebrate harder. Which they should. It''s newer for them.'
     - '{name} sits down carefully and takes a very long time with their laces.'
-    - 'A win is a win. I stopped ranking them a long while ago.'
+    - 'A win is a win. I stopped counting them a long while ago.'
     - '{name} tells a story from a season nobody in the room was alive for.'
     - 'That''s another one. Put it with the others.'
     - '{name} pats the turf on the way past, like an old dog.'
     - 'Good. Now we do it again, which is the hard part.'
   lost_game:
-    - 'I have lost this game several hundred times. It stays unpleasant.'
-    - '{name} takes it with the calm of someone who has taken worse.'
+    - 'I have lost this game several hundred times. You never quite get over it.'
+    - '{name} takes the loss with the calm of someone who has seen worse.'
     - 'You''ll forget this one. I promise you''ll forget it.'
     - '{name} sits with the youngest player in the room without saying much.'
     - 'The trick isn''t not losing. Nobody''s managed that.'
     - '{name} tells a story about a far worse defeat, which helps.'
-    - 'Another one for the pile. The pile is very large.'
+    - 'Another one for the pile.'
     - '{name} takes longer than anyone to get out of their pads.'
     - 'It hurts the same as the first one. That part never got easier.'
   sideline:
@@ -3570,7 +3562,7 @@ ghost:
   # Strict pools: the generic play lines read as a reaction to a SNAP, not to
   # a final whistle, which is what made the old postgame beat feel generic.
   won_game:
-    - '{name} is not in the celebration photograph. {name} was standing right there.'
+    - '{name} is not in the celebration photograph even though {name} was standing right there.'
     - '{name} leaves the field before the final whistle finishes sounding.'
     - 'Good win.'
     - '{name} is already dressed when the team reaches the locker room.'
@@ -3692,11 +3684,11 @@ perfectionist:
   # a final whistle, which is what made the old postgame beat feel generic.
   won_game:
     - '{name} is already listing their own mistakes before anyone congratulates them.'
-    - 'We won. I was still bad in the third.'
+    - 'We won, but it could have been better.'
     - '{name} asks for the film before they take their pads off.'
     - 'Nobody say ''perfect''. It wasn''t close to perfect.'
     - '{name} accepts the win with a small, dissatisfied nod.'
-    - 'Two plays. Two plays I want back from a win.'
+    - 'Two plays. Two plays kept us from being perfect out there.'
     - '{name} stays on the field walking through a route, alone, after everyone leaves.'
     - 'It''s a good result. It isn''t good work.'
     - '{name} thanks a teammate for covering the thing they got wrong.'
@@ -3704,11 +3696,10 @@ perfectionist:
     - '{name} names their own errors, in order, unprompted.'
     - 'That''s mine. Don''t let anyone tell you otherwise.'
     - '{name} is watching the film before the bus arrives.'
-    - 'I know exactly where it went. I knew while it was going.'
+    - 'I know exactly where it went wrong. I knew while it was happening.'
     - '{name} stays on the field alone, walking through it again.'
-    - 'Everyone else was fine. Look at me.'
-    - '{name} refuses to be talked out of the blame, politely and firmly.'
-    - 'I''ll have it fixed by Wednesday. It should never have needed fixing.'
+    - '{name} refuses to be talked out of the blame.'
+    - 'I''ll have it fixed by next week. It should never have needed fixing.'
     - '{name} writes something down and puts it in their locker.'
   sideline:
     - "{name} is filling another page of their sideline notebook."
@@ -3833,21 +3824,20 @@ paranoid:
   # Strict pools: the generic play lines read as a reaction to a SNAP, not to
   # a final whistle, which is what made the old postgame beat feel generic.
   won_game:
-    - '{name} celebrates with one eye on the tunnel.'
-    - 'They let us have that one. I want to know why.'
-    - '{name} checks their locker carefully before opening it.'
-    - 'Somebody was filming our sideline. I saw the angle.'
-    - '{name} counts the handshakes. All of them.'
+    - '{name} celebrates with one eye on the shadows in the tunnel. Something is watching.'
+    - 'They let us have that one, I just can''t figure out why.'
+    - '{name} checks their locker carefully before opening it. Someone tampered with it.'
+    - 'Somebody was filming our sideline. We''ll need to change our signals again.'
     - 'Good. Now they''ll come at us differently.'
-    - '{name} takes a different route to the bus without telling anyone.'
-    - 'Enjoy it, but don''t post about it. Don''t post anything.'
+    - '{name} takes a different route to the bus without telling anyone. The typical path is compromised.'
+    - 'Enjoy it, but don''t talk about it. Don''t talk about anything.'
     - '{name} keeps their playsheet folded and pocketed, even now.'
   lost_game:
     - 'I said something was off. I said it Thursday.'
-    - '{name} inspects the field surface on the way out, slowly.'
-    - 'They knew our calls. Every one of them.'
+    - '{name} inspects the field surface on the way out. It must have been tampered with.'
+    - 'They knew our plays. Every one of them.'
     - '{name} looks around the locker room and says nothing at all.'
-    - 'This didn''t just happen. This was arranged.'
+    - 'This didn''t just happen. This was arranged. I smell a plot.'
     - '{name} switches lockers for next week without explaining.'
     - 'Somebody in this building talks. I''ll find out who.'
     - '{name} takes their own playsheet home rather than leaving it.'
@@ -4398,24 +4388,20 @@ mystic:
   # a final whistle, which is what made the old postgame beat feel generic.
   won_game:
     - '{name} bows once to each end zone before leaving.'
-    - 'The balance held. That is all a win is.'
     - '{name} kneels at midfield with both palms flat on the turf.'
     - 'We were owed nothing. We received something anyway.'
     - '{name} thanks the field aloud, unhurried, while the stands empty.'
-    - 'The pattern completed itself. I only stood inside it.'
     - '{name} presses a thumb to their forehead and holds it there.'
     - 'Do not mistake this for a promise about next week.'
     - '{name} leaves the field last, walking the sideline the long way.'
   lost_game:
     - '{name} bows once to each end zone before leaving.'
-    - 'The balance moved away from us. It moves back.'
+    - 'The balance moved away from us. It will move back.'
     - '{name} kneels at midfield with both palms flat on the turf, longer this time.'
     - 'Something was taken so something could be learned. Probably.'
-    - '{name} accepts the loss with both hands, visibly.'
-    - 'The pattern is not finished. This was the middle of it.'
-    - '{name} thanks the field anyway, which unsettles a nearby rookie.'
+    - 'The pattern is not finished. This was only the middle of it.'
     - 'Do not mourn a thing that is still happening.'
-    - '{name} walks off in complete silence, at peace, which is worse.'
+    - '{name} walks off in complete silence, at peace.'
   sideline:
     - "{name} is sitting cross-legged on the bench, eyes closed."
     - "{name} is tracing a small spiral on the turf with their finger."

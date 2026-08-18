@@ -2868,6 +2868,30 @@ async def get_game_by_id(game_id: int, response: Response):
         # gameFeed is newest-first (insert(0, ...)), so serializable_plays is already newest-first
         game_dict['plays'] = serializable_plays
 
+        # ⚠️ A FINISHED GAME HELD IN MEMORY CAN HAVE AN EMPTY FEED, and then the postgame
+        # lines reach nobody. The play feed is never persisted, so after a restart the
+        # in-memory object for a played game is a shell: status Final, no plays. It is
+        # still "in memory", so the archive rebuild below — which is where the stored
+        # postgame quotes are served from — is never reached. Measured on production: game
+        # 607 came back Final with six quotes in its row and `plays: []`.
+        #
+        # Topped up here rather than by widening the not-in-memory test, because that test
+        # decides the whole payload and a finished game served live still carries live-only
+        # fields worth keeping. Only fills when the feed produced nothing, so a genuinely
+        # live game — whose feed already holds these cutaways — cannot double them up.
+        if not serializable_plays and getattr(game, 'status', None) is not None \
+                and game.status.name == 'Final':
+            try:
+                from database.connection import get_session as _pgSession
+                from game_box_score import postgamePlaysFor
+                _pgs = _pgSession()
+                try:
+                    game_dict['plays'] = postgamePlaysFor(_pgs, game_id)
+                finally:
+                    _pgs.close()
+            except Exception:
+                pass
+
         # Add live game stats snapshot (skip for Scheduled — player gameStatsDict
         # still holds data from their previous game until playGame() resets it)
         if hasattr(game, '_buildGameStatsSnapshot') and game.status.name != 'Scheduled':

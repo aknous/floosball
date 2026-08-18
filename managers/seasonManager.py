@@ -4412,6 +4412,18 @@ class SeasonManager:
             self.recordsManager.checkPlayerGameRecords(scratch)
             self.recordsManager.checkTeamGameRecords(game, scratch)
 
+            # Who was actually on the field for THIS game — players and both clubs. A tie
+            # can only be credited to them; see the note at the filter below.
+            playedHere = set()
+            for team in (getattr(game, 'homeTeam', None), getattr(game, 'awayTeam', None)):
+                if team is None:
+                    continue
+                playedHere.add(getattr(team, 'id', None))
+                for player in (getattr(team, 'rosterDict', None) or {}).values():
+                    if player is not None:
+                        playedHere.add(getattr(player, 'id', None))
+            playedHere.discard(None)
+
             for path, (value, name, holderId) in self._snapshotRecords(scratch).items():
                 previous = recordsBefore.get(path)
                 if not previous or not previous[0] or not name:
@@ -4424,6 +4436,19 @@ class SeasonManager:
                     continue
                 if holderId == prevId:
                     continue  # the holder re-achieving their own mark is not news
+                if holderId not in playedHere:
+                    # ⚠️ THE SWEEP IS LEAGUE-WIDE AND `gameStatsDict` IS STALE BETWEEN
+                    # GAMES. `checkPlayerGameRecords` walks EVERY active player, and a
+                    # player keeps last game's line until they next play — so a mark set on
+                    # Monday still equals the record on Tuesday and Wednesday, and the tie
+                    # republished on every game in between. Reported as the same line three
+                    # times, minutes apart.
+                    #
+                    # The break diff never had this problem: it compares strictly greater,
+                    # so a stale line cannot beat a record it already set. Equality can, and
+                    # does, forever. Only someone who played in THIS game can have tied
+                    # anything in it.
+                    continue
                 node = self._recordNode(path)
                 ties[path] = (value, name, holderId, prevName,
                               (node or {}).get('season'))
