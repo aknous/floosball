@@ -12567,12 +12567,33 @@ class Game:
         contest. Off by default → byte-identical (the TD block never enters the contest)."""
         return bool(getattr(self.gameRules, 'contestedScoringEnabled', False))
 
+    def _contestAttrSource(self, player):
+        """Where a player's attributes actually live.
+
+        ⚠️ THEY ARE NOT ON THE PLAYER. `gameAttributes` is the live in-game copy (league
+        compression, fatigue, funding morale and form all land there) with `attributes` as
+        the profile fallback — the same order every other resolution path uses.
+        """
+        if player is None:
+            return None
+        return getattr(player, 'gameAttributes', None) or getattr(player, 'attributes', None)
+
     def _contestAttr(self, player, attrSpec) -> float:
         """Weighted blend of a player's real attributes for a contest (spec weights sum to
-        1.0). Neutral 80 for a missing player/attr."""
-        if player is None:
+        1.0). Neutral 80 for a missing player/attr.
+
+        ⚠️ THIS READ FROM THE PLAYER OBJECT AND SILENTLY GOT NOTHING. `getattr(player,
+        'power', 80)` — and Player has no `.power`, so EVERY contest resolved 80 against 80
+        whoever was in it. The attribute ratio is the entire matchup, so with it pinned at
+        1.0 the roll was a flat coin at the base rate, identical for a burner racing a
+        lineman and the reverse, and `_selectContestDefender`'s "best-suited defender" was
+        picking between candidates that all scored 80. Reported as the contest reading like
+        flavor on top of the score rather than a gate — which is exactly what it was.
+        """
+        source = self._contestAttrSource(player)
+        if source is None:
             return 80.0
-        return float(sum(getattr(player, a, 80) * w for a, w in attrSpec))
+        return float(sum(getattr(source, a, 80) * w for a, w in attrSpec))
 
     def _selectContestDefender(self, defenseTeam, typeSpec):
         """The single best-suited on-field defender for this contest type (fastest for a
@@ -12604,8 +12625,15 @@ class Game:
             defAttr = max(1.0, self._contestAttr(defender, typeSpec['defender']))
             pDef = CONTEST_DEFENSE_BASE * (defAttr / scorerAttr) ** CONTEST_RATIO_POWER
         # Mental nudge — a clutch scorer finishes; a choker fumbles it.
-        mental = (getattr(scorer, 'pressureHandling', 0) / 10.0
-                  + (getattr(scorer, 'selfBelief', 80) - 80) / 20.0) if scorer is not None else 0.0
+        # ⚠️ Same lookup bug as the attributes above: read off the PLAYER these both
+        # returned their defaults, so the term was always exactly 0. The scales here are
+        # right once the real object is used — `pressureHandling` is a SIGNED modifier
+        # (about -7..+9, neutral 0), not a 0-100 attribute, which is why it is divided by
+        # 10 while `selfBelief` is centred on 80 first.
+        _mentalSource = self._contestAttrSource(scorer)
+        mental = ((getattr(_mentalSource, 'pressureHandling', 0) or 0) / 10.0
+                  + ((getattr(_mentalSource, 'selfBelief', 80) or 80) - 80) / 20.0
+                  ) if _mentalSource is not None else 0.0
         pDef -= max(-1.0, min(1.0, mental)) * CONTEST_MENTAL_SPAN
         pDef = max(CONTEST_DEFENSE_FLOOR, min(CONTEST_DEFENSE_CEIL, pDef))
         # Criticality: contests go haywire — the defense is far more dangerous.
