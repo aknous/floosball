@@ -190,6 +190,44 @@ class TheyOutliveTheGame(unittest.TestCase):
         self.assertEqual(_postgamePlays(Empty()), [])
         self.assertEqual(_postgamePlays(Junk()), [])
 
+    def test_aFinishedGameServedFromMemoryStillGetsThem(self):
+        """⚠️ THE READ SIDE FAILED EVEN THOUGH THE WRITE SIDE WORKED. The play feed is never
+        persisted, so after a restart the in-memory object for a played game is a shell:
+        status Final, no plays. It is still "in memory", so the endpoint never reaches the
+        archive rebuild -- which is the only place the stored quotes were served from.
+
+        Measured on production: game 607 came back `status: Final` with six quotes sitting
+        in its row and `plays: []`, while an older game correctly went `fromArchive: True`.
+        Both paths must be able to produce the lines.
+        """
+        with open('api/main.py') as fh:
+            src = fh.read()
+        block = src.split("game_dict['plays'] = serializable_plays")[1][:1600]
+        self.assertIn('postgamePlaysFor', block)
+        self.assertIn('if not serializable_plays', block,
+                      'the top-up must only fire when the feed produced nothing')
+        self.assertIn("game.status.name == 'Final'", block)
+
+    def test_theTopUpCannotDoubleUpALiveGame(self):
+        """A genuinely live game's feed already holds these cutaways -- the engine inserts
+        them there too -- so filling unconditionally would show every line twice."""
+        with open('api/main.py') as fh:
+            src = fh.read()
+        block = src.split("game_dict['plays'] = serializable_plays")[1][:1600]
+        guard = block.index('if not serializable_plays')
+        fill = block.index('postgamePlaysFor')
+        self.assertLess(guard, fill, 'the emptiness guard must precede the fill')
+
+    def test_theLookupHandlesAGameWithNothingStored(self):
+        """Games that finished before the column existed have nothing to recover, and a
+        missing game must not raise from a read path."""
+        from game_box_score import postgamePlaysFor
+
+        class Session:
+            def query(self, *a, **k):
+                raise RuntimeError('no such table')
+        self.assertEqual(postgamePlaysFor(Session(), 1), [])
+
     def test_theMigrationExists(self):
         with open('database/connection.py') as fh:
             src = fh.read()
