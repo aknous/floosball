@@ -12060,9 +12060,22 @@ class Game:
             result = 'touchback'
             dist = yardsToEndzone - PUNT_TOUCHBACK_TO
 
-        dist = max(15, min(dist, yardsToEndzone - 1))
-
-        dist = max(15, min(dist, yardsToEndzone - 1))
+        # ⚠️ THE CLAMP ORDER WAS INVERTED, AND ON A SHORT FIELD IT INVENTED YARDS.
+        # `max(15, min(dist, yardsToEndzone - 1))` takes the minimum first, so from the
+        # opponent's 5 it computed `min(dist, 4)` = 4 and then `max(15, 4)` = 15 — forcing
+        # a 15-yard punt into a 5-yard field and leaving the ball at `5 - 15 = -10`, a yard
+        # line that does not exist. Reported from a live game as "punts 15 yards, downed at
+        # the -10". Every field position inside the 15 produced a negative landing.
+        #
+        # A punt has a floor (nobody shanks it for 3 yards on purpose) but the floor can
+        # never override the field: past the goal line there is nothing to land on, so a
+        # punt that reaches it is a TOUCHBACK, which is what actually happens and what the
+        # call site and the play text already know how to render.
+        dist = max(15, dist)
+        if yardsToEndzone - dist <= 0:
+            result = 'touchback'
+        else:
+            dist = min(dist, yardsToEndzone - 1)
         return (dist, puntType, result)
 
     def _pickReturner(self, team):
