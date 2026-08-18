@@ -96,6 +96,16 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()  # column already exists — ignore
 
+        # Postgame personality lines — see the note on Game.postgame_quotes. They used to
+        # live only in the in-memory play feed, which now disappears minutes after the
+        # final whistle.
+        try:
+            conn.execute(text("ALTER TABLE games ADD COLUMN postgame_quotes TEXT"))
+            conn.commit()
+            logger.info("  Migration: added games.postgame_quotes")
+        except Exception:
+            conn.rollback()  # column already exists — ignore
+
         # Who won — see the note on Game.winner_team_id. Formats where points do not
         # decide (frames) make a score comparison the wrong question, so the winner is
         # stored rather than re-derived by every reader.

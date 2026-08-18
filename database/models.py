@@ -740,6 +740,15 @@ class Game(Base):
     # Scores
     home_score: Mapped[int] = mapped_column(Integer, default=0)
     away_score: Mapped[int] = mapped_column(Integer, default=0)
+    # The postgame personality lines — what the players said when it ended.
+    # ⚠️ PLAY-BY-PLAY IS DELIBERATELY NOT PERSISTED (owner) because the feed is large, and
+    # these rode in it, so they died with the in-memory game. That was survivable while a
+    # finished game sat in memory for ~9 hours; the rollover now fires ~15 minutes after
+    # the final whistle, so the Bleachers went empty almost immediately and the lines
+    # stopped reaching anyone. These are a handful of rows per game rather than a whole
+    # feed, and they are the closing beat of the story, so they are worth the column.
+    postgame_quotes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # ⚠️ WHO WON, PERSISTED — because in some formats the SCORES DO NOT SAY. Frames is
     # decided by frames won, with points only breaking a level match, so `home_score >
     # away_score` is simply the wrong question there. Nothing used to store this, so every

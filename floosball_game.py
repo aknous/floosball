@@ -10879,7 +10879,9 @@ class Game:
         """Pick a few players from each team and fire polarity-flavored
         postgame reactions: positive for the winner, negative for the loser.
         Inserted into gameFeed as cutaway-style entries (top of feed, since
-        they happen at the very end of the game)."""
+        they happen at the very end of the game), AND collected onto
+        `postgameQuotes` so they can be persisted — the feed itself is not."""
+        self.postgameQuotes = []
         if self.personalityManager is None:
             return
         if self.winningTeam is None or self.losingTeam is None:
@@ -10911,6 +10913,16 @@ class Game:
                 if eventDict is None:
                     continue
                 eventDict['trigger'] = 'postgame'
+                # ⚠️ STAMP THE TEAM HERE. `personalityManager` resolves it with
+                # `getattr(player, 'team', None)` and then reads `.id` / `.abbr` off it —
+                # but `player.team` is a NAME (or a team id), never a Team object, so those
+                # come back None and the rail loses the crest and the accent it is supposed
+                # to render. This loop is iterating the actual Team objects, so it can just
+                # say which side spoke. The same gap affects the other personality payloads;
+                # fixing it there needs each caller to supply a team it may not have.
+                eventDict['teamId'] = getattr(team, 'id', None)
+                eventDict['teamAbbr'] = getattr(team, 'abbr', None)
+                eventDict['won'] = (polarity == 'positive')
                 # Use cutaway-shaped feed entry so the existing renderer picks
                 # it up and shows the team avatar + accent border.
                 self.gameFeed.insert(0, {'play': {
@@ -10920,6 +10932,14 @@ class Game:
                     'quarter': self.currentQuarter,
                     'timeRemaining': '0:00',
                 }})
+                # ⚠️ ALSO KEPT OFF THE FEED, because the feed does not survive the game.
+                # Play-by-play is deliberately unpersisted (it is large), and these rode
+                # inside it — fine while a finished game sat in memory for ~9 hours, but
+                # the rollover now fires ~15 minutes after the final whistle, so the
+                # Bleachers emptied almost immediately. `seasonManager` writes this list
+                # to `games.postgame_quotes` at completion; it is a handful of rows rather
+                # than a whole feed.
+                self.postgameQuotes.append(eventDict)
 
     def _buildSidelineCutaway(self, triggerType: str = 'downtime'):
         """

@@ -261,7 +261,14 @@ class PersonalityManager:
         renderCtx = dict(ctx or {})
         renderCtx.setdefault('name', getattr(player, 'name', ''))
 
-        text = self.engine.composeReaction(personality, quirk, '', polarity, renderCtx)
+        # ⚠️ ASK FOR THE POSTGAME POOL BY NAME. This used to pass an empty event key, which
+        # falls through to positive_generic / negative_generic — pools of reactions to a
+        # PLAY. That is why the postgame beat read as more in-game chatter: a player who
+        # had just lost a game was "jogging back to the huddle". `won_game` / `lost_game`
+        # are the real thing, and they are strict, so a personality that somehow lacks them
+        # still degrades to the old generic behaviour rather than falling silent.
+        eventKey = 'won_game' if polarity == 'positive' else 'lost_game'
+        text = self.engine.composeReaction(personality, quirk, eventKey, polarity, renderCtx)
         if not text:
             return None
 

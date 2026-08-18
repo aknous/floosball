@@ -137,6 +137,29 @@ melancholy:
     - "{name} clutches the ball to their chest, walks slowly to the bench."
     - "{name} sits with the ball a moment too long before passing it on."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} watches the other team celebrate and feels almost nothing.'
+    - 'We won. I keep waiting to feel it.'
+    - '{name} is the last one off the field, walking slowly.'
+    - 'It''s over. That''s the part that gets me.'
+    - '{name} holds the game ball for a while, then sets it down gently.'
+    - 'Everyone''s so happy. I''m glad. I am.'
+    - '{name} sits in the locker room fully dressed, long after the others.'
+    - 'A good day. They don''t stay.'
+    - '{name} smiles at a teammate and means it, briefly.'
+  lost_game:
+    - '{name} takes the loss the way they take everything — quietly.'
+    - 'I knew before the half. I always know.'
+    - '{name} stays on the bench until the lights start going out.'
+    - 'It''s fine. It''s just a game. That''s what we say.'
+    - '{name} folds their towel neatly, which nobody asked for.'
+    - 'I''ll think about this one for a while.'
+    - '{name} looks back at the field once from the tunnel.'
+    - 'We had it. Somewhere in there, we had it.'
+    - '{name} says nothing at all on the way in.'
   sideline:
     - "{name} is sitting at the end of the bench, looking at absolutely nothing."
     - "{name} is drinking water way too slowly."
@@ -282,6 +305,29 @@ stoic:
     - "{name} stands with the ball still in hand and jogs off."
     - "{name} flips the ball to the nearest official and walks back."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} shakes every opposing hand before leaving the field.'
+    - 'Good. Next week.'
+    - '{name} nods once at the scoreboard and walks to the tunnel.'
+    - 'The work held.'
+    - '{name} helps a groundskeeper move a bench, still in pads.'
+    - 'We did what we said we''d do.'
+    - '{name} accepts the game ball, then hands it to a rookie.'
+    - 'No speech. {name} simply sits down and unlaces their cleats.'
+    - 'It counted. That''s all it needed to do.'
+  lost_game:
+    - '{name} shakes every opposing hand before leaving the field.'
+    - 'We were beaten. We''ll be better.'
+    - '{name} watches the tape request go in before they shower.'
+    - 'Nothing to say that film won''t say louder.'
+    - '{name} is the first one dressed and the last one to speak.'
+    - 'My fault where it was my fault.'
+    - '{name} sits with the rookies rather than alone.'
+    - 'It''s a loss. It isn''t the end of anything.'
+    - '{name} folds the loss up and puts it somewhere useful.'
   sideline:
     - "{name} is sitting perfectly still, arms folded, watching the field."
     - "{name} is alone at the end of the bench. Not waiting. Just there."
@@ -493,6 +539,29 @@ chill:
     - "Hey, free ball."
     - "{name} pops up holding the ball, gives a small thumbs-up."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'Yeah. That was a good one.'
+    - '{name} high-fives about four people on the way in, unhurried.'
+    - 'Feels nice, man.'
+    - '{name} is already talking about food.'
+    - 'We just kind of did our thing.'
+    - '{name} leans back against the locker and closes their eyes, smiling.'
+    - 'Everybody played loose. That''s the whole trick.'
+    - '{name} takes the long way to the tunnel, waving at people.'
+    - 'Good win. Good day. Good everything.'
+  lost_game:
+    - 'Ah, that''s how it goes sometimes.'
+    - '{name} shrugs, genuinely unbothered, and gets on the bus.'
+    - 'We''ll get ''em. No big deal.'
+    - '{name} is somehow the calmest person in a very quiet locker room.'
+    - 'Rough one. Still Tuesday, though.'
+    - '{name} pats a furious teammate on the back and says nothing.'
+    - 'You can''t win ''em. That''s the deal you sign.'
+    - '{name} eats a sandwich in full pads, thinking it over.'
+    - 'Next one. Same as always.'
   sideline:
     - "I'm gonna be honest, I might just go home after this."
     - "{name} is watching the cooler with quiet longing."
@@ -705,6 +774,29 @@ cool:
     - "I have reclaimed what was always going to be mine."
     - "The ball was on the ground, and I was the only individual on this field qualified to retrieve it."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'Was there another way this ended?'
+    - '{name} walks off without looking at the scoreboard once.'
+    - 'Told you. Watch the tape.'
+    - '{name} adjusts their collar and gives the crowd nothing.'
+    - 'That''s the standard. Not the ceiling.'
+    - '{name} declines the game ball with a small wave.'
+    - 'Same time next week, I assume.'
+    - '{name} is showered and gone before most of the team is off the field.'
+    - 'It was fine. Fine is enough.'
+  lost_game:
+    - 'Anyone can have a day.'
+    - '{name} walks off at exactly the same pace they walked on.'
+    - 'I''m not going to pretend it means something.'
+    - '{name} refuses to be photographed on the way in.'
+    - 'We were the better team. Scoreboard disagrees. It happens.'
+    - '{name} watches the winners celebrate with total indifference.'
+    - 'One game. Don''t build a story out of it.'
+    - '{name} is the only person in the room whose expression hasn''t changed.'
+    - 'I''ll be fine by the parking lot.'
   sideline:
     - "{name} is reclining on the bench like it's a poolside cabana."
     - "I don't usually work this hard, but I'm feeling generous."
@@ -903,6 +995,29 @@ lively:
     - "I GOT IT! I GOT IT!"
     - "{name} pops up holding the ball, points at the bench."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'THAT''S WHAT I''M TALKING ABOUT!'
+    - '{name} runs the whole sideline high-fiving anyone with a hand.'
+    - 'Y''all felt that one?!'
+    - '{name} starts a chant in the tunnel that catches on immediately.'
+    - 'WE DID THAT! ALL OF US!'
+    - '{name} is dancing before they reach the locker room. Badly.'
+    - 'I love this game. I love these guys. I love EVERYTHING.'
+    - '{name} hugs a security guard who did not expect it.'
+    - 'Somebody put some music on RIGHT NOW.'
+  lost_game:
+    - 'Nah, nah, we''re good. We''re good!'
+    - '{name} is the only loud voice in a silent locker room, on purpose.'
+    - 'Heads up! Heads UP! Next week!'
+    - '{name} claps for their own team until people join in.'
+    - 'That one hurt. So we go get the next one.'
+    - '{name} refuses to let anybody sit alone after a loss.'
+    - 'We''re not doing quiet. Not this week.'
+    - '{name} says something encouraging to every single person there.'
+    - 'Fine. Fine! We remember this one.'
   sideline:
     - "Y'all having fun? I'm having fun."
     - "{name} is leading a chant. Most of the bench is now chanting."
@@ -1125,6 +1240,29 @@ fiery:
     - "MINE FOREVER!"
     - "{name} stands up holding the ball, screams at the offense."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'THAT''S OURS! THAT''S OURS!'
+    - '{name} roars at nobody in particular for a solid five seconds.'
+    - 'NOBODY BELIEVED US. NOBODY!'
+    - '{name} slams their helmet down and immediately hugs whoever is nearest.'
+    - 'WE TOOK IT. THEY DIDN''T GIVE US ANYTHING.'
+    - '{name} is still shouting in the shower, muffled and joyful.'
+    - 'I TOLD YOU. I TOLD ALL OF YOU.'
+    - '{name} points at the opposing bench, then at the scoreboard, then walks off.'
+    - 'MORE. I WANT MORE.'
+  lost_game:
+    - 'ARE YOU KIDDING ME? ARE YOU KIDDING ME!'
+    - '{name} kicks a cooler and then apologizes to it.'
+    - 'THAT WAS OURS AND WE LET IT GO.'
+    - '{name} has to be walked off the field by two teammates.'
+    - 'I''m not okay with this. I''m not going to pretend.'
+    - '{name} sits in front of their locker vibrating with unspent rage.'
+    - 'REMEMBER THIS. ALL OF YOU. REMEMBER IT.'
+    - '{name} punches a bag of ice, which handles it well.'
+    - 'Next week somebody is going to hear about this.'
   sideline:
     - "I'm going back in. PUT ME BACK IN."
     - "{name} is staring down the kicker on the opposing team. The kicker is on the other sideline."
@@ -1332,6 +1470,29 @@ unhinged:
     - "I called it to me. I called it."
     - "{name} tucks the ball under one arm, whispers something only it can hear."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'The scoreboard finally agrees with me.'
+    - '{name} thanks the goalposts individually.'
+    - 'They can''t take this. They''ve tried before.'
+    - '{name} laughs for slightly too long in the tunnel.'
+    - 'I knew when I woke up. The ceiling told me.'
+    - '{name} celebrates by lying face-down on the field for a while.'
+    - 'This one goes in the collection.'
+    - '{name} whispers the final score to themselves, over and over.'
+    - 'Good. Good. Now they know.'
+  lost_game:
+    - 'Fine. FINE. The numbers were never on my side.'
+    - '{name} stares at the scoreboard until someone turns it off.'
+    - 'Somebody moved the field. I felt it move.'
+    - '{name} takes off one cleat and carries it into the tunnel.'
+    - 'I''ll be dealing with this at three in the morning.'
+    - '{name} says goodbye to the field. Out loud. By name.'
+    - 'This is a message. I just have to read it.'
+    - '{name} sits perfectly still in the locker room, eyes open, smiling.'
+    - 'We''ll see who''s laughing in a few weeks. I''ll be laughing.'
   sideline:
     - "i can hear the goalpost humming. it's humming a familiar song."
     - "{name} is staring at the lights. the lights are staring back."
@@ -1496,6 +1657,29 @@ wholesome:
     - "{name} hands the ball to {fumbler}, says 'we're good.'"
     - "Glad I could help. That's what we do."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} tells every single teammate they were great, individually.'
+    - 'I''m so proud of these guys. So proud.'
+    - '{name} finds the equipment staff to thank them first.'
+    - 'Everybody did their part. That''s the whole thing.'
+    - '{name} gives the game ball away before anyone can offer it to them.'
+    - 'This is the best group I''ve ever been around.'
+    - '{name} waits by the tunnel to hug each teammate coming off.'
+    - 'We get to do this again next week. How lucky is that?'
+    - '{name} signs everything a kid holds over the rail, all of it.'
+  lost_game:
+    - '{name} tells every single teammate they were great, individually.'
+    - 'That''s on all of us, and I love all of us.'
+    - '{name} checks on the player who made the last mistake, first.'
+    - 'Nobody in here needs to hear it twice. They already know.'
+    - '{name} still stops to sign for the kids on the way in.'
+    - 'We''ll fix it together. That''s the fun part, honestly.'
+    - '{name} makes sure the rookies aren''t sitting alone.'
+    - 'I''d rather lose with these guys than win with anyone else.'
+    - '{name} thanks the other team''s players for a clean game.'
   sideline:
     - "How's everyone doing? Everyone good? Everyone hydrated?"
     - "{name} is making sure the rookies have water bottles."
@@ -1695,6 +1879,29 @@ goofy:
     - "{name} pretends to pet the football like a small animal."
     - "Found a football on the ground. Finders keepers. That's a real rule."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'Did we win? We won! I was mostly guessing out there.'
+    - '{name} celebrates with the wrong team''s mascot briefly.'
+    - 'I don''t remember the second half at all. Great though.'
+    - '{name} tries a backflip. Does not attempt a second one.'
+    - 'This is the best day since the last best day.'
+    - '{name} puts their jersey on backwards for the walk in. On purpose. Probably.'
+    - 'Somebody tell my mom. Actually she was here. Tell her again.'
+    - '{name} attempts a handshake sequence nobody has agreed to.'
+    - 'Winning is SO much better than the other thing.'
+  lost_game:
+    - 'Oh. Oh, we lost. I thought we were up.'
+    - '{name} congratulates two opposing players and one of their own.'
+    - 'Wait, is it over? That''s it? Just like that?'
+    - '{name} looks for the scoreboard, finds it, sighs, looks again.'
+    - 'I was having a great time right up until the end there.'
+    - '{name} tries to cheer everyone up and makes it slightly worse.'
+    - 'We''ll just win the next one. That''s allowed, right?'
+    - '{name} eats an entire orange slice tray by themselves.'
+    - 'Somebody explain what happened. Slowly.'
   sideline:
     - "Hey. Hey. Pull my finger."
     - "{name} is wearing a teammate's helmet. The teammate is now wearing nothing."
@@ -1886,6 +2093,29 @@ alien:
     - "{name} stands holding the ball, listens to it for a moment."
     - "The ball has returned to my possession, although it took a roundabout path."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'The colony has prevailed. I am told this is good.'
+    - '{name} attempts the victory embrace. It lasts four seconds too long.'
+    - 'I have observed this ritual. Now I am inside it.'
+    - '{name} studies a teammate''s celebration, then reproduces it precisely.'
+    - 'Your species enjoys this. I begin to understand why.'
+    - '{name} collects a small piece of turf and pockets it.'
+    - 'We have taken their numbers from them. This is permitted.'
+    - '{name} bows to the scoreboard. Nobody corrects them.'
+    - 'I will report this outcome favorably.'
+  lost_game:
+    - 'The colony has not prevailed. I am told this is bad.'
+    - '{name} attempts to comfort a teammate using a gesture from a different species.'
+    - 'Their numbers exceeded ours. The rule is simple. I dislike it.'
+    - '{name} remains on the field studying the turf after everyone has gone.'
+    - 'I felt something. I have no word for it yet.'
+    - '{name} asks a teammate, sincerely, whether this happens often.'
+    - 'We will require a different approach. I have several.'
+    - '{name} records observations on their forearm tape.'
+    - 'This will be corrected.'
   sideline:
     - "{name} is examining a Gatorade cup as if it might be sentient."
     - "{name} is watching a passing seagull with intense, unblinking focus."
@@ -2047,6 +2277,29 @@ android:
     - "Object retrieved."
     - "Possession: re-acquired. Not in the report."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'Outcome: favorable. Objective complete.'
+    - '{name} executes the victory protocol. It is a nod, held slightly too long.'
+    - 'Performance within acceptable parameters.'
+    - '{name} logs the result before removing their helmet.'
+    - 'The desired result was obtained. I note this.'
+    - '{name} shakes hands at a perfectly consistent interval down the line.'
+    - 'Efficiency was high. Efficiency can be higher.'
+    - '{name} declines the celebration and begins reviewing the next opponent.'
+    - 'Recording this one. For reference.'
+  lost_game:
+    - 'Outcome: unfavorable. Analysis pending.'
+    - '{name} sits down and stares forward for exactly ninety seconds.'
+    - 'Error identified. Correction scheduled.'
+    - '{name} reviews their own errors before anyone asks them to.'
+    - 'The result does not require my feelings about it.'
+    - '{name} shakes hands at a perfectly consistent interval down the line.'
+    - 'Data acquired. The data was expensive.'
+    - '{name} rewrites something on their wristband and says nothing.'
+    - 'This will not repeat.'
   sideline:
     - "{name} is tapping their wristband three times, nodding. Acknowledgment received."
     - "{name} is watching the opposing offense the way an analyst watches surveillance footage."
@@ -2167,6 +2420,29 @@ prophet:
   recovered_fumble:
     - "The ball returned to the path."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'I saw this ending. I did not enjoy the waiting.'
+    - '{name} watches the celebration as though it already happened.'
+    - 'It was always going to be this. You just hadn''t arrived yet.'
+    - '{name} touches the field once before leaving it.'
+    - 'The result was fixed. The path was ours to walk.'
+    - '{name} tells a teammate exactly what they were about to say.'
+    - 'Ask me about next week. Actually, don''t.'
+    - '{name} smiles at nothing, several seconds before the good news arrives.'
+    - 'One down. I know how many are left.'
+  lost_game:
+    - 'I saw this too. That''s the part nobody asks about.'
+    - '{name} was already walking to the tunnel before the last whistle.'
+    - 'It had to happen here so it doesn''t happen later.'
+    - '{name} accepts the loss with the calm of someone rereading a book.'
+    - 'This is a cost. It buys something. You''ll see.'
+    - '{name} tells a grieving teammate, gently, that it gets better in six weeks.'
+    - 'Don''t ask me if it was avoidable.'
+    - '{name} looks at the scoreboard as if confirming a spelling.'
+    - 'The shape of the season is unchanged.'
   sideline:
     - "{name} is sitting very still, eyes distant, threading futures."
     - "{name} is tracing a symbol on their wristband they have traced before."
@@ -2276,6 +2552,29 @@ cursed:
   recovered_fumble:
     - "{name} cradles the ball, waits for the bad news."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'We won. Which means something is owed.'
+    - '{name} accepts congratulations while glancing over their shoulder.'
+    - 'Enjoy it. It''s borrowed.'
+    - '{name} counts the wins so far, then stops counting, visibly.'
+    - 'Every good thing sends a bill eventually.'
+    - '{name} refuses to touch the game ball.'
+    - 'It went right. That''s what worries me.'
+    - '{name} leaves the field by a different route than they entered.'
+    - 'One day this luck turns. Today wasn''t the day.'
+  lost_game:
+    - 'There it is. Right on schedule.'
+    - '{name} nods at the scoreboard like an old acquaintance.'
+    - 'I felt it coming on Tuesday.'
+    - '{name} is the least surprised person in the building.'
+    - 'This is the one I''ve been carrying around all week.'
+    - '{name} sits calmly while everyone else takes it badly.'
+    - 'Told you it wouldn''t last. It never does.'
+    - '{name} checks something inside their locker and shuts it quickly.'
+    - 'The bill came. I paid it. We move.'
   sideline:
     - "{name} is on the bench, watching the field, waiting for the next bad thing."
     - "{name} is exhaling slowly, eyes on the scoreboard."
@@ -2380,6 +2679,29 @@ time_traveler:
   recovered_fumble:
     - "{name} cradles the ball, comments on the texture."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'In my time this game is famous. Slightly differently, but famous.'
+    - '{name} asks a teammate to remember this exact moment for them.'
+    - 'The record says we won. Good. The record was right.'
+    - '{name} takes a small photograph of the scoreboard. With no camera.'
+    - 'This one holds up. I''ve checked.'
+    - '{name} congratulates a rookie by their eventual nickname.'
+    - 'You''ll all tell this story wrong later. It''s fine.'
+    - '{name} touches the goalpost like it''s a museum piece.'
+    - 'Enjoy it now. Later it''s just a line in a table.'
+  lost_game:
+    - 'This one''s in the record too. I hoped I''d misremembered.'
+    - '{name} watches the clock hit zero with no reaction whatsoever.'
+    - 'It happens here. It matters less than you think.'
+    - '{name} tells a devastated teammate the exact week it stops hurting.'
+    - 'I''ve read about this loss. It''s shorter in print.'
+    - '{name} walks off looking at their wrist, where there is nothing.'
+    - 'The season still ends how it ends.'
+    - '{name} pats the losing scoreboard on the way past. Familiar.'
+    - 'Fine. On to the part I actually like.'
   sideline:
     - "{name} is examining a Gatorade cup as if it were a museum piece."
     - "{name} is mouthing something in a tongue that does not yet exist."
@@ -2485,6 +2807,29 @@ sleepwalker:
   recovered_fumble:
     - "{name} cradles the ball, asleep through it all."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} is congratulated warmly and does not wake up for any of it.'
+    - 'Did we... is it over? Is it Thursday?'
+    - '{name} walks to the tunnel, eyes closed, perfectly on course.'
+    - 'I had a great dream about this. Oh. It wasn''t a dream.'
+    - '{name} celebrates about forty seconds after everyone else, briefly.'
+    - 'Somebody said we won. I''ll take their word for it.'
+    - '{name} falls asleep on the bench still holding their helmet.'
+    - 'Good game, everyone. Whatever happened.'
+    - '{name} is guided into the locker room by a patient teammate.'
+  lost_game:
+    - '{name} sleeps through the entire postgame speech.'
+    - 'We lost? Huh. It felt fine from in there.'
+    - '{name} is gently woken up to be told the game ended some time ago.'
+    - 'I''ll be sad about it when I''m awake.'
+    - '{name} wanders toward the wrong tunnel and is redirected.'
+    - 'Wake me for the next one. Actually don''t. I''ll be there.'
+    - '{name} is asleep before the bus leaves the lot.'
+    - 'That''s a shame. That''s genuinely a shame.'
+    - '{name} nods at nothing, eyes shut, and shuffles off.'
   sideline:
     - "{name} is asleep on the bench, helmet still on, somehow upright."
     - "{name} is asleep with their eyes slightly open. It's unsettling."
@@ -2594,6 +2939,29 @@ superstitious:
     - "{name} kisses the ball before handing it over."
     - "The charm worked."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} leaves the field on the exact same path they took last win.'
+    - 'Nobody wash anything. Nobody. I''m serious.'
+    - '{name} taps the goalpost three times, then twice more to be safe.'
+    - 'It''s the socks. It''s been the socks the whole time.'
+    - '{name} keeps the same seat on the bus and glares at anyone near it.'
+    - 'Same everything next week. Same everything.'
+    - '{name} pockets a blade of turf and won''t explain why.'
+    - 'I didn''t step on a single line today. Not one.'
+    - '{name} refuses to say the word ''streak'' out loud.'
+  lost_game:
+    - '{name} retraces the whole pregame routine, looking for the mistake.'
+    - 'Somebody changed something. I know somebody changed something.'
+    - '{name} throws out a wristband they have worn for two seasons.'
+    - 'It was the new gloves. I knew it when I put them on.'
+    - '{name} taps the goalpost anyway, out of habit, and looks betrayed.'
+    - 'That''s my fault. I ate the wrong thing.'
+    - '{name} takes a completely different route to the tunnel this time.'
+    - 'New everything next week. New everything.'
+    - '{name} counts something on their fingers and comes up short.'
   sideline:
     - "{name} is re-lacing a single cleat in the sacred order."
     - "{name} is kissing their lucky wristband, mouthing a number."
@@ -2693,6 +3061,29 @@ oblivious:
   recovered_fumble:
     - "{name} stands holding the ball, smiles at the camera, hands it to a teammate."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} celebrates enthusiastically, one full beat behind everyone.'
+    - 'Great game! Great game everybody! What was the score?'
+    - '{name} congratulates two players from the other team, warmly.'
+    - 'I thought we had another quarter. This is better.'
+    - '{name} jogs toward the wrong tunnel and corrects, eventually.'
+    - 'Are we happy? We seem happy. I''m happy.'
+    - '{name} is still looking for their helmet, which they are wearing.'
+    - 'Somebody tell me what happened at some point.'
+    - '{name} high-fives a member of the grounds crew.'
+  lost_game:
+    - '{name} celebrates for a second before noticing nobody else is.'
+    - 'Oh, that''s why everyone''s quiet. Got it.'
+    - '{name} asks who won and is told, gently, twice.'
+    - 'I thought that was going great, honestly.'
+    - '{name} congratulates an opposing player at some length.'
+    - 'Well, I had fun. Was I not supposed to?'
+    - '{name} takes their pads off in the wrong locker room.'
+    - 'Next week then! Is it next week?'
+    - '{name} waves cheerfully at a very unhappy coach.'
   sideline:
     - "{name} is waving at someone they think they recognize on the broadcast crew."
     - "{name} is staring at a cloud, missing whatever the coach just said."
@@ -2787,6 +3178,29 @@ prankster:
   recovered_fumble:
     - "{name} pops up with the ball, mimes 'who, me?' to the ref."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} has hidden something in three different lockers already.'
+    - 'Somebody''s cleats are full of ice. That''s all I''ll say.'
+    - '{name} pours a cooler over a teammate who saw it coming and let it happen.'
+    - 'This is a WIN win. That means it''s legally prank season.'
+    - '{name} switches two teammates'' bags during the celebration.'
+    - 'I''ve been saving this one for a good day.'
+    - '{name} conducts a fake postgame interview with the water cooler.'
+    - 'We won, which means nobody can be mad at me until Tuesday.'
+    - '{name} gives a heartfelt speech that turns out to be a movie quote.'
+  lost_game:
+    - '{name} keeps it quiet. Even they know when to keep it quiet.'
+    - 'Not today. I''ve got material, but not today.'
+    - '{name} puts a hand on a teammate''s shoulder, entirely sincerely.'
+    - 'Rough one. I''ll get everybody back on Wednesday.'
+    - '{name} sneaks one small harmless prank in anyway. It helps.'
+    - 'Somebody''s got to make them laugh eventually. Might as well be me.'
+    - '{name} does the fake interview bit and gets one real laugh out of it.'
+    - 'That stunk. Genuinely. No bit.'
+    - '{name} carries someone else''s bag to the bus without comment.'
   sideline:
     - "{name} is loosening a teammate's chinstrap when they aren't looking."
     - "{name} is pulling a teammate's water bottle away just before they reach it."
@@ -2894,6 +3308,29 @@ vain:
   recovered_fumble:
     - "{name} stands up holding the ball, angles toward the camera before handing it over."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} fixes their hair before the cameras find them. They find them.'
+    - 'Winning suits me. Most things do.'
+    - '{name} does a slow lap of the field so everyone gets a look.'
+    - 'I''d like a copy of every photograph. Every one.'
+    - '{name} checks their reflection in a visor before the handshakes.'
+    - 'This is a good look for the whole organization, frankly.'
+    - '{name} arranges their jersey carefully before agreeing to a hug.'
+    - 'Somebody get the angle from the far side. That''s my side.'
+    - '{name} is the last one off the field and knows exactly why.'
+  lost_game:
+    - '{name} declines every camera on the way in.'
+    - 'I don''t want this recorded. Any of it.'
+    - '{name} keeps their helmet on well past the point of usefulness.'
+    - 'That''s not what I look like. That''s not how I play.'
+    - '{name} fixes their hair anyway, out of pure reflex, and hates it.'
+    - 'One bad day does not become the picture of me.'
+    - '{name} showers first, dresses fastest, and leaves before the press.'
+    - 'I''ll be worth watching again next week.'
+    - '{name} covers a jersey number with a towel walking past the tunnel.'
   sideline:
     - "{name} is checking their reflection in a teammate's visor."
     - "{name} is smoothing their hair very deliberately."
@@ -3015,6 +3452,29 @@ fossil:
   recovered_fumble:
     - "{name} cradles the ball, an old companion."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'I have won this game several hundred times. It stays pleasant.'
+    - '{name} shakes hands with the slow patience of someone with time.'
+    - 'The young ones celebrate harder. They should. It''s newer for them.'
+    - '{name} sits down carefully and takes a very long time with their laces.'
+    - 'A win is a win. I stopped ranking them a long while ago.'
+    - '{name} tells a story from a season nobody in the room was alive for.'
+    - 'That''s another one. Put it with the others.'
+    - '{name} pats the turf on the way past, like an old dog.'
+    - 'Good. Now we do it again, which is the hard part.'
+  lost_game:
+    - 'I have lost this game several hundred times. It stays unpleasant.'
+    - '{name} takes it with the calm of someone who has taken worse.'
+    - 'You''ll forget this one. I promise you''ll forget it.'
+    - '{name} sits with the youngest player in the room without saying much.'
+    - 'The trick isn''t not losing. Nobody''s managed that.'
+    - '{name} tells a story about a far worse defeat, which helps.'
+    - 'Another one for the pile. The pile is very large.'
+    - '{name} takes longer than anyone to get out of their pads.'
+    - 'It hurts the same as the first one. That part never got easier.'
   sideline:
     - "{name} is sitting very still on the bench, perhaps remembering."
     - "{name} is watching a young teammate stretch, recalling when stretching was less needed."
@@ -3106,6 +3566,29 @@ ghost:
   recovered_fumble:
     - "{name} pops up with the ball, hands it over, vanishes."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} is not in the celebration photograph. {name} was standing right there.'
+    - '{name} leaves the field before the final whistle finishes sounding.'
+    - 'Good win.'
+    - '{name} is already dressed when the team reaches the locker room.'
+    - '{name} accepts a handshake and gives no indication of having enjoyed it.'
+    - 'It went how it went.'
+    - '{name} declines to be interviewed by simply not being there.'
+    - '{name} is congratulated by a teammate who then can''t remember doing it.'
+    - 'Fine. Good. Next.'
+  lost_game:
+    - '{name} leaves the field before the final whistle finishes sounding.'
+    - '{name} is not in the locker room. Nobody saw them go.'
+    - 'Bad win to give away.'
+    - '{name} sits in the corner and is not noticed for eleven minutes.'
+    - '{name} declines to be interviewed by simply not being there.'
+    - 'It went how it went.'
+    - '{name} is the only player whose expression cannot be recalled afterwards.'
+    - '{name} exits through a door the team did not know opened.'
+    - 'Fine. Next.'
   sideline:
     - "{name} is at the far end of the bench, alone."
     - "{name} is disappearing into the bench area between plays."
@@ -3204,6 +3687,29 @@ perfectionist:
   recovered_fumble:
     - "{name} pops up, hands the ball over, demands the tablet."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} is already listing their own mistakes before anyone congratulates them.'
+    - 'We won. I was still bad in the third.'
+    - '{name} asks for the film before they take their pads off.'
+    - 'Nobody say ''perfect''. It wasn''t close to perfect.'
+    - '{name} accepts the win with a small, dissatisfied nod.'
+    - 'Two plays. Two plays I want back from a win.'
+    - '{name} stays on the field walking through a route, alone, after everyone leaves.'
+    - 'It''s a good result. It isn''t good work.'
+    - '{name} thanks a teammate for covering the thing they got wrong.'
+  lost_game:
+    - '{name} names their own errors, in order, unprompted.'
+    - 'That''s mine. Don''t let anyone tell you otherwise.'
+    - '{name} is watching the film before the bus arrives.'
+    - 'I know exactly where it went. I knew while it was going.'
+    - '{name} stays on the field alone, walking through it again.'
+    - 'Everyone else was fine. Look at me.'
+    - '{name} refuses to be talked out of the blame, politely and firmly.'
+    - 'I''ll have it fixed by Wednesday. It should never have needed fixing.'
+    - '{name} writes something down and puts it in their locker.'
   sideline:
     - "{name} is filling another page of their sideline notebook."
     - "{name} is mouthing the play call to themselves repeatedly."
@@ -3323,6 +3829,29 @@ paranoid:
     - "Wait for the flag. There's going to be a flag."
     - "Got there before they could redirect it."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} celebrates with one eye on the tunnel.'
+    - 'They let us have that one. I want to know why.'
+    - '{name} checks their locker carefully before opening it.'
+    - 'Somebody was filming our sideline. I saw the angle.'
+    - '{name} counts the handshakes. All of them.'
+    - 'Good. Now they''ll come at us differently.'
+    - '{name} takes a different route to the bus without telling anyone.'
+    - 'Enjoy it, but don''t post about it. Don''t post anything.'
+    - '{name} keeps their playsheet folded and pocketed, even now.'
+  lost_game:
+    - 'I said something was off. I said it Thursday.'
+    - '{name} inspects the field surface on the way out, slowly.'
+    - 'They knew our calls. Every one of them.'
+    - '{name} looks around the locker room and says nothing at all.'
+    - 'This didn''t just happen. This was arranged.'
+    - '{name} switches lockers for next week without explaining.'
+    - 'Somebody in this building talks. I''ll find out who.'
+    - '{name} takes their own playsheet home rather than leaving it.'
+    - 'We''ll be ready. We''ll be ready and quiet.'
   sideline:
     - "{name} is covering their mouth while talking to a coach."
     - "{name} is writing something in a notebook they won't let anyone else see."
@@ -3446,6 +3975,29 @@ poetic:
     - "What was lost has, briefly, returned. The balance always shifts."
     - "It came to my hand. Not for long, perhaps. But for now."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - 'A brief and unreasonable joy, and then the bus.'
+    - '{name} stands in the empty end zone a while, saying nothing.'
+    - 'We were, for an afternoon, exactly enough.'
+    - '{name} watches the lights go down over an emptying stadium.'
+    - 'The scoreboard is a poem with only two words in it.'
+    - '{name} touches the turf once, as if thanking it.'
+    - 'Everything ends. Some things end well.'
+    - '{name} walks in last, unhurried, entirely content.'
+    - 'Let the record show it was beautiful. Briefly. It was.'
+  lost_game:
+    - 'And so the afternoon closes its hand.'
+    - '{name} sits in the dim tunnel long after the noise has gone.'
+    - 'We were almost. Almost is its own country.'
+    - '{name} looks back at the field the way one looks at a departing train.'
+    - 'The scoreboard is a poem with only two words in it.'
+    - 'Grief, that punctual guest.'
+    - '{name} folds their gloves together with unusual care.'
+    - 'It will be beautiful again. Not today.'
+    - '{name} leaves the field without hurry, as though it were owed that.'
   sideline:
     - "{name} is mouthing a half-line of verse, lips barely moving."
     - "{name} is at the far end of the bench composing what appears to be a poem."
@@ -3562,6 +4114,29 @@ dramatic:
   recovered_fumble:
     - "{name} cradles the ball like a found infant. Possibly weeping."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} falls to their knees at midfield and stays there.'
+    - 'THEY SAID IT COULDN''T BE DONE. THEY SAID IT!'
+    - '{name} embraces a teammate for an extremely long time.'
+    - 'Write it down! WRITE IT DOWN!'
+    - '{name} addresses the empty upper deck with both arms raised.'
+    - 'This is the greatest day of my ENTIRE LIFE. So far.'
+    - '{name} weeps openly and is not remotely embarrassed.'
+    - 'Somebody hand me a microphone. Anybody.'
+    - '{name} exits the field walking backwards so they can keep waving.'
+  lost_game:
+    - '{name} lies flat on the turf and refuses several offers of help.'
+    - 'IS THIS WHAT WE ARE? IS THIS IT?'
+    - '{name} delivers a devastating speech to a locker room of four people.'
+    - 'I have never known a pain like this. Well. Once.'
+    - '{name} stares into a camera that is not currently recording.'
+    - 'We were SO close. SO close!'
+    - '{name} tears their wristband off and holds it aloft, meaningfully.'
+    - 'This will define us. Somehow. Eventually.'
+    - '{name} is the last person off the field, by a wide and deliberate margin.'
   sideline:
     - "{name} is saluting the camera, holding it for an unsettlingly long time."
     - "{name} is staring into the middle distance, lips moving silently. Soliloquy in progress."
@@ -3682,6 +4257,29 @@ trash_talker:
   recovered_fumble:
     - "{name} cradles the ball, mouths 'thanks for the gift' at the offense."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} says goodbye to each opposing player individually, by name.'
+    - 'Check the tape. Check the SCORE. Check both.'
+    - '{name} points at the scoreboard, then cups a hand to their ear.'
+    - 'They talked all week. I''ll wait for the rest of it.'
+    - '{name} thanks the opposing crowd sincerely, which is worse somehow.'
+    - 'That''s on film forever. Forever!'
+    - '{name} asks a reporter to read the final score out loud.'
+    - 'Same time next year. Bring more.'
+    - '{name} walks the long way past the opposing bench.'
+  lost_game:
+    - '{name} shakes hands and says almost nothing, which is unlike them.'
+    - 'Talk now. I''ll be here in eight weeks.'
+    - '{name} nods at an opponent''s celebration and files it away.'
+    - 'Enjoy it. Write it down somewhere you''ll find it later.'
+    - '{name} refuses to look at the scoreboard on the way past.'
+    - 'One game. I''ve got a long memory and a good schedule.'
+    - '{name} says something quietly to one opposing player and keeps walking.'
+    - 'They earned it. That''s the annoying part.'
+    - '{name} is the first one out of the tunnel and the last one to speak.'
   sideline:
     - "{name} is watching the opposing offense, working on their next line."
     - "{name} is mouthing something at a specific opposing player from across the field."
@@ -3795,6 +4393,29 @@ mystic:
   recovered_fumble:
     - "What was loose, I gathered. That is the flow."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} bows once to each end zone before leaving.'
+    - 'The balance held. That is all a win is.'
+    - '{name} kneels at midfield with both palms flat on the turf.'
+    - 'We were owed nothing. We received something anyway.'
+    - '{name} thanks the field aloud, unhurried, while the stands empty.'
+    - 'The pattern completed itself. I only stood inside it.'
+    - '{name} presses a thumb to their forehead and holds it there.'
+    - 'Do not mistake this for a promise about next week.'
+    - '{name} leaves the field last, walking the sideline the long way.'
+  lost_game:
+    - '{name} bows once to each end zone before leaving.'
+    - 'The balance moved away from us. It moves back.'
+    - '{name} kneels at midfield with both palms flat on the turf, longer this time.'
+    - 'Something was taken so something could be learned. Probably.'
+    - '{name} accepts the loss with both hands, visibly.'
+    - 'The pattern is not finished. This was the middle of it.'
+    - '{name} thanks the field anyway, which unsettles a nearby rookie.'
+    - 'Do not mourn a thing that is still happening.'
+    - '{name} walks off in complete silence, at peace, which is worse.'
   sideline:
     - "{name} is sitting cross-legged on the bench, eyes closed."
     - "{name} is tracing a small spiral on the turf with their finger."
@@ -3897,6 +4518,29 @@ knight:
   recovered_fumble:
     - "{name} cradles the ball as one cradles a recovered standard."
 
+  # Postgame — the game is OVER and this is how they take the result.
+  # Strict pools: the generic play lines read as a reaction to a SNAP, not to
+  # a final whistle, which is what made the old postgame beat feel generic.
+  won_game:
+    - '{name} bows to the opposing captain before leaving the field.'
+    - 'Well fought. Truly.'
+    - '{name} personally thanks each opposing lineman for a clean game.'
+    - 'The victory is the team''s. The credit is theirs to divide.'
+    - '{name} helps an opposing player up before celebrating anything.'
+    - 'We held the line we said we would hold.'
+    - '{name} refuses the game ball and asks that it go to a rookie.'
+    - 'Honor to them. They gave us a real afternoon.'
+    - '{name} is the last of their team to leave the handshake line.'
+  lost_game:
+    - '{name} bows to the opposing captain before leaving the field.'
+    - 'They were the better side today. Say so plainly.'
+    - '{name} congratulates the opposing captain at length and means every word.'
+    - 'The defeat is mine to carry. The lessons are ours to share.'
+    - '{name} stays in the handshake line until every hand is shaken.'
+    - 'We were beaten fairly. There is no smaller word for it.'
+    - '{name} straightens their jersey before facing the tunnel.'
+    - 'No excuses will be offered. None are available.'
+    - '{name} thanks the crowd that just watched them lose.'
   sideline:
     - "{name} is sitting with hands folded, surveying the field as if from a saddle."
     - "{name} is polishing a wristband with great care."
