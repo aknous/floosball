@@ -4616,13 +4616,43 @@ class Game:
         ezMin = 1 if getattr(self.format, 'key', '') == 'bust' else SIDELINE_GOAL_ENDZONE_MIN
         if 'endzone' not in used and ezMin <= yte <= SIDELINE_GOAL_ENDZONE_RANGE:
             return ('endzone', float(yte))
+        # ⚠️ THE NEAREST IN-RANGE PAIR WINS, AND THAT HAS TO BE COMPUTED RATHER THAN
+        # ORDERED. A fixed priority order was correct only while the windows could not
+        # overlap; the midrange pair's reach meets midfield's exactly at the 50, so at
+        # that spot both match — midfield at d=0 (a tap) and midrange at d=20 (a heave).
+        # Ordering midrange first therefore picked the HARDER shot at the one yard line
+        # where the easy one exists, and silently disabled the closing-window urgency,
+        # which only applies to the midfield pair. Distance decides.
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD, SIDELINE_GOAL_MIDRANGE_RANGE
+        candidates = []
+        if SIDELINE_GOAL_MIDRANGE_YARD and 'midrange' not in used:
+            d = yte - SIDELINE_GOAL_MIDRANGE_YARD
+            if 0 <= d <= SIDELINE_GOAL_MIDRANGE_RANGE:
+                candidates.append(('midrange', float(d)))
         if 'midfield' not in used:
             # Only valid while APPROACHING the 50 (d = yards before it). Once the LOS is
             # PAST midfield (d < 0), the hoops are behind the offense — no longer a target.
             d = yte - SIDELINE_GOAL_MIDFIELD_YARD
             if 0 <= d <= SIDELINE_GOAL_MIDFIELD_RANGE:
-                return ('midfield', float(d))
+                candidates.append(('midfield', float(d)))
+        if candidates:
+            return min(candidates, key=lambda pair: pair[1])
         return None
+
+    def _hoopFieldPositions(self) -> dict:
+        """Where the optional third pair stands, for the field graphic. Empty when the
+        pair is off, so a client that knows nothing about it is unaffected."""
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD
+        if not SIDELINE_GOAL_MIDRANGE_YARD:
+            return {}
+        return {'midrangeYard': int(SIDELINE_GOAL_MIDRANGE_YARD)}
+
+    def _hoopPairCount(self) -> int:
+        """How many sideline-hoop pairs a drive has. ⚠️ This was the literal `2` inside
+        `_hoopPointsNeeded`, which silently under-counted the moment a third pair existed —
+        a team needing 3 points would have read its hoops as unable to reach."""
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD
+        return 3 if SIDELINE_GOAL_MIDRANGE_YARD else 2
 
     def _hoopScoreWinsNow(self) -> bool:
         """Would an OFFENSIVE score by the team on offense end the game the instant it
@@ -4739,7 +4769,8 @@ class Game:
         if not self._sidelineGoalsActive():
             return None
         pts = int(getattr(self.gameRules, 'sidelineGoalPoints', 1))
-        remainingHoop = max(0, 2 - len(getattr(self, '_hoopPairResult', None) or {})) * pts
+        remainingHoop = max(0, self._hoopPairCount()
+                            - len(getattr(self, '_hoopPairResult', None) or {})) * pts
         if remainingHoop <= 0:
             return None
         # ⚠️ DARTS ASKS A DIFFERENT QUESTION ENTIRELY, and everything below this branch is
@@ -11555,13 +11586,24 @@ class Game:
                 'limit': getattr(self.gameRules, 'driveClockLimit', 60),
                 'low': self._driveClockLow(),
             } if self._driveClockActive() else None),
-            # Sideline Goals — the two hoop pairs' state for THIS drive (open / made /
+            # Sideline Goals — each hoop pair's state for THIS drive (open / made /
             # missed), so the field graphic can color them (yellow / green / red).
             # `attackingHome` = which end zone the offense is driving toward.
+            # ⚠️ `midrangeYard` is sent rather than hardcoded client-side: the graphic draws
+            # hoops at fixed field positions, so moving the pair in constants.py would
+            # otherwise leave it drawing the old spot. Absent when the pair is switched off,
+            # and the client falls back to the two-pair field.
             'sidelineGoals': ({
                 'active': True,
+                'pairs': self._hoopPairCount(),
+                **self._hoopFieldPositions(),
                 'midfield': (getattr(self, '_hoopPairResult', None) or {}).get('midfield', 'open'),
                 'endzone': (getattr(self, '_hoopPairResult', None) or {}).get('endzone', 'open'),
+                # Only present when the third pair is switched on; the field graphic
+                # ignores an unknown key, so an older client degrades to drawing two.
+                'midrange': ((getattr(self, '_hoopPairResult', None) or {}).get('midrange', 'open')
+                             if self._hoopPairCount() > 2 else None),
+
                 'attackingHome': self.offensiveTeam is self.homeTeam,
             } if getattr(self.gameRules, 'sidelineGoalsEnabled', False) else None),
             'momentum': round(getattr(self, 'momentum', 0.0), 1),

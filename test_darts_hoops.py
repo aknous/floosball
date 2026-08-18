@@ -93,8 +93,13 @@ class TheOffenseKnowsAHoopIsTheOnlyWay(unittest.TestCase):
         game = dartsGame(offScore=X).game
         self.assertIsNone(game._hoopPointsNeeded(0))
 
-    def test_bothPairsSpentMeansNoHoopToWant(self):
-        game = dartsGame(offScore=X - 1, hoopsUsed=('midfield', 'redzone')).game
+    def test_everyPairSpentMeansNoHoopToWant(self):
+        """⚠️ Spends EVERY pair, read from the engine rather than a literal — the count
+        changed from two to three when the midrange pair was added, and a hardcoded pair
+        list here would have gone on passing while testing nothing."""
+        game = dartsGame(offScore=X - 1).game
+        allPairs = ('midfield', 'endzone', 'midrange')[:game._hoopPairCount()]
+        game._hoopPairResult = {pair: 'missed' for pair in allPairs}
         self.assertIsNone(game._hoopPointsNeeded(0))
 
     def test_standardFootballIsUntouched(self):
@@ -166,11 +171,17 @@ class TheMidfieldWindowShuts(unittest.TestCase):
 
     def test_theGeometryIsWhatTheFixtureAssumes(self):
         """Guard the yard numbers this class reasons about: yardsToEndzone 64 down to 50 is
-        approaching the 50, and 48 is past it."""
+        approaching the 50.
+
+        ⚠️ Past the 50 the MIDFIELD pair is gone, but the field is no longer empty there —
+        the third (midrange) pair covers yte 30-50, so the assertion is that the midfield
+        pair specifically has dropped out, not that nothing is in range."""
         self.assertEqual(self._rate(64)[0], 'midfield')
         self.assertEqual(self._rate(52)[0], 'midfield')
         game = dartsGame(offScore=X - 1, ballOn=48).game
-        self.assertIsNone(game._hoopTarget(), 'past midfield the pair should be gone')
+        target = game._hoopTarget()
+        self.assertNotEqual((target or (None,))[0], 'midfield',
+                            'past midfield that pair should be gone')
 
     def test_theShotGetsMoreUrgentAsTheWindowShuts(self):
         far = self._rate(64)[1]      # 14 yards before the crossing
@@ -194,6 +205,76 @@ class TheMidfieldWindowShuts(unittest.TestCase):
         not a scripted play."""
         rate = self._rate(50)[1]
         self.assertLess(rate, 1.0)
+
+
+class TheThirdPairFillsTheDeadZone(unittest.TestCase):
+    """⚠️ WITH ONLY TWO PAIRS THERE WAS A 31-YARD DEAD ZONE between the end-zone band
+    (yte 1-18) and the midfield window (yte 50-64), and measurement showed that is exactly
+    where a team one point short spent its time: 81% of stuck snaps had nothing in range.
+    The third pair sits at the 30 with a 20-yard reach, covering yte 30-50.
+
+    ⚠️ What it buys is CONVERSION, not speed. Across three seeds the stuck spell did not
+    reliably shorten -- a third pair does not make possessions arrive faster -- but those
+    spells end in a landing far more often: 68 -> 74%, 58 -> 70%, 62 -> 70%, with target
+    finishes overall 67 -> 81%.
+    """
+
+    def _pairAt(self, ballOn):
+        game = dartsGame(offScore=X - 1, ballOn=ballOn).game
+        return (game._hoopTarget() or (None, None))[0]
+
+    def test_theDeadZoneIsSmallerThanItWas(self):
+        """The old field had nothing between the 19 and the 49. Most of that is covered."""
+        covered = [yte for yte in range(19, 50) if self._pairAt(yte) is not None]
+        self.assertGreater(len(covered), 15,
+                           'the third pair is not covering the gap it exists for')
+
+    def test_itIsTheMidrangePairDoingIt(self):
+        self.assertEqual(self._pairAt(40), 'midrange')
+        self.assertEqual(self._pairAt(31), 'midrange')
+
+    def test_theNearestPairWinsWhereWindowsOverLAP(self):
+        """⚠️ THE BUG THIS INTRODUCED. Midrange reaches to the 50, exactly where midfield
+        opens, so at that spot both match -- midfield at d=0 (a tap) and midrange at d=20
+        (a heave). A fixed priority order picked the harder shot, and silently disabled the
+        closing-window urgency, which applies only to the midfield pair."""
+        game = dartsGame(offScore=X - 1, ballOn=50).game
+        pair, distance = game._hoopTarget()
+        self.assertEqual(pair, 'midfield')
+        self.assertEqual(distance, 0.0)
+
+    def test_theEndZonePairIsStillPreferredUpClose(self):
+        self.assertEqual(self._pairAt(12), 'endzone')
+
+    def test_thePairCountIsReadNotAssumed(self):
+        """⚠️ `_hoopPointsNeeded` had the literal `2` for how many hoops a drive holds. Left
+        alone it would have under-counted with three pairs, so a team needing 3 would have
+        read its hoops as unable to reach."""
+        game = dartsGame(offScore=X - 1).game
+        self.assertEqual(game._hoopPairCount(), 3)
+        with open('floosball_game.py') as fh:
+            body = fh.read().split('def _hoopPointsNeeded')[1].split('\n    def ')[0]
+        self.assertIn('self._hoopPairCount()', body)
+        self.assertNotIn('max(0, 2 -', body)
+
+    def test_threeHoopsCanCarryANeedOfThree(self):
+        """The point of the count being right: with three pairs open, a need of 3 is
+        reachable on hoops alone -- though a field goal lands it too, so the card is only
+        'critical' below a field goal."""
+        game = dartsGame(offScore=X - 3).game
+        self.assertEqual(game._hoopPairCount(), 3)
+
+    def test_switchingItOffRestoresTheTwoPairField(self):
+        """One constant reverts it, which is what made the experiment cheap."""
+        import constants
+        original = constants.SIDELINE_GOAL_MIDRANGE_YARD
+        try:
+            constants.SIDELINE_GOAL_MIDRANGE_YARD = 0
+            game = dartsGame(offScore=X - 1, ballOn=40).game
+            self.assertIsNone(game._hoopTarget())
+            self.assertEqual(game._hoopPairCount(), 2)
+        finally:
+            constants.SIDELINE_GOAL_MIDRANGE_YARD = original
 
 
 class ADisciplinedSideManagesTheApproach(unittest.TestCase):

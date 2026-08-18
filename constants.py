@@ -2291,6 +2291,30 @@ SIDELINE_GOAL_MAX_MAKE = 0.92            # ceiling — never automatic
 SIDELINE_GOAL_MIDFIELD_YARD = 50         # the midfield pair sits at the 50
 SIDELINE_GOAL_MIDFIELD_RANGE = 14        # midfield pair in range this many yards BEFORE the 50 only
                                          # (once the LOS is PAST midfield the hoops are behind you)
+# ⚠️ EXPERIMENTAL THIRD PAIR (2026-08-18). With only the midfield (50) and end-zone (18-in)
+# pairs there is a 31-yard DEAD ZONE between them, and measurement showed that is where a
+# team one point short spends its time: 81% of snaps while stuck have no hoop in range at
+# all. This pair sits between the two to give that stretch something to shoot at. Reached
+# like the midfield pair — while APPROACHING it only, since once the ball is past, the
+# hoops are behind the offense. Set `SIDELINE_GOAL_MIDRANGE_YARD = 0` to switch it off and
+# get the shipped two-pair field back.
+# Placement was measured over 170 games an arm against the two-pair field. At the 30 with a
+# 20-yard reach it covers yte 30-50, meeting the midfield window exactly and leaving only
+# yte 19-29 dead. Alternatives tried: 34/14 (covers 34-48, leaves two gaps) and 25/25
+# (covers 25-49, but reaches so far back the shot is long and rarely makes).
+#
+# ⚠️ WHAT IT ACTUALLY BUYS IS CONVERSION, NOT SPEED. Across three seeds the time a team
+# spends one or two short did NOT reliably shorten (7.4 -> 5.9, 6.0 -> 6.9, 7.4 -> 7.4
+# minutes), because a third pair does not make possessions arrive faster. What it does
+# reliably is end those spells in a LANDING instead of a fizzle: 68 -> 74%, 58 -> 70%,
+# 62 -> 70%, and target finishes overall 67 -> 81%. Snaps-while-stuck with something to
+# shoot at go 22% -> 30%. Game length is unchanged (~141 plays).
+#
+# The cost is a little comeback tension: the chaser closed the gap on 46% of stuck spells
+# with two pairs and 40% with three.
+SIDELINE_GOAL_MIDRANGE_YARD = 30         # the third pair sits at the 30
+SIDELINE_GOAL_MIDRANGE_RANGE = 20        # in range this many yards BEFORE it
+
 SIDELINE_GOAL_ENDZONE_MIN = 3            # end-zone pair reachable from the ... 3 ...
 SIDELINE_GOAL_ENDZONE_RANGE = 18         # ... out to the 18 (the red zone; not from the goal line itself)
 # Play-caller: attempt chance when a fresh pair is in range (a low-risk point-grab now).
