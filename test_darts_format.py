@@ -219,6 +219,29 @@ class ThePresetIsLive(unittest.TestCase):
         keys = [p['key'] for p in GAME_FORMAT_PRESETS]
         self.assertIn('gf_bust_18', keys, 'the darts preset is still held back')
 
+    def test_thePresetTargetIsInsideTheCertifiedRange(self):
+        """⚠️ THE TARGET HAS A USABLE RANGE. Darts is only a game about landing on a number
+        while the number is reachable inside four quarters; above that the clock decides it
+        and the format is football with a ceiling. Measured over 50 games per target, share
+        decided by LANDING on it: 10 -> 98%, 12 -> 98%, 15 -> 88%, 18 -> 84%, 21 -> 66%,
+        24 -> 58%, 30 -> 30%.
+
+        ⚠️ `GameRules.targetScore` DEFAULTS to 30, which belongs to the 'target' format
+        ("first to 30"), so a darts preset that simply omits the target inherits one it
+        plays badly at. This guards the shipped preset and any added later."""
+        from constants import GAME_FORMAT_PRESETS
+        for preset in GAME_FORMAT_PRESETS:
+            patch = preset.get('patch', {})
+            if patch.get('gameFormat') != 'bust':
+                continue
+            target = patch.get('targetScore')
+            self.assertIsNotNone(
+                target, f"{preset['key']} leaves targetScore at the 'target' default of 30")
+            self.assertLessEqual(
+                target, 18,
+                f"{preset['key']} sets a target of {target}; above 18 the clock decides "
+                f"most games and darts stops being about landing on the number")
+
     def test_thePresetNoLongerCarriesThePrerequisiteItself(self):
         """⚠️ Removing it was the fix, not an oversight: leaving it in the preset would
         hide a regression in `bundledRules` for exactly the activation path people use."""

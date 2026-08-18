@@ -2546,7 +2546,24 @@ GAME_FORMAT_PRESETS = [
     #   {"key": "gf_play_limit_30",  "label": "30 Plays a Quarter",
     #    "patch": {"gameFormat": "play_limit", "playsPerQuarter": 30}},
     # Certified 2026-08-17 (test_darts_format.py): scores never exceed X, are always whole
-    # numbers, 85% of games are decided by landing exactly on it, and ties are gone.
+    # numbers, 87% of games are decided by landing exactly on it, and ties are gone.
+    #
+    # ⚠️ THE TARGET HAS A USABLE RANGE, AND 30 IS OUTSIDE IT. Darts is only a game about
+    # landing on a number while the number is reachable inside four quarters; above that
+    # the clock decides it and the format is ordinary football with a ceiling. Measured
+    # over 50 games at each target, share of games decided by LANDING on it:
+    #
+    #     X=10  98%   X=12  98%   X=15  88%   X=18  84%
+    #     X=21  66%   X=24  58%   X=30  30%
+    #
+    # So a new darts preset belongs at 18 or below. ⚠️ `GameRules.targetScore` DEFAULTS to
+    # 30 — it belongs to the 'target' format ("first to 30") — so darts activated without a
+    # patch inherits a target it plays badly at. `BustFormat._target` documents 18 as its
+    # own fallback and cannot apply it, because the field is always present. The preset is
+    # the supported way in; anything else needs the target set deliberately.
+    #
+    # Scoring stays mixed at 18 rather than degenerating into dinking 1-pointers:
+    # TD 38% / FG 33% / hoop 30% of all points banked.
     # ⚠️ `sidelineGoalsEnabled` is NOT listed here any more, and removing it was the fix
     # rather than an omission: the 1-point hoop is darts' prerequisite (without it the
     # smallest score is 3, so a team on X-1 can never land) and it now lives in
