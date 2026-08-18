@@ -196,6 +196,124 @@ class TheMidfieldWindowShuts(unittest.TestCase):
         self.assertLess(rate, 1.0)
 
 
+class ADisciplinedSideManagesTheApproach(unittest.TestCase):
+    """⚠️ The midfield pair is the only scoring chance a drive can drive PAST. A chunk gain
+    over the 50 is an ordinary good outcome that destroys it, and for a team needing 1 or 2
+    points that is one of only two ways left to score. So a disciplined side stops trying to
+    go downfield and works the sideline the hoops stand on (owner, 2026-08-17).
+
+    Both terms are required to execute: the COACH has to see the situation
+    (`clockManagement`) and the TEAM has to hold the discipline to run short when a big
+    play is available (`collectiveDiscipline`)."""
+
+    def _probe(self, ballOn, discipline=98, clockManagement=98):
+        scenario = dartsGame(offScore=X - 1, ballOn=ballOn)
+        game = scenario.game
+        for player in game.homeTeam.rosterDict.values():
+            live = getattr(player, 'gameAttributes', None) if player else None
+            if live is not None:
+                live.discipline = discipline
+        game.homeTeam.coach.clockManagement = clockManagement
+        weights = {'run': 100.0, 'shortPass': 100.0, 'mediumPass': 100.0,
+                   'longPass': 50.0, 'deepPass': 20.0}
+        out = game._applySituationalMods(dict(weights), game.homeScore - game.awayScore,
+                                         game.homeTeam.coach)
+        total = sum(out.values())
+        diff = game.homeScore - game.awayScore
+        sideline = sum(game._shouldTargetSideline(diff, game.homeTeam.coach)
+                       for _ in range(400)) / 400.0
+        return {
+            'approach': game._dartsHoopApproach(),
+            'downfield': (out.get('longPass', 0) + out.get('deepPass', 0)) / total,
+            'control': (out['run'] + out.get('shortPass', 0)) / total,
+            'sideline': sideline,
+        }
+
+    def test_farOutThereIsNoConflictAtAll(self):
+        """⚠️ Beyond the horizon advancing IS what the offense wants, so this must be
+        completely inert — otherwise darts teams would never drive."""
+        self.assertEqual(self._probe(75)['approach'], 0.0)
+
+    def test_itTightensAsTheWindowCloses(self):
+        approaches = [self._probe(ballOn)['approach'] for ballOn in (75, 64, 56, 51)]
+        self.assertEqual(approaches, sorted(approaches))
+        self.assertGreater(approaches[-1], 0.7, 'no restraint at the crossing')
+
+    def test_theDisciplinedSideStopsGoingDownfield(self):
+        near = self._probe(51)
+        self.assertLess(near['downfield'], 0.10)
+        self.assertGreater(near['control'], 0.75)
+
+    def test_aLooseSideJustPlaysOn(self):
+        """THE POINT OF MAKING IT AN ATTRIBUTE. An undisciplined team drives straight past
+        its own scoring chance, which is the mistake worth being able to make."""
+        loose = self._probe(51, discipline=62, clockManagement=62)
+        disciplined = self._probe(51)
+        self.assertLess(loose['approach'], 0.15)
+        self.assertGreater(disciplined['downfield'] * 2, loose['downfield'] * 0.5)
+        self.assertLess(loose['control'], disciplined['control'])
+
+    def test_bothTermsAreNeeded(self):
+        """A sharp coach with a loose roster, or the reverse, gets part of the effect —
+        neither alone should produce the full clamp."""
+        full = self._probe(51)['approach']
+        coachOnly = self._probe(51, discipline=62)['approach']
+        teamOnly = self._probe(51, clockManagement=62)['approach']
+        for partial in (coachOnly, teamOnly):
+            self.assertLess(partial, full)
+            self.assertGreater(partial, 0.0)
+
+    def test_itWorksTheSideline(self):
+        """The hoops stand on the boundary, so the throw that gets closer to the thing you
+        intend to shoot at is the one going that way."""
+        self.assertGreater(self._probe(51)['sideline'], 0.7)
+        self.assertLess(self._probe(51, discipline=62, clockManagement=62)['sideline'], 0.2)
+
+    def test_pastMidfieldItStops(self):
+        """The pair is gone whatever happens now, so there is nothing left to protect and
+        the offense should go back to playing football."""
+        scenario = dartsGame(offScore=X - 1, ballOn=45)
+        self.assertEqual(scenario.game._dartsHoopApproach(), 0.0)
+
+    def test_aSpentPairStopsIt(self):
+        game = dartsGame(offScore=X - 1, ballOn=56, hoopsUsed=('midfield',)).game
+        self.assertEqual(game._dartsHoopApproach(), 0.0)
+
+    def test_noHoopWantedNoRestraint(self):
+        """Needing exactly a field goal, the hoop is worth nothing and the drive should be
+        run normally."""
+        game = dartsGame(offScore=X - 3, ballOn=56).game
+        self.assertEqual(game._dartsHoopApproach(), 0.0)
+
+    def test_noOtherFormatIsAffected(self):
+        scenario = Scenario()
+        scenario.situation(quarter=2, clock=600, offense='home', offScore=17, defScore=3,
+                           down=1, distance=10, ballOn=56, offTimeouts=3, defTimeouts=3)
+        self.assertEqual(scenario.game._dartsHoopApproach(), 0.0)
+
+    def test_theTeamCompositeReadsTheLivePlayers(self):
+        """⚠️ `gameAttributes`, not `attributes` — compression, fatigue, morale and form all
+        land on the live copy, and a decision made during a game should see the same
+        players the plays do."""
+        game = dartsGame(offScore=X - 1, ballOn=56).game
+        for player in game.homeTeam.rosterDict.values():
+            live = getattr(player, 'gameAttributes', None) if player else None
+            if live is not None:
+                live.discipline = 100
+        high = game.homeTeam.collectiveDiscipline()
+        for player in game.homeTeam.rosterDict.values():
+            live = getattr(player, 'gameAttributes', None) if player else None
+            if live is not None:
+                live.discipline = 60
+        self.assertLess(game.homeTeam.collectiveDiscipline(), high)
+
+    def test_anEmptyRosterReadsNeutralRatherThanLoose(self):
+        from floosball_team import Team
+        team = Team.__new__(Team)
+        team.rosterDict = {}
+        self.assertEqual(team.collectiveDiscipline(), 0.5)
+
+
 class ADeadDrivePunts(unittest.TestCase):
     """Both pairs spent and the need under a field goal: nothing can score this possession."""
 

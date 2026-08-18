@@ -3671,6 +3671,21 @@ DARTS_HOOP_HUNT_AGGR_SPAN = 0.35
 DARTS_HOOP_CLOSING_YARDS = 6.0
 DARTS_HOOP_LAST_CHANCE_LIFT = 0.40
 
+# ⚠️ APPROACHING THE MIDFIELD HOOP, A DISCIPLINED SIDE STOPS TRYING TO GO DOWNFIELD (owner,
+# 2026-08-17). It is the only scoring chance a drive can drive PAST: a chunk gain over the
+# 50 is an ordinary good outcome that destroys the pair, and for a team needing 1-2 points
+# that is one of only two ways left to score. So the deep and long tiers are damped, the
+# controlled ones lifted, and the pass works the sideline the hoops stand on.
+#
+# Scaled by `_dartsHoopApproach`, which blends the COACH seeing it (`clockManagement`, the
+# attribute the engine already uses for situational reads) with the TEAM holding the
+# discipline to run short when a big play is there (`collectiveDiscipline`) — then by how
+# little ROOM is left. Beyond the horizon there is no conflict at all: advancing IS what the
+# offense wants, so the term goes to zero and normal football is played.
+DARTS_APPROACH_HORIZON_YARDS = 25.0
+DARTS_APPROACH_CONTROL_BIAS = 1.9      # run + short pass, at full discipline
+DARTS_APPROACH_DOWNFIELD_DAMP = 0.25   # long + deep, at full discipline
+
 # Run bias while LEADING on a darts drive that can no longer score (both hoop pairs spent,
 # need under a field goal). The drive is worth nothing but clock, and if time expires the
 # higher score wins — so a leader drains it. Runs keep the clock moving; an incompletion

@@ -2381,6 +2381,17 @@ class Game:
         if self._isNoHuddle():
             return True
 
+        # ⚠️ DARTS: THE HOOPS ARE ON THE SIDELINE. Working toward the midfield pair means
+        # working the boundary — the throw that gets the offense closer to the target it
+        # intends to shoot at is the one going that way, not the one going downfield. This
+        # is not the clock-stopping reason every other branch here is about; it is field
+        # position aimed at a specific object on the field. Rolled rather than forced, and
+        # weighted by the same discipline term that damps the deep tiers, so a loose side
+        # still flings it around (owner, 2026-08-17).
+        _dartsApproach = self._dartsHoopApproach()
+        if _dartsApproach > 0 and _random.random() < _dartsApproach:
+            return True
+
         # Drive Clock (seconds): a low drive clock is its own reason to get out of
         # bounds — a stopped game clock pauses the drive clock, so the next huddle
         # doesn't burn it and the offense buys more plays to score. Applies any
@@ -4017,6 +4028,32 @@ class Game:
                 if _tier in weights:
                     _mul(_tier, 1.0 / DARTS_DEAD_DRIVE_RUN_BIAS)
 
+        # ⚠️ DARTS, APPROACHING THE MIDFIELD HOOP: stop trying to go downfield. A chunk
+        # play over the 50 is an ordinary good outcome that DESTROYS the pair, and for a
+        # team needing 1 or 2 points that is one of only two ways left to score. So the
+        # deep and long tiers are damped and the controlled ones lifted, in proportion to
+        # how disciplined the side is and how little room is left — see `_dartsHoopApproach`.
+        # ⚠️ Applied with `_flat`, NOT `_mul`. `_mul` scales every situational adjustment by
+        # the coach's clock IQ, and this term already carries that coach read inside it;
+        # routing it through `_mul` would square the coach and leave a merely-average staff
+        # barely restraining anything.
+        _approach = self._dartsHoopApproach()
+        if _approach > 0:
+            from constants import DARTS_APPROACH_CONTROL_BIAS, DARTS_APPROACH_DOWNFIELD_DAMP
+            self.play.insights['dartsApproach'] = round(_approach, 3)
+            lift = 1.0 + (DARTS_APPROACH_CONTROL_BIAS - 1.0) * _approach
+            damp = 1.0 - (1.0 - DARTS_APPROACH_DOWNFIELD_DAMP) * _approach
+            _flat('run', lift)
+            if 'shortPass' in weights:
+                _flat('shortPass', lift)
+            for _tier in ('longPass', 'deepPass'):
+                if _tier in weights:
+                    _flat(_tier, damp)
+            if 'mediumPass' in weights:
+                # Medium is the boundary case: it can reach the window from outside it
+                # without clearing the 50, so it is neither hunted nor suppressed hard.
+                _flat('mediumPass', 1.0 - (1.0 - damp) * 0.5)
+
         # Coach attributes normalized to [0, 1] for personality math.
         # Raw normalization yields [-1, +1] around neutral (80); shift+scale
         # to [0, 1] so median coaches land at 0.5 and the trailing/leading
@@ -4598,6 +4635,56 @@ class Game:
         if getattr(self, 'otPeriod', 0) >= 2:
             return True
         return bool(getattr(self, 'otSecondPossComplete', False))
+
+    def _dartsHoopApproach(self) -> float:
+        """Darts: how hard the offense is MANAGING ITS FIELD POSITION toward the midfield
+        hoop. 0 = not doing this at all, 1 = every call bent around it.
+
+        ⚠️ THE MIDFIELD PAIR IS THE ONLY SCORING CHANCE A DRIVE CAN DRIVE PAST. It is
+        reachable only while approaching the 50, so an ordinary good play — a chunk gain
+        over midfield — destroys it. For a team needing 1 or 2 points that is not progress,
+        it is the drive throwing away one of its two remaining ways to score. So a
+        disciplined side stops trying to go downfield and works the sideline for controlled
+        yardage until it has taken the shot (owner, 2026-08-17).
+
+        Two terms, because it takes both to execute:
+          * the COACH sees the situation — `clockManagement` is the attribute the rest of
+            the engine already uses for "does this coach understand where they are";
+          * the TEAM has to hold the discipline to actually run short of a big play when
+            one is available, which is `collectiveDiscipline`.
+
+        Scaled by ROOM. Twenty-five yards out there is no conflict — advancing is exactly
+        what the offense wants — so this returns ~0 and normal football is played. The
+        closer the ball gets to the crossing the less room there is for a play to be
+        merely good, and the stronger the restraint becomes.
+        """
+        if getattr(self.format, 'key', '') != 'bust':
+            return 0.0
+        offense = getattr(self, 'offensiveTeam', None)
+        if offense is None:
+            return 0.0
+        used = getattr(self, '_hoopPairResult', None) or {}
+        if 'midfield' in used:
+            return 0.0          # already spent; there is nothing left to protect
+        isHome = offense is self.homeTeam
+        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        if self._hoopPointsNeeded(scoreDiff) not in ('critical', 'helpful'):
+            return 0.0          # no use for the hoop, so no reason to bend the drive
+        from constants import (SIDELINE_GOAL_MIDFIELD_YARD, DARTS_APPROACH_HORIZON_YARDS,
+                               COACH_ATTR_NEUTRAL)
+        room = self.yardsToEndzone - SIDELINE_GOAL_MIDFIELD_YARD
+        if room < 0:
+            return 0.0          # already past it; the pair is gone whatever happens now
+        nearness = 1.0 - min(1.0, room / DARTS_APPROACH_HORIZON_YARDS)
+        coach = getattr(offense, 'coach', None)
+        clockIq = getattr(coach, 'clockManagement', COACH_ATTR_NEUTRAL) if coach else COACH_ATTR_NEUTRAL
+        coachTerm = max(0.0, min(1.0, (float(clockIq) - 60.0) / 40.0))
+        teamTerm = 0.5
+        try:
+            teamTerm = float(offense.collectiveDiscipline())
+        except Exception:
+            pass
+        return max(0.0, min(1.0, 0.5 * (coachTerm + teamTerm) * nearness))
 
     def _dartsDriveIsDead(self) -> bool:
         """Darts: this drive can no longer put a single point on the board.
