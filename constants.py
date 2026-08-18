@@ -3644,6 +3644,40 @@ GLITCH_SURGE_FLOOR_FP = 11.0
 # would burn a glitch's whole life on one week of refreshes.
 GLITCH_MAX_TRIGGERS = 3
 
+# ─── Darts (bust format) — hoop hunting and dead drives ─────────────────────────
+# How often the offense throws at a sideline hoop when a hoop is the ONLY score that
+# does not bust (remaining need below a field goal, so a TD is held up short and a FG is
+# refused). Coach-scaled (owner, 2026-08-17): an aggressive coach hunts it, a cautious one
+# plays field position and waits for a better spot, so the same position produces different
+# football from different clubs. Aggressiveness runs 60-100 around a neutral 80, giving
+# 0.20 at the cautious end, 0.55 neutral, 0.90 at the aggressive end.
+#
+# ⚠️ It applies on EVERY down including the last, which inverts the standing final-down
+# guard on purpose — that guard exists because a hoop consumes the down without gaining
+# yards, and under a target there is no scoring play it could be forfeiting.
+DARTS_HOOP_HUNT_BASE = 0.55
+DARTS_HOOP_HUNT_AGGR_SPAN = 0.35
+
+# ⚠️ THE MIDFIELD HOOP IS USE-IT-OR-LOSE-IT (owner, 2026-08-17): it is only reachable while
+# APPROACHING the 50, and once the line of scrimmage crosses it that pair is behind the
+# offense and gone for the drive. Driving forward is normally pure progress; here it
+# destroys one of the two scoring options a team needing 1-2 points has. So within
+# `DARTS_HOOP_CLOSING_YARDS` of the crossing the shot gets up to `_LAST_CHANCE_LIFT` added
+# to the coach-scaled chance, ramping as the window shuts — an aggressive coach becomes
+# near-certain and even a cautious one usually takes the last look.
+#
+# The END-ZONE pair needs no equivalent: it OPENS as the offense advances rather than
+# closing, so there is never a last chance at it.
+DARTS_HOOP_CLOSING_YARDS = 6.0
+DARTS_HOOP_LAST_CHANCE_LIFT = 0.40
+
+# Run bias while LEADING on a darts drive that can no longer score (both hoop pairs spent,
+# need under a field goal). The drive is worth nothing but clock, and if time expires the
+# higher score wins — so a leader drains it. Runs keep the clock moving; an incompletion
+# stops it and hands the time back. Not applied when trailing: that team wants the drive
+# over so it can restock its hoops on the next possession.
+DARTS_DEAD_DRIVE_RUN_BIAS = 2.5
+
 # Added trigger chance per ADDITIONAL glitched card in the same lineup (owner, 2026-08-17).
 # Rewards FIELDING several at once rather than merely owning them, which is the half that
 # pairs with expiry above: the stockpile is gone, so what is left to reward is assembling a
