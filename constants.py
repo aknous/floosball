@@ -1780,6 +1780,20 @@ FEED_AUTOPOST_BY_RATING = {5: 1, 4: 1, 3: None, 2: -1, 1: -1}
 # floor. A GM is rated by the club's fans, so the same "a small club must still
 # be able to speak" argument applies verbatim; see SENTIMENT_MIN_RATERS.
 # (Kept as its own name so a GM-specific floor stays possible later.)
+# ⚠️ A RATING GOES STALE. A fan casts one standing opinion per subject and can change it
+# whenever they like, but nothing ever expired it — a 1-star cast in season 1 counted at
+# full weight in season 5, against a GM who had since won two titles. Each season of age
+# shrinks a rating's pull TOWARD NEUTRAL; re-rating restores it to full.
+#
+# ⚠️ IT SHRINKS THE DEVIATION, NOT THE WEIGHT IN AN AVERAGE. A weighted mean over voters
+# who are all equally stale is identical to the plain mean — the weights cancel and decay
+# does nothing. So each vote's normalized sentiment is scaled individually and the mean is
+# taken over the RATER COUNT, which is what actually pulls an aged verdict back to 0.
+SENTIMENT_DECAY_PER_SEASON = 0.6
+# Never all the way to nothing: a fan who felt strongly and never came back still counts
+# for something, and a hard 0 would make old clubs read as unanimously indifferent.
+SENTIMENT_DECAY_FLOOR = 0.15
+
 GM_SENTIMENT_MIN_VOTERS = 1
 
 # ---- GM turnover: fired / retire / leave (AFO plan Part C) ----
@@ -1812,6 +1826,36 @@ GM_FIRE_MAX_CHANCE = 0.75     # even a catastrophe isn't a certainty
 
 # Voluntary departure — independent of record, so a hostile fanbase can drive out
 # a GM who is WINNING. Sentiment weights are dormant until plan Part D.
+# ⚠️ TENURE PRESSURE — one bad season is not the only way to lose a job, and until this
+# existed it was the ONLY way. `fireChance`'s deficit term reads the LATEST season alone,
+# so a GM parked just above the 0.45 baseline generated exactly 0.0% risk forever: a club
+# going 13-15 every year had an 86% chance of keeping the same GM across five seasons, and
+# a reliably-slightly-below-average GM was the most secure in the league.
+#
+# These accumulate over a GM's tenure AT THIS CLUB and are added to the single-season
+# deficit, then the whole thing is capped by GM_FIRE_MAX_CHANCE as before.
+#
+# ⚠️ A PLAYOFF WIN RESETS THE STALL CLOCK, nothing else does. That is what separates the
+# two failure modes the owner named: missing the postseason entirely is worse per season
+# than reaching it and going out immediately, but neither counts as getting anywhere.
+GM_FIRE_STALL_GRACE = 2        # seasons without a playoff win before pressure starts
+GM_FIRE_DROUGHT_STEP = 0.07    # per season MISSING the playoffs, past the grace
+GM_FIRE_STAGNATION_STEP = 0.04 # per season reaching them and not winning a round
+# Treading water on RECORD, a separate axis from the postseason. The band is deliberately
+# centred on .500 and stops below the fire baseline (0.45), so a season bad enough to
+# trigger the deficit term is not also counted here.
+# ⚠️ The upper bound is a WINNING season's floor, not a nice round number. At 0.575 a
+# 16-12 club sat inside the band, so a GM winning playoff rounds every year still accrued
+# "treading water" pressure — caught by test_gm_tenure. 0.54 is 15-13 over 28 games: the
+# top of the plateau, below which nobody would call the season a success.
+GM_FIRE_MEDIOCRITY_BAND = (0.45, 0.54)
+GM_FIRE_MEDIOCRITY_GRACE = 3   # three .500-ish seasons is a plateau, not yet a verdict
+GM_FIRE_MEDIOCRITY_STEP = 0.03
+# ⚠️ Ceiling on the whole tenure contribution. Accumulated mediocrity must never rival a
+# catastrophic season -- 4-24 is a firing offence on its own, and a long grey tenure is a
+# reason to be at risk, not a certainty.
+GM_FIRE_TENURE_MAX = 0.30
+
 GM_LEAVE_BASE_CHANCE = 0.03
 GM_LEAVE_SENTIMENT_WEIGHT = 0.35
 GM_FIRE_SENTIMENT_WEIGHT = 0.25
@@ -2247,6 +2291,30 @@ SIDELINE_GOAL_MAX_MAKE = 0.92            # ceiling — never automatic
 SIDELINE_GOAL_MIDFIELD_YARD = 50         # the midfield pair sits at the 50
 SIDELINE_GOAL_MIDFIELD_RANGE = 14        # midfield pair in range this many yards BEFORE the 50 only
                                          # (once the LOS is PAST midfield the hoops are behind you)
+# ⚠️ EXPERIMENTAL THIRD PAIR (2026-08-18). With only the midfield (50) and end-zone (18-in)
+# pairs there is a 31-yard DEAD ZONE between them, and measurement showed that is where a
+# team one point short spends its time: 81% of snaps while stuck have no hoop in range at
+# all. This pair sits between the two to give that stretch something to shoot at. Reached
+# like the midfield pair — while APPROACHING it only, since once the ball is past, the
+# hoops are behind the offense. Set `SIDELINE_GOAL_MIDRANGE_YARD = 0` to switch it off and
+# get the shipped two-pair field back.
+# Placement was measured over 170 games an arm against the two-pair field. At the 30 with a
+# 20-yard reach it covers yte 30-50, meeting the midfield window exactly and leaving only
+# yte 19-29 dead. Alternatives tried: 34/14 (covers 34-48, leaves two gaps) and 25/25
+# (covers 25-49, but reaches so far back the shot is long and rarely makes).
+#
+# ⚠️ WHAT IT ACTUALLY BUYS IS CONVERSION, NOT SPEED. Across three seeds the time a team
+# spends one or two short did NOT reliably shorten (7.4 -> 5.9, 6.0 -> 6.9, 7.4 -> 7.4
+# minutes), because a third pair does not make possessions arrive faster. What it does
+# reliably is end those spells in a LANDING instead of a fizzle: 68 -> 74%, 58 -> 70%,
+# 62 -> 70%, and target finishes overall 67 -> 81%. Snaps-while-stuck with something to
+# shoot at go 22% -> 30%. Game length is unchanged (~141 plays).
+#
+# The cost is a little comeback tension: the chaser closed the gap on 46% of stuck spells
+# with two pairs and 40% with three.
+SIDELINE_GOAL_MIDRANGE_YARD = 30         # the third pair sits at the 30
+SIDELINE_GOAL_MIDRANGE_RANGE = 20        # in range this many yards BEFORE it
+
 SIDELINE_GOAL_ENDZONE_MIN = 3            # end-zone pair reachable from the ... 3 ...
 SIDELINE_GOAL_ENDZONE_RANGE = 18         # ... out to the 18 (the red zone; not from the goal line itself)
 # Play-caller: attempt chance when a fresh pair is in range (a low-risk point-grab now).
@@ -2501,10 +2569,83 @@ GAME_FORMAT_PRESETS = [
     #    "patch": {"gameFormat": "target", "targetScore": 30}},
     #   {"key": "gf_play_limit_30",  "label": "30 Plays a Quarter",
     #    "patch": {"gameFormat": "play_limit", "playsPerQuarter": 30}},
-    #   {"key": "gf_bust_18",        "label": "Darts (land on 18)",
-    #    "patch": {"gameFormat": "bust", "targetScore": 18, "sidelineGoalsEnabled": True,
-    #              "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
-    #              "extraPointPoints": 1, "twoPointConversionPoints": 2}},
+    # Certified 2026-08-17 (test_darts_format.py): scores never exceed X, are always whole
+    # numbers, 87% of games are decided by landing exactly on it, and ties are gone.
+    #
+    # ⚠️ THE TARGET HAS A USABLE RANGE, AND 30 IS OUTSIDE IT. Darts is only a game about
+    # landing on a number while the number is reachable inside four quarters; above that
+    # the clock decides it and the format is ordinary football with a ceiling. Measured
+    # over 50 games at each target, share of games decided by LANDING on it:
+    #
+    #     X=10  98%   X=12  98%   X=15  88%   X=18  84%
+    #     X=21  66%   X=24  58%   X=30  30%
+    #
+    # ⚠️ SHIPPED AT 21 (owner, 2026-08-18: "higher is better. 21-24"), trading some target
+    # finishes for a longer game — two thirds still land on the number, pre-halftime
+    # finishes drop 35% -> 19%, and a game runs ~138 plays against a standard ~157. 24 is
+    # the far end of the owner's range and was not taken: it puts 46% of games on the
+    # clock, which is the point where the format stops being about landing on a number.
+    # Anything above 24 is out of the certified band entirely.
+    #
+    # ⚠️ `GameRules.targetScore` DEFAULTS to 30 — it belongs to the 'target' format ("first
+    # to 30") — so darts activated without a patch inherits a target it plays badly at.
+    # `BustFormat._target` documents its own fallback and cannot apply it, because the
+    # field is always present. The preset is the supported way in; anything else needs the
+    # target set deliberately.
+    #
+    # Scoring stays mixed at 18 rather than degenerating into dinking 1-pointers:
+    # TD 38% / FG 33% / hoop 30% of all points banked.
+    #
+    # GAME LENGTH at the shipped 21: the target is reached at a median 73% of regulation
+    # (~44 of 60 game-minutes, ~141 plays against a standard game's ~155, i.e. 91% of a
+    # full game), split Q2 18% / Q3 38% / Q4 43% — none in Q1. 18% finish before halftime,
+    # and ⚠️ THOSE ARE THE DECIDED GAMES, not truncated close ones: measured at 18, the
+    # loser's median score in a pre-halftime finish was 6 of 18 and NOT ONE was within 4,
+    # against a loser's median of 12 after halftime. The format mercy-rules itself.
+    #
+    # ⚠️ THE LAST POINT IS THE HARD ONE, AND THE WAIT IS FIELD POSITION RATHER THAN
+    # MARKSMANSHIP. Measured over 90 games at 21: a team that gets within 2 of the target
+    # sits there a median 30 plays / 8 game-minutes (p90 ~19 minutes), and 39% never land
+    # at all. Per spell it gets only ~2 snaps with a hoop in range out of ~12 stuck, takes
+    # ~2 shots and makes ~1, across ~2.6 drives.
+    #
+    # The diagnosis: 81% of stuck snaps have NO hoop in range. The pairs sit at the 50 and
+    # inside the 18, so a team one point short spends most of its downs in the dead zone
+    # between them with literally nothing to shoot at. It is not hesitancy (61% of in-range
+    # chances are taken) and not accuracy (68% of those go in). If that wait is ever
+    # judged too long, the lever is hoop GEOMETRY — a third pair, or a wider midfield
+    # window — NOT the trigger rates, and darts already has precedent for its own geometry
+    # (`_hoopTarget` lowers the end-zone pair's near edge to the 1 for this format alone).
+    #
+    # The wait is what makes the endgame a contest rather than a formality, and the numbers
+    # say it is a real one: while a team is stuck the chaser scores 58% of the time, closes
+    # the gap 45%, and draws level or goes ahead 10%, with the stuck team going on to lose
+    # 10%. The hoop is the winning play in 56% of all target finishes (field goal 28%,
+    # touchdown 15%), so it is the format's primary win condition and not a consolation.
+    # ⚠️ Deliberately NOT covered by a test — these are emergent distributions with enough
+    # run-to-run spread to make any threshold flaky (see the note in test_darts_format.py).
+    #
+    # A TIE AT THE END OF REGULATION GOES TO ORDINARY OVERTIME — `checkEarlyEnd` returns
+    # None when nobody has landed, so the standard clock/OT path takes it, and darts
+    # scoring still applies inside OT (a busting score is still void, so it is usually
+    # decided by landing). Measured over 270 games at 18/21/24: OT is reached 0-2% of the
+    # time, every OT game ended by landing on the target, and there were ZERO draws. The
+    # engine's `MAX_OT_PERIODS` (5) backstop accepts a tie and was never reached.
+    # ⚠️ `sidelineGoalsEnabled` is NOT listed here any more, and removing it was the fix
+    # rather than an omission: the 1-point hoop is darts' prerequisite (without it the
+    # smallest score is 3, so a team on X-1 can never land) and it now lives in
+    # `BustFormat.bundledRules`, where every activation path gets it. It was here alone,
+    # so darts switched on any other way was a different game — 8% of finishes landed on
+    # X instead of 85%.
+    # ⚠️ `chaosEligible: False` KEEPS DARTS OUT OF CRITICALITY CHAOS (owner, 2026-08-18)
+    # while the format is still being worked on. Chaos picks a format per game at random,
+    # hides it from users, and the results COUNT — which is the wrong place to debut a
+    # format whose endgame is still being tuned. It stays a normal vote preset, so a league
+    # can still choose it deliberately; this only stops it arriving by surprise.
+    {"key": "gf_bust_21",        "label": "Darts (land on 21)", "chaosEligible": False,
+     "patch": {"gameFormat": "bust", "targetScore": 21,
+               "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
+               "extraPointPoints": 1, "twoPointConversionPoints": 2}},
 ]
 RULE_VOTE_CANDIDATES["gameFormat"]["presets"] = GAME_FORMAT_PRESETS
 
@@ -3098,23 +3239,20 @@ SWAP_CYCLE_WEEKS = 7
 # kickoff, so 1020 is 19:00 ET in both EDT and EST.
 CROSS_DAY_ROLLOVER_LEAD_MINUTES = 1020
 
-# Daily refresh boundary for SCHEDULED mode (UTC hour).
-# The "floosball day" rolls over at this hour so daily limits and shop refreshes
-# don't clash with live games. This drives the FEATURED SHOP CARDS (fantasy + collection)
-# and the daily reroll allowance — a separate path from the pack rotation, which follows
-# `shopDay` off the week rollover above. Both have to move together or the shop only
-# half-refreshes: new packs, yesterday's cards.
+# ⚠️ THERE IS NO `DAILY_RESET_HOUR_UTC` ANY MORE, AND REINTRODUCING ONE REOPENS A BUG.
+# The shop's daily allowances (reroll costs, per-day buy limits) used to reset at a fixed
+# UTC hour while the pack rotation followed the week rollover above — two boundaries for
+# one "shop day". They drifted apart the moment the clocks changed: under EST the rollover
+# lands at 12:00 + 5 - 17h = 00:00 UTC, exactly the old constant, so the two agreed and
+# the fixed hour looked correct; under EDT the rollover is 23:00 UTC and the reset stayed
+# at 00:00, leaving a ONE-HOUR WINDOW each game day, 19:00-20:00 ET, where the new day's
+# packs were on sale beside yesterday's reroll prices. Reported by a user in exactly those
+# terms.
 #
-# ⚠️ 0 (midnight UTC) = 20:00 EDT / 19:00 EST, just after the day's last game ends
-# (18:00 ET kickoff, done by ~18:45 ET). It was 10, i.e. 06:00 ET — a fresh shop arrived
-# 11 hours after the games it followed.
-#
-# ⚠️ A FIXED UTC HOUR CANNOT TRACK AN ET-ANCHORED SCHEDULE ACROSS DST, so this needs
-# slack on both sides rather than a tight fit. Midnight UTC is the choice that keeps it:
-# it sits after the final whistle in EDT (22:45 UTC) AND in EST (23:45 UTC). 23:00 UTC was
-# rejected for exactly this — it reads as 19:00 ET in summer but 18:00 ET in winter, which
-# is the moment the last game KICKS OFF.
-DAILY_RESET_HOUR_UTC = 0
+# The boundary is now DERIVED from the lead above by `shop_repository._dailyResetBoundary`,
+# so both halves of the shop refresh at one instant and move together if the lead moves.
+# The old note here said a fixed UTC hour cannot track an ET-anchored schedule and
+# concluded that the hour needed slack; the right conclusion was to stop using an hour.
 
 # ─── GM Mode ────────────────────────────────────────────────────────────────────
 
@@ -3576,6 +3714,80 @@ GLITCH_FPX_DAMP = 0.80
 # cancelled by the card having a quiet week. Deliberately modest: the surge still scales
 # the card's own output when there IS output, and this is only the fallback.
 GLITCH_SURGE_FLOOR_FP = 11.0
+
+# How many surges a glitch survives before it fades and the card goes back to normal
+# (owner, 2026-08-17). A glitch was PERMANENT — `user_cards.glitched` is a boolean nothing
+# ever cleared — so a Criticality's marks accumulated forever. Measured on production after
+# ONE season: 3 Criticalities (weeks 9, 14, 27), 48 glitched cards across 22 users, and 9
+# users already holding three apiece. Over five seasons a regular would be carrying fifteen.
+#
+# ⚠️ COUNTED IN TRIGGERS, NOT WEEKS, so the lifespan is tied to value actually received: a
+# card that never surges keeps its glitch rather than expiring having given nothing, and a
+# hot card burns out fastest. At the ~0.28-0.46 trigger bases above, three surges is roughly
+# eight or nine weeks of being fielded — a window inside a season rather than a ratchet
+# across careers.
+#
+# ⚠️ The trigger is consumed WHERE THE WEEK IS BANKED, never in the calculator. The
+# calculator re-runs on every projection and every page load, and its RNG is deliberately
+# stable per (user, season, week, card) so a week's result never moves — counting there
+# would burn a glitch's whole life on one week of refreshes.
+GLITCH_MAX_TRIGGERS = 3
+
+# ─── Darts (bust format) — hoop hunting and dead drives ─────────────────────────
+# How often the offense throws at a sideline hoop when a hoop is the ONLY score that
+# does not bust (remaining need below a field goal, so a TD is held up short and a FG is
+# refused). Coach-scaled (owner, 2026-08-17): an aggressive coach hunts it, a cautious one
+# plays field position and waits for a better spot, so the same position produces different
+# football from different clubs. Aggressiveness runs 60-100 around a neutral 80, giving
+# 0.20 at the cautious end, 0.55 neutral, 0.90 at the aggressive end.
+#
+# ⚠️ It applies on EVERY down including the last, which inverts the standing final-down
+# guard on purpose — that guard exists because a hoop consumes the down without gaining
+# yards, and under a target there is no scoring play it could be forfeiting.
+DARTS_HOOP_HUNT_BASE = 0.55
+DARTS_HOOP_HUNT_AGGR_SPAN = 0.35
+
+# ⚠️ THE MIDFIELD HOOP IS USE-IT-OR-LOSE-IT (owner, 2026-08-17): it is only reachable while
+# APPROACHING the 50, and once the line of scrimmage crosses it that pair is behind the
+# offense and gone for the drive. Driving forward is normally pure progress; here it
+# destroys one of the two scoring options a team needing 1-2 points has. So within
+# `DARTS_HOOP_CLOSING_YARDS` of the crossing the shot gets up to `_LAST_CHANCE_LIFT` added
+# to the coach-scaled chance, ramping as the window shuts — an aggressive coach becomes
+# near-certain and even a cautious one usually takes the last look.
+#
+# The END-ZONE pair needs no equivalent: it OPENS as the offense advances rather than
+# closing, so there is never a last chance at it.
+DARTS_HOOP_CLOSING_YARDS = 6.0
+DARTS_HOOP_LAST_CHANCE_LIFT = 0.40
+
+# ⚠️ APPROACHING THE MIDFIELD HOOP, A DISCIPLINED SIDE STOPS TRYING TO GO DOWNFIELD (owner,
+# 2026-08-17). It is the only scoring chance a drive can drive PAST: a chunk gain over the
+# 50 is an ordinary good outcome that destroys the pair, and for a team needing 1-2 points
+# that is one of only two ways left to score. So the deep and long tiers are damped, the
+# controlled ones lifted, and the pass works the sideline the hoops stand on.
+#
+# Scaled by `_dartsHoopApproach`, which blends the COACH seeing it (`clockManagement`, the
+# attribute the engine already uses for situational reads) with the TEAM holding the
+# discipline to run short when a big play is there (`collectiveDiscipline`) — then by how
+# little ROOM is left. Beyond the horizon there is no conflict at all: advancing IS what the
+# offense wants, so the term goes to zero and normal football is played.
+DARTS_APPROACH_HORIZON_YARDS = 25.0
+DARTS_APPROACH_CONTROL_BIAS = 1.9      # run + short pass, at full discipline
+DARTS_APPROACH_DOWNFIELD_DAMP = 0.25   # long + deep, at full discipline
+
+# Run bias while LEADING on a darts drive that can no longer score (both hoop pairs spent,
+# need under a field goal). The drive is worth nothing but clock, and if time expires the
+# higher score wins — so a leader drains it. Runs keep the clock moving; an incompletion
+# stops it and hands the time back. Not applied when trailing: that team wants the drive
+# over so it can restock its hoops on the next possession.
+DARTS_DEAD_DRIVE_RUN_BIAS = 2.5
+
+# Added trigger chance per ADDITIONAL glitched card in the same lineup (owner, 2026-08-17).
+# Rewards FIELDING several at once rather than merely owning them, which is the half that
+# pairs with expiry above: the stockpile is gone, so what is left to reward is assembling a
+# window. Deliberately small against bases of 0.28-0.46 — at the full six-card lineup it is
+# +0.25, enough to feel and not enough to reach `GLITCH_TRIGGER_CAP` on its own.
+GLITCH_SWARM_STEP = 0.05
 
 
 # ── League news feed ─────────────────────────────────────────────────────────

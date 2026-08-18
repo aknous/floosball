@@ -2820,6 +2820,15 @@ async def get_game_by_id(game_id: int, response: Response):
                                 'playType': play_data.playType.name if hasattr(play_data, 'playType') and hasattr(play_data.playType, 'name') else 'Unknown',
                                 'yardsGained': getattr(play_data, 'yardage', 0),
                                 'description': getattr(play_data, 'playText', ''),
+                            # ⚠️ THE THIRD BUILDER. The engine has two payloads carrying
+                            # this (the live game_state lastPlay and its own feed list) and
+                            # THIS is the one the REST API serves — so a play fetched over
+                            # HTTP arrived with no names to emphasise while a play pushed
+                            # over the websocket arrived with them. Reported as two plays
+                            # naming the SAME two players, one bolding and one not: the
+                            # difference was never the sentence, it was the transport.
+                            'involvedPlayers': (game._involvedPlayerNames(play_data)
+                                                if hasattr(game, '_involvedPlayerNames') else []),
                                 'playResult': play_data.playResult.value if hasattr(play_data, 'playResult') and play_data.playResult else None,
                                 'conversionPoints': getattr(play_data, 'conversionPoints', None),
                                 'isProvisionalScore': getattr(play_data, 'isProvisionalScore', False),
@@ -13941,6 +13950,12 @@ def _rowIsHandWritten(row) -> bool:
 
 _ANNOUNCEMENT_CORES = {'cassian', 'pyre', 'aris', 'halverson', 'vera'}
 
+# Turns allowed in a hand-written Cores conversation. The sim's own exchanges run 2-4 and
+# the feed folds them into ONE entry, so a longer one stops reading as an exchange and
+# starts reading as a monologue in several voices. `front_page.META_ROW_FETCH` is also
+# sized around whole exchanges landing intact.
+ADMIN_CONVERSATION_MAX_TURNS = 6
+
 
 def _announcementVoice(postAs: str, icon: str, teamId):
     """Resolve who a hand-written item is FROM → (category, teamId, core, displayName).
@@ -14068,6 +14083,99 @@ async def admin_post_league_news(payload: Dict[str, Any],
         session.close()
 
 
+@app.post("/api/admin/league-news/conversation")
+async def admin_post_cores_conversation(payload: Dict[str, Any],
+                                        _auth: None = Depends(_checkAdminAuth)):
+    """Publish a hand-written CORES CONVERSATION — several turns, one exchange.
+
+    The single-line endpoint above can already post AS a Core, but one line is a remark,
+    not a conversation. The sim publishes its own exchanges as one row per turn sharing an
+    `exchangeId`, which `front_page._groupExchanges` folds back into a single feed entry
+    with its turns in spoken order; this writes exactly that shape, so an authored exchange
+    is indistinguishable downstream from one the Cores had themselves. That is the point —
+    it should thread, render in each Core's own color, and count as one row against the
+    caps, all of which the feed already does.
+
+    ⚠️ TURNS ARE PUBLISHED IN ORDER AND `turnIndex` IS THEIR POSITION, not the row id.
+    Rows come back newest-first, so a reader without the index sees the reply above the
+    line it answers.
+
+    ⚠️ PINNING APPLIES TO EVERY TURN, not just the first. Pinned rows are fetched OUTSIDE
+    the newest-N window, so pinning one turn of an old exchange would re-surface that turn
+    alone and render the conversation as a single stray line.
+    """
+    import uuid as _uuid
+    import league_news
+    from database.connection import get_session
+
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+
+    rawTurns = payload.get("turns")
+    if not isinstance(rawTurns, list) or not rawTurns:
+        raise HTTPException(400, "A conversation needs at least one turn")
+    if len(rawTurns) > ADMIN_CONVERSATION_MAX_TURNS:
+        raise HTTPException(
+            400, f"Keep it to {ADMIN_CONVERSATION_MAX_TURNS} turns — the feed folds an "
+                 f"exchange into one entry and a longer one stops reading as a exchange")
+
+    turns = []
+    for index, raw in enumerate(rawTurns):
+        if not isinstance(raw, dict):
+            raise HTTPException(400, f"Turn {index + 1} is malformed")
+        core = str(raw.get("core") or "").strip().lower()
+        if core not in _ANNOUNCEMENT_CORES:
+            raise HTTPException(
+                400, f"Turn {index + 1}: '{core}' is not one of the Cores "
+                     f"({', '.join(sorted(_ANNOUNCEMENT_CORES))})")
+        text = str(raw.get("text") or "").strip()
+        if not text:
+            raise HTTPException(400, f"Turn {index + 1} has no line")
+        if len(text) > 160:
+            raise HTTPException(
+                400, f"Turn {index + 1}: keep a line under 160 characters — each turn sits "
+                     f"on one line in the feed")
+        turns.append((core, text))
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+
+    pinned = bool(payload.get("pinned"))
+    # Cores lines are in `NEVER_LEAD` — they are voice, not report — and `pinned` is the
+    # one thing that outranks it. So "make this the headline" IS pinning, and the flag is
+    # defaulted on rather than made the caller's problem.
+    if "pinned" not in payload:
+        pinned = True
+    leadWeight = float(payload.get("leadWeight") or 100.0)
+
+    exchangeId = f"admin-{_uuid.uuid4().hex[:12]}"
+    session = get_session()
+    try:
+        for index, (core, text) in enumerate(turns):
+            league_news.publish(
+                session,
+                season=season,
+                week=week,
+                category='cores',
+                eventType=ADMIN_POST_EVENT_TYPE,
+                text=text,
+                core=core,
+                coreDisplayName=core.capitalize(),
+                exchangeId=exchangeId,
+                turnIndex=index,
+                turnCount=len(turns),
+                pinned=pinned,
+                leadWeight=leadWeight,
+            )
+        return build_success_response(
+            {"published": True, "exchangeId": exchangeId, "turns": len(turns),
+             "pinned": pinned, "season": season, "week": week},
+            message="Posted a Cores conversation")
+    finally:
+        session.close()
+
+
 @app.get("/api/admin/league-news")
 async def admin_list_league_news(limit: int = 25, _auth: None = Depends(_checkAdminAuth)):
     """Announcements posted so far, newest first, with their pin state.
@@ -14090,17 +14198,51 @@ async def admin_list_league_news(limit: int = 25, _auth: None = Depends(_checkAd
                 .order_by(LeagueNewsItem.created_at.desc(), LeagueNewsItem.id.desc())
                 .limit(max(1, min(int(limit or 25), 100)))
                 .all())
-        return build_success_response({"items": [{
-            "id": r.id,
-            "headline": r.text,
-            "body": getattr(r, 'body', None),
-            "pinned": bool(getattr(r, 'pinned', False)),
-            "teamId": r.team_id,
-            "core": r.core,
-            "season": r.season,
-            "week": r.week,
-            "createdAt": r.created_at.isoformat() if r.created_at else None,
-        } for r in rows]})
+        # ⚠️ A CONVERSATION IS ONE ENTRY HERE TOO. Its turns are separate rows, and listing
+        # them flat would show a four-turn exchange as four near-identical items with four
+        # delete buttons, three of which orphan the rest. Grouped by `exchange_id`, held at
+        # its FIRST turn's position so the list reads in spoken order, and carrying the
+        # turns so the admin can see what they posted.
+        items = []
+        byExchange = {}
+        for r in rows:
+            entry = {
+                "id": r.id,
+                "headline": r.text,
+                "body": getattr(r, 'body', None),
+                "pinned": bool(getattr(r, 'pinned', False)),
+                "teamId": r.team_id,
+                "core": r.core,
+                "season": r.season,
+                "week": r.week,
+                "createdAt": r.created_at.isoformat() if r.created_at else None,
+            }
+            exchangeId = getattr(r, 'exchange_id', None)
+            if not exchangeId:
+                items.append(entry)
+                continue
+            group = byExchange.get(exchangeId)
+            if group is None:
+                entry["exchangeId"] = exchangeId
+                entry["turns"] = []
+                byExchange[exchangeId] = entry
+                items.append(entry)
+                group = entry
+            group["turns"].append({
+                "core": r.core,
+                "text": r.text,
+                "turnIndex": getattr(r, 'turn_index', None),
+            })
+            # Any pinned turn pins the conversation, matching how the feed groups it.
+            group["pinned"] = group["pinned"] or bool(getattr(r, 'pinned', False))
+        for entry in items:
+            turns = entry.get("turns")
+            if not turns:
+                continue
+            turns.sort(key=lambda t: t["turnIndex"] if t["turnIndex"] is not None else 0)
+            entry["headline"] = turns[0]["text"]
+            entry["core"] = turns[0]["core"]
+        return build_success_response({"items": items})
     finally:
         session.close()
 
@@ -14179,9 +14321,26 @@ async def admin_delete_league_news(itemId: int, _auth: None = Depends(_checkAdmi
             raise HTTPException(404, f"No news item {itemId}")
         if not _rowIsHandWritten(row):
             raise HTTPException(400, "Only hand-written announcements can be deleted")
-        session.delete(row)
+        # ⚠️ A CONVERSATION IS DELETED WHOLE. Its turns are separate rows sharing an
+        # `exchangeId`, and the feed folds them into one entry — so removing the row the
+        # admin clicked would leave the rest of the exchange published and reading as a
+        # conversation with a line torn out of it. The list shows one entry; deleting it
+        # should remove the thing that was shown.
+        exchangeId = getattr(row, 'exchange_id', None)
+        if exchangeId:
+            removed = (session.query(LeagueNewsItem)
+                       .filter(LeagueNewsItem.exchange_id == exchangeId)
+                       .filter(LeagueNewsItem.event_type == ADMIN_POST_EVENT_TYPE)
+                       .all())
+        else:
+            removed = [row]
+        deletedIds = [r.id for r in removed]
+        for r in removed:
+            session.delete(r)
         session.commit()
-        return build_success_response({"deleted": itemId}, message="Announcement removed")
+        return build_success_response(
+            {"deleted": itemId, "deletedIds": deletedIds},
+            message=("Conversation removed" if len(deletedIds) > 1 else "Announcement removed"))
     finally:
         session.close()
 

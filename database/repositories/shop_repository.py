@@ -6,14 +6,55 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from database.models import ShopPurchase, UserModifierOverride
-from constants import DAILY_RESET_HOUR_UTC
+from constants import CROSS_DAY_ROLLOVER_LEAD_MINUTES
+
+
+def _rolloverMomentUtc(gameDate: date) -> datetime:
+    """The instant the shop rolls over INTO the game day `gameDate`.
+
+    The same expression the sim's own week rollover uses: the day's first kickoff is 12:00
+    ET, and the rollover leads it by `CROSS_DAY_ROLLOVER_LEAD_MINUTES`. At the shipped lead
+    of 1020 (17h) that lands at 19:00 ET the evening BEFORE, so the moment returned here
+    sits on the previous calendar day. ET is converted by hand, exactly as
+    `seasonManager.getWeekStartTime` and `cardManager._shopCycleStartDate` do.
+    """
+    from managers.timingManager import _isEdtDate
+    utcOffset = 4 if _isEdtDate(gameDate) else 5
+    kickoffUtc = datetime(gameDate.year, gameDate.month, gameDate.day, 12 + utcOffset)
+    return kickoffUtc - timedelta(minutes=CROSS_DAY_ROLLOVER_LEAD_MINUTES)
 
 
 def _dailyResetBoundary() -> datetime:
-    """Return the most recent daily reset timestamp (DAILY_RESET_HOUR_UTC today or yesterday)."""
+    """The start of the current SHOP DAY — when daily allowances (rerolls, per-day buy
+    limits) reset.
+
+    ⚠️ THIS USED TO BE A FIXED UTC HOUR (`DAILY_RESET_HOUR_UTC`) AND DRIFTED OFF THE PACK
+    ROTATION. The rotation follows the week rollover, which is ET-anchored at
+    `12:00 ET - CROSS_DAY_ROLLOVER_LEAD_MINUTES` = 19:00 ET; a fixed 00:00 UTC is 20:00 EDT.
+    So through the summer there was a ONE-HOUR WINDOW, 19:00-20:00 ET every game day, in
+    which the new day's packs were already on sale and the reroll costs had not reset.
+    Reported exactly that way: "day 2 packs are purchaseable, the week rolled over, but the
+    card and pack reroll costs haven't reset yet".
+
+    ⚠️ IT WAS INVISIBLE IN WINTER, which is why a fixed hour looked correct when it was
+    chosen. Under EST the rollover is 12:00 + 5 - 17h = 00:00 UTC — exactly midnight, the
+    old constant's value — so the two agreed perfectly and diverged by an hour only once
+    the clocks changed. A fixed UTC hour cannot track an ET-anchored schedule; that was
+    already written down as the reason the hour needed slack, and the conclusion should
+    have been to stop using one.
+
+    Deriving both boundaries from the same expression is what actually keeps them in step:
+    move the lead and the shop's two halves still refresh together.
+    """
     now = datetime.utcnow()
-    todayReset = now.replace(hour=DAILY_RESET_HOUR_UTC, minute=0, second=0, microsecond=0)
-    return todayReset if now >= todayReset else todayReset - timedelta(days=1)
+    # A rollover moment for game day D lands about a day before D, so the candidate game
+    # days worth testing straddle today. Take the most recent that has already passed.
+    candidates = [_rolloverMomentUtc(now.date() + timedelta(days=offset))
+                  for offset in (2, 1, 0, -1)]
+    passed = [moment for moment in candidates if moment <= now]
+    # `passed` cannot be empty — the offset -1 candidate is over a day behind `now` — but
+    # falling back to a day ago is cheaper than an IndexError on a shop request.
+    return max(passed) if passed else now - timedelta(days=1)
 
 
 class ShopPurchaseRepository:

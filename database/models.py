@@ -140,6 +140,7 @@ class Coach(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     seasons_coached: Mapped[int] = mapped_column(Integer, default=0)
+    seasons_with_team: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     offensive_mind: Mapped[int] = mapped_column(Integer, default=80)
     defensive_mind: Mapped[int] = mapped_column(Integer, default=80)
     adaptability: Mapped[int] = mapped_column(Integer, default=80)
@@ -739,6 +740,15 @@ class Game(Base):
     # Scores
     home_score: Mapped[int] = mapped_column(Integer, default=0)
     away_score: Mapped[int] = mapped_column(Integer, default=0)
+    # ⚠️ WHO WON, PERSISTED — because in some formats the SCORES DO NOT SAY. Frames is
+    # decided by frames won, with points only breaking a level match, so `home_score >
+    # away_score` is simply the wrong question there. Nothing used to store this, so every
+    # surface re-derived it from the scores and the ones holding only scores got frames
+    # games backwards: reported as a game whose team page showed a win, whose standings
+    # Last-5 showed a loss, and whose recap email listed an L against a record that counted
+    # it as a W. NULL means a draw or a game that is not final.
+    winner_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"),
+                                                          nullable=True)
     
     # Quarter scores
     home_score_q1: Mapped[int] = mapped_column(Integer, default=0)
@@ -1577,6 +1587,12 @@ class UserCard(Base):
     glitched: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     glitched_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     glitched_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Surges this glitch has paid out. At GLITCH_MAX_TRIGGERS the glitch fades and
+    # `glitched` goes back to False — a glitch is a window, not a permanent upgrade.
+    # ⚠️ Kept after the glitch fades rather than reset, so a card that has burned one
+    # glitch and caught another is distinguishable from a fresh one; `markCardsForCriticality`
+    # zeroes it when a NEW glitch lands.
+    glitch_triggers_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="user_cards")
@@ -2147,7 +2163,10 @@ class PlayerSentimentRating(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     player_id: Mapped[int] = mapped_column(Integer, ForeignKey("players.id"), nullable=False)
-    rating: Mapped[int] = mapped_column(Integer, nullable=False)   # 1..5
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Season this rating was last cast. Sentiment decays toward neutral with its
+    # age, so re-rating refreshes a fan's verdict rather than merely replacing it.
+    season: Mapped[int] = mapped_column(Integer, default=0, nullable=False)   # 1..5
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -2185,6 +2204,9 @@ class CoachSentimentVote(Base):
     coach_id: Mapped[int] = mapped_column(Integer, ForeignKey("coaches.id"), nullable=False)
     # 1-5, same scale as players
     rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Season this rating was last cast. Sentiment decays toward neutral with its
+    # age, so re-rating refreshes a fan's verdict rather than merely replacing it.
+    season: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

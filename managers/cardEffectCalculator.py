@@ -281,6 +281,11 @@ class CardBreakdown:
     glitchFp: float = 0.0            # extra FP the surge added (additive, never replacing)
     glitchMultDelta: float = 0.0     # extra FPx delta the surge added
     glitchReadable: bool = False     # True only when the player is awakened
+    # Which owned card the glitch sits on, so the week-end bank can spend a trigger
+    # against it. Set only when the card is glitched; the breakdown otherwise carries no
+    # equipped-card id at all and callers key on (slot, player), which is unique within a
+    # lineup but useless for finding the row to update.
+    glitchUserCardId: Optional[int] = None
 
 
 @dataclass
@@ -1145,6 +1150,35 @@ def calculateWeekCardBonuses(
                 if f in kStats and isinstance(kStats[f], (int, float)):
                     kStats[f] = int(round(kStats[f] * fgMult))
 
+    # Pre-pass: Alchemy converts roster K FGs into TDs for other cards' tallies
+    # (Cornucopia, Touchdown Piñata, etc.). Must run before any card computes, or cards in
+    # lower slot numbers miss the bumped count. Bumps ctx.rosterTotalTds; _computeAlchemy no
+    # longer mutates it.
+    #
+    # ⚠️ IT ALSO HAS TO RUN BEFORE DOUBLER, and used to sit AFTER it. Alchemy's own text says
+    # those field goals "count as TDs" and Doubler's says "roster TDs count 2x", so a reader
+    # applying both sentences expects the converted scores to double — they did not, purely
+    # because Doubler multiplied the pool one block earlier and Alchemy then added to it.
+    # Measured with 2 real TDs and 3 made FGs: (2 x 2) + 3 = 7, where the cards promise
+    # (2 + 3) x 2 = 10. Reported by a user; owner confirmed Doubler should double them.
+    #
+    # ⚠️ It still sits AFTER Sharpshooter, which is deliberate and was already the behaviour:
+    # Sharpshooter multiplies the kicker's `fgs` above, so Alchemy converts the amplified
+    # count. That asymmetry is exactly what made the bug visible — one amplifier fed Alchemy
+    # and the other did not, by line order alone.
+    alchemyEquipped = any(
+        (eq.user_card.card_template.effect_config or {}).get("effectName") == "alchemy"
+        for eq in firstPassCards
+    )
+    if alchemyEquipped and (ctx.gamesActive or ctx.teamResults):
+        fgsMade = 0
+        for pid in ctx.rosterPlayerIds:
+            if ctx.rosterPlayerPositions.get(pid) == 5:
+                kickStats = ctx.weekPlayerStats.get(pid, {}).get("kicking_stats", {}) or {}
+                fgsMade += kickStats.get("fgs", 0)
+        if fgsMade:
+            ctx.rosterTotalTds += fgsMade
+
     if "doubler" in equippedNames and _amplifierActive("doubler"):
         tdMult = _ampFactor("doubler", 2.0, "tdMult")
         ctx.rosterTotalTds = int(round((ctx.rosterTotalTds or 0) * tdMult))
@@ -1161,24 +1195,6 @@ def calculateWeekCardBonuses(
         for ps in (ctx.weekPlayerStats or {}).values():
             if "q4ScoringPlays" in ps and isinstance(ps["q4ScoringPlays"], (int, float)):
                 ps["q4ScoringPlays"] = int(round(ps["q4ScoringPlays"] * tdMult))
-
-    # Pre-pass: Alchemy converts roster K FGs into TDs for other cards'
-    # tallies (Cornucopia, Touchdown Piñata, etc.). Must run before any
-    # card computes, otherwise cards in lower slot numbers miss the
-    # bumped count. Bumps ctx.rosterTotalTds; _computeAlchemy no longer
-    # mutates it.
-    alchemyEquipped = any(
-        (eq.user_card.card_template.effect_config or {}).get("effectName") == "alchemy"
-        for eq in firstPassCards
-    )
-    if alchemyEquipped and (ctx.gamesActive or ctx.teamResults):
-        fgsMade = 0
-        for pid in ctx.rosterPlayerIds:
-            if ctx.rosterPlayerPositions.get(pid) == 5:
-                kickStats = ctx.weekPlayerStats.get(pid, {}).get("kicking_stats", {}) or {}
-                fgsMade += kickStats.get("fgs", 0)
-        if fgsMade:
-            ctx.rosterTotalTds += fgsMade
 
     # First pass: compute non-second-pass cards
     firstPassBreakdowns = []
@@ -1377,9 +1393,13 @@ def _applyGlitchSurges(breakdowns: List[CardBreakdown], equippedCards, ctx) -> N
             continue
         userCardId, playerId = entry
         state, events = anomalyCtx.get(playerId, ('stable', {}))
-        chance = triggerChance(state, events, dial)
+        # Every glitched card in THIS lineup raises every other one's odds — the swarm
+        # term. `glitchedIds` is exactly the equipped glitched set, so it is already the
+        # right count; owning more elsewhere does nothing.
+        chance = triggerChance(state, events, dial, glitchedEquipped=len(glitchedIds))
         b.glitched = True
         b.glitchChance = round(chance, 3)
+        b.glitchUserCardId = userCardId
         b.glitchReadable = (state == 'awakened')
         # Unresolved while the week is still running AND in any projection. gamesActive
         # alone is not enough: a projection has gamesActive False, so guarding on it only

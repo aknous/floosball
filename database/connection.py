@@ -96,10 +96,26 @@ def _runPendingMigrations():
             except Exception:
                 conn.rollback()  # column already exists — ignore
 
+        # Who won — see the note on Game.winner_team_id. Formats where points do not
+        # decide (frames) make a score comparison the wrong question, so the winner is
+        # stored rather than re-derived by every reader.
+        try:
+            conn.execute(text("ALTER TABLE games ADD COLUMN winner_team_id INTEGER"))
+            conn.commit()
+            logger.info("  Migration: added games.winner_team_id")
+        except Exception:
+            conn.rollback()  # column already exists — ignore
+
         # Glitch marks on owned cards (docs/GLITCH_CARDS.md).
+        # ⚠️ `glitch_triggers_used` DEFAULTS TO 0 FOR EVERY EXISTING GLITCH, which hands the
+        # 48 already-marked production cards a full lifespan from the day expiry ships
+        # rather than retiring them on arrival. That is the intended direction: nobody
+        # loses something they were already holding, which is the same rule the glitch
+        # system runs on end to end (a glitch never takes anything away).
         for _col, _def in (('glitched', 'BOOLEAN DEFAULT 0 NOT NULL'),
                            ('glitched_season', 'INTEGER'),
-                           ('glitched_week', 'INTEGER')):
+                           ('glitched_week', 'INTEGER'),
+                           ('glitch_triggers_used', 'INTEGER DEFAULT 0 NOT NULL')):
             try:
                 conn.execute(text(f"ALTER TABLE user_cards ADD COLUMN {_col} {_def}"))
                 conn.commit()
@@ -972,6 +988,40 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # ⚠️ Seasons at THIS club, distinct from the career `seasons_coached`. A fired GM
+        # joins the pool and can be hired elsewhere carrying the career count with them, so
+        # tenure pressure read off that would blame a new GM for a predecessor's drought.
+        # Existing rows seed from the career count, exact for anyone who has only ever had
+        # one job — true of every coach in production when this landed.
+        # ⚠️ Sentiment ratings carry the season they were cast, so an old verdict decays
+        # toward neutral instead of counting forever at full strength. Existing rows are
+        # stamped with the CURRENT season — dating them 0 would decay every rating in the
+        # league to the floor on the first boot after this ships, silently wiping the
+        # standing of every player and GM fans have actually rated.
+        try:
+            cur = conn.execute(text(
+                "SELECT COALESCE((SELECT current_season FROM simulation_state ORDER BY id LIMIT 1),"
+                " (SELECT MAX(season_number) FROM seasons), 1)")).scalar() or 1
+            for tbl in ("player_sentiment_ratings", "coach_sentiment_votes"):
+                try:
+                    conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN season INTEGER DEFAULT 0"))
+                    conn.execute(text(f"UPDATE {tbl} SET season = :s WHERE COALESCE(season, 0) = 0"),
+                                 {"s": int(cur)})
+                except Exception:
+                    pass
+            conn.commit()
+            logger.info(f"  Migration: added season to sentiment ratings (seeded {cur})")
+        except Exception:
+            conn.rollback()
+
+        try:
+            conn.execute(text("ALTER TABLE coaches ADD COLUMN seasons_with_team INTEGER DEFAULT 0"))
+            conn.execute(text("UPDATE coaches SET seasons_with_team = COALESCE(seasons_coached, 0)"))
+            conn.commit()
+            logger.info("  Migration: added coaches.seasons_with_team")
+        except Exception:
+            conn.rollback()
+
         # Starter pack + selection mechanic (feature/pack-revamp)
         try:
             conn.execute(text("ALTER TABLE users ADD COLUMN starter_pack_claimed_season INTEGER"))
@@ -1596,6 +1646,7 @@ def _runPendingMigrations():
     # at the Floos Bowl, before any offseason churn). Runs BEFORE the next season's
     # card generation so newly-generated Champion cards are correct.
     _backfillChampionRosterSnapshots()
+    _backfillGameWinners()
     _backfillTeamPeakStreaks()
     _backfillCoachFanTrust()
     _backfillCurrencyTransactionSeason()
@@ -2228,6 +2279,64 @@ def _backfillCoachFanTrust():
 
 
 
+def _backfillGameWinners():
+    """Fill `games.winner_team_id` for games that finished before the column existed.
+
+    ⚠️ A SCORE COMPARISON IS NOT ENOUGH, which is the whole reason the column was added.
+    For frames the match is decided by FRAMES WON, points only breaking a level match, so
+    those rows are read out of the persisted `format_state` blob — which already carries
+    `framesWonHome`/`framesWonAway` for every completed frames game, so nothing is lost to
+    history. Every other format is points-decided and takes the score.
+
+    Idempotent: only touches final games whose winner is still NULL, and a draw is left
+    NULL by design so it cannot be repeatedly "fixed".
+    """
+    import json as _json
+    session = get_session()
+    try:
+        rows = session.execute(text(
+            "SELECT id, home_team_id, away_team_id, home_score, away_score, format_state "
+            # ⚠️ LOWER(status), because the column holds 'final' and a literal 'Final'
+            # matched nothing — the backfill would have run clean and repaired zero rows,
+            # which is the worst kind of failure since the log line says it did its job.
+            "FROM games WHERE winner_team_id IS NULL AND LOWER(status) = 'final'"
+        )).fetchall()
+        framesFixed = pointsFixed = 0
+        for gid, homeId, awayId, homeScore, awayScore, formatState in rows:
+            homeScore, awayScore = homeScore or 0, awayScore or 0
+            winner = None
+            frames = None
+            if formatState:
+                try:
+                    frames = (_json.loads(formatState) or {}).get('frames')
+                except Exception:
+                    frames = None
+            if frames and frames.get('active'):
+                fh = float(frames.get('framesWonHome') or 0)
+                fa = float(frames.get('framesWonAway') or 0)
+                if fh != fa:
+                    winner = homeId if fh > fa else awayId
+                    framesFixed += 1
+                elif homeScore != awayScore:      # level on frames → points decide
+                    winner = homeId if homeScore > awayScore else awayId
+                    framesFixed += 1
+            elif homeScore != awayScore:
+                winner = homeId if homeScore > awayScore else awayId
+                pointsFixed += 1
+            if winner is not None:
+                session.execute(text("UPDATE games SET winner_team_id = :w WHERE id = :i"),
+                                {"w": winner, "i": gid})
+        if framesFixed or pointsFixed:
+            session.commit()
+            logger.info(f"  Backfill: game winners — {pointsFixed} by points, "
+                        f"{framesFixed} by frames")
+    except Exception as e:
+        session.rollback()
+        logger.warning(f"Game-winner backfill skipped: {e}")
+    finally:
+        session.close()
+
+
 def _backfillTeamPeakStreaks():
     """Walk regular-season games chronologically per team-season and write
     the longest win-or-loss run into team_season_stats.peak_streak.
@@ -2242,7 +2351,8 @@ def _backfillTeamPeakStreaks():
     try:
         rows = conn.execute(text("""
             SELECT g.season, g.id, g.week, g.game_date,
-                   g.home_team_id, g.away_team_id, g.home_score, g.away_score
+                   g.home_team_id, g.away_team_id, g.home_score, g.away_score,
+                   g.winner_team_id
             FROM games g
             WHERE g.is_playoff = 0
               AND g.status = 'final'
@@ -2265,15 +2375,21 @@ def _backfillTeamPeakStreaks():
             absCur = abs(cur)
             if absCur > peakByTeam.get(key, 0):
                 peakByTeam[key] = absCur
-        for season, gid, week, gameDate, homeId, awayId, homeScore, awayScore in rows:
-            if homeScore is None or awayScore is None or homeScore == awayScore:
+        for (season, gid, week, gameDate, homeId, awayId,
+             homeScore, awayScore, winnerId) in rows:
+            # ⚠️ The stored winner decides; the scores are only the fallback for rows that
+            # predate the column. Frames games are not decided by points, so a score
+            # comparison builds the wrong streak — see Game.winner_team_id.
+            if winnerId is not None:
+                won, lost = (homeId, awayId) if winnerId == homeId else (awayId, homeId)
+            elif homeScore is None or awayScore is None or homeScore == awayScore:
                 continue
-            if homeScore > awayScore:
-                recordResult(season, homeId, True)
-                recordResult(season, awayId, False)
+            elif homeScore > awayScore:
+                won, lost = homeId, awayId
             else:
-                recordResult(season, awayId, True)
-                recordResult(season, homeId, False)
+                won, lost = awayId, homeId
+            recordResult(season, won, True)
+            recordResult(season, lost, False)
         updated = 0
         for (season, teamId), peak in peakByTeam.items():
             result = conn.execute(text("""

@@ -89,6 +89,52 @@ def normalizeSentiment(average: Optional[float]) -> float:
     return max(-1.0, min(1.0, (float(average) - SENTIMENT_NEUTRAL) / span))
 
 
+
+def currentSeasonNumber(session) -> int:
+    """The sim's season, for stamping and ageing ratings. 1 if it cannot be read —
+    never fail a rating over this."""
+    from sqlalchemy import text as _text
+    try:
+        n = session.execute(_text(
+            "SELECT current_season FROM simulation_state ORDER BY id LIMIT 1")).scalar()
+        if n and int(n) >= 1:
+            return int(n)
+    except Exception:
+        pass
+    try:
+        n = session.execute(_text("SELECT MAX(season_number) FROM seasons")).scalar()
+        return int(n) if n and int(n) >= 1 else 1
+    except Exception:
+        return 1
+
+
+def decayWeight(voteSeason, currentSeason) -> float:
+    """How much of its original force a rating still carries, by age in seasons."""
+    from constants import SENTIMENT_DECAY_PER_SEASON, SENTIMENT_DECAY_FLOOR
+    try:
+        age = max(0, int(currentSeason) - int(voteSeason or 0))
+    except Exception:
+        return 1.0
+    return max(SENTIMENT_DECAY_FLOOR, SENTIMENT_DECAY_PER_SEASON ** age)
+
+
+def decayedSentiment(rows, currentSeason) -> float:
+    """Mean sentiment over `rows` of (rating, season), each aged toward neutral.
+
+    ⚠️ THE MEAN IS OVER THE RATER COUNT, NOT THE SUM OF WEIGHTS. A weighted average over
+    voters who are all equally stale is identical to the plain average — the weights cancel
+    and the decay does nothing at all, which is the obvious implementation and the wrong
+    one. Scaling each vote's normalized sentiment and dividing by the count is what pulls
+    an aged verdict back toward 0.
+    """
+    if not rows:
+        return 0.0
+    total = 0.0
+    for rating, voteSeason in rows:
+        total += normalizeSentiment(float(rating)) * decayWeight(voteSeason, currentSeason)
+    return max(-1.0, min(1.0, total / len(rows)))
+
+
 class SentimentRepository:
     """Read/write fan sentiment ratings."""
 
@@ -113,13 +159,19 @@ class SentimentRepository:
                        PlayerSentimentRating.player_id == playerId)
                .first())
         now = datetime.utcnow()
+        # ⚠️ Stamp the season on every cast AND every change. That stamp is the whole
+        # mechanism: re-rating is what restores a fan's full weight, so an unchanged row
+        # keeping an old season is the point, not an oversight.
+        season = currentSeasonNumber(self.session)
         if row is None:
             row = PlayerSentimentRating(user_id=userId, player_id=playerId,
-                                        rating=rating, created_at=now, updated_at=now)
+                                        rating=rating, created_at=now, updated_at=now,
+                                        season=season)
             self.session.add(row)
         else:
             row.rating = rating
             row.updated_at = now
+            row.season = season
         return row
 
     def clearRating(self, userId: int, playerId: int) -> bool:
@@ -199,25 +251,39 @@ class SentimentRepository:
         return requiredRatersForTeam(self.session, teamId)
 
     def getSentiment(self, playerId: int) -> float:
-        """Normalized -1..+1 sentiment, or 0.0 below the rater quorum."""
-        avg, count = self.getAggregate(playerId)
-        if count < self.requiredRatersFor(playerId):
+        """Normalized -1..+1 sentiment, aged, or 0.0 below the rater quorum.
+
+        ⚠️ The QUORUM counts raters raw while the VALUE decays. Turnout is turnout — a club
+        that mustered its raters cleared the bar whenever they voted — but how hard their
+        verdict pushes fades if none of them has been back since.
+        """
+        rows = (self.session.query(PlayerSentimentRating.rating, PlayerSentimentRating.season)
+                .filter(PlayerSentimentRating.player_id == playerId).all())
+        if len(rows) < self.requiredRatersFor(playerId):
             return 0.0
-        return normalizeSentiment(avg)
+        return decayedSentiment(rows, currentSeasonNumber(self.session))
 
     def getSentimentMap(self, playerIds=None) -> Dict[int, float]:
         """Bulk normalized sentiment, already rater-gated. Players below their
         own club's bar are simply absent — callers should default to 0.0."""
-        aggregates = self.getAggregates(playerIds)
-        teamIds = self._teamIdsFor(list(aggregates.keys()) or playerIds)
+        q = self.session.query(PlayerSentimentRating.player_id,
+                               PlayerSentimentRating.rating,
+                               PlayerSentimentRating.season)
+        if playerIds:
+            q = q.filter(PlayerSentimentRating.player_id.in_(list(playerIds)))
+        byPlayer: Dict[int, list] = {}
+        for pid, rating, voteSeason in q.all():
+            byPlayer.setdefault(int(pid), []).append((rating, voteSeason))
+        teamIds = self._teamIdsFor(list(byPlayer.keys()) or playerIds)
         needByTeam: Dict[Optional[int], int] = {}
+        season = currentSeasonNumber(self.session)
         out = {}
-        for pid, (avg, count) in aggregates.items():
+        for pid, rows in byPlayer.items():
             teamId = teamIds.get(pid)
             if teamId not in needByTeam:
                 needByTeam[teamId] = requiredRatersForTeam(self.session, teamId)
-            if count >= needByTeam[teamId]:
-                out[pid] = normalizeSentiment(avg)
+            if len(rows) >= needByTeam[teamId]:
+                out[pid] = decayedSentiment(rows, season)
         return out
 
     # ------------------------------------------------------------ boards
@@ -295,13 +361,15 @@ class CoachSentimentRepository:
                        CoachSentimentVote.coach_id == coachId)
                .first())
         now = datetime.utcnow()
+        season = currentSeasonNumber(self.session)
         if row is None:
             self.session.add(CoachSentimentVote(
                 user_id=userId, coach_id=coachId, rating=rating,
-                created_at=now, updated_at=now))
+                created_at=now, updated_at=now, season=season))
         else:
             row.rating = rating
             row.updated_at = now
+            row.season = season
         return rating
 
     def clearRating(self, userId: int, coachId: int) -> bool:
@@ -353,11 +421,17 @@ class CoachSentimentRepository:
                                      floor=GM_SENTIMENT_MIN_VOTERS)
 
     def getStanding(self, coachId: int) -> float:
-        """-1..+1, or 0.0 below the rater quorum — what turnover reads."""
-        avg, count = self.getAggregate(coachId)
-        if count < self.requiredRatersFor(coachId):
+        """-1..+1, aged, or 0.0 below the rater quorum — what turnover reads.
+
+        ⚠️ Quorum counts raters raw; only the VALUE decays. A club that mustered its
+        turnout cleared the bar whenever it voted.
+        """
+        from database.models import CoachSentimentVote
+        rows = (self.session.query(CoachSentimentVote.rating, CoachSentimentVote.season)
+                .filter(CoachSentimentVote.coach_id == coachId).all())
+        if len(rows) < self.requiredRatersFor(coachId):
             return 0.0
-        return normalizeSentiment(avg)
+        return decayedSentiment(rows, currentSeasonNumber(self.session))
 
     def getStandingMap(self) -> dict:
         """{coachId: -1..+1} for the league in one query — the offseason
@@ -366,19 +440,22 @@ class CoachSentimentRepository:
         from constants import GM_SENTIMENT_MIN_VOTERS
         from database.models import CoachSentimentVote
         rows = (self.session.query(CoachSentimentVote.coach_id,
-                                   func.avg(CoachSentimentVote.rating),
-                                   func.count(CoachSentimentVote.id))
-                .group_by(CoachSentimentVote.coach_id).all())
-        teamIds = self._teamIdsByCoach([int(cid) for cid, _a, _c in rows])
+                                   CoachSentimentVote.rating,
+                                   CoachSentimentVote.season).all())
+        byCoach: Dict[int, list] = {}
+        for cid, rating, season in rows:
+            byCoach.setdefault(int(cid), []).append((rating, season))
+        teamIds = self._teamIdsByCoach(list(byCoach.keys()))
         needByTeam: Dict[Optional[int], int] = {}
+        season = currentSeasonNumber(self.session)
         out = {}
-        for cid, avg, cnt in rows:
+        for cid, votes in byCoach.items():
             teamId = teamIds.get(int(cid))
             if teamId not in needByTeam:
                 needByTeam[teamId] = requiredRatersForTeam(
                     self.session, teamId, floor=GM_SENTIMENT_MIN_VOTERS)
-            if int(cnt) >= needByTeam[teamId]:
-                out[int(cid)] = normalizeSentiment(float(avg or 0.0))
+            if len(votes) >= needByTeam[teamId]:
+                out[int(cid)] = decayedSentiment(votes, season)
         return out
 
     def getBoard(self, limit: int, mostLiked: bool = True):

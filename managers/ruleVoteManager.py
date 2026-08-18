@@ -233,8 +233,12 @@ class RuleVoteManager:
         #    before anything else and LOCK the fields it owns (a later random value must not
         #    break the format, e.g. bust needs integer scores + Sideline Goals on).
         formatFields = set()
-        if random.random() < CHAOS_FORMAT_CHANCE:
-            preset = random.choice(GAME_FORMAT_PRESETS)
+        # ⚠️ A preset may opt OUT of chaos (`chaosEligible: False`). Chaos picks a format
+        # per game at random, hides it from users, and the results count — so a format
+        # still being tuned must not arrive that way, even while it stays votable.
+        chaosPresets = [p for p in GAME_FORMAT_PRESETS if p.get('chaosEligible', True)]
+        if chaosPresets and random.random() < CHAOS_FORMAT_CHANCE:
+            preset = random.choice(chaosPresets)
             for fld, v in preset['patch'].items():
                 setattr(g, fld, v)
                 formatFields.add(fld)

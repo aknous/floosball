@@ -395,6 +395,32 @@ class Team:
                 values.append(method())
         return sum(values) / len(values) if values else 0.5
 
+    def collectiveDiscipline(self):
+        """How controlled this club is, 0 (loose) .. 1 (disciplined), as the mean raw
+        `discipline` of the rostered starters normalized around the neutral 80.
+
+        ⚠️ Reads `gameAttributes`, not `attributes`, so it reflects the side that actually
+        took the field — league compression, fatigue, funding morale and form all land on
+        the live copy, and a decision made during a game should see the same players the
+        plays do. Falls back to the profile attribute, then to neutral, so a roster loaded
+        outside a game still answers sensibly instead of reading as undisciplined.
+
+        Not routed through `_collectiveTrait`: that helper calls a METHOD on `attributes`
+        (the mental composites are computed), and discipline is a raw 0-100 number.
+        """
+        values = []
+        for player in (self.rosterDict or {}).values():
+            if player is None:
+                continue
+            live = getattr(player, 'gameAttributes', None)
+            profile = getattr(player, 'attributes', None)
+            raw = getattr(live, 'discipline', None)
+            if raw is None:
+                raw = getattr(profile, 'discipline', None)
+            if raw:
+                values.append(max(0.0, min(1.0, (float(raw) - 60.0) / 40.0)))
+        return sum(values) / len(values) if values else 0.5
+
     def collectiveVulnerability(self):
         """How hard this club falls off a peak — mean complacencyVulnerability
         over the roster. Scales the DOWNWARD half of the form oscillation."""

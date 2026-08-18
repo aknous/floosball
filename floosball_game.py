@@ -2021,6 +2021,46 @@ class Game:
         except Exception:
             pass
 
+    def _involvedPlayerNames(self, playObj=None) -> list:
+        """Every player named in this play's text, longest name first.
+
+        ⚠️ READ OFF THE TEXT, NOT OFF A LIST OF ATTRIBUTES. Listing `passer/receiver/runner/
+        ...` covered only 92.7% of the names that actually appear (measured over 1,976
+        mentions across six games) and the misses were systematic, not stray: the blitzer
+        named in a pre-snap beat, the quarterback who called an audible on a RUN play, the
+        punter, and the defender beaten by a stiff-arm. Each is a real participant the
+        reader wants emphasised, and each would have to be remembered again every time the
+        play-text catalogue grows — which it does constantly.
+
+        Both rosters are twelve players, so scanning them against the finished text is
+        cheap, exact, and cannot drift from what the sentence says.
+
+        Longest name first: a highlighter walking these in order must not let a short name
+        sitting inside a longer one claim the span first.
+        """
+        play = playObj if playObj is not None else getattr(self, 'play', None)
+        if play is None:
+            return []
+        text = getattr(play, 'playText', '') or ''
+        names = []
+        if text:
+            for team in (self.homeTeam, self.awayTeam):
+                for member in (getattr(team, 'rosterDict', None) or {}).values():
+                    name = getattr(member, 'name', None)
+                    if name and name in text and name not in names:
+                        names.append(name)
+        if not names:
+            # No text yet (a payload built before the sentence exists) — fall back to the
+            # participants the play object knows about, so the field is never empty.
+            for attr in ('passer', 'receiver', 'runner', 'kicker', 'returner',
+                         'interceptedBy', 'tackledBy', 'forcedFumbleBy', 'recoveredBy',
+                         'blitzedBy'):
+                who = getattr(play, attr, None)
+                name = getattr(who, 'name', None)
+                if name and name not in names:
+                    names.append(name)
+        return sorted(names, key=len, reverse=True)
+
     def _estimateAvailablePlays(self) -> int:
         """Conservative estimate of productive offensive plays remaining before
         regulation ends, RESERVING ~7s for a closing FG attempt.
@@ -2339,6 +2379,17 @@ class Game:
         # occasional. Owner: "exclusively short-medium passes that target the sideline to
         # stop the clock."
         if self._isNoHuddle():
+            return True
+
+        # ⚠️ DARTS: THE HOOPS ARE ON THE SIDELINE. Working toward the midfield pair means
+        # working the boundary — the throw that gets the offense closer to the target it
+        # intends to shoot at is the one going that way, not the one going downfield. This
+        # is not the clock-stopping reason every other branch here is about; it is field
+        # position aimed at a specific object on the field. Rolled rather than forced, and
+        # weighted by the same discipline term that damps the deep tiers, so a loose side
+        # still flings it around (owner, 2026-08-17).
+        _dartsApproach = self._dartsHoopApproach()
+        if _dartsApproach > 0 and _random.random() < _dartsApproach:
             return True
 
         # Drive Clock (seconds): a low drive clock is its own reason to get out of
@@ -2763,6 +2814,15 @@ class Game:
             from game_formats import getFormat
             self._formatObj = getFormat(key)
             self._formatKey = key
+            # A format's prerequisites are applied the moment it is resolved, so it plays
+            # the same game however it was switched on — a preset, a direct assignment, a
+            # stored rule override. Only ever turns flags ON (see `bundledRules`).
+            try:
+                for flag, value in (self._formatObj.bundledRules() or {}).items():
+                    if not getattr(self.gameRules, flag, False):
+                        setattr(self.gameRules, flag, value)
+            except Exception:
+                pass  # a format without prerequisites must never fail to resolve
         return self._formatObj
 
     def _targetMatchPoint(self) -> bool:
@@ -2973,6 +3033,65 @@ class Game:
         # Frames finish LEVEL → total points break the tie: reason off the aggregate margin.
         isHome = self.offensiveTeam is self.homeTeam
         return (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+
+    def _framesMatchResultIfAdd(self, points: int):
+        """'win' | 'draw' | 'loss' for the OFFENSE if it scores `points` and the frame ends
+        now. None off frames.
+
+        ⚠️ A SCALAR MARGIN CANNOT EXPRESS THIS FORMAT, which is why `_frameDecisionDiff`
+        alone was not enough. Tying the frame does not tie the match — it HALVES the frame,
+        and halved frames can leave the match level and fall to the points tiebreak, where
+        the offense may still be losing. Found by the stress sweep: frames 2.5-2.5, down 3
+        in the frame and 7 on aggregate, the frame margin reads -3, "a field goal ties it"
+        is true of the FRAME and false of the MATCH. Ask the real question instead.
+        """
+        if getattr(self.format, 'key', '') != 'frames':
+            return None
+        isHome = self.offensiveTeam is self.homeTeam
+        curH = self.homeScore - getattr(self, '_frameStartHome', 0)
+        curA = self.awayScore - getattr(self, '_frameStartAway', 0)
+        if isHome:
+            curH += points
+        else:
+            curA += points
+        # Frame credit, mirroring awardFrames — a tied frame is halved.
+        if curH > curA:
+            creditH, creditA = 1.0, 0.0
+        elif curA > curH:
+            creditH, creditA = 0.0, 1.0
+        else:
+            creditH, creditA = 0.5, 0.5
+        try:
+            n = self.format._frames(self)
+        except Exception:
+            n = None
+        isFinal = n is not None and int(getattr(self, '_frameIndex', 0)) >= n - 1
+        if not isFinal:
+            # Earlier frames: the match is not decidable, and banking the frame IS the win.
+            off, dfn = (creditH, creditA) if isHome else (creditA, creditH)
+            return 'win' if off > dfn else ('draw' if off == dfn else 'loss')
+        fh = float(getattr(self, '_framesWonHome', 0.0)) + creditH
+        fa = float(getattr(self, '_framesWonAway', 0.0)) + creditA
+        off, dfn = (fh, fa) if isHome else (fa, fh)
+        if off > dfn:
+            return 'win'
+        if off < dfn:
+            return 'loss'
+        # Frames level -> total points break it.
+        aggH = self.homeScore + (points if isHome else 0)
+        aggA = self.awayScore + (0 if isHome else points)
+        ao, ad = (aggH, aggA) if isHome else (aggA, aggH)
+        return 'win' if ao > ad else ('draw' if ao == ad else 'loss')
+
+    def _framesFgFutile(self) -> bool:
+        """Frames: three points cannot avoid a loss but a touchdown can, so the kick is a
+        wasted last chance. False off frames, and false whenever the kick still helps."""
+        rank = {'loss': 0, 'draw': 1, 'win': 2}
+        fgRes = self._framesMatchResultIfAdd(self._fgValue())
+        if fgRes is None or fgRes != 'loss':
+            return False
+        tdRes = self._framesMatchResultIfAdd(max(7, self._maxPossession()))
+        return tdRes is not None and rank[tdRes] > rank[fgRes]
 
     def _framesLeadingNow(self):
         """Frames only (else None): would the OFFENSE win if the match ended right now?
@@ -3191,6 +3310,17 @@ class Game:
         _frameDiff = self._frameDecisionDiff()
         if _frameDiff is not None:
             scoreDiff = _frameDiff
+        # ⚠️ DARTS: A DEAD DRIVE PUNTS, and that is not the concession it looks like. Both
+        # hoop pairs are spent and the remaining need is under a field goal, so nothing on
+        # this possession can score — but the pairs RESET on the next one, so giving the
+        # ball up is how the offense restocks the only scoring play it has. Going for it
+        # here would risk field position to extend a drive that cannot produce a point.
+        # (Owner, 2026-08-17: punt if behind, burn clock first if ahead — the clock half
+        # rides on the play weights, since both sides still punt in the end.)
+        if self._dartsDriveIsDead():
+            self.play.insights['dartsDeadDrive'] = True
+            self.play.playType = PlayType.Punt
+            return PlayType.Punt
         # Set sideline targeting for any pass plays called in this method
         self.play.targetSideline = self._shouldTargetSideline(scoreDiff, coach)
 
@@ -3230,7 +3360,15 @@ class Game:
                         or self._defenseLockedOut() or self._chessClockLow(120)
                         or self._frameEndSoon()
                         or self.format.isLastScoringChance(self, self.offensiveTeam))
-        fgHelps = scoreDiff >= -self._fgValue() or not lateHopeless
+        # ⚠️ IN FRAMES, "WITHIN A FIELD GOAL" DOES NOT MEAN A FIELD GOAL HELPS. The margin
+        # above is the frame's, and tying a frame only HALVES it — which can leave the match
+        # level and fall to the points tiebreak with the offense still behind. `scoreDiff >=
+        # -fgValue` is therefore true of the FRAME and false of the MATCH. Found by the
+        # stress sweep at frames 2.5-2.5, down 3 in-frame and 7 on aggregate: the kick reads
+        # as adequate and loses. `_framesFgFutile` asks the real question and is False in
+        # every other format, so this is a no-op outside frames.
+        fgHelps = ((scoreDiff >= -self._fgValue() or not lateHopeless)
+                   and not self._framesFgFutile())
         inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
         # Darts (bust): never treat a FG as "in range" if it would overshoot X — the
@@ -3873,6 +4011,49 @@ class Game:
         def _flat(key, m):
             weights[key] = weights.get(key, 0) * m
 
+        # ⚠️ DARTS, DEAD DRIVE, LEADING ON POINTS: the possession cannot score, so the only
+        # thing it is still worth is CLOCK. If the clock beats both teams to the target the
+        # higher score wins, so a leader who drains it is converting a useless drive into
+        # the win condition it can still reach. Runs keep the clock moving; a pass stops it
+        # on an incompletion, which hands the time straight back.
+        #
+        # ⚠️ Deliberately NOT applied when trailing. A trailing team wants this drive OVER
+        # so it can get the ball back with two fresh hoops — burning clock there would be
+        # spending the very thing it needs. Both sides still punt on the final down
+        # (`_fourthDownCaller`); this is the only place the two diverge.
+        if self._dartsDriveIsDead() and self._dartsLeadingOnPoints():
+            from constants import DARTS_DEAD_DRIVE_RUN_BIAS
+            _mul('run', DARTS_DEAD_DRIVE_RUN_BIAS)
+            for _tier in ('shortPass', 'mediumPass', 'longPass', 'deepPass'):
+                if _tier in weights:
+                    _mul(_tier, 1.0 / DARTS_DEAD_DRIVE_RUN_BIAS)
+
+        # ⚠️ DARTS, APPROACHING THE MIDFIELD HOOP: stop trying to go downfield. A chunk
+        # play over the 50 is an ordinary good outcome that DESTROYS the pair, and for a
+        # team needing 1 or 2 points that is one of only two ways left to score. So the
+        # deep and long tiers are damped and the controlled ones lifted, in proportion to
+        # how disciplined the side is and how little room is left — see `_dartsHoopApproach`.
+        # ⚠️ Applied with `_flat`, NOT `_mul`. `_mul` scales every situational adjustment by
+        # the coach's clock IQ, and this term already carries that coach read inside it;
+        # routing it through `_mul` would square the coach and leave a merely-average staff
+        # barely restraining anything.
+        _approach = self._dartsHoopApproach()
+        if _approach > 0:
+            from constants import DARTS_APPROACH_CONTROL_BIAS, DARTS_APPROACH_DOWNFIELD_DAMP
+            self.play.insights['dartsApproach'] = round(_approach, 3)
+            lift = 1.0 + (DARTS_APPROACH_CONTROL_BIAS - 1.0) * _approach
+            damp = 1.0 - (1.0 - DARTS_APPROACH_DOWNFIELD_DAMP) * _approach
+            _flat('run', lift)
+            if 'shortPass' in weights:
+                _flat('shortPass', lift)
+            for _tier in ('longPass', 'deepPass'):
+                if _tier in weights:
+                    _flat(_tier, damp)
+            if 'mediumPass' in weights:
+                # Medium is the boundary case: it can reach the window from outside it
+                # without clearing the 50, so it is neither hunted nor suppressed hard.
+                _flat('mediumPass', 1.0 - (1.0 - damp) * 0.5)
+
         # Coach attributes normalized to [0, 1] for personality math.
         # Raw normalization yields [-1, +1] around neutral (80); shift+scale
         # to [0, 1] so median coaches land at 0.5 and the trailing/leading
@@ -4435,13 +4616,43 @@ class Game:
         ezMin = 1 if getattr(self.format, 'key', '') == 'bust' else SIDELINE_GOAL_ENDZONE_MIN
         if 'endzone' not in used and ezMin <= yte <= SIDELINE_GOAL_ENDZONE_RANGE:
             return ('endzone', float(yte))
+        # ⚠️ THE NEAREST IN-RANGE PAIR WINS, AND THAT HAS TO BE COMPUTED RATHER THAN
+        # ORDERED. A fixed priority order was correct only while the windows could not
+        # overlap; the midrange pair's reach meets midfield's exactly at the 50, so at
+        # that spot both match — midfield at d=0 (a tap) and midrange at d=20 (a heave).
+        # Ordering midrange first therefore picked the HARDER shot at the one yard line
+        # where the easy one exists, and silently disabled the closing-window urgency,
+        # which only applies to the midfield pair. Distance decides.
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD, SIDELINE_GOAL_MIDRANGE_RANGE
+        candidates = []
+        if SIDELINE_GOAL_MIDRANGE_YARD and 'midrange' not in used:
+            d = yte - SIDELINE_GOAL_MIDRANGE_YARD
+            if 0 <= d <= SIDELINE_GOAL_MIDRANGE_RANGE:
+                candidates.append(('midrange', float(d)))
         if 'midfield' not in used:
             # Only valid while APPROACHING the 50 (d = yards before it). Once the LOS is
             # PAST midfield (d < 0), the hoops are behind the offense — no longer a target.
             d = yte - SIDELINE_GOAL_MIDFIELD_YARD
             if 0 <= d <= SIDELINE_GOAL_MIDFIELD_RANGE:
-                return ('midfield', float(d))
+                candidates.append(('midfield', float(d)))
+        if candidates:
+            return min(candidates, key=lambda pair: pair[1])
         return None
+
+    def _hoopFieldPositions(self) -> dict:
+        """Where the optional third pair stands, for the field graphic. Empty when the
+        pair is off, so a client that knows nothing about it is unaffected."""
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD
+        if not SIDELINE_GOAL_MIDRANGE_YARD:
+            return {}
+        return {'midrangeYard': int(SIDELINE_GOAL_MIDRANGE_YARD)}
+
+    def _hoopPairCount(self) -> int:
+        """How many sideline-hoop pairs a drive has. ⚠️ This was the literal `2` inside
+        `_hoopPointsNeeded`, which silently under-counted the moment a third pair existed —
+        a team needing 3 points would have read its hoops as unable to reach."""
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD
+        return 3 if SIDELINE_GOAL_MIDRANGE_YARD else 2
 
     def _hoopScoreWinsNow(self) -> bool:
         """Would an OFFENSIVE score by the team on offense end the game the instant it
@@ -4454,6 +4665,88 @@ class Game:
         if getattr(self, 'otPeriod', 0) >= 2:
             return True
         return bool(getattr(self, 'otSecondPossComplete', False))
+
+    def _dartsHoopApproach(self) -> float:
+        """Darts: how hard the offense is MANAGING ITS FIELD POSITION toward the midfield
+        hoop. 0 = not doing this at all, 1 = every call bent around it.
+
+        ⚠️ THE MIDFIELD PAIR IS THE ONLY SCORING CHANCE A DRIVE CAN DRIVE PAST. It is
+        reachable only while approaching the 50, so an ordinary good play — a chunk gain
+        over midfield — destroys it. For a team needing 1 or 2 points that is not progress,
+        it is the drive throwing away one of its two remaining ways to score. So a
+        disciplined side stops trying to go downfield and works the sideline for controlled
+        yardage until it has taken the shot (owner, 2026-08-17).
+
+        Two terms, because it takes both to execute:
+          * the COACH sees the situation — `clockManagement` is the attribute the rest of
+            the engine already uses for "does this coach understand where they are";
+          * the TEAM has to hold the discipline to actually run short of a big play when
+            one is available, which is `collectiveDiscipline`.
+
+        Scaled by ROOM. Twenty-five yards out there is no conflict — advancing is exactly
+        what the offense wants — so this returns ~0 and normal football is played. The
+        closer the ball gets to the crossing the less room there is for a play to be
+        merely good, and the stronger the restraint becomes.
+        """
+        if getattr(self.format, 'key', '') != 'bust':
+            return 0.0
+        offense = getattr(self, 'offensiveTeam', None)
+        if offense is None:
+            return 0.0
+        used = getattr(self, '_hoopPairResult', None) or {}
+        if 'midfield' in used:
+            return 0.0          # already spent; there is nothing left to protect
+        isHome = offense is self.homeTeam
+        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        if self._hoopPointsNeeded(scoreDiff) not in ('critical', 'helpful'):
+            return 0.0          # no use for the hoop, so no reason to bend the drive
+        from constants import (SIDELINE_GOAL_MIDFIELD_YARD, DARTS_APPROACH_HORIZON_YARDS,
+                               COACH_ATTR_NEUTRAL)
+        room = self.yardsToEndzone - SIDELINE_GOAL_MIDFIELD_YARD
+        if room < 0:
+            return 0.0          # already past it; the pair is gone whatever happens now
+        nearness = 1.0 - min(1.0, room / DARTS_APPROACH_HORIZON_YARDS)
+        coach = getattr(offense, 'coach', None)
+        clockIq = getattr(coach, 'clockManagement', COACH_ATTR_NEUTRAL) if coach else COACH_ATTR_NEUTRAL
+        coachTerm = max(0.0, min(1.0, (float(clockIq) - 60.0) / 40.0))
+        teamTerm = 0.5
+        try:
+            teamTerm = float(offense.collectiveDiscipline())
+        except Exception:
+            pass
+        return max(0.0, min(1.0, 0.5 * (coachTerm + teamTerm) * nearness))
+
+    def _dartsDriveIsDead(self) -> bool:
+        """Darts: this drive can no longer put a single point on the board.
+
+        The remaining need is below a field goal — so a TD is held up short and a FG is
+        refused — AND both sideline-hoop pairs have already been spent, which is the only
+        other way to score. Nothing the offense does for the rest of this possession can
+        change the scoreboard.
+
+        ⚠️ It is not a lost cause, which is why the answer is not "give up": the hoop pairs
+        RESET on every new possession, so ending the drive is precisely how a team restocks
+        the only scoring play it has left. Punting is therefore a positive move here rather
+        than a concession — it buys field position AND two fresh hoops.
+        """
+        if getattr(self.format, 'key', '') != 'bust':
+            return False
+        offense = getattr(self, 'offensiveTeam', None)
+        if offense is None:
+            return False
+        need = self.format.bustNeed(self, offense)
+        if need <= 0 or need >= self._fgValue():
+            return False
+        used = getattr(self, '_hoopPairResult', None) or {}
+        return len(used) >= 2
+
+    def _dartsLeadingOnPoints(self) -> bool:
+        """Darts tiebreak: if the clock beats both teams to the target, the higher score
+        wins. So a dead drive is worth different things to the two sides — see
+        `_dartsDriveIsDead`."""
+        isHome = self.offensiveTeam is self.homeTeam
+        diff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        return diff > 0
 
     def _hoopPointsNeeded(self, scoreDiff: int):
         """How badly the offense needs a sideline-goal point still bankable this drive
@@ -4476,8 +4769,39 @@ class Game:
         if not self._sidelineGoalsActive():
             return None
         pts = int(getattr(self.gameRules, 'sidelineGoalPoints', 1))
-        remainingHoop = max(0, 2 - len(getattr(self, '_hoopPairResult', None) or {})) * pts
+        remainingHoop = max(0, self._hoopPairCount()
+                            - len(getattr(self, '_hoopPairResult', None) or {})) * pts
         if remainingHoop <= 0:
+            return None
+        # ⚠️ DARTS ASKS A DIFFERENT QUESTION ENTIRELY, and everything below this branch is
+        # the wrong one for it. The rest of this method reasons about the DEFICIT against
+        # the opponent — can a FG or TD plus a hoop reach a tie or a lead — and bails out
+        # at `scoreDiff > 0` because a leading team has nothing to chase. In darts the
+        # opponent is irrelevant to the decision: what matters is the distance to the
+        # TARGET, and a team leading 17-3 at X=18 needs a hoop more urgently than anyone.
+        # Measured before this existed: over 30 games there were 531 snaps where a hoop
+        # was the only thing that could land the offense on X, and it shot at 9% — the
+        # standard-football logic was declining the format's own win condition.
+        if getattr(self.format, 'key', '') == 'bust':
+            need = self.format.bustNeed(self, self.offensiveTeam)
+            if need <= 0:
+                return None                      # already there; the game is over
+            fg = self._fgValue()
+            # Below a field goal, a hoop is the ONLY score that does not bust. No
+            # conventional play can put points on the board from here at all.
+            if need < fg:
+                return 'critical' if need <= remainingHoop else None
+            # A conventional score lands it exactly — take that, do not spend downs.
+            if need == fg or need == self._maxPossession():
+                return None
+            # Otherwise hoops BRIDGE to an exact landing — need 4 is one hoop plus a field
+            # goal. ⚠️ Every hoop count has to be tried, not just spending them all: at a
+            # need of 4 with both pairs open, `need - 2` is 2 and matches nothing, so
+            # checking only the full spend reported no use for a hoop in the exact case
+            # this branch exists for.
+            for spend in range(1, int(remainingHoop) + 1):
+                if need - spend in (fg, self._maxPossession()):
+                    return 'helpful'
             return None
         # Tied: a single hoop point breaks the tie and takes the lead.
         if scoreDiff == 0:
@@ -4511,11 +4835,45 @@ class Game:
             return False
         if self._hoopTarget() is None:
             return False
+        isHome = self.offensiveTeam is self.homeTeam
+        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        # ⚠️ IN DARTS THE FINAL-DOWN GUARD INVERTS. It exists because a hoop consumes the
+        # down with no yards, so shooting on the last down forfeits the real scoring play.
+        # Under a target there IS no real scoring play when the remaining need is below a
+        # field goal: a TD is held up short and a FG is refused, so the alternative to
+        # shooting is a snap that cannot score followed by the drive ending anyway.
+        # Coach-scaled rather than automatic (owner, 2026-08-17) — an aggressive coach
+        # hunts the hoop, a cautious one plays field position and waits for a better spot,
+        # so two teams in the same position play it differently.
+        if getattr(self.format, 'key', '') == 'bust':
+            if self._hoopPointsNeeded(scoreDiff) in ('critical', 'helpful'):
+                from constants import (DARTS_HOOP_HUNT_BASE, DARTS_HOOP_HUNT_AGGR_SPAN,
+                                       DARTS_HOOP_LAST_CHANCE_LIFT, DARTS_HOOP_CLOSING_YARDS)
+                coach = getattr(self.offensiveTeam, 'coach', None)
+                aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
+                chance = DARTS_HOOP_HUNT_BASE + ((aggr - 80) / 20.0) * DARTS_HOOP_HUNT_AGGR_SPAN
+                # ⚠️ THE MIDFIELD PAIR IS USE-IT-OR-LOSE-IT (owner, 2026-08-17). It is only
+                # reachable while APPROACHING the 50; once the line of scrimmage crosses it
+                # the hoops are behind the offense and that pair is gone for the drive —
+                # `_hoopTarget` already enforces it. What was missing is the offense ACTING
+                # on the closing window: driving forward is normally pure progress, and here
+                # it silently destroys one of the two scoring options a team needing 1 or 2
+                # points has. So the nearer the ball is to midfield, the more the shot is
+                # worth taking now rather than assuming another chance.
+                #
+                # The end-zone pair needs no such lift: it opens as the offense advances
+                # rather than closing, so there is never a last chance at it.
+                pair = (self._hoopTarget() or (None, 0.0))[0]
+                if pair == 'midfield':
+                    from constants import SIDELINE_GOAL_MIDFIELD_YARD
+                    yardsToCrossing = max(0.0, self.yardsToEndzone - SIDELINE_GOAL_MIDFIELD_YARD)
+                    if yardsToCrossing <= DARTS_HOOP_CLOSING_YARDS:
+                        closeness = 1.0 - (yardsToCrossing / DARTS_HOOP_CLOSING_YARDS)
+                        chance += DARTS_HOOP_LAST_CHANCE_LIFT * closeness
+                return _random.random() < max(0.0, min(1.0, chance))
         # Final down: a hoop always forfeits the scoring play — never shoot.
         if self.down >= self.gameRules.downsPerSeries:
             return False
-        isHome = self.offensiveTeam is self.homeTeam
-        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
         from constants import (SIDELINE_GOAL_ATTEMPT_INRANGE, SIDELINE_GOAL_ATTEMPT_STALL_MULT,
                                SIDELINE_GOAL_ATTEMPT_AGGR_SPAN, SIDELINE_GOAL_ATTEMPT_MAX,
                                SIDELINE_GOAL_DESPERATION_SECS, SIDELINE_GOAL_DESPERATION_CHANCE)
@@ -5025,6 +5383,19 @@ class Game:
     def playCaller(self):
         isHome = (self.offensiveTeam == self.homeTeam)
         scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        # ⚠️ THE MARGIN AN END-GAME DECISION SHOULD REASON OFF, which in frames is NOT the
+        # aggregate. `scoreDiff` above stays the running total because ~15 decisions below
+        # legitimately want it; this is the frame-aware one, identical to `scoreDiff` in
+        # every other format (`_frameDecisionDiff` returns None off frames).
+        #
+        # Reported from production game 469 (Waffles 17-17 Sodas, frames 2.5-3.5): final
+        # frame, frames LEVEL, offense down a TOUCHDOWN in the frame but only 3 on
+        # aggregate, 4th and goal. The end-of-game field-goal branch below asks "trailing by
+        # <= 3?" — true on aggregate, false in the frame — so it kicked, tied the aggregate,
+        # LOST the frame 3-7 and with it the match, while the opponent knelt the clock out.
+        decisionDiff = self._frameDecisionDiff()
+        if decisionDiff is None:
+            decisionDiff = scoreDiff
         coach = getattr(self.offensiveTeam, 'coach', None)
         timeoutsLeft = self.homeTimeoutsRemaining if isHome else self.awayTimeoutsRemaining
 
@@ -5072,9 +5443,18 @@ class Game:
         # scores UP has nothing to gain from scrambling a kick in as the clock or its
         # possession budget expires, and it reads as the sim not knowing the game is over.
         # Owner, on chess clock: "unless the score is a blowout I suppose".
-        _routIsOn = scoreDiff > 3 * self._oneScore()
+        # ⚠️ IN FRAMES, THREE POINTS ARE ONLY WORTH HAVING IF THEY WIN THE FRAME.
+        # `scoreDiff` here is the raw AGGREGATE margin, and this block sits ABOVE the down
+        # split — so on a final down it decides before `_fourthDownCaller`, which is the
+        # caller that already applies the frame hook. Reported from a live game: last frame,
+        # frames level, offense down a TOUCHDOWN in the frame but only 3 on aggregate, 4th
+        # and goal with 0:30 left. The aggregate said a field goal ties it, so it kicked —
+        # losing the frame and with it the match, while the opponent simply knelt out. Every
+        # score test below now reasons off the margin the fourth-down caller would have used.
+        _lastDiff = decisionDiff
+        _routIsOn = _lastDiff > 3 * self._oneScore()
         if (_atDeadline and self._lastSnapBeforeBreak()
-                and not self._isGarbageTime(scoreDiff) and not _routIsOn):
+                and not self._isGarbageTime(_lastDiff) and not _routIsOn):
             _lastKicker = self.offensiveTeam.rosterDict.get('k')
             _lastMax = ((_lastKicker.maxFgDistance - self.gameRules.fgSnapDistance)
                         if _lastKicker else 0)
@@ -5084,7 +5464,7 @@ class Game:
             # resets at the break, so there is no lead to protect. Everywhere else
             # (including a chess-clock lockout and a closing frame) three points have to
             # actually be worth having.
-            _fgSettles = self.currentQuarter == 2 or scoreDiff >= -self._fgValue()
+            _fgSettles = self.currentQuarter == 2 or _lastDiff >= -self._fgValue()
             if 5 < self.yardsToEndzone <= _lastMax and _fgSettles:
                 self.play.insights['clockMgmt'] = {
                     'decision': 'lastSnapFG',
@@ -5820,7 +6200,7 @@ class Game:
         # closer. Aggressive coaches lean toward the conversion attempt;
         # very late (≤30s) the FG is the only realistic option.
         if self.currentQuarter == 4 and self.gameClockSeconds < self.gameRules.timeoutClockThreshold and self.down == self.gameRules.downsPerSeries:
-            if -self._fgValue() <= scoreDiff <= self._fgValue() and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
+            if (-self._fgValue() <= decisionDiff <= self._fgValue() and not self._framesFgFutile()) and self.yardsToEndzone <= kickerMaxFg and (kickerCharged or endGameFgProb >= endGameFgThreshold):
                 canAdvance = self.gameClockSeconds >= 30
                 # A charged kicker's 3 is a sure thing — never gamble it on a conversion.
                 if canAdvance and not kickerCharged and endGameFgProb < 0.55 and self.yardsToFirstDown <= 5:
@@ -11007,6 +11387,11 @@ class Game:
                     'returnYards': getattr(playObj, 'returnYardage', 0) or 0,
                     'returnerName': getattr(getattr(playObj, 'returner', None), 'name', None),
                     'description': getattr(playObj, 'playText', ''),
+                    # ⚠️ THE FEED RENDERS THIS LIST, NOT THE LIVE lastPlay PAYLOAD. Adding
+                    # the names to `broadcastGameState` alone left every play in the feed
+                    # with nothing to emphasise, so no name bolded at all — reported after
+                    # the first fix looked correct in isolation. Two builders, one field.
+                    'involvedPlayers': self._involvedPlayerNames(playObj),
                     'playResult': playObj.playResult.value if hasattr(playObj, 'playResult') and playObj.playResult else None,
                     'hoopPair': getattr(playObj, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                     'conversionPoints': getattr(playObj, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
@@ -11076,6 +11461,14 @@ class Game:
                 'puntTouchback': getattr(self.play, 'puntTouchback', False),
                 'returnYards': getattr(self.play, 'returnYardage', 0) or 0,
                 'returnerName': (getattr(getattr(self.play, 'returner', None), 'name', None)),
+                # ⚠️ THE NAMES, SO THE READER DOES NOT HAVE TO FIND THEM. Play text is one
+                # long sentence and the eye has to hunt for who did what. The frontend
+                # emphasises these, and it can only do that safely if the ENGINE says who
+                # was involved — a client guessing at names would have to invent a rule for
+                # what a name looks like, against a pool that includes "Firstname Lastname"
+                # and every joke in config.json. Exact strings, longest first so a surname
+                # inside a full name cannot match on its own.
+                'involvedPlayers': self._involvedPlayerNames(),
                 'hoopPair': getattr(self.play, 'hoopPair', None),   # Sideline Goals: 'midfield'|'endzone'
                 'conversionPoints': getattr(self.play, 'conversionPoints', None),   # post-TD try rung points (2/3/4/5)
                 'isTouchdown': getattr(self.play, 'isTd', False),
@@ -11193,13 +11586,24 @@ class Game:
                 'limit': getattr(self.gameRules, 'driveClockLimit', 60),
                 'low': self._driveClockLow(),
             } if self._driveClockActive() else None),
-            # Sideline Goals — the two hoop pairs' state for THIS drive (open / made /
+            # Sideline Goals — each hoop pair's state for THIS drive (open / made /
             # missed), so the field graphic can color them (yellow / green / red).
             # `attackingHome` = which end zone the offense is driving toward.
+            # ⚠️ `midrangeYard` is sent rather than hardcoded client-side: the graphic draws
+            # hoops at fixed field positions, so moving the pair in constants.py would
+            # otherwise leave it drawing the old spot. Absent when the pair is switched off,
+            # and the client falls back to the two-pair field.
             'sidelineGoals': ({
                 'active': True,
+                'pairs': self._hoopPairCount(),
+                **self._hoopFieldPositions(),
                 'midfield': (getattr(self, '_hoopPairResult', None) or {}).get('midfield', 'open'),
                 'endzone': (getattr(self, '_hoopPairResult', None) or {}).get('endzone', 'open'),
+                # Only present when the third pair is switched on; the field graphic
+                # ignores an unknown key, so an older client degrades to drawing two.
+                'midrange': ((getattr(self, '_hoopPairResult', None) or {}).get('midrange', 'open')
+                             if self._hoopPairCount() > 2 else None),
+
                 'attackingHome': self.offensiveTeam is self.homeTeam,
             } if getattr(self.gameRules, 'sidelineGoalsEnabled', False) else None),
             'momentum': round(getattr(self, 'momentum', 0.0), 1),

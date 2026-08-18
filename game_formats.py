@@ -50,6 +50,21 @@ class GameFormat:
     key = 'standard'
     label = 'Standard'
 
+    # ── Rules the format REQUIRES ─────────────────────────────────────────────
+    def bundledRules(self) -> dict:
+        """Rule flags this format cannot work without, applied when it is resolved.
+
+        A format is a strategy over the rules, but some formats have a PREREQUISITE — a
+        mechanic without which their win condition is unreachable rather than merely
+        different. Those belong to the format itself, not to whichever preset happened to
+        turn it on, or the same format plays a different game depending on how it was
+        activated.
+
+        Only ever turns things ON. A format asserting what it needs is reasonable; a
+        format silently switching off a rule the league voted for is not.
+        """
+        return {}
+
     # ── End condition ─────────────────────────────────────────────────────────
     def checkEarlyEnd(self, game) -> Optional[bool]:
         """Return True/False to decide the game BEFORE the engine's standard
@@ -955,6 +970,27 @@ class BustFormat(GameFormat):
     TD — dink the exact remainder with a FG / hoop."""
     key = 'bust'
     label = 'Darts'
+
+    def bundledRules(self) -> dict:
+        """⚠️ THE 1-POINT HOOP IS A PREREQUISITE, NOT A GARNISH, and this class only
+        CLAIMED to bundle it — the flag lived in the commented-out rule-vote preset, so
+        darts activated any other way ran without it.
+
+        Without a 1-pointer the smallest score is a 3-point field goal, so a team sitting
+        on X-1 or X-2 can never land on X at all: the win condition is unreachable from
+        the two positions closest to winning. Measured over 40 games at X=18, hoops off
+        against hoops on:
+
+            landed exactly on X          8%  ->  78%
+            team-scores stranded at X-1/X-2   38  ->  12
+            ties                          3  ->   0
+
+        i.e. without them darts is not a game about landing on a number, it is ordinary
+        football with a ceiling, decided by the clock. The engine already special-cases
+        this format for hoop range (`floosball_game` ~:4542), which is the same intent
+        expressed in the one place it could not be forgotten.
+        """
+        return {'sidelineGoalsEnabled': True}
 
     def _target(self, game) -> int:
         return int(getattr(game.gameRules, 'targetScore', 18))

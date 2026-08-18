@@ -81,6 +81,12 @@ ANNOUNCEMENT_CATEGORIES = {'announcement'}
 # tenth notice up there almost certainly meant to unpin one first.
 PINNED_MAX = 5
 
+# Largest number of ROWS one pinned item can be. A pinned Cores conversation is a single
+# item spread over several turn rows, and the pinned fetch is row-limited — see the note at
+# the query. Mirrors `api.main.ADMIN_CONVERSATION_MAX_TURNS`; it is a fetch headroom rather
+# than a rule, so the two drifting apart costs a truncated fetch, not a wrong feed.
+PINNED_MAX_TURNS = 6
+
 # The feed is Cores/meta-simulation centric (owner, 2026-08-08), so these categories get a
 # bigger share of the visible rows than the league's own results do.
 #
@@ -187,6 +193,17 @@ def _groupExchanges(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         entry['text'] = rows[0].get('text') or entry.get('text') or ''
         entry['core'] = rows[0].get('core')
         entry['coreDisplayName'] = rows[0].get('coreDisplayName')
+        # ⚠️ THE GROUP IS SEEDED FROM WHICHEVER TURN CAME FIRST OUT OF THE QUERY — the
+        # NEWEST, since rows arrive newest-first — so `pinned` and `leadWeight` would be
+        # read off the last line of the conversation alone. A hand-written exchange posted
+        # to headline is pinned on every turn, but a single unpinned turn arriving first
+        # (an edit, a partially-pinned exchange) would silently drop the whole thing out
+        # of the lead. The exchange is one item, so its flags are the strongest any turn
+        # carries.
+        entry['pinned'] = any(t.get('pinned') for t in rows)
+        weights = [t.get('leadWeight') for t in rows if t.get('leadWeight') is not None]
+        if weights:
+            entry['leadWeight'] = max(weights)
     return grouped
 
 
@@ -241,11 +258,18 @@ def buildLeagueNews(app, session, limit: int = 8) -> Dict[str, Any]:
     # within a day. Merged by id so a pinned row that IS still in the window is not
     # duplicated.
     try:
+        # ⚠️ THE LIMIT IS IN ROWS AND `PINNED_MAX` IS IN ITEMS, which are the same number
+        # only until a pinned CORES CONVERSATION exists. An exchange is one item and up to
+        # `ADMIN_CONVERSATION_MAX_TURNS` rows, so a flat limit of 5 would fetch part of a
+        # four-turn conversation plus two other notices and render the conversation with
+        # its opening lines missing — worse than not pinning it, because it reads as
+        # complete. Fetch enough rows for every pinned item to arrive whole; grouping
+        # collapses them back to `PINNED_MAX` items or fewer.
         pinnedRows = (
             session.query(LeagueNewsItem)
             .filter(LeagueNewsItem.pinned.is_(True))
             .order_by(LeagueNewsItem.created_at.desc(), LeagueNewsItem.id.desc())
-            .limit(PINNED_MAX)
+            .limit(PINNED_MAX * PINNED_MAX_TURNS)
             .all()
         )
         seen = {r.id for r in rows}

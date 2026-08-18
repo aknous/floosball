@@ -5159,13 +5159,23 @@ def _computeChainReaction(primary, ctx, cardPlayerId, eqId):
 # the seat count. `test_effect_copy.py` asserts it stays reachable.
 _BONUS_ROUND_THRESHOLD = 4
 
-_FULL_HOUSE_MIN_CARDS = 5   # Full House (full_roster) needs at least this many first-pass
-                            # gated (effect) cards present AND all ON to fire. A full 6-slot
-                            # effect lineup that includes Full House itself (second-pass, so
-                            # not counted) leaves exactly 5 first-pass value cards, so this
-                            # means "your other five slots all showed up." Fewer performing
-                            # cards than this and it can't fire (you haven't fielded a full
-                            # squad). See _computeFullRoster.
+# ⚠️ 5 MADE THIS CARD UNPLAYABLE IN PRACTICE, not merely demanding. The lineup is 6 slots;
+# Full House takes one and is second-pass so it does not count itself, leaving exactly 5 —
+# meaning it fired ONLY on a perfect hand with no base prints AND no cross cards at all.
+# One Copycat, Lemons, Chain Reaction, Bonus Round, Last Resort, High Roller, Fortitude or
+# Charmed anywhere in the hand and it became mathematically impossible, silently. Reported
+# by a user whose lineup was touchdown_pinata / Full House / allowance / diversified /
+# copycat / alchemy: four gated cards, needed five, could not fire in any week.
+#
+# 4 leaves room for exactly one cross card or one floor print while still demanding a
+# broadly performing lineup.
+#
+# ⚠️ DEFERRED (owner, agreed): second-pass cards should COUNT toward this, which is what the
+# card's own text already claims ("every card in your lineup"). That needs the calculator to
+# resolve their gates before Full House computes, so it is a bigger change than this
+# threshold; until then a cross card is a free pass rather than a disqualifier.
+_FULL_HOUSE_MIN_CARDS = 4   # first-pass gated (effect) cards that must be present AND all ON.
+                            # See _computeFullRoster.
 
 
 def _computeBonusRound(primary, ctx, cardPlayerId, eqId):

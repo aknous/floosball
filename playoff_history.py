@@ -86,8 +86,14 @@ def buildPlayoffHistory(session, teamId: int) -> List[Dict[str, Any]]:
         isHome = g.home_team_id == teamId
         ours = g.home_score if isHome else g.away_score
         theirs = g.away_score if isHome else g.home_score
+        # ⚠️ The stored winner decides, not the points. A frames playoff game is won on
+        # frames, so `ours > theirs` would report the wrong side — and a wrong playoff run
+        # is worse than a wrong regular-season row, since this drives how deep a club is
+        # shown to have gone. Falls back to points for rows predating the column.
+        winnerId = getattr(g, 'winner_team_id', None)
+        won = (winnerId == teamId) if winnerId is not None else (ours > theirs)
         bySeason.setdefault(g.season, {})[rnd] = {
-            'won': ours > theirs,
+            'won': won,
             'for': ours, 'against': theirs,
             'opponentId': g.away_team_id if isHome else g.home_team_id,
             'gameId': g.id,

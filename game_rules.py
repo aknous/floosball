@@ -127,8 +127,13 @@ class GameRules:
     # Quidditch-style: on any down the offense may throw at a sideline hoop for
     # bonus points. A MAKE banks `sidelineGoalPoints` and CONSUMES the down but the
     # drive continues (no yards gained → repeated shots march toward a turnover on
-    # downs). A MISS is a turnover at the current line of scrimmage (a rare tipped
-    # throw is a returnable INT). Make prob emerges from the QB's accuracy/arm vs the
+    # downs). A MISS is an INCOMPLETION — the down is consumed, that pair is locked for
+    # the drive, and possession does NOT change. ⚠️ This line used to read "a turnover at
+    # the current line of scrimmage (a rare tipped throw is a returnable INT)", which the
+    # implementation has never done: `_executeHoopShot` sets `SidelineHoopMiss` and
+    # nothing downstream changes possession. Corrected 2026-08-17 while settling darts,
+    # where the difference decides whether a team dares shoot at all.
+    # Make prob emerges from the QB's accuracy/arm vs the
     # hoop, minus defensive pressure (tunables in constants.py `SIDELINE_GOAL_*`).
     # Off by default; a Cores vote flips the gate. Fine-grained 1-pt scoring is the
     # prerequisite for the 'bust'/darts game format (which bundles this on).
