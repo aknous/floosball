@@ -341,7 +341,7 @@ def buildFormAndMovement(session, season: int,
     rows = (
         session.query(
             Game.week, Game.home_team_id, Game.away_team_id,
-            Game.home_score, Game.away_score,
+            Game.home_score, Game.away_score, Game.winner_team_id,
         )
         .filter(
             Game.season == season,
@@ -358,10 +358,18 @@ def buildFormAndMovement(session, season: int,
     # BEFORE the newest week that has produced a result.
     latestWeek = max((r[0] for r in rows), default=0)
 
-    for gameWeek, homeId, awayId, homeScore, awayScore in rows:
+    for gameWeek, homeId, awayId, homeScore, awayScore, winnerId in rows:
         homeScore = homeScore or 0
         awayScore = awayScore or 0
-        if homeScore > awayScore:
+        # ⚠️ THE STORED WINNER FIRST, AND THE SCORES ONLY AS A FALLBACK. In frames the
+        # match is decided by frames won and points only break a level match, so comparing
+        # scores here marked the wrong side — a frames win showed as a red 'L' in Last 5
+        # while the club's record counted it as a win. The fallback covers rows finished
+        # before the column existed and not yet backfilled; for every points-decided format
+        # it gives the same answer.
+        if winnerId is not None:
+            homeMark, awayMark = ('W', 'L') if winnerId == homeId else ('L', 'W')
+        elif homeScore > awayScore:
             homeMark, awayMark = 'W', 'L'
         elif awayScore > homeScore:
             homeMark, awayMark = 'L', 'W'

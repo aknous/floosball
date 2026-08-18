@@ -2661,6 +2661,31 @@ class SeasonManager:
         except Exception:
             return {}
 
+    def _applyWinnerToRow(self, dbRow, game) -> None:
+        """Persist WHO WON, from the format's own rule rather than the scores.
+
+        ⚠️ THE SCORES DO NOT ALWAYS SAY. Frames is decided by frames won and falls to
+        points only when those are level, so `home_score > away_score` is the wrong
+        question there — and it was the only question every downstream reader could ask,
+        because the winner was never stored. Reported on a frames game whose team page
+        showed a win, whose standings Last-5 showed a loss, and whose recap email listed an
+        L against a record that had counted it as a W: one game, four surfaces, two
+        answers.
+
+        `format.winnerSide` is the authority — the same rule the engine used to decide the
+        match — so a format added later is right here for free. NULL for a draw.
+        """
+        try:
+            side = game.format.winnerSide(game)
+            if side == 'home':
+                dbRow.winner_team_id = game.homeTeam.id
+            elif side == 'away':
+                dbRow.winner_team_id = game.awayTeam.id
+            else:
+                dbRow.winner_team_id = None
+        except Exception:
+            logger.debug("Could not resolve winner for game", exc_info=True)
+
     def _applyFormatStateToRow(self, dbRow, game) -> None:
         """Persist the format's display state (innings line score, frames results, ...) so
         the box score survives a restart. It's only ever computed live, so a finished game
@@ -3137,6 +3162,7 @@ class SeasonManager:
                     self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
                     self._applyFormatStateToRow(db_game, game)
                     self._applyTeamStatsToRow(db_game, game)
+                    self._applyWinnerToRow(db_game, game)
                     self.db_session.flush()
                     playerStats = self._extractPlayerStatsFromGame(game)
                     if playerStats:
@@ -3173,6 +3199,7 @@ class SeasonManager:
             self._applyGameStatsToRow(db_game, game.gameDict.get('gameStats'))
             self._applyFormatStateToRow(db_game, game)
             self._applyTeamStatsToRow(db_game, game)
+            self._applyWinnerToRow(db_game, game)
             self.game_repo.save(db_game)
             self.db_session.flush()  # Get the ID
 

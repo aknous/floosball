@@ -2637,7 +2637,12 @@ GAME_FORMAT_PRESETS = [
     # `BustFormat.bundledRules`, where every activation path gets it. It was here alone,
     # so darts switched on any other way was a different game — 8% of finishes landed on
     # X instead of 85%.
-    {"key": "gf_bust_21",        "label": "Darts (land on 21)",
+    # ⚠️ `chaosEligible: False` KEEPS DARTS OUT OF CRITICALITY CHAOS (owner, 2026-08-18)
+    # while the format is still being worked on. Chaos picks a format per game at random,
+    # hides it from users, and the results COUNT — which is the wrong place to debut a
+    # format whose endgame is still being tuned. It stays a normal vote preset, so a league
+    # can still choose it deliberately; this only stops it arriving by surprise.
+    {"key": "gf_bust_21",        "label": "Darts (land on 21)", "chaosEligible": False,
      "patch": {"gameFormat": "bust", "targetScore": 21,
                "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
                "extraPointPoints": 1, "twoPointConversionPoints": 2}},

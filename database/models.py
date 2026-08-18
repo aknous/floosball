@@ -740,6 +740,15 @@ class Game(Base):
     # Scores
     home_score: Mapped[int] = mapped_column(Integer, default=0)
     away_score: Mapped[int] = mapped_column(Integer, default=0)
+    # ⚠️ WHO WON, PERSISTED — because in some formats the SCORES DO NOT SAY. Frames is
+    # decided by frames won, with points only breaking a level match, so `home_score >
+    # away_score` is simply the wrong question there. Nothing used to store this, so every
+    # surface re-derived it from the scores and the ones holding only scores got frames
+    # games backwards: reported as a game whose team page showed a win, whose standings
+    # Last-5 showed a loss, and whose recap email listed an L against a record that counted
+    # it as a W. NULL means a draw or a game that is not final.
+    winner_team_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("teams.id"),
+                                                          nullable=True)
     
     # Quarter scores
     home_score_q1: Mapped[int] = mapped_column(Integer, default=0)
