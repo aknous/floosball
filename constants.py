@@ -2556,31 +2556,43 @@ GAME_FORMAT_PRESETS = [
     #     X=10  98%   X=12  98%   X=15  88%   X=18  84%
     #     X=21  66%   X=24  58%   X=30  30%
     #
-    # So a new darts preset belongs at 18 or below. ⚠️ `GameRules.targetScore` DEFAULTS to
-    # 30 — it belongs to the 'target' format ("first to 30") — so darts activated without a
-    # patch inherits a target it plays badly at. `BustFormat._target` documents 18 as its
-    # own fallback and cannot apply it, because the field is always present. The preset is
-    # the supported way in; anything else needs the target set deliberately.
+    # ⚠️ SHIPPED AT 21 (owner, 2026-08-18: "higher is better. 21-24"), trading some target
+    # finishes for a longer game — two thirds still land on the number, pre-halftime
+    # finishes drop 35% -> 19%, and a game runs ~138 plays against a standard ~157. 24 is
+    # the far end of the owner's range and was not taken: it puts 46% of games on the
+    # clock, which is the point where the format stops being about landing on a number.
+    # Anything above 24 is out of the certified band entirely.
+    #
+    # ⚠️ `GameRules.targetScore` DEFAULTS to 30 — it belongs to the 'target' format ("first
+    # to 30") — so darts activated without a patch inherits a target it plays badly at.
+    # `BustFormat._target` documents its own fallback and cannot apply it, because the
+    # field is always present. The preset is the supported way in; anything else needs the
+    # target set deliberately.
     #
     # Scoring stays mixed at 18 rather than degenerating into dinking 1-pointers:
     # TD 38% / FG 33% / hoop 30% of all points banked.
     #
-    # GAME LENGTH at 18: the target is reached at a median 66% of regulation (~40 of 60
-    # game-minutes, ~125 plays against a standard game's ~157), split Q2 27% / Q3 35% /
-    # Q4 37% — none in Q1. About a third finish before halftime, and ⚠️ THOSE ARE THE
-    # DECIDED GAMES, not truncated close ones: the loser's median score in a pre-halftime
-    # finish is 6 of 18 and NOT ONE was within 4, against a loser's median of 12 after
-    # halftime. The format mercy-rules itself. Raising the target lengthens games and
-    # costs target finishes on exactly the curve above (X=21: 70% landed, 19% pre-half,
-    # 138 plays), so it is a real dial if early endings ever feel wrong.
+    # GAME LENGTH at the shipped 21: the target is reached at a median 73% of regulation
+    # (~44 of 60 game-minutes, ~141 plays against a standard game's ~155, i.e. 91% of a
+    # full game), split Q2 18% / Q3 38% / Q4 43% — none in Q1. 18% finish before halftime,
+    # and ⚠️ THOSE ARE THE DECIDED GAMES, not truncated close ones: measured at 18, the
+    # loser's median score in a pre-halftime finish was 6 of 18 and NOT ONE was within 4,
+    # against a loser's median of 12 after halftime. The format mercy-rules itself.
+    #
+    # A TIE AT THE END OF REGULATION GOES TO ORDINARY OVERTIME — `checkEarlyEnd` returns
+    # None when nobody has landed, so the standard clock/OT path takes it, and darts
+    # scoring still applies inside OT (a busting score is still void, so it is usually
+    # decided by landing). Measured over 270 games at 18/21/24: OT is reached 0-2% of the
+    # time, every OT game ended by landing on the target, and there were ZERO draws. The
+    # engine's `MAX_OT_PERIODS` (5) backstop accepts a tie and was never reached.
     # ⚠️ `sidelineGoalsEnabled` is NOT listed here any more, and removing it was the fix
     # rather than an omission: the 1-point hoop is darts' prerequisite (without it the
     # smallest score is 3, so a team on X-1 can never land) and it now lives in
     # `BustFormat.bundledRules`, where every activation path gets it. It was here alone,
     # so darts switched on any other way was a different game — 8% of finishes landed on
     # X instead of 85%.
-    {"key": "gf_bust_18",        "label": "Darts (land on 18)",
-     "patch": {"gameFormat": "bust", "targetScore": 18,
+    {"key": "gf_bust_21",        "label": "Darts (land on 21)",
+     "patch": {"gameFormat": "bust", "targetScore": 21,
                "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
                "extraPointPoints": 1, "twoPointConversionPoints": 2}},
 ]
