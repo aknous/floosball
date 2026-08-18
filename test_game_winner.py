@@ -206,6 +206,52 @@ class TheBackfillCanRecoverHistory(unittest.TestCase):
         self.assertIn("LOWER(status) = 'final'", body)
         self.assertNotIn("status = 'Final'", body)
 
+    def test_theBackfillActuallyRUNS(self):
+        """⚠️ THE TEST THAT WAS MISSING, AND THE REASON THIS SHIPPED BROKEN.
+
+        Every other assertion here checks the backfill's SQL and its decision rule by
+        reading the source or reimplementing the logic. None of them CALLED it. It used
+        `text(...)` without importing it — every neighbouring backfill imports it inside its
+        own body — so it raised NameError on its first statement on every boot, and its own
+        `except Exception` turned that into a one-line warning. The migration log looked
+        healthy. Measured on production after the deploy: 575 final games, 0 with a winner.
+
+        Calling it against a real schema is the only thing that catches a missing name.
+        """
+        import sqlite3
+        import tempfile
+        import os
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.orm import sessionmaker
+        import database.connection as dbc
+
+        path = os.path.join(tempfile.mkdtemp(), 'winners.db')
+        raw = sqlite3.connect(path)
+        raw.executescript("""
+            CREATE TABLE games (id INTEGER PRIMARY KEY, home_team_id INT, away_team_id INT,
+                                home_score INT, away_score INT, status TEXT,
+                                format_state TEXT, winner_team_id INT);
+            INSERT INTO games VALUES (1, 11, 22, 24, 17, 'final', NULL, NULL);
+            INSERT INTO games VALUES (2, 11, 22, 25, 24, 'final',
+                '{"frames": {"active": true, "framesWonHome": 2.5, "framesWonAway": 3.5}}', NULL);
+            INSERT INTO games VALUES (3, 11, 22, 17, 17, 'final', NULL, NULL);
+        """)
+        raw.commit(); raw.close()
+
+        engine, session = dbc.engine, dbc.SessionLocal
+        try:
+            dbc.engine = create_engine(f'sqlite:///{path}')
+            dbc.SessionLocal = sessionmaker(bind=dbc.engine, autocommit=False, autoflush=False)
+            dbc._backfillGameWinners()
+            rows = dict(dbc.engine.connect().execute(
+                text('SELECT id, winner_team_id FROM games')).fetchall())
+        finally:
+            dbc.engine, dbc.SessionLocal = engine, session
+
+        self.assertEqual(rows[1], 11, 'points-decided game not filled')
+        self.assertEqual(rows[2], 22, 'frames winner lost to the points comparison')
+        self.assertIsNone(rows[3], 'a draw should stay NULL')
+
     def test_theMigrationExists(self):
         """alembic does not run on deploy, so the column needs an inline migration."""
         with open('database/connection.py') as fh:

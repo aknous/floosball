@@ -2302,6 +2302,12 @@ def _backfillGameWinners():
     NULL by design so it cannot be repeatedly "fixed".
     """
     import json as _json
+    # ⚠️ `text` IS NOT MODULE-LEVEL IN THIS FILE — every neighbouring backfill imports it
+    # inside its own body, and this one did not. It therefore raised NameError on its first
+    # statement on every boot, and the function's own `except Exception` turned that into a
+    # one-line warning, so the migration log looked healthy while zero rows were repaired.
+    # Measured on production after the deploy: 575 final games, 0 with a winner set.
+    from sqlalchemy import text
     session = get_session()
     try:
         rows = session.execute(text(
