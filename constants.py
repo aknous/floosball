@@ -2564,6 +2564,15 @@ GAME_FORMAT_PRESETS = [
     #
     # Scoring stays mixed at 18 rather than degenerating into dinking 1-pointers:
     # TD 38% / FG 33% / hoop 30% of all points banked.
+    #
+    # GAME LENGTH at 18: the target is reached at a median 66% of regulation (~40 of 60
+    # game-minutes, ~125 plays against a standard game's ~157), split Q2 27% / Q3 35% /
+    # Q4 37% — none in Q1. About a third finish before halftime, and ⚠️ THOSE ARE THE
+    # DECIDED GAMES, not truncated close ones: the loser's median score in a pre-halftime
+    # finish is 6 of 18 and NOT ONE was within 4, against a loser's median of 12 after
+    # halftime. The format mercy-rules itself. Raising the target lengthens games and
+    # costs target finishes on exactly the curve above (X=21: 70% landed, 19% pre-half,
+    # 138 plays), so it is a real dial if early endings ever feel wrong.
     # ⚠️ `sidelineGoalsEnabled` is NOT listed here any more, and removing it was the fix
     # rather than an omission: the 1-point hoop is darts' prerequisite (without it the
     # smallest score is 3, so a team on X-1 can never land) and it now lives in

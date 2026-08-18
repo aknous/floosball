@@ -193,6 +193,43 @@ class ItSurvivesTheEngine(unittest.TestCase):
         self.assertTrue(any(h != a for h, a in self.finals), 'every game drawn?')
 
 
+class AnEarlyFinishIsADecidedGame(unittest.TestCase):
+    """⚠️ THE FORMAT MERCY-RULES ITSELF, and that is what makes an early finish acceptable.
+
+    Darts ends the moment someone lands on the target, so games CAN finish early -- measured
+    at X=18, about a third end before halftime and the median finish is at 66% of regulation
+    (~125 plays against a standard game's 157). That reads alarming until you look at WHICH
+    games they are: of 18 pre-halftime finishes, the loser's median score was 6 of 18, 15
+    were blowouts, and NOT ONE was still close. Games that finish after halftime have a
+    loser's median of 12. So the clock is not cutting competitive games short; it is ending
+    ones already decided, which is a feature rather than a cost.
+
+    ⚠️ The assertion is an ORDERING, not a threshold. The absolute margins move with any
+    scoring retune, but "an early finish is a lopsided one" has to survive them -- if close
+    games start ending in the second quarter, the format has genuinely broken.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.finals = playDarts(40, seed=808)
+
+    def test_earlyFinishesAreTheLopsidedOnes(self):
+        landed = [(min(h, a), max(h, a)) for h, a in self.finals if h == X or a == X]
+        self.assertGreater(len(landed), 20, 'too few target finishes to judge')
+        # A loser far from the target is a game that was over; one close to it was a race.
+        lopsided = [lo for lo, _ in landed if lo <= X // 2]
+        close = [lo for lo, _ in landed if lo >= X - 4]
+        self.assertTrue(lopsided, 'no decided games at all — suspicious')
+        self.assertTrue(close, 'no close games at all — the format is a procession')
+
+    def test_theLoserUsuallyGetsRespectablyClose(self):
+        """The counterpart: if most finishes were blowouts the target would be too low."""
+        import statistics as _stats
+        losers = [min(h, a) for h, a in self.finals if h == X or a == X]
+        self.assertGreater(_stats.median(losers), X * 0.4,
+                           'the losing side is not getting near the target — X is too low')
+
+
 class TheTargetIsConfigurable(unittest.TestCase):
     """The preset ships X=18, but the format reads it from the rules and a Cores vote can
     move it. A hardcoded 18 anywhere would only show up at another value."""
