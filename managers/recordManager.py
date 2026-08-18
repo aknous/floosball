@@ -701,6 +701,253 @@ class RecordManager:
         except Exception as e:
             self.logger.error(f"Failed to update record from DB: {e}")
     
+    # Which stored stat backs each record. ⚠️ THE BLOB KEYS ARE IDENTICAL across
+    # game_player_stats, player_season_stats and player_career_stats, which is what lets one
+    # extractor serve all three scopes — the alternative was three near-identical mappings,
+    # and a record book is exactly the place where a copy-paste slip goes unnoticed for a
+    # season. Verified against production: every key here appears in the real blobs.
+    _PLAYER_RECORD_SOURCES = {
+        'passing':   ('passing_stats',   {'yards': 'yards', 'tds': 'tds',
+                                          'comps': 'comp', 'ints': 'ints'}),
+        'rushing':   ('rushing_stats',   {'yards': 'yards', 'tds': 'tds',
+                                          'fumbles': 'fumblesLost'}),
+        'receiving': ('receiving_stats', {'yards': 'yards', 'tds': 'tds',
+                                          'receptions': 'receptions'}),
+        'kicking':   ('kicking_stats',   {'fgs': 'fgs', 'fgYards': 'fgYards'}),
+    }
+    # players.fantasy.<scope> is keyed by POSITION, not by stat — the record is "most
+    # fantasy points by a QB". Position is stored as the enum's value.
+    _FANTASY_POSITION_KEYS = {1: 'qb', 2: 'rb', 3: 'wr', 4: 'te', 5: 'k'}
+
+    _TEAM_SEASON_SOURCES = {'yards': 'total_yards', 'tds': 'touchdowns', 'pts': 'points',
+                            'ints': 'interceptions', 'fumRec': 'fumbles_recovered',
+                            'elo': 'elo'}
+
+    def _raiseRecord(self, node, value, holderId, nameFor):
+        """Raise one record if `value` beats it. Returns 1 if it moved, else 0.
+
+        ⚠️ ONLY EVER RAISES — see `seedTeamGameRecordsFromHistory`. A value already above
+        anything in the tables was set live this session, and lowering it would be the same
+        loss the seed exists to repair. It is also what makes every seed idempotent.
+        """
+        if node is None or value is None:
+            return 0
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return 0
+        if value <= 0 or value <= float(node.get('value') or 0):
+            return 0
+        node.update({'value': value, 'id': holderId,
+                     'name': nameFor(holderId) or node.get('name')})
+        return 1
+
+    def seedPlayerRecordsFromHistory(self, session) -> int:
+        """Raise every PLAYER record — game, season and career — from the stored stat rows.
+
+        Three tables, one extractor: `game_player_stats` for the single-game marks,
+        `player_season_stats` for the season marks, `player_career_stats` for career. Each
+        carries the same JSON blobs, so the per-stat mapping is written once.
+        """
+        from sqlalchemy import text
+        import json as _json
+
+        names = {}
+        try:
+            for pid, pname, pos in session.execute(text(
+                    "SELECT id, name, position FROM players")).fetchall():
+                names[pid] = (pname, pos)
+        except Exception as e:
+            self.logger.warning(f"Player record seed skipped: {e}")
+            return 0
+        nameFor = lambda pid: (names.get(pid) or (None, None))[0]
+
+        scopes = (
+            ('game', 'game_player_stats'),
+            ('season', 'player_season_stats'),
+            ('career', 'player_career_stats'),
+        )
+        raised = 0
+        for scope, table in scopes:
+            blobCols = sorted({col for col, _ in self._PLAYER_RECORD_SOURCES.values()})
+            try:
+                rows = session.execute(text(
+                    f"SELECT player_id, fantasy_points, {', '.join(blobCols)} FROM {table}"
+                )).fetchall()
+            except Exception as e:
+                self.logger.warning(f"Record seed skipped for {table}: {e}")
+                continue
+
+            for row in rows:
+                playerId, fantasyPoints = row[0], row[1]
+                blobs = dict(zip(blobCols, row[2:]))
+                for group, (blobCol, statMap) in self._PLAYER_RECORD_SOURCES.items():
+                    raw = blobs.get(blobCol)
+                    if not raw:
+                        continue
+                    try:
+                        stats = _json.loads(raw) or {}
+                    except Exception:
+                        continue
+                    target = self.getRecords()['players'].get(group, {}).get(scope, {})
+                    for recordKey, statKey in statMap.items():
+                        raised += self._raiseRecord(target.get(recordKey),
+                                                    stats.get(statKey), playerId, nameFor)
+                # Fantasy is filed by the player's POSITION rather than by a stat name.
+                position = (names.get(playerId) or (None, None))[1]
+                posKey = self._FANTASY_POSITION_KEYS.get(position)
+                if posKey:
+                    fantasy = self.getRecords()['players'].get('fantasy', {}).get(scope, {})
+                    raised += self._raiseRecord(fantasy.get(posKey), fantasyPoints,
+                                                playerId, nameFor)
+        if raised:
+            self.logger.info(f"  Seeded {raised} player record(s) from stored stats")
+        return raised
+
+    def seedTeamSeasonAndAllTimeRecordsFromHistory(self, session) -> int:
+        """Raise the team SEASON and ALL-TIME records from the stored season rows.
+
+        Season marks come from `team_season_stats` directly. All-time wins and losses are
+        the sum of a club's seasons; the title counts come from the `championships` table,
+        which is the authority the rest of the app already uses.
+        """
+        from sqlalchemy import text
+        raised = 0
+        names = {}
+        try:
+            for tid, city, name in session.execute(text(
+                    "SELECT id, city, name FROM teams")).fetchall():
+                names[tid] = f"{city} {name}".strip()
+        except Exception as e:
+            self.logger.warning(f"Team record seed skipped: {e}")
+            return 0
+        nameFor = lambda tid: names.get(tid)
+
+        seasonRecords = self.getRecords()['team'].get('season', {})
+        cols = list(self._TEAM_SEASON_SOURCES.values())
+        try:
+            rows = session.execute(text(
+                f"SELECT team_id, {', '.join(cols)} FROM team_season_stats")).fetchall()
+        except Exception as e:
+            self.logger.warning(f"Team season seed skipped: {e}")
+            rows = []
+        for row in rows:
+            teamId = row[0]
+            for offset, recordKey in enumerate(self._TEAM_SEASON_SOURCES):
+                raised += self._raiseRecord(seasonRecords.get(recordKey),
+                                            row[1 + offset], teamId, nameFor)
+
+        allTime = self.getRecords()['team'].get('allTime', {})
+        try:
+            for teamId, wins, losses in session.execute(text(
+                    "SELECT team_id, SUM(wins), SUM(losses) FROM team_season_stats "
+                    "GROUP BY team_id")).fetchall():
+                raised += self._raiseRecord(allTime.get('wins'), wins, teamId, nameFor)
+                raised += self._raiseRecord(allTime.get('losses'), losses, teamId, nameFor)
+        except Exception as e:
+            self.logger.warning(f"Team all-time seed skipped: {e}")
+
+        # ⚠️ `titles` is the FLOOS BOWL count, matching the tree's split into
+        # titles / leagueTitles / regSeasonTitles.
+        titleKeys = {'floosbowl': 'titles', 'league': 'leagueTitles',
+                     'regular_season': 'regSeasonTitles'}
+        try:
+            for kind, teamId, count in session.execute(text(
+                    "SELECT championship_type, team_id, COUNT(*) FROM championships "
+                    "GROUP BY championship_type, team_id")).fetchall():
+                recordKey = titleKeys.get(kind)
+                if recordKey:
+                    raised += self._raiseRecord(allTime.get(recordKey), count,
+                                                teamId, nameFor)
+        except Exception as e:
+            self.logger.warning(f"Title seed skipped: {e}")
+
+        if raised:
+            self.logger.info(f"  Seeded {raised} team season/all-time record(s)")
+        return raised
+
+    def seedTeamGameRecordsFromHistory(self, session) -> int:
+        """Raise the TEAM game records to what the played games actually contain.
+
+        ⚠️ THE RECORD BOOK WAS NEVER SAVED. `saveRecordsToFile` had no caller outside the
+        tests, so the `records` table sat at zero rows and the whole tree rebuilt from
+        nothing on every restart. Persisting from here on fixes the future, but the values
+        currently in memory are whatever has happened since the last deploy — so saving
+        them would simply make today's wrong numbers durable. The reported symptom was a
+        41-point game announced as the single-game team points record when the real mark is
+        94.
+
+        Team game records are the ones history can answer: the games table holds every
+        final score and the per-team rushing/passing splits. Player, season and career
+        marks are NOT reseeded here — they would need `game_player_stats` and the season
+        and career tables, which is a much larger mapping and a separate job.
+
+        ⚠️ ONLY EVER RAISES. A value already in the tree that is higher than anything in
+        the table is a live record set this session, and lowering it would be the same
+        class of loss this method exists to repair. That also makes it idempotent.
+
+        Returns how many records it raised.
+        """
+        try:
+            from sqlalchemy import text
+        except Exception:
+            return 0
+        try:
+            rows = session.execute(text(
+                "SELECT home_team_id, away_team_id, home_score, away_score, "
+                "       home_rush_yards, home_pass_yards, away_rush_yards, away_pass_yards, "
+                "       home_rush_tds, home_pass_tds, away_rush_tds, away_pass_tds "
+                "FROM games WHERE LOWER(status) = 'final'"
+            )).fetchall()
+        except Exception as e:
+            self.logger.warning(f"Team record seed skipped: {e}")
+            return 0
+
+        # ⚠️ Names come from the TABLE, not from `team_manager`. The seed runs during
+        # startup, and depending on a service being wired by then is exactly the kind of
+        # ordering assumption that leaves a record book full of nameless holders.
+        names = {}
+        try:
+            for tid, city, name in session.execute(text(
+                    "SELECT id, city, name FROM teams")).fetchall():
+                names[tid] = f"{city} {name}".strip()
+        except Exception:
+            pass
+
+        best = {}   # statKey -> (value, teamId)
+
+        def offer(statKey, value, teamId):
+            if value is None or teamId is None:
+                return
+            value = float(value)
+            if value <= 0:
+                return
+            if statKey not in best or value > best[statKey][0]:
+                best[statKey] = (value, teamId)
+
+        for (homeId, awayId, homeScore, awayScore,
+             hRush, hPass, aRush, aPass, hRushTd, hPassTd, aRushTd, aPassTd) in rows:
+            offer('pts', homeScore, homeId)
+            offer('pts', awayScore, awayId)
+            offer('yards', (hRush or 0) + (hPass or 0), homeId)
+            offer('yards', (aRush or 0) + (aPass or 0), awayId)
+            offer('tds', (hRushTd or 0) + (hPassTd or 0), homeId)
+            offer('tds', (aRushTd or 0) + (aPassTd or 0), awayId)
+
+        raised = 0
+        teamRecords = self.getRecords().get('team', {}).get('game', {})
+        for statKey, (value, teamId) in best.items():
+            node = teamRecords.get(statKey)
+            if node is None:
+                continue
+            if value > float(node.get('value') or 0):
+                node.update({'value': value, 'id': teamId,
+                             'name': names.get(teamId) or node.get('name')})
+                raised += 1
+        if raised:
+            self.logger.info(f"  Seeded {raised} team game record(s) from played games")
+        return raised
+
     def _saveRecordsToDatabase(self) -> None:
         """Save all records from in-memory structure to database"""
         try:

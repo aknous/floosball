@@ -104,6 +104,23 @@ class FloosballApplication:
         
         # Initialize records manager
         self.recordsManager.loadRecordsFromFile()
+        # ⚠️ AND REPAIR WHAT WAS NEVER SAVED. The record book had no writer outside the
+        # tests, so the table was empty and the tree came back from load at zero — which is
+        # why a 41-point game was announced as the single-game team points record against a
+        # real mark of 94. Team game records are the ones the games table can answer, so
+        # they are raised from history here; the seed only ever raises, so it is idempotent
+        # and cannot lower a record set live this session. Records are saved from the season
+        # loop from now on, so this is a one-time repair that costs nothing once it is.
+        try:
+            seeded = self.recordsManager.seedTeamGameRecordsFromHistory(self.shared_db_session)
+            seeded += self.recordsManager.seedPlayerRecordsFromHistory(self.shared_db_session)
+            seeded += self.recordsManager.seedTeamSeasonAndAllTimeRecordsFromHistory(
+                self.shared_db_session)
+            if seeded:
+                logger.info(f"Record book: raised {seeded} record(s) from stored history")
+            self.recordsManager.saveRecordsToFile()
+        except Exception as e:
+            logger.debug(f"Record seed skipped: {e}")
         
         # Generate and setup players
         logger.info("Setting up players...")

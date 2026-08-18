@@ -1027,6 +1027,9 @@ class SeasonManager:
             # Additional record checks (matches original)
             self.recordsManager.checkCareerRecords()
             self.recordsManager.checkSeasonRecords(self.currentSeason.seasonNumber)
+            # Season and career marks move here rather than per game, so they need their
+            # own save — the per-game one above has already run for this week's games.
+            self._persistRecords()
 
             # Accumulate fatigue after each week
             self._accumulateFatigue()
@@ -1213,6 +1216,15 @@ class SeasonManager:
             self.recordsManager.checkPlayerGameRecords()
             self.recordsManager.checkTeamGameRecords(gameInstance)
             self._publishGameNews(gameInstance, _recordsBefore)
+            # ⚠️ AND WRITE THEM DOWN. `saveRecordsToFile` had NO caller outside the tests —
+            # the app loaded records at startup and never saved them, so the table sat at
+            # zero rows and the whole tree rebuilt from nothing on every restart. A modest
+            # score then beat the freshly-empty in-session record and the feed announced it:
+            # reported as "Mexico City Exoticos set the single-game team points record at
+            # 41" when the real mark is 94. Saved here rather than at week end because this
+            # is the only moment a game record can move, and a record lost to a restart
+            # cannot be recomputed — there is no path back from the box scores.
+            self._persistRecords()
 
             # Resolve pick-em picks for this game immediately
             if gameIndex >= 0 and getattr(gameInstance, 'winningTeam', None):
@@ -4306,6 +4318,22 @@ class SeasonManager:
                 return None
             return f'{self.RECORD_SCOPES.get(scope, scope)} team {statLabel}'
         return None
+
+    def _persistRecords(self) -> None:
+        """Write the record book to the database.
+
+        ⚠️ NOTHING IN THE APPLICATION USED TO DO THIS. `saveRecordsToFile` existed, worked,
+        and was called only by tests — which is why `test_team_record_persistence.py` passed
+        while production's `records` table held zero rows. The round trip was verified; the
+        fact that nobody made the trip was not.
+
+        Never allowed to break a game: a failed save costs the record book its durability,
+        which is bad, but losing the game that was being simulated is worse.
+        """
+        try:
+            self.recordsManager.saveRecordsToFile()
+        except Exception as e:
+            logger.debug(f"Record persistence skipped: {e}")
 
     def _snapshotRecords(self, tree: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Flatten a records tree to `{path: (value, name, id)}` so a break can be diffed
