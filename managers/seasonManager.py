@@ -112,6 +112,33 @@ class Season:
         self.mvp: Optional[Dict[str, Any]] = None
         self.allProPlayerIds: set = set()
 
+def _framesDisplay(formatStateJson):
+    """The frames block out of a persisted `games.format_state`, or None.
+
+    Mirrors `api.main._framesFromFormatState`. Duplicated rather than imported because
+    `api.main` pulls in the whole app (and the engine, circularly) — this module is the
+    engine.
+    """
+    if not formatStateJson:
+        return None
+    try:
+        import json as _json
+        data = _json.loads(formatStateJson)
+    except Exception:
+        return None
+    if isinstance(data, dict) and isinstance(data.get('frames'), dict):
+        return data['frames']
+    return None
+
+
+def _fmtFrames(value):
+    """A frames total as text. A drawn frame is HALVED, so the total is a whole number or
+    a half and reads as "2", "2½", "½" — the same form every other surface uses."""
+    n = float(value or 0)
+    whole = int(n)
+    return (f"{whole or ''}½" if n - whole >= 0.5 else f"{whole}")
+
+
 class SeasonManager:
     """Manages season simulation, scheduling, and progression"""
     
@@ -9696,14 +9723,40 @@ class SeasonManager:
                                     isHome = g.home_team_id == user.favorite_team_id
                                     teamScore = g.home_score if isHome else g.away_score
                                     oppScore = g.away_score if isHome else g.home_score
-                                    won = teamScore > oppScore
+                                    # ⚠️ THE STORED WINNER, NOT THE SCORES. Frames is
+                                    # decided by frames won with points only breaking a
+                                    # level match, so `teamScore > oppScore` is the wrong
+                                    # question — this listed an 'L' for a frames win, in
+                                    # the same email whose RECORD counted it as a win,
+                                    # because the record comes from the engine and this
+                                    # line did not. The fallback covers rows finished
+                                    # before `winner_team_id` existed.
+                                    winnerId = getattr(g, 'winner_team_id', None)
+                                    if winnerId is not None:
+                                        won = (winnerId == user.favorite_team_id)
+                                    else:
+                                        won = teamScore > oppScore
                                     oppId = g.away_team_id if isHome else g.home_team_id
                                     oppTeam = teamManager.getTeamById(oppId)
                                     oppName = oppTeam.name if oppTeam else f"Team {oppId}"
+                                    # ⚠️ AND THE SCORE SHOWN HAS TO MATCH THE VERDICT. A
+                                    # frames match is reported in FRAMES WON everywhere
+                                    # else (the bot, the team page, the game card), so
+                                    # printing the point total here put a 'W' beside
+                                    # "17-20" — which reads as an error even though both
+                                    # halves are individually true.
+                                    scoreText = f"{teamScore}-{oppScore}"
+                                    frames = _framesDisplay(getattr(g, 'format_state', None))
+                                    if frames:
+                                        fh = frames.get('framesWonHome', 0) or 0
+                                        fa = frames.get('framesWonAway', 0) or 0
+                                        mine, theirs = (fh, fa) if isHome else (fa, fh)
+                                        scoreText = (f"{_fmtFrames(mine)}-{_fmtFrames(theirs)}"
+                                                     " frames")
                                     todayGames.append({
                                         'opponent': oppName,
                                         'won': won,
-                                        'score': f"{teamScore}-{oppScore}",
+                                        'score': scoreText,
                                         'isHome': isHome,
                                     })
                                 favStats = getattr(team, 'seasonTeamStats', {})

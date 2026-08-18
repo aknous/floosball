@@ -108,6 +108,56 @@ class TheReadersUseIt(unittest.TestCase):
                       'the pre-column fallback was removed')
 
 
+class TheRecapEmailAgrees(unittest.TestCase):
+    """⚠️ THE EMAIL WAS THE SHARPEST VERSION OF THE BUG: it printed an 'L' for a frames win
+    in the same message whose RECORD counted it as a win, because the record comes from the
+    engine and the per-game line did not.
+
+    ⚠️ I first reported this file as having no caller, from a search that had silently
+    failed — zsh glob-expanded a `--include=*.py` flag and the grep never ran. The builder
+    is `seasonManager._sendDayEndEmails`, right here in this repo. Worth recording because
+    a clean-looking empty result is indistinguishable from a broken search.
+    """
+
+    def _body(self):
+        with open('managers/seasonManager.py') as fh:
+            return fh.read().split('def _sendDayEndEmails')[1].split('\n    def ')[0]
+
+    def test_theResultComesFromTheStoredWinner(self):
+        body = self._body()
+        self.assertIn('winnerId = getattr(g, \'winner_team_id\', None)', body)
+        self.assertIn('won = (winnerId == user.favorite_team_id)', body)
+
+    def test_theScoreShownMatchesTheVerdict(self):
+        """A 'W' beside "17-20" reads as an error even though both halves are true — every
+        other surface reports a frames match in frames won."""
+        body = self._body()
+        self.assertIn('_framesDisplay(', body)
+        self.assertIn('frames"', body)
+
+    def test_theFramesTextMatchesEverySurface(self):
+        """A drawn frame is HALVED, so the total is a whole number or a half."""
+        import re
+        with open('managers/seasonManager.py') as fh:
+            src = fh.read()
+        ns = {}
+        exec(re.search(r'def _fmtFrames.*?\n\n', src, re.S).group(0), ns)
+        fmt = ns['_fmtFrames']
+        self.assertEqual([fmt(v) for v in (0, 1, 2.5, 0.5, 4)],
+                         ['0', '1', '2\u00bd', '\u00bd', '4'])
+
+
+class ThePlayoffRunUsesItToo(unittest.TestCase):
+    """⚠️ A wrong playoff row is worse than a wrong regular-season one — it drives how deep
+    a club is shown to have gone."""
+
+    def test_playoffHistoryPrefersTheStoredWinner(self):
+        with open('playoff_history.py') as fh:
+            src = fh.read()
+        self.assertIn("winnerId = getattr(g, 'winner_team_id', None)", src)
+        self.assertIn('won = (winnerId == teamId) if winnerId is not None', src)
+
+
 class TheBackfillCanRecoverHistory(unittest.TestCase):
     """⚠️ A score comparison cannot repair the existing rows, which is the whole point. The
     frames breakdown is already persisted in `format_state`, so history is recoverable."""
