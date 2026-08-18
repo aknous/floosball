@@ -701,6 +701,85 @@ class RecordManager:
         except Exception as e:
             self.logger.error(f"Failed to update record from DB: {e}")
     
+    def seedTeamGameRecordsFromHistory(self, session) -> int:
+        """Raise the TEAM game records to what the played games actually contain.
+
+        ⚠️ THE RECORD BOOK WAS NEVER SAVED. `saveRecordsToFile` had no caller outside the
+        tests, so the `records` table sat at zero rows and the whole tree rebuilt from
+        nothing on every restart. Persisting from here on fixes the future, but the values
+        currently in memory are whatever has happened since the last deploy — so saving
+        them would simply make today's wrong numbers durable. The reported symptom was a
+        41-point game announced as the single-game team points record when the real mark is
+        94.
+
+        Team game records are the ones history can answer: the games table holds every
+        final score and the per-team rushing/passing splits. Player, season and career
+        marks are NOT reseeded here — they would need `game_player_stats` and the season
+        and career tables, which is a much larger mapping and a separate job.
+
+        ⚠️ ONLY EVER RAISES. A value already in the tree that is higher than anything in
+        the table is a live record set this session, and lowering it would be the same
+        class of loss this method exists to repair. That also makes it idempotent.
+
+        Returns how many records it raised.
+        """
+        try:
+            from sqlalchemy import text
+        except Exception:
+            return 0
+        try:
+            rows = session.execute(text(
+                "SELECT home_team_id, away_team_id, home_score, away_score, "
+                "       home_rush_yards, home_pass_yards, away_rush_yards, away_pass_yards, "
+                "       home_rush_tds, home_pass_tds, away_rush_tds, away_pass_tds "
+                "FROM games WHERE LOWER(status) = 'final'"
+            )).fetchall()
+        except Exception as e:
+            self.logger.warning(f"Team record seed skipped: {e}")
+            return 0
+
+        best = {}   # statKey -> (value, teamId)
+
+        def offer(statKey, value, teamId):
+            if value is None or teamId is None:
+                return
+            value = float(value)
+            if value <= 0:
+                return
+            if statKey not in best or value > best[statKey][0]:
+                best[statKey] = (value, teamId)
+
+        for (homeId, awayId, homeScore, awayScore,
+             hRush, hPass, aRush, aPass, hRushTd, hPassTd, aRushTd, aPassTd) in rows:
+            offer('pts', homeScore, homeId)
+            offer('pts', awayScore, awayId)
+            offer('yards', (hRush or 0) + (hPass or 0), homeId)
+            offer('yards', (aRush or 0) + (aPass or 0), awayId)
+            offer('tds', (hRushTd or 0) + (hPassTd or 0), homeId)
+            offer('tds', (aRushTd or 0) + (aPassTd or 0), awayId)
+
+        raised = 0
+        teamRecords = self.getRecords().get('team', {}).get('game', {})
+        for statKey, (value, teamId) in best.items():
+            node = teamRecords.get(statKey)
+            if node is None:
+                continue
+            if value > float(node.get('value') or 0):
+                name = None
+                try:
+                    teamManager = self.serviceContainer.getService('team_manager')
+                    team = teamManager.getTeamById(teamId) if teamManager else None
+                    if team is not None:
+                        name = f"{team.city} {team.name}"
+                except Exception:
+                    pass
+                node.update({'value': value, 'id': teamId,
+                             'name': name or node.get('name')})
+                raised += 1
+        if raised:
+            self.logger.info(f"  Seeded {raised} team game record(s) from played games")
+        return raised
+
     def _saveRecordsToDatabase(self) -> None:
         """Save all records from in-memory structure to database"""
         try:
