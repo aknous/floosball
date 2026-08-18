@@ -77,9 +77,14 @@ class APuntNeverLandsOffTheField(unittest.TestCase):
             for _ in range(20):
                 dist, result, _ = landingFor(self.game, self.kicker, yardsToEndzone)
                 if result != 'touchback':
-                    self.assertLess(dist, yardsToEndzone,
-                                    f'yte {yardsToEndzone}: punted {dist} into a '
-                                    f'{yardsToEndzone}-yard field without a touchback')
+                    # ⚠️ `<=`, not `<`. From the 1 the shank clamp is `max(1, yte - 1)` = 1,
+                    # so the ball travels the whole yard and lands ON the goal line —
+                    # landing 0, which is legal and which the call site already treats as
+                    # the touchback spot. Asserting strictly less made this fail about one
+                    # run in three on a correct engine.
+                    self.assertLessEqual(dist, yardsToEndzone,
+                                         f'yte {yardsToEndzone}: punted {dist} past the '
+                                         f'goal line without a touchback')
 
     def test_aShortFieldIsUsuallyATouchback(self):
         """A struck punt from inside the 15 reaches the end zone. The alternative fix —
@@ -101,7 +106,12 @@ class APuntNeverLandsOffTheField(unittest.TestCase):
         deep = [landingFor(self.game, self.kicker, 85) for _ in range(40)]
         self.assertTrue(any(result != 'touchback' for _, result, _ in deep),
                         'a punt from deep in own territory should not be a touchback')
-        self.assertTrue(all(dist >= 15 for dist, _, _ in deep),
+        # ⚠️ The floor applies to a STRUCK punt. A shank is short by definition — its own
+        # branch draws from PUNT_SHANK_MIN upward and returns before the floor — so
+        # asserting it over every punt failed about one run in twelve on correct behaviour.
+        struck = [dist for dist, result, _ in deep if result != 'shank']
+        self.assertTrue(struck, 'every punt shanked — the sample is unusable')
+        self.assertTrue(all(dist >= 15 for dist in struck),
                         'the distance floor should still apply where there is room')
 
     def test_theDuplicatedClampIsGone(self):

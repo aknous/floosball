@@ -6251,13 +6251,26 @@ class Game:
         _dcLastPlay = self._driveClockActive() and (
             (_dcUnitHM == 'plays' and self.driveClockRemaining <= 1)
             or (_dcUnitHM == 'seconds' and self.driveClockRemaining <= _DC_HM_FRAC * self._driveClockLimitSecs()))
-        _gameHailMary = (self.currentQuarter == 4 and scoreDiff < 0
+        # ⚠️ IN FRAMES THE AGGREGATE IS NOT WHO IS WINNING, and this read it. `scoreDiff`
+        # is the raw point margin; a frames match is decided by FRAMES WON, with points
+        # only breaking a level tie. Reported from a live game: final frame, the offense
+        # AHEAD in the frame and ahead on frames, aggregate TIED — so `scoreDiff <= 0` was
+        # true, the drive clock expired, and a team that was winning heaved it into
+        # coverage on 5th and 15 from the 42. Turnover on downs, opponent's ball with 3:54
+        # left in the frame they needed. A leading team has nothing to gamble for.
+        #
+        # `decisionDiff` is the frames-aware margin `playCaller` already computes — the
+        # same one the end-of-game field-goal branch above was corrected to use, for
+        # exactly this reason. It is `scoreDiff` off frames, so every other format is
+        # unchanged.
+        _hmDiff = decisionDiff
+        _gameHailMary = (self.currentQuarter == 4 and _hmDiff < 0
                          and self.gameClockSeconds <= 12)
-        _driveHailMary = _dcLastPlay and scoreDiff <= 0   # trailing or tied
+        _driveHailMary = _dcLastPlay and _hmDiff <= 0   # trailing or tied
         if ((_gameHailMary or _driveHailMary)
                 and self.yardsToEndzone >= 30
-                and not self._isGarbageTime(scoreDiff)):
-            fgCanHelp = (scoreDiff >= -self._fgValue() and self.yardsToEndzone <= kickerMaxFg)
+                and not self._isGarbageTime(_hmDiff)):
+            fgCanHelp = (_hmDiff >= -self._fgValue() and self.yardsToEndzone <= kickerMaxFg)
             if not fgCanHelp:
                 # A bold coach may gamble the final snap on a gadget (a flea-flicker
                 # deep shot) instead of a straight heave — occasional, gated by the
