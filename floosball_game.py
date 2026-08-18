@@ -2803,6 +2803,15 @@ class Game:
             from game_formats import getFormat
             self._formatObj = getFormat(key)
             self._formatKey = key
+            # A format's prerequisites are applied the moment it is resolved, so it plays
+            # the same game however it was switched on — a preset, a direct assignment, a
+            # stored rule override. Only ever turns flags ON (see `bundledRules`).
+            try:
+                for flag, value in (self._formatObj.bundledRules() or {}).items():
+                    if not getattr(self.gameRules, flag, False):
+                        setattr(self.gameRules, flag, value)
+            except Exception:
+                pass  # a format without prerequisites must never fail to resolve
         return self._formatObj
 
     def _targetMatchPoint(self) -> bool:

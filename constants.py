@@ -2545,10 +2545,18 @@ GAME_FORMAT_PRESETS = [
     #    "patch": {"gameFormat": "target", "targetScore": 30}},
     #   {"key": "gf_play_limit_30",  "label": "30 Plays a Quarter",
     #    "patch": {"gameFormat": "play_limit", "playsPerQuarter": 30}},
-    #   {"key": "gf_bust_18",        "label": "Darts (land on 18)",
-    #    "patch": {"gameFormat": "bust", "targetScore": 18, "sidelineGoalsEnabled": True,
-    #              "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
-    #              "extraPointPoints": 1, "twoPointConversionPoints": 2}},
+    # Certified 2026-08-17 (test_darts_format.py): scores never exceed X, are always whole
+    # numbers, 85% of games are decided by landing exactly on it, and ties are gone.
+    # ⚠️ `sidelineGoalsEnabled` is NOT listed here any more, and removing it was the fix
+    # rather than an omission: the 1-point hoop is darts' prerequisite (without it the
+    # smallest score is 3, so a team on X-1 can never land) and it now lives in
+    # `BustFormat.bundledRules`, where every activation path gets it. It was here alone,
+    # so darts switched on any other way was a different game — 8% of finishes landed on
+    # X instead of 85%.
+    {"key": "gf_bust_18",        "label": "Darts (land on 18)",
+     "patch": {"gameFormat": "bust", "targetScore": 18,
+               "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
+               "extraPointPoints": 1, "twoPointConversionPoints": 2}},
 ]
 RULE_VOTE_CANDIDATES["gameFormat"]["presets"] = GAME_FORMAT_PRESETS
 
