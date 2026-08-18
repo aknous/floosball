@@ -112,10 +112,15 @@ class FloosballApplication:
         # and cannot lower a record set live this session. Records are saved from the season
         # loop from now on, so this is a one-time repair that costs nothing once it is.
         try:
-            self.recordsManager.seedTeamGameRecordsFromHistory(self.shared_db_session)
+            seeded = self.recordsManager.seedTeamGameRecordsFromHistory(self.shared_db_session)
+            seeded += self.recordsManager.seedPlayerRecordsFromHistory(self.shared_db_session)
+            seeded += self.recordsManager.seedTeamSeasonAndAllTimeRecordsFromHistory(
+                self.shared_db_session)
+            if seeded:
+                logger.info(f"Record book: raised {seeded} record(s) from stored history")
             self.recordsManager.saveRecordsToFile()
         except Exception as e:
-            logger.debug(f"Team record seed skipped: {e}")
+            logger.debug(f"Record seed skipped: {e}")
         
         # Generate and setup players
         logger.info("Setting up players...")
