@@ -3142,23 +3142,20 @@ SWAP_CYCLE_WEEKS = 7
 # kickoff, so 1020 is 19:00 ET in both EDT and EST.
 CROSS_DAY_ROLLOVER_LEAD_MINUTES = 1020
 
-# Daily refresh boundary for SCHEDULED mode (UTC hour).
-# The "floosball day" rolls over at this hour so daily limits and shop refreshes
-# don't clash with live games. This drives the FEATURED SHOP CARDS (fantasy + collection)
-# and the daily reroll allowance — a separate path from the pack rotation, which follows
-# `shopDay` off the week rollover above. Both have to move together or the shop only
-# half-refreshes: new packs, yesterday's cards.
+# ⚠️ THERE IS NO `DAILY_RESET_HOUR_UTC` ANY MORE, AND REINTRODUCING ONE REOPENS A BUG.
+# The shop's daily allowances (reroll costs, per-day buy limits) used to reset at a fixed
+# UTC hour while the pack rotation followed the week rollover above — two boundaries for
+# one "shop day". They drifted apart the moment the clocks changed: under EST the rollover
+# lands at 12:00 + 5 - 17h = 00:00 UTC, exactly the old constant, so the two agreed and
+# the fixed hour looked correct; under EDT the rollover is 23:00 UTC and the reset stayed
+# at 00:00, leaving a ONE-HOUR WINDOW each game day, 19:00-20:00 ET, where the new day's
+# packs were on sale beside yesterday's reroll prices. Reported by a user in exactly those
+# terms.
 #
-# ⚠️ 0 (midnight UTC) = 20:00 EDT / 19:00 EST, just after the day's last game ends
-# (18:00 ET kickoff, done by ~18:45 ET). It was 10, i.e. 06:00 ET — a fresh shop arrived
-# 11 hours after the games it followed.
-#
-# ⚠️ A FIXED UTC HOUR CANNOT TRACK AN ET-ANCHORED SCHEDULE ACROSS DST, so this needs
-# slack on both sides rather than a tight fit. Midnight UTC is the choice that keeps it:
-# it sits after the final whistle in EDT (22:45 UTC) AND in EST (23:45 UTC). 23:00 UTC was
-# rejected for exactly this — it reads as 19:00 ET in summer but 18:00 ET in winter, which
-# is the moment the last game KICKS OFF.
-DAILY_RESET_HOUR_UTC = 0
+# The boundary is now DERIVED from the lead above by `shop_repository._dailyResetBoundary`,
+# so both halves of the shop refresh at one instant and move together if the lead moves.
+# The old note here said a fixed UTC hour cannot track an ET-anchored schedule and
+# concluded that the hour needed slack; the right conclusion was to stop using an hour.
 
 # ─── GM Mode ────────────────────────────────────────────────────────────────────
 

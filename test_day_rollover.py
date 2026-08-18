@@ -15,9 +15,12 @@ minutes after the final whistle.
 `GET /api/games/{id}` and `/api/weekGames`. Before those were persisted, an early rollover
 would have taken the day's results off the site.
 
-⚠️ THE SHOP HAS TWO REFRESH PATHS AND THEY HAVE TO MOVE TOGETHER. The pack rotation
-follows `shopDay` off the week rollover; the featured shop CARDS follow
-`DAILY_RESET_HOUR_UTC`. Moving only the first gives new packs beside yesterday's cards.
+⚠️ THE SHOP'S TWO REFRESH PATHS ARE NOW ONE MOMENT. The pack rotation follows `shopDay`
+off the week rollover, and the daily allowances (reroll costs, per-day buy limits) used to
+follow a fixed `DAILY_RESET_HOUR_UTC`. That constant is GONE: under EST the rollover landed
+at 00:00 UTC, exactly its value, so the two agreed and the fixed hour looked right; under
+EDT the rollover is 23:00 UTC and the reset stayed at midnight, leaving an hour each game
+day with new packs beside yesterday's reroll prices. See test_shop_day_boundary.py.
 
 ⚠️ AND THE PACK CAP'S CYCLE BOUNDARY IS LOAD-BEARING. `_shopCycleStartDate` used
 `start_date + days` (04:00 UTC), which sat safely in the past only while the rollover ran
@@ -32,7 +35,7 @@ Run: .venv/bin/python test_day_rollover.py
 import datetime as dt
 import unittest
 
-from constants import CROSS_DAY_ROLLOVER_LEAD_MINUTES as LEAD, DAILY_RESET_HOUR_UTC as RESET
+from constants import CROSS_DAY_ROLLOVER_LEAD_MINUTES as LEAD
 from managers.timingManager import _isEdtDate
 
 # Season anchors chosen to exercise both DST states: August is EDT, January is EST.
@@ -104,19 +107,16 @@ class TheNextDayOpensAfterTheLastOneEnds(unittest.TestCase):
 
 class TheShopRefreshesWithIt(unittest.TestCase):
 
-    def test_dailyResetLandsAfterTheGamesInBothDstStates(self):
-        """⚠️ A FIXED UTC HOUR CANNOT TRACK AN ET SCHEDULE. 23:00 UTC reads as 19:00 ET in
-        summer but 18:00 ET in winter — the moment the last game kicks off. Whatever the
-        hour is, it has to clear the final whistle in BOTH states."""
+    def test_theDailyAllowancesResetAtTheRolloverItself(self):
+        """⚠️ ONE BOUNDARY, NOT TWO. This is the assertion the old fixed-hour version could
+        not make: it checked only that the reset landed within 12 hours of the whistle,
+        which an hour of drift passes comfortably."""
+        from database.repositories.shop_repository import _rolloverMomentUtc
         for label, start in (('EDT', EDT_START), ('EST', EST_START)):
-            _, lastRound, off = _dayTimes(start, 0)
-            lastEnd = lastRound + dt.timedelta(minutes=45)
-            reset = lastEnd.replace(hour=RESET, minute=0, second=0, microsecond=0)
-            if reset < lastEnd:
-                reset += dt.timedelta(days=1)
-            gap = (reset - lastEnd).total_seconds() / 3600.0
-            self.assertLess(gap, 12,
-                            f'{label}: shop cards refresh {gap:.0f}h after the games')
+            for dayIndex in (1, 2, 3):
+                gameDate = (start + dt.timedelta(days=dayIndex)).date()
+                self.assertEqual(_rolloverMomentUtc(gameDate), _rollover(start, dayIndex),
+                                 f'{label}: the shop day and the week rollover disagree')
 
     def test_cycleBoundaryEqualsTheRolloverSoTheClampCannotFire(self):
         """⚠️ THIS IS THE ONE THAT BREAKS PURCHASES. If the cycle boundary is later than
