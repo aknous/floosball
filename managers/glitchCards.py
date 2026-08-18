@@ -27,29 +27,92 @@ from typing import Dict, Optional, Tuple
 
 from constants import (GLITCH_CARDS_ENABLED, GLITCH_TRIGGER_BASE, GLITCH_EVENT_BOOST,
                        GLITCH_TRIGGER_CAP, GLITCH_DIAL_SHARE, GLITCH_SURGE_TABLE,
-                       GLITCH_FPX_DAMP, GLITCH_SURGE_FLOOR_FP)
+                       GLITCH_FPX_DAMP, GLITCH_SURGE_FLOOR_FP, GLITCH_MAX_TRIGGERS,
+                       GLITCH_SWARM_STEP)
 from logger_config import get_logger
 
 logger = get_logger("floosball.glitchCards")
 
 
 def triggerChance(playerState: Optional[str], eventCounts: Optional[Dict[str, int]] = None,
-                  instabilityDial: float = 1.0) -> float:
+                  instabilityDial: float = 1.0, glitchedEquipped: int = 1) -> float:
     """Odds a glitched card's surge fires this week.
 
         base(ladder state) scaled by a FRACTION of the instability dial,
-        plus a boost per anomaly event the player fired, escalating with its level.
+        plus a boost per anomaly event the player fired, escalating with its level,
+        plus a step per OTHER glitched card in the same lineup.
 
     The dial is applied at `GLITCH_DIAL_SHARE` rather than in full because it ALSO drives
     how many events fire — applying it at full strength to both terms compounds and pins a
     rampant card at the cap through an entire Criticality.
+
+    ⚠️ THE SWARM TERM COUNTS WHAT IS EQUIPPED, NOT WHAT IS OWNED (owner, 2026-08-17). It is
+    the half that pairs with expiry: once a glitch fades after `GLITCH_MAX_TRIGGERS` there
+    is no stockpile left to reward, so what is worth rewarding is assembling several into
+    one lineup while they last. Counting the collection instead would pay for hoarding,
+    which is the behaviour expiry exists to end.
     """
     base = GLITCH_TRIGGER_BASE.get(playerState or 'stable', GLITCH_TRIGGER_BASE['stable'])
     # dial 1.0 is quiet and leaves the base untouched; 5.0 is a live Criticality.
     scaled = base * (1.0 + (float(instabilityDial) - 1.0) * GLITCH_DIAL_SHARE)
     boost = sum(GLITCH_EVENT_BOOST.get(layer, 0.0) * count
                 for layer, count in (eventCounts or {}).items())
-    return max(0.0, min(GLITCH_TRIGGER_CAP, scaled + boost))
+    swarm = GLITCH_SWARM_STEP * max(0, int(glitchedEquipped or 1) - 1)
+    return max(0.0, min(GLITCH_TRIGGER_CAP, scaled + boost + swarm))
+
+
+def triggersRemaining(userCard) -> int:
+    """How many more surges this glitch has in it. 0 once it has faded."""
+    if not getattr(userCard, 'glitched', False):
+        return 0
+    used = int(getattr(userCard, 'glitch_triggers_used', 0) or 0)
+    return max(0, GLITCH_MAX_TRIGGERS - used)
+
+
+def consumeTriggers(session, userCardIds) -> Dict[int, bool]:
+    """Spend one surge from each card that fired, and fade any that reach the limit.
+
+    Returns `{userCardId: didItFadeNow}`.
+
+    ⚠️ CALLED WHERE THE WEEK IS BANKED, NEVER FROM THE CALCULATOR. `_applyGlitchSurges`
+    re-runs on every projection and every page load — its RNG is deliberately stable per
+    (user, season, week, card) precisely so a settled week never moves — so counting
+    triggers there would spend a glitch's entire life on one week of refreshes. The bank
+    write is the one place a week happens exactly once, which is the same reason
+    `WeeklyCardBonus.breakdowns_json` is the record for everything else about a settled
+    week.
+
+    ⚠️ Not idempotent by itself, and it does not need to be: the caller writes the bank row
+    in the same transaction, and that write is already gated per (user, season, week).
+    """
+    faded: Dict[int, bool] = {}
+    if not GLITCH_CARDS_ENABLED or not userCardIds:
+        return faded
+    try:
+        from database.models import UserCard
+    except Exception:
+        return faded
+    try:
+        cards = (session.query(UserCard)
+                 .filter(UserCard.id.in_(list(userCardIds)),
+                         UserCard.glitched.is_(True))
+                 .all())
+        for card in cards:
+            used = int(getattr(card, 'glitch_triggers_used', 0) or 0) + 1
+            card.glitch_triggers_used = used
+            if used >= GLITCH_MAX_TRIGGERS:
+                # The glitch fades and the card goes back to normal. The printed effect
+                # was never touched, so nothing about the card is lost — it simply stops
+                # carrying the extra roll.
+                card.glitched = False
+                faded[card.id] = True
+                logger.info(f"Glitch faded on user_card {card.id} after {used} surges")
+            else:
+                faded[card.id] = False
+        session.flush()
+    except Exception as e:
+        logger.debug(f"Glitch trigger consumption skipped: {e}")
+    return faded
 
 
 def _canCatch(playerState: Optional[str], eventCounts: Optional[Dict[str, int]] = None) -> bool:
@@ -287,6 +350,10 @@ def markCardsForCriticality(session, season: int, week: int) -> int:
             card.glitched = True
             card.glitched_season = season
             card.glitched_week = week
+            # A NEW glitch is a full lifespan, even on a card that has burned one before.
+            # Without this reset a card that already spent its three surges would catch a
+            # glitch and fade again on the very next trigger.
+            card.glitch_triggers_used = 0
             marked += 1
         if marked:
             session.commit()

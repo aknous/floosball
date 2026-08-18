@@ -97,9 +97,15 @@ def _runPendingMigrations():
                 conn.rollback()  # column already exists — ignore
 
         # Glitch marks on owned cards (docs/GLITCH_CARDS.md).
+        # ⚠️ `glitch_triggers_used` DEFAULTS TO 0 FOR EVERY EXISTING GLITCH, which hands the
+        # 48 already-marked production cards a full lifespan from the day expiry ships
+        # rather than retiring them on arrival. That is the intended direction: nobody
+        # loses something they were already holding, which is the same rule the glitch
+        # system runs on end to end (a glitch never takes anything away).
         for _col, _def in (('glitched', 'BOOLEAN DEFAULT 0 NOT NULL'),
                            ('glitched_season', 'INTEGER'),
-                           ('glitched_week', 'INTEGER')):
+                           ('glitched_week', 'INTEGER'),
+                           ('glitch_triggers_used', 'INTEGER DEFAULT 0 NOT NULL')):
             try:
                 conn.execute(text(f"ALTER TABLE user_cards ADD COLUMN {_col} {_def}"))
                 conn.commit()

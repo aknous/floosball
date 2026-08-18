@@ -281,6 +281,11 @@ class CardBreakdown:
     glitchFp: float = 0.0            # extra FP the surge added (additive, never replacing)
     glitchMultDelta: float = 0.0     # extra FPx delta the surge added
     glitchReadable: bool = False     # True only when the player is awakened
+    # Which owned card the glitch sits on, so the week-end bank can spend a trigger
+    # against it. Set only when the card is glitched; the breakdown otherwise carries no
+    # equipped-card id at all and callers key on (slot, player), which is unique within a
+    # lineup but useless for finding the row to update.
+    glitchUserCardId: Optional[int] = None
 
 
 @dataclass
@@ -1388,9 +1393,13 @@ def _applyGlitchSurges(breakdowns: List[CardBreakdown], equippedCards, ctx) -> N
             continue
         userCardId, playerId = entry
         state, events = anomalyCtx.get(playerId, ('stable', {}))
-        chance = triggerChance(state, events, dial)
+        # Every glitched card in THIS lineup raises every other one's odds — the swarm
+        # term. `glitchedIds` is exactly the equipped glitched set, so it is already the
+        # right count; owning more elsewhere does nothing.
+        chance = triggerChance(state, events, dial, glitchedEquipped=len(glitchedIds))
         b.glitched = True
         b.glitchChance = round(chance, 3)
+        b.glitchUserCardId = userCardId
         b.glitchReadable = (state == 'awakened')
         # Unresolved while the week is still running AND in any projection. gamesActive
         # alone is not enough: a projection has gamesActive False, so guarding on it only

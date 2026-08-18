@@ -2483,6 +2483,25 @@ class SeasonManager:
                             f"+{totalFP:.2f} FP (total: {roster.card_bonus_points:.2f})"
                         )
 
+                        # ⚠️ A GLITCH IS SPENT HERE, AND NOWHERE ELSE. It fades after
+                        # `GLITCH_MAX_TRIGGERS` surges, and this is the only place a week
+                        # happens exactly once — the calculator that ROLLS the surge
+                        # re-runs on every projection and every page load, and its RNG is
+                        # deliberately stable per (user, season, week, card) so a settled
+                        # week never moves. Counting there would burn a glitch's whole
+                        # life on one afternoon of refreshes. Same reason the banked
+                        # breakdowns, written right above, are the record for everything
+                        # else about a settled week.
+                        try:
+                            from managers.glitchCards import consumeTriggers
+                            firedCards = [b.glitchUserCardId for b in result.cardBreakdowns
+                                          if getattr(b, 'glitchTriggered', False)
+                                          and getattr(b, 'glitchUserCardId', None)]
+                            if firedCards:
+                                consumeTriggers(session, firedCards)
+                        except Exception as e:
+                            logger.debug(f"Glitch trigger consumption skipped: {e}")
+
                     # Credit Floobits from cards
                     if result.floobitsEarned > 0:
                         cardNames = ", ".join(

@@ -1578,6 +1578,12 @@ class UserCard(Base):
     glitched: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     glitched_season: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     glitched_week: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Surges this glitch has paid out. At GLITCH_MAX_TRIGGERS the glitch fades and
+    # `glitched` goes back to False — a glitch is a window, not a permanent upgrade.
+    # ⚠️ Kept after the glitch fades rather than reset, so a card that has burned one
+    # glitch and caught another is distinguishable from a fresh one; `markCardsForCriticality`
+    # zeroes it when a NEW glitch lands.
+    glitch_triggers_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="user_cards")

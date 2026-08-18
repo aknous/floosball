@@ -3618,6 +3618,31 @@ GLITCH_FPX_DAMP = 0.80
 # the card's own output when there IS output, and this is only the fallback.
 GLITCH_SURGE_FLOOR_FP = 11.0
 
+# How many surges a glitch survives before it fades and the card goes back to normal
+# (owner, 2026-08-17). A glitch was PERMANENT — `user_cards.glitched` is a boolean nothing
+# ever cleared — so a Criticality's marks accumulated forever. Measured on production after
+# ONE season: 3 Criticalities (weeks 9, 14, 27), 48 glitched cards across 22 users, and 9
+# users already holding three apiece. Over five seasons a regular would be carrying fifteen.
+#
+# ⚠️ COUNTED IN TRIGGERS, NOT WEEKS, so the lifespan is tied to value actually received: a
+# card that never surges keeps its glitch rather than expiring having given nothing, and a
+# hot card burns out fastest. At the ~0.28-0.46 trigger bases above, three surges is roughly
+# eight or nine weeks of being fielded — a window inside a season rather than a ratchet
+# across careers.
+#
+# ⚠️ The trigger is consumed WHERE THE WEEK IS BANKED, never in the calculator. The
+# calculator re-runs on every projection and every page load, and its RNG is deliberately
+# stable per (user, season, week, card) so a week's result never moves — counting there
+# would burn a glitch's whole life on one week of refreshes.
+GLITCH_MAX_TRIGGERS = 3
+
+# Added trigger chance per ADDITIONAL glitched card in the same lineup (owner, 2026-08-17).
+# Rewards FIELDING several at once rather than merely owning them, which is the half that
+# pairs with expiry above: the stockpile is gone, so what is left to reward is assembling a
+# window. Deliberately small against bases of 0.28-0.46 — at the full six-card lineup it is
+# +0.25, enough to feel and not enough to reach `GLITCH_TRIGGER_CAP` on its own.
+GLITCH_SWARM_STEP = 0.05
+
 
 # ── League news feed ─────────────────────────────────────────────────────────
 # ELO gap at which beating a club becomes an upset worth publishing. Set from the
