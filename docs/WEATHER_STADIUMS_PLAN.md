@@ -1,6 +1,6 @@
 # Weather & Stadiums
 
-**Status: SPECCED, NOT BUILT** (2026-08-19). Owner direction in this document's
+**Status: SPECCED, BUILD IN PROGRESS** (2026-08-19). Owner direction in this document's
 "Premise" is settled; everything under "Open decisions" is not.
 
 Prior work: `feature/stadium-quirks` (4 commits, last touched 2026-06-08, 1,100
@@ -204,25 +204,49 @@ before tuning, and check:
 - whether home teams gain (see Open decisions)
 - FP distribution, since weather moves fantasy scoring and therefore the economy
 
-## Open decisions
+## Settled decisions (owner, 2026-08-19)
 
-1. **Home-field familiarity.** Do weather effects apply symmetrically, or does the
-   home team suffer less because they play there every week? Recommendation:
-   **symmetric physical effects** (a wet ball is wet for everyone), with familiarity
-   confined to the one thing it plausibly touches — pre-snap/pace — and kept small.
-   Anything more is a competitive-balance change wearing a weather costume.
-2. **Is weather known before kickoff?** If announced with the slate at the week
-   rollover, it becomes real input for pick-em and for card lineups, which is a large
-   engagement win. Recommendation: **yes, announce it** — and note this makes weather
-   a strategy surface, not just scenery.
-3. **How hard should Criticality weather hit?** The old file's comment says "a few
-   percent... character, not balance disruption." That is right for a settled league
-   and wrong for `Unreal`, which should be genuinely disruptive or Criticality has no
-   face. Needs a number.
-4. **Alternate formats.** Frames, darts and chess clock each change what a modifier
+1. **Weather effects are SYMMETRIC.** A wet ball is wet for everyone. No weather key
+   is ever applied to one side only.
+2. **Weather is announced BEFORE kickoff**, with the slate at the week rollover. This
+   makes it real input for pick-em and for card lineups, so weather is a strategy
+   surface rather than scenery — and it means the announcement path is part of the
+   feature, not a follow-up.
+3. **Criticality hits hard.** `Unreal` is meant to be disruptive, not a few percent.
+   The old file's "character, not balance disruption" note governs the settled league
+   and explicitly does NOT govern the top rung.
+4. **Home-field advantage exists as a small, separate nudge** — separate from weather,
+   which stays symmetric per (1).
+
+### Home-field advantage
+
+⚠️ **There is no home-field advantage in the sim today, at all.** Nothing reads a
+home/away flag for anything but scoreboard labeling; `calculateWinProbability` treats
+the two ELOs identically. Measured on prod over **687 finals: 50.7% home wins, with
+the home team scoring 0.12 BELOW the away team** — a coin flip inside noise. Real
+football runs ~54-57%.
+
+Sizing it off the measured transfer rather than guessing: the
+**rating-multiplier → win-probability transfer is 1.619** (a +10% roster-wide
+multiplier is worth +16.1pp of win rate). So a target of **~55% home wins** is
+**+2.6% on the home team's `gameAttributes`**, applied pre-game alongside the other
+multiplier layers.
+
+⚠️ It does **not distort the standings**, because every team plays 14 home and 14
+away — it makes home games matter without making any team better. Verify that in the
+measurement rather than assuming it.
+
+⚠️ Deliberately a flat league-wide nudge, NOT a per-venue one. A venue-scaled home
+advantage is the `homeBoost` key from the old branch, and it means "some teams are
+simply better", which is a competitive-balance change wearing a stadium costume. Venue
+character belongs in the weather, which is symmetric.
+
+## Remaining open decisions
+
+1. **Alternate formats.** Frames, darts and chess clock each change what a modifier
    means (`puntDistance` matters less in darts, where hoops decide it). Darts is
    already excluded from Criticality chaos; decide whether weather follows it.
-5. **Cards.** Weather-keyed effects are an obvious future card family ("scores in
+2. **Cards.** Weather-keyed effects are an obvious future card family ("scores in
    Severe weather or worse"). Out of scope here, but the persisted `games.weather`
    row is what would make it possible later, so persist it in the shape a card
    calculator could read.

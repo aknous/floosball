@@ -1,0 +1,1065 @@
+# Stadiums and their weather.
+#
+# These are the Cores' RECONSTRUCTIONS of the old floosball venues, assembled from
+# fragmentary broadcast transmissions. The Cores do not actually know where each
+# stadium was or what it looked like, so every one is a guess built from the team's
+# name and a few garbled signals. That is why a team called Rocks ends up playing in
+# a mine and the Jetskis play out on open water. The venues are meant to be
+# fantastical places, not stadiums with a gimmick.
+#
+# WEATHER IS NATIVE TO THE SETTING. A cavern has no rain. It has dripping, dust and
+# dark. A moving train has tunnels and crosswind. Open water has swell and fog. Each
+# venue therefore carries its OWN weather table rather than drawing from a league-wide
+# one.
+#
+# ⚠️ KEYED BY TEAM ID, not team name. Team names change, and six entries in the
+# previous version of this file had already gone stale that way. `team:` is for
+# readers; nothing looks up by it.
+#
+# Schema:
+#   <team_id>:
+#     team: Name                 # readability only, never used as a key
+#     name: "Venue Name"         # the venue's proper name (fan-submittable)
+#     setting: one line          # the fantastical premise
+#     icon: kebab-case-key       # SVG key on the frontend
+#     tagline: short pregame line
+#     description: |             # longer flavor for hover/modal
+#     effects:                   # ALWAYS-ON venue character, multiplicative (1.0 = none)
+#       passAccuracy / deepPassChance / runYardage / fgAccuracy / sackRate
+#       fumbleRate / puntDistance / returnYards / paceMod
+#     weather:                   # this venue's own conditions
+#       - key: calm              # EVERY venue needs exactly one calm state, listed first
+#         label: "Short Name"
+#         text: "One sentence describing it accurately."
+#         effects: {}
+#       - key: ...
+#         unrealOnly: true       # Criticality only. Optional, at most one or two.
+#
+# ⚠️ Effects are authored at ROUGH strength. The intensity ladder scales the deviation
+# from 1.0, so do NOT write one set of numbers per intensity level.
+#
+# ⚠️ `text` is a REQUIREMENT, not flavor: the weather a game reports must be the
+# weather it actually played under. Say what it does.
+
+1:
+  team: Strangers
+  name: "Shadow Court"
+  setting: A court where the light never quite arrives and the corners stay dark.
+  icon: shadow-figure
+  tagline: Nobody Sees You Coming
+  description: |
+    The lighting is dim, the corners are dark, and you can never quite make out who is
+    standing on the far sideline. Long shadows lie across the field all game.
+  effects:
+    passAccuracy: 0.97
+    deepPassChance: 0.94
+  weather:
+    - key: halflight
+      label: "Half Light"
+      text: "Enough light to play by. The far sideline stays hard to read."
+      effects: {}
+    - key: lengthening
+      label: "Lengthening Shadows"
+      text: "The shadows are crossing the field. Deep throws vanish into them."
+      effects: {deepPassChance: 0.86, passAccuracy: 0.95}
+    - key: gloom
+      label: "Gloom"
+      text: "The light is going out of the place. Receivers are losing the ball late."
+      effects: {passAccuracy: 0.92, fgAccuracy: 0.94, deepPassChance: 0.88}
+    - key: blackout
+      label: "Total Dark"
+      unrealOnly: true
+      text: "The lights have failed entirely. They are playing by sound."
+      effects: {passAccuracy: 0.70, deepPassChance: 0.40, fgAccuracy: 0.72, fumbleRate: 1.35}
+
+2:
+  team: Normals
+  name: "Procedure Field"
+  setting: A regulation stadium, to a degree that becomes unsettling.
+  icon: gridlines
+  tagline: Everything As Specified
+  description: |
+    Regulation field, regulation grass, regulation lighting, regulation everything.
+    A sign on the wall reads PROCEDURE. Big plays feel weirdly absent here.
+  effects:
+    deepPassChance: 0.92
+    runYardage: 0.97
+    paceMod: 0.95
+  weather:
+    - key: nominal
+      label: "Nominal"
+      text: "Conditions are within specification. All of them."
+      effects: {}
+    - key: scheduled
+      label: "Scheduled Precipitation"
+      text: "Rain began exactly on the hour. It is expected to stop exactly on the hour."
+      effects: {passAccuracy: 0.95, fumbleRate: 1.08}
+    - key: overcast
+      label: "Standard Overcast"
+      text: "Uniform gray cloud, evenly distributed. Deep throws are hard to track against it."
+      effects: {deepPassChance: 0.90}
+    - key: exception
+      label: "Unhandled Exception"
+      unrealOnly: true
+      text: "The weather is doing something the field was not specified for. Nobody has a procedure."
+      effects: {fumbleRate: 1.40, passAccuracy: 0.84, paceMod: 1.15, sackRate: 1.20}
+
+3:
+  team: Broads
+  name: "Asphalt Acres"
+  setting: A field paved end to end in blacktop, painted with yard lines.
+  icon: asphalt
+  tagline: Hard Top
+  description: |
+    No grass anywhere. The playing surface is fresh asphalt, and it holds the heat of
+    the whole afternoon. Nobody wants to be tackled here.
+  effects:
+    runYardage: 1.04
+    fumbleRate: 1.06
+    returnYards: 1.05
+  weather:
+    - key: dry
+      label: "Dry Top"
+      text: "The blacktop is dry and fast underfoot."
+      effects: {}
+    - key: shimmer
+      label: "Heat Shimmer"
+      text: "Heat coming off the asphalt is bending everything past thirty yards."
+      effects: {deepPassChance: 0.88, fgAccuracy: 0.94}
+    - key: slick
+      label: "Wet Blacktop"
+      text: "Rain on asphalt with nowhere to drain. Footing is gone."
+      effects: {runYardage: 0.90, fumbleRate: 1.18, passAccuracy: 0.95}
+    - key: melt
+      label: "Melting"
+      unrealOnly: true
+      text: "The surface has gone soft and is pulling at their feet. Yard lines are running."
+      effects: {runYardage: 0.72, paceMod: 1.25, sackRate: 1.30, returnYards: 0.70}
+
+4:
+  team: Monuments
+  name: "Colossus Ground"
+  setting: A field laid out between monuments so large their tops are not visible.
+  icon: obelisk
+  tagline: In the Shadow of Giants
+  description: |
+    Stone figures the size of hills stand at each corner. Nobody built them and nobody
+    can say what they commemorate. The field between them is immaculate.
+  effects:
+    fgAccuracy: 0.96
+    paceMod: 0.96
+  weather:
+    - key: clearstone
+      label: "Clear"
+      text: "Still and clear. The monuments throw four long shadows across the field."
+      effects: {}
+    - key: dust
+      label: "Stone Dust"
+      text: "Dust is coming off the monuments and hanging over the field. Hard to see, hard to breathe."
+      effects: {passAccuracy: 0.94, paceMod: 1.06}
+    - key: glare
+      label: "Marble Glare"
+      text: "Sun off polished stone, straight into the eyes of anyone looking up."
+      effects: {deepPassChance: 0.88, fgAccuracy: 0.92, fumbleRate: 1.06}
+    - key: tremor
+      label: "Tremor"
+      unrealOnly: true
+      text: "Something enormous is moving. The ground will not hold still long enough to kick from."
+      effects: {fgAccuracy: 0.60, fumbleRate: 1.45, passAccuracy: 0.86, runYardage: 0.85}
+
+5:
+  team: Melons
+  name: "Melon Patch"
+  setting: A working melon field that a stadium was built around without clearing it.
+  icon: melon
+  tagline: Watch Your Footing
+  description: |
+    The vines were never pulled up. Melons sit in the end zones and along the
+    sidelines, and by the fourth quarter a good many of them have been stepped on.
+  effects:
+    fumbleRate: 1.08
+    runYardage: 0.96
+  weather:
+    - key: ripe
+      label: "Ripe"
+      text: "Warm and still. The fruit is intact, for now."
+      effects: {}
+    - key: humid
+      label: "Growing Weather"
+      text: "Heavy humid air. The ball is slick and the vines are visibly moving."
+      effects: {passAccuracy: 0.94, fumbleRate: 1.12}
+    - key: burst
+      label: "Burst Fruit"
+      text: "Split melons all over the field. The footing is sugar and pulp."
+      effects: {runYardage: 0.88, fumbleRate: 1.20, returnYards: 0.88}
+    - key: overgrowth
+      label: "Overgrowth"
+      unrealOnly: true
+      text: "The vines are growing fast enough to watch. They are taking the field back."
+      effects: {runYardage: 0.70, paceMod: 1.30, sackRate: 1.25, deepPassChance: 0.75}
+
+6:
+  team: Rocks
+  name: "Bedrock Cavern"
+  setting: A mine. The field is cut into the floor of a cavern with no sky above it.
+  icon: cavern
+  tagline: Carved in Stone
+  description: |
+    Play happens under a few hundred feet of rock. Every sound comes back twice, the
+    lighting is strung on cables, and the far end of the cavern is simply dark.
+  effects:
+    deepPassChance: 0.93
+    fumbleRate: 0.94
+    puntDistance: 0.92
+  weather:
+    - key: stillair
+      label: "Still Air"
+      text: "Dead still and cool. Sound carries strangely, but the field is clean."
+      effects: {}
+    - key: seep
+      label: "Seepage"
+      text: "Water is coming through the rock and pooling on the field. The ball is wet."
+      effects: {passAccuracy: 0.93, fumbleRate: 1.15, runYardage: 0.94}
+    - key: dustfall
+      label: "Dust Fall"
+      text: "Fine rock dust drifting down from the ceiling. Nobody can see the roof and nobody wants to."
+      effects: {passAccuracy: 0.92, deepPassChance: 0.85}
+    - key: collapse
+      label: "Rockfall"
+      unrealOnly: true
+      text: "Pieces of the ceiling are coming down onto the field. They are still playing."
+      effects: {fumbleRate: 1.50, passAccuracy: 0.80, runYardage: 0.78, paceMod: 1.20}
+
+7:
+  team: Beans
+  name: "Cloud Gate"
+  setting: A field at the bottom of a valley that fills, daily, with soup-thick fog.
+  icon: fog-bank
+  tagline: Soupy
+  description: |
+    The fog sits in the bowl of the ground and does not lift. On a bad day you cannot
+    see one end zone from the other, and the broadcast is mostly guesswork.
+  effects:
+    deepPassChance: 0.88
+    passAccuracy: 0.96
+  weather:
+    - key: thin
+      label: "Thin Fog"
+      text: "A haze over the field. Both end zones are visible, just barely."
+      effects: {}
+    - key: rolling
+      label: "Rolling Bank"
+      text: "The fog is moving across in waves. Receivers keep disappearing and coming back."
+      effects: {deepPassChance: 0.80, passAccuracy: 0.93}
+    - key: pea
+      label: "Pea Soup"
+      text: "Visibility is about fifteen yards. Anything longer is thrown on faith."
+      effects: {deepPassChance: 0.65, passAccuracy: 0.88, fgAccuracy: 0.90}
+    - key: whiteout
+      label: "Whiteout"
+      unrealOnly: true
+      text: "The fog has closed completely. Nobody on the field can see the ball, including whoever has it."
+      effects: {deepPassChance: 0.30, passAccuracy: 0.72, fgAccuracy: 0.70, fumbleRate: 1.30}
+
+8:
+  team: Caddies
+  name: "Eldorado Greens"
+  setting: A championship links course with a football field mowed into the eighteenth fairway.
+  icon: flagstick
+  tagline: Play It As It Lies
+  description: |
+    The groundskeeping is immaculate and entirely wrong for football. There are
+    bunkers inside the field of play and the crowd is asked to stay quiet at the snap.
+  effects:
+    fgAccuracy: 1.04
+    runYardage: 0.97
+    paceMod: 0.94
+  weather:
+    - key: fair
+      label: "Fair"
+      text: "Perfect golfing weather, which turns out to be perfect football weather."
+      effects: {}
+    - key: links
+      label: "Links Wind"
+      text: "Steady crosswind off the open course. It is pushing every kick and punt."
+      effects: {fgAccuracy: 0.90, puntDistance: 0.90, deepPassChance: 0.92}
+    - key: dew
+      label: "Heavy Dew"
+      text: "The grass has not dried out. Cuts are slipping and the ball is damp."
+      effects: {runYardage: 0.92, fumbleRate: 1.12}
+    - key: lightning
+      label: "Lightning Hold"
+      unrealOnly: true
+      text: "The horn has sounded and nobody has left the field. It is striking the fairway."
+      effects: {paceMod: 1.35, fgAccuracy: 0.75, passAccuracy: 0.85, fumbleRate: 1.25}
+
+9:
+  team: Pops
+  name: "Bright Night Park"
+  setting: A stadium under a fireworks display that has never once stopped.
+  icon: firework
+  tagline: It Never Stops
+  description: |
+    Someone started the show and nobody has found the way to end it. The sky over the
+    field bangs and flashes all game. Visiting teams find the snap count hard to hear.
+  effects:
+    paceMod: 1.04
+    passAccuracy: 0.97
+  weather:
+    - key: highshow
+      label: "High Show"
+      text: "The display is staying high and clear of the field. Loud, but harmless."
+      effects: {}
+    - key: smoke
+      label: "Powder Smoke"
+      text: "Spent smoke has settled over the field and it is not clearing."
+      effects: {deepPassChance: 0.86, passAccuracy: 0.94}
+    - key: lowbursts
+      label: "Low Bursts"
+      text: "The shells are breaking low enough to light the field. Nobody can hear the count."
+      effects: {sackRate: 1.12, paceMod: 1.10, passAccuracy: 0.93}
+    - key: emberfall
+      label: "Ember Fall"
+      unrealOnly: true
+      text: "Burning debris is landing on the field. Play is continuing around it."
+      effects: {fumbleRate: 1.40, runYardage: 0.80, paceMod: 1.25, passAccuracy: 0.85}
+
+10:
+  team: Cranes
+  name: "KACL Tower"
+  setting: A field built on the deck of a broadcast tower, high above the city.
+  icon: radio-tower
+  tagline: We're On the Air
+  description: |
+    The playing surface is a platform at altitude, with the city a long way below and
+    a live radio booth on the sideline. The wind up here is a permanent feature.
+  effects:
+    puntDistance: 1.06
+    fgAccuracy: 0.95
+    deepPassChance: 1.04
+  weather:
+    - key: clearair
+      label: "Clear Air"
+      text: "Cold and clear at altitude. The wind is steady and readable."
+      effects: {}
+    - key: gust
+      label: "Gusting"
+      text: "The wind up here is turning over. Kicks are being taken off line."
+      effects: {fgAccuracy: 0.86, puntDistance: 0.88, deepPassChance: 0.90}
+    - key: cloudbase
+      label: "In the Cloud"
+      text: "The cloud base has come down over the deck. They are playing inside it."
+      effects: {deepPassChance: 0.75, passAccuracy: 0.91}
+    - key: icing
+      label: "Icing"
+      unrealOnly: true
+      text: "Ice is forming on the platform and on the ball. Nothing is being held onto."
+      effects: {fumbleRate: 1.55, runYardage: 0.78, fgAccuracy: 0.72, passAccuracy: 0.84}
+
+11:
+  team: Pinecones
+  name: "Evergreen Park"
+  setting: A field in old-growth forest, with the trees left standing where they stood.
+  icon: conifer
+  tagline: The Grove
+  description: |
+    The canopy closes over most of the field. Trees inside the field of play are
+    treated as part of it, which the visiting side is never quite ready for.
+  effects:
+    deepPassChance: 0.90
+    runYardage: 0.96
+    puntDistance: 0.90
+  weather:
+    - key: sheltered
+      label: "Sheltered"
+      text: "The canopy is holding the weather off. Still and green underneath."
+      effects: {}
+    - key: needlefall
+      label: "Needle Fall"
+      text: "Needles coming down in sheets and covering the footing."
+      effects: {runYardage: 0.92, fumbleRate: 1.10}
+    - key: sap
+      label: "Sap"
+      text: "Sap is dripping through the canopy onto the field and the ball."
+      effects: {passAccuracy: 0.92, fumbleRate: 0.88, paceMod: 1.06}
+    - key: windthrow
+      label: "Windthrow"
+      unrealOnly: true
+      text: "Whole trees are coming down at the edge of the field. They have not stopped play."
+      effects: {paceMod: 1.30, runYardage: 0.80, deepPassChance: 0.60, fumbleRate: 1.25}
+
+12:
+  team: Oysters
+  name: "Brine Basin"
+  setting: A salt basin high in the mountains, where the field is a dried crust of brine.
+  icon: salt-flat
+  tagline: Mountain Brine
+  description: |
+    The surface is packed salt, white to the horizon and hard as pavement. The air
+    tastes of the sea a thousand miles from it.
+  effects:
+    runYardage: 1.03
+    returnYards: 1.06
+    fumbleRate: 1.04
+  weather:
+    - key: crust
+      label: "Hard Crust"
+      text: "The salt is dry and packed. Fast, flat, and bright."
+      effects: {}
+    - key: glare
+      label: "Salt Glare"
+      text: "Sun off white salt in every direction. Nobody can look up for long."
+      effects: {deepPassChance: 0.86, fgAccuracy: 0.92}
+    - key: mist
+      label: "Brine Mist"
+      text: "Salt mist blowing across the basin, stinging and settling on the ball."
+      effects: {passAccuracy: 0.92, fumbleRate: 1.14}
+    - key: flood
+      label: "Basin Flood"
+      unrealOnly: true
+      text: "The basin is filling. They are playing in standing brine to the ankle."
+      effects: {runYardage: 0.72, paceMod: 1.30, fumbleRate: 1.35, puntDistance: 0.85}
+
+13:
+  team: Tuesdays
+  name: "The Second Day"
+  setting: A stadium where it is always Tuesday, and always the same Tuesday.
+  icon: calendar-day
+  tagline: Again
+  description: |
+    The date does not advance here. The same gray mid-week afternoon runs on a loop,
+    down to which way the wind is going. Players report the strong sense of having
+    already played this game.
+  effects:
+    paceMod: 0.94
+    deepPassChance: 0.94
+  weather:
+    - key: samegray
+      label: "The Usual Gray"
+      text: "Overcast, mild, unremarkable. Exactly as it was last week and the week before."
+      effects: {}
+    - key: drizzle
+      label: "The Same Drizzle"
+      text: "The drizzle that always comes, at the hour it always comes."
+      effects: {passAccuracy: 0.95, fumbleRate: 1.08}
+    - key: repeat
+      label: "Repetition"
+      text: "The wind has changed direction and changed back, twice, the same way."
+      effects: {paceMod: 0.88, deepPassChance: 0.88, runYardage: 0.94}
+    - key: loop
+      label: "The Loop Tightens"
+      unrealOnly: true
+      text: "The same minute is happening more than once. The players have noticed."
+      effects: {paceMod: 0.70, passAccuracy: 0.85, fumbleRate: 1.30, deepPassChance: 0.70}
+
+14:
+  team: Slippers
+  name: "Poppy Field"
+  setting: A field of red poppies running to the horizon, under a sky that is too blue.
+  icon: poppy
+  tagline: No Place Like Home
+  description: |
+    The poppies grow to the edge of the field and a good way into it. The scent is
+    heavy and pleasant and visiting teams find themselves slowing down in the third
+    quarter without being able to say why.
+  effects:
+    paceMod: 1.05
+    runYardage: 0.97
+  weather:
+    - key: bloom
+      label: "In Bloom"
+      text: "Warm, bright, and still. The scent is strong but the field is clean."
+      effects: {}
+    - key: pollen
+      label: "Heavy Pollen"
+      text: "Pollen thick in the air. Legs are going heavy earlier than they should."
+      effects: {paceMod: 1.12, runYardage: 0.90, sackRate: 1.10}
+    - key: emerald
+      label: "Emerald Light"
+      text: "The light has gone green and strange. Depth is hard to judge in it."
+      effects: {deepPassChance: 0.84, fgAccuracy: 0.90}
+    - key: twister
+      label: "Twister"
+      unrealOnly: true
+      text: "A funnel has come down beyond the far end zone and it is not moving away."
+      effects: {deepPassChance: 0.45, fgAccuracy: 0.62, puntDistance: 0.70, fumbleRate: 1.40}
+
+15:
+  team: Sand Dollars
+  name: "Coral Sands"
+  setting: A reef flat at low tide, with the field marked out on wet sand.
+  icon: coral
+  tagline: Between Tides
+  description: |
+    The whole ground is only available for part of the day. Coral heads stand around
+    the perimeter and the yard lines are raked in fresh before every game.
+  effects:
+    runYardage: 0.93
+    returnYards: 0.92
+    puntDistance: 0.96
+  weather:
+    - key: lowtide
+      label: "Low Tide"
+      text: "The flat is drained and firm. As good as this field gets."
+      effects: {}
+    - key: surf
+      label: "Running Surf"
+      text: "Surf is reaching the sideline and taking the yard lines with it."
+      effects: {runYardage: 0.90, fumbleRate: 1.12, returnYards: 0.85}
+    - key: sandblow
+      label: "Blowing Sand"
+      text: "Sand off the flat straight down the field. It is in everyone's eyes."
+      effects: {passAccuracy: 0.90, deepPassChance: 0.85}
+    - key: tidein
+      label: "Tide Coming In"
+      unrealOnly: true
+      text: "The water is back over the field and rising. There is no version of this that finishes dry."
+      effects: {runYardage: 0.70, paceMod: 1.30, fumbleRate: 1.35, puntDistance: 0.80}
+
+16:
+  team: Dry Heat
+  name: "Furnace Flats"
+  setting: Open desert hardpan, with no shade anywhere in the venue by design.
+  icon: sun-flare
+  tagline: But It's a Dry Heat
+  description: |
+    The temperature on the field is not published. There is no roof, no shade
+    structure, and the water tables are the only thing anybody looks at on the sideline.
+  effects:
+    paceMod: 1.06
+    runYardage: 1.03
+    sackRate: 0.96
+  weather:
+    - key: hot
+      label: "Hot"
+      text: "Hot and clear and still. The normal condition here."
+      effects: {}
+    - key: shimmer
+      label: "Heat Shimmer"
+      text: "The air over the field is bending. Long throws are being misjudged badly."
+      effects: {deepPassChance: 0.84, fgAccuracy: 0.90}
+    - key: devil
+      label: "Dust Devils"
+      text: "Dust devils crossing the field of play, one at a time, unpredictably."
+      effects: {passAccuracy: 0.92, fumbleRate: 1.12, puntDistance: 0.90}
+    - key: haboob
+      label: "Haboob"
+      unrealOnly: true
+      text: "A wall of dust has arrived over the stadium. Nobody can see anybody."
+      effects: {passAccuracy: 0.72, deepPassChance: 0.35, fgAccuracy: 0.68, paceMod: 1.25}
+
+17:
+  team: Residents
+  name: "Neon Hall"
+  setting: A residency showroom with a football field where the floor seating was.
+  icon: marquee
+  tagline: The Headliner
+  description: |
+    Fully enclosed, fully climate controlled, and lit like a stage. There is a marquee
+    outside with the fixture on it and the visiting team is billed as the support act.
+  effects:
+    passAccuracy: 1.03
+    fgAccuracy: 1.03
+    paceMod: 0.96
+  weather:
+    - key: houselights
+      label: "House Conditions"
+      text: "Indoors and controlled. No wind, no weather, perfect kicking air."
+      effects: {}
+    - key: haze
+      label: "Stage Haze"
+      text: "Haze pumped in for the lighting rig and never vented. It sits at head height."
+      effects: {deepPassChance: 0.88, passAccuracy: 0.95}
+    - key: glare
+      label: "Follow Spots"
+      text: "The spots are tracking the ball carrier, which means they are also in his eyes."
+      effects: {fumbleRate: 1.12, passAccuracy: 0.94}
+    - key: powercut
+      label: "Power Cut"
+      unrealOnly: true
+      text: "The rig is failing in banks. The field goes dark in patches and comes back wrong."
+      effects: {passAccuracy: 0.76, deepPassChance: 0.45, fgAccuracy: 0.74, fumbleRate: 1.30}
+
+18:
+  team: Rhyme
+  name: "Sonnet Park"
+  setting: A stadium where the weather arrives in meter, whether or not anyone wants it to.
+  icon: quill
+  tagline: In Fourteen Lines
+  description: |
+    Rain here falls in a pattern. So does the wind. Nobody has explained it and the
+    groundskeepers have stopped being asked about it.
+  effects:
+    paceMod: 0.95
+    deepPassChance: 0.96
+  weather:
+    - key: measure
+      label: "In Measure"
+      text: "Light, even, and regular. The wind turns over on a count of five."
+      effects: {}
+    - key: iambic
+      label: "Iambic Rain"
+      text: "Rain in a strict alternating pattern, light then heavy, light then heavy."
+      effects: {passAccuracy: 0.94, fumbleRate: 1.10, paceMod: 0.92}
+    - key: caesura
+      label: "Caesura"
+      text: "The weather stops dead in the middle of every drive and starts again."
+      effects: {paceMod: 0.88, deepPassChance: 0.88, fgAccuracy: 0.94}
+    - key: freeverse
+      label: "Free Verse"
+      unrealOnly: true
+      text: "The pattern has broken. The weather is doing whatever it wants and none of it scans."
+      effects: {passAccuracy: 0.80, fumbleRate: 1.35, deepPassChance: 0.60, fgAccuracy: 0.75}
+
+19:
+  team: Waffles
+  name: "The Iron"
+  setting: A field pressed with a deep square grid, under a low ceiling that radiates heat.
+  icon: waffle-grid
+  tagline: Mind the Grid
+  description: |
+    The playing surface is a lattice of squares and channels a few inches deep. Footing
+    depends entirely on whether you land on a ridge or in a groove.
+  effects:
+    runYardage: 0.94
+    fumbleRate: 1.10
+    returnYards: 0.90
+  weather:
+    - key: warm
+      label: "Warm Iron"
+      text: "The grid is warm and dry. Footing is odd but predictable."
+      effects: {}
+    - key: steam
+      label: "Steam"
+      text: "Steam venting up out of the grooves across the whole field."
+      effects: {deepPassChance: 0.84, passAccuracy: 0.93}
+    - key: syrup
+      label: "Syrup"
+      text: "Syrup is standing in the channels. Anyone who goes down comes up slow."
+      effects: {runYardage: 0.86, paceMod: 1.12, sackRate: 1.15}
+    - key: press
+      label: "The Press Closes"
+      unrealOnly: true
+      text: "The ceiling is coming down. There is no room to punt and less to throw."
+      effects: {deepPassChance: 0.30, puntDistance: 0.60, fgAccuracy: 0.65, paceMod: 1.20}
+
+20:
+  team: Midnights
+  name: "Moonlight Towers"
+  setting: A field under a permanent full moon, at an hour that never advances.
+  icon: full-moon
+  tagline: It Is Always Late Here
+  description: |
+    Lit by four iron towers and one enormous moon. The sun has never been observed at
+    this venue and the grounds staff work entirely by night.
+  effects:
+    passAccuracy: 0.96
+    deepPassChance: 0.92
+    fgAccuracy: 0.96
+  weather:
+    - key: fullmoon
+      label: "Full Moon"
+      text: "Bright moonlight, no cloud. Enough to play by, cold enough to notice."
+      effects: {}
+    - key: cloudcross
+      label: "Cloud Across the Moon"
+      text: "Cloud keeps crossing the moon and taking the light with it."
+      effects: {passAccuracy: 0.92, deepPassChance: 0.85}
+    - key: frost
+      label: "Night Frost"
+      text: "Frost forming on the field and on the ball. Hands are going."
+      effects: {fumbleRate: 1.20, runYardage: 0.92, passAccuracy: 0.94}
+    - key: eclipse
+      label: "Eclipse"
+      unrealOnly: true
+      text: "The moon is going out. Whatever is crossing it is not the earth."
+      effects: {passAccuracy: 0.70, deepPassChance: 0.35, fgAccuracy: 0.70, fumbleRate: 1.35}
+
+21:
+  team: Jetskis
+  name: "Marina Bay"
+  setting: A floating field moored in open water, with the bay on all four sides.
+  icon: buoy
+  tagline: On the Water
+  description: |
+    The pitch is a moored platform and it moves with the water under it. There is no
+    dry land inside the venue and the out of bounds is, in the literal sense, the sea.
+  effects:
+    fumbleRate: 1.10
+    fgAccuracy: 0.95
+    puntDistance: 0.94
+  weather:
+    - key: glass
+      label: "Glassy"
+      text: "The bay is flat calm. The platform is barely moving."
+      effects: {}
+    - key: swell
+      label: "Heavy Swell"
+      text: "The field is rising and falling underfoot. Nobody's footing is honest."
+      effects: {fumbleRate: 1.20, passAccuracy: 0.93, fgAccuracy: 0.88}
+    - key: spray
+      label: "Salt Spray"
+      text: "Spray coming over the edge and onto the field. The ball is soaked."
+      effects: {passAccuracy: 0.90, fumbleRate: 1.15, puntDistance: 0.92}
+    - key: squall
+      label: "Squall"
+      unrealOnly: true
+      text: "A squall line has come across the bay. The platform is pitching and nobody has called it."
+      effects: {fumbleRate: 1.55, deepPassChance: 0.40, fgAccuracy: 0.60, puntDistance: 0.72}
+
+22:
+  team: Phones
+  name: "Glass Cube"
+  setting: A sealed glass box, transparent on all six sides, suspended over the city.
+  icon: glass-cube
+  tagline: Everyone Can See In
+  description: |
+    Every surface is glass, including the one they play on. There is nowhere on the
+    field that is not visible from outside and the players are aware of it.
+  effects:
+    passAccuracy: 1.02
+    runYardage: 0.96
+    fumbleRate: 1.05
+  weather:
+    - key: sealed
+      label: "Sealed"
+      text: "No wind, no weather, and a very long way down through the floor."
+      effects: {}
+    - key: condensation
+      label: "Condensation"
+      text: "The glass has fogged from the inside. The city has gone, and so has the far sideline."
+      effects: {deepPassChance: 0.82, passAccuracy: 0.93}
+    - key: glare
+      label: "Full Glare"
+      text: "Light coming through six panes at once and bouncing off the floor."
+      effects: {passAccuracy: 0.92, fgAccuracy: 0.92, fumbleRate: 1.08}
+    - key: fracture
+      label: "Fracture"
+      unrealOnly: true
+      text: "The panes are crazing. Everyone can hear it and nobody is looking down."
+      effects: {passAccuracy: 0.78, runYardage: 0.75, paceMod: 1.25, fumbleRate: 1.35}
+
+23:
+  team: Bees
+  name: "The Apiary"
+  setting: A field inside a working hive, walled and roofed in comb.
+  icon: hexcomb
+  tagline: Do Not Swing At Them
+  description: |
+    The stands are comb, the roof is comb, and the hive is occupied. The sound is
+    constant and rises noticeably when the home team is on a drive.
+  effects:
+    sackRate: 1.05
+    paceMod: 1.04
+    passAccuracy: 0.97
+  weather:
+    - key: hum
+      label: "Steady Hum"
+      text: "The hive is calm. Warm, close air and a noise you stop hearing after a while."
+      effects: {}
+    - key: agitated
+      label: "Agitated"
+      text: "The hive is up. Anyone standing still is getting attention."
+      effects: {paceMod: 1.10, passAccuracy: 0.93, sackRate: 1.12}
+    - key: smoke
+      label: "Smoke"
+      text: "Smoke pumped in to settle the hive. It settles the hive and blinds the receivers."
+      effects: {deepPassChance: 0.82, passAccuracy: 0.92}
+    - key: swarm
+      label: "Swarm"
+      unrealOnly: true
+      text: "The hive has come off the walls and onto the field. Play has not been stopped."
+      effects: {passAccuracy: 0.72, paceMod: 1.35, deepPassChance: 0.45, fumbleRate: 1.30}
+
+24:
+  team: Classics
+  name: "Heritage Field"
+  setting: A period ground kept exactly as it was, including the parts nobody misses.
+  icon: pennant
+  tagline: The Original Recipe
+  description: |
+    Wooden stands, hand-operated scoreboard, and a grass field with no drainage worth
+    the name. Nothing here has been modernized and that is the entire point.
+  effects:
+    runYardage: 1.04
+    deepPassChance: 0.92
+    paceMod: 0.94
+  weather:
+    - key: fine
+      label: "Fine"
+      text: "Cool and dry. The old field plays beautifully on a day like this."
+      effects: {}
+    - key: mud
+      label: "Mud"
+      text: "No drainage and a wet week. The middle of the field is gone already."
+      effects: {runYardage: 0.86, fumbleRate: 1.18, paceMod: 1.10}
+    - key: sepia
+      label: "Low Sun"
+      text: "Long low sun through the wooden stands, striping the field in light and dark."
+      effects: {passAccuracy: 0.93, deepPassChance: 0.86}
+    - key: mire
+      label: "The Mire"
+      unrealOnly: true
+      text: "The field has become a bog end to end. They are playing it out anyway."
+      effects: {runYardage: 0.65, paceMod: 1.35, fumbleRate: 1.40, puntDistance: 0.78}
+
+25:
+  team: Extras
+  name: "Backlot Nine"
+  setting: A film backlot where the stadium is a set, and only the parts on camera are finished.
+  icon: clapperboard
+  tagline: From This Angle
+  description: |
+    From the broadcast side it is a full stadium. From the other side it is scaffolding
+    and painted flats. The weather is supplied by machines and the machines are old.
+  effects:
+    passAccuracy: 0.97
+    fumbleRate: 1.05
+    paceMod: 1.03
+  weather:
+    - key: setup
+      label: "Between Setups"
+      text: "The machines are off. Whatever the real weather is, this is it."
+      effects: {}
+    - key: rainrig
+      label: "Rain Rig"
+      text: "The rain towers are running. It is falling on the field and nowhere else."
+      effects: {passAccuracy: 0.93, fumbleRate: 1.14}
+    - key: windmachine
+      label: "Wind Machines"
+      text: "Four machines aimed across the field, all at slightly different angles."
+      effects: {fgAccuracy: 0.88, puntDistance: 0.88, deepPassChance: 0.88}
+    - key: strike
+      label: "Striking the Set"
+      unrealOnly: true
+      text: "The flats are coming down mid-play. There is nothing behind the far end zone."
+      effects: {passAccuracy: 0.78, deepPassChance: 0.40, paceMod: 1.30, fumbleRate: 1.35}
+
+26:
+  team: Raccoons
+  name: "The Back Lot"
+  setting: A field behind a row of buildings, played at night under one working light.
+  icon: trash-lid
+  tagline: After Hours
+  description: |
+    Chain link on three sides, dumpsters in the corner, and a single sodium lamp that
+    covers about sixty percent of the field. Games start when the businesses close.
+  effects:
+    passAccuracy: 0.95
+    returnYards: 1.06
+    fgAccuracy: 0.94
+  weather:
+    - key: dry
+      label: "Dry Night"
+      text: "Cool and dry. One lamp, one long shadow, and the usual noise off the alley."
+      effects: {}
+    - key: drizzle
+      label: "Drizzle on Tin"
+      text: "Rain on every metal roof around the lot. Nobody can hear the count."
+      effects: {passAccuracy: 0.92, sackRate: 1.12, paceMod: 1.06}
+    - key: blown
+      label: "Blowing Litter"
+      text: "The wind has picked the lot up and is carrying it across the field."
+      effects: {passAccuracy: 0.93, deepPassChance: 0.86, fumbleRate: 1.10}
+    - key: lampout
+      label: "The Lamp Goes"
+      unrealOnly: true
+      text: "The one light has failed. Something is still moving out there and it is not all players."
+      effects: {passAccuracy: 0.70, deepPassChance: 0.35, fgAccuracy: 0.68, fumbleRate: 1.35}
+
+27:
+  team: Curd
+  name: "The Creamery"
+  setting: A working dairy floor, tiled, cold, and washed down between quarters.
+  icon: milk-can
+  tagline: You Can Hear the Squeak
+  description: |
+    Play happens on the creamery floor, between the vats. The surface squeaks
+    underfoot, which the home side finds reassuring and everyone else does not.
+  effects:
+    runYardage: 0.95
+    fumbleRate: 1.06
+    paceMod: 0.97
+  weather:
+    - key: chilled
+      label: "Chilled"
+      text: "Cold, dry and clean. The floor has just been done."
+      effects: {}
+    - key: whey
+      label: "Whey Mist"
+      text: "Warm mist off the vats hanging at head height across the floor."
+      effects: {deepPassChance: 0.84, passAccuracy: 0.93}
+    - key: washdown
+      label: "Wash Down"
+      text: "The floor was hosed between quarters and has not dried. Nobody is cutting on it."
+      effects: {runYardage: 0.86, fumbleRate: 1.18, returnYards: 0.85}
+    - key: coldsnap
+      label: "Cold Store"
+      unrealOnly: true
+      text: "The room has dropped below freezing with the doors shut. The ball is a stone."
+      effects: {fumbleRate: 1.50, passAccuracy: 0.80, runYardage: 0.80, fgAccuracy: 0.75}
+
+28:
+  team: Trains
+  name: "The Overnight"
+  setting: A field aboard a moving train, playing while the country goes past.
+  icon: railcar
+  tagline: We Do Not Stop
+  description: |
+    The stadium is rolling stock and it is in motion for the whole game. The scenery
+    changes by quarter, the weather changes with it, and the crosswind depends
+    entirely on how fast they are going.
+  effects:
+    deepPassChance: 0.90
+    puntDistance: 0.90
+    paceMod: 1.05
+  weather:
+    - key: openline
+      label: "Open Line"
+      text: "Steady speed on straight track. A constant crosswind you can at least plan for."
+      effects: {}
+    - key: tunnel
+      label: "Tunnels"
+      text: "The line is running through tunnels. The field goes dark without warning and comes back."
+      effects: {passAccuracy: 0.90, deepPassChance: 0.80, fumbleRate: 1.10}
+    - key: curve
+      label: "Long Curve"
+      text: "The train is leaning into a curve and taking the field with it. Everything drifts one way."
+      effects: {fgAccuracy: 0.86, puntDistance: 0.86, runYardage: 0.94}
+    - key: highland
+      label: "Crossing the Pass"
+      text: "The line has climbed into weather. Snow is coming across the open cars."
+      effects: {passAccuracy: 0.90, fumbleRate: 1.18, deepPassChance: 0.82}
+    - key: derail
+      label: "Off the Rails"
+      unrealOnly: true
+      text: "The train is not on the track any more. Play is continuing regardless."
+      effects: {fumbleRate: 1.55, passAccuracy: 0.75, fgAccuracy: 0.60, runYardage: 0.78}
+
+29:
+  team: Grillmeisters
+  name: "The Coals"
+  setting: A field laid over a bed of coals, with the grates as the playing surface.
+  icon: grill-grate
+  tagline: Low and Slow
+  description: |
+    The surface is grating and the heat comes up through it. Everyone on the sideline
+    is cooking something and the smoke never fully clears the field.
+  effects:
+    paceMod: 1.06
+    runYardage: 0.96
+    sackRate: 0.95
+  weather:
+    - key: lowheat
+      label: "Low Heat"
+      text: "Steady warmth off the coals and a thin smoke that stays above head height."
+      effects: {}
+    - key: smoke
+      label: "Heavy Smoke"
+      text: "The smoke has come down onto the field and settled there."
+      effects: {deepPassChance: 0.80, passAccuracy: 0.92}
+    - key: flareup
+      label: "Flare Ups"
+      text: "Fat is hitting the coals. Flames coming up through the grate, in places, without warning."
+      effects: {runYardage: 0.90, fumbleRate: 1.15, paceMod: 1.10}
+    - key: inferno
+      label: "The Whole Bed Goes"
+      unrealOnly: true
+      text: "The entire bed is alight under the field. Nobody has stopped it and nobody has left."
+      effects: {runYardage: 0.72, paceMod: 1.35, fumbleRate: 1.40, passAccuracy: 0.82}
+
+30:
+  team: Exoticos
+  name: "Arena Dorada"
+  setting: A lucha arena, gilded, sealed and loud, with the field sunk in the middle.
+  icon: lucha-mask
+  tagline: Todo el Mundo
+  description: |
+    A gold arena with the crowd very close on all four sides. Everything is
+    theatrical, including the entrances, and the noise does not let up for four quarters.
+  effects:
+    sackRate: 1.06
+    paceMod: 1.04
+    fgAccuracy: 1.02
+  weather:
+    - key: sealedair
+      label: "Sealed Air"
+      text: "Indoors and still. Loud, but the air itself is doing nothing."
+      effects: {}
+    - key: pyro
+      label: "Pyro Smoke"
+      text: "Entrance pyro has left smoke in the bowl and there is nowhere for it to go."
+      effects: {deepPassChance: 0.84, passAccuracy: 0.94}
+    - key: confetti
+      label: "Confetti"
+      text: "Gold confetti still coming down two quarters later. It is in the air and on the ball."
+      effects: {passAccuracy: 0.92, fumbleRate: 1.12, deepPassChance: 0.88}
+    - key: fullhouse
+      label: "The House Comes Down"
+      unrealOnly: true
+      text: "The whole arena is on its feet and the bowl is shaking. Nothing can be heard at all."
+      effects: {sackRate: 1.35, paceMod: 1.30, passAccuracy: 0.80, fumbleRate: 1.25}
+
+31:
+  team: Buffalo
+  name: "The Wintering Ground"
+  setting: Open plain in permanent winter, with the herd wintering past the far end zone.
+  icon: bison
+  tagline: They Were Here First
+  description: |
+    Flat grassland to the horizon, snow on it most of the year, and a herd that moves
+    across the back of the venue on its own schedule. Play works around them.
+  effects:
+    runYardage: 1.04
+    passAccuracy: 0.95
+    puntDistance: 0.92
+  weather:
+    - key: hardfrost
+      label: "Hard Frost"
+      text: "Frozen ground, clear sky, no wind. Fast underfoot and very cold."
+      effects: {}
+    - key: plainswind
+      label: "Plains Wind"
+      text: "Nothing to stop the wind for a hundred miles and it shows in every kick."
+      effects: {fgAccuracy: 0.86, puntDistance: 0.84, deepPassChance: 0.86}
+    - key: snow
+      label: "Falling Snow"
+      text: "Steady snow filling the yard lines in as fast as they can be cleared."
+      effects: {passAccuracy: 0.90, runYardage: 0.92, fumbleRate: 1.18}
+    - key: whiteout
+      label: "Blizzard"
+      unrealOnly: true
+      text: "Full whiteout with the herd somewhere inside it. The far end zone is a rumor."
+      effects: {passAccuracy: 0.70, deepPassChance: 0.30, fgAccuracy: 0.65, fumbleRate: 1.45}
+
+32:
+  team: Sodas
+  name: "The Fountain"
+  setting: A field at the bottom of an enormous soda fountain, permanently carbonated.
+  icon: fizz
+  tagline: Still Fizzing
+  description: |
+    The air is carbonated and so is everything else. The field is sticky by the second
+    quarter and the whole venue smells faintly of syrup for the entire game.
+  effects:
+    paceMod: 1.05
+    runYardage: 0.95
+    fumbleRate: 1.06
+  weather:
+    - key: flat
+      label: "Gone Flat"
+      text: "The fizz has died down. Sticky underfoot but otherwise playable."
+      effects: {}
+    - key: carbonation
+      label: "Heavy Carbonation"
+      text: "The air is full of bubbles and the ball will not sit still in anyone's hands."
+      effects: {fumbleRate: 1.18, passAccuracy: 0.93}
+    - key: syruprain
+      label: "Syrup Rain"
+      text: "Syrup coming down from the rim. Everything it lands on stops moving quite right."
+      effects: {runYardage: 0.88, paceMod: 1.12, sackRate: 1.12}
+    - key: eruption
+      label: "Eruption"
+      unrealOnly: true
+      text: "The whole fountain has gone up. The field is under it and still in play."
+      effects: {fumbleRate: 1.55, runYardage: 0.70, passAccuracy: 0.78, paceMod: 1.30}
