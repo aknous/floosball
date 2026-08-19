@@ -1210,12 +1210,36 @@ not currently work.
 correction the sentiment quorum already made, and it has the better property anyway: it
 measures the people who actually care about this player.
 
+#### What the race is actually for
+
+⚠️ **Clearing the threshold EQUIPS the augment at level 1; it does not finish it.** An
+augment is a level and not a switch, so the bar a fanbase fills is "get this onto the
+field", after which the same fans keep feeding it upward at escalating cost until it
+nears tolerance and starts risking failure. Reading the threshold as a one-time unlock
+loses the repeating weekly decision the level model exists to create.
+
+⚠️ **Losing the race must mean WAITING, not losing** — otherwise first-past-the-post
+reintroduces the exact flaw that ruled out a ballot, a loser whose stake evaporates.
+It does not, because **chrome decays**: slots free themselves, so a completed augment
+that missed a slot is fitted when one opens. The race decides *when*, not *whether*.
+
+That is a useful knock-on. Decay was specced as the sink and the anti-ratchet; it is also
+the **rotation mechanism** that keeps the race non-zero-sum, which is what lets several
+factions back different augments without any of them being wiped out.
+
+⚠️ It follows that **a completed-but-unslotted augment must NOT decay while it waits.**
+Decaying in the queue makes the queue a trap: a fanbase that lost a close race would
+watch its investment drain with no way to spend it. Decay should start when the augment
+is FITTED, not when it is finished.
+
 **What this leaves open:**
-1. When slots are full and a new augment finishes, does it wait, or contest a fitted one?
-   Waiting is simpler; contesting is more dramatic and risks thrash.
-2. Can components be moved off an augment that is losing the race, or are they committed?
+1. Can components be moved off an augment that is losing the race, or are they committed?
    Committed is cleaner and makes the choice mean something.
-3. Does a completed-but-unslotted augment decay while it waits?
+2. Should a waiting augment be able to DISPLACE a fitted one that has decayed below some
+   level, or must it wait for a clean slot? Displacement is more dramatic and risks
+   thrash.
+3. Is there a cap on how many augments can be in progress on one player at once? Without
+   one, a popular player accumulates an unbounded queue.
 
 ### Shape
 
