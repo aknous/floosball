@@ -138,11 +138,46 @@ Either is fine; deriving from anything else is not.
 
 ### Exceeding tolerance
 
-⚠️ A **soft** cap, not a hard one. A hard cap is a UI message; a soft one is a decision.
-A fan should be able to push a player past their tolerance and watch cyberpsychosis
-arrive — mental attributes degrading, erratic play, the drawbacks this plan already names
-— which makes over-chroming a gamble a fan takes rather than a thing the game forbids.
-That is also the version that produces stories.
+⚠️ A **soft** cap, not a hard one (owner, confirmed 2026-08-19). A hard cap is a UI
+message; a soft one is a decision. A fan should be able to push a player past their
+tolerance and watch cyberpsychosis arrive — mental attributes degrading, erratic play,
+the drawbacks this plan already names — which makes over-chroming a gamble a fan takes
+rather than a thing the game forbids. That is the version that produces stories.
+
+### ⚠️ The strain MUST be legible before the flame-out
+
+Owner, 2026-08-19: a fan has to be told a player is nearing capacity, or they are left
+confused about why the player they spent so much on is falling apart. **An unsignalled
+soft cap is not a gamble, it is a hidden punishment**, and it will read as a bug rather
+than a consequence.
+
+**Copy the retirement-risk pattern, which already solves this exact problem.**
+`playerManager.computeRetirementOdds` is the single source of truth for both the ROLL and
+the displayed risk tier (`computeRetirementRisk`) "so they never drift". Chrome load
+needs the same shape: **one function computes the strain, and both the penalty and the
+displayed state read it.** Anything else eventually shows "stable" on a player who is
+already degrading — the exact class of bug this codebase keeps getting burned by, where
+a surface and its underlying number are computed twice and diverge.
+
+**Warn before the commit, not after it.** The signal has to arrive while the fan can
+still act, so the fitting flow needs to show where THIS augment lands the player, not
+just where they are now. A warning that appears after the socket is filled is an autopsy.
+
+⚠️ **Show CUMULATIVE load, not the fan's own contribution.** Any fan may chrome any
+player, so several fans can be loading the same one independently. Without a shared
+visible total, three fans each fit one augment believing they are safe and collectively
+fry the player — and every one of them experiences it as the game cheating. This is the
+detail most likely to be missed, because it only breaks with more than one contributor.
+
+**Qualitative band, not a raw number**, matching the house style for player-facing state
+(the form badge, the retirement risk tier). The exact capacity can stay hidden; how close
+to it they are cannot.
+
+**And deliver it in character as well.** Cyberpsychosis has symptoms, and the personality
+system already carries moods and quotes — a player nearing capacity should start sounding
+wrong before the numbers move. That is the version a reader notices without being told to
+look. ⚠️ Flavor alone is NOT the warning though: it rides alongside the explicit state,
+never instead of it.
 
 ## The frame — the Cores got bored
 

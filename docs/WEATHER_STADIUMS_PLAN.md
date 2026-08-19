@@ -479,6 +479,13 @@ i.e. a player who is genuinely better in the dark than in the light. That is the
 fantasy and the strongest version of the spectacle, but it is also the one thing that
 can undo the fairness work above, so it should be deliberate.
 
+⚠️ **Chrome has scarce slots and per-player tolerance** (owner, 2026-08-19), so a
+weather augment competes for a socket with a straight skill boost. Tolerance is an
+independent attribute — deliberately NOT derived from the existing mentals, which
+measure +0.21 to +0.40 correlated with rating and would make chrome a rich-get-richer
+amplifier — and the cap is soft, with the strain surfaced to fans before the flame-out.
+Full reasoning in `docs/CHROME.md`.
+
 **It composes with the roster fit already built.** The GM builds for the venue
 (`phaseBias` → positions), the fans chrome for the venue (conditions → augments). Two
 layers reading the same input from opposite ends, which is exactly the fans-versus-Cores
