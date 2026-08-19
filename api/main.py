@@ -3605,6 +3605,55 @@ async def get_standings(response: Response):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/standings/history")
+async def getStandingsHistory(season: Optional[int] = None):
+    """Week-by-week standings trajectories — one line per team, for a graphical
+    standings chart.
+
+    Derived from the games table rather than stored, so it covers any season already
+    played. Each point carries the raw record plus `gamesAbove500` (the classic y-axis,
+    which spreads the lines around zero rather than bunching them in a monotonic climb)
+    and `divisionGamesBack` measured against that club's division leader AS OF THAT WEEK.
+    """
+    try:
+        from standings_history import buildStandingsHistory
+        from standings_view import seedLeague
+
+        sm = floosball_app.seasonManager
+        if season is None:
+            season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+        leagues = floosball_app.leagueManager.leagues
+        teamsByLeague = {lg.name: list(lg.teamList) for lg in leagues}
+
+        # Division membership in the owner's config order, matching the board.
+        divisionsByLeague = {}
+        for lg in leagues:
+            built = seedLeague(list(lg.teamList), [])
+            divs = built['divisions']
+            try:
+                order = sm._divisionNames(lg.name) if sm else None
+            except Exception:
+                order = None
+            if order:
+                names = ([n for n in order if n in divs]
+                         + [n for n in divs if n not in order])
+            else:
+                names = list(divs)
+            divisionsByLeague[lg.name] = {n: divs[n] for n in names}
+
+        _session = get_session()
+        try:
+            payload = buildStandingsHistory(_session, season, teamsByLeague, divisionsByLeague)
+        finally:
+            _session.close()
+        return payload
+
+    except Exception as e:
+        logger.error(f"Error getting standings history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/cards/effects")
 async def get_card_effects(response: Response):
     """Public listing of all card effects with display name, tooltip, and tier."""
