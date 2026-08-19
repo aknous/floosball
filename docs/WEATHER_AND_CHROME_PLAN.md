@@ -547,6 +547,12 @@ player isn't a better football player — they're a different kind of thing wear
 
 ## The model: users gift chrome (and it bites back)
 
+> ⚠️ **SUPERSEDED BELOW — the scope and the currency in this paragraph are both out of
+> date.** Chrome is **earned, not bought with Floobits** (2026-07-31), and **any user may
+> add components to any player** (owner, re-confirmed 2026-08-19). The reasoning in the
+> rest of this section about *why* fans participate still holds; the restriction does not.
+> Kept because the sabotage argument it makes is what the Monstars frame answers.
+
 **Users gift chrome to players on their favorite team** — spend Floobits (a new sink) to bolt an
 augment onto a player on the team they back. **Favorite-team-only** (owner direction, 2026-06-23):
 chrome is a **loyalty investment in your own roster**, not a weapon — which cleanly kills the
@@ -1280,6 +1286,35 @@ tolerance is a property of the player and not of the fanbase. **A bigger fanbase
 speed, not a higher ceiling.** That is what keeps chrome from becoming a
 popularity-to-power converter, and it is why tolerance being independent of rating matters
 twice over.
+
+#### Owner decisions, 2026-08-19
+
+**Any user may add components to any player** — not just their own team's. This is the
+2026-07-31 scope re-confirmed, and it **resolves the zero-fan-team problem directly.**
+Measured at a 7-day window, only 17 of 32 teams have even one active fan, so under
+favorite-team-only gifting **15 teams could never be chromed at all** — a structural
+divergence, not a quiet gap. With open scope the whole active pool (29 users) can direct
+components anywhere, and the constraint becomes attention rather than geography.
+
+**"Active" means a 7-day window for chrome.** ⚠️ Note this is a THIRD definition in the
+codebase and should be its own named constant rather than a reused one:
+`SUPPORTER_ACTIVITY_WINDOW_DAYS` is **14** and is what `_countActiveUsers` — and therefore
+the fan-award quorum — already uses. Seven days is defensible on its own terms here, since
+the game week is a real cadence (games run Mon-Thu) so "active this week" means something
+concrete for a weekly contribution loop; but it must not silently redefine the existing
+one.
+
+Measured across the candidate windows:
+
+| window | active users | 
+|---|---|
+| **7d (chrome)** | **28-29** |
+| 14d (`_countActiveUsers`, awards) | 37 |
+| 30d | 44 |
+
+⚠️ Correction to an earlier revision of this section: it quoted the active count as 44 and
+the award quorum as 9. Those are the **30-day** figures, computed by hand;
+`_countActiveUsers` uses the 14-day window, so the live values are **37 and 8**.
 
 **Shape to tune against**, with the earning rate as the free variable:
 
