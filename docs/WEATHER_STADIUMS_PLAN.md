@@ -424,7 +424,16 @@ PERSONNEL for the place, which the roster half above already provides — giving
 play-calling read as well would double-count it into a second, unmeasured home
 advantage. Build it with the modifier wiring so the two can be measured together.
 
-## Chrome answers the weather (owner, 2026-08-19)
+## Chrome answers the weather — as ONE family (owner, 2026-08-19)
+
+⚠️ **Chrome is not only weather counters.** Its backbone is **straight skill boosts** —
+fit an augment, the player is better, full stop — and that is what a fan reaches for by
+default. Everything below is a SECOND family alongside that one. Weather does not
+redefine chrome and is not its reason for existing; it gives one family of augments a
+concrete, repeating trigger. ⚠️ The conditional family also needs a genuinely higher
+ceiling than the straight one, or nobody takes it: an augment carrying variance and
+requiring a read loses to a reliable one at equal expectation. Same axis the cards
+already run on.
 
 ⚠️ **As built, weather is pure input with no counterplay** — it happens to you and you
 take it. Chrome (`docs/CHROME.md`, doc-only, staged behind Stages 1-2) is the answer,

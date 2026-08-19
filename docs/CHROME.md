@@ -36,7 +36,27 @@ anomaly dial Stages 1–2 establish, which is why it wants that foundation first
 > and take it a step further than vanilla football. It's all a Matrix-style simulation, so maybe the
 > Cores just got bored and decided to let the players go crazy."
 
-## ⚠️ 2026-08-19 — weather gives chrome its concrete trigger
+## ⚠️ 2026-08-19 — weather chrome is ONE FAMILY, not the model for all of it
+
+⚠️ **Owner, 2026-08-19: chrome is not only weather counters. The backbone is straight
+skill boosts** — fit an augment, the player is better, full stop. That is what a fan
+reaches for by default and it is what this document already describes ("chrome genuinely
+juices players and may decide games"). The section below adds a SECOND family alongside
+it; it does not redefine the system, and weather is not chrome's reason for existing.
+
+The two families want different shapes, and the tension between them is the actual
+decision a fan makes:
+
+| | pays | shape |
+|---|---|---|
+| **straight augment** | always | reliable, lower ceiling, no read required |
+| **conditional / weather** | only in the conditions it is for | higher ceiling, needs a read, dead weight when wrong |
+
+⚠️ **The conditional family needs a genuinely higher ceiling or nobody takes it.** If the
+two are equal in expectation, the one carrying variance and requiring homework simply
+loses. This is the same axis the card system already runs on — dependable at the base,
+conditional with higher ceilings above it — and it is worth copying because it is
+already proven with this audience.
 
 Stadiums and weather are built (`docs/WEATHER_STADIUMS_PLAN.md`, `data/templates/stadiums.yaml`):
 every venue is a fantastical setting with weather native to it, and **its intensity rides
