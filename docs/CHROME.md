@@ -36,6 +36,25 @@ anomaly dial Stages 1–2 establish, which is why it wants that foundation first
 > and take it a step further than vanilla football. It's all a Matrix-style simulation, so maybe the
 > Cores just got bored and decided to let the players go crazy."
 
+## ⚠️ 2026-08-19 — weather gives chrome its concrete trigger
+
+Stadiums and weather are built (`docs/WEATHER_STADIUMS_PLAN.md`, `data/templates/stadiums.yaml`):
+every venue is a fantastical setting with weather native to it, and **its intensity rides
+the anomaly dial and peaks at Criticality**. That hands this plan the thing it was short
+of — a specific, visible, repeating reason for a fan to chrome a specific player.
+
+Weather is **announced before kickoff**, so the read is legible: your team is at Bedrock
+Cavern in the dark this week, so you fit optics. The conditions are sensory and physical
+(`visibility`, `footing`, `fumbleRate`, `paceMod`, …) and so is chrome, which makes the
+mapping one-to-one rather than invented. Full table and guardrails in the weather plan
+under "Chrome answers the weather".
+
+Two constraints carried over from there: weather chrome must be **conditional** (it pays
+only in the conditions it is for, so it is a read and not a flat upgrade), and it must
+**not fully negate** the weather or the two features cancel. The open question is whether
+awakened-tier chrome may make a player genuinely BETTER in the dark than in the light —
+the Monstars fantasy, and the one thing that can undo the venue fairness work.
+
 ## The frame — the Cores got bored
 
 This is the key narrative move, and it's the cleanest thing the lore has been building toward.

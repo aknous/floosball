@@ -424,6 +424,59 @@ PERSONNEL for the place, which the roster half above already provides — giving
 play-calling read as well would double-count it into a second, unmeasured home
 advantage. Build it with the modifier wiring so the two can be measured together.
 
+## Chrome answers the weather (owner, 2026-08-19)
+
+⚠️ **As built, weather is pure input with no counterplay** — it happens to you and you
+take it. Chrome (`docs/CHROME.md`, doc-only, staged behind Stages 1-2) is the answer,
+and the two dovetail better than either was designed for.
+
+**Why it fits.** Chrome is the fan's lever on the sim, and weather is **announced before
+kickoff** — so a fan can read the slate, see their team is at Bedrock Cavern in the
+dark, and chrome their receiver with low-light optics. That is a decision with a visible
+input and a visible outcome, which is what a metagame lever needs and what chrome
+otherwise lacks a concrete trigger for.
+
+**The fiction is already correct.** The same anomaly that degrades the Cores'
+reconstruction — which is *why* the weather worsens as the aggregate climbs — is the one
+handing players the means to operate in it. One force causes the problem and the
+adaptation, and both get louder together. At Criticality the field is barely playable
+and the chromed are the only ones who can work in it.
+
+**The mapping is one-to-one**, because cybernetic augmentation is sensory and physical
+adaptation and these keys are sensory and physical conditions:
+
+| condition | the chrome that answers it |
+|---|---|
+| `visibility` | optical implants — low-light, thermal. The most obvious augment in the game |
+| `footing` | grip actuators, gyroscopic balance |
+| `fumbleRate` | tactile feedback, grip |
+| `passAccuracy` | targeting assist, a stabilized arm |
+| `deepPassChance` | arm augment |
+| `sackRate` | threat detection, reaction |
+| `fgAccuracy` / `puntDistance` | gyroscopic leg |
+| `paceMod` | lungs, for thin air and heat |
+
+⚠️ **Weather chrome must be CONDITIONAL — it pays only in the conditions it is for.**
+That is what makes it a read rather than a flat upgrade, and it is the same shape the
+card system already uses for its higher-ceiling effects. A fan who chromes optics for a
+dark venue and then watches their team play three clear weeks has made a bad read, and
+that is the point.
+
+⚠️ **It must not fully negate the weather, or the two features cancel and both stop
+mattering.** Proposal: ordinary chrome restores *toward* baseline and is capped there —
+a player with optics is as good in the dark as they would be in daylight, never better.
+**Owner call needed**: whether awakened / Criticality-tier chrome may EXCEED baseline,
+i.e. a player who is genuinely better in the dark than in the light. That is the Monstars
+fantasy and the strongest version of the spectacle, but it is also the one thing that
+can undo the fairness work above, so it should be deliberate.
+
+**It composes with the roster fit already built.** The GM builds for the venue
+(`phaseBias` → positions), the fans chrome for the venue (conditions → augments). Two
+layers reading the same input from opposite ends, which is exactly the fans-versus-Cores
+frame the metagame plan is built on. It also gives each team a visible chrome identity
+over time — the team in the cavern all run optics — which is character emerging from
+mechanics rather than being authored.
+
 ## Remaining open decisions
 
 1. **Alternate formats.** Frames, darts and chess clock each change what a modifier
