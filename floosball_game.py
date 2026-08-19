@@ -495,7 +495,7 @@ sackList = [
                     '{} is brought down by {} for {} yards',
                     '{} goes down, sacked by {} for {} yards',
                     '{} is taken down by {} behind the line for {} yards',
-                    '{} has nowhere to throw, {} brings him down for {} yards',
+                    '{} has nowhere to throw, {} brings them down for {} yards',
                     '{} is wrapped up by {} and sacked for {} yards',
                     '{} is crushed by {} for {} yards',
                     '{} is buried by {} for {} yards',
