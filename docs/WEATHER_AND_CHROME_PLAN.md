@@ -922,11 +922,43 @@ Each existing mental attribute gets a distinct job (names verified against `floo
 | Transition | Governed by | Reading |
 |---|---|---|
 | **Awakening** — noticing the seams | `instinct`, `creativity` | who *perceives* the simulation. Squares with the lore's meta-awareness tiers, where prophet/mystic already hear through the wall |
-| **Chrome tolerance** — the breaking point | `selfBelief`, `pressureHandling`, `focus`, `discipline` | who can *carry* load without coming apart |
+| **Chrome tolerance** — the breaking point | ⚠️ **SUPERSEDED — see below** | who can *carry* load without coming apart |
 | **Cleansing resistance** | `resilience` + the existing `_purgeDodgeFor` personality dodge | who *survives* the Cores' purge |
 
 Note the cleansing half already exists in code — `_purgeDodgeFor` gives aware-tier personalities a
 0.5 multiplier — so this extends a precedent rather than inventing one.
+
+#### ⚠️ Tolerance is an INDEPENDENT attribute, superseding the row above (owner, 2026-08-19)
+
+The table originally derived tolerance from `selfBelief` / `pressureHandling` / `focus` /
+`discipline`, which is the natural thematic fit and is **wrong for a measurable reason.**
+Measured on 192 live players, every mental attribute except one correlates positively with
+overall rating:
+
+| attribute | vs rating | | attribute | vs rating |
+|---|---|---|---|---|
+| instinct | +0.40 | | attitude | +0.26 |
+| x_factor | +0.38 | | resilience | +0.25 |
+| focus | +0.37 | | self_belief | +0.21 |
+| creativity | +0.36 | | **pressure_handling** | **−0.12** |
+| discipline | +0.34 | | | |
+
+Generation makes good players good at everything, so any derivation from those is a rating
+proxy — and chrome would become a **rich-get-richer amplifier**, handing the most augments
+to the players who are already best, widening the talent gap, and cutting directly against
+the shipped parity work that exists to stop exactly that. It is the same trap that killed
+`flairOf` for the audible grid, where every QB mental attribute correlated 0.65–0.77 with
+every other.
+
+**Owner call: tolerance is its own independent attribute**, uncorrelated with everything
+else by construction. That is what guarantees the mid-rated, high-tolerance player exists,
+which is the whole reason tolerance is interesting — it creates player value orthogonal to
+rating. (`pressureHandling` alone, at −0.12, would also have been defensible; anything else
+is not.)
+
+⚠️ The awakening and cleansing rows above are UNAFFECTED — they are *supposed* to favor
+particular players, and neither creates an amplifier, since awakening is not a strength
+multiplier.
 
 Because the three are independent, players fall into genuinely different archetypes, and **scouting
 becomes a real activity**:
@@ -1056,6 +1088,76 @@ Under an earned model, **we set the faucet directly.** Chrome entering the leagu
 number we choose. R₀ — the one load-bearing number in the contagion design — becomes tunable at
 source instead of emergent from the economy. That turns the hardest calibration problem in this
 document into a supply schedule.
+
+### Which augment, and who decides (open, 2026-08-19)
+
+⚠️ **The plan never answered this.** It says fans feed a player an item to level an
+augment, and that power chrome is "a choice", but not how a SPECIFIC augment gets
+selected. The question sharpens once there are classes: if one augment is a plain skill
+boost and another is weather adaptation, what decides which one a fan is working on?
+
+Two models, and the choice between them decides what chrome IS:
+
+| | **typed components** | **generic components** |
+|---|---|---|
+| you earn | an *optical module*, a *leg module* | plain components |
+| the augment is chosen by | the item you were dealt | the fan, from a catalog |
+| texture | collection, chase, trading | agency, aim, planning |
+| failure mode | dead rewards — you wanted an arm and got a leg | convergence — everyone fits the same optimum |
+
+**Recommendation: generic components, fan-chosen augment.** The reason is a division of
+labor rather than a preference:
+
+> **Cards are the system where you are DEALT to. Chrome should be the system where you
+> AIM.**
+
+The card economy already provides collection, chase, randomness and packs, and it is
+extensively tuned. A second collectible economy would compete with it for the same
+attention and the same reward budget, and would make chrome — which exists to be *the
+fan's lever on the sim* — into another thing that happens to you. A lever has to be
+aimable. Typed components also fight the accessibility goal that shaped the earning
+model: a fan who never draws the type they want is stuck, which is exactly the outcome
+"accessible to all, not just the best" was written to avoid.
+
+**Convergence is the real risk of the generic model, and it is already handled** by
+constraints that exist for other reasons:
+
+- **tolerance** — slots are scarce, so nobody fits everything;
+- **the venue split** — the optimal augment differs by team, because a fan of the team in
+  the cavern is answering darkness while a fan of the team on the salt flat is not. This
+  produces regional variation for free, which is the good version of "everyone optimizes";
+- **position validity** — a cannon arm on a kicker is nonsense. `effectValidPositions` in
+  the card system is the existing precedent for exactly this check.
+
+**What the fan is actually choosing between**, and this is the decision the whole feature
+turns on:
+
+| | pays | shape |
+|---|---|---|
+| **skill augment** | always | reliable, lower ceiling, no read |
+| **weather augment** | only in those conditions | higher ceiling, needs a read of the slate |
+
+Weather is announced before kickoff and the venue calendar is known all season, so the
+read is legible: a fan of the team in the cavern knows fourteen games are played in the
+dark. ⚠️ The conditional side needs the genuinely higher ceiling, or the reliable one wins
+by default — same axis the cards already run on.
+
+**Where a chase can still live: power chrome.** The classes do not need the same
+availability. Enhancement and weather chrome want an open catalog (they are the on-ramp
+and the planning layer); **power chrome is the payoff tier**, so it is the natural home
+for scarcity, and it is already specced as fans choosing *what kind of monster* a player
+becomes. That gives chrome one chase without turning the whole system into a second pack
+economy.
+
+**Still open on this piece:**
+1. Is the catalog fully open from the start, or does a fan unlock augment types over time?
+   (Open is simpler and matches the accessibility goal; unlocking gives progression a
+   second track.)
+2. Can a fan REDIRECT an augment — swap a fitted one for another — or only let it decay?
+   Decay-only is cleaner and reinforces impermanence; redirect is kinder and reduces the
+   sting of a bad read.
+3. Does the fan who started an augment have any standing over it, given any fan may feed
+   any player? The collective push-your-luck dynamic assumes not, but it is unstated.
 
 ### Shape
 
