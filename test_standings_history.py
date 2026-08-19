@@ -66,11 +66,14 @@ expect("a level legacy row is a tie", _winnerOf(1, 2, 20, 20, None) is None)
 
 # ── the trajectory ─────────────────────────────────────────────────────────
 class FakeSession:
-    def __init__(self, rows): self._rows = rows
-    def execute(self, *_a, **_k):
-        rows = self._rows
+    def __init__(self, rows, scheduledWeeks=28):
+        self._rows = rows; self._weeks = scheduledWeeks
+    def execute(self, q, *_a, **_k):
+        rows, weeks = self._rows, self._weeks
+        isSchedule = 'MAX(week)' in str(q)
         class R:
             def fetchall(self): return rows
+            def fetchone(self): return (weeks,) if isSchedule else None
         return R()
 
 # week, home, away, hs, as, winner
@@ -107,6 +110,14 @@ southLead = [(p['week'], byId[3]['series'][i]['divisionGamesBack'],
              for i, p in enumerate(byId[3]['series'])]
 expect(f"the division lead changes hands over time ({southLead})",
        southLead[0][1] > 0 and southLead[-1][1] == 0.0)
+
+# ⚠️ The x-axis spans the whole SCHEDULED season, not just the weeks with results, or
+# every line is redrawn at a different scale each week and a fan cannot see how far
+# through the season they are.
+expect(f"the full season length is reported ({hist.get('totalWeeks')})",
+       hist.get('totalWeeks') == 28)
+expect("it is the scheduled length, not the played length",
+       hist['totalWeeks'] > len(hist['weeks']))
 
 expect("the payload carries division membership",
        {d['name'] for d in hist['leagues'][0]['divisions']} == {'North', 'South'})

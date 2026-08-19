@@ -3618,6 +3618,8 @@ async def getStandingsHistory(season: Optional[int] = None):
     try:
         from standings_history import buildStandingsHistory
         from standings_view import seedLeague
+        # ⚠️ get_session is imported per-function throughout this module, not at the top.
+        from database.connection import get_session
 
         sm = floosball_app.seasonManager
         if season is None:

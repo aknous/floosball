@@ -20,6 +20,25 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 
 
+def _scheduledWeeks(session, season: int) -> int:
+    """How many regular-season weeks this season HAS, played or not.
+
+    The chart's x-axis spans the whole season rather than only the weeks with results, so
+    a fan can see how far through it they are — at week 6 the lines should occupy the
+    first fifth of the plot, not stretch across all of it.
+
+    ⚠️ Counted off the SCHEDULE (every row, any status), not off finals, or the axis would
+    grow a week at a time and every line would be redrawn at a different scale each week.
+    ⚠️ Playoff rounds are excluded: `_simulatePlayoffRounds` appends them to the same
+    schedule, and including them would stretch the axis by four empty weeks.
+    """
+    row = session.execute(text("""
+        SELECT MAX(week) FROM games
+        WHERE season = :s AND (is_playoff IS NULL OR is_playoff = 0)
+    """), {'s': season}).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
 def _resultsByWeek(session, season: int) -> Dict[int, List[tuple]]:
     """{week: [(homeId, awayId, homeScore, awayScore, winnerId), ...]} for finals only."""
     rows = session.execute(text("""
@@ -63,6 +82,7 @@ def buildStandingsHistory(session, season: int, teamsByLeague: Dict[str, List[An
     """
     byWeek = _resultsByWeek(session, season)
     weeks = sorted(byWeek)
+    totalWeeks = _scheduledWeeks(session, season)
 
     allTeams = {t.id: t for members in teamsByLeague.values() for t in members}
     wins: Dict[int, int] = {tid: 0 for tid in allTeams}
@@ -133,4 +153,5 @@ def buildStandingsHistory(session, season: int, teamsByLeague: Dict[str, List[An
             } for t in members],
         })
 
-    return {'season': season, 'weeks': weeks, 'leagues': leagues}
+    return {'season': season, 'weeks': weeks, 'totalWeeks': totalWeeks,
+            'leagues': leagues}
