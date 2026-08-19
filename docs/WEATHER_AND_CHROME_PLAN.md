@@ -1241,6 +1241,66 @@ is FITTED, not when it is finished.
 3. Is there a cap on how many augments can be in progress on one player at once? Without
    one, a popular player accumulates an unbounded queue.
 
+### Costing the levels — design for one fan (2026-08-19)
+
+⚠️ **Escalating cost is the specced cap, but priced against an imagined crowd it locks
+most of the league out entirely.** If one fan cannot clear level 1 in a reasonable window,
+chrome does not exist for the teams that only have one fan — and that is not a hypothetical.
+
+**Measured on production, 2026-08-19:**
+
+```
+187 users; 166 have a favorite team, across 27 of 32 teams
+5 teams have ZERO fans
+per-team fanbase: 1, 1, 2, 2, 3, 4, 4, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6,
+                  6, 6, 7, 8, 8, 8, 9, 14, 14, 15
+```
+
+**Two teams have exactly one fan. The median team has five or six. The largest has
+fifteen.** So "a fanbase makes a monster" means *six people*, not fifty, and the solo
+contributor is the normal case rather than the edge. Three consequences:
+
+**1. Level 1 must be reachable solo, within a season.** Anchor the entry cost to what ONE
+fan earns from the first checkpoint tiers, not to a pooled total. A curve that needs three
+contributors to start is a curve that does nothing for most of the league.
+
+**2. The escalation is where the crowd shows up — low entry, steep climb.** That preserves
+both goals at once: a solo fan gets a real, fitted, meaningfully-levelled augment, while a
+six-fan team pushes the same augment far higher. The crowd's advantage lives in the upper
+levels rather than in the right to participate.
+
+**3. ⚠️ Do NOT scale cost by fanbase size.** It is the obvious equalizer and it breaks on
+this data: five teams have no fans at all, so the bar is undefined or zero for them, and
+the two one-fan teams would get a trivial bar while a fifteen-fan team gets a punitive one
+— i.e. the fans who engage most are taxed for it. This is the same shape that forced the
+sentiment quorum off a flat league-wide floor, in the opposite direction.
+
+**What contains the popularity advantage instead: tolerance.** A fifteen-fan team reaches
+a player's ceiling faster than a one-fan team, but it is the SAME ceiling, because
+tolerance is a property of the player and not of the fanbase. **A bigger fanbase buys
+speed, not a higher ceiling.** That is what keeps chrome from becoming a
+popularity-to-power converter, and it is why tolerance being independent of rating matters
+twice over.
+
+**Shape to tune against**, with the earning rate as the free variable:
+
+| | should reach |
+|---|---|
+| one fan, one season | fitted, and a few levels in |
+| median team (5-6 fans) pooling | at or near the player's tolerance |
+| largest team (15) pooling | tolerance, comfortably — and then facing the failure decision |
+
+A linear increment per level (cost of level *n* proportional to *n*, so cumulative is
+triangular) fits those targets and matches the shop's reroll ladder, which already
+escalates that way.
+
+⚠️ **Denominate the cost in an earned unit, not a hardcoded number.** Facilities already
+solve this: `computeShareUnit` prices upgrades as a fraction of what the league actually
+granted users last season, so it self-scales instead of going stale. Chrome wants the same
+treatment — and the same guardrail, since that mechanism shipped a bug where a zero share
+unit made every facility **free**, which is why `FACILITY_SHARE_UNIT_FLOOR` exists. Any
+self-scaling chrome cost needs its floor from day one.
+
 ### Shape
 
 **Discrete items, not a currency.** The owner's phrasing is already right: fans *feed a player an
