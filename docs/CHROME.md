@@ -75,6 +75,75 @@ only in the conditions it is for, so it is a read and not a flat upgrade), and i
 awakened-tier chrome may make a player genuinely BETTER in the dark than in the light —
 the Monstars fantasy, and the one thing that can undo the venue fairness work.
 
+## ⚠️ 2026-08-19 — slots are limited, and tolerance varies by player
+
+Owner: **a player has only so many chrome slots, and each player tolerates a different
+amount** — some can carry more than others. This is the mechanic that makes chrome a
+set of choices rather than an accumulator, and it does three jobs at once.
+
+**It makes the two families compete.** With slots scarce, the straight augment and the
+conditional weather one are fighting for the same socket, so the tension described above
+becomes a real decision instead of a theoretical one.
+
+**It is a better balance dial than supply.** This plan already names supply as the master
+dial, but supply is GLOBAL — it controls how much chrome exists, not where it piles up.
+Tolerance is per-player, so it caps concentration directly: even with chrome everywhere,
+no single player can absorb the league.
+
+**It creates a new axis of player value.** A mid-rated player who tolerates five implants
+is worth more than a star who can take one, which is value orthogonal to rating and
+exactly the "players who are characters" pillar. High-tolerance players are also the
+natural Monstars under the contagion model.
+
+### ⚠️ Tolerance MUST NOT correlate with rating
+
+That third job only works if tolerance is **independent of how good the player already
+is**, and the obvious implementation quietly destroys it. Deriving tolerance from mental
+attributes — resilience, self-belief, focus, the natural thematic fit for withstanding
+cyberpsychosis — hands the most chrome to the players who are already the best.
+
+**Measured on 192 live players, correlation of each mental attribute with overall rating:**
+
+| attribute | vs rating |
+|---|---|
+| instinct | +0.40 |
+| x_factor | +0.38 |
+| focus | +0.37 |
+| creativity | +0.36 |
+| discipline | +0.34 |
+| attitude | +0.26 |
+| resilience | +0.25 |
+| self_belief | +0.21 |
+| **pressure_handling** | **−0.12** |
+
+Generation makes good players good at everything, so any mental-attribute derivation is a
+rating proxy. Chrome would then be a **rich-get-richer amplifier**: the best players take
+the most augments, get better still, and the talent gap widens — cutting directly against
+the shipped parity work (`LEAGUE_COMPRESSION_FACTOR` 0.45, the star-scarcity rebalance)
+which exists to stop exactly that.
+
+⚠️ This is the same trap that killed `flairOf` for the audible grid, where every QB mental
+attribute correlated 0.65–0.77 with every other and collapsed the 2x2 onto its diagonal.
+Do not walk into it twice.
+
+**Two ways out:**
+1. **An independent roll** — tolerance is its own generated attribute, uncorrelated with
+   everything else by construction. Cleanest, and it guarantees the mid-rated
+   high-tolerance player exists.
+2. **`pressureHandling`** — the ONE mental attribute measured as uncorrelated with rating
+   (−0.12), and a defensible thematic fit for withstanding chrome stress. Grounds
+   tolerance in the existing mental model without the amplifier problem.
+
+Either is fine; deriving from anything else is not.
+
+### Exceeding tolerance
+
+⚠️ A **soft** cap, not a hard one. A hard cap is a UI message; a soft one is a decision.
+A fan should be able to push a player past their tolerance and watch cyberpsychosis
+arrive — mental attributes degrading, erratic play, the drawbacks this plan already names
+— which makes over-chroming a gamble a fan takes rather than a thing the game forbids.
+That is also the version that produces stories.
+
 ## The frame — the Cores got bored
 
 This is the key narrative move, and it's the cleanest thing the lore has been building toward.
