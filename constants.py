@@ -3839,3 +3839,17 @@ CORES_AMBIENT_NEWS_EVERY_WEEKS = 3
 #
 # ⚠️ Templates mint ONCE PER SEASON, so a change here lands at the next season boundary.
 CARD_EFFECTS_PER_PLAYER = 3
+
+# ─── Venue-aware roster building ──────────────────────────────────────────────
+# A GM knows their own stadium. Where the venue suppresses the passing game they
+# should value the run (RB, and TE for its blocking) over QB and WR, and the inverse
+# where passing is favored. Sign convention matches stadiumManager.phaseBias:
+# +1 = run-side position, -1 = pass-side, 0 = unaffected.
+VENUE_PHASE_POSITIONS = {'RB': 1, 'TE': 1, 'QB': -1, 'WR': -1, 'K': 0}
+
+# ⚠️ DELIBERATELY MODEST. A team plays 14 home games and 14 away, so a roster fitted
+# hard to one venue is paid for in the other half of the season. At 0.10 a max-bias
+# venue moves RB from 0.72 to 0.79 and QB from 1.00 to 0.90 — enough to flip a close
+# call between two comparable players, never enough to invert the position hierarchy.
+# This is the same "tips close calls, never dictates" bar the sentiment tilt is held to.
+VENUE_POSITION_WEIGHT = 0.10

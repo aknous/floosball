@@ -129,10 +129,36 @@ def combineEffects(*layers: Dict[str, float]) -> Dict[str, float]:
     return out
 
 
+# ─── Phase bias: does this venue favor the run or the pass? ───────────────────
+# Positive = PASSING is suppressed here more than running, so build and call for the
+# run. Negative = the reverse.
+#
+# ⚠️ MEASURED RELATIVE TO THE LEAGUE, NOT TO NEUTRAL, and that is not a detail. Real
+# weather suppresses throwing far more often than it suppresses running — fog, wind,
+# rain, glare and dark all land on the passing game — so the RAW bias came out
+# 20 venues run-favoring against 1 pass-favoring. Fed to the front office that is not
+# 32 identities, it is a league-wide instruction to stop drafting quarterbacks, and it
+# would devalue the position measured as the most impactful in the sim (+2.52 wins).
+# Centering on the league mean turns "everywhere is hard to throw in" into "this place
+# is harder to throw in THAN MOST", which is the only version a GM can act on.
+_PASS_KEYS = (('passAccuracy', 1.0), ('deepPassChance', 0.5), ('sackRate', -1.0))
+_RUN_KEYS = (('runYardage', 1.0),)
+_BIAS_FULL_SCALE = 0.11   # centered bias at which phaseBias() reaches +/-1
+
+
+def _rawBias(effects: Dict[str, float]) -> float:
+    import math
+    p = sum(w * math.log(effects[k]) for k, w in _PASS_KEYS if effects.get(k, 0) > 0)
+    r = sum(w * math.log(effects[k]) for k, w in _RUN_KEYS if effects.get(k, 0) > 0)
+    return (-p) - (-r)   # penalty to passing, less penalty to running
+
+
 class StadiumManager:
     def __init__(self) -> None:
         self._venues: Dict[int, Dict[str, Any]] = {}
+        self._bias: Dict[int, float] = {}
         self._load()
+        self._computeBias()
 
     def _load(self) -> None:
         path = os.path.join(TEMPLATE_DIR, STADIUMS_FILE)
@@ -206,7 +232,33 @@ class StadiumManager:
             })
         return out
 
+    def _computeBias(self) -> None:
+        """Per-venue run/pass lean, centered on the league so it sums to ~zero."""
+        raw: Dict[int, float] = {}
+        for tid, v in self._venues.items():
+            always = _rawBias(v['effects'])
+            ordinary = [w for w in v['weather']
+                        if not w['unrealOnly'] and w['effects']]
+            wx = (sum(_rawBias(w['effects']) for w in ordinary) / len(ordinary)) if ordinary else 0.0
+            raw[tid] = always + wx
+        if not raw:
+            return
+        mean = sum(raw.values()) / len(raw)
+        for tid, value in raw.items():
+            centered = (value - mean) / _BIAS_FULL_SCALE
+            self._bias[tid] = max(-1.0, min(1.0, centered))
+
     # -------- public API --------
+
+    def phaseBias(self, teamId: Optional[int]) -> float:
+        """-1 (this venue favors the PASS) .. +1 (favors the RUN), vs the league.
+
+        Consumed by the front office, which weights RB/TE against QB/WR for the team
+        that lives here, and by play-calling, which leans toward the phase that works.
+        ⚠️ A team plays only half its games at home, so whatever reads this must stay
+        modest: over-fitting the venue is paid for in the other fourteen games.
+        """
+        return self._bias.get(teamId, 0.0)
 
     def has(self, teamId: Optional[int]) -> bool:
         return teamId in self._venues

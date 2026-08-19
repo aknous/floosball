@@ -289,6 +289,44 @@ advantage is the `homeBoost` key from the old branch, and it means "some teams a
 simply better", which is a competitive-balance change wearing a stadium costume. Venue
 character belongs in the weather, which is symmetric.
 
+## Venue-aware teams (owner, 2026-08-19)
+
+A GM knows their own stadium. Where the venue suppresses the passing game they should
+value the run — backs, and tight ends for their blocking — over quarterbacks and
+receivers, and lean that way in play-calling too. The inverse where passing is favored.
+
+This is also what turns the residual pass/run tilt from an uncompensated penalty into a
+team's identity: the tilt only hurt because nothing adapted to it.
+
+**`stadiumManager.phaseBias(teamId)`** → −1 (favors the pass) .. +1 (favors the run).
+
+⚠️ **MEASURED AGAINST THE LEAGUE, NOT AGAINST NEUTRAL, and this is the load-bearing
+detail.** Real weather suppresses throwing far more often than running — fog, wind,
+rain, glare and dark all land on the passing game — so the raw reading came out **20 of
+32 venues run-favoring against 1 pass-favoring**. Fed to the front office that is not 32
+identities, it is a league-wide instruction to stop drafting quarterbacks, and it would
+devalue the position the sim measures as the most impactful (+2.52 wins). Centering
+turns "everywhere is hard to throw in" into "this place is harder to throw in than most",
+which is the only version a GM can act on. After centering: **11 run-lean, 11 pass-lean,
+10 neutral, summing to zero.**
+
+**BUILT — roster valuation.** `positionValue(player, venueBias)` scales RB/TE against
+QB/WR by `VENUE_POSITION_WEIGHT` (0.10), reached through `perceivedValue`, so every
+fill, upgrade, re-sign and draft-board call inherits it. ⚠️ Deliberately modest: a team
+plays 14 home and 14 away, so a roster fitted hard to one venue is paid for in the other
+half of the season. At full bias a quarterback still outranks a back — the weight tips
+close calls and never inverts the hierarchy, the same bar the sentiment tilt is held to.
+Regression: `test_venue_roster_fit.py`.
+
+**NOT BUILT — play-calling.** The lever is `runPassRatio`, consumed in
+`_applyGameplanMods`. Add the venue lean as its own multiplicative term there so it
+composes with the existing mid-game adaptation and can be flagged off independently.
+⚠️ Apply it to **BOTH teams**, not just the home side: the conditions are symmetric and
+any coach can read them. The home team's edge should come from having the right
+PERSONNEL for the place, which the roster half above already provides — giving them the
+play-calling read as well would double-count it into a second, unmeasured home
+advantage. Build it with the modifier wiring so the two can be measured together.
+
 ## Remaining open decisions
 
 1. **Alternate formats.** Frames, darts and chess clock each change what a modifier

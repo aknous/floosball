@@ -50,6 +50,8 @@ _SOFT_APPEAL_PENALTY = float(_os.environ.get('FLOOS_SOFT_APPEAL_PENALTY', '0.75'
 
 from constants import (
     POSITION_VALUE,
+    VENUE_PHASE_POSITIONS,
+    VENUE_POSITION_WEIGHT,
     FO_SCOUT_VISION_FLOOR, FO_SCOUT_VISION_CEILING, FO_SCOUT_NOISE_MAX,
     FO_CEILING_CREDIT, FO_DEVELOPING_HEADROOM,
     FO_DECLINE_PER_YEAR_PAST, FO_DECLINE_MAX,
@@ -102,12 +104,44 @@ def _atLeastOneSurvives(upgrades: int, trials: int, p: float) -> float:
     return _clamp(total, 0.0, 1.0)
 
 
-def positionValue(player) -> float:
+def positionValue(player, venueBias: float = 0.0) -> float:
     """POSITION_VALUE multiplier for a player's position. Unknown/missing
-    positions fall back to 1.0 so a valuation never silently zeroes out."""
+    positions fall back to 1.0 so a valuation never silently zeroes out.
+
+    `venueBias` is the GM's own stadium leaning toward the run (+) or the pass (-),
+    from stadiumManager.phaseBias. A GM who plays fourteen games a year somewhere the
+    ball will not travel should be buying backs and blocking tight ends, not
+    quarterbacks — and the reverse where the air is clean.
+
+    ⚠️ The bias is measured against the LEAGUE, not against neutral. Weather suppresses
+    throwing far more often than running, so an absolute reading made 20 of 32 venues
+    run-favoring and would have devalued quarterbacks league-wide rather than giving
+    each team an identity.
+    """
     pos = getattr(player, 'position', None)
-    name = getattr(pos, 'name', None) or str(pos or '')
-    return POSITION_VALUE.get(name.upper(), 1.0)
+    name = (getattr(pos, 'name', None) or str(pos or '')).upper()
+    base = POSITION_VALUE.get(name, 1.0)
+    if not venueBias:
+        return base
+    side = VENUE_PHASE_POSITIONS.get(name, 0)
+    if not side:
+        return base
+    return base * (1.0 + VENUE_POSITION_WEIGHT * float(venueBias) * side)
+
+
+def venueBiasFor(team) -> float:
+    """The run/pass leaning of this team's home stadium, or 0.0 if unknown.
+
+    Fails to neutral on ANY problem: a valuation must never depend on the venue file
+    being loadable.
+    """
+    if team is None:
+        return 0.0
+    try:
+        from managers.stadiumManager import getStadiumManager
+        return getStadiumManager().phaseBias(getattr(team, 'id', None))
+    except Exception:
+        return 0.0
 
 
 class FrontOfficeBrain:
@@ -266,7 +300,7 @@ class FrontOfficeBrain:
         # Error shrinks to zero as vision approaches 1.
         seen += self._scoutError(player, coach, self._noiseSigma(vision), rng)
 
-        return max(0.0, seen) * positionValue(player)
+        return max(0.0, seen) * positionValue(player, venueBiasFor(team))
 
     @staticmethod
     def _noiseSigma(vision: float) -> float:
