@@ -341,7 +341,7 @@ period, a clock and a score mean, so the page cannot be signed off on standard a
   lower generation seed showing up in a season-1 league, or real drift. ⚠️ **Note for whoever picks
   this up:** paired fresh sims CANNOT resolve small effects here — each regenerates the whole player
   pool and the run-to-run spread was 27.4–31.1 pts/g across four runs. Measure mechanics directly.
-- **Docs describe a stale attention model** — `docs/CHROME.md` and `docs/CRITICALITY_METAGAME_PLAN.md`
+- **Docs describe a stale attention model** — `docs/WEATHER_AND_CHROME_PLAN.md` (Part II) and `docs/CRITICALITY_METAGAME_PLAN.md`
   still say four attention sources with cards at 10/wk. Development's `5dcc8dd`/`1078e7f` cut it to
   three with cards at 18, and equipped cards were contributing NOTHING on prod before that fix.
 - **Criticality threshold is outrun by the season** ⚠️ OPEN — folded into the Deeper Game plan

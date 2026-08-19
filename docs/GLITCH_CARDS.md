@@ -4,7 +4,7 @@
 **Status:** DESIGN — settled in conversation 2026-08-06. Nothing built.
 **Reads with:** `docs/CRITICALITY_METAGAME_PLAN.md` (fans-vs-Cores, the locked no-wipe
 constraint), `docs/AWAKENED_POWERS_PLAN.md` (the ladder, the charge meter, the L4 powers),
-`docs/CHROME.md` (chrome supersedes the Vigil as the fan lever), `docs/CARD_STAT_LADDER.md`
+`docs/WEATHER_AND_CHROME_PLAN.md` (Part II) (chrome supersedes the Vigil as the fan lever), `docs/CARD_STAT_LADDER.md`
 (the card pool this attaches to).
 
 ## What it is
@@ -296,7 +296,7 @@ hot-stretch feel whether events stay rare or not.
 
 ## ⚠️ Chrome will move the ground under this (owner)
 
-`docs/CHROME.md`'s 2026-07-31 revision promotes chrome to **the input layer of the anomaly
+`docs/WEATHER_AND_CHROME_PLAN.md` (Part II)'s 2026-07-31 revision promotes chrome to **the input layer of the anomaly
 system**, and this spec keys off two things it changes:
 
 | this spec assumes | chrome changes it to |

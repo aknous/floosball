@@ -16,7 +16,7 @@ aspirational — Stage 2 can follow if needed.
   **already partly shipped** (scoring values, `firstDownDistance`, `downsPerSeries`, clock knobs,
   running-clock — see the build logs below); what's left is the fan-voting + the remaining structural
   rules (field geometry). **Target: ship with Stage 1.**
-- **Stage 3 — chrome / enhancements.** `docs/CHROME.md` — user-gifted, favorite-team, facility-gated
+- **Stage 3 — chrome / enhancements.** `docs/WEATHER_AND_CHROME_PLAN.md` (Part II) — user-gifted, favorite-team, facility-gated
   cybernetic augments (double-edge + burnout). Deferred until Stages 1–2 ship; it's a *louder paid
   hand* on the same anomaly dial they establish, so it wants that foundation first.
 
