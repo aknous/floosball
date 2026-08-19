@@ -218,6 +218,40 @@ before tuning, and check:
 4. **Home-field advantage exists as a small, separate nudge** — separate from weather,
    which stays symmetric per (1).
 
+### Competitive fairness: equal magnitude, different shape
+
+⚠️ **A team plays 14 games a season at its own venue** (owner, 2026-08-19), so a venue
+that is harsher than the rest is a season-long tax on whoever lives there. Weather is
+symmetric inside a game, so this is not about one side gaining — it is about repeated
+exposure, and it lands on the home team specifically.
+
+The mechanism is skill compression rather than a flat penalty: adverse conditions add
+variance and mute the better team's edge, so a harsh venue quietly costs a GOOD home
+team wins and hands a BAD one a few. Either way it is uncompensated, because the
+autonomous front office does not consider the venue when building a roster.
+
+**Measured before it was enforced**: always-on severity (log-space distance from
+neutral) ran **0.070 to 0.263, a 3.8x spread** — St. Louis carried nearly four times
+Minnesota's permanent load. Now 1.04x.
+
+⚠️ **The ALWAYS-ON layer is the dangerous one, and the two layers get different bands.**
+Always-on is paid at full strength in all 14 home games; weather is scaled to a quarter
+in a settled league and varies game to game, so it averages out over a season. Targets:
+always-on **0.130** (tight), weather **0.210** per condition (looser), Criticality
+conditions at 3.4x the ordinary target since they are meant to be extreme.
+
+⚠️ Equalizing scales every deviation in a venue by **one factor**, which preserves the
+proportions between its keys exactly — the venue still feels like itself and only its
+weight changes. **Do NOT equalize the shape**: 25 distinct key combinations across 32
+venues is what makes these different places rather than one weather system wearing 32
+names.
+
+**Residual, accepted for now**: a pass/run tilt of −0.20 to +0.26 remains (fog suppresses
+passing more than running, and it should). At a settled league's quarter strength that
+is small, and it cuts both ways depending on the home roster's style. ⚠️ Re-measure it
+as a **win-rate** effect once the modifiers are wired — everything above is an
+analytic proxy, since nothing reaches a game yet.
+
 ### Paired venues
 
 ⚠️ **Minnesota Pops and Salt Lake City Sodas are a MATCHED PAIR** (owner, 2026-08-19).

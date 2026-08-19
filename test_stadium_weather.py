@@ -124,6 +124,45 @@ atCrit = collections.Counter(m.rollWeather(21, 5.0, seed=s)['key'] for s in rang
 expect(f"at Criticality the unreal condition is the most common one ({atCrit.most_common(1)})",
        (21, atCrit.most_common(1)[0][0]) in unrealKeys)
 
+# ── COMPETITIVE FAIRNESS: equal magnitude, different shape ─────────────────
+# ⚠️ A team plays 14 games a season at its own venue, so a venue that is harsher than
+# the others is a season-long tax on whoever lives there. Weather is symmetric within a
+# game, so this is not about one side gaining — it is about repeated exposure. Venues
+# must therefore differ in WHICH keys they touch, never in HOW HARD they hit.
+#
+# ⚠️ The ALWAYS-ON layer is the dangerous one and gets the tighter band: it is paid at
+# full strength in every home game, where weather is scaled to a quarter in a settled
+# league and varies game to game, so it averages out. Measured before this was pinned:
+# always-on ran 0.070 to 0.263, a 3.8x spread.
+import math
+def severity(eff):
+    """Distance from neutral in log space, so 0.80 and 1.25 weigh the same."""
+    return sum(abs(math.log(v)) for v in eff.values() if v > 0)
+
+always = {t: severity(raw[t].get('effects') or {}) for t in raw}
+lo, hi = min(always.values()), max(always.values())
+worst = sorted(always.items(), key=lambda kv: -kv[1])[:2]
+expect(f"no venue carries a heavier permanent load than another ({hi/lo:.2f}x, worst {worst})",
+       hi / lo <= 1.25)
+
+rough = {}
+for t in raw:
+    base = m.venue(t)['effects']
+    vals = []
+    for k in range(120):
+        w = m.rollWeather(t, 2.1, seed=k)
+        vals.append(severity({key: v / base.get(key, 1.0) for key, v in w['effects'].items()}))
+    rough[t] = sum(vals) / len(vals)
+rlo, rhi = min(rough.values()), max(rough.values())
+expect(f"no venue's weather is systematically rougher than another's ({rhi/rlo:.2f}x)",
+       rhi / rlo <= 1.6)
+
+# Shape is what makes a venue itself, so it must NOT be equalized. If every venue hit
+# the same keys, the whole feature would be one weather system with 32 names on it.
+shapes = {frozenset((raw[t].get('effects') or {}).keys()) for t in raw}
+expect(f"venues still differ in WHICH keys they touch ({len(shapes)} distinct shapes)",
+       len(shapes) >= 12)
+
 # ── an unknown venue degrades to neutral rather than raising ───────────────
 w = m.rollWeather(9999, 5.0, seed=1)
 expect("an unknown team plays in neutral conditions rather than crashing",
