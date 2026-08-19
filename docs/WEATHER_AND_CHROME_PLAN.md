@@ -1159,6 +1159,64 @@ economy.
 3. Does the fan who started an augment have any standing over it, given any fan may feed
    any player? The collective push-your-luck dynamic assumes not, but it is unstated.
 
+### How a disagreement resolves: fund it, do not vote on it (2026-08-19)
+
+The open question: fans gift components, but **who decides which augment gets equipped
+when two fans want different ones?**
+
+⚠️ **A BINDING FAN VOTE IS THE ONE MECHANISM THIS CODEBASE HAS ALREADY REMOVED.**
+`gmManager.py` and the binding sign / cut / re-sign / fire / hire votes are **deleted**;
+the design settled on "the sim decides, fans express sentiment", and the `tribune` and
+`mutineer` achievements were retired because they keyed off the vote system that no
+longer exists. Reintroducing a binding vote for chrome revives exactly that shape, so it
+needs a positive reason, not just momentum.
+
+⚠️ **"SCALED TO THE ACTIVE USER BASE" IS BROKEN IN PRODUCTION RIGHT NOW.**
+`_countActiveUsers` filters on `users.last_login_at`, and **nothing in the app ever
+writes that column** (only tests). It returns **0** in production, so every quorum
+scaling off it silently pins to its floor — the fan-award quorum advertises scaling with
+turnout and delivers a flat 3. The fan-sentiment system already had to move OFF it onto
+per-club favoriters for this exact reason. Any chrome threshold expressed as a fraction
+of active users would be a constant wearing a formula.
+
+**Recommendation: components are earmarked at gift time. It is a funding race, not an
+election.** A fan does not gift components to a *player*; they gift them to a *specific
+augment on* a player. Several augments can be in progress on the same player at once,
+each with its own progress; the first to fill claims a slot.
+
+Why this is better than a ballot:
+
+- **Nobody's contribution is wasted.** A vote produces a loser whose stake evaporates,
+  which is the worst possible outcome in a system explicitly built on repeat contribution.
+  In a funding race, a fan who backed the other augment still owns that progress and it
+  is still climbing.
+- **Disagreement becomes parallel progress rather than a defeat.** Two fanbase factions
+  racing two augments is better drama than one faction being overruled, and both stay
+  engaged.
+- **It needs no population count at all**, which sidesteps the broken metric above.
+- **It is continuous.** Chrome is fed weekly; a ballot is a synchronous event with a
+  window, which fits awards and rule changes and does not fit a thing you top up.
+- **The precedent already exists**: `POST /api/teams/{id}/contribute` is a fan
+  contribution pool with no vote attached.
+
+**The threshold is already specced and needs no new rule.** This plan already establishes
+that an augment is a level, each level costing more than the last, and that "the price
+curve is the cap". That escalating cost IS the threshold. Adding a user-base-scaled
+quorum on top would be a second cap doing the same job, with a population count that does
+not currently work.
+
+⚠️ **If a population scale is ever genuinely wanted, use the player's own constituency**
+— their followers, or the team's favoriters — not league-wide active users. That is the
+correction the sentiment quorum already made, and it has the better property anyway: it
+measures the people who actually care about this player.
+
+**What this leaves open:**
+1. When slots are full and a new augment finishes, does it wait, or contest a fitted one?
+   Waiting is simpler; contesting is more dramatic and risks thrash.
+2. Can components be moved off an augment that is losing the race, or are they committed?
+   Committed is cleaner and makes the choice mean something.
+3. Does a completed-but-unslotted augment decay while it waits?
+
 ### Shape
 
 **Discrete items, not a currency.** The owner's phrasing is already right: fans *feed a player an
