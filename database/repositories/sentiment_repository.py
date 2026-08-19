@@ -30,9 +30,18 @@ _QUORUM_TTL_SECONDS = 60
 def teamFanCounts(session) -> Dict[int, int]:
     """{teamId: how many users have favorited it}. Briefly cached.
 
-    Favoriters rather than *active* favoriters on purpose: `last_login_at` is
-    never written by the application, so any "active" count is 0 in production
-    and would make every club's quorum the bare floor.
+    Favoriters rather than *active* favoriters on purpose.
+
+    The reason originally recorded here was that `last_login_at` is never written so an
+    "active" count is always 0. That was STALE and is corrected (2026-08-19):
+    `api/auth.py` stamps it on every authenticated request, and the active count is 44 on
+    production.
+
+    The rule is unchanged, for a better reason. Measured 2026-08-19: 166 favoriters across
+    27 of 32 clubs, but only 44 are active in a 30-day window and just 22 clubs have even
+    ONE active fan. Filtering to active favoriters would leave ten clubs unable to register
+    sentiment at all, which is the exact failure the per-club quorum was written to fix.
+    Counting every favoriter keeps a club's bar inside the fanbase it actually has.
     """
     from datetime import datetime
     from database.models import User
