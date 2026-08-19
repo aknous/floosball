@@ -125,7 +125,7 @@ today. Ship only keys with a verified call site:
 |---|---|
 | `passAccuracy` | completion roll in `passPlay` |
 | `deepPassChance` | pass-tier weighting (`_applyGameplanMods`) |
-| `runYardage` | the run gate model (`_resolveRunGates`) |
+| `footing` | the **shared carrier tail** — rushes *and* yards after catch |
 | `fgAccuracy` | `fgMakeProbability` — the single source of truth, so the coach's attempt decision moves with it automatically |
 | `sackRate` | `calculateSackProbability` |
 | `fumbleRate` | the fumble check in the shared carrier tail |
@@ -133,6 +133,32 @@ today. Ship only keys with a verified call site:
 | `returnYards` | `_resolvePuntReturn` |
 | `paceMod` | pre-snap time |
 | `visibility` | **two-sided, see below** |
+
+### The surface is not a run-only effect, and symmetry is not the goal
+
+⚠️ **`footing` was called `runYardage`, and that was wrong once you look at where it
+wires.** The sim resolves `_runnerMove` and `_stretchForFirst` in a carrier tail
+**shared by runs and receptions**, so ground that runs fast helps a receiver who has
+caught it exactly as much as it helps a back. Yards after catch are **~31% of passing
+yards** in this sim, so a surface effect lands on all of the run game and roughly a
+third of the pass game.
+
+This corrected a real error downstream: `phaseBias` counted the surface as purely
+run-side, which **overstated how run-favoring every firm-ground venue is by the whole
+YAC share** — and that error would have flowed straight into what the front office
+drafts.
+
+⚠️ **Perfect symmetry between the phases is not achievable and is not the goal**
+(owner, 2026-08-19). Weather acts on two things and they do not partition evenly:
+
+- the **air** — ball flight, so passing and kicking;
+- the **surface** — the carrier, so running *plus a third of passing*.
+
+Passing simply has more distinct failure modes (the throw, the catch, the protection,
+the sight of it) than running has. The honest response is to **measure the asymmetry and
+account for it**, not to flatten the model until every key is even. What must hold is
+that the *league* does not lean systematically one way, which the centered bias handles
+and the test pins.
 
 ### Sight is its own dimension, and it cuts both ways
 

@@ -44,7 +44,7 @@ STADIUMS_FILE = 'stadiums.yaml'
 EFFECT_KEYS = (
     'passAccuracy',     # completion roll in passPlay
     'deepPassChance',   # pass-tier weighting
-    'runYardage',       # the run gate model
+    'footing',          # SEE BELOW — the SHARED carrier tail: rushes AND yards after catch
     'fgAccuracy',       # fgMakeProbability — so the ATTEMPT decision moves with it too
     'sackRate',         # calculateSackProbability
     'fumbleRate',       # the fumble check in the shared carrier tail
@@ -69,6 +69,21 @@ EFFECT_KEYS = (
 #   punt muff + fair catch  raised as sight falls  (PUNT_MUFF_*, PUNT_FAIRCATCH_*)
 #   the tackler's resistance in _runnerMove  LOWERED as sight falls, so a dark field
 #   hands yards to the carrier. This is the two-sided half and must not be dropped.
+# ⚠️ `footing` IS NOT A RUN-ONLY KEY, despite being the surface. The sim resolves
+# `_runnerMove` and `_stretchForFirst` in a carrier tail SHARED by runs and receptions,
+# so ground that runs fast helps a receiver who has caught it exactly as much as it
+# helps a back. Yards after catch are ~31% of passing yards in this sim, so a surface
+# effect lands on all of the run game and roughly a third of the pass game.
+#
+# ⚠️ This is why perfect symmetry between the two phases is NOT achievable and is not
+# the goal. Weather acts on the AIR, which is ball flight, which is passing and kicking;
+# and on the SURFACE, which is the carrier, which is running plus a third of passing.
+# The passing game simply has more surface area to be affected — more distinct failure
+# modes (the throw, the catch, the protection, the sight of it) than running has. The
+# honest response is to MEASURE the asymmetry and account for it, not to flatten the
+# model until every key is even.
+YAC_PASS_SHARE = 0.31
+
 VISIBILITY_PASS_EXP = 0.5
 VISIBILITY_DEEP_EXP = 1.5
 VISIBILITY_TACKLE_EXP = 0.6   # how much a defender loses by not seeing the carrier
@@ -166,8 +181,12 @@ def combineEffects(*layers: Dict[str, float]) -> Dict[str, float]:
 # would devalue the position measured as the most impactful in the sim (+2.52 wins).
 # Centering on the league mean turns "everywhere is hard to throw in" into "this place
 # is harder to throw in THAN MOST", which is the only version a GM can act on.
-_PASS_KEYS = (('passAccuracy', 1.0), ('deepPassChance', 0.5), ('sackRate', -1.0))
-_RUN_KEYS = (('runYardage', 1.0),)
+_PASS_KEYS = (('passAccuracy', 1.0), ('deepPassChance', 0.5), ('sackRate', -1.0),
+              ('visibility', 1.0),
+              # ⚠️ The surface is on BOTH lists. Counting it as run-only overstates how
+              # run-favoring a firm-ground venue is, by the whole YAC share.
+              ('footing', YAC_PASS_SHARE))
+_RUN_KEYS = (('footing', 1.0),)
 _BIAS_FULL_SCALE = 0.11   # centered bias at which phaseBias() reaches +/-1
 
 

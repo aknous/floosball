@@ -84,7 +84,7 @@
 #     tagline: short pregame line
 #     description: |             # longer flavor for hover/modal
 #     effects:                   # ALWAYS-ON venue character, multiplicative (1.0 = none)
-#       passAccuracy / deepPassChance / runYardage / fgAccuracy / sackRate
+#       passAccuracy / deepPassChance / footing / fgAccuracy / sackRate
 #       fumbleRate / puntDistance / returnYards / paceMod / visibility
 #
 # ⚠️ `visibility` IS TWO-SIDED and is the only key here that is. Darkness was first
@@ -153,7 +153,7 @@
     refers to.
   effects:
     deepPassChance: 0.937
-    runYardage: 0.976
+    footing: 0.976
     paceMod: 0.961
   weather:
     - key: nominal
@@ -185,7 +185,7 @@
     Cores took the property literally, so the street is wide enough to hold a stadium,
     and they left the traffic on it.
   effects:
-    runYardage: 1.036
+    footing: 1.036
     fumbleRate: 1.053
     returnYards: 1.044
   weather:
@@ -200,16 +200,16 @@
     - key: baked
       label: "Baked Blacktop"
       text: "The top has cured hard and dry. Anyone who gets a step is gone."
-      effects: {runYardage: 1.11, returnYards: 1.12, fumbleRate: 0.94}
+      effects: {footing: 1.11, returnYards: 1.12, fumbleRate: 0.94}
     - key: slick
       label: "Wet Blacktop"
       text: "Rain on asphalt with nowhere to drain. Footing is gone."
-      effects: {runYardage: 0.935, fumbleRate: 1.117, passAccuracy: 0.967}
+      effects: {footing: 0.935, fumbleRate: 1.117, passAccuracy: 0.967}
     - key: melt
       label: "Melting"
       unrealOnly: true
       text: "The surface has gone soft and is pulling at their feet. Yard lines are running."
-      effects: {runYardage: 0.829, paceMod: 1.152, sackRate: 1.183, returnYards: 0.817}
+      effects: {footing: 0.829, paceMod: 1.152, sackRate: 1.183, returnYards: 0.817}
 
 4:
   team: Monuments
@@ -241,7 +241,7 @@
       label: "Tremor"
       unrealOnly: true
       text: "Something enormous is moving. The ground will not hold still long enough to kick from."
-      effects: {fgAccuracy: 0.761, fumbleRate: 1.269, passAccuracy: 0.916, runYardage: 0.91}
+      effects: {fgAccuracy: 0.761, fumbleRate: 1.269, passAccuracy: 0.916, footing: 0.91}
 
 5:
   team: Melons
@@ -256,7 +256,7 @@
     working between the rows are logged as period farm equipment.
   effects:
     fumbleRate: 1.088
-    runYardage: 0.956
+    footing: 0.956
   weather:
     - key: ripe
       label: "Ripe"
@@ -269,12 +269,12 @@
     - key: burst
       label: "Burst Fruit"
       text: "Split melons all over the field. The footing is sugar and pulp."
-      effects: {runYardage: 0.942, fumbleRate: 1.096, returnYards: 0.942}
+      effects: {footing: 0.942, fumbleRate: 1.096, returnYards: 0.942}
     - key: overgrowth
       label: "Overgrowth"
       unrealOnly: true
       text: "The vines are growing fast enough to watch. They are taking the field back."
-      effects: {runYardage: 0.81, paceMod: 1.19, sackRate: 1.158, deepPassChance: 0.842}
+      effects: {footing: 0.81, paceMod: 1.19, sackRate: 1.158, deepPassChance: 0.842}
 
 6:
   team: Rocks
@@ -298,7 +298,7 @@
     - key: seep
       label: "Seepage"
       text: "Water is coming through the rock and pooling on the field. The ball is wet."
-      effects: {visibility: 0.973, fumbleRate: 1.115, runYardage: 0.954}
+      effects: {visibility: 0.973, fumbleRate: 1.115, footing: 0.954}
     - key: deadair
       label: "Dead Air"
       text: "There is no weather down here at all. No wind has ever reached this field and the ball knows it."
@@ -311,7 +311,7 @@
       label: "Rockfall"
       unrealOnly: true
       text: "Pieces of the ceiling are coming down onto the field. They are still playing."
-      effects: {fumbleRate: 1.337, passAccuracy: 0.865, runYardage: 0.852, paceMod: 1.135}
+      effects: {fumbleRate: 1.337, passAccuracy: 0.865, footing: 0.852, paceMod: 1.135}
 
 7:
   team: Beans
@@ -357,7 +357,7 @@
     of play and a crowd asked to stay quiet at the snap.
   effects:
     fgAccuracy: 1.04
-    runYardage: 0.97
+    footing: 0.97
     paceMod: 0.941
   weather:
     - key: fair
@@ -371,7 +371,7 @@
     - key: dew
       label: "Heavy Dew"
       text: "The grass has not dried out. Cuts are slipping and the ball is damp."
-      effects: {runYardage: 0.915, fumbleRate: 1.128}
+      effects: {footing: 0.915, fumbleRate: 1.128}
     - key: lightning
       label: "Lightning Hold"
       unrealOnly: true
@@ -408,12 +408,12 @@
     - key: sticky
       label: "Sticky Floor"
       text: "Enough has gone over that the floor has turned tacky. Nobody is cutting cleanly."
-      effects: {runYardage: 0.925, paceMod: 1.062, sackRate: 1.075}
+      effects: {footing: 0.925, paceMod: 1.062, sackRate: 1.075}
     - key: burst
       label: "The Line Bursts"
       unrealOnly: true
       text: "Every bottle on the line has gone at once. The hall is full of it and the game is still on."
-      effects: {fumbleRate: 1.314, runYardage: 0.84, passAccuracy: 0.886, paceMod: 1.171}
+      effects: {fumbleRate: 1.314, footing: 0.84, passAccuracy: 0.886, paceMod: 1.171}
 
 10:
   team: Cranes
@@ -450,7 +450,7 @@
       label: "Icing"
       unrealOnly: true
       text: "Ice is forming on the platform and on the ball. Nothing is being held onto."
-      effects: {fumbleRate: 1.33, runYardage: 0.868, fgAccuracy: 0.832, passAccuracy: 0.904}
+      effects: {fumbleRate: 1.33, footing: 0.868, fgAccuracy: 0.832, passAccuracy: 0.904}
 
 11:
   team: Pinecones
@@ -464,7 +464,7 @@
     as part of it, which the visiting team is never quite ready for.
   effects:
     deepPassChance: 0.948
-    runYardage: 0.979
+    footing: 0.979
     puntDistance: 0.948
   weather:
     - key: sheltered
@@ -474,7 +474,7 @@
     - key: needlefall
       label: "Needle Fall"
       text: "Needles coming down in sheets and covering the footing."
-      effects: {runYardage: 0.906, fumbleRate: 1.118}
+      effects: {footing: 0.906, fumbleRate: 1.118}
     - key: sap
       label: "Sap"
       text: "Sap is dripping through the canopy onto the field and the ball."
@@ -483,7 +483,7 @@
       label: "Windthrow"
       unrealOnly: true
       text: "Whole trees are coming down at the edge of the field. They have not stopped play."
-      effects: {paceMod: 1.176, runYardage: 0.883, deepPassChance: 0.766, fumbleRate: 1.146}
+      effects: {paceMod: 1.176, footing: 0.883, deepPassChance: 0.766, fumbleRate: 1.146}
 
 12:
   team: Oysters
@@ -496,7 +496,7 @@
     reconstruction is a salt basin in the mountains, white to the horizon and hard as
     pavement, with air that tastes of a sea a thousand miles away.
   effects:
-    runYardage: 1.031
+    footing: 1.031
     returnYards: 1.061
     fumbleRate: 1.041
   weather:
@@ -520,7 +520,7 @@
       label: "Basin Flood"
       unrealOnly: true
       text: "The basin is filling. They are playing in standing brine to the ankle."
-      effects: {runYardage: 0.81, paceMod: 1.203, fumbleRate: 1.237, puntDistance: 0.898}
+      effects: {footing: 0.81, paceMod: 1.203, fumbleRate: 1.237, puntDistance: 0.898}
 
 13:
   team: Tuesdays
@@ -547,11 +547,11 @@
     - key: dejavu
       label: "Deja Vu"
       text: "Everyone on the field has played this exact Tuesday before. Nobody is being surprised by anything."
-      effects: {passAccuracy: 1.06, runYardage: 1.06, fumbleRate: 0.92}
+      effects: {passAccuracy: 1.06, footing: 1.06, fumbleRate: 0.92}
     - key: throw
       label: "Beads Underfoot"
       text: "The parade has come through again and left the route ankle deep in what it throws."
-      effects: {runYardage: 0.939, fumbleRate: 1.073, returnYards: 0.927}
+      effects: {footing: 0.939, fumbleRate: 1.073, returnYards: 0.927}
     - key: loop
       label: "The Parade Will Not End"
       unrealOnly: true
@@ -574,7 +574,7 @@
     down in the third quarter without being able to say why.
   effects:
     paceMod: 1.082
-    runYardage: 0.951
+    footing: 0.951
   weather:
     - key: bloom
       label: "In Bloom"
@@ -583,7 +583,7 @@
     - key: pollen
       label: "Heavy Pollen"
       text: "Pollen thick in the air. Legs are going heavy earlier than they should."
-      effects: {paceMod: 1.08, runYardage: 0.933, sackRate: 1.067}
+      effects: {paceMod: 1.08, footing: 0.933, sackRate: 1.067}
     - key: emerald
       label: "Emerald Light"
       text: "The light has gone green and strange. Depth is hard to judge in it."
@@ -605,7 +605,7 @@
     is still paid in them. The ground is only available for part of the day, coral heads
     stand around the perimeter, and the yard lines are raked in fresh before every game.
   effects:
-    runYardage: 0.954
+    footing: 0.954
     returnYards: 0.947
     puntDistance: 0.974
   weather:
@@ -616,7 +616,7 @@
     - key: surf
       label: "Running Surf"
       text: "Surf is reaching the sideline and taking the yard lines with it."
-      effects: {runYardage: 0.945, fumbleRate: 1.066, returnYards: 0.917}
+      effects: {footing: 0.945, fumbleRate: 1.066, returnYards: 0.917}
     - key: sandblow
       label: "Blowing Sand"
       text: "Sand off the flat straight down the field. It is in everyone's eyes."
@@ -625,7 +625,7 @@
       label: "Tide Coming In"
       unrealOnly: true
       text: "The water is back over the field and rising. There is no version of this that finishes dry."
-      effects: {runYardage: 0.812, paceMod: 1.188, fumbleRate: 1.219, puntDistance: 0.875}
+      effects: {footing: 0.812, paceMod: 1.188, fumbleRate: 1.219, puntDistance: 0.875}
 
 16:
   team: Dry Heat
@@ -639,7 +639,7 @@
     the water tables are the only thing anybody looks at on the sideline.
   effects:
     paceMod: 1.061
-    runYardage: 1.03
+    footing: 1.03
     sackRate: 0.96
   weather:
     - key: hot
@@ -744,7 +744,7 @@
     same damaged entry. The reconstruction is both: a pavilion floor pressed into ridges
     and channels a few inches deep, under a low ceiling that radiates heat.
   effects:
-    runYardage: 0.97
+    footing: 0.97
     fumbleRate: 1.05
     returnYards: 0.95
   weather:
@@ -759,7 +759,7 @@
     - key: syrup
       label: "Syrup"
       text: "Syrup is standing in the channels. Anyone who goes down comes up slow."
-      effects: {runYardage: 0.927, paceMod: 1.062, sackRate: 1.078}
+      effects: {footing: 0.927, paceMod: 1.062, sackRate: 1.078}
     - key: press
       label: "The Press Closes"
       unrealOnly: true
@@ -792,7 +792,7 @@
     - key: icefog
       label: "Ice Fog"
       text: "Ice fog off the ground, lit from behind. Hands are going and nobody can see far."
-      effects: {visibility: 0.967, fumbleRate: 1.107, runYardage: 0.957}
+      effects: {visibility: 0.967, fumbleRate: 1.107, footing: 0.957}
     - key: setting
       label: "It Begins to Set"
       unrealOnly: true
@@ -845,7 +845,7 @@
     reasonable guess.
   effects:
     passAccuracy: 1.024
-    runYardage: 0.952
+    footing: 0.952
     fumbleRate: 1.059
   weather:
     - key: sealed
@@ -868,7 +868,7 @@
       label: "Fracture"
       unrealOnly: true
       text: "The panes are crazing. Everyone can hear it and nobody is looking down."
-      effects: {passAccuracy: 0.852, runYardage: 0.832, paceMod: 1.168, fumbleRate: 1.236}
+      effects: {passAccuracy: 0.852, footing: 0.832, paceMod: 1.168, fumbleRate: 1.236}
 
 23:
   team: Bees
@@ -919,7 +919,7 @@
     furnished the rest from the period: wooden stands, a hand-operated scoreboard, and a
     grass field with no drainage worth the name.
   effects:
-    runYardage: 1.028
+    footing: 1.028
     deepPassChance: 0.944
     paceMod: 0.958
   weather:
@@ -930,11 +930,11 @@
     - key: mud
       label: "Mud"
       text: "No drainage and a wet week. The middle of the field is gone already."
-      effects: {runYardage: 0.929, fumbleRate: 1.092, paceMod: 1.051}
+      effects: {footing: 0.929, fumbleRate: 1.092, paceMod: 1.051}
     - key: baked
       label: "Baked Hard"
       text: "A dry week has set the old field like clay. It has not run this fast all season."
-      effects: {runYardage: 1.13, returnYards: 1.09, paceMod: 0.96}
+      effects: {footing: 1.13, returnYards: 1.09, paceMod: 0.96}
     - key: sepia
       label: "Low Sun"
       text: "Long low sun through the wooden stands, striping the field in light and dark."
@@ -943,7 +943,7 @@
       label: "The Mire"
       unrealOnly: true
       text: "The field has become a bog end to end. They are playing it out anyway."
-      effects: {runYardage: 0.81, paceMod: 1.19, fumbleRate: 1.217, puntDistance: 0.881}
+      effects: {footing: 0.81, paceMod: 1.19, fumbleRate: 1.217, puntDistance: 0.881}
 
 25:
   team: Extras
@@ -1024,7 +1024,7 @@
     surface that squeaks underfoot, which the home side finds reassuring and nobody else
     does.
   effects:
-    runYardage: 0.954
+    footing: 0.954
     fumbleRate: 1.056
     paceMod: 0.972
   weather:
@@ -1039,12 +1039,12 @@
     - key: washdown
       label: "Wash Down"
       text: "The floor was hosed between quarters and has not dried. Nobody is cutting on it."
-      effects: {runYardage: 0.939, fumbleRate: 1.079, returnYards: 0.934}
+      effects: {footing: 0.939, fumbleRate: 1.079, returnYards: 0.934}
     - key: coldsnap
       label: "Cold Store"
       unrealOnly: true
       text: "The room has dropped below freezing with the doors shut. The ball is a stone."
-      effects: {fumbleRate: 1.313, passAccuracy: 0.875, runYardage: 0.875, fgAccuracy: 0.843}
+      effects: {fumbleRate: 1.313, passAccuracy: 0.875, footing: 0.875, fgAccuracy: 0.843}
 
 28:
   team: Trains
@@ -1076,7 +1076,7 @@
     - key: curve
       label: "Long Curve"
       text: "The train is leaning into a curve and taking the field with it. Everything drifts one way."
-      effects: {fgAccuracy: 0.919, puntDistance: 0.919, runYardage: 0.965}
+      effects: {fgAccuracy: 0.919, puntDistance: 0.919, footing: 0.965}
     - key: highland
       label: "Crossing the Pass"
       text: "The line has climbed into weather. Snow is coming across the open cars."
@@ -1085,7 +1085,7 @@
       label: "Off the Rails"
       unrealOnly: true
       text: "The train is not on the track any more. Play is continuing regardless."
-      effects: {visibility: 0.938, fumbleRate: 1.264, fgAccuracy: 0.808, runYardage: 0.894}
+      effects: {visibility: 0.938, fumbleRate: 1.264, fgAccuracy: 0.808, footing: 0.894}
 
 29:
   team: Grillmeisters
@@ -1099,7 +1099,7 @@
     the sideline is cooking something and the smoke never fully clears the field.
   effects:
     paceMod: 1.052
-    runYardage: 0.965
+    footing: 0.965
     sackRate: 0.957
   weather:
     - key: lowheat
@@ -1113,12 +1113,12 @@
     - key: flareup
       label: "Flare Ups"
       text: "Fat is hitting the coals. Flames coming up through the grate, in places, without warning."
-      effects: {runYardage: 0.938, fumbleRate: 1.093, paceMod: 1.062}
+      effects: {footing: 0.938, fumbleRate: 1.093, paceMod: 1.062}
     - key: inferno
       label: "The Whole Bed Goes"
       unrealOnly: true
       text: "The entire bed is alight under the field. Nobody has stopped it and nobody has left."
-      effects: {runYardage: 0.828, paceMod: 1.215, fumbleRate: 1.245, passAccuracy: 0.89}
+      effects: {footing: 0.828, paceMod: 1.215, fumbleRate: 1.245, passAccuracy: 0.89}
 
 30:
   team: Exoticos
@@ -1169,7 +1169,7 @@
     animals, so there are animals: flat grassland to the horizon, snow on it most of the
     year, and a herd that moves across the back of the venue on its own schedule.
   effects:
-    runYardage: 1.03
+    footing: 1.03
     passAccuracy: 0.963
     puntDistance: 0.94
   weather:
@@ -1184,11 +1184,11 @@
     - key: frozenfast
       label: "Frozen Fast"
       text: "The ground has gone hard as board. Fast underfoot, and nothing anyone catches feels like anything."
-      effects: {runYardage: 1.12, returnYards: 1.1, fumbleRate: 1.08}
+      effects: {footing: 1.12, returnYards: 1.1, fumbleRate: 1.08}
     - key: snow
       label: "Falling Snow"
       text: "Steady snow filling the yard lines in as fast as they can be cleared."
-      effects: {passAccuracy: 0.941, runYardage: 0.953, fumbleRate: 1.107}
+      effects: {passAccuracy: 0.941, footing: 0.953, fumbleRate: 1.107}
     - key: whiteout
       label: "Blizzard"
       unrealOnly: true
@@ -1211,7 +1211,7 @@
     field sits at the foot of the fountain. The air is full of it.
   effects:
     paceMod: 1.041
-    runYardage: 0.959
+    footing: 0.959
     fumbleRate: 1.049
   weather:
     - key: flat
@@ -1225,9 +1225,9 @@
     - key: syruprain
       label: "Syrup Rain"
       text: "Syrup coming down from the rim. Everything it lands on stops moving quite right."
-      effects: {runYardage: 0.929, paceMod: 1.071, sackRate: 1.071}
+      effects: {footing: 0.929, paceMod: 1.071, sackRate: 1.071}
     - key: eruption
       label: "Eruption"
       unrealOnly: true
       text: "The whole fountain has gone up. The field is under it and still in play."
-      effects: {fumbleRate: 1.301, runYardage: 0.836, passAccuracy: 0.88, paceMod: 1.164}
+      effects: {fumbleRate: 1.301, footing: 0.836, passAccuracy: 0.88, paceMod: 1.164}

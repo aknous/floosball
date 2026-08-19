@@ -80,7 +80,7 @@ expect(f"scale stretches the deviation, not the value ({scaled['passAccuracy']:.
 expect("scale 0 collapses every effect to neutral",
        scaleEffects({'fumbleRate': 1.5, 'passAccuracy': 0.7}, 0.0) == {'fumbleRate': 1.0, 'passAccuracy': 1.0})
 expect("combine multiplies layers and fills the rest with neutral",
-       abs(combineEffects({'runYardage': 1.1}, {'runYardage': 0.5})['runYardage'] - 0.55) < 1e-9
+       abs(combineEffects({'footing': 1.1}, {'footing': 0.5})['footing'] - 0.55) < 1e-9
        and combineEffects({})['sackRate'] == 1.0)
 
 # ── the two load-bearing properties ────────────────────────────────────────
@@ -184,7 +184,7 @@ expect(f"venues still differ in WHICH keys they touch ({len(shapes)} distinct sh
 # altitude carries the ball (Colorado, Mexico City), heat thins it the same way
 # (Arizona), a sealed room has no wind at all (Las Vegas, San Francisco), and a tower
 # has a standing updraft (Seattle).
-HELPFUL = {'passAccuracy', 'deepPassChance', 'runYardage', 'fgAccuracy',
+HELPFUL = {'passAccuracy', 'deepPassChance', 'footing', 'fgAccuracy',
            'puntDistance', 'returnYards'}
 def helps(k, v): return v > 1.0 if k in HELPFUL else v < 1.0
 
@@ -235,6 +235,34 @@ expect("a deep ball needs sight more than a short one does",
        VISIBILITY_DEEP_EXP > VISIBILITY_PASS_EXP)
 expect("the defense loses something in the dark too, or it is just a passing penalty",
        VISIBILITY_TACKLE_EXP > 0)
+
+# ── THE SURFACE IS NOT RUN-ONLY ───────────────────────────────────────────
+# ⚠️ The sim resolves _runnerMove and _stretchForFirst in a carrier tail SHARED by runs
+# and receptions, so ground that runs fast helps a receiver who has caught it exactly as
+# much as it helps a back. Treating `footing` as run-only overstates how run-favoring a
+# firm-ground venue is, by the whole YAC share, and that error would flow straight into
+# what the front office drafts.
+from managers.stadiumManager import YAC_PASS_SHARE, _rawBias
+expect(f"yards after catch are counted, so the surface is partly a passing effect ({YAC_PASS_SHARE})",
+       0 < YAC_PASS_SHARE < 1)
+# Convention: positive = the venue favors the RUN. Firm ground helps whoever is
+# carrying, so it leans run — but by LESS than it would if receivers never ran with it.
+firm = _rawBias({'footing': 1.10})
+runOnly = math.log(1.10)          # what it would read if the surface were run-only
+expect(f"firm ground still leans run ({firm:+.4f})", firm > 0)
+expect(f"but by less than a run-only reading would say ({firm:.4f} < {runOnly:.4f})",
+       firm < runOnly)
+expect("and the gap is exactly the yards-after-catch share",
+       abs(firm - runOnly * (1 - YAC_PASS_SHARE)) < 1e-9)
+
+# ⚠️ Perfect symmetry between the phases is NOT the goal and is not achievable: weather
+# acts on the air (ball flight, so passing and kicking) and on the surface (the carrier,
+# so running plus a third of passing), and passing simply has more distinct failure
+# modes. What IS required is that the league not lean systematically one way, which the
+# centered bias handles.
+biases = [m.phaseBias(t) for t in range(1, 33)]
+expect(f"the league does not lean to one phase overall (sum {sum(biases):+.2f})",
+       abs(sum(biases)) < 4.0)
 
 # ── an unknown venue degrades to neutral rather than raising ───────────────
 w = m.rollWeather(9999, 5.0, seed=1)
