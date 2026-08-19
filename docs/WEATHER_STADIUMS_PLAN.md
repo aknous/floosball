@@ -218,6 +218,20 @@ before tuning, and check:
 4. **Home-field advantage exists as a small, separate nudge** — separate from weather,
    which stays symmetric per (1).
 
+### Paired venues
+
+⚠️ **Minnesota Pops and Salt Lake City Sodas are a MATCHED PAIR** (owner, 2026-08-19).
+Both teams are named for the same dispute — what the drink is called — and both are
+rivals who think they do it better. Their venues therefore have to be written together
+or the rivalry stops reading: Minnesota argues the word is the SOUND and bottles it
+(`The Bottling Floor`, "That Is the Sound It Makes"); Salt Lake argues the word belongs
+to the drink and mixes it to order (`The Fountain`, "Mixed, Not Sealed"). Bottle against
+fountain, sealed against mixed. Each YAML entry carries a pointer to the other.
+
+⚠️ A weather **key is scoped to its venue, not global** — 7 keys are reused across the
+league by design (4 venues have a `glare`). Anything persisting a condition must store
+the venue alongside it, or a bare key does not identify what was played in.
+
 ### Home-field advantage
 
 ⚠️ **There is no home-field advantage in the sim today, at all.** Nothing reads a

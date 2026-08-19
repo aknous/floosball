@@ -324,35 +324,40 @@
 
 9:
   team: Pops
-  name: "Bright Night Park"
-  setting: A single word repeated in every fragment from this city, taken for a sound.
-  icon: firework
-  tagline: It Never Stops
+  # ⚠️ PAIRED WITH 32 (Salt Lake City Sodas). Owner: the two are RIVALS, and the names
+  # come from the dispute over what the drink is called. Both venues are soda/pop themed
+  # and each is certain it does it better. Write them as a matched pair or the rivalry
+  # stops reading. This side argues the word is the SOUND, so it bottles and caps.
+  name: "The Bottling Floor"
+  setting: A bottling hall where the field runs between the lines, named for the noise a cap makes.
+  icon: bottle-cap
+  tagline: That Is the Sound It Makes
   description: |
-    Every transmission out of this place contains the same short word. The Cores
-    concluded it was onomatopoeia and built a sky that makes it. Somebody started the
-    display and nobody has found the way to end it.
+    The archive carries two names for one drink and two cities each certain the other is
+    wrong. This one holds that the word is the sound, and built a hall to prove it. The
+    field runs between the lines, the caps come off all game, and the Cores have entered
+    the noise into the record as evidence.
   effects:
     paceMod: 1.04
     passAccuracy: 0.97
   weather:
-    - key: highshow
-      label: "High Show"
-      text: "The display is staying high and clear of the field. Loud, but harmless."
+    - key: capped
+      label: "Running Clean"
+      text: "The line is moving and nothing has gone over. Loud, but the floor is dry."
       effects: {}
-    - key: smoke
-      label: "Powder Smoke"
-      text: "Spent smoke has settled over the field and it is not clearing."
-      effects: {deepPassChance: 0.86, passAccuracy: 0.94}
-    - key: lowbursts
-      label: "Low Bursts"
-      text: "The shells are breaking low enough to light the field. Nobody can hear the count."
-      effects: {sackRate: 1.12, paceMod: 1.10, passAccuracy: 0.93}
-    - key: emberfall
-      label: "Ember Fall"
+    - key: spray
+      label: "Cap Spray"
+      text: "Caps coming off faster than the line can take them. There is a fine mist of it over the field."
+      effects: {passAccuracy: 0.93, fumbleRate: 1.14}
+    - key: sticky
+      label: "Sticky Floor"
+      text: "Enough has gone over that the floor has turned tacky. Nobody is cutting cleanly."
+      effects: {runYardage: 0.88, paceMod: 1.10, sackRate: 1.12}
+    - key: burst
+      label: "The Line Bursts"
       unrealOnly: true
-      text: "Burning debris is landing on the field. Play is continuing around it."
-      effects: {fumbleRate: 1.40, runYardage: 0.80, paceMod: 1.25, passAccuracy: 0.85}
+      text: "Every bottle on the line has gone at once. The hall is full of it and the game is still on."
+      effects: {fumbleRate: 1.55, runYardage: 0.72, passAccuracy: 0.80, paceMod: 1.30}
 
 10:
   team: Cranes
@@ -1092,14 +1097,18 @@
 
 32:
   team: Sodas
+  # ⚠️ PAIRED WITH 9 (Minnesota Pops). See the note there. This side argues the word
+  # belongs to the DRINK rather than to a noise, and that mixing to order beats anything
+  # that arrives sealed.
   name: "The Fountain"
-  setting: A city the archive describes as permanently carbonated, which the Cores did not treat as figurative.
+  setting: A field at the foot of an enormous fountain, where the drink is mixed to order and never sealed.
   icon: fizz
-  tagline: Still Fizzing
+  tagline: Mixed, Not Sealed
   description: |
-    The record says the drinks here are dirty and the air is sweet, and both were built.
-    The field sits at the bottom of an enormous fountain, the air is full of it, and the
-    whole venue smells faintly of syrup for the entire game.
+    The archive carries two names for one drink and two cities each certain the other is
+    wrong. This one holds that the word belongs to the drink and not to a noise, and that
+    anything worth drinking is mixed at a counter rather than capped by a machine. The
+    field sits at the foot of the fountain. The air is full of it.
   effects:
     paceMod: 1.05
     runYardage: 0.95

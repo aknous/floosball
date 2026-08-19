@@ -110,8 +110,13 @@ expect("venue baseline survives at zero intensity (the field does not change)",
        all(abs(still[k] - val) < 1e-9 for k, val in v6.items()))
 
 # ── unreal states are genuinely gated ──────────────────────────────────────
-unrealKeys = {w['key'] for v in raw.values() for w in v['weather'] if w.get('unrealOnly')}
-belowCrit = {m.rollWeather(t, d, seed=s)['key']
+# ⚠️ A weather key is scoped to its VENUE, not global: 7 keys are deliberately reused
+# across the league (4 venues have a `glare`), and Pittsburgh's ordinary "Burst Fruit"
+# shares `burst` with Minnesota's Criticality-only "The Line Bursts". Compare (team, key)
+# pairs. Anything that PERSISTS a condition must store the venue alongside it for the
+# same reason — a bare key does not identify a condition.
+unrealKeys = {(t, w['key']) for t, v in raw.items() for w in v['weather'] if w.get('unrealOnly')}
+belowCrit = {(t, m.rollWeather(t, d, seed=s)['key'])
              for t in range(1, 33) for d in (1.0, 1.6, 2.2, 2.6) for s in range(6)}
 expect(f"no Criticality-only condition appears below Criticality ({sorted(belowCrit & unrealKeys)[:3]})",
        not (belowCrit & unrealKeys))
