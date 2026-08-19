@@ -122,7 +122,7 @@ expect(f"no Criticality-only condition appears below Criticality ({sorted(belowC
        not (belowCrit & unrealKeys))
 atCrit = collections.Counter(m.rollWeather(21, 5.0, seed=s)['key'] for s in range(400))
 expect(f"at Criticality the unreal condition is the most common one ({atCrit.most_common(1)})",
-       atCrit.most_common(1)[0][0] in unrealKeys)
+       (21, atCrit.most_common(1)[0][0]) in unrealKeys)
 
 # ── an unknown venue degrades to neutral rather than raising ───────────────
 w = m.rollWeather(9999, 5.0, seed=1)
