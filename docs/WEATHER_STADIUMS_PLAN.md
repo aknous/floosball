@@ -132,6 +132,36 @@ today. Ship only keys with a verified call site:
 | `puntDistance` | `resolvePunt` |
 | `returnYards` | `_resolvePuntReturn` |
 | `paceMod` | pre-snap time |
+| `visibility` | **two-sided, see below** |
+
+### Sight is its own dimension, and it cuts both ways
+
+⚠️ Darkness was first modeled as `passAccuracy`, which quietly asserts that **poor sight
+only costs the offense**. It does not: a carrier nobody can see is a carrier nobody can
+tackle. Measured on the draft, **34 of the league's conditions** had collapsed into a
+flat tax on throwing because of it — which is also most of why the file came out 92%
+penalties.
+
+`visibility` (1.0 normal, below = obscured, above = unnaturally clear) drives four
+things, and all four call sites were verified to exist before the key was added:
+
+| | |
+|---|---|
+| `passAccuracy` | `× visibility ** VISIBILITY_PASS_EXP` (0.5, mild) |
+| `deepPassChance` | `× visibility ** VISIBILITY_DEEP_EXP` (1.5, steep — a deep ball needs sight most) |
+| punt muff + fair catch | raised as sight falls (`PUNT_MUFF_*`, `PUNT_FAIRCATCH_*`) |
+| **the tackler in `_runnerMove`** | **resistance LOWERED as sight falls**, so a dark field hands yards to the carrier |
+
+⚠️ **The fourth row is the whole point and is the one most likely to be quietly dropped
+during wiring.** Without it this is a renamed passing penalty. `test_stadium_weather.py`
+pins the exponents' relationship so it cannot silently become one-sided.
+
+⚠️ Use `visibility` **instead of** a raw passing penalty where the cause is sight —
+carrying both charges for the same darkness twice, which the test also refuses.
+
+⚠️ It is weighted **×2** in the fairness severity metric (`SEVERITY_WEIGHTS`): one term
+replaces two authored keys and adds two more consequences, so counting it once would
+make a dark venue measure as half the venue it is.
 
 ⚠️ `fgAccuracy` reaching `fgMakeProbability` is the reason that function was
 consolidated: the attempt decision, the kick, the PAT estimate and the OT model all

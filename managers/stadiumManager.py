@@ -51,7 +51,32 @@ EFFECT_KEYS = (
     'puntDistance',     # resolvePunt
     'returnYards',      # _resolvePuntReturn
     'paceMod',          # pre-snap time
+    'visibility',       # SEE BELOW — the only two-sided key in the vocabulary
 )
+
+# ⚠️ `visibility` IS NOT A PASSING PENALTY WEARING A NEW NAME, and it is the one key
+# here that helps one side of the ball while hurting the other. If nobody can see, the
+# BALL CARRIER IS ALSO HARDER TO TRACK. Modeling darkness as pass accuracy alone quietly
+# asserts that poor sight only costs the offense, which is why 34 of the league's
+# conditions had collapsed into a flat tax on throwing.
+#
+# 1.0 = normal sight. Below 1.0 = obscured. Above 1.0 = unnaturally clear.
+#
+# Wiring (all four call sites verified to exist before the key was added):
+#   passAccuracy   x visibility ** VISIBILITY_PASS_EXP    (mild)
+#   deepPassChance x visibility ** VISIBILITY_DEEP_EXP    (steep — a deep ball needs
+#                                                          sight most)
+#   punt muff + fair catch  raised as sight falls  (PUNT_MUFF_*, PUNT_FAIRCATCH_*)
+#   the tackler's resistance in _runnerMove  LOWERED as sight falls, so a dark field
+#   hands yards to the carrier. This is the two-sided half and must not be dropped.
+VISIBILITY_PASS_EXP = 0.5
+VISIBILITY_DEEP_EXP = 1.5
+VISIBILITY_TACKLE_EXP = 0.6   # how much a defender loses by not seeing the carrier
+
+# ⚠️ One `visibility` term replaces TWO authored pass keys and adds two more
+# consequences, so counting it once would make a dark venue measure as half the venue it
+# is. The fairness bands weight it accordingly.
+SEVERITY_WEIGHTS = {'visibility': 2.0}
 
 NEUTRAL_EFFECTS: Dict[str, float] = {k: 1.0 for k in EFFECT_KEYS}
 

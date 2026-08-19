@@ -85,7 +85,15 @@
 #     description: |             # longer flavor for hover/modal
 #     effects:                   # ALWAYS-ON venue character, multiplicative (1.0 = none)
 #       passAccuracy / deepPassChance / runYardage / fgAccuracy / sackRate
-#       fumbleRate / puntDistance / returnYards / paceMod
+#       fumbleRate / puntDistance / returnYards / paceMod / visibility
+#
+# ⚠️ `visibility` IS TWO-SIDED and is the only key here that is. Darkness was first
+# written as a passing penalty, which quietly says poor sight only costs the offense --
+# it does not, because a carrier nobody can see is a carrier nobody can tackle. Below
+# 1.0 it costs pass accuracy (mildly), deep passing (steeply), and raises punt muffs and
+# fair catches, AND it takes the tackler's resistance down so a dark field hands yards
+# to the runner. Use it INSTEAD of a raw passing penalty wherever the cause is sight;
+# carrying both charges for the same darkness twice.
 #     weather:                   # this venue's own conditions
 #       - key: calm              # EVERY venue needs exactly one calm state, listed first
 #         label: "Short Name"
@@ -121,16 +129,16 @@
     - key: lengthening
       label: "Lengthening Shadows"
       text: "The shadows are crossing the field. Deep throws vanish into them."
-      effects: {deepPassChance: 0.855, passAccuracy: 0.948}
+      effects: {visibility: 0.9}
     - key: gloom
       label: "Gloom"
       text: "The light is going out of the place. Receivers are losing the ball late."
-      effects: {passAccuracy: 0.938, fgAccuracy: 0.954, deepPassChance: 0.908}
+      effects: {visibility: 0.923, fgAccuracy: 0.954}
     - key: blackout
       label: "Total Dark"
       unrealOnly: true
       text: "The lights have failed entirely. They are playing by sound."
-      effects: {passAccuracy: 0.887, deepPassChance: 0.775, fgAccuracy: 0.895, fumbleRate: 1.131}
+      effects: {visibility: 0.829, fgAccuracy: 0.895, fumbleRate: 1.131}
 
 2:
   team: Normals
@@ -159,12 +167,12 @@
     - key: overcast
       label: "Standard Overcast"
       text: "Uniform gray cloud, evenly distributed. Deep throws are hard to track against it."
-      effects: {deepPassChance: 0.801}
+      effects: {visibility: 0.895}
     - key: tolerance
       label: "Within Tolerance"
       unrealOnly: true
       text: "Every reading has come back exactly nominal, which has never once happened. The ball is going precisely where it is thrown."
-      effects: {passAccuracy: 1.22, deepPassChance: 1.25, fgAccuracy: 1.18, fumbleRate: 0.85}
+      effects: {visibility: 0.81, fgAccuracy: 1.18, fumbleRate: 0.85}
 
 3:
   team: Broads
@@ -224,11 +232,11 @@
     - key: dust
       label: "Stone Dust"
       text: "Dust is coming off the monuments and hanging over the field. Hard to see, hard to breathe."
-      effects: {passAccuracy: 0.895, paceMod: 1.105}
+      effects: {visibility: 0.946, paceMod: 1.105}
     - key: glare
       label: "Marble Glare"
       text: "Sun off polished stone, straight into the eyes of anyone looking up."
-      effects: {deepPassChance: 0.906, fgAccuracy: 0.938, fumbleRate: 1.047}
+      effects: {visibility: 0.952, fgAccuracy: 0.938, fumbleRate: 1.047}
     - key: tremor
       label: "Tremor"
       unrealOnly: true
@@ -290,7 +298,7 @@
     - key: seep
       label: "Seepage"
       text: "Water is coming through the rock and pooling on the field. The ball is wet."
-      effects: {passAccuracy: 0.946, fumbleRate: 1.115, runYardage: 0.954}
+      effects: {visibility: 0.973, fumbleRate: 1.115, runYardage: 0.954}
     - key: deadair
       label: "Dead Air"
       text: "There is no weather down here at all. No wind has ever reached this field and the ball knows it."
@@ -298,7 +306,7 @@
     - key: dustfall
       label: "Dust Fall"
       text: "Fine rock dust drifting down from the ceiling. Nobody can see the roof and nobody wants to."
-      effects: {passAccuracy: 0.932, deepPassChance: 0.872}
+      effects: {visibility: 0.902}
     - key: collapse
       label: "Rockfall"
       unrealOnly: true
@@ -326,16 +334,16 @@
     - key: rolling
       label: "Rolling Bank"
       text: "The fog is moving across in waves. Receivers keep disappearing and coming back."
-      effects: {deepPassChance: 0.858, passAccuracy: 0.95}
+      effects: {visibility: 0.903}
     - key: pea
       label: "Pea Soup"
       text: "Visibility is about fifteen yards. Anything longer is thrown on faith."
-      effects: {deepPassChance: 0.889, passAccuracy: 0.962, fgAccuracy: 0.968}
+      effects: {visibility: 0.925, fgAccuracy: 0.968}
     - key: whiteout
       label: "Whiteout"
       unrealOnly: true
       text: "The fog has closed completely. Nobody on the field can see the ball, including whoever has it."
-      effects: {deepPassChance: 0.768, passAccuracy: 0.907, fgAccuracy: 0.9, fumbleRate: 1.1}
+      effects: {visibility: 0.835, fgAccuracy: 0.9, fumbleRate: 1.1}
 
 8:
   team: Caddies
@@ -368,7 +376,7 @@
       label: "Lightning Hold"
       unrealOnly: true
       text: "The horn has sounded and nobody has left the field. It is striking the fairway."
-      effects: {paceMod: 1.257, fgAccuracy: 0.817, passAccuracy: 0.89, fumbleRate: 1.183}
+      effects: {visibility: 0.943, paceMod: 1.257, fgAccuracy: 0.817, fumbleRate: 1.183}
 
 9:
   team: Pops
@@ -396,7 +404,7 @@
     - key: spray
       label: "Cap Spray"
       text: "Caps coming off faster than the line can take them. There is a fine mist of it over the field."
-      effects: {passAccuracy: 0.928, fumbleRate: 1.144}
+      effects: {visibility: 0.963, fumbleRate: 1.144}
     - key: sticky
       label: "Sticky Floor"
       text: "Enough has gone over that the floor has turned tacky. Nobody is cutting cleanly."
@@ -499,7 +507,7 @@
     - key: glare
       label: "Salt Glare"
       text: "Sun off white salt in every direction. Nobody can look up for long."
-      effects: {deepPassChance: 0.874, fgAccuracy: 0.928}
+      effects: {visibility: 0.935, fgAccuracy: 0.928}
     - key: thinair
       label: "Thin Air"
       text: "The air up here is thin enough that the ball simply goes further. Everything carries."
@@ -507,7 +515,7 @@
     - key: mist
       label: "Brine Mist"
       text: "Salt mist blowing across the basin, stinging and settling on the ball."
-      effects: {passAccuracy: 0.922, fumbleRate: 1.137}
+      effects: {visibility: 0.96, fumbleRate: 1.137}
     - key: flood
       label: "Basin Flood"
       unrealOnly: true
@@ -579,7 +587,7 @@
     - key: emerald
       label: "Emerald Light"
       text: "The light has gone green and strange. Depth is hard to judge in it."
-      effects: {deepPassChance: 0.88, fgAccuracy: 0.925}
+      effects: {visibility: 0.938, fgAccuracy: 0.925}
     - key: twister
       label: "Twister"
       unrealOnly: true
@@ -649,12 +657,12 @@
     - key: devil
       label: "Dust Devils"
       text: "Dust devils crossing the field of play, one at a time, unpredictably."
-      effects: {passAccuracy: 0.944, fumbleRate: 1.083, puntDistance: 0.93}
+      effects: {visibility: 0.972, fumbleRate: 1.083, puntDistance: 0.93}
     - key: haboob
       label: "Haboob"
       unrealOnly: true
       text: "A wall of dust has arrived over the stadium. Nobody can see anybody."
-      effects: {passAccuracy: 0.899, deepPassChance: 0.766, fgAccuracy: 0.885, paceMod: 1.09}
+      effects: {visibility: 0.83, fgAccuracy: 0.885, paceMod: 1.09}
 
 17:
   team: Residents
@@ -678,7 +686,7 @@
     - key: haze
       label: "Stage Haze"
       text: "Haze pumped in for the lighting rig and never vented. It sits at head height."
-      effects: {deepPassChance: 0.859, passAccuracy: 0.941}
+      effects: {visibility: 0.899}
     - key: showair
       label: "Show Conditions"
       text: "The room is holding exactly where it was set. Nothing is moving the ball but the thrower."
@@ -686,12 +694,12 @@
     - key: glare
       label: "Follow Spots"
       text: "The spots are tracking the ball carrier, which means they are also in his eyes."
-      effects: {fumbleRate: 1.144, passAccuracy: 0.928}
+      effects: {visibility: 0.963, fumbleRate: 1.144}
     - key: powercut
       label: "Power Cut"
       unrealOnly: true
       text: "The rig is failing in banks. The field goes dark in patches and comes back wrong."
-      effects: {passAccuracy: 0.895, deepPassChance: 0.76, fgAccuracy: 0.887, fumbleRate: 1.131}
+      effects: {visibility: 0.825, fgAccuracy: 0.887, fumbleRate: 1.131}
 
 18:
   team: Rhyme
@@ -714,7 +722,7 @@
     - key: iambic
       label: "Iambic Rain"
       text: "Rain in a strict alternating pattern, light then heavy, light then heavy."
-      effects: {passAccuracy: 0.948, fumbleRate: 1.087, paceMod: 0.93}
+      effects: {visibility: 0.974, fumbleRate: 1.087, paceMod: 0.93}
     - key: caesura
       label: "Caesura"
       text: "The weather stops dead in the middle of every drive and starts again."
@@ -747,7 +755,7 @@
     - key: steam
       label: "Steam"
       text: "Steam venting up out of the grooves across the whole field."
-      effects: {deepPassChance: 0.864, passAccuracy: 0.94}
+      effects: {visibility: 0.901}
     - key: syrup
       label: "Syrup"
       text: "Syrup is standing in the channels. Anyone who goes down comes up slow."
@@ -780,11 +788,11 @@
     - key: allangles
       label: "Glare From Everywhere"
       text: "Low sun working around the whole rim. There is no side of the field with shade on it."
-      effects: {passAccuracy: 0.945, deepPassChance: 0.898, fgAccuracy: 0.959}
+      effects: {visibility: 0.921, fgAccuracy: 0.959}
     - key: icefog
       label: "Ice Fog"
       text: "Ice fog off the ground, lit from behind. Hands are going and nobody can see far."
-      effects: {fumbleRate: 1.107, runYardage: 0.957, deepPassChance: 0.936}
+      effects: {visibility: 0.967, fumbleRate: 1.107, runYardage: 0.957}
     - key: setting
       label: "It Begins to Set"
       unrealOnly: true
@@ -847,7 +855,7 @@
     - key: condensation
       label: "Condensation"
       text: "The glass has fogged from the inside. The city has gone, and so has the far sideline."
-      effects: {deepPassChance: 0.861, passAccuracy: 0.946}
+      effects: {visibility: 0.902}
     - key: deadstill
       label: "Dead Still"
       text: "Nothing is moving in the box at all. The ball goes exactly where it is put."
@@ -855,7 +863,7 @@
     - key: glare
       label: "Full Glare"
       text: "Light coming through six panes at once and bouncing off the floor."
-      effects: {passAccuracy: 0.931, fgAccuracy: 0.931, fumbleRate: 1.069}
+      effects: {visibility: 0.965, fgAccuracy: 0.931, fumbleRate: 1.069}
     - key: fracture
       label: "Fracture"
       unrealOnly: true
@@ -892,12 +900,12 @@
     - key: smoke
       label: "Smoke"
       text: "Smoke pumped in to settle the hive. It settles the hive and blinds the receivers."
-      effects: {deepPassChance: 0.866, passAccuracy: 0.94}
+      effects: {visibility: 0.902}
     - key: swarm
       label: "Swarm"
       unrealOnly: true
       text: "The hive has come off the walls and onto the field. Play has not been stopped."
-      effects: {passAccuracy: 0.882, paceMod: 1.148, deepPassChance: 0.768, fumbleRate: 1.127}
+      effects: {visibility: 0.823, paceMod: 1.148, fumbleRate: 1.127}
 
 24:
   team: Classics
@@ -930,7 +938,7 @@
     - key: sepia
       label: "Low Sun"
       text: "Long low sun through the wooden stands, striping the field in light and dark."
-      effects: {passAccuracy: 0.934, deepPassChance: 0.868}
+      effects: {visibility: 0.9}
     - key: mire
       label: "The Mire"
       unrealOnly: true
@@ -1002,7 +1010,7 @@
       label: "The Lamp Goes"
       unrealOnly: true
       text: "The one light has failed. Something is still moving out there and it is not all players."
-      effects: {passAccuracy: 0.898, deepPassChance: 0.778, fgAccuracy: 0.891, fumbleRate: 1.119}
+      effects: {visibility: 0.836, fgAccuracy: 0.891, fumbleRate: 1.119}
 
 27:
   team: Curd
@@ -1027,7 +1035,7 @@
     - key: whey
       label: "Whey Mist"
       text: "Warm mist off the vats hanging at head height across the floor."
-      effects: {deepPassChance: 0.864, passAccuracy: 0.94}
+      effects: {visibility: 0.901}
     - key: washdown
       label: "Wash Down"
       text: "The floor was hosed between quarters and has not dried. Nobody is cutting on it."
@@ -1060,7 +1068,7 @@
     - key: tunnel
       label: "Tunnels"
       text: "The line is running through tunnels. The field goes dark without warning and comes back."
-      effects: {passAccuracy: 0.95, deepPassChance: 0.901, fumbleRate: 1.05}
+      effects: {visibility: 0.925, fumbleRate: 1.05}
     - key: slipstream
       label: "Slipstream"
       text: "The train is running dead straight and everything thrown forward is going with it."
@@ -1077,7 +1085,7 @@
       label: "Off the Rails"
       unrealOnly: true
       text: "The train is not on the track any more. Play is continuing regardless."
-      effects: {fumbleRate: 1.264, passAccuracy: 0.88, fgAccuracy: 0.808, runYardage: 0.894}
+      effects: {visibility: 0.938, fumbleRate: 1.264, fgAccuracy: 0.808, runYardage: 0.894}
 
 29:
   team: Grillmeisters
@@ -1101,7 +1109,7 @@
     - key: smoke
       label: "Heavy Smoke"
       text: "The smoke has come down onto the field and settled there."
-      effects: {deepPassChance: 0.863, passAccuracy: 0.945}
+      effects: {visibility: 0.903}
     - key: flareup
       label: "Flare Ups"
       text: "Fat is hitting the coals. Flames coming up through the grate, in places, without warning."
@@ -1135,7 +1143,7 @@
     - key: pyro
       label: "Pyro Smoke"
       text: "Entrance pyro has left smoke in the bowl and there is nowhere for it to go."
-      effects: {deepPassChance: 0.858, passAccuracy: 0.947}
+      effects: {visibility: 0.901}
     - key: altitude
       label: "Thin Air"
       text: "Sealed, still, and a long way above sea level. The ball goes further here than anywhere."
@@ -1143,7 +1151,7 @@
     - key: confetti
       label: "Confetti"
       text: "Gold confetti still coming down two quarters later. It is in the air and on the ball."
-      effects: {passAccuracy: 0.948, fumbleRate: 1.078, deepPassChance: 0.922}
+      effects: {visibility: 0.935, fumbleRate: 1.078}
     - key: fullhouse
       label: "The House Comes Down"
       unrealOnly: true
@@ -1185,7 +1193,7 @@
       label: "Blizzard"
       unrealOnly: true
       text: "Full whiteout with the herd somewhere inside it. The far end zone is a rumor."
-      effects: {passAccuracy: 0.909, deepPassChance: 0.788, fgAccuracy: 0.894, fumbleRate: 1.136}
+      effects: {visibility: 0.846, fgAccuracy: 0.894, fumbleRate: 1.136}
 
 32:
   team: Sodas

@@ -135,9 +135,16 @@ expect(f"at Criticality the unreal condition is the most common one ({atCrit.mos
 # league and varies game to game, so it averages out. Measured before this was pinned:
 # always-on ran 0.070 to 0.263, a 3.8x spread.
 import math
+from managers.stadiumManager import SEVERITY_WEIGHTS
 def severity(eff):
-    """Distance from neutral in log space, so 0.80 and 1.25 weigh the same."""
-    return sum(abs(math.log(v)) for v in eff.values() if v > 0)
+    """Distance from neutral in log space, so 0.80 and 1.25 weigh the same.
+
+    ⚠️ `visibility` is weighted up: one term replaces two authored pass keys AND adds
+    muff, fair-catch and missed-tackle consequences, so counting it once would make a
+    dark venue measure as half the venue it actually is.
+    """
+    return sum(SEVERITY_WEIGHTS.get(k, 1.0) * abs(math.log(v))
+               for k, v in eff.items() if v > 0)
 
 always = {t: severity(raw[t].get('effects') or {}) for t in raw}
 lo, hi = min(always.values()), max(always.values())
@@ -202,6 +209,32 @@ critBoost = [(t, w['label']) for t, v in raw.items() for w in v['weather']
              if w.get('unrealOnly') and isBoost(w.get('effects'))]
 expect(f"at least one Criticality condition makes things BETTER, wrongly ({critBoost})",
        len(critBoost) >= 1)
+
+# ── SIGHT IS ITS OWN DIMENSION, AND IT CUTS BOTH WAYS ─────────────────────
+# ⚠️ Darkness was originally modeled as pass accuracy, which quietly asserts that poor
+# sight only costs the OFFENSE. It does not: if nobody can see, the ball carrier is
+# also harder to track. 34 of the league's conditions had collapsed into a flat tax on
+# throwing because of it.
+visUsers = [(t, w['label']) for t, v in raw.items() for w in v['weather']
+            if 'visibility' in (w.get('effects') or {})]
+expect(f"sight-caused conditions use the visibility term ({len(visUsers)} of them)",
+       len(visUsers) >= 25)
+
+# A condition should express its cause ONCE. Carrying visibility and a raw passing
+# penalty together double-counts the same darkness.
+doubled = [(t, w['label']) for t, v in raw.items() for w in v['weather']
+           if 'visibility' in (w.get('effects') or {})
+           and ({'passAccuracy', 'deepPassChance'} & set(w['effects']))]
+expect(f"no condition charges for the same darkness twice ({doubled[:2]})", not doubled)
+
+# ⚠️ The two-sided half is the whole point and is the part most likely to be quietly
+# dropped during wiring. These exponents are what the engine must consume.
+from managers.stadiumManager import (VISIBILITY_PASS_EXP, VISIBILITY_DEEP_EXP,
+                                     VISIBILITY_TACKLE_EXP)
+expect("a deep ball needs sight more than a short one does",
+       VISIBILITY_DEEP_EXP > VISIBILITY_PASS_EXP)
+expect("the defense loses something in the dark too, or it is just a passing penalty",
+       VISIBILITY_TACKLE_EXP > 0)
 
 # ── an unknown venue degrades to neutral rather than raising ───────────────
 w = m.rollWeather(9999, 5.0, seed=1)
