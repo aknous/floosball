@@ -1171,13 +1171,12 @@ the design settled on "the sim decides, fans express sentiment", and the `tribun
 longer exists. Reintroducing a binding vote for chrome revives exactly that shape, so it
 needs a positive reason, not just momentum.
 
-⚠️ **"SCALED TO THE ACTIVE USER BASE" IS BROKEN IN PRODUCTION RIGHT NOW.**
-`_countActiveUsers` filters on `users.last_login_at`, and **nothing in the app ever
-writes that column** (only tests). It returns **0** in production, so every quorum
-scaling off it silently pins to its floor — the fan-award quorum advertises scaling with
-turnout and delivers a flat 3. The fan-sentiment system already had to move OFF it onto
-per-club favoriters for this exact reason. Any chrome threshold expressed as a fraction
-of active users would be a constant wearing a formula.
+⚠️ **CORRECTION (2026-08-19): active-user scaling WORKS.** An earlier revision of this
+section, and the CLAUDE.md Open Questions entry it trusted, said `users.last_login_at` was
+never written and so `_countActiveUsers` returned 0. That is false: **`api/auth.py:679`
+stamps it on every authenticated request**, and the fan-award quorum is live at **9**
+rather than pinned at its floor of 3. Measured on prod: 175 of 187 users carry a stamp,
+44 are active on a 30-day window, 29 on 7 days. Scaling on the active base is available.
 
 **Recommendation: components are earmarked at gift time. It is a funding race, not an
 election.** A fan does not gift components to a *player*; they gift them to a *specific
