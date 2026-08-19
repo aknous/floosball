@@ -163,6 +163,46 @@ shapes = {frozenset((raw[t].get('effects') or {}).keys()) for t in raw}
 expect(f"venues still differ in WHICH keys they touch ({len(shapes)} distinct shapes)",
        len(shapes) >= 12)
 
+# ── SOME WEATHER HAS TO HELP ───────────────────────────────────────────────
+# ⚠️ Measured when this file was first written: 92% of every effect in it was a penalty,
+# and in the weather layer passAccuracy was lowered in 40 of 40 conditions and
+# deepPassChance in 32 of 32. Not one condition in the league helped anything. Three
+# things follow from that and all three are bad:
+#   - weather can only ever SUBTRACT offense, and subtracts more as the anomaly climbs,
+#     so Criticality becomes a scoring drought instead of a spectacle;
+#   - a "pass-favoring venue" is a lie — it only hurts running MORE, so a GM building a
+#     passing team for one is building for somewhere merely less bad;
+#   - 32 places collapse into 32 amounts of difficulty.
+# The answers are physical and the league already had the geography: thin air at
+# altitude carries the ball (Colorado, Mexico City), heat thins it the same way
+# (Arizona), a sealed room has no wind at all (Las Vegas, San Francisco), and a tower
+# has a standing updraft (Seattle).
+HELPFUL = {'passAccuracy', 'deepPassChance', 'runYardage', 'fgAccuracy',
+           'puntDistance', 'returnYards'}
+def helps(k, v): return v > 1.0 if k in HELPFUL else v < 1.0
+
+def isBoost(eff):
+    """A condition that helps on balance, not one lucky key inside a penalty."""
+    good = sum(1 for k, v in (eff or {}).items() if helps(k, v))
+    return good >= 2 and good > len(eff or {}) - good
+
+boostVenues = [t for t, v in raw.items() if any(isBoost(w.get('effects')) for w in v['weather'])]
+expect(f"some venues are genuinely GOOD to play in ({len(boostVenues)} of 32)",
+       len(boostVenues) >= 5)
+
+passLifted = [(t, w['label']) for t, v in raw.items() for w in v['weather']
+              if (w.get('effects') or {}).get('passAccuracy', 1.0) > 1.0
+              or (w.get('effects') or {}).get('deepPassChance', 1.0) > 1.0]
+expect(f"the passing game is helped somewhere, not merely hurt less ({len(passLifted)} conditions)",
+       len(passLifted) >= 5)
+
+# ⚠️ Criticality must not be uniformly a slog. Exactly one venue's top rung snaps to
+# spec instead of degrading, which is far more unsettling than another penalty.
+critBoost = [(t, w['label']) for t, v in raw.items() for w in v['weather']
+             if w.get('unrealOnly') and isBoost(w.get('effects'))]
+expect(f"at least one Criticality condition makes things BETTER, wrongly ({critBoost})",
+       len(critBoost) >= 1)
+
 # ── an unknown venue degrades to neutral rather than raising ───────────────
 w = m.rollWeather(9999, 5.0, seed=1)
 expect("an unknown team plays in neutral conditions rather than crashing",

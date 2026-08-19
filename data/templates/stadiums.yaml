@@ -19,6 +19,27 @@
 # future arrives misdated into what they believe was the era of the sport. Two flavors,
 # both good, mix freely:
 #
+# ⚠️ WEATHER DOES NOT HAVE TO SUPPRESS (owner, 2026-08-19). Real weather almost only
+# ever subtracts, and the first version of this file inherited that without noticing:
+# 92% of every effect in it was a penalty, with passAccuracy lowered in 40 of 40
+# conditions. That makes weather a pure drag on scoring, makes Criticality a drought
+# rather than a spectacle, and reduces 32 places to 32 amounts of difficulty. Two ways
+# out, and BOTH are in use:
+#
+#   PHYSICAL     thin air at altitude carries the ball (Colorado, Mexico City), heat
+#                thins it the same way (Arizona), a sealed room has no wind at all
+#                (Las Vegas, San Francisco), a tower has a standing updraft (Seattle),
+#                and ground that freezes or bakes hard runs fast (Buffalo, Georgia,
+#                Philadelphia). Note the split: weather acts on the AIR, so it boosts
+#                ball flight; the run game is helped by SURFACE.
+#
+#   SUBVERSION   these are not real places and their weather need not obey. A cavern
+#                has no wind at all, so the best throwing conditions in the league are
+#                underground. A Tuesday on a loop has been REHEARSED. A hive is the
+#                most coordinated thing alive. Boston's Criticality snaps to spec
+#                instead of degrading, which is far worse than another penalty.
+#                ⚠️ The subversion must be EARNED BY THE SETTING, not handed out.
+#
 #   DISTORTION   a real city feature at the wrong scale, material or literalism.
 #                Chicago's mirrored monument comes back as an actual legume, grown.
 #                Cleveland "rocks", so the Cores filed it under geology and built a mine.
@@ -139,11 +160,11 @@
       label: "Standard Overcast"
       text: "Uniform gray cloud, evenly distributed. Deep throws are hard to track against it."
       effects: {deepPassChance: 0.801}
-    - key: exception
-      label: "Unhandled Exception"
+    - key: tolerance
+      label: "Within Tolerance"
       unrealOnly: true
-      text: "The weather is doing something the field was not specified for. Nobody has a procedure."
-      effects: {fumbleRate: 1.343, passAccuracy: 0.863, paceMod: 1.129, sackRate: 1.171}
+      text: "Every reading has come back exactly nominal, which has never once happened. The ball is going precisely where it is thrown."
+      effects: {passAccuracy: 1.22, deepPassChance: 1.25, fgAccuracy: 1.18, fumbleRate: 0.85}
 
 3:
   team: Broads
@@ -168,6 +189,10 @@
       label: "Heat Shimmer"
       text: "Heat coming off the asphalt is bending everything past thirty yards."
       effects: {deepPassChance: 0.867, fgAccuracy: 0.934}
+    - key: baked
+      label: "Baked Blacktop"
+      text: "The top has cured hard and dry. Anyone who gets a step is gone."
+      effects: {runYardage: 1.11, returnYards: 1.12, fumbleRate: 0.94}
     - key: slick
       label: "Wet Blacktop"
       text: "Rain on asphalt with nowhere to drain. Footing is gone."
@@ -266,6 +291,10 @@
       label: "Seepage"
       text: "Water is coming through the rock and pooling on the field. The ball is wet."
       effects: {passAccuracy: 0.946, fumbleRate: 1.115, runYardage: 0.954}
+    - key: deadair
+      label: "Dead Air"
+      text: "There is no weather down here at all. No wind has ever reached this field and the ball knows it."
+      effects: {deepPassChance: 1.1, fgAccuracy: 1.08, puntDistance: 1.05}
     - key: dustfall
       label: "Dust Fall"
       text: "Fine rock dust drifting down from the ceiling. Nobody can see the roof and nobody wants to."
@@ -401,6 +430,10 @@
       label: "Gusting"
       text: "The wind up here is turning over. Kicks are being taken off line."
       effects: {fgAccuracy: 0.923, puntDistance: 0.934, deepPassChance: 0.945}
+    - key: updraft
+      label: "Standing Updraft"
+      text: "The air is coming up the tower in a steady column and holding everything thrown into it."
+      effects: {deepPassChance: 1.12, puntDistance: 1.1, fgAccuracy: 0.96}
     - key: cloudbase
       label: "In the Cloud"
       text: "The cloud base has come down over the deck. They are playing inside it."
@@ -467,6 +500,10 @@
       label: "Salt Glare"
       text: "Sun off white salt in every direction. Nobody can look up for long."
       effects: {deepPassChance: 0.874, fgAccuracy: 0.928}
+    - key: thinair
+      label: "Thin Air"
+      text: "The air up here is thin enough that the ball simply goes further. Everything carries."
+      effects: {deepPassChance: 1.1, fgAccuracy: 1.07, puntDistance: 1.06}
     - key: mist
       label: "Brine Mist"
       text: "Salt mist blowing across the basin, stinging and settling on the ball."
@@ -499,6 +536,10 @@
       label: "The Same Rain"
       text: "The warm downpour that always comes, at the hour it always comes, off the same street."
       effects: {passAccuracy: 0.92, fumbleRate: 1.134}
+    - key: dejavu
+      label: "Deja Vu"
+      text: "Everyone on the field has played this exact Tuesday before. Nobody is being surprised by anything."
+      effects: {passAccuracy: 1.06, runYardage: 1.06, fumbleRate: 0.92}
     - key: throw
       label: "Beads Underfoot"
       text: "The parade has come through again and left the route ankle deep in what it throws."
@@ -601,6 +642,10 @@
       label: "Heat Shimmer"
       text: "The air over the field is bending. Long throws are being misjudged badly."
       effects: {deepPassChance: 0.88, fgAccuracy: 0.925}
+    - key: rising
+      label: "Rising Air"
+      text: "The heat has thinned the air off the hardpan and the ball is riding it a long way."
+      effects: {deepPassChance: 1.1, puntDistance: 1.08, fgAccuracy: 1.05}
     - key: devil
       label: "Dust Devils"
       text: "Dust devils crossing the field of play, one at a time, unpredictably."
@@ -634,6 +679,10 @@
       label: "Stage Haze"
       text: "Haze pumped in for the lighting rig and never vented. It sits at head height."
       effects: {deepPassChance: 0.859, passAccuracy: 0.941}
+    - key: showair
+      label: "Show Conditions"
+      text: "The room is holding exactly where it was set. Nothing is moving the ball but the thrower."
+      effects: {passAccuracy: 1.07, fgAccuracy: 1.08, deepPassChance: 1.05}
     - key: glare
       label: "Follow Spots"
       text: "The spots are tracking the ball carrier, which means they are also in his eyes."
@@ -799,6 +848,10 @@
       label: "Condensation"
       text: "The glass has fogged from the inside. The city has gone, and so has the far sideline."
       effects: {deepPassChance: 0.861, passAccuracy: 0.946}
+    - key: deadstill
+      label: "Dead Still"
+      text: "Nothing is moving in the box at all. The ball goes exactly where it is put."
+      effects: {passAccuracy: 1.08, fgAccuracy: 1.07, deepPassChance: 1.04}
     - key: glare
       label: "Full Glare"
       text: "Light coming through six panes at once and bouncing off the floor."
@@ -832,6 +885,10 @@
       label: "Agitated"
       text: "The hive is up. Anyone standing still is getting attention."
       effects: {paceMod: 1.075, passAccuracy: 0.948, sackRate: 1.09}
+    - key: agrees
+      label: "The Hive Agrees"
+      text: "The hum has settled onto one note and the whole team is moving on it. Nobody is jumping early."
+      effects: {passAccuracy: 1.05, sackRate: 0.9, paceMod: 0.95}
     - key: smoke
       label: "Smoke"
       text: "Smoke pumped in to settle the hive. It settles the hive and blinds the receivers."
@@ -866,6 +923,10 @@
       label: "Mud"
       text: "No drainage and a wet week. The middle of the field is gone already."
       effects: {runYardage: 0.929, fumbleRate: 1.092, paceMod: 1.051}
+    - key: baked
+      label: "Baked Hard"
+      text: "A dry week has set the old field like clay. It has not run this fast all season."
+      effects: {runYardage: 1.13, returnYards: 1.09, paceMod: 0.96}
     - key: sepia
       label: "Low Sun"
       text: "Long low sun through the wooden stands, striping the field in light and dark."
@@ -1000,6 +1061,10 @@
       label: "Tunnels"
       text: "The line is running through tunnels. The field goes dark without warning and comes back."
       effects: {passAccuracy: 0.95, deepPassChance: 0.901, fumbleRate: 1.05}
+    - key: slipstream
+      label: "Slipstream"
+      text: "The train is running dead straight and everything thrown forward is going with it."
+      effects: {deepPassChance: 1.12, puntDistance: 1.1, fgAccuracy: 0.97}
     - key: curve
       label: "Long Curve"
       text: "The train is leaning into a curve and taking the field with it. Everything drifts one way."
@@ -1071,6 +1136,10 @@
       label: "Pyro Smoke"
       text: "Entrance pyro has left smoke in the bowl and there is nowhere for it to go."
       effects: {deepPassChance: 0.858, passAccuracy: 0.947}
+    - key: altitude
+      label: "Thin Air"
+      text: "Sealed, still, and a long way above sea level. The ball goes further here than anywhere."
+      effects: {deepPassChance: 1.09, fgAccuracy: 1.07, passAccuracy: 1.04}
     - key: confetti
       label: "Confetti"
       text: "Gold confetti still coming down two quarters later. It is in the air and on the ball."
@@ -1104,6 +1173,10 @@
       label: "Plains Wind"
       text: "Nothing to stop the wind for a hundred miles and it shows in every kick."
       effects: {fgAccuracy: 0.938, puntDistance: 0.929, deepPassChance: 0.938}
+    - key: frozenfast
+      label: "Frozen Fast"
+      text: "The ground has gone hard as board. Fast underfoot, and nothing anyone catches feels like anything."
+      effects: {runYardage: 1.12, returnYards: 1.1, fumbleRate: 1.08}
     - key: snow
       label: "Falling Snow"
       text: "Steady snow filling the yard lines in as fast as they can be cleared."

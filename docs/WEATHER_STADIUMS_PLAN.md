@@ -289,6 +289,47 @@ advantage is the `homeBoost` key from the old branch, and it means "some teams a
 simply better", which is a competitive-balance change wearing a stadium costume. Venue
 character belongs in the weather, which is symmetric.
 
+## Weather does not have to suppress (owner, 2026-08-19)
+
+⚠️ **Measured on the first complete draft: 92% of every effect in the file was a
+penalty.** In the weather layer `passAccuracy` was lowered in **40 of 40** conditions
+and `deepPassChance` in **32 of 32**. Not one condition in the league helped anything —
+inherited without noticing from real weather, which almost only ever subtracts.
+
+Three consequences, all bad:
+- weather can only **subtract** offense, and subtracts more as the anomaly climbs, so
+  **Criticality becomes a scoring drought instead of a spectacle**;
+- a "pass-favoring venue" is a lie — it only hurts running *more*, so a GM building a
+  passing team for one is building for somewhere merely less bad;
+- 32 places collapse into 32 amounts of difficulty.
+
+Two ways out, both now in use.
+
+**PHYSICAL.** Thin air at altitude carries the ball (Colorado's mountain basin, Mexico
+City at 7,300ft), heat thins it the same way (Arizona), a sealed room has no wind at all
+(Las Vegas, San Francisco), a tower has a standing updraft (Seattle), and ground that
+freezes or bakes hard runs fast (Buffalo, Georgia, Philadelphia).
+
+⚠️ **Note the split, because it explains why the boosts skewed to passing:** weather acts
+on the **air**, so it boosts **ball flight** — passing and kicking. The run game is
+helped by **surface**, and surface is mostly the venue's permanent character rather than
+its weather. The only way weather touches surface positively is by drying or freezing it.
+
+**SUBVERSION.** These are not real places and their weather need not obey. A cavern has
+no wind at all, so the best throwing conditions in the league are underground. A Tuesday
+on a loop has been *rehearsed*, so nobody is surprised by anything. A hive is the most
+coordinated thing alive. Boston's Criticality **snaps to spec** instead of degrading —
+every reading exactly nominal, which has never once happened — and that is far more
+unsettling than another penalty.
+
+⚠️ A subversion must be **earned by the setting**, not handed out, or the rule stops
+meaning anything and every venue drifts toward being pleasant.
+
+Landed: **83% penalties** (from 92%), **14 of 32 venues have a genuinely good
+condition**, 11 conditions lift the passing game, and one Criticality condition improves
+things. Severity bands and the centered phase bias both held. Pinned by
+`test_stadium_weather.py`, which now fails if the league goes back to all-penalty.
+
 ## Venue-aware teams (owner, 2026-08-19)
 
 A GM knows their own stadium. Where the venue suppresses the passing game they should
