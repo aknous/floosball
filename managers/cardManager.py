@@ -4,6 +4,7 @@ import random
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from logger_config import get_logger
+from constants import CARD_EFFECTS_PER_PLAYER
 from managers.cardEffects import (buildEffectConfig as _buildEffectConfig, getEffectOutputType,
                                   effectValidPositions as _effectValidPositions,
                                   effectPoolFor as _effectPoolFor,
@@ -543,7 +544,7 @@ class CardManager:
 
     @staticmethod
     def _assignEffects(edition: str, position: int, players: list,
-                       topUp: bool = True) -> list:
+                       topUp: bool = True, perPlayer: int = None) -> list:
         """Plan one (edition, position) bucket: [(player, effectName), ...].
 
         Replaces `random.choice` per template, which both starved and clustered the pool.
@@ -552,28 +553,41 @@ class CardManager:
         effects held 5+ templates. A card could be built, seeded, and still be
         unobtainable — which is what made the pass-TD family need an admin grant.
 
-        Two rules, and the second is the one that makes coverage a guarantee rather than
-        a probability:
+        Three rules:
 
-          1. Effects are DEALT from a shuffled pool, so every one is handed out before
-             any repeats and counts differ by at most one.
-          2. When a bucket has FEWER players than effects, it mints one template per
-             EFFECT and cycles the players, instead of one per player. Dealing alone
-             cannot help here: prismatic RB is 7 players against 27 effects, so 20 must
-             be absent however you shuffle. This is the top-up that closes that gap.
+          1. Effects are DEALT, not rolled — assignment always takes the LEAST-USED
+             effects first, so every one is handed out before any repeats and counts
+             differ by at most one.
+          2. Every player carries `perPlayer` (CARD_EFFECTS_PER_PLAYER) DISTINCT effects
+             in every edition they are eligible for. This is a FLOOR, and it is the whole
+             reason the knob exists: a player in a DENSE bucket (43 eligible WRs against
+             36 holographic effects) used to get exactly one card and no more, while a
+             player in a THIN one (13 prismatic QBs against 26 effects) already collected
+             ~2 from the cycling below. One number now sets the floor for both.
+          3. When a bucket still has fewer PLAYER SLOTS than EFFECTS, it tops up to one
+             template per EFFECT and cycles the players. Dealing alone cannot help there —
+             7 players holding 1 effect each cannot carry 27 effects however you shuffle —
+             so this is what makes coverage a guarantee rather than a probability.
 
-        So a bucket mints max(len(players), len(effects)) templates, and every effect is
-        minted wherever an eligible player exists.
+        So a bucket mints max(len(players) * perPlayer, len(effects)) templates, and every
+        effect is minted wherever an eligible player exists.
 
-        `topUp=False` keeps rule 1 and drops rule 2, minting exactly one template per
-        player. That is what the ROOKIE path wants: it adds to a season pool whose
-        coverage is already guaranteed, so topping up there would mint the entire effect
-        set for a handful of rookies.
+        ⚠️ `perPlayer` is capped at len(pool) — a player cannot hold more DISTINCT effects
+        than the position/edition has. At perPlayer=1 this reproduces the original rule
+        exactly, so the knob is inert until it is raised.
 
-        ⚠️ It cannot conjure a player. Nothing has ever rated 90 at QB (max 87) or K (max
-        88), so with diamond's threshold at 90 those two buckets are empty and their
-        effects stay unmintable — a rating-distribution fact, not a minting one. Owner
-        call 2026-08-07: left as is.
+        ⚠️ Templates are minted ONCE PER SEASON and never re-minted, so a change here
+        lands at the next season boundary, not on deploy.
+
+        `topUp=False` drops rule 3 and keeps the rest. That is what the ROOKIE path wants:
+        it adds to a season pool whose coverage is already guaranteed, so topping up there
+        would mint the entire effect set for a handful of rookies.
+
+        ⚠️ It cannot conjure a player. A bucket with nobody over the edition's rating bar
+        mints nothing, and its effects stay unmintable that season — a rating-distribution
+        fact, not a minting one. Owner call 2026-08-07: left as is. (This used to read
+        "nothing has ever rated 90 at QB or K, so diamond is RB/WR/TE-only"; prod season 2
+        has a 92 at both, so those buckets do fill now.)
         """
         import random as _r
         if edition == 'base' or not players:
@@ -582,20 +596,31 @@ class CardManager:
         if not pool:
             return [(p, None) for p in players]
 
-        effects = pool[:]
-        _r.shuffle(effects)
-        if not topUp and len(effects) > len(players):
-            effects = effects[:len(players)]
-        if len(players) > len(effects):
-            # More players than effects: keep dealing fresh shuffled passes so the extra
-            # templates spread evenly rather than piling onto whatever won the first roll.
-            while len(effects) < len(players):
-                nxt = pool[:]
-                _r.shuffle(nxt)
-                effects.extend(nxt)
-            effects = effects[:len(players)]
-        # Otherwise every effect gets its own template and players cycle to carry them.
-        return [(players[i % len(players)], eff) for i, eff in enumerate(effects)]
+        k = CARD_EFFECTS_PER_PLAYER if perPlayer is None else perPlayer
+        k = max(1, min(int(k), len(pool)))
+        total = len(players) * k
+        if topUp:
+            total = max(total, len(pool))
+
+        # Shuffle the players, so whoever carries the top-up remainder is not always
+        # whoever the roster happened to list first.
+        order = players[:]
+        _r.shuffle(order)
+        counts = [total // len(order)] * len(order)
+        for i in range(total % len(order)):
+            counts[i] += 1
+        counts = [min(c, len(pool)) for c in counts]
+
+        # Least-used first: while any effect is still unminted it outranks every minted
+        # one, which is what carries the coverage guarantee. Random breaks ties so two
+        # players with the same view of the pool don't draw the same set.
+        usage = {e: 0 for e in pool}
+        plan = []
+        for player, n in zip(order, counts):
+            for eff in sorted(pool, key=lambda e: (usage[e], _r.random()))[:n]:
+                usage[eff] += 1
+                plan.append((player, eff))
+        return plan
 
     def generateSeasonTemplates(
         self, session, seasonNumber: int,

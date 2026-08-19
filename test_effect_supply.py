@@ -52,11 +52,14 @@ for _t in range(32):
     for pos, n in ((1, 1), (2, 1), (3, 2), (4, 1), (5, 1)):
         for _ in range(n):
             _id += 1
-            # QB and K genuinely top out below the diamond bar in this sim.
-            ceiling = 87 if pos == 1 else (88 if pos == 5 else 96)
+            # Ceilings mirror the live rating curve. QB and K used to top out below the
+            # diamond bar (87 / 88), which is why the docs called those buckets
+            # permanently unmintable; prod season 2 has a 92 at both, so they fill now.
+            ceiling = 92 if pos in (1, 5) else 96
             LEAGUE.append(FakePlayer(_id, random.randint(62, ceiling), pos))
 
 UNIVERSE = {e for e in ce.EFFECT_EDITION_TIER if ce.effectValidPositions(e)}
+from constants import CARD_EFFECTS_PER_PLAYER as _K0
 
 
 def mint(topUp=True):
@@ -107,26 +110,84 @@ rbPlayers = bucketsFor(LEAGUE).get(('prismatic', 2), [])
 rbEffects = ce.effectPoolFor('prismatic', 2)
 if rbPlayers and len(rbPlayers) < len(rbEffects):
     withTop = {e for _p, e in CardManager._assignEffects('prismatic', 2, rbPlayers)}
-    without = {e for _p, e in CardManager._assignEffects('prismatic', 2, rbPlayers, topUp=False)}
     expect(f"top-up covers a thin bucket ({len(rbPlayers)} players, {len(rbEffects)} effects)",
            withTop == set(rbEffects))
-    expect("without the top-up that bucket is mostly empty", len(without) <= len(rbPlayers))
+    # The top-up's NECESSITY is a per-player-count property: at K=1 this bucket is
+    # starved without it. At a higher K the floor alone can already cover a bucket this
+    # wide, so asserting the old shape here would just be asserting that K is 1.
+    one = {e for _p, e in CardManager._assignEffects('prismatic', 2, rbPlayers,
+                                                     topUp=False, perPlayer=1)}
+    expect("at one effect per player the top-up is what covers it",
+           len(one) <= len(rbPlayers))
 
-# ── a bucket mints max(players, effects) ───────────────────────────────────
+# Where the top-up still binds at the shipped K: a bucket whose pool is wider than
+# players x K. Built explicitly rather than fished out of LEAGUE — prod season 2 has
+# exactly ONE diamond-eligible QB against 13 effects, and a random league is not
+# reliably that thin at the top.
+lone = [FakePlayer(9001, 95, 1)]
+lonePool = ce.effectPoolFor('diamond', 1)
+loneCovered = {e for _p, e in CardManager._assignEffects('diamond', 1, lone)}
+expect(f"the top-up still covers a 1-player bucket ({len(lonePool)} effects)",
+       loneCovered == set(lonePool) and len(lonePool) > _K0)
+
+# ── a bucket mints max(players * K, effects) ───────────────────────────────
+_K = _K0
 sizes_ok = True
 for (ed, pos), members in bucketsFor(LEAGUE).items():
     n = len(CardManager._assignEffects(ed, pos, members))
-    want = len(members) if ed == 'base' else max(len(members), len(ce.effectPoolFor(ed, pos)) or len(members))
+    pool = len(ce.effectPoolFor(ed, pos))
+    want = len(members) if ed == 'base' or not pool else max(len(members) * min(_K, pool), pool)
     if n != want: sizes_ok = False
-expect("each bucket mints max(players, effects) templates", sizes_ok)
+expect(f"each bucket mints max(players x {_K}, effects) templates", sizes_ok)
+
+# ── the per-player floor: K distinct effects in every eligible edition ─────
+# The knob exists for the DENSE buckets. A player there used to get exactly one card
+# however many effects the position had; the thin buckets were already over-served by
+# the top-up, so measuring only those would show nothing.
+floor_ok, dedup_ok, dense = True, True, 0
+for (ed, pos), members in bucketsFor(LEAGUE).items():
+    if ed == 'base':
+        continue
+    pool = ce.effectPoolFor(ed, pos)
+    if not pool:
+        continue
+    held = collections.defaultdict(list)
+    for pl, eff in CardManager._assignEffects(ed, pos, members):
+        held[pl.id].append(eff)
+    want = min(_K, len(pool))
+    if any(len(v) < want for v in held.values()): floor_ok = False
+    if any(len(v) != len(set(v)) for v in held.values()): dedup_ok = False
+    if len(members) >= len(pool): dense += 1
+expect(f"every player carries at least {_K} effects per eligible edition", floor_ok)
+expect("no player ever holds the same effect twice", dedup_ok)
+expect(f"the dense buckets this knob is for are present ({dense} of them)", dense > 0)
+
+# ── K=1 reproduces the original rule exactly, so the knob is inert at 1 ────
+inert_ok = True
+for (ed, pos), members in bucketsFor(LEAGUE).items():
+    if ed == 'base':
+        continue
+    pool = len(ce.effectPoolFor(ed, pos))
+    if not pool:
+        continue
+    n = len(CardManager._assignEffects(ed, pos, members, perPlayer=1))
+    if n != max(len(members), pool): inert_ok = False
+expect("perPlayer=1 still mints max(players, effects)", inert_ok)
 
 # ── no effect hogs the pool ────────────────────────────────────────────────
-expect(f"no effect dominates (max {max(counts.values())} templates)", max(counts.values()) <= 14)
+# Scales with K by construction: 3x the templates puts 3x on every effect. What this
+# guards is DISPROPORTION, so the bar moves with the knob rather than being re-pinned.
+expect(f"no effect dominates (max {max(counts.values())} templates, bar {14 * _K})",
+       max(counts.values()) <= 14 * _K)
 
-# ── the rookie path adds one card per player, not the whole effect set ─────
-rookieTotal, _c, _p = mint(topUp=False)
-expect(f"rookie path stays one-per-player ({rookieTotal} vs {total} with top-up)",
-       rookieTotal < total)
+# ── the rookie path gives a handful of rookies K cards each, not the set ───
+# Must be measured on a ROOKIE-SIZED group. Run over the whole league it now reads
+# identical, because every full bucket already clears its own floor and the top-up
+# never engages — which is the point of topUp=False, not a failure of it.
+rookies = [p for p in LEAGUE if p.position == 3 and p.playerRating >= 75][:4]
+rookiePlan = CardManager._assignEffects('holographic', 3, rookies, topUp=False)
+expect(f"rookie path mints {_K} per rookie, not the {len(ce.effectPoolFor('holographic', 3))}-effect set",
+       len(rookiePlan) == len(rookies) * _K)
 
 # ── the pass-TD family, the cards that surfaced all this ───────────────────
 for eff in ('bombardier', 'salvo', 'barrage'):

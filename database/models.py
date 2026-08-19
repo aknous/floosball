@@ -1533,7 +1533,13 @@ class SimulationState(Base):
 
 
 class CardTemplate(Base):
-    """Card template table - blueprint for every card (one per player/edition/season)."""
+    """Card template table - blueprint for every card.
+
+    NOT one per player/edition/season, despite what this said for a long time: a bucket
+    mints max(players * CARD_EFFECTS_PER_PLAYER, effects), so a player holds several
+    per edition, each with a different effect. There is deliberately no uniqueness
+    constraint here.
+    """
     __tablename__ = "card_templates"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
