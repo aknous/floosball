@@ -280,11 +280,36 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
         myCeiling = ceiling(team)
 
         # Everyone else at their best, this club at its worst.
-        worstSeeds = seedLeague([_projected(t, t is not team, totalGames)
-                                 for t in teams])['seeds']
+        worstShims = [_projected(t, t is not team, totalGames) for t in teams]
+        worstSeeds = seedLeague(worstShims)['seeds']
         # This club at its best, everyone else at their worst.
-        bestSeeds = seedLeague([_projected(t, t is team, totalGames)
-                                for t in teams])['seeds']
+        bestShims = [_projected(t, t is team, totalGames) for t in teams]
+        bestSeeds = seedLeague(bestShims)['seeds']
+
+        # ⚠️ A PROJECTED TIE PROVES NOTHING, and this is what put a wildcard badge on a
+        # club that then missed the playoffs. `_projected` advances wins and losses only:
+        # `divWins` / `lgWins` ride through UNCHANGED, so when the worst case lands on a
+        # TIE, `orderTeams` breaks it on TODAY's division and league records rather than
+        # the ones the finished season will hold. The club won the projected tiebreak,
+        # was shown as clinched, lost in week 28 and lost the real tiebreak with it.
+        #
+        # Reported exactly there: the Broads shown as having clinched a wildcard after
+        # week 27 and out of the field after week 28. A badge that has to be taken away
+        # is the one failure this whole function exists to avoid.
+        #
+        # So a berth has to survive every tie going AGAINST this club: seeded in the
+        # worst case, and nobody left outside the field level with it on points.
+        myWorst = next((sh for sh in worstShims if sh.id == tid), None)
+        tiedFromOutside = myWorst is not None and any(
+            sh.id != tid and worstSeeds.get(sh.id) is None
+            and _points(sh) >= _points(myWorst) for sh in worstShims)
+
+        # The mirror, so elimination is not claimed on a tie either: a club level with
+        # someone inside the field at ITS best could still win that tiebreak.
+        myBest = next((sh for sh in bestShims if sh.id == tid), None)
+        tiedFromInside = myBest is not None and any(
+            sh.id != tid and bestSeeds.get(sh.id) is not None
+            and _points(sh) <= _points(myBest) for sh in bestShims)
 
         myDivision = divisionOf.get(tid)
         divisionRivals = [t for t in divisions.get(myDivision, [])
@@ -359,14 +384,20 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
         seededAtWorst = worstSeeds.get(tid)
         seededAtBest = bestSeeds.get(tid)
 
+        # ⚠️ A SECURED DIVISION TITLE IS A BERTH WHATEVER THE POINTS DO — the seed is
+        # guaranteed, so it does not depend on winning a tie for a wildcard place and the
+        # tie test above must not withhold it. `divisionClinched` has already proved the
+        # title survives every tie, so leaning on it here is not circular.
+        safeOnPoints = seededAtWorst is not None and not tiedFromOutside
+
         out[tid] = {
-            # A guaranteed division seed is already inside the worst-case seeding,
-            # so this needs no separate auto-clinch term.
-            'clinchedPlayoffs': seededAtWorst is not None,
+            'clinchedPlayoffs': bool(divisionClinched or safeOnPoints),
             'clinchedDivision': divisionClinched,
-            # The top seed has to survive the worst case as seed 1 specifically.
-            'clinchedTopSeed': seededAtWorst is not None and seededAtWorst[0] == 1,
-            'eliminated': seededAtBest is None,
+            # The top seed has to survive the worst case as seed 1 specifically, and a
+            # tie for it is no more decided than a tie for the last berth.
+            'clinchedTopSeed': (seededAtWorst is not None and seededAtWorst[0] == 1
+                                and not tiedFromOutside),
+            'eliminated': seededAtBest is None and not tiedFromInside,
         }
     return out
 
