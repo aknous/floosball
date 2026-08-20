@@ -247,8 +247,31 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
         # A title is won when no rival can reach this club, and lost once one is
         # beyond reach. Both are within-division questions, so they stay a points
         # comparison rather than a re-seed.
+        #
+        # ⚠️ STRICTLY LESS THAN. `<=` says a rival who can draw LEVEL cannot take the
+        # title, and that is false: a level finish goes to the tiebreaker chain, which
+        # the leader can lose. Reported from a live board at week 27 — the Sand Dollars
+        # were shown as division champions one game up on the club they still had to
+        # PLAY in week 28, where a loss ties them and hands the title to a tiebreak.
+        #
+        # ⚠️ It also produced a self-contradicting row. `clinchedPlayoffs` runs the real
+        # worst-case seeding, which honours the division rule; a genuine division winner
+        # is therefore always seeded and always reads as clinched too. This test was the
+        # only one using a different, looser rule, so it was the only way the board could
+        # claim a division title and no playoff berth at the same time.
+        #
+        # ⚠️ AND THIS IS WHY IT DOES NOT RE-SEED TO BREAK THE TIE. The obvious upgrade —
+        # run the worst case through `seedLeague` and ask whether this club still leads
+        # its division after the tiebreakers — would clinch EARLIER, and would be wrong.
+        # `_projected` advances wins and losses only: `divWins` / `divLosses` ride through
+        # UNCHANGED, so a projected tie would be broken on TODAY's division record while
+        # the games that decide it are still unplayed. Reported exactly there — the Rocks
+        # shown as champions when a week-28 loss ties them and the Strangers take it on
+        # division record. Refusing to clinch while a tie is reachable is what "taking the
+        # tiebreaker into account" has to mean until the projection can move those columns
+        # too. Late and right beats early and retracted.
         divisionClinched = bool(myDivision) and all(
-            ceiling(t) <= floor for t in divisionRivals)
+            ceiling(t) < floor for t in divisionRivals)
 
         seededAtWorst = worstSeeds.get(tid)
         seededAtBest = bestSeeds.get(tid)

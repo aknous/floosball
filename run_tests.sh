@@ -26,7 +26,12 @@ PATTERN="${1:-}"
 pass=0; fail=0; failed=""
 for f in test_*.py; do
   [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
-  if grep -q "__main__" "$f"; then
+  # ⚠️ `__main__` ALONE IS THE WRONG SIGNAL. Style 2 files run their assertions at
+  # module level and call sys.exit() there WITHOUT a __main__ guard — handing one of
+  # those to pytest aborts collection with INTERNALERROR: SystemExit, which reads as a
+  # failure and is really the runner's mistake. Anything that exits at import time must
+  # be run directly.
+  if grep -qE "__main__|^[[:space:]]*sys\.exit\(" "$f"; then
     # styles 1 and 2 — direct
     if $PY "$f" >/tmp/_floo_test_out 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); failed="$failed $f"; fi
   else
