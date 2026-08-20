@@ -299,15 +299,30 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
         #
         # So a berth has to survive every tie going AGAINST this club: seeded in the
         # worst case, and nobody left outside the field level with it on points.
+        # ⚠️ ONCE THE SEASON IS OVER THE TIE GUARDS BELOW ARE WRONG. They exist because a
+        # PROJECTED tie is unresolved — `_projected` cannot move div/league records, so a
+        # tie broken on today's numbers is not the tie the finished season will hold. With
+        # every game played there is no projection: the worst case IS the result, the
+        # tiebreakers have run on final numbers, and the field is settled.
+        #
+        # Reported from a finished board — the 7 and 8 seeds shown as NOT having clinched,
+        # tied on record and on league record with the club in 9th. They were in; the
+        # guard was still asking whether a tie could take it away when there was nothing
+        # left to play.
+        #
+        # This is the same correction the division badge already got a commit earlier. It
+        # needed making twice because the berth and the title are computed separately.
+        seasonComplete = bool(teams) and all(_played(t) >= totalGames for t in teams)
+
         myWorst = next((sh for sh in worstShims if sh.id == tid), None)
-        tiedFromOutside = myWorst is not None and any(
+        tiedFromOutside = (not seasonComplete) and myWorst is not None and any(
             sh.id != tid and worstSeeds.get(sh.id) is None
             and _points(sh) >= _points(myWorst) for sh in worstShims)
 
         # The mirror, so elimination is not claimed on a tie either: a club level with
         # someone inside the field at ITS best could still win that tiebreak.
         myBest = next((sh for sh in bestShims if sh.id == tid), None)
-        tiedFromInside = myBest is not None and any(
+        tiedFromInside = (not seasonComplete) and myBest is not None and any(
             sh.id != tid and bestSeeds.get(sh.id) is not None
             and _points(sh) <= _points(myBest) for sh in bestShims)
 
