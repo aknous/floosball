@@ -5310,6 +5310,46 @@ class SeasonManager:
             h2h = []
         return orderTeams(list(teams), h2h)
 
+    def _frozenSeedMap(self) -> dict:
+        """{teamId: seed} from the seeds frozen when the field was built.
+
+        ⚠️ THE BRACKET MUST HONOUR THESE, and for a long time it did not. The field is
+        built division-first — the four division winners take seeds 1-4 whatever their
+        records, then the best four remaining take 5-8 — and `_freezePlayoffSeeds` stamps
+        exactly that. The round loop then re-sorted the survivors by RECORD every round,
+        which sorted those winners straight back out of the top seeds, so a division title
+        was a label on the standings board and bought nothing in the bracket.
+
+        Read from the frozen blob rather than from the in-memory field, because that is
+        the copy that survives a restart mid-postseason — the resume path rebuilds
+        `playoffTeams` from a survivor snapshot that carries no seeds at all.
+        """
+        try:
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            frozen = PlayoffBracketRepository(self.db_session).getFrozenSeeds(season) or {}
+            out = {}
+            for _conf, entries in (frozen.get('conferences') or {}).items():
+                for entry in entries or []:
+                    tid, seed = entry.get('teamId'), entry.get('seed')
+                    if tid is not None and seed is not None:
+                        out[tid] = seed
+            return out
+        except Exception:
+            return {}
+
+    def _orderByFrozenSeed(self, teams):
+        """Survivors in SEED order — the NFL rule the design describes.
+
+        ⚠️ Falls back to record order only when a seed is missing for someone, which
+        means the freeze never happened. Sorting a partially-seeded field by seed would
+        be worse than sorting all of it by record.
+        """
+        seedMap = self._frozenSeedMap()
+        if not seedMap or any(getattr(t, 'id', None) not in seedMap for t in teams):
+            return self._seedTeams(teams)
+        return sorted(teams, key=lambda t: seedMap[t.id])
+
     async def _simulatePlayoffRounds(self, resumeFromRound: int = 1, restoredState: Optional[dict] = None) -> None:
         """Simulate all playoff rounds.
 
@@ -5565,7 +5605,9 @@ class SeasonManager:
                             from managers.teamManager import logPressureDiag
                             logPressureDiag(team, f"playoff_r{currentRound}", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
-                    teamsInRound[:] = self._seedTeams(teamsInRound)
+                    # ⚠️ BY FROZEN SEED, NOT BY RECORD. Re-sorting on record here is what
+                    # discarded the division-first seeding one screen after it was built.
+                    teamsInRound[:] = self._orderByFrozenSeed(teamsInRound)
 
                     hiSeed = 0
                     lowSeed = len(teamsInRound) - 1

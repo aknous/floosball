@@ -68,9 +68,24 @@ def normalizeByes(conferences: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
 
 
 def _seedSort(entries: List[Dict]) -> List[Dict]:
-    """Engine's ordering: best record first (winPct, then scoreDiff), with a
-    stable teamId tiebreak so projection never diverges from the sim on ties."""
-    return sorted(entries, key=lambda e: (e["winPct"], e["scoreDiff"], -e["teamId"]), reverse=True)
+    """Engine's ordering: by FROZEN SEED, lowest first.
+
+    ⚠️ THIS SORTED BY RECORD (winPct, then scoreDiff) and that was the bug. The field is
+    built division-first — four division winners take seeds 1-4 whatever their records,
+    then the best four remaining take 5-8 — and sorting survivors on record every round
+    put those winners straight back out of the top seeds, so a division title bought
+    nothing in the bracket.
+
+    ⚠️ The seed already encodes the record: seeds 1-4 are ordered by win% among the
+    division winners and 5-8 among the wildcards, so sorting on it keeps every tiebreak
+    that produced it and adds the division rule the record sort could not see.
+
+    ⚠️ Changing this alone is not enough and was warned about in CLAUDE.md: the engine's
+    round loop and `utils/bracketProjection.ts` sort the same field, and fixing one of
+    the three re-creates exactly the projection-vs-sim divergence this mirror exists to
+    prevent. All three move together.
+    """
+    return sorted(entries, key=lambda e: (e.get("seed") or 99, e["teamId"]))
 
 
 def pairTopVsBottom(survivors: List[Dict]) -> List[Tuple[Dict, Dict]]:
