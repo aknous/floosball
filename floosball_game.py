@@ -10936,6 +10936,20 @@ class Game:
                 eventDict['teamId'] = getattr(team, 'id', None)
                 eventDict['teamAbbr'] = getattr(team, 'abbr', None)
                 eventDict['won'] = (polarity == 'positive')
+                # ⚠️ STAMP THE WALL CLOCK, exactly as `_buildSidelineCutaway` does. The
+                # Bleachers rail merges cutaways with fan posts into ONE timeline sorted
+                # newest-first, and it deliberately sinks undated entries to the bottom
+                # (`if (Number.isNaN(ta)) return 1` in GameFeedComposer) because guessing
+                # a time would float an old line above a shout from a second ago.
+                #
+                # These were built here rather than through _buildSidelineCutaway, so they
+                # never got stamped — and a line said at the FINAL WHISTLE therefore sorted
+                # below every in-game cutaway and every shout, i.e. it read as the oldest
+                # thing in the game and was invisible at the top of the rail where a reader
+                # looks. Reported as the postgame lines "still not coming through": they
+                # were arriving, generated and persisted correctly, and buried.
+                from datetime import datetime as _pgDt
+                eventDict['createdAt'] = _pgDt.utcnow().isoformat() + 'Z'
                 # Use cutaway-shaped feed entry so the existing renderer picks
                 # it up and shows the team avatar + accent border.
                 self.gameFeed.insert(0, {'play': {
