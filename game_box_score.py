@@ -161,15 +161,40 @@ def _postgamePlays(gameRow):
         quotes = json.loads(raw) or []
     except Exception:
         return []
-    return [{
-        'isSidelineCutaway': True,
-        'sidelineCutaway': q,
-        # These all happened at the whistle; the rail sorts on the stamped time inside
-        # the cutaway, so the ordering here is only a stable tiebreak.
-        'playNumber': 0.9,
-        'quarter': None,
-        'timeRemaining': '0:00',
-    } for q in quotes if isinstance(q, dict)]
+    # ⚠️ FALL BACK TO THE GAME'S OWN TIME when a stored quote has no `createdAt`.
+    # The Bleachers rail merges cutaways with fan posts into one newest-first timeline and
+    # deliberately SINKS undated entries to the bottom, so a line said at the final whistle
+    # read as the oldest thing in the game and was invisible at the top of the rail. The
+    # sim now stamps these at build time, but every quote already stored predates that, and
+    # those games are exactly the ones a fan scrolls back to.
+    #
+    # `game_date` is when the game was played and is the honest answer; `created_at` is the
+    # row's own stamp and is the fallback. Either puts these at the right end of the
+    # timeline, which is all the rail needs.
+    when = getattr(gameRow, 'game_date', None) or getattr(gameRow, 'created_at', None)
+    stamp = None
+    if when is not None:
+        try:
+            stamp = when.isoformat() + ('Z' if when.tzinfo is None else '')
+        except Exception:
+            stamp = None
+
+    out = []
+    for q in quotes:
+        if not isinstance(q, dict):
+            continue
+        if not q.get('createdAt') and stamp:
+            q = {**q, 'createdAt': stamp}
+        out.append({
+            'isSidelineCutaway': True,
+            'sidelineCutaway': q,
+            # These all happened at the whistle; the rail sorts on the stamped time inside
+            # the cutaway, so the ordering here is only a stable tiebreak.
+            'playNumber': 0.9,
+            'quarter': None,
+            'timeRemaining': '0:00',
+        })
+    return out
 
 
 def buildFinishedGame(session, gameId: int) -> Optional[Dict[str, Any]]:
