@@ -54,8 +54,16 @@ def _league(records, divisions=None, size=16):
 # ------------------------------------------------------------- playoff berth
 
 def test_a_club_nobody_can_catch_has_clinched():
-    """14-0 with 14 to play: the 8 berths cannot all be taken by clubs above it."""
-    teams = _league([(14, 0)] + [(0, 14)] * 15)
+    """Uncatchable means no rival can even DRAW LEVEL, not merely that few sit above it.
+
+    ⚠️ This was 14-0 against 0-14 with fourteen games left, where every rival winning out
+    finishes 14-14 and TIES — all eight berths then go to tiebreakers and this club can
+    genuinely miss. That is the third fixture in this suite to treat a reachable tie as a
+    settled lead, and the live version of the same mistake put a wildcard badge on a club
+    that was out of the playoffs a week later. Six games left, floor of 20 against a
+    ceiling of 6.
+    """
+    teams = _league([(20, 2)] + [(0, 22)] * 15)
     status = clinchStatus(teams, totalGames=28)
     assert status[0]['clinchedPlayoffs'] is True
     print("PASS an uncatchable club has clinched a berth")
