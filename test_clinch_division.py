@@ -53,7 +53,10 @@ def league(*rows):
                 w, l = row[0], row[1]
                 div = row[2] if len(row) > 2 else (0, 0)
             else:
-                w, l, div = 8, 19, (0, 0)      # filler, clearly out of the race
+                # ⚠️ 28 played, not 27: a division is only FINISHED when every one of
+                # its members has played out, so a filler short of the full slate
+                # keeps the whole division mid-season and hides the season-end path.
+                w, l, div = 8, 20, (0, 0)      # filler, clearly out of the race
             teams.append(T(tid, f'Team{tid}', w, l, division=name, div=div))
     return teams
 
@@ -127,10 +130,48 @@ expect("with every game played, the leader has won the division",
 # ── nothing is clinched on opening day ──
 teams = league((1, 0), (0, 1))
 status = clinchStatus(teams, TOTAL)
+# ⚠️ Scoped to the division under test. The filler clubs play a FULL slate so the
+# season-end path can be exercised, which means their own divisions are legitimately
+# finished and legitimately have champions — asserting across the whole league would be
+# asserting about them.
+north = [t for t in teams if t.division == 'North']
 expect("a one-game lead in week 1 clinches nothing",
-       not any(v['clinchedDivision'] for v in status.values()))
+       not any(status[t.id]['clinchedDivision'] for t in north))
+
+# ── the season is over: nothing to project, so the real chain decides ──────
+# ⚠️ Owner's point: two clubs level on record AND on the first tiebreaker can only be
+# separated by score differential, and that cannot be known until the season ends. It
+# CAN be known then — and without this the division finished with NO champion on the
+# board while the seeding beneath it had already picked one and shown that club a berth.
+def finished(divA, divB, diffA, diffB):
+    teams = league((20, 8, divA), (20, 8, divB))
+    teams[0].seasonTeamStats['scoreDiff'] = diffA
+    teams[1].seasonTeamStats['scoreDiff'] = diffB
+    return teams, clinchStatus(teams, TOTAL)
+
+teams, status = finished((6, 6), (6, 6), 55, 10)
+expect("with the season over and records level, score differential decides it",
+       status[teams[0].id]['clinchedDivision'] is True
+       and status[teams[1].id]['clinchedDivision'] is False)
+
+teams, status = finished((6, 6), (6, 6), 10, 55)
+expect("and it decides it the other way when the differential is the other way",
+       status[teams[0].id]['clinchedDivision'] is False
+       and status[teams[1].id]['clinchedDivision'] is True)
+
+teams, status = finished((6, 6), (6, 6), 30, 30)
+champs = [t.name for t in teams[:2] if status[t.id]['clinchedDivision']]
+expect(f"a finished division always has exactly one champion ({champs})", len(champs) == 1)
+
+# ⚠️ And it must still agree with the berth, which is the invariant the whole report
+# turned on.
+for t in teams[:2]:
+    if status[t.id]['clinchedDivision']:
+        expect("the finished champion also holds a berth", status[t.id]['clinchedPlayoffs'])
 
 print()
 if fails:
     print(f"{len(fails)} FAILED"); sys.exit(1)
 print("PASS — a division is only won when no rival can even draw level.")
+
+

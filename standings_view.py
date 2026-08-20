@@ -221,6 +221,7 @@ def _divisionTiebreakSecured(team, rival, totalGames: int) -> bool:
     myLeft = max(0, totalGames - _played(team))
     rivalLeft = max(0, totalGames - _played(rival))
 
+
     # This club's floor: every remaining game a divisional LOSS.
     mine = _divisionRate(
         (myStats.get('divWins', 0) or 0),
@@ -329,7 +330,31 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
                 return False
             return _divisionTiebreakSecured(team, t, totalGames)
 
-        divisionClinched = bool(myDivision) and all(rivalBeaten(t) for t in divisionRivals)
+        # ⚠️ A FINISHED DIVISION IS DECIDED BY ITS ACTUAL ORDER, not by projection.
+        # With every game played there is no floor and no ceiling, just a result, and the
+        # rungs below division record settle it — score differential, then head-to-head
+        # point diff, then points for and against. None of those can be bounded, which is
+        # why the projection stops at division record; at season end it does not have to.
+        #
+        # ⚠️ It must be ONE ordering of the whole division, never a pairwise test. Two
+        # clubs tied all the way down the chain each win their own pairwise comparison,
+        # because the sort is stable and each sees itself first — so BOTH were crowned.
+        # Ordering the division once gives exactly one leader by construction.
+        #
+        # Without any of this, two clubs finishing level on record and division record
+        # left the division with NO champion on the board while the seeding beneath had
+        # already picked one and shown that club a berth.
+        divisionMembers = divisions.get(myDivision, []) if myDivision else []
+        seasonOver = bool(divisionMembers) and all(
+            _played(t) >= totalGames for t in divisionMembers)
+        if seasonOver:
+            try:
+                from seeding import orderTeams
+                divisionClinched = orderTeams(list(divisionMembers))[0] is team
+            except Exception:
+                divisionClinched = all(rivalBeaten(t) for t in divisionRivals)
+        else:
+            divisionClinched = bool(myDivision) and all(rivalBeaten(t) for t in divisionRivals)
 
         seededAtWorst = worstSeeds.get(tid)
         seededAtBest = bestSeeds.get(tid)
