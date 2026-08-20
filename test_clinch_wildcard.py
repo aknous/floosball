@@ -121,6 +121,34 @@ for recs in [[(20, 7), (19, 8), (10, 17), (9, 18)] + [(15, 12)] * 12,
             if status[t.id]['clinchedPlayoffs'] and status[t.id]['eliminated']]
     expect(f"nothing is both clinched and eliminated ({both})", not both)
 
+# ── the season is over: the field is settled, ties and all ─────────────────
+# ⚠️ The tie guard above exists because a PROJECTED tie is unresolved. Once every game
+# is played there is no projection — the tiebreakers have run on final numbers and the
+# field IS the field. Reported from a finished board: the 7 and 8 seeds shown as not
+# having clinched, tied on record AND on league record with the club in 9th. They were
+# in. The same correction the division badge needed, which had to be made twice because
+# the berth and the title are computed separately.
+records = []
+for _ in range(4):
+    records += [(20, 8, (8, 4), (14, 6)), (18, 10, (7, 5), (13, 7)),
+                (14, 14, (6, 6), (10, 10)), (14, 14, (6, 6), (10, 10))]
+teams = build(records)
+status = clinchStatus(teams, TOTAL)
+seeded = [t for t in teams if status[t.id]['clinchedPlayoffs']]
+elim = [t for t in teams if status[t.id]['eliminated']]
+expect(f"a finished season has exactly a full field clinched ({len(seeded)})", len(seeded) == 8)
+expect(f"and everyone else eliminated ({len(elim)})", len(elim) == 8)
+expect("nobody is left in limbo once the season is over",
+       len(seeded) + len(elim) == len(teams))
+
+# The clubs level on record AND league record are the reported case — whichever way the
+# tiebreak fell, they must be on one side of the line, not neither.
+levels = [t for t in teams if t.seasonTeamStats['wins'] == 14]
+undecided = [t.name for t in levels
+             if not status[t.id]['clinchedPlayoffs'] and not status[t.id]['eliminated']]
+expect(f"clubs tied on record and league record are still resolved ({undecided})",
+       not undecided)
+
 print()
 if fails:
     print(f"{len(fails)} FAILED"); sys.exit(1)
