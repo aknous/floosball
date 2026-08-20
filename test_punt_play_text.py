@@ -75,8 +75,30 @@ def testNoPinnedSuffix():
 
 
 def testShankReadsAsAShank():
+    """⚠️ A SHANK DESCRIBES THE KICK, NOT THE WHOLE PLAY.
+
+    This test used to assert the opposite -- that a shank swallowed everything the
+    receiving team then did -- because `_puntPlayText` returned early on a shank, above
+    every other branch. It shipped, and was reported from a live game as a punt marked
+    `Fumble` whose text read only "Archer Littlebreath shanks the punt, 29 yards": the
+    returner had muffed it and the KICKING team had recovered, and none of that was said.
+    The play label was the only evidence a turnover had happened.
+    """
     t = _text(gross=17, result='shank', action='return', landing=48, ret=6)
-    assert t == 'Dane Fulcher shanks the punt, 17 yards'
+    assert t == 'Dane Fulcher shanks the punt, 17 yards, Cass Whitlow returns it 6 yards'
+
+
+def testShankedPuntStillReportsAMuffedTurnover():
+    """The exact reported case: shanked, muffed, recovered by the kicking team."""
+    t = _text(gross=29, result='shank', action='muff', landing=40, ret=0,
+              muffBy='kicking')
+    assert 'shanks the punt, 29 yards' in t
+    assert 'muffs it' in t, 'the turnover must be in the text, not only in the play label'
+
+
+def testShankedPuntStillReportsATouchback():
+    t = _text(gross=60, result='shank', action='return', landing=0, ret=0, tb=True)
+    assert t == 'Dane Fulcher shanks the punt, 60 yards, touchback'
 
 
 def testMuffNamesWhoRecovered():

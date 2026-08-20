@@ -190,6 +190,51 @@ def regularSeasonWeeks(schedule) -> int:
     return weeks
 
 
+def _divisionRate(wins: float, losses: float, ties: float) -> float:
+    """Win rate inside the division. Mirrors `seeding._divisionWinPerc`, which is what
+    actually breaks a division tie, so the two cannot disagree."""
+    played = wins + losses + ties
+    if not played:
+        return 0.0
+    return round((wins + 0.5 * ties) / played, 4)
+
+
+def _divisionTiebreakSecured(team, rival, totalGames: int) -> bool:
+    """Would `team` beat `rival` on DIVISION RECORD no matter how the rest plays out?
+
+    The first tiebreaker after win% when both clubs share a division, and the only rung
+    of the chain that can be bounded at all — so it is the only rung a clinch can be
+    proved on. Below it sits SCORE DIFFERENTIAL, which has no ceiling (a club can win by
+    one or by forty), and nothing after that is projectable either. A club that cannot
+    settle it here is genuinely undecided, not merely unproven.
+
+    ⚠️ The bound is TOTAL remaining games, not remaining DIVISION games. Fewer of a
+    club's remaining fixtures are divisional than that, so this over-states how far the
+    rival can climb and how far this club can fall — deliberately, because it needs no
+    schedule lookup and no assumption about the season's shape. The 28-week format is
+    12 division games out of 28 today, and that split has already moved once (it was
+    14/8/6 at 24 clubs); a clinch rule must not quietly depend on it.
+    """
+    myStats = getattr(team, 'seasonTeamStats', {}) or {}
+    rivalStats = getattr(rival, 'seasonTeamStats', {}) or {}
+
+    myLeft = max(0, totalGames - _played(team))
+    rivalLeft = max(0, totalGames - _played(rival))
+
+
+    # This club's floor: every remaining game a divisional LOSS.
+    mine = _divisionRate(
+        (myStats.get('divWins', 0) or 0),
+        (myStats.get('divLosses', 0) or 0) + myLeft,
+        (myStats.get('divTies', 0) or 0))
+    # The rival's ceiling: every remaining game a divisional WIN.
+    theirs = _divisionRate(
+        (rivalStats.get('divWins', 0) or 0) + rivalLeft,
+        (rivalStats.get('divLosses', 0) or 0),
+        (rivalStats.get('divTies', 0) or 0))
+    return mine > theirs
+
+
 def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]]:
     """Who is mathematically IN, who has won their division, who owns the top seed.
 
@@ -247,8 +292,69 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
         # A title is won when no rival can reach this club, and lost once one is
         # beyond reach. Both are within-division questions, so they stay a points
         # comparison rather than a re-seed.
-        divisionClinched = bool(myDivision) and all(
-            ceiling(t) <= floor for t in divisionRivals)
+        #
+        # ⚠️ STRICTLY LESS THAN. `<=` says a rival who can draw LEVEL cannot take the
+        # title, and that is false: a level finish goes to the tiebreaker chain, which
+        # the leader can lose. Reported from a live board at week 27 — the Sand Dollars
+        # were shown as division champions one game up on the club they still had to
+        # PLAY in week 28, where a loss ties them and hands the title to a tiebreak.
+        #
+        # ⚠️ It also produced a self-contradicting row. `clinchedPlayoffs` runs the real
+        # worst-case seeding, which honours the division rule; a genuine division winner
+        # is therefore always seeded and always reads as clinched too. This test was the
+        # only one using a different, looser rule, so it was the only way the board could
+        # claim a division title and no playoff berth at the same time.
+        #
+        # ⚠️ IT DOES NOT RE-SEED TO BREAK THE TIE, and that is deliberate. Running the
+        # worst case through `seedLeague` and asking whether this club still leads its
+        # division looks like the obvious upgrade and is wrong: `_projected` advances wins
+        # and losses only, so `divWins` / `divLosses` ride through UNCHANGED and a
+        # projected tie would be settled on TODAY's division record while the games that
+        # decide it are unplayed. That is exactly the reported case — the Rocks shown as
+        # champions when a week-28 loss ties them and the Strangers take it on division
+        # record.
+        #
+        # `_divisionTiebreakSecured` answers the same question honestly instead: it moves
+        # the division record to this club's FLOOR and the rival's CEILING, so a clinch is
+        # claimed only where the tie is already decided whatever happens. That is strictly
+        # harsher than what `seedLeague` would do with today's numbers, which is what
+        # keeps `clinchedDivision` from ever outrunning `clinchedPlayoffs`.
+        # A rival who cannot even reach this club's points is beaten outright. One who
+        # can draw LEVEL is only beaten if the tie itself is already decided — see
+        # `_divisionTiebreakSecured`.
+        def rivalBeaten(t) -> bool:
+            rivalCeiling = ceiling(t)
+            if rivalCeiling < floor:
+                return True
+            if rivalCeiling > floor:
+                return False
+            return _divisionTiebreakSecured(team, t, totalGames)
+
+        # ⚠️ A FINISHED DIVISION IS DECIDED BY ITS ACTUAL ORDER, not by projection.
+        # With every game played there is no floor and no ceiling, just a result, and the
+        # rungs below division record settle it — score differential, then head-to-head
+        # point diff, then points for and against. None of those can be bounded, which is
+        # why the projection stops at division record; at season end it does not have to.
+        #
+        # ⚠️ It must be ONE ordering of the whole division, never a pairwise test. Two
+        # clubs tied all the way down the chain each win their own pairwise comparison,
+        # because the sort is stable and each sees itself first — so BOTH were crowned.
+        # Ordering the division once gives exactly one leader by construction.
+        #
+        # Without any of this, two clubs finishing level on record and division record
+        # left the division with NO champion on the board while the seeding beneath had
+        # already picked one and shown that club a berth.
+        divisionMembers = divisions.get(myDivision, []) if myDivision else []
+        seasonOver = bool(divisionMembers) and all(
+            _played(t) >= totalGames for t in divisionMembers)
+        if seasonOver:
+            try:
+                from seeding import orderTeams
+                divisionClinched = orderTeams(list(divisionMembers))[0] is team
+            except Exception:
+                divisionClinched = all(rivalBeaten(t) for t in divisionRivals)
+        else:
+            divisionClinched = bool(myDivision) and all(rivalBeaten(t) for t in divisionRivals)
 
         seededAtWorst = worstSeeds.get(tid)
         seededAtBest = bestSeeds.get(tid)

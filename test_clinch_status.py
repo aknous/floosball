@@ -147,7 +147,11 @@ def test_winning_the_division_auto_clinches_the_berth():
                      ('East' if i < 12 else 'West'))) for i in range(16)}
     # North is settled: leader 10-8, rivals buried. Everyone OUTSIDE North is
     # 14-4 and could finish above the leader on record.
-    records = [(10, 8), (0, 18), (0, 18), (0, 18)] + [(14, 4)] * 12
+    # ⚠️ North must be settled BEYOND A TIE. This was 10-8 against 0-18 with ten games
+    # left, where a rival winning out reaches 10 and the leader losing out stays at 10 —
+    # level, and a level finish goes to a tiebreak the leader can lose. Twenty games in,
+    # the rivals top out at 8 against a floor of 12.
+    records = [(12, 8), (0, 20), (0, 20), (0, 20)] + [(14, 4)] * 12
     teams = _league(records, divisions)
     status = clinchStatus(teams, totalGames=28)
     assert status[0]['clinchedDivision'] is True
@@ -165,7 +169,10 @@ def test_a_division_winner_is_never_eliminated():
                      ('East' if i < 12 else 'West'))) for i in range(16)}
     # A weak North: leader 6-16 but its rivals are buried and cannot reach it.
     # Everyone outside North is 18-4 and far beyond the leader's ceiling.
-    records = [(6, 16), (0, 22), (0, 22), (0, 22)] + [(18, 4)] * 12
+    # ⚠️ Buried beyond a TIE, not merely behind: four games left puts the rivals'
+    # ceiling at 4 against a floor of 8. It was 6-16 against 0-22, where a rival
+    # winning out reached exactly 6 and could draw level.
+    records = [(8, 16), (0, 24), (0, 24), (0, 24)] + [(18, 4)] * 12
     teams = _league(records, divisions)
     status = clinchStatus(teams, totalGames=28)
     assert status[0]['clinchedDivision'] is True
