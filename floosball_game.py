@@ -12207,10 +12207,16 @@ class Game:
         landing = getattr(play, 'puntLanding', None)
         retYds = int(getattr(play, 'returnYardage', 0) or 0)
         retName = getattr(getattr(play, 'returner', None), 'name', None)
-        base = '{} punts {} yards'.format(punterName, gross)
+        # ⚠️ A SHANK DESCRIBES THE KICK, NOT THE WHOLE PLAY. This used to `return` here,
+        # above every branch below, so a shanked punt that was then MUFFED AND RECOVERED
+        # BY THE KICKING TEAM read as "X shanks the punt, 29 yards" and said nothing about
+        # the turnover — the only evidence was the play being labelled Fumble, which is
+        # how it was reported. The shank now replaces the opening clause and the receiving
+        # team's outcome still gets said.
+        base = ('{} shanks the punt, {} yards'.format(punterName, gross)
+                if result == 'shank'
+                else '{} punts {} yards'.format(punterName, gross))
 
-        if result == 'shank':
-            return '{} shanks the punt, {} yards'.format(punterName, gross)
         if getattr(play, 'puntTouchback', False):
             return '{}, touchback'.format(base)
         if action == 'touchdown' and retName:
