@@ -883,7 +883,7 @@ class LeagueResponseBuilder(ResponseBuilder):
         rather than the endpoint failing. `divisionOrder` fixes the order the division
         blocks render in (the owner's config order); anything not listed follows.
         """
-        from standings_view import seedLeague, gamesBackFrom, clinchStatus
+        from standings_view import seedLeague, gamesBackFrom, clinchStatus, divisionGamesBack
 
         form = form or {}
         seeded = seedLeague(list(teams), h2hGames or [])
@@ -963,6 +963,13 @@ class LeagueResponseBuilder(ResponseBuilder):
             team_standings.append(team_dict)
 
         divisions = seeded['divisions']
+        # Games behind the DIVISION leader, for the By Division view. The league column
+        # measures from the playoff cut, which answers a different question and reads
+        # wrong inside a division block — a club can lead its division and still show a
+        # positive number against the cut.
+        divGB = divisionGamesBack(divisions, list(teams))
+        for row in team_standings:
+            row['divisionGamesBack'] = divGB.get(row.get('id'), 0.0)
         if divisionOrder:
             names = ([n for n in divisionOrder if n in divisions]
                      + [n for n in divisions if n not in divisionOrder])

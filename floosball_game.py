@@ -495,7 +495,7 @@ sackList = [
                     '{} is brought down by {} for {} yards',
                     '{} goes down, sacked by {} for {} yards',
                     '{} is taken down by {} behind the line for {} yards',
-                    '{} has nowhere to throw, {} brings him down for {} yards',
+                    '{} has nowhere to throw, {} brings them down for {} yards',
                     '{} is wrapped up by {} and sacked for {} yards',
                     '{} is crushed by {} for {} yards',
                     '{} is buried by {} for {} yards',
@@ -6251,13 +6251,26 @@ class Game:
         _dcLastPlay = self._driveClockActive() and (
             (_dcUnitHM == 'plays' and self.driveClockRemaining <= 1)
             or (_dcUnitHM == 'seconds' and self.driveClockRemaining <= _DC_HM_FRAC * self._driveClockLimitSecs()))
-        _gameHailMary = (self.currentQuarter == 4 and scoreDiff < 0
+        # ⚠️ IN FRAMES THE AGGREGATE IS NOT WHO IS WINNING, and this read it. `scoreDiff`
+        # is the raw point margin; a frames match is decided by FRAMES WON, with points
+        # only breaking a level tie. Reported from a live game: final frame, the offense
+        # AHEAD in the frame and ahead on frames, aggregate TIED — so `scoreDiff <= 0` was
+        # true, the drive clock expired, and a team that was winning heaved it into
+        # coverage on 5th and 15 from the 42. Turnover on downs, opponent's ball with 3:54
+        # left in the frame they needed. A leading team has nothing to gamble for.
+        #
+        # `decisionDiff` is the frames-aware margin `playCaller` already computes — the
+        # same one the end-of-game field-goal branch above was corrected to use, for
+        # exactly this reason. It is `scoreDiff` off frames, so every other format is
+        # unchanged.
+        _hmDiff = decisionDiff
+        _gameHailMary = (self.currentQuarter == 4 and _hmDiff < 0
                          and self.gameClockSeconds <= 12)
-        _driveHailMary = _dcLastPlay and scoreDiff <= 0   # trailing or tied
+        _driveHailMary = _dcLastPlay and _hmDiff <= 0   # trailing or tied
         if ((_gameHailMary or _driveHailMary)
                 and self.yardsToEndzone >= 30
-                and not self._isGarbageTime(scoreDiff)):
-            fgCanHelp = (scoreDiff >= -self._fgValue() and self.yardsToEndzone <= kickerMaxFg)
+                and not self._isGarbageTime(_hmDiff)):
+            fgCanHelp = (_hmDiff >= -self._fgValue() and self.yardsToEndzone <= kickerMaxFg)
             if not fgCanHelp:
                 # A bold coach may gamble the final snap on a gadget (a flea-flicker
                 # deep shot) instead of a straight heave — occasional, gated by the
@@ -12060,9 +12073,22 @@ class Game:
             result = 'touchback'
             dist = yardsToEndzone - PUNT_TOUCHBACK_TO
 
-        dist = max(15, min(dist, yardsToEndzone - 1))
-
-        dist = max(15, min(dist, yardsToEndzone - 1))
+        # ⚠️ THE CLAMP ORDER WAS INVERTED, AND ON A SHORT FIELD IT INVENTED YARDS.
+        # `max(15, min(dist, yardsToEndzone - 1))` takes the minimum first, so from the
+        # opponent's 5 it computed `min(dist, 4)` = 4 and then `max(15, 4)` = 15 — forcing
+        # a 15-yard punt into a 5-yard field and leaving the ball at `5 - 15 = -10`, a yard
+        # line that does not exist. Reported from a live game as "punts 15 yards, downed at
+        # the -10". Every field position inside the 15 produced a negative landing.
+        #
+        # A punt has a floor (nobody shanks it for 3 yards on purpose) but the floor can
+        # never override the field: past the goal line there is nothing to land on, so a
+        # punt that reaches it is a TOUCHBACK, which is what actually happens and what the
+        # call site and the play text already know how to render.
+        dist = max(15, dist)
+        if yardsToEndzone - dist <= 0:
+            result = 'touchback'
+        else:
+            dist = min(dist, yardsToEndzone - 1)
         return (dist, puntType, result)
 
     def _pickReturner(self, team):

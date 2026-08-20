@@ -3605,6 +3605,57 @@ async def get_standings(response: Response):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/standings/history")
+async def getStandingsHistory(season: Optional[int] = None):
+    """Week-by-week standings trajectories — one line per team, for a graphical
+    standings chart.
+
+    Derived from the games table rather than stored, so it covers any season already
+    played. Each point carries the raw record plus `gamesAbove500` (the classic y-axis,
+    which spreads the lines around zero rather than bunching them in a monotonic climb)
+    and `divisionGamesBack` measured against that club's division leader AS OF THAT WEEK.
+    """
+    try:
+        from standings_history import buildStandingsHistory
+        from standings_view import seedLeague
+        # ⚠️ get_session is imported per-function throughout this module, not at the top.
+        from database.connection import get_session
+
+        sm = floosball_app.seasonManager
+        if season is None:
+            season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+        leagues = floosball_app.leagueManager.leagues
+        teamsByLeague = {lg.name: list(lg.teamList) for lg in leagues}
+
+        # Division membership in the owner's config order, matching the board.
+        divisionsByLeague = {}
+        for lg in leagues:
+            built = seedLeague(list(lg.teamList), [])
+            divs = built['divisions']
+            try:
+                order = sm._divisionNames(lg.name) if sm else None
+            except Exception:
+                order = None
+            if order:
+                names = ([n for n in order if n in divs]
+                         + [n for n in divs if n not in order])
+            else:
+                names = list(divs)
+            divisionsByLeague[lg.name] = {n: divs[n] for n in names}
+
+        _session = get_session()
+        try:
+            payload = buildStandingsHistory(_session, season, teamsByLeague, divisionsByLeague)
+        finally:
+            _session.close()
+        return payload
+
+    except Exception as e:
+        logger.error(f"Error getting standings history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/cards/effects")
 async def get_card_effects(response: Response):
     """Public listing of all card effects with display name, tooltip, and tier."""
@@ -14196,6 +14247,54 @@ async def admin_post_cores_conversation(payload: Dict[str, Any],
             {"published": True, "exchangeId": exchangeId, "turns": len(turns),
              "pinned": pinned, "season": season, "week": week},
             message="Posted a Cores conversation")
+    finally:
+        session.close()
+
+
+@app.get("/api/admin/games/{game_id}/rules")
+async def admin_game_chaos_rules(game_id: int, _auth: None = Depends(_checkAdminAuth)):
+    """What ruleset a game was actually played under.
+
+    ⚠️ ADMIN-ONLY ON PURPOSE. Chaos rules are hidden from players by design — a Criticality
+    game is meant to feel wrong without announcing why — but they were hidden from everyone,
+    including whoever has to explain a strange play afterwards. A punt on 5th and goal from
+    the 5 could not be judged, because the league's ruleset has four downs and that game
+    plainly had five, and nothing recorded what it had been playing under.
+
+    Returns the DIFF from the league's rules, which is the whole question, plus the league
+    ruleset for context. `chaos` is null for an ordinary game.
+    """
+    import json as _json
+    from database.connection import get_session
+    from database.models import Game
+
+    session = get_session()
+    try:
+        row = session.query(Game).filter(Game.id == game_id).first()
+        if row is None:
+            raise HTTPException(404, f"No game {game_id}")
+        chaos = None
+        raw = getattr(row, 'chaos_rules', None)
+        if raw:
+            try:
+                chaos = _json.loads(raw)
+            except Exception:
+                chaos = None
+        league = None
+        try:
+            sm = floosball_app.seasonManager if floosball_app else None
+            rules = sm.currentSeason.gameRules if sm and sm.currentSeason else None
+            if rules is not None:
+                from constants import RULE_VOTE_CANDIDATES
+                league = {f: getattr(rules, f, None) for f in RULE_VOTE_CANDIDATES}
+        except Exception:
+            pass
+        return build_success_response({
+            "gameId": game_id,
+            "wasChaos": bool(chaos),
+            "chaos": chaos,
+            "leagueRules": league,
+        })
     finally:
         session.close()
 

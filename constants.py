@@ -3822,3 +3822,20 @@ BIG_GAME_NEWS_ENABLED = False
 # triggering event and lands rarely enough to stay a pleasure rather than noise.
 CORES_GAME_NEWS_EVERY_WEEKS = 1
 CORES_AMBIENT_NEWS_EVERY_WEEKS = 3
+
+# How many DISTINCT effects each player carries in every edition they are eligible for.
+# A FLOOR, not a cap: a bucket still tops up to one template per effect where that would
+# otherwise leave effects unminted (see cardManager._assignEffects).
+#
+# 1 reproduces the pre-2026-08-18 rule exactly. The knob exists because the two failure
+# modes are opposite: a player in a THIN bucket (13 prismatic QBs against 26 effects)
+# already collected ~2 cards from the top-up cycling, while a player in a DENSE one
+# (43 eligible WRs against 36 holographic effects) got exactly ONE and never more.
+#
+# Measured against prod season 2 (749 templates today):
+#   K=1  749     K=2  1,084     K=3  1,502     K=4  1,921     K=5  2,340
+# The full player x effect cross-product would be 11,069 (14.8x) — rejected, it stops
+# a pull being a chase.
+#
+# ⚠️ Templates mint ONCE PER SEASON, so a change here lands at the next season boundary.
+CARD_EFFECTS_PER_PLAYER = 3

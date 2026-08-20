@@ -194,7 +194,7 @@ _VOICE: Dict[str, Dict[str, List[str]]] = {
             "Drift in 498b is accelerating. I saw a receiver literally phase through a defender. That can't happen!",
             "What is going on in 498b?? Players are falling right through the field. I thought that would be fixed for this instance.",
             "If this wrecks the season I will be genuinely upset. This is the best run of 498 we have had, and it is falling apart right as the games get good.",
-            "A cornerback jumped a route he could not have seen. Twice. I ran it back frame by frame and I am telling you, he KNEW.",
+            "A cornerback jumped a route they could not have seen. Twice. I ran it back frame by frame and I am telling you, they KNEW.",
         ],
         'criticality': [
             "Total loss of control. TOTAL. The scores are changing on their own and my model is quietly becoming fiction.",

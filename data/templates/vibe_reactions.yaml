@@ -174,7 +174,7 @@ melancholy:
     - "{name} took the long way home from practice yesterday."
     - "I spent the morning re-reading old letters that I probably should have left in the box."
     - "{name} took a long walk by the river and didn't talk to anyone the whole way."
-    - "I keep thinking about my old high school coach, and I wonder where she ended up."
+    - "I keep thinking about my old high school coach, and I wonder where they ended up."
     - "{name} sat on a porch all afternoon and watched the day pass without saying much."
     - "I keep finding stadium dust in my pockets, and I'm not entirely sure how it gets there."
     - "I cleaned the entire kitchen this morning, and somehow that just made me feel worse about everything."
@@ -972,7 +972,7 @@ lively:
     - "{name} smacks their helmet, screams 'NO!'"
     - "{name} runs after the defender, gives up at midfield, walks back."
     - "{name} sprints down the field after the defender. Loses by twenty yards."
-    - "GET HIM, GET HIM!"
+    - "GET THEM, GET THEM!"
 
   made_int:
     - "{name} catches it, runs to the sideline holding the ball over their head."
@@ -1109,7 +1109,7 @@ fiery:
     - "That is the standard. You match it or you lose."
     - "{name} points at the opposing sideline, and names a specific person."
     - "{name} runs to the bench and immediately demands to know what the next play is."
-    - "Their corner cheats inside. I told you he cheats inside. Are you listening yet?"
+    - "Their corner cheats inside. I told you they cheat inside. Are you listening yet?"
     - "Run that again. Run it the same way. I want to see if they figured it out."
 
   negative_generic:
@@ -1778,7 +1778,7 @@ goofy:
     - "{name} pulls a small magic-trick flourish at the back of the endzone."
     - "{name} pretends to dunk the football over the crossbar."
     - "I think I scored. Did I score? I scored."
-    - "I scored that for my dog. She doesn't know what football is but she's proud."
+    - "I scored that for my dog. They don't know what football is but they're proud."
     - "Six points!! That's almost ten!!"
     - "{name} spikes the ball into the ground, then dives after it like it's getting away."
     - "{name} strikes a series of poses, each one increasingly strange."
@@ -1887,7 +1887,7 @@ goofy:
     - '{name} tries a backflip. Beefs it. Tries another one.'
     - 'This is the best day since the last best day.'
     - '{name} puts their jersey on backwards for the walk in. Hopefully on purpose.'
-    - 'Somebody tell my mom. Actually she''s here. Hi mom!'
+    - 'Somebody tell my mom. Actually they''re here. Hi mom!'
     - '{name} attempts a handshake sequence nobody understands.'
     - 'Winning is SO much better than the other thing.'
   lost_game:
@@ -1937,7 +1937,7 @@ goofy:
     - "I learned to play football from a raccoon and that raccoon owes me money."
     - "I sleep with the lights on because the dark has opinions about me."
     - "My hobbies include staring, blinking, and aggressive napping."
-    - "I'm writing a screenplay about a guy who plays football but he's also a wizard. It's me. It's autobiographical."
+    - "I'm writing a screenplay about someone who plays football but they're also a wizard. It's me. It's autobiographical."
     - "I once fought a goose and we both walked away changed."
     - "I collect rocks. Specifically, rocks that look like other rocks."
     - "If I had a tail I'd be unstoppable. I think about this a lot."
@@ -3215,12 +3215,12 @@ prankster:
     - "{name} spent the morning perfecting their next locker-room booby trap, and refuses to share details."
     - "I'm cooking up something this week, so don't ask any questions and just keep your eyes open."
     - "{name} bought eight rubber chickens. The team will find out next week."
-    - "I set up an elaborate fake interoffice memo chain just to watch the long-snapper read it, and the look on his face was beautiful."
+    - "I set up an elaborate fake interoffice memo chain just to watch the long-snapper read it, and the look on their face was beautiful."
     - "{name} switched two teammates' lockers. They haven't noticed."
-    - "I rigged the kicker's headphones to play one repeating piano note, and that's all he's been hearing all morning."
+    - "I rigged the kicker's headphones to play one repeating piano note, and that's all they've been hearing all morning."
     - "I have a list. The list is long. The list is for next week."
     - "Locker room culture is, on balance, an art form, and I am the curator."
-    - "The kicker has not yet noticed what I did to his cleats."
+    - "The kicker has not yet noticed what I did to their cleats."
     - "I do not bully. I educate, dramatically."
     - "If you are wondering who put the live cricket in your helmet, that is a fair question."
     - "An untouched whiteboard is a wasted opportunity."
@@ -3369,7 +3369,7 @@ fossil:
     - "{name} watches the celebration quietly. They have seen many of these, in many cities, in many lives."
     - "Pleasant. The first pleasant moment in some time."
     - "{name} tilts their head, a memory stirring from a previous century."
-    - "I knew their great-grandfather. He was a worse player."
+    - "I knew their great-grandfather. They were a worse player."
     - "{name} hands the ball to the ref, a gesture they have made many thousand times."
     - "Brief, this happiness. As all things are."
     - "{name} watches their teammates as if they were children, which they are."
@@ -3857,7 +3857,7 @@ paranoid:
     - "Don't say it out loud. They listen during timeouts. Especially during timeouts."
     - "Hey. The cheerleaders do the same routine in the same order every game. Every game. That's not how cheerleading works. I checked."
     - "{name} watches a specific cameraman for the entire timeout without blinking."
-    - "There's a kid in the second row holding the same sign he had at our last home game. Same kid. Same sign. The sign hasn't gotten any older."
+    - "There's a kid in the second row holding the same sign they had at our last home game. Same kid. Same sign. The sign hasn't gotten any older."
     - "The chain gang is too efficient. Watch them work. Nobody is that smooth at a job that boring."
     - "Don't tell coach what just happened on that play. They're compromised. I don't know how but they're compromised."
 
@@ -3874,7 +3874,7 @@ paranoid:
     - "I had a teammate two years ago who started asking the right questions. They're not on a team anymore. They're not on any team. I checked all of them."
     - "There is a guy in the third row at every home game. Different jacket. Same haircut. Same hands."
     - "I'm being watched by something, but the thing isn't a person. That's all I know."
-    - "Did you know they hired a new janitor at the practice facility three weeks ago? I asked him where he was from. He said the city. The city. As if that's a real place."
+    - "Did you know they hired a new janitor at the practice facility three weeks ago? I asked them where they were from. They said the city. The city. As if that's a real place."
     - "Tell me which of these people you've actually met outside the locker room. Most of you can't name three. That's by design."
 
 
@@ -4289,7 +4289,7 @@ trash_talker:
     - "I told a reporter the opposing left tackle wouldn't be fast enough this week. The reporter laughed. The left tackle is also slow."
     - "{name} predicted the exact final score of next week's game in writing, signed the page, and sent it to the league office."
     - "I had three suits made this week, and one of them is specifically for the postgame press conference where I get to remind everybody exactly what I told you."
-    - "{name} watched film of next week's safety getting beat on a deep ball and sent him the timestamp in a letter."
+    - "{name} watched film of next week's safety getting beat on a deep ball and sent them the timestamp in a letter."
     - "{name} sent a fruit basket to the corner they beat last week, with a handwritten card inside that just said 'thank you for the help.'"
     - "I have the opposing safety's quote about me pinned above my locker, and I've been reading it every day so I don't forget what we are doing here."
     - "I called the opposing offense soft on the radio last year, and three of them have sued me for defamation."

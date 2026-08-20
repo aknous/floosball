@@ -265,18 +265,49 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
     return out
 
 
-def gamesBackFrom(cutTeam, team) -> float:
-    """Games behind the club holding the LAST playoff spot.
+def gamesBackFrom(refTeam, team) -> float:
+    """Games behind a reference club. Half-games are real — one club having played a game
+    the other has not shifts the gap by a half.
 
-    Signed so the column reads as a race rather than a ranking: negative is ahead of the
-    cut, 0 is the club on it, positive is chasing. Half-games are real — one club playing
-    a game the other has not shifts the gap by a half.
+    Used against TWO references, and the sign means different things in each:
+
+      - the club ON the playoff cut (`gamesBack`): negative is ahead of the cut, 0 is the
+        club holding the last spot, positive is chasing;
+      - the DIVISION LEADER (`divisionGamesBack`): 0 is the leader and nothing is
+        negative, which is the ordinary standings-table reading.
     """
-    if cutTeam is None:
+    if refTeam is None:
         return 0.0
-    cutW, cutL = _record(cutTeam)
+    refW, refL = _record(refTeam)
     w, l = _record(team)
-    return ((cutW - w) + (l - cutL)) / 2.0
+    return ((refW - w) + (l - refL)) / 2.0
+
+
+def divisionGamesBack(divisions: Dict[str, List[int]], teams: List[Any]) -> Dict[int, float]:
+    """{teamId: games behind ITS OWN division leader}.
+
+    The league column answers "am I making the playoffs"; this one answers "am I winning
+    my division", which at four clubs per division is what most of the league is actually
+    racing for — 24 of 32 will never win a league title.
+
+    ⚠️ The leader is `divisions[name][0]`, which `seedLeague` has already ordered through
+    the full tiebreaker chain (`orderTeams`). Do not re-derive it by max(winPct): that
+    skips the contextual tiebreaker and would disagree with the division-winner rule the
+    same payload reports.
+    """
+    byId = {t.id: t for t in teams}
+    out: Dict[int, float] = {}
+    for memberIds in (divisions or {}).values():
+        if not memberIds:
+            continue
+        leader = byId.get(memberIds[0])
+        if leader is None:
+            continue
+        for tid in memberIds:
+            team = byId.get(tid)
+            if team is not None:
+                out[tid] = gamesBackFrom(leader, team)
+    return out
 
 
 def _emptyStats() -> Dict[str, Any]:

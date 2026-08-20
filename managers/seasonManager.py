@@ -2700,6 +2700,16 @@ class SeasonManager:
         except Exception:
             return {}
 
+    def _applyChaosRulesToRow(self, dbRow, game) -> None:
+        """Persist the game's chaos ruleset diff. No-op for an ordinary game."""
+        try:
+            diff = getattr(game, '_chaosRules', None)
+            if diff:
+                import json
+                dbRow.chaos_rules = json.dumps(diff)
+        except Exception:
+            logger.debug("Could not serialize chaos rules for game", exc_info=True)
+
     def _applyPostgameQuotesToRow(self, dbRow, game) -> None:
         """Persist what the players said when the game ended.
 
@@ -3224,6 +3234,7 @@ class SeasonManager:
                     self._applyTeamStatsToRow(db_game, game)
                     self._applyWinnerToRow(db_game, game)
                     self._applyPostgameQuotesToRow(db_game, game)
+                    self._applyChaosRulesToRow(db_game, game)
                     self.db_session.flush()
                     playerStats = self._extractPlayerStatsFromGame(game)
                     if playerStats:
@@ -3262,6 +3273,7 @@ class SeasonManager:
             self._applyTeamStatsToRow(db_game, game)
             self._applyWinnerToRow(db_game, game)
             self._applyPostgameQuotesToRow(db_game, game)
+            self._applyChaosRulesToRow(db_game, game)
             self.game_repo.save(db_game)
             self.db_session.flush()  # Get the ID
 
@@ -11332,6 +11344,27 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"Rule vote resolve hook failed: {e}")
 
+    @staticmethod
+    def _chaosRuleDiff(seasonRules, chaosRules) -> dict:
+        """What this game's ruleset changed, relative to the league's.
+
+        Reads the candidate fields the chaos randomizer can actually touch rather than
+        every attribute on the rules object, so the record is the decision that was made
+        and not a dump of unrelated state.
+        """
+        try:
+            from constants import RULE_VOTE_CANDIDATES
+            fields = list(RULE_VOTE_CANDIDATES.keys())
+        except Exception:
+            return {}
+        diff = {}
+        for field in fields:
+            was = getattr(seasonRules, field, None)
+            now = getattr(chaosRules, field, None)
+            if now is not None and now != was:
+                diff[field] = {'was': was, 'now': now}
+        return diff
+
     def _applyChaosRulesIfCritical(self, game) -> None:
         """During a Criticality, give this game its OWN randomized ruleset just
         before kickoff — chaos rules are hidden from users, both teams play by the
@@ -11349,7 +11382,15 @@ class SeasonManager:
             gameWeek = getattr(game, 'week', None)
             week = (gameWeek + 1) if gameWeek is not None else self.currentSeason.currentWeek
             if isCriticalityWeek(self.currentSeason.seasonNumber, week):
-                game.gameRules = self._ruleVoteMgr().randomChaosRules(self.currentSeason.gameRules)
+                seasonRules = self.currentSeason.gameRules
+                game.gameRules = self._ruleVoteMgr().randomChaosRules(seasonRules)
+                # ⚠️ RECORD WHAT WAS DIFFERENT, or the game becomes undiagnosable the
+                # moment it ends. Chaos rules are hidden from players by design and were
+                # also hidden from US — a punt on 5th and goal from the 5 could not be
+                # judged, because the league's own ruleset has four downs and that game
+                # plainly had five, and nothing anywhere recorded what it had been playing.
+                # The DIFF is the whole question, so that is what is stored.
+                game._chaosRules = self._chaosRuleDiff(seasonRules, game.gameRules)
         except Exception as e:
             logger.warning(f"Criticality chaos ruleset failed: {e}")
 
