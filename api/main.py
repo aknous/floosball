@@ -3527,9 +3527,13 @@ async def get_season_info(response: Response):
             'offseason_phase': offseasonPhase,
             'offseason_phase_target_time': offseasonPhaseTargetTime,
             'bracket_available': bracketAvailable,
-            'regular_season_over': current_season.currentWeek > 28 or (
-                current_season.currentWeek == 28 and current_season.completedWeekGames is not None
-            ),
+            # ⚠️ ONE SOURCE. This used to repeat the week arithmetic inline, which made it
+            # the FOURTH place deciding whether the regular season is over — and it read
+            # `currentWeek`, which is 0 on production while 28 weeks of games are final,
+            # because nothing persists it. The frontend gates its whole season-over view
+            # on this flag, so a stale 0 left the fantasy page showing a live season with
+            # no leaderboard and the shop selling cards nobody could ever field.
+            'regular_season_over': not _isRegularSeason(),
         })
     
     except Exception as e:
@@ -10530,6 +10534,34 @@ def setEquippedCards(
 # ============================================================================
 
 
+def _regularSeasonWeeksPlayed(seasonNumber: int) -> Optional[int]:
+    """The newest regular-season week with a FINAL game, read off the games table.
+
+    ⚠️ `seasons.current_week` CANNOT BE TRUSTED FOR THIS. Measured on production with
+    28 weeks of season-2 games already final, that column read **0** — and there is no
+    `is_complete` column at all, so `Season.isComplete` lives only in memory and comes
+    back False on every load. `_isRegularSeason` believed both, so after any restart it
+    reported "regular season" forever and every purchase gate below it went inert.
+
+    The games table is the thing that actually moved.
+    """
+    try:
+        from database.connection import get_session as _gs
+        from sqlalchemy import text as _text
+        _s = _gs()
+        try:
+            row = _s.execute(_text("""
+                SELECT MAX(week) FROM games
+                WHERE season = :s AND LOWER(status) = 'final'
+                  AND (is_playoff IS NULL OR is_playoff = 0)
+            """), {'s': seasonNumber}).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        finally:
+            _s.close()
+    except Exception:
+        return None
+
+
 def _isRegularSeason() -> bool:
     """True while regular-season fantasy is live (through week 28's games).
 
@@ -10541,6 +10573,13 @@ def _isRegularSeason() -> bool:
     if not sm or not sm.currentSeason:
         return False
     cs = sm.currentSeason
+
+    # The durable answer first: 28 regular-season weeks in the books means it is over,
+    # whatever the in-memory counters say after a restart.
+    played = _regularSeasonWeeksPlayed(getattr(cs, 'seasonNumber', 0) or 0)
+    if played is not None and played >= 28:
+        return False
+
     if cs.isComplete or cs.currentWeek > 28:
         return False
     if cs.currentWeek == 28 and cs.completedWeekGames is not None:
@@ -11013,6 +11052,26 @@ def buyFeaturedCard(req: BuyCardRequest, user: _User = Depends(_getCurrentUser))
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+    # ⚠️ Outside the regular season only the COLLECTION shelf is buyable. A fantasy
+    # single bought after week 28 can never be equipped — fantasy is over and the card
+    # is season-scoped — so selling one is selling a brick. Collection singles lose
+    # nothing: they are never fielded anyway and keep earning through the Showcase.
+    # `_requireCollectionOnly` guards the PACK path; singles need their own check
+    # because the thing being bought is a card, not a pack type.
+    if _showpieceOnly():
+        _s = get_session()
+        try:
+            from database.models import FeaturedShopCard as _FSC
+            _kind = _s.query(_FSC.kind).filter(
+                _FSC.user_id == user.id, _FSC.season == currentSeason,
+                _FSC.card_template_id == req.templateId).first()
+            if not _kind or (_kind[0] or '') != 'collection':
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only collection cards are available outside the regular season")
+        finally:
+            _s.close()
 
     cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
 
@@ -11489,6 +11548,13 @@ class BuyPowerupRequest(BaseModel):
 def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
     """Purchase a power-up. Validates eligibility, deducts Floobits, executes effect."""
     _requireShopOpen()
+    # ⚠️ Every powerup acts on a fantasy week — the modifier override, the extra slot,
+    # the trigger boost. Outside the regular season there is no week for them to act on,
+    # so buying one spends Floobits on nothing.
+    if _showpieceOnly():
+        raise HTTPException(
+            status_code=403,
+            detail="Powerups are only available during the regular season")
     from database.connection import get_session
     from database.models import FantasyRoster, FeaturedShopCard
     from database.repositories.shop_repository import ShopPurchaseRepository, ModifierOverrideRepository
