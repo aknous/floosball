@@ -3274,7 +3274,22 @@ class Game:
         import math
         after = deficit - points
         afterXp = deficit - xp
-        need = lambda gap: math.ceil(gap / one) if gap > 0 else 0
+        # ⚠️ POSSESSIONS ARE COUNTED IN WHAT A POSSESSION CAN MAXIMALLY YIELD, NOT IN
+        # TD+XP. This measured the gap in `one` (7 at default rules) while a possession can
+        # actually produce `_maxPossession()` (8, TD + the best conversion rung) — and
+        # `_maxPossession`'s own docstring calls itself "the 'still a one-score game'
+        # bound". Counting in 7 misreads a gap of exactly 8, which INVERTED the chart at
+        # the two deficits either side of it:
+        #   down 9  — kicking gives 8, a one-possession game, GUARANTEED. Going for two
+        #             reaches 7 (still one possession) and risks 9 (two). The kick
+        #             strictly dominates, and the sim went for it 94% of the time.
+        #   down 10 — kicking gives 9 (two possessions). Two makes it 8 (ONE), and a miss
+        #             leaves 10, which is two possessions exactly like the 9 would have
+        #             been. The try is a FREE ROLL, and the sim took it 23% of the time.
+        # Reported from a live game as a team going for two down ten. It was not a coach
+        # error: the chart rated the correct call as an occasional longshot.
+        possUnit = self._maxPossession() or one
+        need = lambda gap: math.ceil(gap / possUnit) if gap > 0 else 0
         if after <= 0 < afterXp:
             base = CONVERSION_DESIRE_TIE_OR_WIN   # this try ties/wins now; the kick leaves you behind
         elif need(after) < need(afterXp):
