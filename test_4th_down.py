@@ -87,6 +87,16 @@ def setupGame(homeScore=0, awayScore=0, quarter=2, clock=450,
     # here. `clockRunning` is read by `_isNoHuddle`, which `_shouldTargetSideline` now
     # consults — a huddling default, since these cases are not two-minute drills.
     g.clockRunning = False
+    # `gameRules` is read all over the decision chain (downsPerSeries, scoring values,
+    # and `Game.format`, which resolves from gameRules.gameFormat). Defaults are the
+    # standard ruleset, which is what these 4th-down cases describe.
+    from game_rules import GameRules
+    g.gameRules = GameRules()
+    # Awakened bookkeeping the play-calling chain consults. Empty = nobody charged,
+    # which is the neutral state these cases assume.
+    g._awakenedReady = {}
+    g._awakenedPower = {}
+    g._awakenedCharge = {}
     g.homeTeam = home
     g.awayTeam = away
     g.homeScore = homeScore

@@ -203,8 +203,17 @@ def testCoresExchanges():
         assert all('—' not in t['text'] for t in turns), f"em-dash leaked in {ev} exchange"
 
     # entriesForEvent: exchange where a pool exists, solo line where it doesn't.
+    # ⚠️ `warning_low` HAS an exchange now (every criticality beat does), so it returns a
+    # multi-turn conversation, not the solo line this used to assert. The rule being
+    # tested is the BRANCH, not which events happen to have pools today — so drive the
+    # solo side with an event that genuinely has no pool, and assert the pooled side
+    # from hasExchange rather than naming one event.
     assert len(c.entriesForEvent('warning_high')) >= 2, "warning_high prefers an exchange"
-    assert len(c.entriesForEvent('warning_low')) == 1, "warning_low has no exchange → solo"
+    for ev in ('warning_low', 'warning_high', 'suppression', 'reset', 'criticality'):
+        assert c.hasExchange(ev), f"{ev} should have an exchange pool"
+        assert len(c.entriesForEvent(ev)) >= 2, f"{ev} has a pool → exchange"
+    assert not c.hasExchange('observation'), "observation is the poolless case this relies on"
+    assert len(c.entriesForEvent('observation')) == 1, "no exchange pool → solo line"
     # A forced core always yields a single attributed line.
     solo = c.entriesForEvent('suppression', core='pyre')
     assert len(solo) == 1 and solo[0]['core'] == 'pyre'

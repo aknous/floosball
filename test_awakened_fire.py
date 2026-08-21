@@ -9,7 +9,13 @@ Run: python test_awakened_fire.py
 import os, sys
 sys.path.insert(0, os.getcwd())
 from scenario import Scenario
-from constants import AWAKENED_FORCE_RUN_GAIN, AWAKENED_FORCE_PASS_GAIN
+# ⚠️ THE RUN/PASS FORCED GAINS WERE UNIFIED. AWAKENED_FORCE_RUN_GAIN and
+# AWAKENED_FORCE_PASS_GAIN are GONE -- importing them raised ImportError and no
+# assertion in this file ran. A fired power now guarantees a FIRST DOWN
+# (max(AWAKENED_FORCE_MIN_GAIN, yardsToFirstDown)) plus an exponential tail, the same
+# way for a run and a pass, so the floor is asserted against the live situation rather
+# than a per-play-type constant.
+from constants import AWAKENED_FORCE_MIN_GAIN
 
 failures = []
 def expect(label, cond):
@@ -38,7 +44,8 @@ expect("the fire records the power name", p.awakenedFire['powerName'] == 'No-Cli
 s.game.formatPlayText()
 expect("the PBP text leads with the power name + flavor",
        p.playText.startswith('No-Clip:') and rb.name in p.playText)
-expect("the run is forced to at least the breakaway floor", p.yardage >= AWAKENED_FORCE_RUN_GAIN)
+expect("the run is forced to at least the breakaway floor",
+       p.yardage >= max(AWAKENED_FORCE_MIN_GAIN, int(s.game.yardsToFirstDown or 0)))
 expect("a fired run does not fumble", not p.isFumbleLost)
 expect("firing discharged the meter", s.game._awakenedReady[rb.id] is False and s.game._awakenedFills[rb.id] == 1)
 
@@ -49,17 +56,37 @@ s2.game._awakenedReady = {}; s2.game._awakenedPower = {}; s2.game._awakenedCharg
 s2.game.play.runPlay()
 expect("no fire tag when nobody is ready", s2.game.play.awakenedFire is None)
 
-print("\n3. A charged kicker whose power covers 'kick' makes the FG automatically")
+print("\n3. A charged kicker's power RESCUES a kick, and is not spent on a made one")
+# ⚠️ THE KICK FIRE IS A RESCUE, NOT AN OVERRIDE. fieldGoalTry only reaches
+# _awakenedTryFire when the kick is beyond normal range or the roll MISSED; a kick that
+# rolls good on its own is left alone and the meter stays charged. This section used to
+# set up a makeable ~52-yarder and assert a fire, which passed only when the roll
+# happened to miss. Use a kick beyond the kicker's range so the branch is deterministic.
 s3 = Scenario()
-s3.situation(quarter=4, clock=120, offense='home', down=4, distance=8, ballOn=35)  # ~52yd FG
+k_probe = Scenario().game.offensiveTeam.rosterDict['k']
+_beyond = int(getattr(k_probe, 'maxFgDistance', 55) or 55) + 15
+s3.situation(quarter=4, clock=120, offense='home', down=4, distance=8,
+             ballOn=_beyond - 17)          # ballOn is yards to the endzone; +17 = FG distance
 g3 = s3.game
 k = g3.offensiveTeam.rosterDict['k']
 g3._awakenedCharge = {k.id: 100.0}; g3._awakenedFills = {k.id: 0}
 g3._awakenedReady = {k.id: True}; g3._awakenedPower = {k.id: 'moonshot'}
 g3.play.fieldGoalTry()
-expect("the FG is forced good", g3.play.isFgGood)
-expect("the FG is tagged as an awakened fire", g3.play.awakenedFire and g3.play.awakenedFire['power'] == 'moonshot')
+expect("a kick beyond the kicker's range is forced good by the power", g3.play.isFgGood)
+expect("the FG is tagged as an awakened fire",
+       bool(g3.play.awakenedFire) and g3.play.awakenedFire['power'] == 'moonshot')
 expect("firing discharged the kicker's meter", g3._awakenedReady[k.id] is False)
+
+# The other half of the same rule: an easy kick must NOT spend the power.
+s3b = Scenario()
+s3b.situation(quarter=4, clock=120, offense='home', down=4, distance=8, ballOn=8)  # ~25yd chip shot
+g3b = s3b.game
+kb = g3b.offensiveTeam.rosterDict['k']
+g3b._awakenedCharge = {kb.id: 100.0}; g3b._awakenedFills = {kb.id: 0}
+g3b._awakenedReady = {kb.id: True}; g3b._awakenedPower = {kb.id: 'moonshot'}
+g3b.play.fieldGoalTry()
+expect("a chip shot that makes itself does not burn the power",
+       (not g3b.play.isFgGood) or (g3b.play.awakenedFire is None and g3b._awakenedReady[kb.id] is True))
 
 print("\n4. A charged QB forces the completion (no INT/drop, big gain)")
 # A dropback can sack/throw-away (no target), so loop until a real throw fires.
@@ -78,7 +105,8 @@ for _ in range(30):
 expect("a charged QB fires on a throw", fired is not None and fired.awakenedFire['power'] == 'wormhole')
 if fired:
     expect("fired pass is a completion, not an interception", fired.isPassCompletion and not fired.isInterception)
-    expect("fired pass forces the breakaway floor", fired.yardage >= AWAKENED_FORCE_PASS_GAIN)
+    expect("fired pass forces the breakaway floor",
+           fired.yardage >= AWAKENED_FORCE_MIN_GAIN)
     expect("fired pass does not fumble", not fired.isFumbleLost)
 
 print("\n5. A charged defender strips a run (forced fumble lost, credited to the defender)")
@@ -87,7 +115,15 @@ s5.situation(quarter=2, clock=600, offense='home', down=1, distance=10, ballOn=6
 g5 = s5.game
 lb = g5.defensiveTeam.rosterDict['rb']   # LB (the defense's RB slot) — only the DEFENDER is ready
 g5._awakenedCharge = {lb.id: 100.0}; g5._awakenedFills = {lb.id: 0}
-g5._awakenedReady = {lb.id: True}; g5._awakenedPower = {lb.id: 'pickpocket'}   # covers run + defense
+# ⚠️ 'pickpocket' NO LONGER EXISTS. The power catalog was expanded to 63 entries
+# and renamed; an unknown key makes powerCoversSituation() return False, so the
+# defender silently never fires. 'no_clip' is universal and covers strip + pick.
+g5._awakenedReady = {lb.id: True}; g5._awakenedPower = {lb.id: 'no_clip'}
+# ⚠️ DEFENSIVE FIRES ARE PROBABILITY-GATED (`_awakenedDefFireChance`, default
+# AWAKENED_DEF_FIRE_CHANCE = 35%) so they cannot dominate the offense. That gate is
+# newer than this test, which assumed a ready+covered defender always discharges. Pin it
+# open here so the assertion is about the STRIP mechanics rather than a 35% coin flip.
+g5._awakenedDefFireChance = 100.0
 g5.play.runPlay()
 p5 = g5.play
 expect("the run is tagged as a strip fire", p5.awakenedFire and p5.awakenedFire['situation'] == 'strip')
@@ -102,7 +138,9 @@ for _ in range(30):
     g6 = s6.game
     cb = g6.defensiveTeam.rosterDict['wr1']   # CB; only the defender is ready
     g6._awakenedCharge = {cb.id: 100.0}; g6._awakenedFills = {cb.id: 0}
-    g6._awakenedReady = {cb.id: True}; g6._awakenedPower = {cb.id: 'highway_robbery'}  # covers defense
+    g6._awakenedDefFireChance = 100.0   # see note above: pin the defensive gate open
+    # 'highway_robbery' was also removed in the catalog expansion; no_clip covers 'pick'.
+    g6._awakenedReady = {cb.id: True}; g6._awakenedPower = {cb.id: 'no_clip'}
     g6.play.passPlay(g6._selectPassPlay('medium'))
     if g6.play.awakenedFire and g6.play.awakenedFire['situation'] == 'pick':
         fired6 = g6.play
