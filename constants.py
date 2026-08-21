@@ -3845,3 +3845,28 @@ CORES_AMBIENT_NEWS_EVERY_WEEKS = 3
 #
 # ⚠️ Templates mint ONCE PER SEASON, so a change here lands at the next season boundary.
 CARD_EFFECTS_PER_PLAYER = 3
+
+# ─── Expected-points imminence (win probability) ──────────────────────────────
+# ⚠️ Win probability damped EXPECTED points by 1/possessions-remaining while REALIZED
+# points went undamped, so a drive in field-goal range banked ~1/24th of the points it
+# was about to score and the kick banked the rest. That is the whole source of the
+# kicker's inflated WPA: measured over 20 seasons, kickers ran 9.8x a QB's WPA per snap.
+#
+# Once a drive is in range the points are imminent rather than speculative, so EP is
+# weighted by how close it is to converting instead. Only ever RAISES the weight, so
+# nothing outside range changes and late-game drives (already near 1.0) are untouched.
+#
+# ⚠️ APPLIED TO THE CREDIT MODEL ONLY (`calculateWinProbability(forAttribution=True)`),
+# never to the win probability fans see. WP is not just a readout — `isBigPlay` fires
+# MOMENTUM_BIG_PLAY_BONUS, the one path from WP back into play outcomes — and applying
+# this floor to the display model shifts that distribution. Unifying the two models
+# means retuning the 7.0 big-play threshold to hold the big-play RATE, or accepting the
+# resulting scoring move as a deliberate balance call.
+#
+# ⚠️ Do NOT try to size that scoring move by comparing two fresh sims: between-league
+# variance is ~2.8 pts/game (two leagues with PROVABLY identical gameplay measured 36.06
+# and 33.26), which is as large as the effect, and seasons within one league are not
+# independent samples.
+EP_IMMINENCE_MIN_FIELD_POS = 60          # opponent's 40 — the same line EP calls FG range
+EP_IMMINENCE_POSITIONS = [60, 75, 90, 100]
+EP_IMMINENCE_WEIGHTS = [0.45, 0.70, 0.85, 0.90]
