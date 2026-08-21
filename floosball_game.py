@@ -3085,13 +3085,128 @@ class Game:
 
     def _framesFgFutile(self) -> bool:
         """Frames: three points cannot avoid a loss but a touchdown can, so the kick is a
-        wasted last chance. False off frames, and false whenever the kick still helps."""
+        wasted LAST CHANCE. False off frames, and false whenever the kick still helps.
+
+        ⚠️ "LAST CHANCE" IS THE LOAD-BEARING WORD, AND IT USED TO BE UNCHECKED. Without a
+        clock test this veto fires on EVERY possession of a frame, so an offense down a
+        touchdown with nine minutes of frame left refused a routine field goal and went
+        for it on 4th and 8 — measured at 100% go, where the identical board in standard
+        kicks 100%. Early in a frame a kick is not a wasted last chance at all: it cuts
+        the frame margin now, and there is time to get the ball back and win the frame.
+        The veto only makes sense once this really is the frame's final possession, which
+        is what `_frameEndSoon` answers — the same predicate `lateHopeless` already uses
+        one clause above the main call site.
+
+        ⚠️ This is a NARROWING, so it can only ever re-allow a kick the sim was refusing;
+        it cannot introduce a new refusal. The late cases the veto exists for — frames
+        level, down 3 in-frame and 7 on aggregate, the frame closing — are unaffected,
+        because `_frameEndSoon` is True in exactly those.
+        """
+        if not self._frameEndSoon():
+            return False
         rank = {'loss': 0, 'draw': 1, 'win': 2}
         fgRes = self._framesMatchResultIfAdd(self._fgValue())
         if fgRes is None or fgRes != 'loss':
             return False
         tdRes = self._framesMatchResultIfAdd(max(7, self._maxPossession()))
         return tdRes is not None and rank[tdRes] > rank[fgRes]
+
+    def _framesFgWins(self) -> bool:
+        """Frames: three points WIN THE MATCH outright, so the kick is not a compromise —
+        it IS the win. False off frames, and false whenever the kick does not settle it.
+
+        The mirror of `_framesFgFutile`, and the other half of the question this format
+        actually asks. A scalar margin cannot see it: tying a FRAME halves it, and a
+        halved frame can leave the match level and hand it to the TOTAL-POINTS tiebreak,
+        where three points may be exactly what wins. So a team "down 3 in the frame" can
+        be one kick from the title while the margin says it is losing — measured over 304
+        closing-frame states where a field goal won the match, the sim went for it in
+        ~12% of them, gambling a decided result on a conversion.
+
+        Gated on the frame closing, like its mirror: earlier in a frame the match is not
+        decidable from here, the frame can still swing, and a drive has value beyond the
+        three points.
+        """
+        if not self._frameEndSoon():
+            return False
+        return self._framesMatchResultIfAdd(self._fgValue()) == 'win'
+
+    def _kneelOutDetail(self, isHome: bool):
+        """The numbers behind a game-ending KNEEL-OUT, or None when kneeling cannot end it.
+
+        A kneel-out is the strongest ending in the sim: the offense is LEADING THE MATCH
+        in Q4/OT and can run the clock to 0:00 from here, so the result is decided with
+        no snap the opponent can answer. It beats every alternative, including a made
+        field goal, because a kick can miss and hands the ball back either way.
+
+        ⚠️ AVAILABLE ON THE FINAL DOWN TOO, which is the whole reason this is a helper.
+        The clock-management block that used to own this reasoning is gated on
+        `down < downsPerSeries`, so on a final down there was NO kneel option at all and
+        `_lastSnapBeforeBreak` — which sits ABOVE the down split — kicked instead.
+        Reported case: leading 21-20, 4th and 5 on the opponent's 33, 0:28 left, opponent
+        out of timeouts. It kicked a 50-yarder every time where a kneel simply ends it.
+        On a final down there is exactly ONE kneel and it is only safe BECAUSE the clock
+        dies on it: if it did not, the down would be surrendered and the ball with it,
+        which is why the drain test below is not optional.
+
+        ⚠️ "Leading" means leading THE MATCH, not the score margin — in frames a team can
+        be ahead on total points and losing on frames won, and kneeling there kneels away
+        a loss (`_framesLeadingNow`).
+        """
+        if not (self.currentQuarter == 4 or self.currentQuarter >= 5):
+            return None
+        _framesLead = self._framesLeadingNow()
+        scoreDiff = ((self.homeScore - self.awayScore) if isHome
+                     else (self.awayScore - self.homeScore))
+        leading = (scoreDiff > 0) if _framesLead is None else _framesLead
+        if not leading:
+            return None
+        # Field-position guard: a kneel loses a yard, so on the goal line it backs into
+        # the endzone for a self-inflicted safety.
+        if self.yardsToSafety <= 2:
+            return None
+
+        # Chess clock: a kneel drains the offense's OWN possession budget 1:1 with the
+        # game clock. If that budget cannot outlast the clock the kneels run it to 0 and
+        # the team is LOCKED OUT — a turnover handing the trailing opponent the ball.
+        _chessSecs = self._chessClockOffenseSecs()
+        if not ((_chessSecs is None) or (_chessSecs >= self.gameClockSeconds)):
+            return None
+
+        remaining = self.gameRules.downsPerSeries - self.down
+        availableKneels = remaining if remaining > 0 else 1
+
+        # Drive clock: kneels drain the possession shot-clock too and earn no first down
+        # to refill it, so the same lockout trap applies.
+        if self._driveClockActive():
+            _dcU = getattr(self.gameRules, 'driveClockUnit', 'seconds')
+            if _dcU == 'seconds':
+                if self.driveClockRemaining < self.gameClockSeconds:
+                    return None
+            else:  # 'plays': each kneel burns one drive-clock play
+                import math as _math
+                _kneelsNeeded = min(availableKneels, max(1, _math.ceil(
+                    self.gameClockSeconds / max(1, self.gameRules.kneelDrainSeconds))))
+                if self.driveClockRemaining < _kneelsNeeded:
+                    return None
+
+        oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
+        # Opponent timeouts only matter while the game is close enough for them to come
+        # back; how far they have to come is a POINTS gap, which in frames is the margin
+        # inside the live frame rather than the running total.
+        maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
+        _comebackDiff = self._frameScoreDiff()
+        _comebackDiff = _comebackDiff if _comebackDiff is not None else scoreDiff
+        effectiveOppTos = oppTimeouts if _comebackDiff <= maxComebackPts else 0
+        # A timed-out kneel drains only the ~4s snap; a free one drains the full ~40s
+        # (snap plus the play-clock runoff before the next snap or the game ending).
+        toadKneels = min(effectiveOppTos, availableKneels)
+        freeKneels = availableKneels - toadKneels
+        drainableSeconds = toadKneels * 4 + freeKneels * self.gameRules.kneelDrainSeconds
+        if drainableSeconds < self.gameClockSeconds:
+            return None
+        return {'drainableSeconds': drainableSeconds, 'oppTimeouts': oppTimeouts,
+                'availableKneels': availableKneels}
 
     def _framesLeadingNow(self):
         """Frames only (else None): would the OFFENSE win if the match ended right now?
@@ -3310,6 +3425,25 @@ class Game:
         _frameDiff = self._frameDecisionDiff()
         if _frameDiff is not None:
             scoreDiff = _frameDiff
+        # ⚠️ KNEEL IT OUT IF THAT ENDS THE GAME — checked before every scoring option
+        # below, because none of them can beat a decided result. Leading in Q4/OT with
+        # enough clock-drain in hand, the offense simply runs it to 0:00: a field goal can
+        # miss, and a make hands the ball back with time on it either way. `_kneelOutDetail`
+        # returns None unless the clock genuinely dies on these kneels, so a final-down
+        # kneel is never taken speculatively — the down (and the ball) would be gone.
+        # Reported: leading 21-20, 4th and 5 on the opponent's 33, 0:28, opponent out of
+        # timeouts, kicking a 50-yarder every time.
+        _kneelOut = self._kneelOutDetail(isHome)
+        if _kneelOut is not None:
+            self.play.insights['clockMgmt'] = {
+                'decision': 'kneelOut',
+                'reason': 'Kneeling runs out the clock and wins outright',
+                'clockRemaining': self.gameClockSeconds,
+                'drainableSeconds': _kneelOut['drainableSeconds'],
+                'oppTimeouts': _kneelOut['oppTimeouts'],
+            }
+            self.play.kneel()
+            return PlayType.Kneel
         # ⚠️ DARTS: A DEAD DRIVE PUNTS, and that is not the concession it looks like. Both
         # hoop pairs are spent and the remaining need is under a field goal, so nothing on
         # this possession can score — but the pairs RESET on the next one, so giving the
@@ -3371,6 +3505,31 @@ class Game:
                    and not self._framesFgFutile())
         inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
+        # ⚠️ THE FUTILE VETO ONLY GUARDED THE CHARGED-KICKER PATH. `fgHelps` is ANDed with
+        # `chargedInRange` alone, so an ORDINARY in-range kick skipped it completely and
+        # the sim kicked a field goal that provably loses the match while a touchdown
+        # would win it. Measured over 490 closing-frame states: of the 179 where only a TD
+        # wins, it kicked 120 (67%). Re-applied here rather than by folding `fgHelps` into
+        # the second clause, because `fgHelps` also carries a NON-frames margin test
+        # (`scoreDiff >= -fgValue or not lateHopeless`) that would start suppressing
+        # legitimate kicks in every other format. `_framesFgFutile` is False off frames,
+        # so this stays a no-op everywhere else.
+        if self._framesFgFutile():
+            inFieldGoalRange = False
+        # ⚠️ AND THE MIRROR: A KICK THAT WINS THE MATCH IS TAKEN, NOT GAMBLED. Everything
+        # below reasons about whether a field goal is "enough" from a scalar margin, which
+        # cannot see that tying the frame halves it and throws the match to the points
+        # tiebreak — where three points can be the win. Without this the sim went for it
+        # on 4th and short in ~12% of the closing-frame states where the kick simply won.
+        # `_framesFgWins` is False off frames and whenever the kick does not settle it.
+        if inFieldGoalRange and self._framesFgWins():
+            self.play.insights['framesDecision'] = {
+                'decision': 'fgWinsMatch',
+                'reason': 'Three points win the match outright',
+                'frameMargin': self._frameScoreDiff(),
+            }
+            self.play.playType = PlayType.FieldGoal
+            return PlayType.FieldGoal
         # Darts (bust): never treat a FG as "in range" if it would overshoot X — the
         # offense should go for it / dink a hoop instead of busting the kick.
         if not self.format.allowFieldGoal(self, self.gameRules.fieldGoalPoints):
@@ -5453,7 +5612,20 @@ class Game:
         # score test below now reasons off the margin the fourth-down caller would have used.
         _lastDiff = decisionDiff
         _routIsOn = _lastDiff > 3 * self._oneScore()
-        if (_atDeadline and self._lastSnapBeforeBreak()
+        # ⚠️ A KNEEL THAT ENDS THE GAME OUTRANKS THE KICK, AND IS CHECKED FIRST. This
+        # block reads only the clock and sits ABOVE the down split, so on a final down it
+        # decided before the clock-management branch (gated `down < downsPerSeries`) could
+        # offer a kneel at all. Reported: leading 21-20, 4th and 5 on the opponent's 33,
+        # 0:28, opponent out of timeouts — it kicked a 50-yarder 100% of the time, where a
+        # kneel simply ends it. The kick can MISS and hands the ball back either way, so
+        # running the clock out strictly dominates. `_kneelOutDetail` returns None unless
+        # the clock genuinely dies on these kneels, so this never surrenders a live down.
+        # It DEFERS rather than kneeling here: the actual kneel is taken by whichever
+        # decision-maker owns this down — the clock-management block below on a
+        # non-final down, `_fourthDownCaller` on a final one — so there is exactly one
+        # kneel site per down class and a direct caller of either gets the same answer.
+        if (self._kneelOutDetail(isHome) is None
+                and _atDeadline and self._lastSnapBeforeBreak()
                 and not self._isGarbageTime(_lastDiff) and not _routIsOn):
             _lastKicker = self.offensiveTeam.rosterDict.get('k')
             _lastMax = ((_lastKicker.maxFgDistance - self.gameRules.fgSnapDistance)
