@@ -233,7 +233,13 @@ PERF_DEFENSE_WEIGHT = 0.3    # defensive-production share of the overall perform
 # overall composite), so there's no separate box defValue term — only the clutch
 # defensive WPA remains, as a secondary term.
 MVP_PERF_WEIGHT = 0.7        # overall (two-way) production-composite z share
-MVP_WPA_WEIGHT = 0.3         # per-snap OFFENSIVE WPA share (offensive clutch)
+MVP_WPA_WEIGHT = 0.2         # per-GAME OFFENSIVE WPA share (offensive clutch)
+# ⚠️ 0.3 -> 0.2, PAIRED with wpaRate moving from per-snap to per-GAME. Measured over
+# 20 simulated seasons: per-snap at 0.30 gave quarterbacks 1 MVP in 20 (receivers took
+# 11), because a QB logs ~1,233 WPA snaps a season against a receiver's ~290 and so
+# carries the league's lowest per-snap rate despite its second-highest raw WPA. Per
+# game at 0.30 over-corrects to QB 14 of 20; at 0.20 it splits QB 8 / WR 8 / RB 3 /
+# TE 1. Changing either half alone reproduces one of the two failures.
 MVP_DEF_WPA_WEIGHT = 0.2     # individual DEFENSIVE WPA share (defensive clutch; secondary)
 # Per-defensive-group box weights (DEF_BOX_WEIGHTS, below) now feed the DEFENSIVE
 # performance rating; defValue's box term and the old MVP_DEF_WEIGHT/MVP_DEF_BOX_WEIGHT
