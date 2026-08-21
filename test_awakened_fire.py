@@ -78,15 +78,34 @@ expect("the FG is tagged as an awakened fire",
 expect("firing discharged the kicker's meter", g3._awakenedReady[k.id] is False)
 
 # The other half of the same rule: an easy kick must NOT spend the power.
+# ⚠️ ASSERTED AS AN INVARIANT PLUS A RATE, NOT AS A SINGLE OUTCOME. A first version read
+# `(not isFgGood) or (awakenedFire is None and still ready)`, which has a hole: when the
+# chip shot's roll MISSES, the power rescues it, so isFgGood is True AND a fire is
+# recorded — both clauses go false and the test fails on a rescue working exactly as
+# designed. A ~25-yarder misses rarely, so it failed roughly one run in twenty and passed
+# twenty in a row while being hunted.
 s3b = Scenario()
-s3b.situation(quarter=4, clock=120, offense='home', down=4, distance=8, ballOn=8)  # ~25yd chip shot
-g3b = s3b.game
-kb = g3b.offensiveTeam.rosterDict['k']
-g3b._awakenedCharge = {kb.id: 100.0}; g3b._awakenedFills = {kb.id: 0}
-g3b._awakenedReady = {kb.id: True}; g3b._awakenedPower = {kb.id: 'moonshot'}
-g3b.play.fieldGoalTry()
-expect("a chip shot that makes itself does not burn the power",
-       (not g3b.play.isFgGood) or (g3b.play.awakenedFire is None and g3b._awakenedReady[kb.id] is True))
+burned = fired = 0
+TRIALS = 40
+for _ in range(TRIALS):
+    s3b.situation(quarter=4, clock=120, offense='home', down=4, distance=8, ballOn=8)  # ~25yd
+    g3b = s3b.game
+    kb = g3b.offensiveTeam.rosterDict['k']
+    g3b._awakenedCharge = {kb.id: 100.0}; g3b._awakenedFills = {kb.id: 0}
+    g3b._awakenedReady = {kb.id: True}; g3b._awakenedPower = {kb.id: 'moonshot'}
+    g3b.play.fieldGoalTry()
+    didFire = g3b.play.awakenedFire is not None
+    stillReady = g3b._awakenedReady[kb.id] is True
+    fired += int(didFire)
+    burned += int(not stillReady)
+    # The invariant holds on EVERY roll: the meter is spent exactly when the power fired.
+    if didFire == stillReady:
+        expect(f"meter spent iff the power fired (fired={didFire}, ready={stillReady})", False)
+        break
+expect(f"the meter is spent exactly when the power fires ({burned} spent, {fired} fired)",
+       burned == fired)
+expect(f"an easy kick usually makes itself and keeps the power ({TRIALS - fired}/{TRIALS})",
+       fired <= TRIALS * 0.25)
 
 print("\n4. A charged QB forces the completion (no INT/drop, big gain)")
 # A dropback can sack/throw-away (no target), so loop until a real throw fires.

@@ -4937,7 +4937,13 @@ class SeasonManager:
                 season=season,
                 week=getattr(self, 'currentWeek', 0) or 0,
                 category='champion',
-                event_type='floosbowl_champion',
+                # ⚠️ camelCase. `publish` is keyword-only and takes `eventType`; this said
+                # `event_type` and raised TypeError on EVERY Floos Bowl, so the champion
+                # never reached the feed — while the unpin above had ALREADY run, leaving
+                # the previous champion unpinned and no new one published. Same fault as
+                # `_publishCriticalityNews`'s `lead_weight=`, which cost 17 seasons of
+                # criticality rows. Regression: test_publish_kwargs.py sweeps every call.
+                eventType='floosbowl_champion',
                 text='{0} {1} are Floos Bowl champions.'.format(
                     getattr(champion, 'city', ''), champion.name).strip(),
                 teamId=champion.id,
@@ -4956,6 +4962,29 @@ class SeasonManager:
                 broadcast=False,
             )
         except Exception as e:
+            # ⚠️ ROLL BACK, OR A FAILED PUBLISH TAKES THE SITE DOWN. The unpin above is a
+            # bulk UPDATE: it executes immediately and takes SQLite's single write lock.
+            # If anything between it and the publish raises, this except used to just log
+            # and walk away, leaving the shared session holding that write transaction
+            # open indefinitely. Every other session's write then waits the full 30s
+            # busy_timeout and fails — and because `runSimulation()` is a task on the SAME
+            # event loop as the HTTP server, each of those 30s blocks freezes the health
+            # check until Fly pulls the instance. That is exactly what a one-word kwarg
+            # typo (`event_type=` for `eventType=`) did in production on 2026-08-21:
+            # bracket prizes and the favourite-team bonus both died 30s apart, and the
+            # proxy reported no healthy instances.
+            # COMMIT rather than roll back: `publish` commits on success, so this is
+            # already a commit point on the happy path, and rolling back would discard
+            # whatever else was pending on the shared session. The unpin is wanted either
+            # way — the old champion stepping aside is correct even when the new row
+            # fails. Fall back to a rollback only if the session is genuinely broken.
+            try:
+                self.db_session.commit()
+            except Exception:
+                try:
+                    self.db_session.rollback()
+                except Exception:
+                    pass
             logger.error(f"Champion news publish failed: {e}")
 
     def _applyDivisionSeeding(self, qualifiers, league):
