@@ -64,6 +64,10 @@ season4/games/Week 8.json
 season4/games/Week 9.json
 season4/seasonData.json
 season*
+# ...but not source modules. `season*` is for the legacy season4/ JSON dumps above;
+# it also silently swallowed season_finish.py, which works locally and is simply
+# absent in production. seasonManager.py only survives it by already being tracked.
+!season_*.py
 *.pyc
 *.png
 data/unusedNames.json

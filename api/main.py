@@ -659,6 +659,20 @@ async def get_team(team_id: int, response: Response):
                     'Defense': row.defense_stats or {},
                 }
                 pastSeasons.append(pastEntry)
+
+            # Where they actually finished: division placing and playoff exit, both
+            # derived from games rather than stored (see season_finish). Merged in
+            # rather than replacing the flags — the flags still drive the champion
+            # colours, this only says how the rest of the season ended.
+            try:
+                from season_finish import buildSeasonFinishes
+                finishes = buildSeasonFinishes(
+                    dbSession, team.id, excludeSeasons={currentSeasonNum})
+                for entry in pastSeasons:
+                    entry.update(finishes.get(entry['season'], {}))
+            except Exception as _fe:
+                logger.debug(f"Season finishes skipped for team {team.id}: {_fe}")
+
             dbSession.close()
         except Exception:
             # Fallback to runtime archive if DB query fails
