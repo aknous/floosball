@@ -702,6 +702,93 @@ class TheConversionIsMeasuredAgainstTheTarget(unittest.TestCase):
         self.assertIsNone(std._chooseDartsConversion(std.homeTeam, goRungs, kick))
 
 
+class LateTheClockDecidesAndTheOpponentComesBack(unittest.TestCase):
+    """⚠️ PRODUCTION GAME 994 (owner, 2026-08-24). DET 18, BOS 17, nobody near the target.
+    BOS finished on 17 — a need of exactly 7, which is an exact landing, so
+    `_dartsNeedIsExactLanding` vetoed every hoop shot — and threw away the last 57 seconds:
+
+        0:23  BOS 1&10 at BOS 46  -> yardsToEndzone 54, INSIDE the midfield window
+        0:17  BOS 2&5  at DET 49  -> 49, the midfield pair is gone
+        0:13  BOS 1&10 at DET 44  -> 44, INSIDE the midrange window
+        0:00  clock expires, lost 18-17
+
+    They had the tying point in range TWICE and took neither.
+
+    ⚠️ Every other darts read ignores the opponent ON PURPOSE — what matters is distance to
+    the TARGET, and a team leading 17-3 needs a hoop as badly as anyone. That stops being
+    true once the clock is going to decide it: if nobody reaches X the higher score wins, so
+    a single point is the difference between a loss and overtime. The veto stands down and
+    the need is rated `critical`.
+    """
+
+    def _late(self, offScore, oppScore, ballOn=54, clock=23, quarter=4, hoopsUsed=()):
+        from floosball_game import Play
+        g = Scenario(gameRules=dartsRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.homeScore, g.awayScore = offScore, oppScore
+        g.currentQuarter, g.gameClockSeconds = quarter, clock
+        g.down, g.yardsToEndzone, g.yardsToFirstDown = 1, ballOn, 10
+        g._hoopPairResult = {p: 'made' for p in hoopsUsed}
+        g.play = Play(g)
+        return g
+
+    def _rate(self, game, rolls=400):
+        return sum(game._shouldAttemptHoopShot() for _ in range(rolls)) / rolls
+
+    def test_theFixtureReproducesGame994(self):
+        g = self._late(17, 18)
+        self.assertIn(float(g.format.bustNeed(g, g.homeTeam)), g._dartsExactLandings(),
+                      'the premise: the need is an exact landing, which is what vetoed it')
+        self.assertIsNotNone(g._hoopTarget(), 'the tying hoop really was in range')
+
+    def test_theVetoStandsDownWhenTheClockWillDecideIt(self):
+        g = self._late(17, 18)
+        self.assertTrue(g._dartsHoopSavesTheClockGame())
+        self.assertFalse(g._dartsNeedIsExactLanding(), 'still refusing the tying point')
+        self.assertEqual(g._hoopPointsNeeded(-1), 'critical')
+        self.assertGreater(self._rate(g), 0.5, 'the tying hoop is still not being taken')
+
+    def test_theOtherWindowInThatGameToo(self):
+        """The midrange pair at yardsToEndzone 44, where BOS sat at 0:13."""
+        g = self._late(17, 18, ballOn=44, clock=13)
+        self.assertEqual((g._hoopTarget() or (None,))[0], 'midrange')
+        self.assertGreater(self._rate(g), 0.4)
+
+    def test_levelLateCountsToo(self):
+        """Tied with the clock dying, the point LEADS — that is the game, not a bridge."""
+        g = self._late(18, 18)
+        self.assertTrue(g._dartsHoopSavesTheClockGame())
+        self.assertFalse(g._dartsNeedIsExactLanding())
+
+    def test_earlyTheLandingIsStillProtected(self):
+        """⚠️ THE CONTROL THAT KEEPS THE ORIGINAL RULE ALIVE. With a whole half to play the
+        target is what matters and a hoop still spoils the landing."""
+        g = self._late(17, 18, quarter=2, clock=600)
+        self.assertFalse(g._dartsHoopSavesTheClockGame())
+        self.assertTrue(g._dartsNeedIsExactLanding())
+        self.assertEqual(self._rate(g), 0.0)
+
+    def test_aLeaderIsNotRescuedFromItself(self):
+        """Ahead with the clock running out, the clock is a friend."""
+        self.assertFalse(self._late(19, 18)._dartsHoopSavesTheClockGame())
+
+    def test_aDeficitBeyondTheHoopsDoesNotQualify(self):
+        """The hoops have to be able to ERASE it — three pairs is three points."""
+        self.assertFalse(self._late(13, 18)._dartsHoopSavesTheClockGame())
+
+    def test_spentPairsDoNotQualify(self):
+        g = self._late(17, 18, hoopsUsed=('midfield', 'midrange', 'endzone'))
+        self.assertFalse(g._dartsHoopSavesTheClockGame())
+
+    def test_itIsInertOutsideDarts(self):
+        from game_rules import GameRules
+        g = Scenario(gameRules=GameRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.currentQuarter, g.gameClockSeconds = 4, 23
+        g.homeScore, g.awayScore = 17, 18
+        self.assertFalse(g._dartsHoopSavesTheClockGame())
+
+
 class OvertimeIsStandardFootball(unittest.TestCase):
     """Overtime reverts to standard rules — next score wins once both teams have had a
     possession, and the sideline hoops are off (owner, 2026-08-24).

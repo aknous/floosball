@@ -4887,6 +4887,52 @@ class Game:
                 continue
         return out
 
+    def _dartsHoopSavesTheClockGame(self) -> bool:
+        """Darts: the clock is about to decide this game, and a hoop point still reachable
+        would tie it or take the lead.
+
+        ⚠️ WHEN THE CLOCK DECIDES IT, DARTS BECOMES "HIGHER SCORE WINS" AND THE OPPONENT
+        COMES BACK INTO THE QUESTION. Every other darts read ignores the opponent on
+        purpose — what matters is distance to the TARGET, and a team leading 17-3 needs a
+        hoop as badly as anyone. That stops being true in the closing minutes: if nobody
+        reaches X the higher score takes it, so a single point is the difference between a
+        loss and overtime.
+
+        ⚠️ Reported from PRODUCTION GAME 994 (owner, 2026-08-24). BOS finished 18-17 on a
+        need of exactly 7 — an exact landing, so `_dartsNeedIsExactLanding` vetoed every
+        hoop shot — and threw away the last 57 seconds. They sat on `yardsToEndzone` 54 at
+        0:23 (inside the midfield window) and 44 at 0:13 (inside the midrange window), took
+        neither, and lost by ONE with the tying point in range twice.
+
+        Trailing OR TIED both qualify: level with the clock dying, a hoop point is the game
+        rather than a bridge to a landing.
+        """
+        if not self._dartsActive():
+            return False
+        offense = getattr(self, 'offensiveTeam', None)
+        if offense is None or not self._sidelineGoalsActive():
+            return False
+        from constants import SIDELINE_GOAL_DESPERATION_SECS
+        if not (self.currentQuarter >= 4
+                and self.gameClockSeconds <= SIDELINE_GOAL_DESPERATION_SECS):
+            return False
+        isHome = offense is self.homeTeam
+        deficit = ((self.awayScore - self.homeScore) if isHome
+                   else (self.homeScore - self.awayScore))
+        if deficit < 0:
+            return False                # already ahead; the clock is a friend
+        pts = float(getattr(self.gameRules, 'sidelineGoalPoints', 1))
+        remaining = max(0, self._hoopPairCount()
+                        - len(getattr(self, '_hoopPairResult', None) or {})) * pts
+        if remaining <= 0:
+            return False
+        # Level needs the ONE point that leads; behind needs the deficit erased.
+        needed = float(deficit) if deficit > 0 else pts
+        # ⚠️ The points must not BUST on the way — a hoop that overshoots the target banks
+        # nothing, so it cannot rescue anything either.
+        return (needed <= remaining
+                and not self.format.voidsScore(self, offense, needed))
+
     def _dartsNeedIsExactLanding(self) -> bool:
         """Darts: the remaining need is already exactly what a normal scoring play banks,
         so the offense should go and score it rather than shoot a hoop.
@@ -4915,6 +4961,12 @@ class Game:
             return False
         offense = getattr(self, 'offensiveTeam', None)
         if offense is None:
+            return False
+        # ⚠️ THE VETO STANDS DOWN WHEN THE CLOCK IS ABOUT TO DECIDE THE GAME. Preserving an
+        # exact landing is worth nothing if the whistle goes first — see
+        # `_dartsHoopSavesTheClockGame`, and production game 994, which was lost by ONE with
+        # the tying hoop in range twice on the final drive.
+        if self._dartsHoopSavesTheClockGame():
             return False
         return self.format.bustNeed(self, offense) in self._dartsExactLandings()
 
@@ -5413,6 +5465,13 @@ class Game:
             need = self.format.bustNeed(self, self.offensiveTeam)
             if need <= 0:
                 return None                      # already there; the game is over
+            # ⚠️ LATE, THE CLOCK DECIDES IT AND THE OPPONENT COMES BACK INTO THE QUESTION.
+            # Everything below reasons purely about distance to the TARGET, which is right
+            # all game and wrong in the last minutes: if nobody reaches X the higher score
+            # wins, so a point that ties or leads outranks any landing. See
+            # `_dartsHoopSavesTheClockGame` (production game 994).
+            if self._dartsHoopSavesTheClockGame():
+                return 'critical'
             fg = self._fgValue()
             # Below a field goal, a hoop is the ONLY score that does not bust. No
             # conventional play can put points on the board from here at all.
