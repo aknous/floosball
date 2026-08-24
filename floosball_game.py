@@ -12918,6 +12918,17 @@ class Game:
             _framesPick = self._chooseFramesConversion(scoringTeam, goRungs, fallback)
             if _framesPick is not None:
                 return _framesPick
+        # Darts: a rung that lands on the target wins outright, and one that overshoots
+        # banks nothing. Deferring drops the busting rungs so the standard policy cannot
+        # gamble on a try that scores zero however well it is executed.
+        if goRungs and self._dartsActive():
+            _dartsPick = self._chooseDartsConversion(scoringTeam, goRungs, fallback)
+            if _dartsPick is not None:
+                return _dartsPick
+            goRungs = [r for r in goRungs
+                       if not self.format.voidsScore(self, scoringTeam, r['points'])]
+            if not goRungs:
+                return fallback
         if self.currentQuarter not in (3, 4) or not goRungs:   # Q1-Q2 / OT: the safe kick (or forced go-rung)
             return fallback
         scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
@@ -12955,6 +12966,41 @@ class Game:
         aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         pct = max(0.05, min(0.95, desire + aggressNorm * 0.15))
         return target if random.random() < pct else fallback
+
+    def _chooseDartsConversion(self, scoringTeam: FloosTeam.Team, goRungs: list, fallback: dict):
+        """Darts post-TD decision, or None to defer to the standard policy.
+
+        ⚠️ THE CONVERSION IS A SCORE, AND IN DARTS EVERY SCORE IS MEASURED AGAINST THE
+        TARGET — the standard policy measures it against the OPPONENT, so it could not see
+        either half of this. Two things follow, and they are the same two that govern every
+        other darts call:
+
+          * A rung that lands EXACTLY on the target WINS THE GAME. Measured at X=24, a team
+            on 16 scores a touchdown to reach 22 and the two-point try takes it to 24 while
+            the kick only reaches 23 — and the chooser took the kick **60 times out of 60**,
+            because a one-point deficit against the opponent is not what is being decided.
+          * A rung that BUSTS banks nothing at all, so it is never worth attempting. At a
+            need of 1 the two-point try overshoots and scores ZERO, leaving the team exactly
+            where the touchdown left it — strictly worse than the kick that lands.
+
+        ⚠️ The safe kick can never bust here, which is what makes this total: the try is
+        skipped outright at a need of 0 (`_conversionIsMoot`), so the need is at least 1 and
+        an extra point is at most that. There is always a legal rung.
+        """
+        if not self._dartsActive():
+            return None
+        need = float(self.format.bustNeed(self, scoringTeam))
+        if need <= 0:
+            return None                 # already on the target; the try is moot anyway
+        # A go-rung that lands exactly on it ends the game — take the shortest such try.
+        landing = [r for r in goRungs if float(r['points']) == need]
+        if landing:
+            return min(landing, key=lambda r: r['distance'])
+        # Otherwise the kick lands it, if anything does.
+        if float(getattr(self.gameRules, 'extraPointPoints', 1)) == need:
+            return fallback if fallback['kind'] == 'kick' else dict(
+                next(r for r in self._conversionRungs() if r['kind'] == 'kick'))
+        return None                     # nothing wins outright — defer, minus the busting rungs
 
     def _chooseFramesConversion(self, scoringTeam: FloosTeam.Team, goRungs: list, fallback: dict):
         """Frames post-TD decision, or None to defer to the standard policy.
