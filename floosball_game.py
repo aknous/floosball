@@ -4914,6 +4914,64 @@ class Game:
         used = getattr(self, '_hoopPairResult', None) or {}
         return len(used) >= 2
 
+    def _refuseBustingKick(self) -> bool:
+        """Darts: never attempt a field goal that would overshoot X. Returns True if the
+        call was overridden.
+
+        ⚠️ THE RULE EXISTED AND WAS ENFORCED IN ONE PLACE. `BustFormat.allowFieldGoal`
+        is consulted by `_fourthDownCaller` and nowhere else, while ~35 sites can set
+        `PlayType.FieldGoal` — so `endOfHalfFG` (which deliberately sits ABOVE the down
+        split and fires on any down) kicked straight through it. Measured over 60 darts
+        games: every bust in the sample was a field goal, roughly half of them from that
+        one path and the rest from another that records no clock-management decision.
+
+        So the guard lives at the CHOKE POINT instead: there is exactly one `playCaller()`
+        call and exactly one field-goal execution branch, and nothing has run yet in
+        between. Every present and future decision site funnels through here, which is the
+        only way a rule with 35 entrances stays enforced.
+
+        What the offense does instead (owner, 2026-08-23):
+          - No hoop left and the need is under a field goal — the drive genuinely cannot
+            score. Punt. `_fourthDownCaller` already reaches this conclusion for a final
+            down (`_dartsDriveIsDead`), and the pairs RESET next possession, so giving the
+            ball up is how the offense restocks its only scoring play.
+          - A hoop still available: play on, because yards are how you get into range for
+            the 1-pointer that actually lands. On a FINAL down that means going for it
+            when deep in opponent territory, where losing the ball hands over poor field
+            position anyway; from further out, punt instead.
+        """
+        if getattr(self.format, 'key', '') != 'bust':
+            return False
+        if self.play is None or self.play.playType is not PlayType.FieldGoal:
+            return False
+        if self.format.allowFieldGoal(self, self.gameRules.fieldGoalPoints):
+            return False
+
+        from constants import DARTS_GO_FOR_IT_YARDS
+        finalDown = self.down >= self.gameRules.downsPerSeries
+        deepInOpponentTerritory = self.yardsToEndzone <= DARTS_GO_FOR_IT_YARDS
+        punt = self._dartsDriveIsDead() or (finalDown and not deepInOpponentTerritory)
+
+        self.play.insights['dartsRefusedKick'] = {
+            'reason': 'a field goal from here would clear the target',
+            'need': self.format.bustNeed(self, self.offensiveTeam),
+            'instead': 'punt' if punt else 'play on',
+        }
+        if punt:
+            self.play.playType = PlayType.Punt
+            return True
+
+        # Play on. Re-derive exactly what playCaller's downs-1-3 tail uses, then run it —
+        # the weights already bias toward hoop hunting in this format.
+        isHome = (self.offensiveTeam == self.homeTeam)
+        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        self.play.playType = None
+        self.play.targetSideline = self._shouldTargetSideline(scoreDiff, coach)
+        self._executeWeightedPlay(self._computePlayWeights(scoreDiff, coach),
+                                  targetSideline=self.play.targetSideline)
+        return True
+
     def _dartsLeadingOnPoints(self) -> bool:
         """Darts tiebreak: if the clock beats both teams to the target, the higher score
         wins. So a dead drive is worth different things to the two sides — see
@@ -8800,6 +8858,10 @@ class Game:
                 # Call and execute play
                 self._timeoutCalled = False
                 self.playCaller()
+                # ⚠️ THE ONE PLACE A BUSTING KICK CAN BE STOPPED. See _refuseBustingKick —
+                # the rule has ~35 entrances and one enforcement point, and this is it.
+                # A no-op in every non-bust format.
+                self._refuseBustingKick()
                 if self._timeoutCalled and self.timingManager:
                     await self.timingManager.waitAfterTimeout()
 

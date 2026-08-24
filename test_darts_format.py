@@ -38,7 +38,7 @@ from game_rules import GameRules
 from scenario import Scenario
 
 # The shipped preset's target, so the engine tests below exercise what actually runs.
-X = 21
+X = 24
 
 
 def dartsRules(target=X, **overrides):
@@ -102,6 +102,93 @@ class TheFormatAssertsItsOwnPrerequisite(unittest.TestCase):
 
     def test_theBaseClassDefaultIsEmpty(self):
         self.assertEqual(GameFormat().bundledRules(), {})
+
+
+class TheKickGuardIsCentral(unittest.TestCase):
+    """A busting field goal banks NOTHING and concedes the ball, so it is never the right
+    call — and the offense was making it.
+
+    ⚠️ THE RULE HAD ONE ENFORCEMENT POINT AND ~35 ENTRANCES. `allowFieldGoal` was
+    consulted only by `_fourthDownCaller`, while every other site that can set
+    `PlayType.FieldGoal` kicked straight past it — `endOfHalfFG` most of all, because it
+    deliberately sits ABOVE the down split and fires on any down. Measured over 60 games
+    before the guard: every bust in the sample was a field goal, about half from that one
+    path. After: zero, with no path attributed.
+
+    These pin the GUARD rather than the count. The bust rate is emergent and small enough
+    that a threshold on it would be flaky (see the note above on distributions); "the
+    offense never chooses a kick that cannot score" is a hard invariant and testable.
+    """
+
+    def setUp(self):
+        self.game = Scenario(gameRules=dartsRules()).game
+        self.game.offensiveTeam = self.game.homeTeam
+        self.game.defensiveTeam = self.game.awayTeam
+        self.game.play = self.game.play or None
+
+    def _kickFrom(self, score, yardsToEndzone=20, down=1, hoopsUsed=0):
+        """Set up a snap where the offense has decided to kick and would bust."""
+        from floosball_game import Play, PlayType
+        g = self.game
+        g.homeScore = score
+        g.down = down
+        g.yardsToEndzone = yardsToEndzone
+        g._hoopPairResult = {f'pair{i}': 'made' for i in range(hoopsUsed)}
+        g.play = Play(g)
+        g.play.playType = PlayType.FieldGoal
+        return g
+
+    def test_aKickThatWouldBustIsOverridden(self):
+        from floosball_game import PlayType
+        g = self._kickFrom(X - 1)
+        self.assertTrue(g._refuseBustingKick(), 'the guard did not fire')
+        self.assertIsNot(g.play.playType, PlayType.FieldGoal,
+                         'kicked a field goal that cannot score')
+
+    def test_aKickThatLandsExactlyIsLeftAlone(self):
+        from floosball_game import PlayType
+        g = self._kickFrom(X - 3)   # a field goal lands on X exactly
+        self.assertFalse(g._refuseBustingKick(), 'refused a kick that wins the game')
+        self.assertIs(g.play.playType, PlayType.FieldGoal)
+
+    def test_aDeadDrivePunts(self):
+        """No hoop left and the need under a field goal: nothing on this possession can
+        score, and the pairs reset next drive — so giving the ball up restocks the only
+        scoring play the offense has."""
+        from floosball_game import PlayType
+        g = self._kickFrom(X - 1, hoopsUsed=2)
+        self.assertTrue(g._refuseBustingKick())
+        self.assertIs(g.play.playType, PlayType.Punt)
+
+    def test_withAHoopLeftTheDrivePlaysOn(self):
+        """Yards are how you reach the 1-pointer that actually lands, so a live hoop is
+        worth playing for rather than punting away."""
+        from floosball_game import PlayType
+        g = self._kickFrom(X - 1, hoopsUsed=0, down=1)
+        g._refuseBustingKick()
+        self.assertIsNot(g.play.playType, PlayType.Punt,
+                         'punted a drive that could still land a hoop')
+
+    def test_onAFinalDownFarOutItPunts(self):
+        """Deep in opponent territory a failed try costs little, so go for it — from
+        further out it hands over real field position, so punt."""
+        from floosball_game import PlayType
+        g = self._kickFrom(X - 1, yardsToEndzone=60,
+                           down=self.game.gameRules.downsPerSeries)
+        self.assertTrue(g._refuseBustingKick())
+        self.assertIs(g.play.playType, PlayType.Punt)
+
+    def test_itIsANoOpInStandardFootball(self):
+        """The guard runs on every snap of every format, so it has to cost nothing
+        anywhere else."""
+        from floosball_game import Play, PlayType
+        from game_rules import GameRules
+        g = Scenario(gameRules=GameRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.play = Play(g)
+        g.play.playType = PlayType.FieldGoal
+        self.assertFalse(g._refuseBustingKick())
+        self.assertIs(g.play.playType, PlayType.FieldGoal)
 
 
 class TheScoringRules(unittest.TestCase):
@@ -265,16 +352,15 @@ class ThePresetIsLive(unittest.TestCase):
     def test_dartsIsOfferedToTheLeagueAgain(self):
         from constants import GAME_FORMAT_PRESETS
         keys = [p['key'] for p in GAME_FORMAT_PRESETS]
-        self.assertIn('gf_bust_21', keys, 'the darts preset is still held back')
+        self.assertIn('gf_bust_24', keys, 'the darts preset is still held back')
 
     def test_thePresetTargetIsInsideTheCertifiedRange(self):
         """⚠️ THE TARGET HAS A USABLE RANGE. Darts is only a game about landing on a number
         while the number is reachable inside four quarters; above that the clock decides it
         and the format is football with a ceiling. Measured over 50 games per target, share
         decided by LANDING on it: 10 -> 98%, 12 -> 98%, 15 -> 88%, 18 -> 84%, 21 -> 66%,
-        24 -> 58%, 30 -> 30%. Shipped at 21 (owner, 2026-08-18: "higher is better.
-        21-24") to buy a longer game -- pre-halftime finishes 35% -> 19% and ~138 plays
-        against ~125, at the cost of a third of games going to the clock.
+        24 -> 58%, 30 -> 30%. Shipped at 24 (owner, 2026-08-23), the top of the range they gave on 2026-08-18
+        ("higher is better. 21-24") — knowingly trading target finishes for a longer game.
 
         ⚠️ `GameRules.targetScore` DEFAULTS to 30, which belongs to the 'target' format
         ("first to 30"), so a darts preset that simply omits the target inherits one it
@@ -300,7 +386,7 @@ class ThePresetIsLive(unittest.TestCase):
         """⚠️ Removing it was the fix, not an oversight: leaving it in the preset would
         hide a regression in `bundledRules` for exactly the activation path people use."""
         from constants import GAME_FORMAT_PRESETS
-        preset = next(p for p in GAME_FORMAT_PRESETS if p['key'] == 'gf_bust_21')
+        preset = next(p for p in GAME_FORMAT_PRESETS if p['key'] == 'gf_bust_24')
         self.assertNotIn('sidelineGoalsEnabled', preset['patch'])
         self.assertEqual(preset['patch']['gameFormat'], 'bust')
 

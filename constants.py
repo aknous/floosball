@@ -2587,12 +2587,15 @@ GAME_FORMAT_PRESETS = [
     #     X=10  98%   X=12  98%   X=15  88%   X=18  84%
     #     X=21  66%   X=24  58%   X=30  30%
     #
-    # ⚠️ SHIPPED AT 21 (owner, 2026-08-18: "higher is better. 21-24"), trading some target
-    # finishes for a longer game — two thirds still land on the number, pre-halftime
-    # finishes drop 35% -> 19%, and a game runs ~138 plays against a standard ~157. 24 is
-    # the far end of the owner's range and was not taken: it puts 46% of games on the
-    # clock, which is the point where the format stops being about landing on a number.
-    # Anything above 24 is out of the certified band entirely.
+    # ⚠️ SHIPPED AT 24 (owner, 2026-08-23), the far end of the range they gave on
+    # 2026-08-18 ("higher is better. 21-24"). It was 21 first, and the trade is stated
+    # plainly rather than hidden: 58% of games are decided by LANDING on the number
+    # against 21's 66%, so ~46% go to the clock instead — the owner raised it knowing
+    # that ("I understand that less games will end with reaching the target"). What it
+    # buys is a longer game and a later finish.
+    # ⚠️ 24 IS THE CEILING, not a step on a ladder. Above it the clock decides most games
+    # and darts stops being a game about landing on a number at all (30 lands only 30% of
+    # the time). `test_darts_format.py` asserts the preset stays at or under it.
     #
     # ⚠️ `GameRules.targetScore` DEFAULTS to 30 — it belongs to the 'target' format ("first
     # to 30") — so darts activated without a patch inherits a target it plays badly at.
@@ -2649,8 +2652,11 @@ GAME_FORMAT_PRESETS = [
     # hides it from users, and the results COUNT — which is the wrong place to debut a
     # format whose endgame is still being tuned. It stays a normal vote preset, so a league
     # can still choose it deliberately; this only stops it arriving by surprise.
-    {"key": "gf_bust_21",        "label": "Darts (land on 21)", "chaosEligible": False,
-     "patch": {"gameFormat": "bust", "targetScore": 21,
+    # ⚠️ THE KEY CARRIES THE TARGET, so it moves with it — `RuleVote.option_key` is
+    # persisted, so renaming orphans any darts vote already cast in an OPEN window. Ship
+    # a target change between windows, not during one.
+    {"key": "gf_bust_24",        "label": "Darts (land on 24)", "chaosEligible": False,
+     "patch": {"gameFormat": "bust", "targetScore": 24,
                "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
                "extraPointPoints": 1, "twoPointConversionPoints": 2}},
 ]
@@ -2665,7 +2671,7 @@ GAME_FORMAT_DESCRIPTIONS = {
     "chess_clock": "Each team gets a set amount of time to possess the ball. Once a team runs out, they can't get the ball back.",
     "innings":     "Teams get 3 \"tries\" per inning. Most points wins.",
     "frames":      "Match play. The game splits into frames. The team with the most points in a frame wins the frame. Most frames wins.",
-    "bust":        "Land directly on the target score to win. Overshoot it and the points are voided. Auto-enables sideline targets to help you land it exactly.",
+    "bust":        "Land directly on the target score to win. Overshoot it and the points are voided. Auto-enables sideline targets.",
 }
 
 # ---- Player Fatigue ----
@@ -3751,6 +3757,12 @@ GLITCH_MAX_TRIGGERS = 3
 # ⚠️ It applies on EVERY down including the last, which inverts the standing final-down
 # guard on purpose — that guard exists because a hoop consumes the down without gaining
 # yards, and under a target there is no scoring play it could be forfeiting.
+# How deep into opponent territory counts as "losing the ball here costs little" when a
+# busting field goal is refused on a final down (owner, 2026-08-23). Inside this, go for
+# it — a failed try hands over poor field position anyway, and a hoop can still land the
+# exact remainder. Outside it, punt.
+DARTS_GO_FOR_IT_YARDS = 40.0
+
 DARTS_HOOP_HUNT_BASE = 0.55
 DARTS_HOOP_HUNT_AGGR_SPAN = 0.35
 
