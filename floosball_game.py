@@ -4918,6 +4918,32 @@ class Game:
             return False
         return self.format.bustNeed(self, offense) in self._dartsExactLandings()
 
+    def _dartsNeedCoverableBy(self, hoopPoints: float) -> bool:
+        """Could the offense still reach the target with `hoopPoints` of hoop left to it?
+
+        ⚠️ NOT `hoopPoints >= need`. That is only the question below a field goal, where
+        hoops are the ONLY score. Above it they BRIDGE — a need of 4 is a field goal plus one
+        hoop — so demanding the hoops cover the whole need declares a drive stranded while a
+        perfectly ordinary kick-plus-dink still lands it. Shipped that way for one commit and
+        caught by a sweep: at a need of 4 with two hoops still reachable it read 'the drive
+        cannot recover' and shot at 93%, against the 57% that spot deserves.
+
+        Mirrors `_hoopPointsNeeded`'s arithmetic against `_dartsExactLandings`, which is the
+        one definition of what a conventional score lands on.
+        """
+        need = float(self.format.bustNeed(self, self.offensiveTeam))
+        if need <= 0:
+            return True
+        if need < self._fgValue():
+            return hoopPoints >= need        # only a hoop can score at all
+        landings = self._dartsExactLandings()
+        if need in landings:
+            return True                      # a conventional score lands it alone
+        for spend in range(1, int(hoopPoints) + 1):
+            if need - spend in landings:
+                return True                  # hoops bridge to one
+        return False
+
     def _dartsHoopCoverAfterDeclining(self, pairName: str) -> float:
         """Points the offense could still bank from hoops if it passes up `pairName` and
         drives on. The test for whether a shot is load-bearing.
@@ -5499,7 +5525,19 @@ class Game:
                     # (caught by `TheHuntIsCoachScaled`, whose fixture sits at the 12).
                     from constants import DARTS_HOOP_LOADBEARING_CHANCE
                     _need = self.format.bustNeed(self, self.offensiveTeam)
-                    if self._dartsHoopCoverAfterDeclining(pair) < _need:
+                    _pts = float(getattr(self.gameRules, 'sidelineGoalPoints', 1))
+                    # ⚠️ AND WHEN THE SHOT SIMPLY WINS THE GAME (owner, 2026-08-24). Passing
+                    # up a CLOSING pair that ends the match is dominated, not merely risky:
+                    # crossing the pair loses it for NOTHING, while shooting loses it only
+                    # after a ~71% chance of winning on the spot, and a miss is an
+                    # incompletion — the down is spent, the ball is kept, the end-zone pair
+                    # is still ahead. Measured over 400 games, drives that passed up an
+                    # in-range midfield hoop needing 2 or fewer went on to score at all
+                    # **11 times out of 22**, so "there are chances left" was paying for a
+                    # coin flip with a 71% shot already in hand.
+                    if (_need <= _pts
+                            or not self._dartsNeedCoverableBy(
+                                self._dartsHoopCoverAfterDeclining(pair))):
                         chance = max(chance, DARTS_HOOP_LOADBEARING_CHANCE)
                     yardsToCrossing = max(0.0, self.yardsToEndzone - _closing[1])
                     if yardsToCrossing <= DARTS_HOOP_CLOSING_YARDS:

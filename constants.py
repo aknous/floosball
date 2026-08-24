@@ -3790,6 +3790,19 @@ DARTS_HOOP_LAST_CHANCE_LIFT = 0.40
 # drove past the midfield pair, **12 were left unable to cover their need** — that is the
 # half that is a mistake, and the other 14 are ordinary football.
 #
+# ⚠️ IT ALSO COVERS A CLOSING SHOT THAT SIMPLY WINS THE GAME (owner, 2026-08-24: needing one
+# point, the midfield goals are the nearest score and driving past them risks the ball for
+# nothing). That case is DOMINATED rather than merely risky, because crossing the pair loses
+# it either way: declining loses it for nothing, shooting loses it only after a ~71% chance
+# of ending the match, and a miss is an incompletion — the down is spent, the ball is kept,
+# and the end-zone pair is still ahead. Measured over 400 games, drives that passed up an
+# in-range midfield hoop needing 2 points or fewer went on to score AT ALL 11 times out of
+# 22, so "there are chances left" was buying a coin flip with a 71% shot in hand.
+#
+# ⚠️ CLOSING pairs only, in both cases. The END-ZONE pair is not lost by driving on, so
+# declining it costs a down rather than the chance, and forcing it would erase the coach dial
+# across the whole red zone.
+#
 # Sits at the same height as `SIDELINE_GOAL_DESPERATION_CHANCE` (0.92), which is the
 # standard game's "this point is needed to tie or win" rate; the reasoning is identical.
 DARTS_HOOP_LOADBEARING_CHANCE = 0.92

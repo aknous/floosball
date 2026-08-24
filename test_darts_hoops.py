@@ -164,9 +164,49 @@ class AHoopTheDriveCannotAffordToLoseIsShot(unittest.TestCase):
         self.assertEqual(spent._dartsHoopCoverAfterDeclining('midfield'), 1.0)
 
     def test_withChancesLeftItStillWeighsTheShot(self):
-        """The control, and the reason this is not just 'always shoot'."""
-        self.assertLess(self._rate(need=1, ballOn=60), 0.75,
+        """The control, and the reason this is not just 'always shoot'. Uses a BRIDGING
+        need — at a need of 1 the shot wins the game outright and is taken regardless."""
+        self.assertLess(self._rate(need=2, ballOn=60), 0.75,
                         'shooting on reflex with two chances still ahead')
+
+    def test_aWinningClosingShotIsTakenEvenWithChancesLeft(self):
+        """⚠️ Owner, 2026-08-24: needing one point the midfield goals are the nearest score,
+        and driving past them risks the ball for nothing. The case is DOMINATED rather than
+        merely risky — crossing the pair loses it either way, so declining loses it for
+        nothing while shooting loses it only after a ~71% chance of ending the match, and a
+        miss is an incompletion that keeps the ball. Measured over 400 games, drives that
+        passed up an in-range midfield hoop needing 2 or fewer went on to score AT ALL 11
+        times out of 22."""
+        from constants import DARTS_HOOP_LOADBEARING_CHANCE
+        rate = self._rate(need=1, ballOn=60)      # every pair still unused
+        self.assertGreater(rate, DARTS_HOOP_LOADBEARING_CHANCE - 0.08,
+                           f'passed up the shot that wins the game ({rate:.0%})')
+
+    def test_aBridgingNeedIsNotTreatedAsStranded(self):
+        """⚠️ THIS SHIPPED WRONG FOR ONE COMMIT. The stranding test was `cover < need`,
+        which is only the right question BELOW a field goal, where hoops are the only score.
+        Above it they BRIDGE — a need of 4 is a field goal plus one hoop — so demanding the
+        hoops cover the whole need declared an ordinary kick-plus-dink drive stranded and
+        shot at 93% where 57% belongs. Caught by sweeping the needs rather than spot-checking.
+        """
+        from constants import DARTS_HOOP_HUNT_BASE
+        game = dartsGame(offScore=X - 4, ballOn=60).game
+        self.assertEqual(game._dartsHoopCoverAfterDeclining('midfield'), 2.0)
+        self.assertTrue(game._dartsNeedCoverableBy(2.0),
+                        'a field goal plus a hoop still lands a need of 4')
+        rate = self._rate(need=4, ballOn=60)
+        self.assertLess(rate, DARTS_HOOP_HUNT_BASE + 0.15,
+                        f'forced a bridging shot that had chances left ({rate:.0%})')
+
+    def test_theBridgeMustActuallyReachALanding(self):
+        """The counterpart: with only the midfield pair able to supply the bridging point,
+        passing it up does strand the drive."""
+        from constants import DARTS_HOOP_LOADBEARING_CHANCE
+        game = dartsGame(offScore=X - 4, ballOn=60, hoopsUsed=('midrange', 'endzone')).game
+        self.assertEqual(game._dartsHoopCoverAfterDeclining('midfield'), 0.0)
+        self.assertFalse(game._dartsNeedCoverableBy(0.0))
+        rate = self._rate(need=4, ballOn=60, hoopsUsed=('midrange', 'endzone'))
+        self.assertGreater(rate, DARTS_HOOP_LOADBEARING_CHANCE - 0.08)
 
     def test_whenDecliningWouldStrandTheDriveItShoots(self):
         from constants import DARTS_HOOP_LOADBEARING_CHANCE
@@ -241,8 +281,12 @@ class TheMidfieldWindowShuts(unittest.TestCase):
     progress, and here it silently destroys one of the two scoring options a team needing
     1 or 2 points has, so the shot gets more urgent as the window shuts."""
 
-    def _rate(self, ballOn, aggressiveness=80, rolls=600):
-        scenario = dartsGame(offScore=X - 1, ballOn=ballOn, aggressiveness=aggressiveness)
+    def _rate(self, ballOn, aggressiveness=80, rolls=600, need=2):
+        """⚠️ A BRIDGING need (2) by default, NOT 1. At a need of 1 the closing shot WINS
+        THE GAME and floors at `DARTS_HOOP_LOADBEARING_CHANCE` on every snap of the window,
+        which is deliberate — but it swamps the gradient this class exists to measure and
+        makes the curve read flat. Measure the lift where the shot is genuinely weighed."""
+        scenario = dartsGame(offScore=X - need, ballOn=ballOn, aggressiveness=aggressiveness)
         game = scenario.game
         target = game._hoopTarget()
         self.assertIsNotNone(target, f'fixture at {ballOn} is out of hoop range')
@@ -281,9 +325,19 @@ class TheMidfieldWindowShuts(unittest.TestCase):
 
     def test_itIsStillAChanceRatherThanACertainty(self):
         """Even at the crossing a neutral coach sometimes plays on — the lift is urgency,
-        not a scripted play."""
+        not a scripted play.
+
+        ⚠️ True of a BRIDGING need only. When the shot wins the game outright it is
+        deliberately near-scripted (see `test_aWinningShotIsScriptedNotWeighed`), because
+        crossing the pair loses it either way and declining buys nothing."""
         rate = self._rate(50)[1]
         self.assertLess(rate, 1.0)
+
+    def test_aWinningShotIsScriptedNotWeighed(self):
+        """The deliberate exception, and the reason `_rate` defaults to a bridging need."""
+        self.assertGreater(self._rate(64, need=1)[1], 0.85,
+                           'a shot that wins the game is still being weighed 14 yards out')
+        self.assertGreater(self._rate(50, need=1)[1], 0.95)
 
 
 class TheThirdPairFillsTheDeadZone(unittest.TestCase):
