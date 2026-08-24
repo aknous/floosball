@@ -40,6 +40,11 @@ from scenario import Scenario
 # The shipped preset's target, so the engine tests below exercise what actually runs.
 X = 24
 
+# The sideline-hoop pairs, in the order a drive meets them. ⚠️ Use these names in fixtures:
+# `_dartsDriveIsDead` asks which pairs are still REACHABLE, so a made-up key leaves the
+# pair it meant to spend wide open and the drive alive.
+HOOP_PAIRS = ('midfield', 'midrange', 'endzone')
+
 
 def dartsRules(target=X, **overrides):
     rules = GameRules()
@@ -133,7 +138,11 @@ class TheKickGuardIsCentral(unittest.TestCase):
         g.homeScore = score
         g.down = down
         g.yardsToEndzone = yardsToEndzone
-        g._hoopPairResult = {f'pair{i}': 'made' for i in range(hoopsUsed)}
+        # ⚠️ REAL PAIR NAMES. `_dartsDriveIsDead` asks which pairs are still REACHABLE, and
+        # the end-zone pair is the one every drive advances into — so `pair0/pair1` style
+        # placeholders leave it live and the drive is not dead at all. They passed only
+        # while the check counted keys.
+        g._hoopPairResult = {p: 'made' for p in HOOP_PAIRS[:hoopsUsed]}
         g.play = Play(g)
         g.play.playType = PlayType.FieldGoal
         return g
@@ -156,7 +165,7 @@ class TheKickGuardIsCentral(unittest.TestCase):
         score, and the pairs reset next drive — so giving the ball up restocks the only
         scoring play the offense has."""
         from floosball_game import PlayType
-        g = self._kickFrom(X - 1, hoopsUsed=2)
+        g = self._kickFrom(X - 1, hoopsUsed=len(HOOP_PAIRS))
         self.assertTrue(g._refuseBustingKick())
         self.assertIs(g.play.playType, PlayType.Punt)
 
@@ -189,6 +198,269 @@ class TheKickGuardIsCentral(unittest.TestCase):
         g.play.playType = PlayType.FieldGoal
         self.assertFalse(g._refuseBustingKick())
         self.assertIs(g.play.playType, PlayType.FieldGoal)
+
+
+class TheOnlyScoreLeftIsTaken(unittest.TestCase):
+    """The mirror of the kick guard: when a field goal is the ONLY score still available,
+    the offense takes it on ANY down.
+
+    ⚠️ THE STATE IS NOT AN EDGE CASE AND THE OFFENSE WAS PLAYING THROUGH IT. Three facts
+    combine to strand a drive: a touchdown is VOIDED when it would clear X (the carrier is
+    held up short instead), both hoop pairs are spent, and the remaining need is still a
+    field goal or more. Nothing a normal snap can do puts a point on the board — yet every
+    read in the standard tree is about the deficit against the OPPONENT rather than the
+    distance to the TARGET, so it kept calling football until the final down.
+
+    Measured at the choke point over 200 games at X=24, rule off: 58 snaps sat in this
+    state, all in range, and 42 of them were runs or passes. Rule on: 21 states, all 21
+    kicking (the count falls because a drive now resolves the moment it can instead of
+    burning three downs first). Every state in the sample was inside the opponent's 20 —
+    many at the 1-yard line, a carrier held up short over and over — and the kick being
+    declined sat at the engine's 0.96 make ceiling, so there is no 'work closer for a
+    better kick' trade being given up.
+    """
+
+    def setUp(self):
+        self.game = Scenario(gameRules=dartsRules()).game
+        self.game.offensiveTeam = self.game.homeTeam
+        self.game.defensiveTeam = self.game.awayTeam
+
+    def _snap(self, score, down=1, yardsToEndzone=12, hoopsUsed=None, playType=None):
+        """⚠️ `hoopsUsed` defaults to ALL of them, read off `_hoopPairCount()` rather than
+        hardcoded — the third (midrange) pair was added after the first two and a literal 2
+        would leave a live hoop, which is exactly the case that keeps the choice open."""
+        from floosball_game import Play, PlayType
+        g = self.game
+        if hoopsUsed is None:
+            hoopsUsed = g._hoopPairCount()
+        g.homeScore = score
+        g.down = down
+        g.yardsToEndzone = yardsToEndzone
+        g.yardsToFirstDown = 10
+        g._hoopPairResult = {f'pair{i}': 'made' for i in range(hoopsUsed)}
+        g.play = Play(g)
+        g.play.playType = playType if playType is not None else PlayType.Pass
+        return g
+
+    def test_itKicksOnAnyDown(self):
+        """X-4: a field goal lands (leaving 1 for nothing), a touchdown busts, no hoop
+        left. There is one scoring play and it should not wait for the final down."""
+        from floosball_game import PlayType
+        for down in range(1, self.game.gameRules.downsPerSeries + 1):
+            g = self._snap(X - 4, down=down)
+            self.assertTrue(g._dartsForceKick(), f'the rule did not fire on down {down}')
+            self.assertIs(g.play.playType, PlayType.FieldGoal,
+                          f'ran a play that cannot score on down {down}')
+
+    def test_aTouchdownStillLandingLeavesTheChoiceOpen(self):
+        """At X-7 a touchdown is a real option, so nothing is forced."""
+        from floosball_game import PlayType
+        g = self._snap(X - 7)
+        self.assertFalse(g._dartsForceKick())
+        self.assertIs(g.play.playType, PlayType.Pass)
+
+    def test_aLiveHoopLeavesTheChoiceOpen(self):
+        """A hoop is the other way to score, so the drive is not stranded."""
+        from floosball_game import PlayType
+        g = self._snap(X - 4, hoopsUsed=0)
+        self.assertFalse(g._dartsForceKick())
+        self.assertIs(g.play.playType, PlayType.Pass)
+
+    def test_aBustingKickIsNeverForced(self):
+        """Below a field goal the kick is the one thing that must NOT happen — that is
+        `_refuseBustingKick`'s case and the two must not fight over it."""
+        from floosball_game import PlayType
+        g = self._snap(X - 1)
+        self.assertFalse(g._dartsForceKick())
+        self.assertIsNot(g.play.playType, PlayType.FieldGoal)
+
+    def test_outOfRangeItPlaysOn(self):
+        """'The only score' is not a reason to heave a hopeless kick — work into range
+        first, the same answer the tree gives anywhere else."""
+        from floosball_game import PlayType
+        g = self._snap(X - 4, yardsToEndzone=85)
+        self.assertFalse(g._dartsForceKick())
+        self.assertIs(g.play.playType, PlayType.Pass)
+
+    def test_itDoesNotOverrideAResolvedHoopShot(self):
+        """⚠️ `_executeHoopShot` banks its point INSIDE playCaller, unlike every other
+        call, so a shot that spent the last pair leaves this method looking at the exact
+        state it fires on. Flipping it to a kick would replay the down."""
+        from floosball_game import PlayType
+        g = self._snap(X - 4)
+        g.play.isHoopShot = True
+        self.assertFalse(g._dartsForceKick())
+        self.assertIsNot(g.play.playType, PlayType.FieldGoal)
+
+    def test_itLeavesAPuntAndAKneelAlone(self):
+        from floosball_game import PlayType
+        for kind in (PlayType.Punt, PlayType.Kneel, PlayType.Spike):
+            g = self._snap(X - 4, playType=kind)
+            self.assertFalse(g._dartsForceKick(), f'overrode a {kind.name}')
+            self.assertIs(g.play.playType, kind)
+
+    def test_itIsANoOpInStandardFootball(self):
+        """It runs on every snap of every format, so it has to cost nothing elsewhere."""
+        from floosball_game import Play, PlayType
+        from game_rules import GameRules
+        g = Scenario(gameRules=GameRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.homeScore = X - 4
+        g.play = Play(g)
+        g.play.playType = PlayType.Pass
+        self.assertFalse(g._dartsForceKick())
+        self.assertIs(g.play.playType, PlayType.Pass)
+
+
+class AnExactLandingIsNotSpentOnAHoop(unittest.TestCase):
+    """Needing exactly a touchdown or a field goal, the offense goes and scores it rather
+    than shooting a sideline hoop (owner, 2026-08-24: teams were shooting these and ending
+    up with an awkward remainder they then had to work back from).
+
+    ⚠️ A HOOP POINT IS NOT FREE ONCE THE DRIVE HAS ITS ANSWER — IT SPOILS THE LANDING.
+    From a need of 6 a made hoop leaves 5, which no conventional score reaches; from 3 it
+    leaves 2, below a field goal, which is the format's own dead-drive state. Measured over
+    200 games at X=24 before the fix: 330 shots were taken while the need was ALREADY an
+    exact landing, 222 made, and **102 of them turned an exact landing into one nothing can
+    reach** (58 from a need of 6, 44 from a need of 3). After: 0, with hoop volume down
+    3462 -> 2855. End to end over a further 200 games on one seed, the format's own win
+    condition improves: games decided by landing exactly on X **138 -> 150 (69% -> 75%)**
+    and team-scores stranded at X-1 or X-2 **40 -> 26**.
+
+    ⚠️ TWO CAUSES, ONE VETO. `_hoopPointsNeeded`'s "a conventional score lands it exactly"
+    test was the literal `need == fg or need == self._maxPossession()` — two of the four
+    landings — so a need of 6 fell through to the BRIDGING loop, which found 6 minus three
+    hoops equals a field goal and called spending every pair 'helpful'. And separately, the
+    darts branch of `_shouldAttemptHoopShot` does not return when it declines to decide, so
+    a need of 3 (already returning None) dropped into the standard-football tail, which
+    asks the deficit-against-the-opponent question this format does not care about. That
+    tail was 44 of the 102 on its own, which is why the veto sits above both.
+    """
+
+    def setUp(self):
+        self.game = Scenario(gameRules=dartsRules()).game
+        self.game.offensiveTeam = self.game.homeTeam
+        self.game.defensiveTeam = self.game.awayTeam
+
+    def _at(self, need, hoopsUsed=0):
+        from floosball_game import Play
+        g = self.game
+        g.homeScore = X - need
+        g.awayScore = 0
+        g.down = 1
+        g.yardsToEndzone = 45
+        g.yardsToFirstDown = 10
+        g._hoopPairResult = {p: 'made' for p in HOOP_PAIRS[:hoopsUsed]}
+        g.play = Play(g)
+        return g
+
+    def test_theLandingSetIsAllFourValues(self):
+        """A field goal, a bare touchdown, and a touchdown plus each conversion rung."""
+        g = self.game
+        rules = g.gameRules
+        self.assertEqual(
+            g._dartsExactLandings(),
+            {float(rules.fieldGoalPoints),
+             float(rules.touchdownPoints),
+             float(rules.touchdownPoints + rules.extraPointPoints),
+             float(rules.touchdownPoints + rules.twoPointConversionPoints)})
+
+    def test_itIsDerivedFromTheLiveRulesNotConstants(self):
+        """FG / TD / XP / 2-pt values are all votable, so a mutated ruleset has to move
+        the landing set with it."""
+        rules = dartsRules(fieldGoalPoints=4, touchdownPoints=5, extraPointPoints=2)
+        g = Scenario(gameRules=rules).game
+        self.assertIn(4.0, g._dartsExactLandings(), 'a 4-point field goal is a landing')
+        self.assertIn(5.0, g._dartsExactLandings(), 'a bare touchdown is a landing')
+        self.assertIn(7.0, g._dartsExactLandings(), 'touchdown plus the 2-point XP')
+        self.assertNotIn(3.0, g._dartsExactLandings(), 'read a hardcoded field goal')
+
+    def test_needingExactlyATouchdownVetoesTheShot(self):
+        g = self._at(int(g_td(self.game)))
+        self.assertTrue(g._dartsNeedIsExactLanding())
+        self.assertFalse(g._shouldAttemptHoopShot(),
+                         'shot a hoop while needing exactly a touchdown')
+
+    def test_needingExactlyAFieldGoalVetoesTheShot(self):
+        g = self._at(int(self.game._fgValue()))
+        self.assertTrue(g._dartsNeedIsExactLanding())
+        self.assertFalse(g._shouldAttemptHoopShot(),
+                         'shot a hoop while needing exactly a field goal')
+
+    def test_theVetoCoversTheWholeTouchdownBand(self):
+        """⚠️ 6 and 7 are the two the old check missed, and 7 is the one that reads
+        harmless — it goes to 6, still landable. The shot still bought a down and a pair
+        for nothing, so it is vetoed too."""
+        td = int(g_td(self.game))
+        for need in (td, td + self.game.gameRules.extraPointPoints,
+                     td + self.game.gameRules.twoPointConversionPoints):
+            g = self._at(need)
+            self.assertTrue(g._dartsNeedIsExactLanding(), f'need {need} is a landing')
+            self.assertFalse(g._shouldAttemptHoopShot(), f'shot a hoop at a need of {need}')
+
+    def test_theOffenseStopsBendingTheDriveTowardTheHoopToo(self):
+        """⚠️ ONE FIX, TWO SURFACES. `_dartsHoopApproach` damps downfield play to protect
+        the use-it-or-lose-it midfield pair, and it reads the same verdict — so needing
+        exactly a touchdown was ALSO suppressing the passing that gets one."""
+        g = self._at(int(g_td(self.game)))
+        g.yardsToEndzone = 52   # right in the approach window
+        self.assertEqual(g._hoopPointsNeeded(g.homeScore - g.awayScore), None)
+        self.assertEqual(g._dartsHoopApproach(), 0.0,
+                         'still managing field position toward a hoop it should ignore')
+
+    def test_aBridgingNeedStillWantsTheHoop(self):
+        """The mechanic's whole point: a need of 4 is one hoop plus a field goal, so the
+        veto must not swallow the case hoops exist for.
+
+        ⚠️ This is also the POSITIVE CONTROL for the vetoes above. They assert a False out
+        of `_shouldAttemptHoopShot`, and that method has half a dozen other ways to return
+        False — an out-of-range pair, the final down, hurry-up. Firing from the IDENTICAL
+        fixture at a bridging need is what proves the veto is the thing doing the work.
+        """
+        g = self._at(int(self.game._fgValue()) + 1)
+        self.assertFalse(g._dartsNeedIsExactLanding())
+        self.assertEqual(g._hoopPointsNeeded(g.homeScore - g.awayScore), 'helpful')
+        self.assertIsNotNone(g._hoopTarget(), 'fixture has no pair in range')
+        random.seed(3)
+        fired = sum(1 for _ in range(200) if g._shouldAttemptHoopShot())
+        self.assertGreater(fired, 40, 'the fixture never shoots, so the vetoes prove nothing')
+
+    def test_aNeedBelowAFieldGoalIsStillCritical(self):
+        """Below a field goal the hoop is the ONLY score, which is the opposite case."""
+        g = self._at(1)
+        self.assertFalse(g._dartsNeedIsExactLanding())
+        self.assertEqual(g._hoopPointsNeeded(g.homeScore - g.awayScore), 'critical')
+
+    def test_aLargeNeedIsUntouched(self):
+        """⚠️ The veto is narrow ON PURPOSE. At 0-0 the need is the whole target, the pairs
+        reset every possession and dozens of drives remain — a hoop point there is ordinary
+        progress with nothing to spoil. It fired on 9.5% of shots in the sample."""
+        g = self._at(X)
+        self.assertFalse(g._dartsNeedIsExactLanding())
+
+    def test_itIsANoOpInStandardFootball(self):
+        from game_rules import GameRules
+        g = Scenario(gameRules=GameRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.homeScore, g.awayScore = 21, 18   # a 3-point margin: a "landing" if this applied
+        self.assertFalse(g._dartsNeedIsExactLanding())
+
+
+def g_td(game):
+    return float(getattr(game.gameRules, 'touchdownPoints', 6))
+
+
+class TheHeldUpShortText(unittest.TestCase):
+    """A carrier who pulled up short of a would-bust touchdown reads as football, not as a
+    rules footnote — the parenthetical restating the target was cut (owner, 2026-08-24)."""
+
+    def test_itDoesNotRestateTheTarget(self):
+        import inspect
+        from floosball_game import Game
+        source = inspect.getsource(Game.formatPlayText)
+        self.assertIn('pulls up short of the goal', source)
+        self.assertNotIn('a TD would clear', source,
+                         'the held-up-short line still restates the target')
 
 
 class TheScoringRules(unittest.TestCase):
