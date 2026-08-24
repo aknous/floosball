@@ -22,7 +22,12 @@ def expect(desc, cond):
 
 WR = 3
 CARD = 500
-WR_GATE = CARD_GATE_FP_THRESHOLDS[WR]     # 8
+# ⚠️ PER-EDITION BAR. `run()` mints a PRISMATIC card by default, and the gate bar is set
+# by CARD_GATE_FP_THRESHOLDS_BY_EDITION (prismatic WR = 12), not by the flat
+# CARD_GATE_FP_THRESHOLDS table (8). Reading the flat one compared the minted card
+# against a bar no prismatic card ever gets.
+from constants import CARD_GATE_FP_THRESHOLDS_BY_EDITION
+WR_GATE = CARD_GATE_FP_THRESHOLDS_BY_EDITION['prismatic'][WR]   # 12
 WR_STUD = _ALL_IN_STUD_LINE[WR]           # 20
 
 
@@ -42,7 +47,12 @@ p = cfg["primary"]
 expect(f"studLine injected for WR ({p.get('studLine')})", p.get("studLine") == WR_STUD)
 expect(f"perFPx present ({p.get('perFPx')})", isinstance(p.get("perFPx"), (int, float)) and p["perFPx"] > 0)
 expect(f"maxXBonus cap present ({p.get('maxXBonus')})", p.get("maxXBonus", 0) > 0)
-expect(f"the card still carries the FP power bar", cfg.get("gate", {}).get("threshold") == WR_GATE)
+# ⚠️ ALL IN GATES AT ITS OWN STUD LINE, NOT THE GENERIC PER-EDITION BAR. The two are
+# deliberately kept EQUAL on this card (see _allInStudLine: lowering both together is
+# what keeps an All-Pro All In paying sooner without reopening the gap). This compared
+# against the standard bar, which All In has never used.
+expect(f"the card gates at its stud line ({cfg.get('gate', {}).get('threshold')})",
+       cfg.get("gate", {}).get("threshold") == p.get("studLine") == WR_STUD)
 
 print("\n1. Under the stud line -> no payout")
 r, _ = run(WR_STUD - 3)                    # above the gate, below the stud line

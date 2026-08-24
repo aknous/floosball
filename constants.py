@@ -233,7 +233,13 @@ PERF_DEFENSE_WEIGHT = 0.3    # defensive-production share of the overall perform
 # overall composite), so there's no separate box defValue term — only the clutch
 # defensive WPA remains, as a secondary term.
 MVP_PERF_WEIGHT = 0.7        # overall (two-way) production-composite z share
-MVP_WPA_WEIGHT = 0.3         # per-snap OFFENSIVE WPA share (offensive clutch)
+MVP_WPA_WEIGHT = 0.2         # per-GAME OFFENSIVE WPA share (offensive clutch)
+# ⚠️ 0.3 -> 0.2, PAIRED with wpaRate moving from per-snap to per-GAME. Measured over
+# 20 simulated seasons: per-snap at 0.30 gave quarterbacks 1 MVP in 20 (receivers took
+# 11), because a QB logs ~1,233 WPA snaps a season against a receiver's ~290 and so
+# carries the league's lowest per-snap rate despite its second-highest raw WPA. Per
+# game at 0.30 over-corrects to QB 14 of 20; at 0.20 it splits QB 8 / WR 8 / RB 3 /
+# TE 1. Changing either half alone reproduces one of the two failures.
 MVP_DEF_WPA_WEIGHT = 0.2     # individual DEFENSIVE WPA share (defensive clutch; secondary)
 # Per-defensive-group box weights (DEF_BOX_WEIGHTS, below) now feed the DEFENSIVE
 # performance rating; defValue's box term and the old MVP_DEF_WEIGHT/MVP_DEF_BOX_WEIGHT
@@ -1571,15 +1577,16 @@ ATTITUDE_DRIFT_MAGNITUDE = 1.5    # win/loss drift multiplier on |winPct-0.5| (d
 # don't re-open a gap. Only matters when a position is genuinely short.
 ROSTER_SUPPLY_BUFFER_PER_POSITION = 3
 
-# ---- League realignment (one-time competitive rebalance) ----
-# One league had drifted persistently stronger than the other. A one-time
-# realignment ranks all teams by combined win% over the last
-# LEAGUE_REALIGN_WINDOW_SEASONS completed seasons and serpentine-splits them
-# evenly across the two leagues (rank 1->A, 2->B, 3->B, 4->A, ...) so neither
-# league stays lopsided. Fires once at a new-season boundary (gated by the
-# `league_realigned` app_setting) and the resulting alignment persists via the
-# `league_alignment` app_setting, honored by LeagueManager.createLeagues.
-LEAGUE_REALIGN_WINDOW_SEASONS = 2
+# ---- League realignment: REMOVED (owner, 2026-08-23) ----
+# `realignByRecentPerformance` serpentine-split the two leagues by recent win% so
+# neither stayed perpetually stronger. It predates divisions, and once league AND
+# division membership are curated in config.json it works against them: it moves
+# clubs between leagues, which invalidates `divisionDistribution` and forces
+# `_assignDivisions` to fall back. Measured on a fresh league it moved 16 teams at
+# season 2 and re-formed every division. Function, caller and window constant are
+# gone. ⚠️ `_applyPersistedAlignment` and the `league_alignment` app_setting STAY —
+# a database where the realignment already ran keeps the leagues it has, because
+# reverting them would move half the league. `league_realigned` is now vestigial.
 
 # ---- Retention limits (parity — docs/PARITY_PROSPECT_PLAN.md Phase 5) ----
 # Force stacked teams to break up by limiting RETENTION, not salary. Two levers,
@@ -2580,12 +2587,15 @@ GAME_FORMAT_PRESETS = [
     #     X=10  98%   X=12  98%   X=15  88%   X=18  84%
     #     X=21  66%   X=24  58%   X=30  30%
     #
-    # ⚠️ SHIPPED AT 21 (owner, 2026-08-18: "higher is better. 21-24"), trading some target
-    # finishes for a longer game — two thirds still land on the number, pre-halftime
-    # finishes drop 35% -> 19%, and a game runs ~138 plays against a standard ~157. 24 is
-    # the far end of the owner's range and was not taken: it puts 46% of games on the
-    # clock, which is the point where the format stops being about landing on a number.
-    # Anything above 24 is out of the certified band entirely.
+    # ⚠️ SHIPPED AT 24 (owner, 2026-08-23), the far end of the range they gave on
+    # 2026-08-18 ("higher is better. 21-24"). It was 21 first, and the trade is stated
+    # plainly rather than hidden: 58% of games are decided by LANDING on the number
+    # against 21's 66%, so ~46% go to the clock instead — the owner raised it knowing
+    # that ("I understand that less games will end with reaching the target"). What it
+    # buys is a longer game and a later finish.
+    # ⚠️ 24 IS THE CEILING, not a step on a ladder. Above it the clock decides most games
+    # and darts stops being a game about landing on a number at all (30 lands only 30% of
+    # the time). `test_darts_format.py` asserts the preset stays at or under it.
     #
     # ⚠️ `GameRules.targetScore` DEFAULTS to 30 — it belongs to the 'target' format ("first
     # to 30") — so darts activated without a patch inherits a target it plays badly at.
@@ -2642,8 +2652,11 @@ GAME_FORMAT_PRESETS = [
     # hides it from users, and the results COUNT — which is the wrong place to debut a
     # format whose endgame is still being tuned. It stays a normal vote preset, so a league
     # can still choose it deliberately; this only stops it arriving by surprise.
-    {"key": "gf_bust_21",        "label": "Darts (land on 21)", "chaosEligible": False,
-     "patch": {"gameFormat": "bust", "targetScore": 21,
+    # ⚠️ THE KEY CARRIES THE TARGET, so it moves with it — `RuleVote.option_key` is
+    # persisted, so renaming orphans any darts vote already cast in an OPEN window. Ship
+    # a target change between windows, not during one.
+    {"key": "gf_bust_24",        "label": "Darts (land on 24)", "chaosEligible": False,
+     "patch": {"gameFormat": "bust", "targetScore": 24,
                "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
                "extraPointPoints": 1, "twoPointConversionPoints": 2}},
 ]
@@ -2658,7 +2671,7 @@ GAME_FORMAT_DESCRIPTIONS = {
     "chess_clock": "Each team gets a set amount of time to possess the ball. Once a team runs out, they can't get the ball back.",
     "innings":     "Teams get 3 \"tries\" per inning. Most points wins.",
     "frames":      "Match play. The game splits into frames. The team with the most points in a frame wins the frame. Most frames wins.",
-    "bust":        "Land directly on the target score to win. Overshoot it and the points are voided. Auto-enables sideline targets to help you land it exactly.",
+    "bust":        "Land directly on the target score to win. Overshoot it and the points are voided. Auto-enables sideline targets.",
 }
 
 # ---- Player Fatigue ----
@@ -3744,6 +3757,12 @@ GLITCH_MAX_TRIGGERS = 3
 # ⚠️ It applies on EVERY down including the last, which inverts the standing final-down
 # guard on purpose — that guard exists because a hoop consumes the down without gaining
 # yards, and under a target there is no scoring play it could be forfeiting.
+# How deep into opponent territory counts as "losing the ball here costs little" when a
+# busting field goal is refused on a final down (owner, 2026-08-23). Inside this, go for
+# it — a failed try hands over poor field position anyway, and a hoop can still land the
+# exact remainder. Outside it, punt.
+DARTS_GO_FOR_IT_YARDS = 40.0
+
 DARTS_HOOP_HUNT_BASE = 0.55
 DARTS_HOOP_HUNT_AGGR_SPAN = 0.35
 
@@ -3839,3 +3858,28 @@ CORES_AMBIENT_NEWS_EVERY_WEEKS = 3
 #
 # ⚠️ Templates mint ONCE PER SEASON, so a change here lands at the next season boundary.
 CARD_EFFECTS_PER_PLAYER = 3
+
+# ─── Expected-points imminence (win probability) ──────────────────────────────
+# ⚠️ Win probability damped EXPECTED points by 1/possessions-remaining while REALIZED
+# points went undamped, so a drive in field-goal range banked ~1/24th of the points it
+# was about to score and the kick banked the rest. That is the whole source of the
+# kicker's inflated WPA: measured over 20 seasons, kickers ran 9.8x a QB's WPA per snap.
+#
+# Once a drive is in range the points are imminent rather than speculative, so EP is
+# weighted by how close it is to converting instead. Only ever RAISES the weight, so
+# nothing outside range changes and late-game drives (already near 1.0) are untouched.
+#
+# ⚠️ APPLIED TO THE CREDIT MODEL ONLY (`calculateWinProbability(forAttribution=True)`),
+# never to the win probability fans see. WP is not just a readout — `isBigPlay` fires
+# MOMENTUM_BIG_PLAY_BONUS, the one path from WP back into play outcomes — and applying
+# this floor to the display model shifts that distribution. Unifying the two models
+# means retuning the 7.0 big-play threshold to hold the big-play RATE, or accepting the
+# resulting scoring move as a deliberate balance call.
+#
+# ⚠️ Do NOT try to size that scoring move by comparing two fresh sims: between-league
+# variance is ~2.8 pts/game (two leagues with PROVABLY identical gameplay measured 36.06
+# and 33.26), which is as large as the effect, and seasons within one league are not
+# independent samples.
+EP_IMMINENCE_MIN_FIELD_POS = 60          # opponent's 40 — the same line EP calls FG range
+EP_IMMINENCE_POSITIONS = [60, 75, 90, 100]
+EP_IMMINENCE_WEIGHTS = [0.45, 0.70, 0.85, 0.90]

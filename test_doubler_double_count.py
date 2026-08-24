@@ -32,11 +32,22 @@ def makeCard(eqId, effectName, position, playerId, primary, tier=1):
 
 def buildSourceStats():
     """Per-player week stats summing to exactly 6 roster TDs (the shared dicts
-    handed in by fantasyTracker, by reference)."""
+    handed in by fantasyTracker, by reference).
+
+    ⚠️ 999 IS THE DOUBLER'S OWN DEPICTED PLAYER AND NEEDS A STAT LINE. An amplifier
+    only fires when its own player clears the card gate (`_amplifierActive` reads
+    `weekPlayerStats[player_id]['fantasyPoints']` against
+    `CARD_GATE_FP_THRESHOLDS[position]`, which is 6 at K). This fixture predates that
+    gate and gave 999 no entry at all, so `fp` read 0, the gate held the amplifier off,
+    and the test reported ">>> REGRESSION PRESENT <<<" against a Doubler that was
+    working correctly — it contributes no TDs of its own, so nothing else here hinted
+    that it needed stats. Kept above the threshold deliberately; drop it below 6 and
+    this test starts asserting the gate instead of the double-count it is named for."""
     return {
         101: {"passing_stats": {"tds": 3}},      # QB: 3 pass TDs
         102: {"rushing_stats": {"runTds": 2}},   # RB: 2 rush TDs
         103: {"receiving_stats": {"rcvTds": 1}}, # WR: 1 rec TD
+        999: {"fantasyPoints": 12},              # the Doubler's own player, past its gate
     }
 
 

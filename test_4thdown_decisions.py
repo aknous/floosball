@@ -77,8 +77,32 @@ class StubGame:
         self.currentQuarter = 4
         self.gameClockSeconds = 120
         self.down = 4
+        # Read by the huddle/clock cost model inside the 4th-down chain. A running
+        # clock is the ordinary 4th-down state these scenarios describe.
+        self.clockRunning = True
 
     _fourthDownCaller      = fg.Game._fourthDownCaller
+
+    # ⚠️ BORROW ANY GAME METHOD THIS STUB DOES NOT DEFINE. `_fourthDownCaller` reaches a
+    # growing set of per-format helpers (`_frameDecisionDiff`, `_dartsDriveIsDead`, ...),
+    # and each one added to the engine used to break this test with an AttributeError
+    # raised before a single decision was made. Enumerating them by hand is a losing
+    # game, so methods fall through to the real implementation while missing DATA still
+    # raises — data has to stay explicit here or a scenario could silently read a
+    # default instead of the value it means to test. Under the standard format these
+    # helpers short-circuit (frames/darts checks return None/False), so the standard
+    # 4th-down logic these tests exercise runs unchanged.
+    def __getattr__(self, name):
+        attr = getattr(fg.Game, name, None)
+        if callable(attr):
+            return attr.__get__(self, type(self))
+        raise AttributeError(name)
+
+    @property
+    def format(self):
+        from game_formats import getFormat
+        return getFormat(getattr(self.gameRules, 'gameFormat', 'standard') or 'standard')
+
     _shouldTargetSideline  = fg.Game._shouldTargetSideline
     _coachClockIQ          = fg.Game._coachClockIQ
     _estimateFgProbability = fg.Game._estimateFgProbability

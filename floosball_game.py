@@ -52,7 +52,7 @@ from constants import (
     MOMENTUM_PUNT,
     WPA_PASS_QB_SHARE, WPA_DROP_RECEIVER_SHARE, DEF_PLAYMAKER_BONUS,
     TD_DRAIN_MIN_SECONDS, TD_DRAIN_MAX_YARDS, LEAD_THREAT_TD_YARDS,
-)
+    EP_IMMINENCE_MIN_FIELD_POS, EP_IMMINENCE_POSITIONS, EP_IMMINENCE_WEIGHTS)
 
 # Import TimingManager for game-level timing control
 try:
@@ -3085,13 +3085,128 @@ class Game:
 
     def _framesFgFutile(self) -> bool:
         """Frames: three points cannot avoid a loss but a touchdown can, so the kick is a
-        wasted last chance. False off frames, and false whenever the kick still helps."""
+        wasted LAST CHANCE. False off frames, and false whenever the kick still helps.
+
+        ⚠️ "LAST CHANCE" IS THE LOAD-BEARING WORD, AND IT USED TO BE UNCHECKED. Without a
+        clock test this veto fires on EVERY possession of a frame, so an offense down a
+        touchdown with nine minutes of frame left refused a routine field goal and went
+        for it on 4th and 8 — measured at 100% go, where the identical board in standard
+        kicks 100%. Early in a frame a kick is not a wasted last chance at all: it cuts
+        the frame margin now, and there is time to get the ball back and win the frame.
+        The veto only makes sense once this really is the frame's final possession, which
+        is what `_frameEndSoon` answers — the same predicate `lateHopeless` already uses
+        one clause above the main call site.
+
+        ⚠️ This is a NARROWING, so it can only ever re-allow a kick the sim was refusing;
+        it cannot introduce a new refusal. The late cases the veto exists for — frames
+        level, down 3 in-frame and 7 on aggregate, the frame closing — are unaffected,
+        because `_frameEndSoon` is True in exactly those.
+        """
+        if not self._frameEndSoon():
+            return False
         rank = {'loss': 0, 'draw': 1, 'win': 2}
         fgRes = self._framesMatchResultIfAdd(self._fgValue())
         if fgRes is None or fgRes != 'loss':
             return False
         tdRes = self._framesMatchResultIfAdd(max(7, self._maxPossession()))
         return tdRes is not None and rank[tdRes] > rank[fgRes]
+
+    def _framesFgWins(self) -> bool:
+        """Frames: three points WIN THE MATCH outright, so the kick is not a compromise —
+        it IS the win. False off frames, and false whenever the kick does not settle it.
+
+        The mirror of `_framesFgFutile`, and the other half of the question this format
+        actually asks. A scalar margin cannot see it: tying a FRAME halves it, and a
+        halved frame can leave the match level and hand it to the TOTAL-POINTS tiebreak,
+        where three points may be exactly what wins. So a team "down 3 in the frame" can
+        be one kick from the title while the margin says it is losing — measured over 304
+        closing-frame states where a field goal won the match, the sim went for it in
+        ~12% of them, gambling a decided result on a conversion.
+
+        Gated on the frame closing, like its mirror: earlier in a frame the match is not
+        decidable from here, the frame can still swing, and a drive has value beyond the
+        three points.
+        """
+        if not self._frameEndSoon():
+            return False
+        return self._framesMatchResultIfAdd(self._fgValue()) == 'win'
+
+    def _kneelOutDetail(self, isHome: bool):
+        """The numbers behind a game-ending KNEEL-OUT, or None when kneeling cannot end it.
+
+        A kneel-out is the strongest ending in the sim: the offense is LEADING THE MATCH
+        in Q4/OT and can run the clock to 0:00 from here, so the result is decided with
+        no snap the opponent can answer. It beats every alternative, including a made
+        field goal, because a kick can miss and hands the ball back either way.
+
+        ⚠️ AVAILABLE ON THE FINAL DOWN TOO, which is the whole reason this is a helper.
+        The clock-management block that used to own this reasoning is gated on
+        `down < downsPerSeries`, so on a final down there was NO kneel option at all and
+        `_lastSnapBeforeBreak` — which sits ABOVE the down split — kicked instead.
+        Reported case: leading 21-20, 4th and 5 on the opponent's 33, 0:28 left, opponent
+        out of timeouts. It kicked a 50-yarder every time where a kneel simply ends it.
+        On a final down there is exactly ONE kneel and it is only safe BECAUSE the clock
+        dies on it: if it did not, the down would be surrendered and the ball with it,
+        which is why the drain test below is not optional.
+
+        ⚠️ "Leading" means leading THE MATCH, not the score margin — in frames a team can
+        be ahead on total points and losing on frames won, and kneeling there kneels away
+        a loss (`_framesLeadingNow`).
+        """
+        if not (self.currentQuarter == 4 or self.currentQuarter >= 5):
+            return None
+        _framesLead = self._framesLeadingNow()
+        scoreDiff = ((self.homeScore - self.awayScore) if isHome
+                     else (self.awayScore - self.homeScore))
+        leading = (scoreDiff > 0) if _framesLead is None else _framesLead
+        if not leading:
+            return None
+        # Field-position guard: a kneel loses a yard, so on the goal line it backs into
+        # the endzone for a self-inflicted safety.
+        if self.yardsToSafety <= 2:
+            return None
+
+        # Chess clock: a kneel drains the offense's OWN possession budget 1:1 with the
+        # game clock. If that budget cannot outlast the clock the kneels run it to 0 and
+        # the team is LOCKED OUT — a turnover handing the trailing opponent the ball.
+        _chessSecs = self._chessClockOffenseSecs()
+        if not ((_chessSecs is None) or (_chessSecs >= self.gameClockSeconds)):
+            return None
+
+        remaining = self.gameRules.downsPerSeries - self.down
+        availableKneels = remaining if remaining > 0 else 1
+
+        # Drive clock: kneels drain the possession shot-clock too and earn no first down
+        # to refill it, so the same lockout trap applies.
+        if self._driveClockActive():
+            _dcU = getattr(self.gameRules, 'driveClockUnit', 'seconds')
+            if _dcU == 'seconds':
+                if self.driveClockRemaining < self.gameClockSeconds:
+                    return None
+            else:  # 'plays': each kneel burns one drive-clock play
+                import math as _math
+                _kneelsNeeded = min(availableKneels, max(1, _math.ceil(
+                    self.gameClockSeconds / max(1, self.gameRules.kneelDrainSeconds))))
+                if self.driveClockRemaining < _kneelsNeeded:
+                    return None
+
+        oppTimeouts = self.awayTimeoutsRemaining if isHome else self.homeTimeoutsRemaining
+        # Opponent timeouts only matter while the game is close enough for them to come
+        # back; how far they have to come is a POINTS gap, which in frames is the margin
+        # inside the live frame rather than the running total.
+        maxComebackPts = 8 if self.gameClockSeconds <= 60 else 16
+        _comebackDiff = self._frameScoreDiff()
+        _comebackDiff = _comebackDiff if _comebackDiff is not None else scoreDiff
+        effectiveOppTos = oppTimeouts if _comebackDiff <= maxComebackPts else 0
+        # A timed-out kneel drains only the ~4s snap; a free one drains the full ~40s
+        # (snap plus the play-clock runoff before the next snap or the game ending).
+        toadKneels = min(effectiveOppTos, availableKneels)
+        freeKneels = availableKneels - toadKneels
+        drainableSeconds = toadKneels * 4 + freeKneels * self.gameRules.kneelDrainSeconds
+        if drainableSeconds < self.gameClockSeconds:
+            return None
+        return {'drainableSeconds': drainableSeconds, 'oppTimeouts': oppTimeouts,
+                'availableKneels': availableKneels}
 
     def _framesLeadingNow(self):
         """Frames only (else None): would the OFFENSE win if the match ended right now?
@@ -3159,7 +3274,22 @@ class Game:
         import math
         after = deficit - points
         afterXp = deficit - xp
-        need = lambda gap: math.ceil(gap / one) if gap > 0 else 0
+        # ⚠️ POSSESSIONS ARE COUNTED IN WHAT A POSSESSION CAN MAXIMALLY YIELD, NOT IN
+        # TD+XP. This measured the gap in `one` (7 at default rules) while a possession can
+        # actually produce `_maxPossession()` (8, TD + the best conversion rung) — and
+        # `_maxPossession`'s own docstring calls itself "the 'still a one-score game'
+        # bound". Counting in 7 misreads a gap of exactly 8, which INVERTED the chart at
+        # the two deficits either side of it:
+        #   down 9  — kicking gives 8, a one-possession game, GUARANTEED. Going for two
+        #             reaches 7 (still one possession) and risks 9 (two). The kick
+        #             strictly dominates, and the sim went for it 94% of the time.
+        #   down 10 — kicking gives 9 (two possessions). Two makes it 8 (ONE), and a miss
+        #             leaves 10, which is two possessions exactly like the 9 would have
+        #             been. The try is a FREE ROLL, and the sim took it 23% of the time.
+        # Reported from a live game as a team going for two down ten. It was not a coach
+        # error: the chart rated the correct call as an occasional longshot.
+        possUnit = self._maxPossession() or one
+        need = lambda gap: math.ceil(gap / possUnit) if gap > 0 else 0
         if after <= 0 < afterXp:
             base = CONVERSION_DESIRE_TIE_OR_WIN   # this try ties/wins now; the kick leaves you behind
         elif need(after) < need(afterXp):
@@ -3310,6 +3440,25 @@ class Game:
         _frameDiff = self._frameDecisionDiff()
         if _frameDiff is not None:
             scoreDiff = _frameDiff
+        # ⚠️ KNEEL IT OUT IF THAT ENDS THE GAME — checked before every scoring option
+        # below, because none of them can beat a decided result. Leading in Q4/OT with
+        # enough clock-drain in hand, the offense simply runs it to 0:00: a field goal can
+        # miss, and a make hands the ball back with time on it either way. `_kneelOutDetail`
+        # returns None unless the clock genuinely dies on these kneels, so a final-down
+        # kneel is never taken speculatively — the down (and the ball) would be gone.
+        # Reported: leading 21-20, 4th and 5 on the opponent's 33, 0:28, opponent out of
+        # timeouts, kicking a 50-yarder every time.
+        _kneelOut = self._kneelOutDetail(isHome)
+        if _kneelOut is not None:
+            self.play.insights['clockMgmt'] = {
+                'decision': 'kneelOut',
+                'reason': 'Kneeling runs out the clock and wins outright',
+                'clockRemaining': self.gameClockSeconds,
+                'drainableSeconds': _kneelOut['drainableSeconds'],
+                'oppTimeouts': _kneelOut['oppTimeouts'],
+            }
+            self.play.kneel()
+            return PlayType.Kneel
         # ⚠️ DARTS: A DEAD DRIVE PUNTS, and that is not the concession it looks like. Both
         # hoop pairs are spent and the remaining need is under a field goal, so nothing on
         # this possession can score — but the pairs RESET on the next one, so giving the
@@ -3371,6 +3520,31 @@ class Game:
                    and not self._framesFgFutile())
         inFieldGoalRange = ((chargedInRange and fgHelps)
                             or (self.yardsToEndzone <= kickerMaxDistance and fgProb >= fgThreshold))
+        # ⚠️ THE FUTILE VETO ONLY GUARDED THE CHARGED-KICKER PATH. `fgHelps` is ANDed with
+        # `chargedInRange` alone, so an ORDINARY in-range kick skipped it completely and
+        # the sim kicked a field goal that provably loses the match while a touchdown
+        # would win it. Measured over 490 closing-frame states: of the 179 where only a TD
+        # wins, it kicked 120 (67%). Re-applied here rather than by folding `fgHelps` into
+        # the second clause, because `fgHelps` also carries a NON-frames margin test
+        # (`scoreDiff >= -fgValue or not lateHopeless`) that would start suppressing
+        # legitimate kicks in every other format. `_framesFgFutile` is False off frames,
+        # so this stays a no-op everywhere else.
+        if self._framesFgFutile():
+            inFieldGoalRange = False
+        # ⚠️ AND THE MIRROR: A KICK THAT WINS THE MATCH IS TAKEN, NOT GAMBLED. Everything
+        # below reasons about whether a field goal is "enough" from a scalar margin, which
+        # cannot see that tying the frame halves it and throws the match to the points
+        # tiebreak — where three points can be the win. Without this the sim went for it
+        # on 4th and short in ~12% of the closing-frame states where the kick simply won.
+        # `_framesFgWins` is False off frames and whenever the kick does not settle it.
+        if inFieldGoalRange and self._framesFgWins():
+            self.play.insights['framesDecision'] = {
+                'decision': 'fgWinsMatch',
+                'reason': 'Three points win the match outright',
+                'frameMargin': self._frameScoreDiff(),
+            }
+            self.play.playType = PlayType.FieldGoal
+            return PlayType.FieldGoal
         # Darts (bust): never treat a FG as "in range" if it would overshoot X — the
         # offense should go for it / dink a hoop instead of busting the kick.
         if not self.format.allowFieldGoal(self, self.gameRules.fieldGoalPoints):
@@ -4740,6 +4914,64 @@ class Game:
         used = getattr(self, '_hoopPairResult', None) or {}
         return len(used) >= 2
 
+    def _refuseBustingKick(self) -> bool:
+        """Darts: never attempt a field goal that would overshoot X. Returns True if the
+        call was overridden.
+
+        ⚠️ THE RULE EXISTED AND WAS ENFORCED IN ONE PLACE. `BustFormat.allowFieldGoal`
+        is consulted by `_fourthDownCaller` and nowhere else, while ~35 sites can set
+        `PlayType.FieldGoal` — so `endOfHalfFG` (which deliberately sits ABOVE the down
+        split and fires on any down) kicked straight through it. Measured over 60 darts
+        games: every bust in the sample was a field goal, roughly half of them from that
+        one path and the rest from another that records no clock-management decision.
+
+        So the guard lives at the CHOKE POINT instead: there is exactly one `playCaller()`
+        call and exactly one field-goal execution branch, and nothing has run yet in
+        between. Every present and future decision site funnels through here, which is the
+        only way a rule with 35 entrances stays enforced.
+
+        What the offense does instead (owner, 2026-08-23):
+          - No hoop left and the need is under a field goal — the drive genuinely cannot
+            score. Punt. `_fourthDownCaller` already reaches this conclusion for a final
+            down (`_dartsDriveIsDead`), and the pairs RESET next possession, so giving the
+            ball up is how the offense restocks its only scoring play.
+          - A hoop still available: play on, because yards are how you get into range for
+            the 1-pointer that actually lands. On a FINAL down that means going for it
+            when deep in opponent territory, where losing the ball hands over poor field
+            position anyway; from further out, punt instead.
+        """
+        if getattr(self.format, 'key', '') != 'bust':
+            return False
+        if self.play is None or self.play.playType is not PlayType.FieldGoal:
+            return False
+        if self.format.allowFieldGoal(self, self.gameRules.fieldGoalPoints):
+            return False
+
+        from constants import DARTS_GO_FOR_IT_YARDS
+        finalDown = self.down >= self.gameRules.downsPerSeries
+        deepInOpponentTerritory = self.yardsToEndzone <= DARTS_GO_FOR_IT_YARDS
+        punt = self._dartsDriveIsDead() or (finalDown and not deepInOpponentTerritory)
+
+        self.play.insights['dartsRefusedKick'] = {
+            'reason': 'a field goal from here would clear the target',
+            'need': self.format.bustNeed(self, self.offensiveTeam),
+            'instead': 'punt' if punt else 'play on',
+        }
+        if punt:
+            self.play.playType = PlayType.Punt
+            return True
+
+        # Play on. Re-derive exactly what playCaller's downs-1-3 tail uses, then run it —
+        # the weights already bias toward hoop hunting in this format.
+        isHome = (self.offensiveTeam == self.homeTeam)
+        scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
+        coach = getattr(self.offensiveTeam, 'coach', None)
+        self.play.playType = None
+        self.play.targetSideline = self._shouldTargetSideline(scoreDiff, coach)
+        self._executeWeightedPlay(self._computePlayWeights(scoreDiff, coach),
+                                  targetSideline=self.play.targetSideline)
+        return True
+
     def _dartsLeadingOnPoints(self) -> bool:
         """Darts tiebreak: if the clock beats both teams to the target, the higher score
         wins. So a dead drive is worth different things to the two sides — see
@@ -5453,7 +5685,20 @@ class Game:
         # score test below now reasons off the margin the fourth-down caller would have used.
         _lastDiff = decisionDiff
         _routIsOn = _lastDiff > 3 * self._oneScore()
-        if (_atDeadline and self._lastSnapBeforeBreak()
+        # ⚠️ A KNEEL THAT ENDS THE GAME OUTRANKS THE KICK, AND IS CHECKED FIRST. This
+        # block reads only the clock and sits ABOVE the down split, so on a final down it
+        # decided before the clock-management branch (gated `down < downsPerSeries`) could
+        # offer a kneel at all. Reported: leading 21-20, 4th and 5 on the opponent's 33,
+        # 0:28, opponent out of timeouts — it kicked a 50-yarder 100% of the time, where a
+        # kneel simply ends it. The kick can MISS and hands the ball back either way, so
+        # running the clock out strictly dominates. `_kneelOutDetail` returns None unless
+        # the clock genuinely dies on these kneels, so this never surrenders a live down.
+        # It DEFERS rather than kneeling here: the actual kneel is taken by whichever
+        # decision-maker owns this down — the clock-management block below on a
+        # non-final down, `_fourthDownCaller` on a final one — so there is exactly one
+        # kneel site per down class and a direct caller of either gets the same answer.
+        if (self._kneelOutDetail(isHome) is None
+                and _atDeadline and self._lastSnapBeforeBreak()
                 and not self._isGarbageTime(_lastDiff) and not _routIsOn):
             _lastKicker = self.offensiveTeam.rosterDict.get('k')
             _lastMax = ((_lastKicker.maxFgDistance - self.gameRules.fgSnapDistance)
@@ -7914,6 +8159,12 @@ class Game:
         # Track previous win probability for WPA (Win Probability Added) calculations
         self.previousHomeWinProbability = self.homeTeamWinProbability
         self.previousAwayWinProbability = self.awayTeamWinProbability
+
+        # Credit-model baseline (see calculateWinProbability's `forAttribution`). Seeded
+        # from the same kickoff state; it only diverges once a drive reaches FG range.
+        _creditWp = self.calculateWinProbability(forAttribution=True)
+        self.previousHomeWpCredit = _creditWp['home']
+        self.previousAwayWpCredit = _creditWp['away']
         
         # Broadcast game start event
         if BROADCASTING_AVAILABLE and broadcaster.is_enabled():
@@ -8607,6 +8858,10 @@ class Game:
                 # Call and execute play
                 self._timeoutCalled = False
                 self.playCaller()
+                # ⚠️ THE ONE PLACE A BUSTING KICK CAN BE STOPPED. See _refuseBustingKick —
+                # the rule has ~35 entrances and one enforcement point, and this is it.
+                # A no-op in every non-bust format.
+                self._refuseBustingKick()
                 if self._timeoutCalled and self.timingManager:
                     await self.timingManager.waitAfterTimeout()
 
@@ -11045,6 +11300,18 @@ class Game:
         homeWpa = float(newHomeWp - self.previousHomeWinProbability)
         awayWpa = float(newAwayWp - self.previousAwayWinProbability)
 
+        # CREDIT model, run alongside the display model on its own baseline. It prices a
+        # drive that has reached field-goal range for the points it is about to score,
+        # instead of leaving ~96% of them for the kick to bank. That fixes the kicker's
+        # inflated season WPA (measured 9.8x a QB per snap, 5.3x after) without touching
+        # the WP the fans see or the momentum/clutch effects below, which are the only
+        # path from WP back into play outcomes.
+        attribWp = self.calculateWinProbability(forAttribution=True)
+        _prevHomeCredit = getattr(self, 'previousHomeWpCredit', self.previousHomeWinProbability)
+        _prevAwayCredit = getattr(self, 'previousAwayWpCredit', self.previousAwayWinProbability)
+        homeWpaCredit = float(attribWp['home'] - _prevHomeCredit)
+        awayWpaCredit = float(attribWp['away'] - _prevAwayCredit)
+
         # Persist WP/WPA on the play (gameFeed holds the play by reference)
         self.play.homeWinProbability = newHomeWp
         self.play.awayWinProbability = newAwayWp
@@ -11066,7 +11333,7 @@ class Game:
 
         # Attribute this play's WP swing to the players involved (offense + defense unit)
         try:
-            self._attributeWpa(self.play, homeWpa, awayWpa)
+            self._attributeWpa(self.play, homeWpaCredit, awayWpaCredit)
         except Exception as e:
             logging.debug(f"WPA attribution skipped on play {getattr(self.play, 'playNumber', '?')}: {e}")
 
@@ -11077,6 +11344,8 @@ class Game:
         self.awayTeamWinProbability = newAwayWp
         self.previousHomeWinProbability = newHomeWp
         self.previousAwayWinProbability = newAwayWp
+        self.previousHomeWpCredit = attribWp['home']
+        self.previousAwayWpCredit = attribWp['away']
         self.play._wpaResolved = True
         return (newHomeWp, newAwayWp, homeWpa, awayWpa)
 
@@ -13298,11 +13567,20 @@ class Game:
 
         return False
     
-    def calculateWinProbability(self) -> dict:
+    def calculateWinProbability(self, forAttribution: bool = False) -> dict:
         """
         Calculate win probability for both teams using formula-based approach.
         Based on: ELO ratings, score differential, time remaining, possession, field position, down/distance
         Returns: {'home': float, 'away': float} percentages (0-100)
+
+        `forAttribution` selects the CREDIT model rather than the display model. The two
+        answer different questions and are deliberately allowed to differ:
+          - display  (False): "who is winning right now" -> the WP chart, and the
+            momentum/clutch effects that feed back into play outcomes.
+          - credit   (True):  "who created the value" -> per-player season WPA / MVP.
+        The only difference is the EP imminence floor below. Keeping it a PARAMETER of
+        this one function (rather than a second copy of the curve) is deliberate: the
+        fgMakeProbability drift is what four separate copies of one curve cost.
         """
         # Get total seconds remaining in game
         if self.currentQuarter <= 0:
@@ -13390,6 +13668,62 @@ class Game:
         # on the last drive it's the whole picture.
         estimatedPossessions = max(1.0, total_seconds / 150.0)
         epWeight = 1.0 / estimatedPossessions
+
+        # ⚠️ EXPECTED POINTS WERE DAMPED TWICE AND REALIZED POINTS ONCE, and that
+        # asymmetry is where the kicker's inflated WPA comes from.
+        #
+        # `k` below already scales the whole differential by game progress — that is the
+        # "how much do three points matter this early" question, and it is answered. Then
+        # `epWeight` damped the EXPECTED half again by 1/possessions-remaining. So a drive
+        # sitting in field-goal range in Q1 contributed EP*0.042 ≈ 0.125 points to the
+        # differential, and the instant the kick went through the scoreboard contributed
+        # the full 3.0. The drive banked a twenty-fourth of the points it was about to
+        # score and the kicker banked the other 96%.
+        #
+        # The distinction `epWeight` was missing is IMMINENCE. A team on its own 30 has
+        # speculative points and should be damped hard — there are twenty-odd possessions
+        # left and this one may end in a punt. A team on the 15 has points arriving on the
+        # NEXT PLAY, and those are not a twenty-fourth of anything.
+        #
+        # So the damping becomes a FLOOR rather than the whole answer: once a drive is in
+        # field-goal range, EP is weighted by how close it is to converting instead. WP
+        # then rises as the drive advances, which is where the value is actually created,
+        # and the kick itself only moves it by the margin between expected and actual.
+        #
+        # ⚠️ It only ever RAISES the weight (`max`), so nothing outside field-goal range
+        # changes at all, and a late-game drive — where 1/possessions is already near
+        # 1.0 — is untouched.
+        #
+        # ⚠️ CREDIT MODEL ONLY (`forAttribution`), AND THAT GATE IS LOAD-BEARING. WP is
+        # not just a readout: `isBigPlay` (|WPA| >= 7.0) fires MOMENTUM_BIG_PLAY_BONUS,
+        # which feeds back into play outcomes, and it is the ONLY path from WP into
+        # gameplay. Applying this floor to the DISPLAY model shifts that distribution and
+        # shifts that distribution. Nobody asked for a scoring change; they asked for the
+        # kicker to stop banking the whole drive. So display answers "who is winning" and
+        # credit answers "who created the value". ⚠️ Do NOT drop the gate to "unify the
+        # models" without either retuning the 7.0 big-play threshold to hold the big-play
+        # RATE, or accepting the resulting scoring move as a deliberate balance decision.
+        #
+        # ⚠️ The neutrality of this split is PROVEN, not measured: display WP is
+        # byte-identical to pre-change across a 9,504-state sweep, and nothing on this
+        # path consumes RNG, so the extra call cannot shift the stream.
+        #
+        # ⚠️ BETWEEN-LEAGUE SCORING VARIANCE IS ~2.8 PTS/GAME. Two fresh leagues with
+        # PROVABLY identical gameplay measured 36.06 and 33.26 combined pts/game, so a
+        # season-level t-test across two different fresh sims reported a confident +2.09
+        # (t=4.28) for the unconditional version — seasons are nested in a league, not
+        # independent. That number is confounded; do not quote it.
+        #
+        # ⚠️ Measuring this with a paired offline harness does NOT work and was tried:
+        # reseeding random+numpy and restoring team/player state still left two
+        # IDENTICALLY configured arms 3.9 pts/game apart, because the engine has
+        # id-dependent behavior and game ids increment per construction. Compare full
+        # sims MATCHED ON SEASON NUMBER instead (league scoring drifts as rosters
+        # develop, so a 6-season run against a 20-season control is not like-for-like).
+        _fieldPos = 100 - self.yardsToEndzone
+        if forAttribution and _fieldPos >= EP_IMMINENCE_MIN_FIELD_POS:
+            epWeight = max(epWeight, float(np.interp(
+                _fieldPos, EP_IMMINENCE_POSITIONS, EP_IMMINENCE_WEIGHTS)))
         # Dampen EP further when the score gap is large — a 3-point EP swing
         # shouldn't move WP much in a 21-point blowout. "One score" tracks the
         # mutable TD (+XP) value so the gap is measured in scores, not raw points

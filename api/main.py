@@ -659,6 +659,20 @@ async def get_team(team_id: int, response: Response):
                     'Defense': row.defense_stats or {},
                 }
                 pastSeasons.append(pastEntry)
+
+            # Where they actually finished: division placing and playoff exit, both
+            # derived from games rather than stored (see season_finish). Merged in
+            # rather than replacing the flags — the flags still drive the champion
+            # colours, this only says how the rest of the season ended.
+            try:
+                from season_finish import buildSeasonFinishes
+                finishes = buildSeasonFinishes(
+                    dbSession, team.id, excludeSeasons={currentSeasonNum})
+                for entry in pastSeasons:
+                    entry.update(finishes.get(entry['season'], {}))
+            except Exception as _fe:
+                logger.debug(f"Season finishes skipped for team {team.id}: {_fe}")
+
             dbSession.close()
         except Exception:
             # Fallback to runtime archive if DB query fails
@@ -3527,9 +3541,13 @@ async def get_season_info(response: Response):
             'offseason_phase': offseasonPhase,
             'offseason_phase_target_time': offseasonPhaseTargetTime,
             'bracket_available': bracketAvailable,
-            'regular_season_over': current_season.currentWeek > 28 or (
-                current_season.currentWeek == 28 and current_season.completedWeekGames is not None
-            ),
+            # ⚠️ ONE SOURCE. This used to repeat the week arithmetic inline, which made it
+            # the FOURTH place deciding whether the regular season is over — and it read
+            # `currentWeek`, which is 0 on production while 28 weeks of games are final,
+            # because nothing persists it. The frontend gates its whole season-over view
+            # on this flag, so a stale 0 left the fantasy page showing a live season with
+            # no leaderboard and the shop selling cards nobody could ever field.
+            'regular_season_over': not _isRegularSeason(),
         })
     
     except Exception as e:
@@ -3743,6 +3761,7 @@ async def get_history_standings(season: int, response: Response):
         raise HTTPException(status_code=503, detail="Application not initialized")
     from database.connection import get_session
     from database.models import Game as DBGame, Team as DBTeam, TeamSeasonStats as DBTeamSeasonStats
+    from sqlalchemy import func
     session = get_session()
     try:
         games = session.query(DBGame).filter(
@@ -3799,6 +3818,47 @@ async def get_history_standings(season: int, response: Response):
                 "winPct": round(winPct, 3),
                 "elo": eloByTeam.get(tid),
             })
+        # ── Postseason finish, per club ──────────────────────────────────────
+        # A final table that stops at the record does not say what the season was FOR.
+        # Derived from the playoff games of that season (the same rounds
+        # `playoff_history` reads), so it answers for every season in the database.
+        #
+        # ⚠️ The league's OWN round names, not generic bracket vocabulary. Round 3 is the
+        # League Championship here, so calling it a semifinal would invent a competition
+        # the app never mentions anywhere else.
+        try:
+            from playoff_history import _roundNumber, FINAL_ROUND
+            deepest: Dict[int, tuple] = {}
+            pRows = session.query(DBGame).filter(
+                DBGame.season == season, DBGame.is_playoff == True,  # noqa: E712
+                func.lower(DBGame.status) == 'final',
+            ).all()
+            for g in pRows:
+                rnd = _roundNumber(g.playoff_round)
+                if rnd is None:
+                    continue
+                winner = getattr(g, 'winner_team_id', None)
+                for tid in (g.home_team_id, g.away_team_id):
+                    won = (winner == tid) if winner is not None else (
+                        (g.home_score > g.away_score) if tid == g.home_team_id
+                        else (g.away_score > g.home_score))
+                    if tid not in deepest or rnd > deepest[tid][0]:
+                        deepest[tid] = (rnd, won)
+
+            ROUND_RESULT = {1: "ROUND 1", 2: "ROUND 2", 3: "LEAGUE FINAL"}
+            for t in teams:
+                d = deepest.get(t["teamId"])
+                if not d:
+                    t["result"] = None
+                    continue
+                rnd, won = d
+                if rnd == FINAL_ROUND:
+                    t["result"] = "CHAMPION" if won else "RUNNER-UP"
+                else:
+                    t["result"] = ROUND_RESULT.get(rnd, f"ROUND {rnd}")
+        except Exception as e:
+            logger.debug(f"Season result column unavailable for {season}: {e}")
+
         teams.sort(key=lambda t: (-t["winPct"], -(t["pointsFor"] - t["pointsAgainst"]), -t["pointsFor"]))
         return build_success_response({"season": season, "teams": teams})
     finally:
@@ -4167,6 +4227,33 @@ def get_season_recap(response: Response = None):
         session.close()
 
 
+# Which CATEGORY each record belongs to, for the Record Book's filter chips.
+#
+# ⚠️ THE FRONTEND BUILDS ITS CHIP ROW FROM THIS, so a category named here with no lists
+# behind it becomes a chip leading to a blank page. Only name groups records actually
+# exist for: there are no player DEFENSE or SCORING records today (the design mock showed
+# both — its fixture data invented them), so neither is listed and neither chip appears.
+# Adding them is a new feature, not a mapping change.
+#
+# `fantasyPoints` is a PLAYER's fantasy production and is deliberately its own group
+# rather than 'scoring' — it is not points the club scored, and the Record Book's FANTASY
+# *subject* is a different thing again (owner totals, from user-records).
+_RECORD_GROUPS = {
+    "passingYards": "passing", "passingTds": "passing",
+    "rushingYards": "rushing", "rushingTds": "rushing",
+    "receivingYards": "receiving", "receivingTds": "receiving", "receptions": "receiving",
+    "fgMade": "kicking",
+    "fantasyPoints": "fantasy",
+}
+
+# Team records split offense / defense; the all-time title lists get their own group.
+_TEAM_RECORD_GROUPS = {
+    "points": "offense", "passYards": "offense", "rushYards": "offense",
+    "passTds": "offense", "rushTds": "offense", "fgs": "offense",
+    "sacks": "defense", "ints": "defense",
+    "championships": "titles", "divisionTitles": "titles",
+}
+
 # Stat category → (label, source field for record book queries)
 _RECORD_STATS = {
     "passingYards":   {"label": "Passing Yards",   "json_key": "yards",     "json_field": "passing_stats",   "season_col": "passing_yards"},
@@ -4251,9 +4338,21 @@ async def get_history_records(response: Response, limit: int = Query(default=10,
                 })
             result["game"][stat_key] = entries
 
-            # ── Single-season records (only stats with a denormalized col) ──
+            # ── Single-season records ────────────────────────────────────
+            # ⚠️ NOT denormalized-column only. `fgMade` has no season column, so kicking
+            # returned a SINGLE-GAME list and nothing else — which in the Record Book
+            # meant selecting KICKING made the career and season toggles disappear.
+            # `player_season_stats` carries the same `kicking_stats` blob the game table
+            # does, so the value is read straight out of it; the career total then sums
+            # that expression exactly as it sums a column.
+            seasonCol = None
             if meta["season_col"]:
-                col = getattr(DBPlayerSeasonStats, meta["season_col"])
+                seasonCol = getattr(DBPlayerSeasonStats, meta["season_col"])
+            elif meta["json_field"] and hasattr(DBPlayerSeasonStats, meta["json_field"]):
+                seasonCol = func.json_extract(
+                    getattr(DBPlayerSeasonStats, meta["json_field"]), f'$.{meta["json_key"]}')
+            if seasonCol is not None:
+                col = seasonCol
                 rows = (
                     session.query(
                         DBPlayerSeasonStats.player_id,
@@ -4314,7 +4413,9 @@ async def get_history_records(response: Response, limit: int = Query(default=10,
 
         # Labels for the frontend so it doesn't have to hardcode them
         labels = {k: v["label"] for k, v in _RECORD_STATS.items()}
-        return build_success_response({"records": result, "labels": labels})
+        groups = {k: g for k, g in _RECORD_GROUPS.items() if k in labels}
+        return build_success_response({
+            "records": result, "labels": labels, "groups": groups})
     finally:
         session.close()
 
@@ -4415,8 +4516,54 @@ async def get_history_team_records(response: Response, limit: int = Query(defaul
                 for r in seasonRows if r.total
             ]
 
+        # ── ALL-TIME: the counting records that DO mean something for a club ──
+        # A club does not retire, so a career yardage total mostly says which one has
+        # existed longest — but titles are the exception, which is why this scope holds
+        # these two lists and nothing else. Both count rows already written by the
+        # season manager (`championships` is the Floos Bowl; `division_titles` lives on
+        # the club and is season-stamped).
+        allTime: Dict[str, list] = {}
+        try:
+            from database.models import Championship as DBChampionship
+            champRows = session.execute(
+                select(DBChampionship.team_id, func.count().label("n"))
+                .where(DBChampionship.championship_type == 'floosbowl')
+                .group_by(DBChampionship.team_id)
+                .order_by(desc(literal_column("n")))
+                .limit(limit)
+            ).all()
+            allTime["championships"] = [
+                {**teamCell(r.team_id), "value": int(r.n)} for r in champRows if r.n
+            ]
+        except Exception as e:
+            logger.debug(f"All-time championships unavailable: {e}")
+
+        try:
+            # ⚠️ Counted off the club's own list rather than the Championship table,
+            # because a division title entry is {season, division} (or a bare 'Season N'
+            # on rows written before the name was recorded) and both shapes count as one.
+            divRows = [
+                (t.id, len(t.division_titles or []))
+                for t in teams.values() if (t.division_titles or [])
+            ]
+            divRows.sort(key=lambda r: -r[1])
+            allTime["divisionTitles"] = [
+                {**teamCell(tid), "value": n} for tid, n in divRows[:limit]
+            ]
+        except Exception as e:
+            logger.debug(f"All-time division titles unavailable: {e}")
+
+        # Absent rather than empty — the frontend drops a scope with no lists, and an
+        # empty dict would draw a section header over nothing.
+        allTime = {k: v for k, v in allTime.items() if v}
+        if allTime:
+            result["allTime"] = allTime
+
         labels = {k: v["label"] for k, v in _TEAM_RECORD_STATS.items()}
-        return build_success_response({"records": result, "labels": labels})
+        labels.update({"championships": "Floos Bowls", "divisionTitles": "Division Titles"})
+        groups = {k: g for k, g in _TEAM_RECORD_GROUPS.items() if k in labels}
+        return build_success_response({
+            "records": result, "labels": labels, "groups": groups})
     finally:
         session.close()
 
@@ -4475,7 +4622,7 @@ async def get_history_user_records(response: Response, limit: int = Query(defaul
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     import json as _json
-    from sqlalchemy import text
+    from sqlalchemy import text, select, func, desc, literal_column
     from database.connection import get_session
     from database.models import User
     session = get_session()
@@ -4519,23 +4666,72 @@ async def get_history_user_records(response: Response, limit: int = Query(defaul
             key=lambda t: t[2], reverse=True,
         )[:limit]
 
+        # ── Most correct picks, week and season ──────────────────────────────
+        # The other half of what an OWNER does. Counted off `pick_em_picks.correct`,
+        # the same column the Prognostications leaderboard totals, so the two can never
+        # disagree about what a correct pick is.
+        # ⚠️ `correct` is NULLABLE — a pick on a game that has not finished is neither
+        # right nor wrong — so this counts `correct IS TRUE` rather than treating a NULL
+        # as a miss, which would rank a user's unfinished week against a settled one.
+        weeklyPicks, seasonPicks = [], []
+        try:
+            from database.models import PickEmPick as DBPickEmPick
+            correctOnly = DBPickEmPick.correct.is_(True)
+            weekRows = session.execute(
+                select(DBPickEmPick.user_id, DBPickEmPick.season, DBPickEmPick.week,
+                       func.count().label("n"))
+                .where(correctOnly)
+                .group_by(DBPickEmPick.user_id, DBPickEmPick.season, DBPickEmPick.week)
+                .order_by(desc(literal_column("n")))
+                .limit(limit)
+            ).all()
+            weeklyPicks = [(r.user_id, r.season, r.week, int(r.n)) for r in weekRows if r.n]
+
+            seasonRows = session.execute(
+                select(DBPickEmPick.user_id, DBPickEmPick.season, func.count().label("n"))
+                .where(correctOnly)
+                .group_by(DBPickEmPick.user_id, DBPickEmPick.season)
+                .order_by(desc(literal_column("n")))
+                .limit(limit)
+            ).all()
+            seasonPicks = [(r.user_id, r.season, int(r.n)) for r in seasonRows if r.n]
+        except Exception as e:
+            logger.debug(f"Pick records unavailable: {e}")
+
         # Resolve usernames in one batch
-        userIds = {uid for (uid, *_rest) in weeklyTotals} | {uid for (uid, *_rest) in seasonTotals}
+        userIds = ({uid for (uid, *_rest) in weeklyTotals}
+                   | {uid for (uid, *_rest) in seasonTotals}
+                   | {uid for (uid, *_rest) in weeklyPicks}
+                   | {uid for (uid, *_rest) in seasonPicks})
         users = session.query(User).filter(User.id.in_(userIds)).all() if userIds else []
         nameByUser = {u.id: (u.username or u.email or f"User {u.id}") for u in users}
 
-        return build_success_response({
+        def _named(uid):
+            return {"userId": uid, "username": nameByUser.get(uid, f"User {uid}")}
+
+        payload = {
             "weeklyFP": [
-                {"userId": uid, "username": nameByUser.get(uid, f"User {uid}"),
-                 "value": round(v, 1), "season": s, "week": w}
+                {**_named(uid), "value": round(v, 1), "season": s, "week": w}
                 for uid, s, w, v in weeklyTotals
             ],
             "seasonFP": [
-                {"userId": uid, "username": nameByUser.get(uid, f"User {uid}"),
-                 "value": round(v, 1), "season": s}
+                {**_named(uid), "value": round(v, 1), "season": s}
                 for uid, s, v in seasonTotals
             ],
-        })
+        }
+        # Present only when there is something in them — the frontend renders the arrays
+        # that arrive and a subject with no lists should not offer a list.
+        if weeklyPicks:
+            payload["weeklyPicks"] = [
+                {**_named(uid), "value": n, "season": s, "week": w}
+                for uid, s, w, n in weeklyPicks
+            ]
+        if seasonPicks:
+            payload["seasonPicks"] = [
+                {**_named(uid), "value": n, "season": s}
+                for uid, s, n in seasonPicks
+            ]
+        return build_success_response(payload)
     finally:
         session.close()
 
@@ -10530,6 +10726,34 @@ def setEquippedCards(
 # ============================================================================
 
 
+def _regularSeasonWeeksPlayed(seasonNumber: int) -> Optional[int]:
+    """The newest regular-season week with a FINAL game, read off the games table.
+
+    ⚠️ `seasons.current_week` CANNOT BE TRUSTED FOR THIS. Measured on production with
+    28 weeks of season-2 games already final, that column read **0** — and there is no
+    `is_complete` column at all, so `Season.isComplete` lives only in memory and comes
+    back False on every load. `_isRegularSeason` believed both, so after any restart it
+    reported "regular season" forever and every purchase gate below it went inert.
+
+    The games table is the thing that actually moved.
+    """
+    try:
+        from database.connection import get_session as _gs
+        from sqlalchemy import text as _text
+        _s = _gs()
+        try:
+            row = _s.execute(_text("""
+                SELECT MAX(week) FROM games
+                WHERE season = :s AND LOWER(status) = 'final'
+                  AND (is_playoff IS NULL OR is_playoff = 0)
+            """), {'s': seasonNumber}).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        finally:
+            _s.close()
+    except Exception:
+        return None
+
+
 def _isRegularSeason() -> bool:
     """True while regular-season fantasy is live (through week 28's games).
 
@@ -10541,6 +10765,13 @@ def _isRegularSeason() -> bool:
     if not sm or not sm.currentSeason:
         return False
     cs = sm.currentSeason
+
+    # The durable answer first: 28 regular-season weeks in the books means it is over,
+    # whatever the in-memory counters say after a restart.
+    played = _regularSeasonWeeksPlayed(getattr(cs, 'seasonNumber', 0) or 0)
+    if played is not None and played >= 28:
+        return False
+
     if cs.isComplete or cs.currentWeek > 28:
         return False
     if cs.currentWeek == 28 and cs.completedWeekGames is not None:
@@ -11013,6 +11244,26 @@ def buyFeaturedCard(req: BuyCardRequest, user: _User = Depends(_getCurrentUser))
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+    # ⚠️ Outside the regular season only the COLLECTION shelf is buyable. A fantasy
+    # single bought after week 28 can never be equipped — fantasy is over and the card
+    # is season-scoped — so selling one is selling a brick. Collection singles lose
+    # nothing: they are never fielded anyway and keep earning through the Showcase.
+    # `_requireCollectionOnly` guards the PACK path; singles need their own check
+    # because the thing being bought is a card, not a pack type.
+    if _showpieceOnly():
+        _s = get_session()
+        try:
+            from database.models import FeaturedShopCard as _FSC
+            _kind = _s.query(_FSC.kind).filter(
+                _FSC.user_id == user.id, _FSC.season == currentSeason,
+                _FSC.card_template_id == req.templateId).first()
+            if not _kind or (_kind[0] or '') != 'collection':
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only collection cards are available outside the regular season")
+        finally:
+            _s.close()
 
     cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
 
@@ -11489,6 +11740,13 @@ class BuyPowerupRequest(BaseModel):
 def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
     """Purchase a power-up. Validates eligibility, deducts Floobits, executes effect."""
     _requireShopOpen()
+    # ⚠️ Every powerup acts on a fantasy week — the modifier override, the extra slot,
+    # the trigger boost. Outside the regular season there is no week for them to act on,
+    # so buying one spends Floobits on nothing.
+    if _showpieceOnly():
+        raise HTTPException(
+            status_code=403,
+            detail="Powerups are only available during the regular season")
     from database.connection import get_session
     from database.models import FantasyRoster, FeaturedShopCard
     from database.repositories.shop_repository import ShopPurchaseRepository, ModifierOverrideRepository

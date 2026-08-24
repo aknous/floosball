@@ -36,6 +36,12 @@ def makeOtState(*, quarter=5, otPeriod=1, home=20, away=14,
                 otFirstPossComplete=True, otSecondPossComplete=False,
                 clock=240):
     """A Game-shaped namespace carrying only what the two methods read."""
+    # ⚠️ `format` IS REQUIRED: isGameOver consults `self.format.checkEarlyEnd(self)` for
+    # a format-specific walk-off BEFORE the standard clock/OT logic, so a namespace
+    # without it raises AttributeError before any assertion runs. The standard format is
+    # a pure pass-through (checkEarlyEnd returns None = defer to the standard checks),
+    # which is exactly what these OT rules want to exercise.
+    from game_formats import getFormat
     return types.SimpleNamespace(
         status=None,                      # not Final
         currentQuarter=quarter,
@@ -44,6 +50,7 @@ def makeOtState(*, quarter=5, otPeriod=1, home=20, away=14,
         otPeriod=otPeriod,
         otFirstPossComplete=otFirstPossComplete,
         otSecondPossComplete=otSecondPossComplete,
+        format=getFormat('standard'),
     )
 
 

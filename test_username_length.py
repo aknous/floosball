@@ -82,7 +82,12 @@ expect("a short generated name still passes", accepted(_USERNAME_FIRSTS[0] + _US
 expect("a short custom name still passes", accepted('Andrew'))
 expect("too short is still too short", not accepted('Al'))
 expect("bad characters are still refused", not accepted('has spaces'))
-expect("must still start with a letter", not accepted('9Lives'))
+# ⚠️ A USERNAME DOES NOT HAVE TO START WITH A LETTER (owner, 2026-08-21). This asserted
+# the opposite, matching validateUsername's docstring rather than its regex — the
+# docstring said "starting with a letter" and `_USERNAME_RE` has never enforced it. The
+# regex is the rule; the prose was wrong and is now corrected.
+expect("a leading digit is fine", accepted('9Lives'))
+expect("a leading underscore is fine", accepted('_leading'))
 
 print()
 if fails:

@@ -38,6 +38,56 @@
       "Paisley"
     ]
   },
+  "divisionDistribution": {
+    "Twill": [
+      "Strangers",
+      "Rocks",
+      "Broads",
+      "Monuments"
+    ],
+    "Denim": [
+      "Slippers",
+      "Normals",
+      "Beans",
+      "Caddies"
+    ],
+    "Herringbone": [
+      "Pops",
+      "Sodas",
+      "Melons",
+      "Waffles"
+    ],
+    "Tweed": [
+      "Dry Heat",
+      "Residents",
+      "Sand Dollars",
+      "Oysters"
+    ],
+    "Gingham": [
+      "Cranes",
+      "Pinecones",
+      "Phones",
+      "Extras"
+    ],
+    "Houndstooth": [
+      "Jetskis",
+      "Bees",
+      "Classics",
+      "Tuesdays"
+    ],
+    "Chambray": [
+      "Raccoons",
+      "Curd",
+      "Buffalo",
+      "Midnights"
+    ],
+    "Paisley": [
+      "Grillmeisters",
+      "Trains",
+      "Exoticos",
+      "Rhyme"
+    ]
+  },
   "teams": [
     {
       "city": "New York",

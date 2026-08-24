@@ -84,6 +84,18 @@ def makeGame(homeScore=14, awayScore=10, momentum=0.0, streak=0, lastTeam=None, 
     game._isMomentumShift = types.MethodType(fg.Game._isMomentumShift, game)
     game._applyMomentumEvent = types.MethodType(fg.Game._applyMomentumEvent, game)
     game._applyMomentumEffect = types.MethodType(fg.Game._applyMomentumEffect, game)
+    # ⚠️ `_decayMomentum` measures the score gap in SCORES via `_oneScore()`, which reads
+    # gameRules. On a bare MagicMock that returns a Mock and the comparison raises
+    # TypeError, so bind the real method over real rules rather than let the mock
+    # auto-answer with something that is not a number.
+    from game_rules import GameRules
+    game.gameRules = GameRules()
+    game._oneScore = types.MethodType(fg.Game._oneScore, game)
+    game._maxPossession = types.MethodType(fg.Game._maxPossession, game)
+    game._fgValue = types.MethodType(fg.Game._fgValue, game)
+    # Numeric game state the momentum path reads and compares. A MagicMock would
+    # auto-answer these with a Mock and every comparison would raise TypeError.
+    game._peakAbsMomentum = 0.0
 
     return game
 
@@ -244,20 +256,33 @@ def testMomentumShiftDetection():
 
     game = makeGame()
 
-    # Large swing (>= 15): always a shift
-    assert game._isMomentumShift(0, 15) == True
-    assert game._isMomentumShift(10, 25) == True
-    assert game._isMomentumShift(-20, -5) == True
+    # ⚠️ A BIG SWING IS NO LONGER ENOUGH ON ITS OWN. The rule now requires either a
+    # ZERO-CROSSING or a large swing that runs AGAINST the prevailing momentum; piling on
+    # in the direction momentum is already going is never a shift, however big the delta
+    # ("not routine scoring by a team already dominating"). These cases asserted the old
+    # any-large-delta rule, so 0 -> 15 was expected True where it is now correctly False.
 
-    # Small swing: not a shift
+    # Piling on — same direction as the prevailing momentum — is never a shift.
+    assert game._isMomentumShift(0, 15) == False
+    assert game._isMomentumShift(10, 25) == False
+    assert game._isMomentumShift(-10, -25) == False
+
+    # Against the grain, and big enough (delta >= MOMENTUM_SHIFT_THRESHOLD): a shift.
+    assert game._isMomentumShift(-20, -5) == True    # delta=15, pushing back toward zero
+    assert game._isMomentumShift(25, 10) == True     # delta=15, the other side pushing back
+
+    # Against the grain but too small: not a shift.
+    assert game._isMomentumShift(10, 5) == False     # delta=5
+
+    # Small swing: not a shift.
     assert game._isMomentumShift(0, 5) == False
     assert game._isMomentumShift(10, 15) == False
 
-    # Cross zero with >= 10 delta: is a shift
+    # Cross zero with >= MOMENTUM_CROSS_ZERO_THRESHOLD delta: is a shift.
     assert game._isMomentumShift(5, -5) == True   # delta=10, crosses zero
     assert game._isMomentumShift(-6, 6) == True    # delta=12, crosses zero
 
-    # Cross zero with < 10 delta: not a shift
+    # Cross zero with too small a delta: not a shift.
     assert game._isMomentumShift(2, -2) == False   # delta=4, too small
 
     print("    PASSED")
@@ -693,18 +718,34 @@ def testFullGameSimulation():
 
 
 def testBlowoutMomentumSuppression():
-    """Verify momentum is heavily suppressed in blowouts."""
+    """Blowout suppression is ASYMMETRIC: the leader's piling-on is muted, the trailing
+    team's comeback push still lands at full value.
+
+    ⚠️ ASSERTED RELATIVELY, NOT AGAINST AN ABSOLUTE FLOOR. This used to require
+    `momentum < 10` after three TDs at 35-7. That gap is 28 = exactly 4 x _oneScore()
+    (TD 6 + XP 1), which lands on the 0.4 dampener rung rather than the 0.2 one, so the
+    old number silently assumed a different scoring baseline — and the score values are
+    MUTABLE RULES, so any absolute figure here is one rule vote away from being wrong
+    again. Comparing against the same events in a tied game tests the actual contract.
+    """
     print("  Blowout suppression (35-7 game)...")
 
-    game = makeGame(homeScore=35, awayScore=7, mentalStats=80)
+    def threeTds(homeScore, awayScore, benefiting):
+        g = makeGame(homeScore=homeScore, awayScore=awayScore, mentalStats=80)
+        team = g.homeTeam if benefiting == 'home' else g.awayTeam
+        for _ in range(3):
+            g._applyMomentumEvent(MOMENTUM_TD, team)
+        return g.momentum
 
-    # Even 3 consecutive TDs in a blowout shouldn't build much momentum
-    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
-    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
-    game._applyMomentumEvent(MOMENTUM_TD, game.homeTeam)
+    tied = threeTds(14, 14, 'home')            # same events, no gap to damp
+    leader = threeTds(35, 7, 'home')           # the team already ahead, piling on
+    trailer = threeTds(35, 7, 'away')          # the comeback push
 
-    print(f"    3 TDs in blowout: momentum={game.momentum:.1f}")
-    assert game.momentum < 10, f"Expected momentum < 10 in blowout, got {game.momentum:.1f}"
+    print(f"    3 TDs tied={tied:.1f}  leader-in-blowout={leader:.1f}  trailer={trailer:.1f}")
+    assert leader < tied * 0.6, (
+        f"leader's piling-on should be materially damped: {leader:.1f} vs {tied:.1f}")
+    assert abs(trailer) >= abs(tied) * 0.99, (
+        f"the trailing team's comeback must NOT be damped: {trailer:.1f} vs {tied:.1f}")
     print("    PASSED")
 
 
@@ -764,7 +805,10 @@ def main():
     assert MOMENTUM_DECAY_RATE == 0.03
     assert MOMENTUM_BLOWOUT_DECAY_RATE == 0.08
     assert MOMENTUM_MIDGAP_DECAY_RATE == 0.05
-    assert MOMENTUM_NEUTRAL_ZONE == 10
+    # ⚠️ Retuned 10 -> 5. This assertion was missed at the time, while line ~455 of this
+    # same file was updated to say "(5)" — so the file disagreed with itself and every
+    # momentum test below was unreachable behind this one AssertionError.
+    assert MOMENTUM_NEUTRAL_ZONE == 5
     assert MOMENTUM_SHIFT_THRESHOLD == 14
     assert MOMENTUM_CROSS_ZERO_THRESHOLD == 8
     assert MOMENTUM_DISPLAY_THRESHOLD == 5
