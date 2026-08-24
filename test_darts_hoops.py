@@ -128,6 +128,111 @@ class TheOffenseKnowsAHoopIsTheOnlyWay(unittest.TestCase):
         self.assertIsNone(game._hoopPointsNeeded(5), 'a leading team still wants nothing')
 
 
+class TheFinalDownGetsTheHoopDecisionToo(unittest.TestCase):
+    """⚠️ THE RULE WAS WRITTEN, DOCUMENTED, AND UNREACHABLE (owner report, 2026-08-24).
+
+    `_shouldAttemptHoopShot`'s darts branch says the final-down guard INVERTS: a hoop
+    normally forfeits the real scoring play, but under a target with the need below a field
+    goal there is no real scoring play to forfeit — a touchdown is held up short and a kick
+    busts. Correct, and it never ran. The check is consulted from exactly ONE place, inside
+    `_executeWeightedPlay`, and `playCaller` routes the final down to `_fourthDownCaller`,
+    which sets Punt/FieldGoal directly or calls runPlay/passPlay. The inversion sat behind a
+    door the final down never opens.
+
+    Measured over 400 games: 26 final-down snaps where only a hoop could score and one was
+    in range. It shot 1 — the rest punted (12), ran (6), passed (5) or knelt (2). After: 8
+    of 13 (the total falls because a taken shot resolves the state instead of leaving the
+    offense sitting in it).
+
+    ⚠️ The end-zone pair partly escaped this BY ACCIDENT, which is why a sweep showed it
+    shooting on fourth down while midfield did not: in the red zone the kick is in range, so
+    the caller picks a FieldGoal, it busts, `_refuseBustingKick` refuses it, and its
+    "play on" branch re-enters `_executeWeightedPlay` through the back door.
+    """
+
+    def _finalDown(self, need=1, ballOn=55, hoopsUsed=()):
+        from floosball_game import Play
+        scenario = dartsGame(offScore=X - need, defScore=max(0, X - need - 3),
+                             ballOn=ballOn, distance=8, hoopsUsed=hoopsUsed)
+        g = scenario.game
+        g.down = g.gameRules.downsPerSeries
+        g.play = Play(g)
+        return g
+
+    def test_theFixtureIsTheStateTheRuleDescribes(self):
+        g = self._finalDown()
+        self.assertLess(g.format.bustNeed(g, g.homeTeam), g._fgValue(),
+                        'a field goal would bust, so no conventional score is possible')
+        self.assertIsNotNone(g._hoopTarget(), 'a pair really is in range')
+        self.assertEqual(g.down, g.gameRules.downsPerSeries)
+
+    def test_aPuntOnTheFinalDownBecomesTheShot(self):
+        from floosball_game import PlayType
+        g = self._finalDown()
+        g.play.playType = PlayType.Punt
+        self.assertTrue(g._dartsFinalDownHoop(), 'punted away the only scoring play')
+        self.assertTrue(g.play.isHoopShot)
+
+    def test_soDoARunOrAPass(self):
+        from floosball_game import PlayType
+        for kind in (PlayType.Run, PlayType.Pass):
+            g = self._finalDown()
+            g.play.playType = kind
+            self.assertTrue(g._dartsFinalDownHoop(), f'ran a {kind.name} that cannot score')
+            self.assertTrue(g.play.isHoopShot)
+
+    def test_itDoesNotFireOnEarlierDowns(self):
+        """⚠️ `_executeWeightedPlay` already asked on those, and asking twice would shoot a
+        second hoop on a snap that has already resolved one."""
+        from floosball_game import PlayType
+        g = self._finalDown()
+        g.down = 1
+        g.play.playType = PlayType.Run
+        self.assertFalse(g._dartsFinalDownHoop())
+
+    def test_itLeavesAnAlreadyResolvedShotAlone(self):
+        g = self._finalDown()
+        g.play.isHoopShot = True
+        self.assertFalse(g._dartsFinalDownHoop())
+
+    def test_itLeavesAKneelAndASpikeAlone(self):
+        from floosball_game import PlayType
+        for kind in (PlayType.Kneel, PlayType.Spike):
+            g = self._finalDown()
+            g.play.playType = kind
+            self.assertFalse(g._dartsFinalDownHoop(), f'overrode a {kind.name}')
+
+    def test_withNoPairInRangeItDoesNothing(self):
+        from floosball_game import PlayType
+        # ⚠️ 25, not 35. The windows are end zone 1-18, midrange 30-50, midfield 50-64, so
+        # the 35 is INSIDE the midrange pair — the third pair closed the gap the old
+        # two-pair layout had (see `TheThirdPairFillsTheDeadZone`). 19-29 is a real gap.
+        g = self._finalDown(ballOn=25)
+        self.assertIsNone(g._hoopTarget())
+        g.play.playType = PlayType.Punt
+        self.assertFalse(g._dartsFinalDownHoop())
+        self.assertIs(g.play.playType, PlayType.Punt)
+
+    def test_whenAConventionalScoreIsAvailableItDefers(self):
+        """Needing a field goal, the kick is the play — the hoop would spoil the landing."""
+        from floosball_game import PlayType
+        g = self._finalDown(need=int(dartsGame(offScore=0).game._fgValue()))
+        g.play.playType = PlayType.FieldGoal
+        self.assertFalse(g._dartsFinalDownHoop())
+        self.assertIs(g.play.playType, PlayType.FieldGoal)
+
+    def test_itIsANoOpInStandardFootball(self):
+        from floosball_game import Play, PlayType
+        scenario = Scenario()
+        scenario.situation(quarter=2, clock=600, offense='home', offScore=17, defScore=14,
+                           down=4, distance=8, ballOn=55, offTimeouts=3, defTimeouts=3)
+        g = scenario.game
+        g.play = Play(g)
+        g.play.playType = PlayType.Punt
+        self.assertFalse(g._dartsFinalDownHoop())
+        self.assertIs(g.play.playType, PlayType.Punt)
+
+
 class AHoopTheDriveCannotAffordToLoseIsShot(unittest.TestCase):
     """⚠️ Reported (owner, 2026-08-24): teams needing a single point drive straight past the
     midfield goal. They do — and most of the time that is FINE, which is why the rule is not

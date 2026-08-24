@@ -4967,6 +4967,13 @@ class Game:
         fgInRange = self.yardsToEndzone <= maxDistance
         for spend in range(0, int(reachable) + 1):
             landing = need - spend
+            # ⚠️ THE HOOPS CAN FINISH IT ALONE, and `landings` holds only CONVENTIONAL
+            # scores. At a need of 1 the spend IS the plan — 23 + 1 = 24 — so `landing`
+            # comes out 0, which is in no conventional set. Omitting this case declared the
+            # target unreachable in exactly the state the hoops exist for, which switched
+            # the whole hunt off across the late game and left the final-down fix inert.
+            if landing == 0:
+                return playsLeft < spend
             if landing in landings:
                 cost = 1 if (landing == self._fgValue() and fgInRange) else DARTS_PLAYS_TO_SCORE
                 return playsLeft < spend + cost
@@ -5506,6 +5513,70 @@ class Game:
         self.play.targetSideline = self._shouldTargetSideline(scoreDiff, coach)
         self._executeWeightedPlay(self._computePlayWeights(scoreDiff, coach),
                                   targetSideline=self.play.targetSideline)
+        return True
+
+    def _dartsFinalDownHoop(self) -> bool:
+        """Darts: give the final down the hoop decision every other down already gets.
+        Returns True if a shot was taken.
+
+        ⚠️ THE RULE WAS WRITTEN, DOCUMENTED, AND UNREACHABLE. `_shouldAttemptHoopShot`'s
+        darts branch says the final-down guard INVERTS — a hoop normally forfeits the real
+        scoring play, but under a target with the need below a field goal there is no real
+        scoring play to forfeit: a touchdown is held up short and a kick busts. Correct, and
+        it never ran. The check is consulted from exactly ONE place, inside
+        `_executeWeightedPlay`, and `playCaller` routes the final down to
+        `_fourthDownCaller`, which sets Punt/FieldGoal directly or calls runPlay/passPlay —
+        it never reaches the weighted path. The inversion sat behind a door the final down
+        never opens.
+
+        Measured over 400 games: **26** final-down snaps where only a hoop could score and
+        one was in range. It shot **1**. The other 25 punted (12), ran (6), passed (5) or
+        knelt (2) — giving up the ball, or running a play that could not produce a point,
+        while holding the only scoring play on the field.
+
+        ⚠️ The end-zone pair partly escaped this BY ACCIDENT, which is why the earlier sweep
+        showed it shooting on fourth down and midfield not. In the red zone the kick is in
+        range, so `_fourthDownCaller` picks a FieldGoal, the kick busts, `_refuseBustingKick`
+        refuses it, and its "play on" branch re-enters `_executeWeightedPlay` through the
+        back door. Out at midfield the kick is out of range, nothing re-routes, and the hoop
+        is never considered at all.
+
+        ⚠️ It DELEGATES rather than re-deciding. `_shouldAttemptHoopShot` already returns the
+        right answer on a final down — its darts branch returns the coach-scaled roll before
+        the generic "never on the last down" guard is reached, and carries the load-bearing
+        floor, the closing-window lift, the exact-landing veto and the play-for-points
+        hand-over with it. The only thing missing was ever calling it.
+        """
+        if not self._dartsActive():
+            return False
+        if self.play is None or getattr(self.play, 'isHoopShot', False):
+            return False
+        if self.down < self.gameRules.downsPerSeries:
+            return False        # the weighted path already asked on this down
+        # A kneel or spike is a deliberate clock play; a resolved score is not ours to undo.
+        if self.play.playType in (PlayType.Kneel, PlayType.Spike):
+            return False
+        if getattr(self.play, 'scoreChange', False):
+            return False
+        if not self._shouldAttemptHoopShot():
+            return False
+        # Clear the from-scrimmage setup the call being replaced left behind, exactly as
+        # `_dartsForceKick` does — the shot ignores it, and the insights would otherwise
+        # report a trick play that never ran.
+        self.play.insights['dartsFinalDownHoop'] = {
+            'reason': 'no conventional score is possible, so the down forfeits nothing',
+            'need': self.format.bustNeed(self, self.offensiveTeam),
+            'instead': self.play.playType.name if self.play.playType else 'weighted',
+        }
+        self.play.trickPlay = None
+        self.play.runConcept = None
+        self.play._rpoRunRelief = 0.0
+        self.play._trickOpennessBonus = 0.0
+        self.play._trickRunRelief = 0.0
+        self.play._trickSackMult = 1.0
+        self.play._forcedRunner = None
+        self.play._forcedGap = None
+        self._executeHoopShot()
         return True
 
     def _dartsLeadingOnPoints(self) -> bool:
@@ -9463,6 +9534,9 @@ class Game:
                 # and then kneels it out, rather than punting from the opponent's 1 — see
                 # _dartsKneelOut. A no-op in every non-bust format.
                 self._dartsKneelOut()
+                # ⚠️ AND THE FINAL DOWN'S HOOP DECISION, which `_fourthDownCaller` bypasses
+                # entirely — see _dartsFinalDownHoop. A no-op in every non-bust format.
+                self._dartsFinalDownHoop()
                 if self._timeoutCalled and self.timingManager:
                     await self.timingManager.waitAfterTimeout()
 

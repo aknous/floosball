@@ -711,8 +711,16 @@ class ThereIsAPointWhereTheTargetIsAbandoned(unittest.TestCase):
     football and the target is a distraction. Without the crossover the sim spent its last
     downs on arithmetically-valid plans it had no time to execute: a team on 13 against 18
     with 23 seconds hunting three hoops to bridge to a touchdown-plus-two-point landing on
-    24, when the touchdown alone wins it. Measured over 400 games, futile late shots (ones
-    that could neither land nor tie) roughly HALVED, 23 -> 12.
+    24, when the touchdown alone wins it.
+
+    ⚠️ THE ORIGINAL COMMIT CLAIMED "futile late shots roughly HALVED, 23 -> 12". THAT WAS AN
+    ARTIFACT and the claim is withdrawn. `_dartsTargetOutOfReach` tested only whether
+    `need - spend` was a CONVENTIONAL landing, so a need the hoops finish ALONE (spend ==
+    need, landing 0) matched nothing and read as unreachable — declaring the target dead in
+    exactly the state hoops exist for, and suppressing legitimate shots wholesale. With that
+    fixed the futile count is 23, the same as before the crossover, while USEFUL late shots
+    rose 27 -> 33. The crossover's value is the specific states it corrects (below), not a
+    headline reduction.
 
     Both bounds are measured rather than picked. Over 3,475 darts possessions a scoring
     drive took a median 9 plays and a p25 of 7 (`DARTS_PLAYS_TO_SCORE`), and a possession
@@ -745,6 +753,20 @@ class ThereIsAPointWhereTheTargetIsAbandoned(unittest.TestCase):
     def test_withTimeForAnotherDriveTheTargetStandsLive(self):
         g = self._at(13, 18, ballOn=54, clock=300)
         self.assertFalse(g._dartsTargetOutOfReach())
+
+    def test_aNeedTheHoopsFinishAloneIsReachable(self):
+        """⚠️ THE BUG THE ORIGINAL CROSSOVER SHIPPED WITH. The plan loop asked whether
+        `need - spend` is a CONVENTIONAL landing, and at a need of 1 the spend IS the whole
+        plan (23 + 1 = 24), so `landing` comes out 0 — which is in no conventional set. The
+        target read as unreachable in exactly the state the hoops exist for, which switched
+        the hunt off across the late game and left the final-down fix inert."""
+        g = self._at(X - 1, X - 4, ballOn=55, clock=100)
+        self.assertNotIn(0.0, g._dartsExactLandings(), 'landings are conventional scores only')
+        self.assertFalse(g._dartsTargetOutOfReach(),
+                         'a need one hoop finishes is not out of reach')
+        self.assertFalse(g._dartsPlayForPoints())
+        rate = sum(g._shouldAttemptHoopShot() for _ in range(300)) / 300
+        self.assertGreater(rate, 0.8, f'the format\'s own win condition is not hunted ({rate:.0%})')
 
     def test_aPlanWithNoTimeToRunIsAbandoned(self):
         """The reported case: need 11, so a landing means three hoop snaps plus a
