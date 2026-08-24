@@ -3779,6 +3779,35 @@ DARTS_HOOP_HUNT_AGGR_SPAN = 0.35
 DARTS_HOOP_CLOSING_YARDS = 6.0
 DARTS_HOOP_LAST_CHANCE_LIFT = 0.40
 
+# ⚠️ A HOOP THE DRIVE CANNOT AFFORD TO LOSE IS SHOT, NOT WEIGHED (owner report, 2026-08-24:
+# teams needing a single point were driving straight past the midfield goal).
+#
+# Declining a pair is normally fine — a shot costs a down and no yards, and the END-ZONE
+# pair is always still ahead, so a team needing 1 with everything unused has two more
+# chances and is right to keep driving. It stops being fine when the hoops that remain
+# REACHABLE after this one can no longer cover the need: then driving on forfeits the only
+# path the drive had. Measured over 300 games, of 26 snaps where a team needing 2 or fewer
+# drove past the midfield pair, **12 were left unable to cover their need** — that is the
+# half that is a mistake, and the other 14 are ordinary football.
+#
+# ⚠️ IT ALSO COVERS A CLOSING SHOT THAT SIMPLY WINS THE GAME (owner, 2026-08-24: needing one
+# point, the midfield goals are the nearest score and driving past them risks the ball for
+# nothing). That case is DOMINATED rather than merely risky, because crossing the pair loses
+# it either way: declining loses it for nothing, shooting loses it only after a ~71% chance
+# of ending the match, and a miss is an incompletion — the down is spent, the ball is kept,
+# and the end-zone pair is still ahead. Measured over 400 games, drives that passed up an
+# in-range midfield hoop needing 2 points or fewer went on to score AT ALL 11 times out of
+# 22, so "there are chances left" was buying a coin flip with a 71% shot in hand.
+#
+# ⚠️ CLOSING pairs only, in both cases. The END-ZONE pair is not lost by driving on, so
+# declining it costs a down rather than the chance, and forcing it would erase the coach dial
+# across the whole red zone.
+#
+# Sits at the same height as `SIDELINE_GOAL_DESPERATION_CHANCE` (0.92), which is the
+# standard game's "this point is needed to tie or win" rate; the reasoning is identical.
+DARTS_HOOP_LOADBEARING_CHANCE = 0.92
+
+
 # ⚠️ APPROACHING THE MIDFIELD HOOP, A DISCIPLINED SIDE STOPS TRYING TO GO DOWNFIELD (owner,
 # 2026-08-17). It is the only scoring chance a drive can drive PAST: a chunk gain over the
 # 50 is an ordinary good outcome that destroys the pair, and for a team needing 1-2 points
@@ -3813,6 +3842,25 @@ DARTS_DEAD_DRIVE_RUN_BIAS = 2.5
 # `yardsToEndzone - 1`, so from the 3 the whole remaining prize is two yards of pin. Beyond
 # it the offense plays on and works closer first, which is the "as close as possible" half.
 DARTS_KNEEL_OUT_YARDS = 3
+
+# ⚠️ THERE IS A POINT WHERE A TEAM STOPS TRYING TO LAND ON THE TARGET AND JUST ACCUMULATES
+# POINTS, because the clock is going to decide it and the higher score wins (owner,
+# 2026-08-24). Every darts read is deliberately blind to the opponent — what matters is
+# distance to X, and a team leading 17-3 needs a hoop as badly as anyone — but that is only
+# true while landing on X is still achievable. Once it is not, the blindness is the bug: it
+# had teams spending their last downs on an exact landing they had no time to reach.
+#
+# The crossover is whether a plan that LANDS still fits, measured rather than picked:
+#   * on THIS possession — the hoop shots the plan needs, plus a scoring drive. Over 3,475
+#     darts possessions a scoring drive took a median 9 plays and a p25 of 7, so 7 is the
+#     conservative floor (a plan needing more than that is not fitting into two snaps).
+#   * or on a LATER one — a possession averaged 108 seconds, so a team needs roughly 216s
+#     on the clock to expect the ball back.
+# Neither fits -> the target is gone, and the decision reverts to the ordinary
+# points-against-the-opponent logic every other format uses.
+DARTS_PLAYS_TO_SCORE = 7
+DARTS_NEXT_POSSESSION_SECS = 216
+
 
 # ⚠️ A DARTS KICK THAT LANDS ON THE TARGET WINS THE GAME, SO IT IS NOT WORTH WAITING FOR
 # FOURTH DOWN ONCE IT IS COMFORTABLE (owner, 2026-08-24). On an ordinary drive there is no

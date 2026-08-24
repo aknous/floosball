@@ -28,6 +28,7 @@ Run: .venv/bin/python test_darts_format.py
 """
 import asyncio
 import logging
+import collections
 import random
 import unittest
 
@@ -55,7 +56,7 @@ def dartsRules(target=X, **overrides):
     return rules
 
 
-def playDarts(count, seed=5, target=X, **overrides):
+def playDarts(count, seed=5, target=X, withOvertime=False, **overrides):
     """Play real games and return their finals. Deliberately the whole engine — the point
     of a certification pass is that the format survives contact with it."""
     async def run():
@@ -64,7 +65,9 @@ def playDarts(count, seed=5, target=X, **overrides):
         for _ in range(count):
             game = Scenario(gameRules=dartsRules(target, **overrides)).game
             await game.playGame()
-            out.append((game.homeScore, game.awayScore))
+            out.append((game.homeScore, game.awayScore)
+                       if not withOvertime else
+                       (game.homeScore, game.awayScore, getattr(game, 'otPeriod', 0) or 0))
         return out
     return asyncio.run(run())
 
@@ -604,6 +607,422 @@ class TheHeldUpShortText(unittest.TestCase):
                          'the held-up-short line still restates the target')
 
 
+class TheConversionIsMeasuredAgainstTheTarget(unittest.TestCase):
+    """A post-TD try is a SCORE, and in darts every score is measured against the target.
+    The standard policy measures it against the OPPONENT, so it could not see either half.
+
+    ⚠️ Reported as: a team needing only a touchdown should be able to take it and win
+    without attempting an extra point that would bust (owner, 2026-08-24). That half already
+    worked — `_conversionIsMoot` skips the try on any walk-off, format-agnostically, by
+    simply asking `isGameOver()`. Confirmed in PRODUCTION on the live darts slate: game 955,
+    TOR reached 24 on a touchdown, `conversionPoints` was null, no extra-point play followed
+    and the game ended on the score.
+
+    ⚠️ CHECKING IT SURFACED THE RUNG NEXT DOOR, WHICH DID NOT WORK. From 16, a touchdown
+    reaches 22 and the two-point try lands exactly on 24 and WINS — the kick only reaches
+    23. The chooser took the kick **60 times out of 60**, because a one-point deficit
+    against the opponent is not what is being decided.
+
+    ⚠️ And the mirror: a rung that BUSTS banks nothing, so it is never worth attempting. At
+    a need of 1 the two-point try overshoots and scores ZERO, leaving the team exactly where
+    the touchdown left it — strictly worse than the kick that lands. The standard policy
+    would gamble on it while trailing in the fourth quarter.
+    """
+
+    def _afterTd(self, scoreAfter, oppScore=5, quarter=3):
+        g = Scenario(gameRules=dartsRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.homeScore, g.awayScore = scoreAfter, oppScore
+        g.currentQuarter = quarter
+        g.down, g.yardsToEndzone, g.yardsToFirstDown = 1, 5, 10
+        return g
+
+    def _picks(self, scoreAfter, oppScore=5, quarter=3, n=40):
+        out = collections.Counter()
+        for i in range(n):
+            random.seed(i)
+            g = self._afterTd(scoreAfter, oppScore, quarter)
+            r = g._chooseConversion(g.homeTeam)
+            out[(r['kind'], float(r['points']))] += 1
+        return out
+
+    def test_aTouchdownThatLandsOnTheTargetSkipsTheTryEntirely(self):
+        """The reported case. The extra point would bust, and is never attempted."""
+        g = self._afterTd(X)
+        self.assertTrue(g.format.voidsScore(g, g.homeTeam, g.gameRules.extraPointPoints),
+                        'the fixture premise: an extra point here would bust')
+        self.assertTrue(g.isGameOver())
+        self.assertTrue(g._conversionIsMoot(g.homeTeam), 'attempted a try after winning')
+
+    def test_aTouchdownThatDoesNotEndItStillTries(self):
+        g = self._afterTd(X - 4)
+        self.assertFalse(g.isGameOver())
+        self.assertFalse(g._conversionIsMoot(g.homeTeam))
+
+    def test_theTryThatLandsOnTheTargetIsTaken(self):
+        """⚠️ THE BUG. Two points reach 24 from 22 and win; the kick reaches 23."""
+        two = int(self._afterTd(X).gameRules.twoPointConversionPoints)
+        picks = self._picks(X - two)
+        self.assertEqual(set(picks), {('go', float(two))},
+                         f'declined the try that wins the game: {dict(picks)}')
+
+    def test_theKickIsTakenWhenTheKickIsWhatLands(self):
+        xp = int(self._afterTd(X).gameRules.extraPointPoints)
+        picks = self._picks(X - xp)
+        self.assertEqual(set(picks), {('kick', float(xp))}, dict(picks))
+
+    def test_aBustingTryIsNeverAttemptedEvenWhenTrailingLate(self):
+        """⚠️ Q4 one point down is exactly where the standard policy gambles hardest — and
+        the gamble scores ZERO here however well it is executed."""
+        xp = int(self._afterTd(X).gameRules.extraPointPoints)
+        picks = self._picks(X - xp, oppScore=X - xp, quarter=4)
+        for (kind, points), count in picks.items():
+            g = self._afterTd(X - xp)
+            self.assertFalse(g.format.voidsScore(g, g.homeTeam, points),
+                             f'chose a {kind} for {points} that busts ({count} times)')
+
+    def test_whereNothingLandsItDefersToTheOrdinaryPolicy(self):
+        """The try is not always a target question — with no rung landing, darts has no
+        opinion and the standard kick-vs-go decision owns it."""
+        g = self._afterTd(X - 4)
+        self.assertIsNone(g._chooseDartsConversion(
+            g.homeTeam, [r for r in g._conversionRungs() if r['kind'] == 'go'],
+            next(r for r in g._conversionRungs() if r['kind'] == 'kick')))
+
+    def test_itIsInertInOvertimeAndInOtherFormats(self):
+        """Overtime is standard football, so the target drives nothing there either."""
+        from game_rules import GameRules
+        g = self._afterTd(X - 2, quarter=5)
+        g.isOvertime, g.otPeriod = True, 1
+        goRungs = [r for r in g._conversionRungs() if r['kind'] == 'go']
+        kick = next(r for r in g._conversionRungs() if r['kind'] == 'kick')
+        self.assertIsNone(g._chooseDartsConversion(g.homeTeam, goRungs, kick))
+        std = Scenario(gameRules=GameRules()).game
+        std.offensiveTeam, std.defensiveTeam = std.homeTeam, std.awayTeam
+        self.assertIsNone(std._chooseDartsConversion(std.homeTeam, goRungs, kick))
+
+
+class ThereIsAPointWhereTheTargetIsAbandoned(unittest.TestCase):
+    """⚠️ Owner, 2026-08-24: there has to be a point where teams stop trying to hit the target
+    on the dot and just accumulate points, in case the game ends on time.
+
+    Chasing an exact landing is right for most of a game and self-defeating at the end,
+    because if nobody reaches X the higher score wins — so the closing minutes are ordinary
+    football and the target is a distraction. Without the crossover the sim spent its last
+    downs on arithmetically-valid plans it had no time to execute: a team on 13 against 18
+    with 23 seconds hunting three hoops to bridge to a touchdown-plus-two-point landing on
+    24, when the touchdown alone wins it.
+
+    ⚠️ THE ORIGINAL COMMIT CLAIMED "futile late shots roughly HALVED, 23 -> 12". THAT WAS AN
+    ARTIFACT and the claim is withdrawn. `_dartsTargetOutOfReach` tested only whether
+    `need - spend` was a CONVENTIONAL landing, so a need the hoops finish ALONE (spend ==
+    need, landing 0) matched nothing and read as unreachable — declaring the target dead in
+    exactly the state hoops exist for, and suppressing legitimate shots wholesale. With that
+    fixed the futile count is 23, the same as before the crossover, while USEFUL late shots
+    rose 27 -> 33. The crossover's value is the specific states it corrects (below), not a
+    headline reduction.
+
+    Both bounds are measured rather than picked. Over 3,475 darts possessions a scoring
+    drive took a median 9 plays and a p25 of 7 (`DARTS_PLAYS_TO_SCORE`), and a possession
+    averaged 108 seconds, so a team needs roughly 216s to expect the ball back
+    (`DARTS_NEXT_POSSESSION_SECS`).
+    """
+
+    def _at(self, offScore, oppScore, ballOn, clock, quarter=4, hoopsUsed=()):
+        from floosball_game import Play
+        g = Scenario(gameRules=dartsRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.homeScore, g.awayScore = offScore, oppScore
+        g.currentQuarter, g.gameClockSeconds = quarter, clock
+        g.down, g.yardsToEndzone, g.yardsToFirstDown = 1, ballOn, 10
+        g._hoopPairResult = {p: 'made' for p in hoopsUsed}
+        g.play = Play(g)
+        return g
+
+    def test_itReadsTimeLeftInTheGameNotInTheQuarter(self):
+        """⚠️ THE ERROR THAT HIDES. `gameClockSeconds` counts down WITHIN a quarter and
+        resets, so reading it directly declared the target out of reach at the end of every
+        quarter — measured at 14,875 snaps over 400 games, about 37 a game, against the
+        handful this is meant to cover. A team three minutes from the end of the FIRST
+        quarter has three quarters left to work with."""
+        for quarter in (1, 2, 3):
+            g = self._at(13, 18, ballOn=54, clock=60, quarter=quarter)
+            self.assertFalse(g._dartsTargetOutOfReach(),
+                             f'abandoned the target in Q{quarter} with a full game left')
+
+    def test_withTimeForAnotherDriveTheTargetStandsLive(self):
+        g = self._at(13, 18, ballOn=54, clock=300)
+        self.assertFalse(g._dartsTargetOutOfReach())
+
+    def test_aNeedTheHoopsFinishAloneIsReachable(self):
+        """⚠️ THE BUG THE ORIGINAL CROSSOVER SHIPPED WITH. The plan loop asked whether
+        `need - spend` is a CONVENTIONAL landing, and at a need of 1 the spend IS the whole
+        plan (23 + 1 = 24), so `landing` comes out 0 — which is in no conventional set. The
+        target read as unreachable in exactly the state the hoops exist for, which switched
+        the hunt off across the late game and left the final-down fix inert."""
+        g = self._at(X - 1, X - 4, ballOn=55, clock=100)
+        self.assertNotIn(0.0, g._dartsExactLandings(), 'landings are conventional scores only')
+        self.assertFalse(g._dartsTargetOutOfReach(),
+                         'a need one hoop finishes is not out of reach')
+        self.assertFalse(g._dartsPlayForPoints())
+        rate = sum(g._shouldAttemptHoopShot() for _ in range(300)) / 300
+        self.assertGreater(rate, 0.8, f'the format\'s own win condition is not hunted ({rate:.0%})')
+
+    def test_aPlanWithNoTimeToRunIsAbandoned(self):
+        """The reported case: need 11, so a landing means three hoop snaps plus a
+        touchdown plus a two-point try — in 23 seconds."""
+        g = self._at(13, 18, ballOn=54, clock=23)
+        self.assertTrue(g._dartsTargetOutOfReach())
+        self.assertTrue(g._dartsPlayForPoints())
+
+    def test_aLandingAlreadyInRangeIsOneSnapNotADrive(self):
+        """⚠️ ALSO SHIPPED WRONG FOR A MOMENT. `DARTS_PLAYS_TO_SCORE` is the cost of GETTING
+        to a score, not of taking one already there — needing exactly a field goal from the
+        30 is a single kick away and must never read as out of reach."""
+        g = self._at(X - 3, 18, ballOn=30, clock=60)
+        kicker = g.offensiveTeam.rosterDict.get('k')
+        self.assertLessEqual(g.yardsToEndzone,
+                             kicker.maxFgDistance - g.gameRules.fgSnapDistance,
+                             'fixture premise: the kick is in range')
+        self.assertFalse(g._dartsTargetOutOfReach(), 'abandoned a target one kick away')
+
+    def test_aNeedNothingCanLandIsAbandoned(self):
+        """No combination of a conventional score and the reachable hoops reaches it."""
+        g = self._at(X - 13, 18, ballOn=54, clock=23,
+                     hoopsUsed=('midfield', 'midrange', 'endzone'))
+        self.assertTrue(g._dartsTargetOutOfReach())
+
+    def test_theHoopHuntStandsDownWhenPlayingForPoints(self):
+        """The whole point: it stops chasing X and the ordinary points logic takes over."""
+        g = self._at(13, 18, ballOn=54, clock=23)
+        rate = sum(g._shouldAttemptHoopShot() for _ in range(300)) / 300
+        self.assertLess(rate, 0.15, f'still hunting a target it cannot reach ({rate:.0%})')
+
+    def test_aTyingHoopIsStillTakenThough(self):
+        """⚠️ THE TWO HALVES ARE DIFFERENT QUESTIONS. The target being gone says the LANDING
+        is dead, not that the hoops are worthless — a point can still tie on the clock.
+        Handing those states to the standard path reintroduces its hurry-up guard, and a
+        team trailing by one inside a minute is ALWAYS in hurry-up, so game 994's tying shot
+        went straight back to 0% when this was first wired without the second half."""
+        g = self._at(17, 18, ballOn=54, clock=23)
+        self.assertTrue(g._dartsTargetOutOfReach())
+        self.assertFalse(g._dartsPlayForPoints(), 'handed away the tying shot')
+        rate = sum(g._shouldAttemptHoopShot() for _ in range(300)) / 300
+        self.assertGreater(rate, 0.4, f'the tying hoop is not being taken ({rate:.0%})')
+
+    def test_itIsInertOutsideDarts(self):
+        from game_rules import GameRules
+        g = Scenario(gameRules=GameRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.currentQuarter, g.gameClockSeconds = 4, 23
+        self.assertFalse(g._dartsTargetOutOfReach())
+        self.assertFalse(g._dartsPlayForPoints())
+
+
+class LateTheClockDecidesAndTheOpponentComesBack(unittest.TestCase):
+    """⚠️ PRODUCTION GAME 994 (owner, 2026-08-24). DET 18, BOS 17, nobody near the target.
+    BOS finished on 17 — a need of exactly 7, which is an exact landing, so
+    `_dartsNeedIsExactLanding` vetoed every hoop shot — and threw away the last 57 seconds:
+
+        0:23  BOS 1&10 at BOS 46  -> yardsToEndzone 54, INSIDE the midfield window
+        0:17  BOS 2&5  at DET 49  -> 49, the midfield pair is gone
+        0:13  BOS 1&10 at DET 44  -> 44, INSIDE the midrange window
+        0:00  clock expires, lost 18-17
+
+    They had the tying point in range TWICE and took neither.
+
+    ⚠️ Every other darts read ignores the opponent ON PURPOSE — what matters is distance to
+    the TARGET, and a team leading 17-3 needs a hoop as badly as anyone. That stops being
+    true once the clock is going to decide it: if nobody reaches X the higher score wins, so
+    a single point is the difference between a loss and overtime. The veto stands down and
+    the need is rated `critical`.
+    """
+
+    def _late(self, offScore, oppScore, ballOn=54, clock=23, quarter=4, hoopsUsed=()):
+        from floosball_game import Play
+        g = Scenario(gameRules=dartsRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.homeScore, g.awayScore = offScore, oppScore
+        g.currentQuarter, g.gameClockSeconds = quarter, clock
+        g.down, g.yardsToEndzone, g.yardsToFirstDown = 1, ballOn, 10
+        g._hoopPairResult = {p: 'made' for p in hoopsUsed}
+        g.play = Play(g)
+        return g
+
+    def _rate(self, game, rolls=400):
+        return sum(game._shouldAttemptHoopShot() for _ in range(rolls)) / rolls
+
+    def test_theFixtureReproducesGame994(self):
+        g = self._late(17, 18)
+        self.assertIn(float(g.format.bustNeed(g, g.homeTeam)), g._dartsExactLandings(),
+                      'the premise: the need is an exact landing, which is what vetoed it')
+        self.assertIsNotNone(g._hoopTarget(), 'the tying hoop really was in range')
+
+    def test_theVetoStandsDownWhenTheClockWillDecideIt(self):
+        g = self._late(17, 18)
+        self.assertTrue(g._dartsHoopSavesTheClockGame())
+        self.assertFalse(g._dartsNeedIsExactLanding(), 'still refusing the tying point')
+        self.assertEqual(g._hoopPointsNeeded(-1), 'critical')
+        self.assertGreater(self._rate(g), 0.5, 'the tying hoop is still not being taken')
+
+    def test_theOtherWindowInThatGameToo(self):
+        """The midrange pair at yardsToEndzone 44, where BOS sat at 0:13."""
+        g = self._late(17, 18, ballOn=44, clock=13)
+        self.assertEqual((g._hoopTarget() or (None,))[0], 'midrange')
+        self.assertGreater(self._rate(g), 0.4)
+
+    def test_levelLateCountsToo(self):
+        """Tied with the clock dying, the point LEADS — that is the game, not a bridge."""
+        g = self._late(18, 18)
+        self.assertTrue(g._dartsHoopSavesTheClockGame())
+        self.assertFalse(g._dartsNeedIsExactLanding())
+
+    def test_earlyTheLandingIsStillProtected(self):
+        """⚠️ THE CONTROL THAT KEEPS THE ORIGINAL RULE ALIVE. With a whole half to play the
+        target is what matters and a hoop still spoils the landing."""
+        g = self._late(17, 18, quarter=2, clock=600)
+        self.assertFalse(g._dartsHoopSavesTheClockGame())
+        self.assertTrue(g._dartsNeedIsExactLanding())
+        self.assertEqual(self._rate(g), 0.0)
+
+    def test_aLeaderIsNotRescuedFromItself(self):
+        """Ahead with the clock running out, the clock is a friend."""
+        self.assertFalse(self._late(19, 18)._dartsHoopSavesTheClockGame())
+
+    def test_aDeficitBeyondTheHoopsDoesNotQualify(self):
+        """The hoops have to be able to ERASE it — three pairs is three points."""
+        self.assertFalse(self._late(13, 18)._dartsHoopSavesTheClockGame())
+
+    def test_spentPairsDoNotQualify(self):
+        g = self._late(17, 18, hoopsUsed=('midfield', 'midrange', 'endzone'))
+        self.assertFalse(g._dartsHoopSavesTheClockGame())
+
+    def test_itIsInertOutsideDarts(self):
+        from game_rules import GameRules
+        g = Scenario(gameRules=GameRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.currentQuarter, g.gameClockSeconds = 4, 23
+        g.homeScore, g.awayScore = 17, 18
+        self.assertFalse(g._dartsHoopSavesTheClockGame())
+
+
+class OvertimeIsStandardFootball(unittest.TestCase):
+    """Overtime reverts to standard rules — next score wins once both teams have had a
+    possession, and the sideline hoops are off (owner, 2026-08-24).
+
+    ⚠️ BUSTING HAS TO GO WITH THE HOOPS; IT IS NOT A SEPARATE CHOICE. `bundledRules` spells
+    out why the 1-point hoop is a prerequisite: without it the smallest score is a 3-point
+    field goal, so a team on X-1 or X-2 cannot land on X. In regulation that strands a
+    drive. In an overtime ENTERED FROM A TIE it is fatal, because BOTH teams sit on the
+    same unreachable number — see `test_withoutHoopsBustingWouldDeadlockThePeriod`, which
+    pins the arithmetic. So the target stops governing entirely in overtime.
+
+    ⚠️ IT IS A TIE, NOT A HANG — `MAX_OT_PERIODS` (5) accepts a draw rather than looping.
+    But it is not rare: over 1,000 games, 18 reached overtime and 4 entered at 23-23 or
+    22-22, i.e. 0.40% of all games, about 1.8 a season. Tie scores cluster against the
+    target, which is what makes it a real case.
+
+    ⚠️ THE PRICE, ACCEPTED KNOWINGLY (owner, 2026-08-24): an overtime final CAN exceed the
+    target. Over 500 games, 8 went to overtime and 2 finished above X (30-27 and 26-23) —
+    about 1% of all games. The sample had no ties and none needed a third period.
+    """
+
+    def _tied(self, score, quarter=5, bothPossessions=True, ballOn=30, down=1):
+        from floosball_game import Play
+        g = Scenario(gameRules=dartsRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.homeScore = g.awayScore = score
+        g.currentQuarter = quarter
+        g.down, g.yardsToEndzone, g.yardsToFirstDown = down, ballOn, 10
+        if quarter >= 5:
+            g.isOvertime, g.otPeriod = True, 1
+            g.otSecondPossComplete = bothPossessions
+        g.play = Play(g)
+        return g
+
+    def test_withoutHoopsBustingWouldDeadlockThePeriod(self):
+        """⚠️ THE ARITHMETIC THAT FORCES THE WHOLE DESIGN. At X-1 every scoring play in the
+        game busts, so with no 1-pointer neither team could ever score and the period could
+        not end. This is why overtime drops the target rather than only the hoops."""
+        g = self._tied(X - 1, quarter=3)     # regulation, where busting IS in force
+        rules = g.gameRules
+        everyScore = (rules.fieldGoalPoints, rules.touchdownPoints,
+                      rules.touchdownPoints + rules.extraPointPoints,
+                      rules.touchdownPoints + rules.twoPointConversionPoints)
+        for points in everyScore:
+            self.assertTrue(g.format.voidsScore(g, g.homeTeam, points),
+                            f'{points} points does not bust from X-1, so there is no deadlock')
+
+    def test_theDartsRulesStandDownInOvertime(self):
+        for score in (X - 1, X - 2, X - 3, X - 6):
+            g = self._tied(score)
+            self.assertFalse(g._dartsActive(), f'darts still governing at {score}')
+            self.assertFalse(g._sidelineGoalsActive(), 'the hoops are still on')
+            self.assertFalse(g.format.voidsScore(g, g.homeTeam, g.gameRules.touchdownPoints),
+                             'a touchdown still busts in overtime')
+            self.assertTrue(g.format.allowFieldGoal(g, g.gameRules.fieldGoalPoints))
+            self.assertIsNone(g.format.checkEarlyEnd(g), 'first-to-X still walking it off')
+
+    def test_regulationIsUntouched(self):
+        """The control — everything above must still be true of the fourth quarter."""
+        g = self._tied(X - 1, quarter=3)
+        self.assertTrue(g._dartsActive())
+        self.assertTrue(g._sidelineGoalsActive())
+        self.assertTrue(g.format.voidsScore(g, g.homeTeam, g.gameRules.fieldGoalPoints))
+        self.assertFalse(g.format.allowFieldGoal(g, g.gameRules.fieldGoalPoints))
+
+    def test_anOvertimeFieldGoalIsNoLongerRefused(self):
+        """⚠️ THE SHARPEST TRAP. `_refuseBustingKick` reads `allowFieldGoal`, a bust
+        question — left running in overtime it REFUSED a kick that is perfectly legal there
+        AND wins the game outright."""
+        from floosball_game import PlayType
+        g = self._tied(X - 2)
+        g.play.playType = PlayType.FieldGoal
+        self.assertFalse(g._refuseBustingKick(), 'refused a legal, winning overtime kick')
+        self.assertIs(g.play.playType, PlayType.FieldGoal)
+
+    def test_noDriveIsDeadInOvertime(self):
+        """Same shape: the kick `_dartsDriveIsDead` was ruling out is back on."""
+        g = self._tied(X - 1)
+        g._hoopPairResult = {p: 'made' for p in HOOP_PAIRS}
+        self.assertFalse(g._dartsDriveIsDead())
+        self.assertFalse(g._dartsKneelOut())
+
+    def test_theTargetDrivesNoDecisionInOvertime(self):
+        from floosball_game import PlayType
+        g = self._tied(X - 3)                 # a 'landing' need, in regulation terms
+        self.assertFalse(g._dartsNeedIsExactLanding())
+        g.play.playType = PlayType.Run
+        self.assertFalse(g._dartsForceKick(), 'forced a kick off a target that no longer applies')
+
+    def test_reachingTheTargetDoesNotWalkOffOverTheGuaranteedPossession(self):
+        """⚠️ `isGameOver` consults `checkEarlyEnd` BEFORE the overtime logic, so a
+        first-to-X walk-off would end the period with the opponent's possession still owed
+        — the one rule overtime exists to enforce."""
+        owed = self._tied(X - 3, bothPossessions=False)
+        owed.homeScore = X
+        self.assertFalse(owed.isGameOver(), 'ended overtime before the opponent possessed')
+        settled = self._tied(X - 3, bothPossessions=True)
+        settled.homeScore = X
+        self.assertTrue(settled.isGameOver(), 'a lead after both possessions should end it')
+
+    def test_takingTheLeadUnderTheTargetWinsIt(self):
+        """The headline: nobody has to reach X. Measured over 500 games, 7 of the 8
+        overtimes were won on a lead under the target."""
+        g = self._tied(X - 8)
+        g.homeScore += int(g._fgValue())      # 19-16 at X=24, nowhere near the target
+        self.assertLess(g.homeScore, X)
+        self.assertTrue(g.checkOvertimeEnd())
+        self.assertTrue(g.isGameOver())
+
+    def test_noOtherFormatNoticesAnyOfThis(self):
+        from game_rules import GameRules
+        g = Scenario(gameRules=GameRules()).game
+        self.assertFalse(g._dartsActive())
+        g.currentQuarter = 5
+        self.assertFalse(g._dartsActive())
+
+
 class TheScoringRules(unittest.TestCase):
     """The format's own predicates, checked directly rather than inferred from finals."""
 
@@ -665,10 +1084,32 @@ class ItSurvivesTheEngine(unittest.TestCase):
     def setUpClass(cls):
         cls.finals = playDarts(24)
 
-    def test_nobodyEverExceedsTheTarget(self):
-        """The one inviolable rule of the format."""
-        over = [(h, a) for h, a in self.finals if h > X or a > X]
-        self.assertEqual(over, [], f'{len(over)} games finished above the target')
+    def test_nobodyEverExceedsTheTargetInRegulation(self):
+        """The format's inviolable rule, now scoped to where it still holds.
+
+        ⚠️ OVERTIME IS THE ONE EXEMPTION, and it is deliberate (owner, 2026-08-24) — see
+        `OvertimeIsStandardFootball`. The period drops the target entirely, because with the
+        hoops off a tie at X-1 leaves NO legal score for either team and the game grinds to
+        the `MAX_OT_PERIODS` draw. About 1% of games therefore finish above X.
+
+        ⚠️ THIS TEST CAUGHT THAT, AND ONLY ON THE THIRD RUN. The overtime change shipped
+        while this still read "nobody, ever", and it passed twice on sample luck — an
+        over-target final needs an overtime AND a scoring pattern that clears X, so a
+        24-game sample misses it most of the time. Asserting the exemption EXPLICITLY, and
+        checking that every violation is an overtime game, is what makes it real: a
+        REGULATION game finishing above the target is still a hard failure.
+        """
+        detailed = playDarts(24, withOvertime=True)
+        regulation = [(h, a) for h, a, ot in detailed if not ot]
+        over = [(h, a) for h, a in regulation if h > X or a > X]
+        self.assertEqual(over, [], f'{len(over)} REGULATION games finished above the target')
+
+    def test_onlyOvertimeMayExceedIt(self):
+        """The other half: an over-target final has to be an overtime game, never a
+        regulation one that quietly busted."""
+        for home, away, ot in playDarts(24, seed=31, withOvertime=True):
+            if home > X or away > X:
+                self.assertGreater(ot, 0, f'{home}-{away} exceeded the target in regulation')
 
     def test_everyScoreIsAWholeNumber(self):
         for home, away in self.finals:
@@ -712,7 +1153,12 @@ class AnEarlyFinishIsADecidedGame(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.finals = playDarts(40, seed=808)
+        # ⚠️ 60, not 40. The guard below is a SAMPLE-SIZE precondition, not a claim about the
+        # rate — that is `test_mostGamesAreDecidedByLandingOnIt`, which owns it. At 40 the
+        # sample sat right on the guard and any change to play-calling tipped it, which reads
+        # as this test failing when nothing it asserts has moved. Widen the sample rather
+        # than lower the bar.
+        cls.finals = playDarts(60, seed=808)
 
     def test_earlyFinishesAreTheLopsidedOnes(self):
         landed = [(min(h, a), max(h, a)) for h, a in self.finals if h == X or a == X]

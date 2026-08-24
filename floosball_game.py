@@ -4771,7 +4771,33 @@ class Game:
             self.play.passPlay(self._selectPassPlay(playCall))
 
     # ── Sideline Goals (hoop shot) ─────────────────────────────────────────────
+    def _dartsActive(self) -> bool:
+        """Are the darts rules governing this snap? FALSE IN OVERTIME.
+
+        ⚠️ OVERTIME REVERTS TO STANDARD FOOTBALL (owner, 2026-08-24): next score wins once
+        both teams have had a possession, sideline hoops off, nothing busts. See
+        `BustFormat.dartsLive` for why busting cannot stay behind when the hoops go — tied
+        at X-1 with no 1-pointer, NO score of any kind is legal, so the period burns the
+        `MAX_OT_PERIODS` backstop and ends in a tie. Measured at 0.40% of all games, about
+        1.8 a season.
+
+        ⚠️ EVERY `_darts*` HELPER KEYS OFF THIS, not off `format.key`, because a rule set
+        that is half in force is worse than either state. `_refuseBustingKick` is the sharp
+        one: it reads `allowFieldGoal`, which is a bust question, so left running it would
+        REFUSE an overtime field goal that is perfectly legal AND wins the game outright.
+        `_dartsDriveIsDead` is the same shape — no drive is dead in overtime, because the
+        kick it was ruling out is back on.
+        """
+        return getattr(self.format, 'key', '') == 'bust' and self.format.dartsLive(self)
+
     def _sidelineGoalsActive(self) -> bool:
+        # ⚠️ Darts bundles the hoops as a PREREQUISITE, and overtime hands them back: the
+        # period is standard football, so there is no 1-pointer to dink an exact remainder
+        # with and nothing to dink it toward. Read here rather than by mutating
+        # `gameRules`, which is shared and would leak the change past the period.
+        if (getattr(self.format, 'key', '') == 'bust'
+                and not self.format.dartsLive(self)):
+            return False
         return bool(getattr(self.gameRules, 'sidelineGoalsEnabled', False))
 
     def _hoopTarget(self):
@@ -4861,6 +4887,144 @@ class Game:
                 continue
         return out
 
+    def _dartsPlayForPoints(self) -> bool:
+        """Darts: stop reasoning about the target and play the ordinary points game.
+
+        ⚠️ THE TWO HALVES ARE NOT THE SAME QUESTION and running only the first is a
+        regression. The target being out of reach says the LANDING is dead; it does not say
+        the hoops are worthless, because a hoop point can still tie or win on the clock.
+        Handing those states to the standard path suppresses the shot exactly when it
+        matters — that path applies the hurry-up guard, and a team trailing by one inside a
+        minute is always in hurry-up, so production game 994's tying shot went straight back
+        to 0% the moment this was wired without the second half.
+        """
+        return self._dartsTargetOutOfReach() and not self._dartsHoopSavesTheClockGame()
+
+    def _dartsTargetOutOfReach(self) -> bool:
+        """Darts: landing exactly on the target is no longer achievable in the time left, so
+        the offense should stop chasing it and play for POINTS.
+
+        ⚠️ THE CROSSOVER THE FORMAT WAS MISSING (owner, 2026-08-24). Chasing an exact
+        landing is right for most of a game and becomes actively self-defeating at the end,
+        because if nobody reaches X the higher score wins — so the last minutes are ordinary
+        football and the target is a distraction. Without this the sim burned its final
+        downs on arithmetically-valid plans it had no time to execute: measured over 400
+        games, of the hoop shots taken while trailing late, **17 of 39 could not change the
+        result** — a team on 13 against 18 with 23 seconds hunting three hoops to bridge to
+        a touchdown-plus-two-point landing on 24, when the touchdown alone wins it.
+
+        A plan that lands still fits if EITHER:
+          * it fits this possession — `spend` hoop snaps (which gain no yards) plus a
+            scoring drive, against `_estimateAvailablePlays`; or
+          * there is time for another possession at all.
+
+        Both bounds are measured, not picked — see `DARTS_PLAYS_TO_SCORE` and
+        `DARTS_NEXT_POSSESSION_SECS`.
+
+        ⚠️ Deliberately NOT a fixed clock threshold. A team needing exactly a field goal from
+        the 30 is one snap from landing and should still chase it with a minute left, while a
+        team needing 11 is not, at the same moment on the same clock. The question is whether
+        the PLAN fits, not what the clock says.
+        """
+        if not self._dartsActive():
+            return False
+        offense = getattr(self, 'offensiveTeam', None)
+        if offense is None:
+            return False
+        from constants import DARTS_PLAYS_TO_SCORE, DARTS_NEXT_POSSESSION_SECS
+        # ⚠️ TIME LEFT IN THE GAME, NOT IN THE QUARTER. `gameClockSeconds` counts down within
+        # the current quarter and resets, so reading it directly declared the target out of
+        # reach at the end of EVERY quarter — measured at 14,875 snaps over 400 games, about
+        # 37 a game, against the handful this is meant to cover. A team three minutes from
+        # the end of the first quarter has three quarters left to work with.
+        secondsLeft = (max(0, 4 - self.currentQuarter) * self.gameRules.quarterLengthSeconds
+                       + self.gameClockSeconds)
+        # Time for another drive? Then the target is still live whatever this one does.
+        if secondsLeft >= DARTS_NEXT_POSSESSION_SECS:
+            return False
+        need = float(self.format.bustNeed(self, offense))
+        if need <= 0:
+            return False
+        landings = self._dartsExactLandings()
+        pts = float(getattr(self.gameRules, 'sidelineGoalPoints', 1))
+        reachable = 0.0
+        if self._sidelineGoalsActive():
+            reachable = max(0, self._hoopPairCount()
+                            - len(getattr(self, '_hoopPairResult', None) or {})) * pts
+        try:
+            playsLeft = float(self._estimateAvailablePlays())
+        except Exception:
+            return False        # cannot tell — leave the format alone
+        # The cheapest landing plan: the fewest hoop points that bridge to a conventional
+        # score, each costing a snap that gains nothing.
+        # ⚠️ A LANDING ALREADY IN RANGE IS ONE SNAP, NOT A DRIVE. Needing exactly a field
+        # goal from the 30 is a single kick away and must never read as out of reach —
+        # `DARTS_PLAYS_TO_SCORE` is the cost of GETTING to a score, not of taking one that
+        # is already there. Shipped without this and it declared that state unreachable with
+        # a minute on the clock.
+        kicker = offense.rosterDict.get('k')
+        maxDistance = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
+        fgInRange = self.yardsToEndzone <= maxDistance
+        for spend in range(0, int(reachable) + 1):
+            landing = need - spend
+            # ⚠️ THE HOOPS CAN FINISH IT ALONE, and `landings` holds only CONVENTIONAL
+            # scores. At a need of 1 the spend IS the plan — 23 + 1 = 24 — so `landing`
+            # comes out 0, which is in no conventional set. Omitting this case declared the
+            # target unreachable in exactly the state the hoops exist for, which switched
+            # the whole hunt off across the late game and left the final-down fix inert.
+            if landing == 0:
+                return playsLeft < spend
+            if landing in landings:
+                cost = 1 if (landing == self._fgValue() and fgInRange) else DARTS_PLAYS_TO_SCORE
+                return playsLeft < spend + cost
+        return True             # no combination lands at all from here
+
+    def _dartsHoopSavesTheClockGame(self) -> bool:
+        """Darts: the clock is about to decide this game, and a hoop point still reachable
+        would tie it or take the lead.
+
+        ⚠️ WHEN THE CLOCK DECIDES IT, DARTS BECOMES "HIGHER SCORE WINS" AND THE OPPONENT
+        COMES BACK INTO THE QUESTION. Every other darts read ignores the opponent on
+        purpose — what matters is distance to the TARGET, and a team leading 17-3 needs a
+        hoop as badly as anyone. That stops being true in the closing minutes: if nobody
+        reaches X the higher score takes it, so a single point is the difference between a
+        loss and overtime.
+
+        ⚠️ Reported from PRODUCTION GAME 994 (owner, 2026-08-24). BOS finished 18-17 on a
+        need of exactly 7 — an exact landing, so `_dartsNeedIsExactLanding` vetoed every
+        hoop shot — and threw away the last 57 seconds. They sat on `yardsToEndzone` 54 at
+        0:23 (inside the midfield window) and 44 at 0:13 (inside the midrange window), took
+        neither, and lost by ONE with the tying point in range twice.
+
+        Trailing OR TIED both qualify: level with the clock dying, a hoop point is the game
+        rather than a bridge to a landing.
+        """
+        if not self._dartsActive():
+            return False
+        offense = getattr(self, 'offensiveTeam', None)
+        if offense is None or not self._sidelineGoalsActive():
+            return False
+        from constants import SIDELINE_GOAL_DESPERATION_SECS
+        if not (self.currentQuarter >= 4
+                and self.gameClockSeconds <= SIDELINE_GOAL_DESPERATION_SECS):
+            return False
+        isHome = offense is self.homeTeam
+        deficit = ((self.awayScore - self.homeScore) if isHome
+                   else (self.homeScore - self.awayScore))
+        if deficit < 0:
+            return False                # already ahead; the clock is a friend
+        pts = float(getattr(self.gameRules, 'sidelineGoalPoints', 1))
+        remaining = max(0, self._hoopPairCount()
+                        - len(getattr(self, '_hoopPairResult', None) or {})) * pts
+        if remaining <= 0:
+            return False
+        # Level needs the ONE point that leads; behind needs the deficit erased.
+        needed = float(deficit) if deficit > 0 else pts
+        # ⚠️ The points must not BUST on the way — a hoop that overshoots the target banks
+        # nothing, so it cannot rescue anything either.
+        return (needed <= remaining
+                and not self.format.voidsScore(self, offense, needed))
+
     def _dartsNeedIsExactLanding(self) -> bool:
         """Darts: the remaining need is already exactly what a normal scoring play banks,
         so the offense should go and score it rather than shoot a hoop.
@@ -4885,12 +5049,108 @@ class Game:
         possession and there are dozens of drives left, so there is nothing to spoil. The
         veto is narrow on purpose: it fired on 9.5% of shots in the sample.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return False
         offense = getattr(self, 'offensiveTeam', None)
         if offense is None:
             return False
+        # ⚠️ THE VETO STANDS DOWN WHEN THE CLOCK IS ABOUT TO DECIDE THE GAME. Preserving an
+        # exact landing is worth nothing if the whistle goes first — see
+        # `_dartsHoopSavesTheClockGame`, and production game 994, which was lost by ONE with
+        # the tying hoop in range twice on the final drive.
+        if self._dartsHoopSavesTheClockGame():
+            return False
+        # ⚠️ AND WHEN THE LANDING ITSELF IS NO LONGER ACHIEVABLE there is nothing left to
+        # protect — see `_dartsTargetOutOfReach`.
+        if self._dartsTargetOutOfReach():
+            return False
         return self.format.bustNeed(self, offense) in self._dartsExactLandings()
+
+    def _dartsNeedCoverableBy(self, hoopPoints: float) -> bool:
+        """Could the offense still reach the target with `hoopPoints` of hoop left to it?
+
+        ⚠️ NOT `hoopPoints >= need`. That is only the question below a field goal, where
+        hoops are the ONLY score. Above it they BRIDGE — a need of 4 is a field goal plus one
+        hoop — so demanding the hoops cover the whole need declares a drive stranded while a
+        perfectly ordinary kick-plus-dink still lands it. Shipped that way for one commit and
+        caught by a sweep: at a need of 4 with two hoops still reachable it read 'the drive
+        cannot recover' and shot at 93%, against the 57% that spot deserves.
+
+        Mirrors `_hoopPointsNeeded`'s arithmetic against `_dartsExactLandings`, which is the
+        one definition of what a conventional score lands on.
+        """
+        need = float(self.format.bustNeed(self, self.offensiveTeam))
+        if need <= 0:
+            return True
+        if need < self._fgValue():
+            return hoopPoints >= need        # only a hoop can score at all
+        landings = self._dartsExactLandings()
+        if need in landings:
+            return True                      # a conventional score lands it alone
+        for spend in range(1, int(hoopPoints) + 1):
+            if need - spend in landings:
+                return True                  # hoops bridge to one
+        return False
+
+    def _dartsHoopCoverAfterDeclining(self, pairName: str) -> float:
+        """Points the offense could still bank from hoops if it passes up `pairName` and
+        drives on. The test for whether a shot is load-bearing.
+
+        ⚠️ NOT "how many pairs are unused" — how many are still REACHABLE. A closing pair
+        behind the ball is gone (`_dartsClosingPair`), while the END-ZONE pair is always
+        ahead of a drive and is what makes declining a midfield look reasonable most of the
+        time: a team needing 1 point with everything unused still has two chances left.
+
+        ⚠️ Only meaningful for a CLOSING pair. Passing up the end-zone pair does not lose
+        it — it stays in range while the drive continues — so `pairName` should only ever be
+        one the drive destroys by advancing.
+        """
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD, SIDELINE_GOAL_MIDFIELD_YARD
+        used = getattr(self, '_hoopPairResult', None) or {}
+        pts = float(getattr(self.gameRules, 'sidelineGoalPoints', 1))
+        yte = self.yardsToEndzone
+        cover = 0.0
+        if 'endzone' != pairName and 'endzone' not in used:
+            cover += pts                        # always in front of the offense
+        if ('midrange' != pairName and SIDELINE_GOAL_MIDRANGE_YARD
+                and 'midrange' not in used and yte >= SIDELINE_GOAL_MIDRANGE_YARD):
+            cover += pts
+        if ('midfield' != pairName and 'midfield' not in used
+                and yte >= SIDELINE_GOAL_MIDFIELD_YARD):
+            cover += pts
+        return cover
+
+    def _dartsClosingPair(self):
+        """The nearest unused USE-IT-OR-LOSE-IT hoop pair still ahead of the ball, as
+        (name, yard), or None.
+
+        ⚠️ "CLOSING" IS A PROPERTY OF THE PAIR, NOT A NAME. The midfield and midrange pairs
+        are only reachable while the offense is APPROACHING them (`_hoopTarget` requires
+        `d >= 0`), so driving past one destroys it. The END-ZONE pair is the opposite — it
+        OPENS as the offense advances — so it is deliberately excluded: there is never a
+        last chance at it and nothing to hold a drive back for.
+
+        ⚠️ THIS EXISTS BECAUSE THE MIDRANGE PAIR WAS ADDED AFTER THE RESTRAINT LOGIC AND
+        NEITHER CALLER WAS UPDATED — the same way `_dartsDriveIsDead` kept a hardcoded 2.
+        `_dartsHoopApproach` measured `room` off the MIDFIELD yard alone and returned 0.0
+        once past it, so restraint ramped to 0.48 approaching the 50 and then fell to
+        EXACTLY ZERO from the 48 down to the 30 — the entire stretch where the midrange
+        pair is the live target and about to be driven past. Measured over 300 games, of
+        the snaps where a team needing 2 points or fewer had a pair in range, it drove past
+        it 10% of the time at midrange and 13% at midfield.
+        """
+        from constants import (SIDELINE_GOAL_MIDRANGE_YARD, SIDELINE_GOAL_MIDFIELD_YARD)
+        used = getattr(self, '_hoopPairResult', None) or {}
+        yte = self.yardsToEndzone
+        candidates = []
+        if SIDELINE_GOAL_MIDRANGE_YARD and 'midrange' not in used:
+            candidates.append(('midrange', float(SIDELINE_GOAL_MIDRANGE_YARD)))
+        if 'midfield' not in used:
+            candidates.append(('midfield', float(SIDELINE_GOAL_MIDFIELD_YARD)))
+        ahead = [c for c in candidates if yte >= c[1]]
+        if not ahead:
+            return None
+        return min(ahead, key=lambda c: yte - c[1])   # the one about to be crossed
 
     def _dartsHoopApproach(self) -> float:
         """Darts: how hard the offense is MANAGING ITS FIELD POSITION toward the midfield
@@ -4914,21 +5174,24 @@ class Game:
         closer the ball gets to the crossing the less room there is for a play to be
         merely good, and the stronger the restraint becomes.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return 0.0
         offense = getattr(self, 'offensiveTeam', None)
         if offense is None:
             return 0.0
-        used = getattr(self, '_hoopPairResult', None) or {}
-        if 'midfield' in used:
-            return 0.0          # already spent; there is nothing left to protect
         isHome = offense is self.homeTeam
         scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
         if self._hoopPointsNeeded(scoreDiff) not in ('critical', 'helpful'):
             return 0.0          # no use for the hoop, so no reason to bend the drive
-        from constants import (SIDELINE_GOAL_MIDFIELD_YARD, DARTS_APPROACH_HORIZON_YARDS,
-                               COACH_ATTR_NEUTRAL)
-        room = self.yardsToEndzone - SIDELINE_GOAL_MIDFIELD_YARD
+        from constants import DARTS_APPROACH_HORIZON_YARDS, COACH_ATTR_NEUTRAL
+        # ⚠️ WHICHEVER CLOSING PAIR IS NEXT, not the midfield one. This read the midfield
+        # yard alone and bailed once past it, which switched the restraint off completely
+        # across the 48-to-30 stretch where the MIDRANGE pair is the live target. See
+        # `_dartsClosingPair`.
+        closing = self._dartsClosingPair()
+        if closing is None:
+            return 0.0          # nothing left ahead that a drive can destroy
+        room = self.yardsToEndzone - closing[1]
         if room < 0:
             return 0.0          # already past it; the pair is gone whatever happens now
         nearness = 1.0 - min(1.0, room / DARTS_APPROACH_HORIZON_YARDS)
@@ -4984,7 +5247,7 @@ class Game:
         the only scoring play it has left. Punting is therefore a positive move here rather
         than a concession — it buys field position AND two fresh hoops.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return False
         offense = getattr(self, 'offensiveTeam', None)
         if offense is None:
@@ -5029,7 +5292,7 @@ class Game:
             when deep in opponent territory, where losing the ball hands over poor field
             position anyway; from further out, punt instead.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return False
         if self.play is None or self.play.playType is not PlayType.FieldGoal:
             return False
@@ -5090,7 +5353,7 @@ class Game:
         one. Out of range, the offense plays on and works into range, which is the same
         answer it would give anywhere else.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return False
         if self.play is None or self.play.playType is PlayType.FieldGoal:
             return False
@@ -5215,7 +5478,7 @@ class Game:
         score. The cost to a trailing team is the ~40s a kneel runs off — real, but it is
         buying out a snap whose only possible outcomes are neutral or bad.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return False
         if self.play is None or self.play.playType is PlayType.Kneel:
             return False
@@ -5250,6 +5513,70 @@ class Game:
         self.play.targetSideline = self._shouldTargetSideline(scoreDiff, coach)
         self._executeWeightedPlay(self._computePlayWeights(scoreDiff, coach),
                                   targetSideline=self.play.targetSideline)
+        return True
+
+    def _dartsFinalDownHoop(self) -> bool:
+        """Darts: give the final down the hoop decision every other down already gets.
+        Returns True if a shot was taken.
+
+        ⚠️ THE RULE WAS WRITTEN, DOCUMENTED, AND UNREACHABLE. `_shouldAttemptHoopShot`'s
+        darts branch says the final-down guard INVERTS — a hoop normally forfeits the real
+        scoring play, but under a target with the need below a field goal there is no real
+        scoring play to forfeit: a touchdown is held up short and a kick busts. Correct, and
+        it never ran. The check is consulted from exactly ONE place, inside
+        `_executeWeightedPlay`, and `playCaller` routes the final down to
+        `_fourthDownCaller`, which sets Punt/FieldGoal directly or calls runPlay/passPlay —
+        it never reaches the weighted path. The inversion sat behind a door the final down
+        never opens.
+
+        Measured over 400 games: **26** final-down snaps where only a hoop could score and
+        one was in range. It shot **1**. The other 25 punted (12), ran (6), passed (5) or
+        knelt (2) — giving up the ball, or running a play that could not produce a point,
+        while holding the only scoring play on the field.
+
+        ⚠️ The end-zone pair partly escaped this BY ACCIDENT, which is why the earlier sweep
+        showed it shooting on fourth down and midfield not. In the red zone the kick is in
+        range, so `_fourthDownCaller` picks a FieldGoal, the kick busts, `_refuseBustingKick`
+        refuses it, and its "play on" branch re-enters `_executeWeightedPlay` through the
+        back door. Out at midfield the kick is out of range, nothing re-routes, and the hoop
+        is never considered at all.
+
+        ⚠️ It DELEGATES rather than re-deciding. `_shouldAttemptHoopShot` already returns the
+        right answer on a final down — its darts branch returns the coach-scaled roll before
+        the generic "never on the last down" guard is reached, and carries the load-bearing
+        floor, the closing-window lift, the exact-landing veto and the play-for-points
+        hand-over with it. The only thing missing was ever calling it.
+        """
+        if not self._dartsActive():
+            return False
+        if self.play is None or getattr(self.play, 'isHoopShot', False):
+            return False
+        if self.down < self.gameRules.downsPerSeries:
+            return False        # the weighted path already asked on this down
+        # A kneel or spike is a deliberate clock play; a resolved score is not ours to undo.
+        if self.play.playType in (PlayType.Kneel, PlayType.Spike):
+            return False
+        if getattr(self.play, 'scoreChange', False):
+            return False
+        if not self._shouldAttemptHoopShot():
+            return False
+        # Clear the from-scrimmage setup the call being replaced left behind, exactly as
+        # `_dartsForceKick` does — the shot ignores it, and the insights would otherwise
+        # report a trick play that never ran.
+        self.play.insights['dartsFinalDownHoop'] = {
+            'reason': 'no conventional score is possible, so the down forfeits nothing',
+            'need': self.format.bustNeed(self, self.offensiveTeam),
+            'instead': self.play.playType.name if self.play.playType else 'weighted',
+        }
+        self.play.trickPlay = None
+        self.play.runConcept = None
+        self.play._rpoRunRelief = 0.0
+        self.play._trickOpennessBonus = 0.0
+        self.play._trickRunRelief = 0.0
+        self.play._trickSackMult = 1.0
+        self.play._forcedRunner = None
+        self.play._forcedGap = None
+        self._executeHoopShot()
         return True
 
     def _dartsLeadingOnPoints(self) -> bool:
@@ -5294,10 +5621,17 @@ class Game:
         # Measured before this existed: over 30 games there were 531 snaps where a hoop
         # was the only thing that could land the offense on X, and it shot at 9% — the
         # standard-football logic was declining the format's own win condition.
-        if getattr(self.format, 'key', '') == 'bust':
+        if self._dartsActive() and not self._dartsPlayForPoints():
             need = self.format.bustNeed(self, self.offensiveTeam)
             if need <= 0:
                 return None                      # already there; the game is over
+            # ⚠️ LATE, THE CLOCK DECIDES IT AND THE OPPONENT COMES BACK INTO THE QUESTION.
+            # Everything below reasons purely about distance to the TARGET, which is right
+            # all game and wrong in the last minutes: if nobody reaches X the higher score
+            # wins, so a point that ties or leads outranks any landing. See
+            # `_dartsHoopSavesTheClockGame` (production game 994).
+            if self._dartsHoopSavesTheClockGame():
+                return 'critical'
             fg = self._fgValue()
             # Below a field goal, a hoop is the ONLY score that does not bust. No
             # conventional play can put points on the board from here at all.
@@ -5373,7 +5707,11 @@ class Game:
         # Coach-scaled rather than automatic (owner, 2026-08-17) — an aggressive coach
         # hunts the hoop, a cautious one plays field position and waits for a better spot,
         # so two teams in the same position play it differently.
-        if getattr(self.format, 'key', '') == 'bust':
+        # ⚠️ ONCE THE TARGET IS OUT OF REACH THE DARTS HUNT HANDS OVER ENTIRELY. Its
+        # load-bearing floor reasons about reaching X, which is the wrong basis when X
+        # can no longer be reached. The standard path below already asks the question
+        # that decides a game the clock is about to end: does this point tie or lead.
+        if self._dartsActive() and not self._dartsPlayForPoints():
             if self._hoopPointsNeeded(scoreDiff) in ('critical', 'helpful'):
                 from constants import (DARTS_HOOP_HUNT_BASE, DARTS_HOOP_HUNT_AGGR_SPAN,
                                        DARTS_HOOP_LAST_CHANCE_LIFT, DARTS_HOOP_CLOSING_YARDS)
@@ -5391,10 +5729,40 @@ class Game:
                 #
                 # The end-zone pair needs no such lift: it opens as the offense advances
                 # rather than closing, so there is never a last chance at it.
+                # ⚠️ EITHER CLOSING PAIR, not just the midfield one — the midrange pair
+                # shuts the same way and was getting no closing urgency at all.
                 pair = (self._hoopTarget() or (None, 0.0))[0]
-                if pair == 'midfield':
-                    from constants import SIDELINE_GOAL_MIDFIELD_YARD
-                    yardsToCrossing = max(0.0, self.yardsToEndzone - SIDELINE_GOAL_MIDFIELD_YARD)
+                _closing = self._dartsClosingPair()
+                if _closing is not None and pair == _closing[0]:
+                    # ⚠️ IF PASSING THIS UP LEAVES THE DRIVE UNABLE TO COVER ITS NEED, SHOOT.
+                    # Declining is normally reasonable — a shot costs a down and no yards,
+                    # and the end-zone pair is always still ahead — but once the hoops that
+                    # remain REACHABLE no longer add up to the need, driving on forfeits the
+                    # only path the drive has. Measured over 300 games, 12 of 26 midfield
+                    # crossings at a need of 2 or fewer stranded the offense that way.
+                    #
+                    # ⚠️ CLOSING PAIRS ONLY, and that is not a detail. Declining the END-ZONE
+                    # pair does not lose it — it stays in range as the drive continues, so
+                    # the cost is a down rather than the chance. Applied to it, this fired on
+                    # every red-zone snap and flattened the coach dial the hunt is built on
+                    # (caught by `TheHuntIsCoachScaled`, whose fixture sits at the 12).
+                    from constants import DARTS_HOOP_LOADBEARING_CHANCE
+                    _need = self.format.bustNeed(self, self.offensiveTeam)
+                    _pts = float(getattr(self.gameRules, 'sidelineGoalPoints', 1))
+                    # ⚠️ AND WHEN THE SHOT SIMPLY WINS THE GAME (owner, 2026-08-24). Passing
+                    # up a CLOSING pair that ends the match is dominated, not merely risky:
+                    # crossing the pair loses it for NOTHING, while shooting loses it only
+                    # after a ~71% chance of winning on the spot, and a miss is an
+                    # incompletion — the down is spent, the ball is kept, the end-zone pair
+                    # is still ahead. Measured over 400 games, drives that passed up an
+                    # in-range midfield hoop needing 2 or fewer went on to score at all
+                    # **11 times out of 22**, so "there are chances left" was paying for a
+                    # coin flip with a 71% shot already in hand.
+                    if (_need <= _pts
+                            or not self._dartsNeedCoverableBy(
+                                self._dartsHoopCoverAfterDeclining(pair))):
+                        chance = max(chance, DARTS_HOOP_LOADBEARING_CHANCE)
+                    yardsToCrossing = max(0.0, self.yardsToEndzone - _closing[1])
                     if yardsToCrossing <= DARTS_HOOP_CLOSING_YARDS:
                         closeness = 1.0 - (yardsToCrossing / DARTS_HOOP_CLOSING_YARDS)
                         chance += DARTS_HOOP_LAST_CHANCE_LIFT * closeness
@@ -9166,6 +9534,9 @@ class Game:
                 # and then kneels it out, rather than punting from the opponent's 1 — see
                 # _dartsKneelOut. A no-op in every non-bust format.
                 self._dartsKneelOut()
+                # ⚠️ AND THE FINAL DOWN'S HOOP DECISION, which `_fourthDownCaller` bypasses
+                # entirely — see _dartsFinalDownHoop. A no-op in every non-bust format.
+                self._dartsFinalDownHoop()
                 if self._timeoutCalled and self.timingManager:
                     await self.timingManager.waitAfterTimeout()
 
@@ -12892,6 +13263,17 @@ class Game:
             _framesPick = self._chooseFramesConversion(scoringTeam, goRungs, fallback)
             if _framesPick is not None:
                 return _framesPick
+        # Darts: a rung that lands on the target wins outright, and one that overshoots
+        # banks nothing. Deferring drops the busting rungs so the standard policy cannot
+        # gamble on a try that scores zero however well it is executed.
+        if goRungs and self._dartsActive():
+            _dartsPick = self._chooseDartsConversion(scoringTeam, goRungs, fallback)
+            if _dartsPick is not None:
+                return _dartsPick
+            goRungs = [r for r in goRungs
+                       if not self.format.voidsScore(self, scoringTeam, r['points'])]
+            if not goRungs:
+                return fallback
         if self.currentQuarter not in (3, 4) or not goRungs:   # Q1-Q2 / OT: the safe kick (or forced go-rung)
             return fallback
         scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
@@ -12929,6 +13311,41 @@ class Game:
         aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
         pct = max(0.05, min(0.95, desire + aggressNorm * 0.15))
         return target if random.random() < pct else fallback
+
+    def _chooseDartsConversion(self, scoringTeam: FloosTeam.Team, goRungs: list, fallback: dict):
+        """Darts post-TD decision, or None to defer to the standard policy.
+
+        ⚠️ THE CONVERSION IS A SCORE, AND IN DARTS EVERY SCORE IS MEASURED AGAINST THE
+        TARGET — the standard policy measures it against the OPPONENT, so it could not see
+        either half of this. Two things follow, and they are the same two that govern every
+        other darts call:
+
+          * A rung that lands EXACTLY on the target WINS THE GAME. Measured at X=24, a team
+            on 16 scores a touchdown to reach 22 and the two-point try takes it to 24 while
+            the kick only reaches 23 — and the chooser took the kick **60 times out of 60**,
+            because a one-point deficit against the opponent is not what is being decided.
+          * A rung that BUSTS banks nothing at all, so it is never worth attempting. At a
+            need of 1 the two-point try overshoots and scores ZERO, leaving the team exactly
+            where the touchdown left it — strictly worse than the kick that lands.
+
+        ⚠️ The safe kick can never bust here, which is what makes this total: the try is
+        skipped outright at a need of 0 (`_conversionIsMoot`), so the need is at least 1 and
+        an extra point is at most that. There is always a legal rung.
+        """
+        if not self._dartsActive():
+            return None
+        need = float(self.format.bustNeed(self, scoringTeam))
+        if need <= 0:
+            return None                 # already on the target; the try is moot anyway
+        # A go-rung that lands exactly on it ends the game — take the shortest such try.
+        landing = [r for r in goRungs if float(r['points']) == need]
+        if landing:
+            return min(landing, key=lambda r: r['distance'])
+        # Otherwise the kick lands it, if anything does.
+        if float(getattr(self.gameRules, 'extraPointPoints', 1)) == need:
+            return fallback if fallback['kind'] == 'kick' else dict(
+                next(r for r in self._conversionRungs() if r['kind'] == 'kick'))
+        return None                     # nothing wins outright — defer, minus the busting rungs
 
     def _chooseFramesConversion(self, scoringTeam: FloosTeam.Team, goRungs: list, fallback: dict):
         """Frames post-TD decision, or None to defer to the standard policy.

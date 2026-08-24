@@ -128,6 +128,216 @@ class TheOffenseKnowsAHoopIsTheOnlyWay(unittest.TestCase):
         self.assertIsNone(game._hoopPointsNeeded(5), 'a leading team still wants nothing')
 
 
+class TheFinalDownGetsTheHoopDecisionToo(unittest.TestCase):
+    """⚠️ THE RULE WAS WRITTEN, DOCUMENTED, AND UNREACHABLE (owner report, 2026-08-24).
+
+    `_shouldAttemptHoopShot`'s darts branch says the final-down guard INVERTS: a hoop
+    normally forfeits the real scoring play, but under a target with the need below a field
+    goal there is no real scoring play to forfeit — a touchdown is held up short and a kick
+    busts. Correct, and it never ran. The check is consulted from exactly ONE place, inside
+    `_executeWeightedPlay`, and `playCaller` routes the final down to `_fourthDownCaller`,
+    which sets Punt/FieldGoal directly or calls runPlay/passPlay. The inversion sat behind a
+    door the final down never opens.
+
+    Measured over 400 games: 26 final-down snaps where only a hoop could score and one was
+    in range. It shot 1 — the rest punted (12), ran (6), passed (5) or knelt (2). After: 8
+    of 13 (the total falls because a taken shot resolves the state instead of leaving the
+    offense sitting in it).
+
+    ⚠️ The end-zone pair partly escaped this BY ACCIDENT, which is why a sweep showed it
+    shooting on fourth down while midfield did not: in the red zone the kick is in range, so
+    the caller picks a FieldGoal, it busts, `_refuseBustingKick` refuses it, and its
+    "play on" branch re-enters `_executeWeightedPlay` through the back door.
+    """
+
+    def _finalDown(self, need=1, ballOn=55, hoopsUsed=()):
+        from floosball_game import Play
+        scenario = dartsGame(offScore=X - need, defScore=max(0, X - need - 3),
+                             ballOn=ballOn, distance=8, hoopsUsed=hoopsUsed)
+        g = scenario.game
+        g.down = g.gameRules.downsPerSeries
+        g.play = Play(g)
+        return g
+
+    def test_theFixtureIsTheStateTheRuleDescribes(self):
+        g = self._finalDown()
+        self.assertLess(g.format.bustNeed(g, g.homeTeam), g._fgValue(),
+                        'a field goal would bust, so no conventional score is possible')
+        self.assertIsNotNone(g._hoopTarget(), 'a pair really is in range')
+        self.assertEqual(g.down, g.gameRules.downsPerSeries)
+
+    def test_aPuntOnTheFinalDownBecomesTheShot(self):
+        from floosball_game import PlayType
+        g = self._finalDown()
+        g.play.playType = PlayType.Punt
+        self.assertTrue(g._dartsFinalDownHoop(), 'punted away the only scoring play')
+        self.assertTrue(g.play.isHoopShot)
+
+    def test_soDoARunOrAPass(self):
+        from floosball_game import PlayType
+        for kind in (PlayType.Run, PlayType.Pass):
+            g = self._finalDown()
+            g.play.playType = kind
+            self.assertTrue(g._dartsFinalDownHoop(), f'ran a {kind.name} that cannot score')
+            self.assertTrue(g.play.isHoopShot)
+
+    def test_itDoesNotFireOnEarlierDowns(self):
+        """⚠️ `_executeWeightedPlay` already asked on those, and asking twice would shoot a
+        second hoop on a snap that has already resolved one."""
+        from floosball_game import PlayType
+        g = self._finalDown()
+        g.down = 1
+        g.play.playType = PlayType.Run
+        self.assertFalse(g._dartsFinalDownHoop())
+
+    def test_itLeavesAnAlreadyResolvedShotAlone(self):
+        g = self._finalDown()
+        g.play.isHoopShot = True
+        self.assertFalse(g._dartsFinalDownHoop())
+
+    def test_itLeavesAKneelAndASpikeAlone(self):
+        from floosball_game import PlayType
+        for kind in (PlayType.Kneel, PlayType.Spike):
+            g = self._finalDown()
+            g.play.playType = kind
+            self.assertFalse(g._dartsFinalDownHoop(), f'overrode a {kind.name}')
+
+    def test_withNoPairInRangeItDoesNothing(self):
+        from floosball_game import PlayType
+        # ⚠️ 25, not 35. The windows are end zone 1-18, midrange 30-50, midfield 50-64, so
+        # the 35 is INSIDE the midrange pair — the third pair closed the gap the old
+        # two-pair layout had (see `TheThirdPairFillsTheDeadZone`). 19-29 is a real gap.
+        g = self._finalDown(ballOn=25)
+        self.assertIsNone(g._hoopTarget())
+        g.play.playType = PlayType.Punt
+        self.assertFalse(g._dartsFinalDownHoop())
+        self.assertIs(g.play.playType, PlayType.Punt)
+
+    def test_whenAConventionalScoreIsAvailableItDefers(self):
+        """Needing a field goal, the kick is the play — the hoop would spoil the landing."""
+        from floosball_game import PlayType
+        g = self._finalDown(need=int(dartsGame(offScore=0).game._fgValue()))
+        g.play.playType = PlayType.FieldGoal
+        self.assertFalse(g._dartsFinalDownHoop())
+        self.assertIs(g.play.playType, PlayType.FieldGoal)
+
+    def test_itIsANoOpInStandardFootball(self):
+        from floosball_game import Play, PlayType
+        scenario = Scenario()
+        scenario.situation(quarter=2, clock=600, offense='home', offScore=17, defScore=14,
+                           down=4, distance=8, ballOn=55, offTimeouts=3, defTimeouts=3)
+        g = scenario.game
+        g.play = Play(g)
+        g.play.playType = PlayType.Punt
+        self.assertFalse(g._dartsFinalDownHoop())
+        self.assertIs(g.play.playType, PlayType.Punt)
+
+
+class AHoopTheDriveCannotAffordToLoseIsShot(unittest.TestCase):
+    """⚠️ Reported (owner, 2026-08-24): teams needing a single point drive straight past the
+    midfield goal. They do — and most of the time that is FINE, which is why the rule is not
+    "always shoot". A shot costs a down and no yards, and the end-zone pair is always still
+    ahead, so a team needing 1 with everything unused has two more chances and is right to
+    keep driving.
+
+    It stops being fine when the hoops still REACHABLE after this one no longer add up to
+    the need: driving on then forfeits the only path the drive has. Measured over 300 games,
+    of 26 snaps where a team needing 2 or fewer drove past the midfield pair, **12 left it
+    unable to cover its need**. That half is the mistake; the other 14 are football.
+
+    ⚠️ CLOSING PAIRS ONLY. Passing up the END-ZONE pair does not lose it — it stays in range
+    as the drive continues — so the cost there is a down, not the chance. Applied to it, this
+    fired on every red-zone snap and flattened the coach dial the whole hunt is built on;
+    `TheHuntIsCoachScaled` caught it, its fixture sitting at the 12.
+    """
+
+    def _rate(self, need, ballOn, hoopsUsed=(), rolls=400):
+        game = dartsGame(offScore=X - need, ballOn=ballOn, hoopsUsed=hoopsUsed).game
+        self.assertIsNotNone(game._hoopTarget(), 'fixture has no pair in range')
+        return sum(game._shouldAttemptHoopShot() for _ in range(rolls)) / rolls
+
+    def test_theCoverCountsOnlyWhatIsStillReachable(self):
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD as MR
+        # At the midfield pair, the midrange pair is still ahead and the end-zone pair always is.
+        far = dartsGame(offScore=X - 1, ballOn=60).game
+        self.assertEqual(far._dartsHoopCoverAfterDeclining('midfield'), 2.0)
+        # Past the midrange pair, only the end-zone pair is left.
+        near = dartsGame(offScore=X - 1, ballOn=int(MR) - 5).game
+        self.assertEqual(near._dartsHoopCoverAfterDeclining('midfield'), 1.0)
+        # A spent pair does not count either.
+        spent = dartsGame(offScore=X - 1, ballOn=60, hoopsUsed=('endzone',)).game
+        self.assertEqual(spent._dartsHoopCoverAfterDeclining('midfield'), 1.0)
+
+    def test_withChancesLeftItStillWeighsTheShot(self):
+        """The control, and the reason this is not just 'always shoot'. Uses a BRIDGING
+        need — at a need of 1 the shot wins the game outright and is taken regardless."""
+        self.assertLess(self._rate(need=2, ballOn=60), 0.75,
+                        'shooting on reflex with two chances still ahead')
+
+    def test_aWinningClosingShotIsTakenEvenWithChancesLeft(self):
+        """⚠️ Owner, 2026-08-24: needing one point the midfield goals are the nearest score,
+        and driving past them risks the ball for nothing. The case is DOMINATED rather than
+        merely risky — crossing the pair loses it either way, so declining loses it for
+        nothing while shooting loses it only after a ~71% chance of ending the match, and a
+        miss is an incompletion that keeps the ball. Measured over 400 games, drives that
+        passed up an in-range midfield hoop needing 2 or fewer went on to score AT ALL 11
+        times out of 22."""
+        from constants import DARTS_HOOP_LOADBEARING_CHANCE
+        rate = self._rate(need=1, ballOn=60)      # every pair still unused
+        self.assertGreater(rate, DARTS_HOOP_LOADBEARING_CHANCE - 0.08,
+                           f'passed up the shot that wins the game ({rate:.0%})')
+
+    def test_aBridgingNeedIsNotTreatedAsStranded(self):
+        """⚠️ THIS SHIPPED WRONG FOR ONE COMMIT. The stranding test was `cover < need`,
+        which is only the right question BELOW a field goal, where hoops are the only score.
+        Above it they BRIDGE — a need of 4 is a field goal plus one hoop — so demanding the
+        hoops cover the whole need declared an ordinary kick-plus-dink drive stranded and
+        shot at 93% where 57% belongs. Caught by sweeping the needs rather than spot-checking.
+        """
+        from constants import DARTS_HOOP_HUNT_BASE
+        game = dartsGame(offScore=X - 4, ballOn=60).game
+        self.assertEqual(game._dartsHoopCoverAfterDeclining('midfield'), 2.0)
+        self.assertTrue(game._dartsNeedCoverableBy(2.0),
+                        'a field goal plus a hoop still lands a need of 4')
+        rate = self._rate(need=4, ballOn=60)
+        self.assertLess(rate, DARTS_HOOP_HUNT_BASE + 0.15,
+                        f'forced a bridging shot that had chances left ({rate:.0%})')
+
+    def test_theBridgeMustActuallyReachALanding(self):
+        """The counterpart: with only the midfield pair able to supply the bridging point,
+        passing it up does strand the drive."""
+        from constants import DARTS_HOOP_LOADBEARING_CHANCE
+        game = dartsGame(offScore=X - 4, ballOn=60, hoopsUsed=('midrange', 'endzone')).game
+        self.assertEqual(game._dartsHoopCoverAfterDeclining('midfield'), 0.0)
+        self.assertFalse(game._dartsNeedCoverableBy(0.0))
+        rate = self._rate(need=4, ballOn=60, hoopsUsed=('midrange', 'endzone'))
+        self.assertGreater(rate, DARTS_HOOP_LOADBEARING_CHANCE - 0.08)
+
+    def test_whenDecliningWouldStrandTheDriveItShoots(self):
+        from constants import DARTS_HOOP_LOADBEARING_CHANCE
+        cases = ((1, ('midrange', 'endzone')),   # nothing left behind the midfield pair
+                 (2, ('midrange',)),             # only the end-zone pair, and it is 1 short
+                 (2, ('endzone',)))
+        for need, used in cases:
+            rate = self._rate(need=need, ballOn=60, hoopsUsed=used)
+            self.assertGreater(rate, DARTS_HOOP_LOADBEARING_CHANCE - 0.08,
+                               f'need {need} with {used} spent shot only {rate:.0%}')
+
+    def test_theEndZonePairIsNeverTreatedAsLoadBearing(self):
+        """⚠️ It is not lost by driving on, so declining it costs a down and nothing else —
+        and forcing it would erase the coach dial across the whole red zone."""
+        from constants import DARTS_HOOP_HUNT_BASE
+        rate = self._rate(need=1, ballOn=12, hoopsUsed=('midfield', 'midrange'))
+        self.assertLess(rate, DARTS_HOOP_HUNT_BASE + 0.15,
+                        f'the end-zone pair was forced ({rate:.0%})')
+
+    def test_itIsInertWhenNoHoopIsWanted(self):
+        """Needing exactly a field goal, the hoop is worth nothing and nothing is forced."""
+        game = dartsGame(offScore=X - 3, ballOn=60, hoopsUsed=('midrange', 'endzone')).game
+        rate = sum(game._shouldAttemptHoopShot() for _ in range(200)) / 200
+        self.assertEqual(rate, 0.0)
+
+
 class TheHuntIsCoachScaled(unittest.TestCase):
     """⚠️ Measured over many rolls rather than asserted on one, since the decision is a
     coin weighted by the coach — a single call proves nothing either way."""
@@ -176,8 +386,12 @@ class TheMidfieldWindowShuts(unittest.TestCase):
     progress, and here it silently destroys one of the two scoring options a team needing
     1 or 2 points has, so the shot gets more urgent as the window shuts."""
 
-    def _rate(self, ballOn, aggressiveness=80, rolls=600):
-        scenario = dartsGame(offScore=X - 1, ballOn=ballOn, aggressiveness=aggressiveness)
+    def _rate(self, ballOn, aggressiveness=80, rolls=600, need=2):
+        """⚠️ A BRIDGING need (2) by default, NOT 1. At a need of 1 the closing shot WINS
+        THE GAME and floors at `DARTS_HOOP_LOADBEARING_CHANCE` on every snap of the window,
+        which is deliberate — but it swamps the gradient this class exists to measure and
+        makes the curve read flat. Measure the lift where the shot is genuinely weighed."""
+        scenario = dartsGame(offScore=X - need, ballOn=ballOn, aggressiveness=aggressiveness)
         game = scenario.game
         target = game._hoopTarget()
         self.assertIsNotNone(target, f'fixture at {ballOn} is out of hoop range')
@@ -216,9 +430,19 @@ class TheMidfieldWindowShuts(unittest.TestCase):
 
     def test_itIsStillAChanceRatherThanACertainty(self):
         """Even at the crossing a neutral coach sometimes plays on — the lift is urgency,
-        not a scripted play."""
+        not a scripted play.
+
+        ⚠️ True of a BRIDGING need only. When the shot wins the game outright it is
+        deliberately near-scripted (see `test_aWinningShotIsScriptedNotWeighed`), because
+        crossing the pair loses it either way and declining buys nothing."""
         rate = self._rate(50)[1]
         self.assertLess(rate, 1.0)
+
+    def test_aWinningShotIsScriptedNotWeighed(self):
+        """The deliberate exception, and the reason `_rate` defaults to a bridging need."""
+        self.assertGreater(self._rate(64, need=1)[1], 0.85,
+                           'a shot that wins the game is still being weighed 14 yards out')
+        self.assertGreater(self._rate(50, need=1)[1], 0.95)
 
 
 class TheThirdPairFillsTheDeadZone(unittest.TestCase):
@@ -364,14 +588,46 @@ class ADisciplinedSideManagesTheApproach(unittest.TestCase):
         self.assertGreater(self._probe(51)['sideline'], 0.7)
         self.assertLess(self._probe(51, discipline=62, clockManagement=62)['sideline'], 0.2)
 
-    def test_pastMidfieldItStops(self):
-        """The pair is gone whatever happens now, so there is nothing left to protect and
-        the offense should go back to playing football."""
-        scenario = dartsGame(offScore=X - 1, ballOn=45)
-        self.assertEqual(scenario.game._dartsHoopApproach(), 0.0)
+    def test_pastMidfieldTheMidrangePairTakesOver(self):
+        """⚠️ THIS TEST USED TO ASSERT THE BUG. It read "past midfield it stops" and pinned
+        `_dartsHoopApproach() == 0.0` from the 45 — true of the MIDFIELD pair and false of
+        the drive, because the midrange pair at the 30 is still ahead and shuts the same
+        way. Restraint fell to exactly zero across the whole 48-to-30 stretch, which is
+        precisely where the last hoop was about to be driven past.
 
-    def test_aSpentPairStopsIt(self):
-        game = dartsGame(offScore=X - 1, ballOn=56, hoopsUsed=('midfield',)).game
+        Restraint stops when there is nothing left AHEAD to destroy, not at a fixed yard.
+        """
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD
+        game = dartsGame(offScore=X - 1, ballOn=45).game
+        self.assertEqual(game._dartsClosingPair()[0], 'midrange')
+        self.assertGreater(game._dartsHoopApproach(), 0.0,
+                           'the drive is unrestrained with a hoop still in front of it')
+        # Ramps as that window shuts, exactly as it did approaching the 50.
+        near = dartsGame(offScore=X - 1, ballOn=int(SIDELINE_GOAL_MIDRANGE_YARD) + 2).game
+        self.assertGreater(near._dartsHoopApproach(), game._dartsHoopApproach())
+
+    def test_pastTheLastClosingPairItStops(self):
+        """The real version of the rule: inside the final pair, nothing a drive does can
+        destroy a scoring chance, so it goes back to playing football.
+
+        ⚠️ The END-ZONE pair is deliberately not a closing pair — it OPENS as the offense
+        advances, so there is never a last chance at it and nothing to hold back for."""
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD
+        game = dartsGame(offScore=X - 1, ballOn=int(SIDELINE_GOAL_MIDRANGE_YARD) - 5).game
+        self.assertIsNone(game._dartsClosingPair())
+        self.assertEqual(game._dartsHoopApproach(), 0.0)
+
+    def test_aSpentPairHandsOffToTheNextOne(self):
+        """A spent midfield pair does not end the restraint — it moves it to the midrange
+        pair, which is still in front of the ball."""
+        game = dartsGame(offScore=X - 1, ballOn=40, hoopsUsed=('midfield',)).game
+        self.assertEqual(game._dartsClosingPair()[0], 'midrange')
+        self.assertGreater(game._dartsHoopApproach(), 0.0)
+
+    def test_everyClosingPairSpentStopsIt(self):
+        game = dartsGame(offScore=X - 1, ballOn=40,
+                         hoopsUsed=('midfield', 'midrange')).game
+        self.assertIsNone(game._dartsClosingPair())
         self.assertEqual(game._dartsHoopApproach(), 0.0)
 
     def test_noHoopWantedNoRestraint(self):

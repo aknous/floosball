@@ -995,10 +995,44 @@ class BustFormat(GameFormat):
     def _target(self, game) -> int:
         return int(getattr(game.gameRules, 'targetScore', 18))
 
+    def dartsLive(self, game) -> bool:
+        """Are the darts rules in force right now? FALSE IN OVERTIME.
+
+        ⚠️ OVERTIME REVERTS TO STANDARD FOOTBALL — next score wins once both teams have had
+        a possession, and the sideline hoops are off (owner, 2026-08-24).
+
+        ⚠️ BUSTING HAS TO GO WITH THE HOOPS; IT IS NOT A SEPARATE CHOICE. `bundledRules`
+        above already spells out why: without a 1-point hoop the smallest score is a
+        3-point field goal, so a team on X-1 or X-2 cannot land on X at all. In regulation
+        that merely strands a drive. In an overtime ENTERED FROM A TIE it strands the whole
+        PERIOD, because both teams sit on the same unreachable number — verified directly
+        at X=24: tied at 23, NO score of any kind is legal (field goal, touchdown, either
+        conversion and a safety all bust), and tied at 22 only a safety is.
+
+        ⚠️ IT IS A TIE, NOT A HANG. `playGame`'s `MAX_OT_PERIODS` (5) backstop accepts a tie
+        rather than looping, so the failure mode is five scoreless overtimes and a draw. Not
+        an endless game — but not a game either, and NOT rare: measured over 1,000 games,
+        18 reached overtime and **4 of those entered at 23-23 or 22-22**, i.e. 0.40% of all
+        games, about 1.8 a season across a 448-game schedule. Tie scores cluster right up
+        against the target, which is what makes this a real case rather than a freak one.
+
+        So the target stops governing entirely: no bust, no hoops, no first-to-X walk-off.
+        ⚠️ THE PRICE, ACCEPTED KNOWINGLY (owner, 2026-08-24, choosing this over two
+        alternatives that preserve the target): an overtime final CAN exceed it — 21 plus a
+        touchdown reads 27 at X=24, and about 1% of games finish above X. The rejected
+        options were keeping bust always (inviolable target, ~1.8 scoreless-tie games a
+        season) and dropping the target only once provably unreachable (over-target finals
+        confined to 0.40%, at the cost of a rule that switches mid-period).
+        """
+        return not (getattr(game, 'isOvertime', False)
+                    or getattr(game, 'currentQuarter', 1) >= 5)
+
     def scorePoints(self, game, points):
         return int(round(points))   # whole numbers only — a fractional score can't land on X
 
     def voidsScore(self, game, team, points) -> bool:
+        if not self.dartsLive(game):
+            return False            # overtime is standard football — nothing busts
         cur = game.homeScore if team is game.homeTeam else game.awayScore
         return (cur + points) > self._target(game)
 
@@ -1007,6 +1041,8 @@ class BustFormat(GameFormat):
         return self._target(game) - cur
 
     def allowFieldGoal(self, game, fgPoints) -> bool:
+        if not self.dartsLive(game):
+            return True             # overtime: an ordinary kick, and it wins the game
         off = getattr(game, 'offensiveTeam', None)
         if off is None:
             return True
@@ -1014,6 +1050,13 @@ class BustFormat(GameFormat):
 
     def checkEarlyEnd(self, game):
         # Reached exactly X → win (the standard higher-score winner picks that team).
+        # ⚠️ DEFERS IN OVERTIME, and it has to. `isGameOver` consults this BEFORE the
+        # overtime logic, so a first-to-X walk-off would end the period the instant a team
+        # landed on the target — even with the opponent's guaranteed possession still
+        # owed, which is exactly the rule overtime is supposed to follow. Standing down
+        # here hands the decision to `checkOvertimeEnd`, where it belongs.
+        if not self.dartsLive(game):
+            return None
         X = self._target(game)
         if game.homeScore == X or game.awayScore == X:
             return True
