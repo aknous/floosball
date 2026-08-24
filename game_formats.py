@@ -995,10 +995,33 @@ class BustFormat(GameFormat):
     def _target(self, game) -> int:
         return int(getattr(game.gameRules, 'targetScore', 18))
 
+    def dartsLive(self, game) -> bool:
+        """Are the darts rules in force right now? FALSE IN OVERTIME.
+
+        ⚠️ OVERTIME REVERTS TO STANDARD FOOTBALL — next score wins once both teams have had
+        a possession, and the sideline hoops are off (owner, 2026-08-24).
+
+        ⚠️ BUSTING HAS TO GO WITH THE HOOPS; IT IS NOT A SEPARATE CHOICE. `bundledRules`
+        above already spells out why: without a 1-point hoop the smallest score is a
+        3-point field goal, so a team on X-1 or X-2 cannot land on X at all. In regulation
+        that merely strands a drive. In an overtime ENTERED FROM A TIE it is fatal, because
+        both teams sit on the same unreachable number — verified directly at X=24: tied at
+        23, NO score of any kind is legal (field goal, touchdown, either conversion and a
+        safety all bust), and tied at 22 only a safety is. The period could never end.
+
+        So the target stops governing entirely: no bust, no hoops, no first-to-X walk-off.
+        ⚠️ A consequence worth knowing: an overtime final CAN exceed the target (21 + a
+        touchdown reads 27 at X=24). That is the price of a period that always resolves.
+        """
+        return not (getattr(game, 'isOvertime', False)
+                    or getattr(game, 'currentQuarter', 1) >= 5)
+
     def scorePoints(self, game, points):
         return int(round(points))   # whole numbers only — a fractional score can't land on X
 
     def voidsScore(self, game, team, points) -> bool:
+        if not self.dartsLive(game):
+            return False            # overtime is standard football — nothing busts
         cur = game.homeScore if team is game.homeTeam else game.awayScore
         return (cur + points) > self._target(game)
 
@@ -1007,6 +1030,8 @@ class BustFormat(GameFormat):
         return self._target(game) - cur
 
     def allowFieldGoal(self, game, fgPoints) -> bool:
+        if not self.dartsLive(game):
+            return True             # overtime: an ordinary kick, and it wins the game
         off = getattr(game, 'offensiveTeam', None)
         if off is None:
             return True
@@ -1014,6 +1039,13 @@ class BustFormat(GameFormat):
 
     def checkEarlyEnd(self, game):
         # Reached exactly X → win (the standard higher-score winner picks that team).
+        # ⚠️ DEFERS IN OVERTIME, and it has to. `isGameOver` consults this BEFORE the
+        # overtime logic, so a first-to-X walk-off would end the period the instant a team
+        # landed on the target — even with the opponent's guaranteed possession still
+        # owed, which is exactly the rule overtime is supposed to follow. Standing down
+        # here hands the decision to `checkOvertimeEnd`, where it belongs.
+        if not self.dartsLive(game):
+            return None
         X = self._target(game)
         if game.homeScore == X or game.awayScore == X:
             return True

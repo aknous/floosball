@@ -604,6 +604,118 @@ class TheHeldUpShortText(unittest.TestCase):
                          'the held-up-short line still restates the target')
 
 
+class OvertimeIsStandardFootball(unittest.TestCase):
+    """Overtime reverts to standard rules — next score wins once both teams have had a
+    possession, and the sideline hoops are off (owner, 2026-08-24).
+
+    ⚠️ BUSTING HAS TO GO WITH THE HOOPS; IT IS NOT A SEPARATE CHOICE. `bundledRules` spells
+    out why the 1-point hoop is a prerequisite: without it the smallest score is a 3-point
+    field goal, so a team on X-1 or X-2 cannot land on X. In regulation that strands a
+    drive. In an overtime ENTERED FROM A TIE it is fatal, because BOTH teams sit on the
+    same unreachable number — see `test_withoutHoopsBustingWouldDeadlockThePeriod`, which
+    pins the arithmetic. So the target stops governing entirely in overtime.
+
+    ⚠️ THE PRICE: an overtime final CAN exceed the target. Measured over 500 games, 8 went
+    to overtime and 2 of those finished above X (30-27 and 26-23). That is the cost of a
+    period that always resolves; the sample had no ties and none needed a third period.
+    """
+
+    def _tied(self, score, quarter=5, bothPossessions=True, ballOn=30, down=1):
+        from floosball_game import Play
+        g = Scenario(gameRules=dartsRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.homeScore = g.awayScore = score
+        g.currentQuarter = quarter
+        g.down, g.yardsToEndzone, g.yardsToFirstDown = down, ballOn, 10
+        if quarter >= 5:
+            g.isOvertime, g.otPeriod = True, 1
+            g.otSecondPossComplete = bothPossessions
+        g.play = Play(g)
+        return g
+
+    def test_withoutHoopsBustingWouldDeadlockThePeriod(self):
+        """⚠️ THE ARITHMETIC THAT FORCES THE WHOLE DESIGN. At X-1 every scoring play in the
+        game busts, so with no 1-pointer neither team could ever score and the period could
+        not end. This is why overtime drops the target rather than only the hoops."""
+        g = self._tied(X - 1, quarter=3)     # regulation, where busting IS in force
+        rules = g.gameRules
+        everyScore = (rules.fieldGoalPoints, rules.touchdownPoints,
+                      rules.touchdownPoints + rules.extraPointPoints,
+                      rules.touchdownPoints + rules.twoPointConversionPoints)
+        for points in everyScore:
+            self.assertTrue(g.format.voidsScore(g, g.homeTeam, points),
+                            f'{points} points does not bust from X-1, so there is no deadlock')
+
+    def test_theDartsRulesStandDownInOvertime(self):
+        for score in (X - 1, X - 2, X - 3, X - 6):
+            g = self._tied(score)
+            self.assertFalse(g._dartsActive(), f'darts still governing at {score}')
+            self.assertFalse(g._sidelineGoalsActive(), 'the hoops are still on')
+            self.assertFalse(g.format.voidsScore(g, g.homeTeam, g.gameRules.touchdownPoints),
+                             'a touchdown still busts in overtime')
+            self.assertTrue(g.format.allowFieldGoal(g, g.gameRules.fieldGoalPoints))
+            self.assertIsNone(g.format.checkEarlyEnd(g), 'first-to-X still walking it off')
+
+    def test_regulationIsUntouched(self):
+        """The control — everything above must still be true of the fourth quarter."""
+        g = self._tied(X - 1, quarter=3)
+        self.assertTrue(g._dartsActive())
+        self.assertTrue(g._sidelineGoalsActive())
+        self.assertTrue(g.format.voidsScore(g, g.homeTeam, g.gameRules.fieldGoalPoints))
+        self.assertFalse(g.format.allowFieldGoal(g, g.gameRules.fieldGoalPoints))
+
+    def test_anOvertimeFieldGoalIsNoLongerRefused(self):
+        """⚠️ THE SHARPEST TRAP. `_refuseBustingKick` reads `allowFieldGoal`, a bust
+        question — left running in overtime it REFUSED a kick that is perfectly legal there
+        AND wins the game outright."""
+        from floosball_game import PlayType
+        g = self._tied(X - 2)
+        g.play.playType = PlayType.FieldGoal
+        self.assertFalse(g._refuseBustingKick(), 'refused a legal, winning overtime kick')
+        self.assertIs(g.play.playType, PlayType.FieldGoal)
+
+    def test_noDriveIsDeadInOvertime(self):
+        """Same shape: the kick `_dartsDriveIsDead` was ruling out is back on."""
+        g = self._tied(X - 1)
+        g._hoopPairResult = {p: 'made' for p in HOOP_PAIRS}
+        self.assertFalse(g._dartsDriveIsDead())
+        self.assertFalse(g._dartsKneelOut())
+
+    def test_theTargetDrivesNoDecisionInOvertime(self):
+        from floosball_game import PlayType
+        g = self._tied(X - 3)                 # a 'landing' need, in regulation terms
+        self.assertFalse(g._dartsNeedIsExactLanding())
+        g.play.playType = PlayType.Run
+        self.assertFalse(g._dartsForceKick(), 'forced a kick off a target that no longer applies')
+
+    def test_reachingTheTargetDoesNotWalkOffOverTheGuaranteedPossession(self):
+        """⚠️ `isGameOver` consults `checkEarlyEnd` BEFORE the overtime logic, so a
+        first-to-X walk-off would end the period with the opponent's possession still owed
+        — the one rule overtime exists to enforce."""
+        owed = self._tied(X - 3, bothPossessions=False)
+        owed.homeScore = X
+        self.assertFalse(owed.isGameOver(), 'ended overtime before the opponent possessed')
+        settled = self._tied(X - 3, bothPossessions=True)
+        settled.homeScore = X
+        self.assertTrue(settled.isGameOver(), 'a lead after both possessions should end it')
+
+    def test_takingTheLeadUnderTheTargetWinsIt(self):
+        """The headline: nobody has to reach X. Measured over 500 games, 7 of the 8
+        overtimes were won on a lead under the target."""
+        g = self._tied(X - 8)
+        g.homeScore += int(g._fgValue())      # 19-16 at X=24, nowhere near the target
+        self.assertLess(g.homeScore, X)
+        self.assertTrue(g.checkOvertimeEnd())
+        self.assertTrue(g.isGameOver())
+
+    def test_noOtherFormatNoticesAnyOfThis(self):
+        from game_rules import GameRules
+        g = Scenario(gameRules=GameRules()).game
+        self.assertFalse(g._dartsActive())
+        g.currentQuarter = 5
+        self.assertFalse(g._dartsActive())
+
+
 class TheScoringRules(unittest.TestCase):
     """The format's own predicates, checked directly rather than inferred from finals."""
 

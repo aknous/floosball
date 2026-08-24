@@ -4771,7 +4771,32 @@ class Game:
             self.play.passPlay(self._selectPassPlay(playCall))
 
     # ── Sideline Goals (hoop shot) ─────────────────────────────────────────────
+    def _dartsActive(self) -> bool:
+        """Are the darts rules governing this snap? FALSE IN OVERTIME.
+
+        ⚠️ OVERTIME REVERTS TO STANDARD FOOTBALL (owner, 2026-08-24): next score wins once
+        both teams have had a possession, sideline hoops off, nothing busts. See
+        `BustFormat.dartsLive` for why busting cannot stay behind when the hoops go — tied
+        at X-1 with no 1-pointer, NO score of any kind is legal and the period could never
+        end.
+
+        ⚠️ EVERY `_darts*` HELPER KEYS OFF THIS, not off `format.key`, because a rule set
+        that is half in force is worse than either state. `_refuseBustingKick` is the sharp
+        one: it reads `allowFieldGoal`, which is a bust question, so left running it would
+        REFUSE an overtime field goal that is perfectly legal AND wins the game outright.
+        `_dartsDriveIsDead` is the same shape — no drive is dead in overtime, because the
+        kick it was ruling out is back on.
+        """
+        return getattr(self.format, 'key', '') == 'bust' and self.format.dartsLive(self)
+
     def _sidelineGoalsActive(self) -> bool:
+        # ⚠️ Darts bundles the hoops as a PREREQUISITE, and overtime hands them back: the
+        # period is standard football, so there is no 1-pointer to dink an exact remainder
+        # with and nothing to dink it toward. Read here rather than by mutating
+        # `gameRules`, which is shared and would leak the change past the period.
+        if (getattr(self.format, 'key', '') == 'bust'
+                and not self.format.dartsLive(self)):
+            return False
         return bool(getattr(self.gameRules, 'sidelineGoalsEnabled', False))
 
     def _hoopTarget(self):
@@ -4885,7 +4910,7 @@ class Game:
         possession and there are dozens of drives left, so there is nothing to spoil. The
         veto is narrow on purpose: it fired on 9.5% of shots in the sample.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return False
         offense = getattr(self, 'offensiveTeam', None)
         if offense is None:
@@ -4914,7 +4939,7 @@ class Game:
         closer the ball gets to the crossing the less room there is for a play to be
         merely good, and the stronger the restraint becomes.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return 0.0
         offense = getattr(self, 'offensiveTeam', None)
         if offense is None:
@@ -4984,7 +5009,7 @@ class Game:
         the only scoring play it has left. Punting is therefore a positive move here rather
         than a concession — it buys field position AND two fresh hoops.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return False
         offense = getattr(self, 'offensiveTeam', None)
         if offense is None:
@@ -5029,7 +5054,7 @@ class Game:
             when deep in opponent territory, where losing the ball hands over poor field
             position anyway; from further out, punt instead.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return False
         if self.play is None or self.play.playType is not PlayType.FieldGoal:
             return False
@@ -5090,7 +5115,7 @@ class Game:
         one. Out of range, the offense plays on and works into range, which is the same
         answer it would give anywhere else.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return False
         if self.play is None or self.play.playType is PlayType.FieldGoal:
             return False
@@ -5215,7 +5240,7 @@ class Game:
         score. The cost to a trailing team is the ~40s a kneel runs off — real, but it is
         buying out a snap whose only possible outcomes are neutral or bad.
         """
-        if getattr(self.format, 'key', '') != 'bust':
+        if not self._dartsActive():
             return False
         if self.play is None or self.play.playType is PlayType.Kneel:
             return False
@@ -5294,7 +5319,7 @@ class Game:
         # Measured before this existed: over 30 games there were 531 snaps where a hoop
         # was the only thing that could land the offense on X, and it shot at 9% — the
         # standard-football logic was declining the format's own win condition.
-        if getattr(self.format, 'key', '') == 'bust':
+        if self._dartsActive():
             need = self.format.bustNeed(self, self.offensiveTeam)
             if need <= 0:
                 return None                      # already there; the game is over
@@ -5373,7 +5398,7 @@ class Game:
         # Coach-scaled rather than automatic (owner, 2026-08-17) — an aggressive coach
         # hunts the hoop, a cautious one plays field position and waits for a better spot,
         # so two teams in the same position play it differently.
-        if getattr(self.format, 'key', '') == 'bust':
+        if self._dartsActive():
             if self._hoopPointsNeeded(scoreDiff) in ('critical', 'helpful'):
                 from constants import (DARTS_HOOP_HUNT_BASE, DARTS_HOOP_HUNT_AGGR_SPAN,
                                        DARTS_HOOP_LAST_CHANCE_LIFT, DARTS_HOOP_CLOSING_YARDS)
