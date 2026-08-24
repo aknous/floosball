@@ -3801,6 +3801,20 @@ DARTS_APPROACH_DOWNFIELD_DAMP = 0.25   # long + deep, at full discipline
 # over so it can restock its hoops on the next possession.
 DARTS_DEAD_DRIVE_RUN_BIAS = 2.5
 
+# ⚠️ A DEAD DARTS DRIVE AT THE GOAL LINE KNEELS IT OUT (owner, 2026-08-24). Both hoop pairs
+# are spent and the remaining need is under a field goal, so nothing this possession does
+# can score — and because a would-bust touchdown is held up short, the offense cannot even
+# cross the goal line. Every snap from there is PURE DOWNSIDE: it cannot gain a point, it
+# can lose yards, and it can lose the ball on a fumble or a pick. A kneel gives up nothing
+# the drive still had (the down is going anyway), removes that risk, drains the play clock,
+# and hands the opponent the ball on their own doorstep.
+#
+# Inside this many yards there is nothing left to gain — `_holdUpShortCap` caps a carrier at
+# `yardsToEndzone - 1`, so from the 3 the whole remaining prize is two yards of pin. Beyond
+# it the offense plays on and works closer first, which is the "as close as possible" half.
+DARTS_KNEEL_OUT_YARDS = 3
+
+
 # Added trigger chance per ADDITIONAL glitched card in the same lineup (owner, 2026-08-17).
 # Rewards FIELDING several at once rather than merely owning them, which is the half that
 # pairs with expiry above: the stockpile is gone, so what is left to reward is assembling a

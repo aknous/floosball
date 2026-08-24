@@ -34,6 +34,13 @@ from scenario import Scenario, PlayType
 X = 18
 
 
+# The real pair names, in the order a drive meets them. ALL_PAIRS_SPENT is the only
+# fixture that strands a drive from anywhere on the field — with the end-zone pair unused
+# the offense simply advances into it, whatever else it has spent.
+HOOP_PAIRS = ('midfield', 'midrange', 'endzone')
+ALL_PAIRS_SPENT = HOOP_PAIRS
+
+
 def dartsGame(*, offScore, defScore=4, ballOn=35, down=1, distance=10,
               hoopsUsed=(), aggressiveness=80):
     """A darts game with the offense on `offScore`, i.e. needing X - offScore."""
@@ -46,6 +53,13 @@ def dartsGame(*, offScore, defScore=4, ballOn=35, down=1, distance=10,
                        offScore=offScore, defScore=defScore,
                        down=down, distance=distance, ballOn=ballOn,
                        offTimeouts=3, defTimeouts=3, clockRunning=True)
+    # ⚠️ VALIDATED, because a typo here is INVISIBLE. `_dartsDriveIsDead` used to count
+    # `len(_hoopPairResult) >= 2`, so a phantom key was as good as a real one — every
+    # dead-drive fixture below said `'redzone'` (the pair is `'endzone'`) and the whole
+    # class passed with the end-zone pair still live. The check now asks which pairs are
+    # REACHABLE, which is what surfaced it.
+    unknown = set(hoopsUsed) - set(HOOP_PAIRS)
+    assert not unknown, f'no such hoop pair: {sorted(unknown)} (pairs are {HOOP_PAIRS})'
     game._hoopPairResult = {pair: 'missed' for pair in hoopsUsed}
     coach = getattr(game.homeTeam, 'coach', None)
     if coach is not None:
@@ -399,7 +413,7 @@ class ADeadDrivePunts(unittest.TestCase):
     """Both pairs spent and the need under a field goal: nothing can score this possession."""
 
     def test_theStateIsRecognised(self):
-        game = dartsGame(offScore=X - 1, hoopsUsed=('midfield', 'redzone')).game
+        game = dartsGame(offScore=X - 1, hoopsUsed=ALL_PAIRS_SPENT).game
         self.assertTrue(game._dartsDriveIsDead())
 
     def test_anOpenPairIsNotADeadDrive(self):
@@ -408,7 +422,7 @@ class ADeadDrivePunts(unittest.TestCase):
 
     def test_aReachableNeedIsNotADeadDrive(self):
         """Needing a field goal exactly, the drive is perfectly alive."""
-        game = dartsGame(offScore=X - 3, hoopsUsed=('midfield', 'redzone')).game
+        game = dartsGame(offScore=X - 3, hoopsUsed=ALL_PAIRS_SPENT).game
         self.assertFalse(game._dartsDriveIsDead())
 
     def test_noOtherFormatIsEverDead(self):
@@ -420,14 +434,14 @@ class ADeadDrivePunts(unittest.TestCase):
     def test_itPuntsOnTheFinalDown(self):
         """⚠️ Not a concession — the hoop pairs RESET on the next possession, so ending the
         drive is how the offense restocks the only scoring play it has left."""
-        scenario = dartsGame(offScore=X - 1, hoopsUsed=('midfield', 'redzone'),
+        scenario = dartsGame(offScore=X - 1, hoopsUsed=ALL_PAIRS_SPENT,
                              down=4, ballOn=45)
         self.assertIs(scenario.fourthDownPlay(), PlayType.Punt)
 
     def test_itPuntsEvenInFieldGoalRange(self):
         """The kick is refused by the format anyway (it would bust), so 'in range' is
         meaningless here and must not tempt the caller into a field goal."""
-        scenario = dartsGame(offScore=X - 1, hoopsUsed=('midfield', 'redzone'),
+        scenario = dartsGame(offScore=X - 1, hoopsUsed=ALL_PAIRS_SPENT,
                              down=4, ballOn=20)
         scenario.setKickerLeg('home', 60)
         self.assertIs(scenario.fourthDownPlay(), PlayType.Punt)
@@ -444,13 +458,142 @@ class ADeadDrivePunts(unittest.TestCase):
                         'every fourth down punts — the dead-drive rule is too broad')
 
 
+class ADeadDriveKneelsItOutAtTheGoal(unittest.TestCase):
+    """A drive that can no longer score plays for FIELD POSITION and then kneels it out
+    (owner, 2026-08-24).
+
+    ⚠️ THE OFFENSE WAS PUNTING FROM THE OPPONENT'S 1-YARD LINE. On a dead drive the need is
+    under a field goal, so a would-bust touchdown is held up short — `_holdUpShortCap` caps
+    the carrier at `yardsToEndzone - 1` — and the offense piles up ON the goal line unable
+    to cross it. `_fourthDownCaller` then punted, which from there is a touchback: the
+    opponent takes the ball on their own `PUNT_TOUCHBACK_TO` (20). Giving it up on downs
+    where it already sits hands them their own 1 instead. Measured over 400 games at X=24,
+    the rule refuses 19 punts, struck from a median `yardsToEndzone` of 4 and three of them
+    from the literal 1-yard line. It also turns 15 dead-drive runs and passes at the goal
+    into kneels.
+
+    ⚠️ A snap at the goal line there is PURE DOWNSIDE — it cannot produce a point, the cap
+    leaves nothing to gain, and it can still fumble or throw a pick. The down is being
+    surrendered either way, so a kneel forfeits nothing the drive still had.
+    """
+
+    def _dead(self, ballOn, down=1, **kw):
+        return dartsGame(offScore=X - 1, hoopsUsed=ALL_PAIRS_SPENT,
+                         ballOn=ballOn, down=down, **kw)
+
+    def test_theFixtureIsActuallyDead(self):
+        g = self._dead(ballOn=1).game
+        self.assertTrue(g._dartsDriveIsDead())
+        self.assertLess(need(g), g._fgValue(), 'a field goal would still land')
+
+    def test_itKneelsAtTheGoalLine(self):
+        from constants import DARTS_KNEEL_OUT_YARDS
+        for ballOn in range(1, DARTS_KNEEL_OUT_YARDS + 1):
+            g = self._dead(ballOn=ballOn).game
+            g.play.playType = PlayType.Run
+            self.assertTrue(g._dartsKneelOut(), f'did not kneel from the {ballOn}')
+            self.assertIs(g.play.playType, PlayType.Kneel)
+
+    def test_itKneelsOnAnyDownNotJustTheLast(self):
+        """The down is going either way, so there is nothing to save it for."""
+        for down in range(1, 5):
+            g = self._dead(ballOn=1, down=down).game
+            g.play.playType = PlayType.Pass
+            self.assertTrue(g._dartsKneelOut(), f'did not kneel on down {down}')
+            self.assertIs(g.play.playType, PlayType.Kneel)
+
+    def test_itRefusesThePuntInsideTheTouchbackLine(self):
+        """⚠️ THE POINT OF THE WHOLE RULE. A punt cannot do better than spotting them the
+        touchback, so from inside it the punt gives away field position to gain nothing."""
+        g = self._dead(ballOn=12, down=4).game
+        g.play.playType = PlayType.Punt
+        self.assertTrue(g._dartsKneelOut())
+        self.assertIsNot(g.play.playType, PlayType.Punt,
+                         'punted from inside the touchback line on a dead drive')
+
+    def test_beyondTheTouchbackLineThePuntStays(self):
+        """⚠️ NOT an oversight. From out there a punt genuinely buys field position a
+        turnover on downs does not, and the pairs RESET next possession — so ending the
+        drive is how the offense restocks the only scoring play it has."""
+        from constants import PUNT_TOUCHBACK_TO
+        g = self._dead(ballOn=PUNT_TOUCHBACK_TO + 5, down=4).game
+        g.play.playType = PlayType.Punt
+        self.assertFalse(g._dartsKneelOut())
+        self.assertIs(g.play.playType, PlayType.Punt)
+
+    def test_aLiveDriveIsNeverKnelt(self):
+        """The counterpart: with the drive still able to score, kneeling throws the game."""
+        for hoops in ((), ('midfield',), ('midfield', 'midrange')):
+            g = dartsGame(offScore=X - 1, hoopsUsed=hoops, ballOn=1).game
+            g.play.playType = PlayType.Run
+            self.assertFalse(g._dartsKneelOut(), f'knelt with {hoops or "no"} pairs spent')
+        g = dartsGame(offScore=X - 3, hoopsUsed=ALL_PAIRS_SPENT, ballOn=1).game
+        g.play.playType = PlayType.Run
+        self.assertFalse(g._dartsKneelOut(), 'knelt while a field goal would land')
+
+    def test_itIsANoOpInStandardFootball(self):
+        scenario = Scenario()
+        scenario.situation(quarter=2, clock=600, offense='home', offScore=17, defScore=3,
+                           down=4, distance=2, ballOn=1, offTimeouts=3, defTimeouts=3)
+        g = scenario.game
+        g.play.playType = PlayType.Punt
+        self.assertFalse(g._dartsKneelOut())
+        self.assertIs(g.play.playType, PlayType.Punt)
+
+
+class WhichHoopsAreStillReachable(unittest.TestCase):
+    """⚠️ "OPEN" IS NOT "UNUSED". `_hoopTarget` only returns a pair while the ball is still
+    APPROACHING it, so once the line of scrimmage clears the 50 the midfield pair is behind
+    the offense forever — as gone as one already shot at. `_dartsDriveIsDead` counted SPENT
+    pairs (`len(used) >= 2`, against three pairs), which was wrong in both directions at
+    once: it called a drive dead while a live midrange pair sat in front of it, and called
+    one alive with nothing ahead but pairs it had already driven past.
+
+    Measured by evaluating BOTH predicates at the same snap across 400 games at X=24 (a
+    within-run pairing — this harness is not reproducible run to run, so two separate sims
+    cannot be compared): over 1,424 snaps where only a hoop could score, of the 162 the
+    count called dead it was wrong about 102 — 77 dead with a hoop still reachable, 25
+    alive with nothing left in front of them.
+    """
+
+    def test_anUnusedEndZonePairIsAlwaysReachable(self):
+        """Every drive advances into it, so it is the pair whose loss actually strands a
+        possession."""
+        for ballOn in (1, 12, 35, 60, 90):
+            g = dartsGame(offScore=X - 1, hoopsUsed=('midfield', 'midrange'),
+                          ballOn=ballOn).game
+            self.assertTrue(g._dartsHoopReachable(), f'unreachable from the {ballOn}')
+            self.assertFalse(g._dartsDriveIsDead())
+
+    def test_aPairTheBallHasDrivenPastIsGone(self):
+        """End-zone pair spent and the ball inside the midrange pair: nothing ahead."""
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD
+        g = dartsGame(offScore=X - 1, hoopsUsed=('endzone',),
+                      ballOn=int(SIDELINE_GOAL_MIDRANGE_YARD) - 5).game
+        self.assertFalse(g._dartsHoopReachable())
+        self.assertTrue(g._dartsDriveIsDead())
+
+    def test_thatSamePairIsReachableFromBehindIt(self):
+        """The control for the case above — one fixture, moved back up the field."""
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD
+        g = dartsGame(offScore=X - 1, hoopsUsed=('endzone',),
+                      ballOn=int(SIDELINE_GOAL_MIDRANGE_YARD) + 5).game
+        self.assertTrue(g._dartsHoopReachable())
+        self.assertFalse(g._dartsDriveIsDead())
+
+    def test_aPairInRangeRightNowCounts(self):
+        g = dartsGame(offScore=X - 1, hoopsUsed=('midfield', 'midrange'), ballOn=8).game
+        self.assertIsNotNone(g._hoopTarget())
+        self.assertTrue(g._dartsHoopReachable())
+
+
 class ALeaderBurnsTheClock(unittest.TestCase):
     """A dead drive is worth nothing but time. If the clock beats both teams to the target
     the higher score wins, so the leader drains it and the trailer wants the drive over."""
 
     def _runShare(self, offScore, defScore):
         scenario = dartsGame(offScore=offScore, defScore=defScore,
-                             hoopsUsed=('midfield', 'redzone'), down=1, ballOn=45)
+                             hoopsUsed=ALL_PAIRS_SPENT, down=1, ballOn=45)
         game = scenario.game
         weights = {'run': 100.0, 'shortPass': 100.0, 'mediumPass': 100.0,
                    'longPass': 50.0, 'deepPass': 20.0}
@@ -468,7 +611,7 @@ class ALeaderBurnsTheClock(unittest.TestCase):
         """⚠️ Burning clock while behind spends the very thing that team needs — it wants
         this drive over so it can restock its hoops."""
         scenario = dartsGame(offScore=X - 1, defScore=X - 1,
-                             hoopsUsed=('midfield', 'redzone'), ballOn=45)
+                             hoopsUsed=ALL_PAIRS_SPENT, ballOn=45)
         game = scenario.game
         base = {'run': 100.0, 'shortPass': 100.0}
         withMods = game._applySituationalMods(dict(base), 0,
