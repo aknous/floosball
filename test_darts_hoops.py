@@ -364,14 +364,46 @@ class ADisciplinedSideManagesTheApproach(unittest.TestCase):
         self.assertGreater(self._probe(51)['sideline'], 0.7)
         self.assertLess(self._probe(51, discipline=62, clockManagement=62)['sideline'], 0.2)
 
-    def test_pastMidfieldItStops(self):
-        """The pair is gone whatever happens now, so there is nothing left to protect and
-        the offense should go back to playing football."""
-        scenario = dartsGame(offScore=X - 1, ballOn=45)
-        self.assertEqual(scenario.game._dartsHoopApproach(), 0.0)
+    def test_pastMidfieldTheMidrangePairTakesOver(self):
+        """⚠️ THIS TEST USED TO ASSERT THE BUG. It read "past midfield it stops" and pinned
+        `_dartsHoopApproach() == 0.0` from the 45 — true of the MIDFIELD pair and false of
+        the drive, because the midrange pair at the 30 is still ahead and shuts the same
+        way. Restraint fell to exactly zero across the whole 48-to-30 stretch, which is
+        precisely where the last hoop was about to be driven past.
 
-    def test_aSpentPairStopsIt(self):
-        game = dartsGame(offScore=X - 1, ballOn=56, hoopsUsed=('midfield',)).game
+        Restraint stops when there is nothing left AHEAD to destroy, not at a fixed yard.
+        """
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD
+        game = dartsGame(offScore=X - 1, ballOn=45).game
+        self.assertEqual(game._dartsClosingPair()[0], 'midrange')
+        self.assertGreater(game._dartsHoopApproach(), 0.0,
+                           'the drive is unrestrained with a hoop still in front of it')
+        # Ramps as that window shuts, exactly as it did approaching the 50.
+        near = dartsGame(offScore=X - 1, ballOn=int(SIDELINE_GOAL_MIDRANGE_YARD) + 2).game
+        self.assertGreater(near._dartsHoopApproach(), game._dartsHoopApproach())
+
+    def test_pastTheLastClosingPairItStops(self):
+        """The real version of the rule: inside the final pair, nothing a drive does can
+        destroy a scoring chance, so it goes back to playing football.
+
+        ⚠️ The END-ZONE pair is deliberately not a closing pair — it OPENS as the offense
+        advances, so there is never a last chance at it and nothing to hold back for."""
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD
+        game = dartsGame(offScore=X - 1, ballOn=int(SIDELINE_GOAL_MIDRANGE_YARD) - 5).game
+        self.assertIsNone(game._dartsClosingPair())
+        self.assertEqual(game._dartsHoopApproach(), 0.0)
+
+    def test_aSpentPairHandsOffToTheNextOne(self):
+        """A spent midfield pair does not end the restraint — it moves it to the midrange
+        pair, which is still in front of the ball."""
+        game = dartsGame(offScore=X - 1, ballOn=40, hoopsUsed=('midfield',)).game
+        self.assertEqual(game._dartsClosingPair()[0], 'midrange')
+        self.assertGreater(game._dartsHoopApproach(), 0.0)
+
+    def test_everyClosingPairSpentStopsIt(self):
+        game = dartsGame(offScore=X - 1, ballOn=40,
+                         hoopsUsed=('midfield', 'midrange')).game
+        self.assertIsNone(game._dartsClosingPair())
         self.assertEqual(game._dartsHoopApproach(), 0.0)
 
     def test_noHoopWantedNoRestraint(self):

@@ -4918,6 +4918,38 @@ class Game:
             return False
         return self.format.bustNeed(self, offense) in self._dartsExactLandings()
 
+    def _dartsClosingPair(self):
+        """The nearest unused USE-IT-OR-LOSE-IT hoop pair still ahead of the ball, as
+        (name, yard), or None.
+
+        ⚠️ "CLOSING" IS A PROPERTY OF THE PAIR, NOT A NAME. The midfield and midrange pairs
+        are only reachable while the offense is APPROACHING them (`_hoopTarget` requires
+        `d >= 0`), so driving past one destroys it. The END-ZONE pair is the opposite — it
+        OPENS as the offense advances — so it is deliberately excluded: there is never a
+        last chance at it and nothing to hold a drive back for.
+
+        ⚠️ THIS EXISTS BECAUSE THE MIDRANGE PAIR WAS ADDED AFTER THE RESTRAINT LOGIC AND
+        NEITHER CALLER WAS UPDATED — the same way `_dartsDriveIsDead` kept a hardcoded 2.
+        `_dartsHoopApproach` measured `room` off the MIDFIELD yard alone and returned 0.0
+        once past it, so restraint ramped to 0.48 approaching the 50 and then fell to
+        EXACTLY ZERO from the 48 down to the 30 — the entire stretch where the midrange
+        pair is the live target and about to be driven past. Measured over 300 games, of
+        the snaps where a team needing 2 points or fewer had a pair in range, it drove past
+        it 10% of the time at midrange and 13% at midfield.
+        """
+        from constants import (SIDELINE_GOAL_MIDRANGE_YARD, SIDELINE_GOAL_MIDFIELD_YARD)
+        used = getattr(self, '_hoopPairResult', None) or {}
+        yte = self.yardsToEndzone
+        candidates = []
+        if SIDELINE_GOAL_MIDRANGE_YARD and 'midrange' not in used:
+            candidates.append(('midrange', float(SIDELINE_GOAL_MIDRANGE_YARD)))
+        if 'midfield' not in used:
+            candidates.append(('midfield', float(SIDELINE_GOAL_MIDFIELD_YARD)))
+        ahead = [c for c in candidates if yte >= c[1]]
+        if not ahead:
+            return None
+        return min(ahead, key=lambda c: yte - c[1])   # the one about to be crossed
+
     def _dartsHoopApproach(self) -> float:
         """Darts: how hard the offense is MANAGING ITS FIELD POSITION toward the midfield
         hoop. 0 = not doing this at all, 1 = every call bent around it.
@@ -4945,16 +4977,19 @@ class Game:
         offense = getattr(self, 'offensiveTeam', None)
         if offense is None:
             return 0.0
-        used = getattr(self, '_hoopPairResult', None) or {}
-        if 'midfield' in used:
-            return 0.0          # already spent; there is nothing left to protect
         isHome = offense is self.homeTeam
         scoreDiff = (self.homeScore - self.awayScore) if isHome else (self.awayScore - self.homeScore)
         if self._hoopPointsNeeded(scoreDiff) not in ('critical', 'helpful'):
             return 0.0          # no use for the hoop, so no reason to bend the drive
-        from constants import (SIDELINE_GOAL_MIDFIELD_YARD, DARTS_APPROACH_HORIZON_YARDS,
-                               COACH_ATTR_NEUTRAL)
-        room = self.yardsToEndzone - SIDELINE_GOAL_MIDFIELD_YARD
+        from constants import DARTS_APPROACH_HORIZON_YARDS, COACH_ATTR_NEUTRAL
+        # ⚠️ WHICHEVER CLOSING PAIR IS NEXT, not the midfield one. This read the midfield
+        # yard alone and bailed once past it, which switched the restraint off completely
+        # across the 48-to-30 stretch where the MIDRANGE pair is the live target. See
+        # `_dartsClosingPair`.
+        closing = self._dartsClosingPair()
+        if closing is None:
+            return 0.0          # nothing left ahead that a drive can destroy
+        room = self.yardsToEndzone - closing[1]
         if room < 0:
             return 0.0          # already past it; the pair is gone whatever happens now
         nearness = 1.0 - min(1.0, room / DARTS_APPROACH_HORIZON_YARDS)
@@ -5417,10 +5452,12 @@ class Game:
                 #
                 # The end-zone pair needs no such lift: it opens as the offense advances
                 # rather than closing, so there is never a last chance at it.
+                # ⚠️ EITHER CLOSING PAIR, not just the midfield one — the midrange pair
+                # shuts the same way and was getting no closing urgency at all.
                 pair = (self._hoopTarget() or (None, 0.0))[0]
-                if pair == 'midfield':
-                    from constants import SIDELINE_GOAL_MIDFIELD_YARD
-                    yardsToCrossing = max(0.0, self.yardsToEndzone - SIDELINE_GOAL_MIDFIELD_YARD)
+                _closing = self._dartsClosingPair()
+                if _closing is not None and pair == _closing[0]:
+                    yardsToCrossing = max(0.0, self.yardsToEndzone - _closing[1])
                     if yardsToCrossing <= DARTS_HOOP_CLOSING_YARDS:
                         closeness = 1.0 - (yardsToCrossing / DARTS_HOOP_CLOSING_YARDS)
                         chance += DARTS_HOOP_LAST_CHANCE_LIFT * closeness
