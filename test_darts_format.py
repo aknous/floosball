@@ -615,9 +615,14 @@ class OvertimeIsStandardFootball(unittest.TestCase):
     same unreachable number — see `test_withoutHoopsBustingWouldDeadlockThePeriod`, which
     pins the arithmetic. So the target stops governing entirely in overtime.
 
-    ⚠️ THE PRICE: an overtime final CAN exceed the target. Measured over 500 games, 8 went
-    to overtime and 2 of those finished above X (30-27 and 26-23). That is the cost of a
-    period that always resolves; the sample had no ties and none needed a third period.
+    ⚠️ IT IS A TIE, NOT A HANG — `MAX_OT_PERIODS` (5) accepts a draw rather than looping.
+    But it is not rare: over 1,000 games, 18 reached overtime and 4 entered at 23-23 or
+    22-22, i.e. 0.40% of all games, about 1.8 a season. Tie scores cluster against the
+    target, which is what makes it a real case.
+
+    ⚠️ THE PRICE, ACCEPTED KNOWINGLY (owner, 2026-08-24): an overtime final CAN exceed the
+    target. Over 500 games, 8 went to overtime and 2 finished above X (30-27 and 26-23) —
+    about 1% of all games. The sample had no ties and none needed a third period.
     """
 
     def _tied(self, score, quarter=5, bothPossessions=True, ballOn=30, down=1):
