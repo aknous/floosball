@@ -5112,12 +5112,45 @@ class Game:
         need = self.format.bustNeed(self, offense)
         if need < self._fgValue():
             return False                     # a field goal would bust — not the answer
-        if need >= float(getattr(self.gameRules, 'touchdownPoints', 6)):
-            return False                     # a touchdown still lands, so there is a choice
-        if self._sidelineGoalsActive():
-            remaining = self._hoopPairCount() - len(getattr(self, '_hoopPairResult', None) or {})
-            if remaining > 0:
-                return False                 # a hoop can still score — also a choice
+
+        # ⚠️ A KICK THAT LANDS ON X WINS THE GAME OUTRIGHT — TAKE IT, DO NOT GAMBLE. At a
+        # need of exactly a field goal, `checkEarlyEnd` ends the game the moment it goes
+        # through, whatever the opponent's score. That outranks every alternative, and it
+        # was being overruled: `_fourthDownCaller`'s short-yardage branch went for it on
+        # **4th and 1 or 2 between 42% and 65% of the time** from ANYWHERE inside the
+        # opponent's 40, with the winning kick sitting there — measured across a
+        # field-position sweep, at every opponent score from a 19-point lead to a 2-point
+        # deficit. Reported from a live game in exactly those terms. (`_framesFgWins` is the
+        # same rule for frames, which is where the wording comes from.) After: 100% out to
+        # the 35 on a final down and out to ~the 30 on any down, the residual beyond being
+        # entirely kickers whose range does not reach (measured at the 40: 167 of 200 in
+        # range, all 167 kicking).
+        #
+        # ⚠️ The hoops and the touchdown are NOT alternatives here and the two bails below
+        # would otherwise say they are. A hoop takes a need of 3 to 2 — off the landing and
+        # under a field goal, which is the format's own dead-drive state — which is exactly
+        # why `_dartsNeedIsExactLanding` already refuses to shoot one. A touchdown busts.
+        #
+        # ⚠️ ON A FINAL DOWN, OR AS SOON AS THE KICK IS COMFORTABLE — not fourth down only
+        # (owner, 2026-08-24). Playing on to improve a kick is free while the kick is
+        # mediocre, and stops being free once it is good: every further snap is a fumble, a
+        # sack or an interception standing between the team and a won game, and it cannot
+        # make a 96% kick meaningfully better. `DARTS_WINNING_KICK_COMFORT` is a MAKE
+        # PROBABILITY, not a yard line, so it scales with the kicker taking it — measured
+        # against the live curve, 0.80 is about the opponent's 30 for a median leg, and a
+        # strong accurate kicker earns the early kick from further out.
+        from constants import DARTS_WINNING_KICK_COMFORT
+        winsOutright = (need == self._fgValue()
+                        and (self.down >= self.gameRules.downsPerSeries
+                             or self._estimateFgProbability() >= DARTS_WINNING_KICK_COMFORT))
+        if not winsOutright:
+            if need >= float(getattr(self.gameRules, 'touchdownPoints', 6)):
+                return False                 # a touchdown still lands, so there is a choice
+            if self._sidelineGoalsActive():
+                remaining = (self._hoopPairCount()
+                             - len(getattr(self, '_hoopPairResult', None) or {}))
+                if remaining > 0:
+                    return False             # a hoop can still score — also a choice
 
         kicker = offense.rosterDict.get('k')
         maxDistance = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
@@ -5128,7 +5161,8 @@ class Game:
             return False
 
         self.play.insights['dartsOnlyScore'] = {
-            'reason': 'a field goal is the only score still available',
+            'reason': ('this field goal lands on the target and wins outright' if winsOutright
+                       else 'a field goal is the only score still available'),
             'need': need,
             'instead': self.play.playType.name if self.play.playType else 'weighted',
         }

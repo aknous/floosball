@@ -312,6 +312,147 @@ class TheOnlyScoreLeftIsTaken(unittest.TestCase):
         self.assertIs(g.play.playType, PlayType.Pass)
 
 
+class AWinningKickIsNeverGambled(unittest.TestCase):
+    """A field goal that lands exactly on X ENDS THE GAME. On a final down that outranks
+    every alternative, and the short-yardage branch was overruling it.
+
+    ⚠️ Reported from a live game (owner, 2026-08-24): a team needing exactly 3 to reach 24
+    went for it on fourth down. Measured across a field-position sweep at every opponent
+    score from a 19-point lead to a 2-point deficit, on **4th and 1 or 2** from ANYWHERE
+    inside the opponent's 40 it went for it **42-65% of the time** with the winning kick
+    sitting there. After: 100% inside the 35, and the residual out at the 40 is entirely
+    kickers whose range does not reach a 47-yarder (measured: 167 of 200 in range, all 167
+    kicking, the other 33 out of range).
+
+    ⚠️ THE HOOPS AND THE TOUCHDOWN ARE NOT ALTERNATIVES HERE, and `_dartsForceKick`'s two
+    "there is still a choice" bails said they were — which is why the fix is not simply the
+    earlier only-score rule firing. A hoop takes a need of 3 to 2, off the landing and under
+    a field goal, which is the format's own dead-drive state (and is exactly why
+    `_dartsNeedIsExactLanding` already refuses to shoot one). A touchdown busts.
+
+    `_framesFgWins` is the same rule for frames; darts simply never had it.
+    """
+
+    def _snap(self, need=None, down=None, yardsToEndzone=25, hoopsUsed=0, distance=1):
+        """`need` defaults to the live field-goal value — the whole point is a kick that
+        lands exactly on X, and the FG value is a votable rule."""
+        from floosball_game import Play, PlayType
+        g = Scenario(gameRules=dartsRules()).game
+        if need is None:
+            need = int(g._fgValue())
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.homeScore = X - need
+        g.awayScore = X - need - 1          # trailing them is irrelevant: the kick still wins
+        g.down = down if down is not None else g.gameRules.downsPerSeries
+        g.yardsToEndzone = yardsToEndzone
+        g.yardsToFirstDown = distance
+        g._hoopPairResult = {p: 'made' for p in HOOP_PAIRS[:hoopsUsed]}
+        g.play = Play(g)
+        g.play.playType = PlayType.Run
+        return g
+
+    def test_theKickReallyWouldWin(self):
+        """The fixture's premise, asserted rather than assumed."""
+        g = self._snap()
+        g.homeScore += int(g._fgValue())
+        self.assertTrue(g.format.checkEarlyEnd(g), 'the kick does not actually end the game')
+
+    def test_itTakesTheWinningKickOnAFinalDown(self):
+        from floosball_game import PlayType
+        g = self._snap()
+        self.assertTrue(g._dartsForceKick(), 'gambled a kick that wins the game')
+        self.assertIs(g.play.playType, PlayType.FieldGoal)
+        self.assertIn('wins outright', g.play.insights['dartsOnlyScore']['reason'])
+
+    def test_itDoesSoWithEveryHoopStillOpen(self):
+        """⚠️ THE HALF THAT WAS BROKEN. The only-score rule bails when a hoop is unspent,
+        and at a need of 3 that bail is wrong — a hoop can only move the drive OFF the win."""
+        from floosball_game import PlayType
+        g = self._snap(hoopsUsed=0)
+        self.assertEqual(g._hoopPairResult, {})
+        self.assertTrue(g._dartsForceKick())
+        self.assertIs(g.play.playType, PlayType.FieldGoal)
+
+    def test_itDoesSoOnShortYardage(self):
+        """4th and 1 is where the go-for-it branch was winning the argument."""
+        from floosball_game import PlayType
+        for distance in (1, 2, 3):
+            g = self._snap(distance=distance)
+            self.assertTrue(g._dartsForceKick(), f'went for it on 4th and {distance}')
+            self.assertIs(g.play.playType, PlayType.FieldGoal)
+
+    def test_itKicksOnAnyDownOnceTheKickIsComfortable(self):
+        """⚠️ NOT FOURTH DOWN ONLY (owner, 2026-08-24). Playing on to improve the kick is
+        free while the kick is mediocre and stops being free once it is good — every extra
+        snap is a fumble, a sack or a pick standing between the team and a won game, and it
+        cannot make a 96% kick meaningfully better."""
+        from floosball_game import PlayType
+        from constants import DARTS_WINNING_KICK_COMFORT
+        for down in range(1, 5):
+            g = self._snap(down=down, yardsToEndzone=15)
+            self.assertGreaterEqual(g._estimateFgProbability(), DARTS_WINNING_KICK_COMFORT,
+                                    'fixture is not a comfortable kick')
+            self.assertTrue(g._dartsForceKick(), f'did not kick on down {down}')
+            self.assertIs(g.play.playType, PlayType.FieldGoal)
+
+    def test_fromLongRangeItWorksCloserFirst(self):
+        """⚠️ The other half of the same rule. Out where the kick is a coin flip, yards are
+        worth having — and yards cannot bust, only scores can, so the drive risks nothing by
+        continuing. The FINAL down still kicks, because there the alternative is losing the
+        ball rather than getting a better look at it."""
+        from floosball_game import PlayType
+        from constants import DARTS_WINNING_KICK_COMFORT
+        far = 38
+        for down in range(1, 4):
+            g = self._snap(down=down, yardsToEndzone=far)
+            self.assertLess(g._estimateFgProbability(), DARTS_WINNING_KICK_COMFORT,
+                            'fixture is already comfortable, so it proves nothing')
+            self.assertFalse(g._dartsForceKick(), f'kicked a coin flip on down {down}')
+            self.assertIs(g.play.playType, PlayType.Run)
+        g = self._snap(yardsToEndzone=far)   # final down
+        self.assertTrue(g._dartsForceKick(), 'declined the winning kick on the last down')
+        self.assertIs(g.play.playType, PlayType.FieldGoal)
+
+    def test_theComfortLineIsAMakeProbabilityNotAYardLine(self):
+        """So it scales with the kicker taking it: a strong accurate leg earns the early
+        kick from further out than a weak one, from the identical spot."""
+        from floosball_game import PlayType
+        strong = self._snap(down=1, yardsToEndzone=34)
+        k = strong.offensiveTeam.rosterDict.get('k')
+        k.gameAttributes.accuracy = 99
+        k.maxFgDistance = 70
+        weak = self._snap(down=1, yardsToEndzone=34)
+        k2 = weak.offensiveTeam.rosterDict.get('k')
+        k2.gameAttributes.accuracy = 62
+        k2.maxFgDistance = 52
+        self.assertTrue(strong._dartsForceKick(), 'a 34-yarder is comfortable for this leg')
+        self.assertFalse(weak._dartsForceKick(), 'the weak leg should work closer first')
+
+    def test_aKickThatDoesNotWinIsNotForcedByThisLimb(self):
+        """A need of 4 leaves 1 behind the kick, so the hoops genuinely are an alternative
+        and the ordinary bridging logic still owns the call."""
+        g = self._snap(need=int(Scenario(gameRules=dartsRules()).game._fgValue()) + 1,
+                       hoopsUsed=0)
+        self.assertFalse(g._dartsForceKick())
+
+    def test_outOfRangeItStillDoesNotHeaveIt(self):
+        from floosball_game import PlayType
+        g = self._snap(yardsToEndzone=85)
+        self.assertFalse(g._dartsForceKick())
+        self.assertIs(g.play.playType, PlayType.Run)
+
+    def test_theOpponentsScoreIsIrrelevant(self):
+        """⚠️ This is why the standard tree missed it: every read in `_fourthDownCaller` is
+        about the margin against the OPPONENT, and under a target the kick wins from a
+        19-point lead and a 2-point deficit alike."""
+        from floosball_game import PlayType
+        for awayScore in (2, 10, 20, X - 1):
+            g = self._snap()
+            g.awayScore = awayScore
+            self.assertTrue(g._dartsForceKick(), f'gambled the win at {X-3}-{awayScore}')
+            self.assertIs(g.play.playType, PlayType.FieldGoal)
+
+
 class AnExactLandingIsNotSpentOnAHoop(unittest.TestCase):
     """Needing exactly a touchdown or a field goal, the offense goes and scores it rather
     than shooting a sideline hoop (owner, 2026-08-24: teams were shooting these and ending

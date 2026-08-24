@@ -3814,6 +3814,24 @@ DARTS_DEAD_DRIVE_RUN_BIAS = 2.5
 # it the offense plays on and works closer first, which is the "as close as possible" half.
 DARTS_KNEEL_OUT_YARDS = 3
 
+# ⚠️ A DARTS KICK THAT LANDS ON THE TARGET WINS THE GAME, SO IT IS NOT WORTH WAITING FOR
+# FOURTH DOWN ONCE IT IS COMFORTABLE (owner, 2026-08-24). On an ordinary drive there is no
+# rush — yards cannot bust, only scores can, so playing on improves the kick for free. That
+# stops being true once the kick is already good: every further snap is a fumble, a sack or
+# an interception standing between the team and a won game, and it cannot make a 96% kick
+# meaningfully better.
+#
+# Expressed as a MAKE PROBABILITY rather than a yard line so it scales with the kicker, who
+# is the one taking it. Measured against the live curve over 16 real kickers: 0.80 sits at
+# roughly the opponent's 30 (a 47-yard attempt) for a median leg — inside the 30 the median
+# kicker is at 0.82 or better, and by the 35 (52 yards) it has fallen to 0.69. A big-leg,
+# accurate kicker earns the early kick from further out; a poor one has to get closer.
+#
+# On the FINAL down this does not apply — there the ordinary coach threshold governs, because
+# the alternative is losing the ball rather than getting a better look at it.
+DARTS_WINNING_KICK_COMFORT = 0.80
+
+
 
 # Added trigger chance per ADDITIONAL glitched card in the same lineup (owner, 2026-08-17).
 # Rewards FIELDING several at once rather than merely owning them, which is the half that
