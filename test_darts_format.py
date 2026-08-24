@@ -702,6 +702,101 @@ class TheConversionIsMeasuredAgainstTheTarget(unittest.TestCase):
         self.assertIsNone(std._chooseDartsConversion(std.homeTeam, goRungs, kick))
 
 
+class ThereIsAPointWhereTheTargetIsAbandoned(unittest.TestCase):
+    """⚠️ Owner, 2026-08-24: there has to be a point where teams stop trying to hit the target
+    on the dot and just accumulate points, in case the game ends on time.
+
+    Chasing an exact landing is right for most of a game and self-defeating at the end,
+    because if nobody reaches X the higher score wins — so the closing minutes are ordinary
+    football and the target is a distraction. Without the crossover the sim spent its last
+    downs on arithmetically-valid plans it had no time to execute: a team on 13 against 18
+    with 23 seconds hunting three hoops to bridge to a touchdown-plus-two-point landing on
+    24, when the touchdown alone wins it. Measured over 400 games, futile late shots (ones
+    that could neither land nor tie) roughly HALVED, 23 -> 12.
+
+    Both bounds are measured rather than picked. Over 3,475 darts possessions a scoring
+    drive took a median 9 plays and a p25 of 7 (`DARTS_PLAYS_TO_SCORE`), and a possession
+    averaged 108 seconds, so a team needs roughly 216s to expect the ball back
+    (`DARTS_NEXT_POSSESSION_SECS`).
+    """
+
+    def _at(self, offScore, oppScore, ballOn, clock, quarter=4, hoopsUsed=()):
+        from floosball_game import Play
+        g = Scenario(gameRules=dartsRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.homeScore, g.awayScore = offScore, oppScore
+        g.currentQuarter, g.gameClockSeconds = quarter, clock
+        g.down, g.yardsToEndzone, g.yardsToFirstDown = 1, ballOn, 10
+        g._hoopPairResult = {p: 'made' for p in hoopsUsed}
+        g.play = Play(g)
+        return g
+
+    def test_itReadsTimeLeftInTheGameNotInTheQuarter(self):
+        """⚠️ THE ERROR THAT HIDES. `gameClockSeconds` counts down WITHIN a quarter and
+        resets, so reading it directly declared the target out of reach at the end of every
+        quarter — measured at 14,875 snaps over 400 games, about 37 a game, against the
+        handful this is meant to cover. A team three minutes from the end of the FIRST
+        quarter has three quarters left to work with."""
+        for quarter in (1, 2, 3):
+            g = self._at(13, 18, ballOn=54, clock=60, quarter=quarter)
+            self.assertFalse(g._dartsTargetOutOfReach(),
+                             f'abandoned the target in Q{quarter} with a full game left')
+
+    def test_withTimeForAnotherDriveTheTargetStandsLive(self):
+        g = self._at(13, 18, ballOn=54, clock=300)
+        self.assertFalse(g._dartsTargetOutOfReach())
+
+    def test_aPlanWithNoTimeToRunIsAbandoned(self):
+        """The reported case: need 11, so a landing means three hoop snaps plus a
+        touchdown plus a two-point try — in 23 seconds."""
+        g = self._at(13, 18, ballOn=54, clock=23)
+        self.assertTrue(g._dartsTargetOutOfReach())
+        self.assertTrue(g._dartsPlayForPoints())
+
+    def test_aLandingAlreadyInRangeIsOneSnapNotADrive(self):
+        """⚠️ ALSO SHIPPED WRONG FOR A MOMENT. `DARTS_PLAYS_TO_SCORE` is the cost of GETTING
+        to a score, not of taking one already there — needing exactly a field goal from the
+        30 is a single kick away and must never read as out of reach."""
+        g = self._at(X - 3, 18, ballOn=30, clock=60)
+        kicker = g.offensiveTeam.rosterDict.get('k')
+        self.assertLessEqual(g.yardsToEndzone,
+                             kicker.maxFgDistance - g.gameRules.fgSnapDistance,
+                             'fixture premise: the kick is in range')
+        self.assertFalse(g._dartsTargetOutOfReach(), 'abandoned a target one kick away')
+
+    def test_aNeedNothingCanLandIsAbandoned(self):
+        """No combination of a conventional score and the reachable hoops reaches it."""
+        g = self._at(X - 13, 18, ballOn=54, clock=23,
+                     hoopsUsed=('midfield', 'midrange', 'endzone'))
+        self.assertTrue(g._dartsTargetOutOfReach())
+
+    def test_theHoopHuntStandsDownWhenPlayingForPoints(self):
+        """The whole point: it stops chasing X and the ordinary points logic takes over."""
+        g = self._at(13, 18, ballOn=54, clock=23)
+        rate = sum(g._shouldAttemptHoopShot() for _ in range(300)) / 300
+        self.assertLess(rate, 0.15, f'still hunting a target it cannot reach ({rate:.0%})')
+
+    def test_aTyingHoopIsStillTakenThough(self):
+        """⚠️ THE TWO HALVES ARE DIFFERENT QUESTIONS. The target being gone says the LANDING
+        is dead, not that the hoops are worthless — a point can still tie on the clock.
+        Handing those states to the standard path reintroduces its hurry-up guard, and a
+        team trailing by one inside a minute is ALWAYS in hurry-up, so game 994's tying shot
+        went straight back to 0% when this was first wired without the second half."""
+        g = self._at(17, 18, ballOn=54, clock=23)
+        self.assertTrue(g._dartsTargetOutOfReach())
+        self.assertFalse(g._dartsPlayForPoints(), 'handed away the tying shot')
+        rate = sum(g._shouldAttemptHoopShot() for _ in range(300)) / 300
+        self.assertGreater(rate, 0.4, f'the tying hoop is not being taken ({rate:.0%})')
+
+    def test_itIsInertOutsideDarts(self):
+        from game_rules import GameRules
+        g = Scenario(gameRules=GameRules()).game
+        g.offensiveTeam, g.defensiveTeam = g.homeTeam, g.awayTeam
+        g.currentQuarter, g.gameClockSeconds = 4, 23
+        self.assertFalse(g._dartsTargetOutOfReach())
+        self.assertFalse(g._dartsPlayForPoints())
+
+
 class LateTheClockDecidesAndTheOpponentComesBack(unittest.TestCase):
     """⚠️ PRODUCTION GAME 994 (owner, 2026-08-24). DET 18, BOS 17, nobody near the target.
     BOS finished on 17 — a need of exactly 7, which is an exact landing, so

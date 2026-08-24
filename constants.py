@@ -3843,6 +3843,25 @@ DARTS_DEAD_DRIVE_RUN_BIAS = 2.5
 # it the offense plays on and works closer first, which is the "as close as possible" half.
 DARTS_KNEEL_OUT_YARDS = 3
 
+# ⚠️ THERE IS A POINT WHERE A TEAM STOPS TRYING TO LAND ON THE TARGET AND JUST ACCUMULATES
+# POINTS, because the clock is going to decide it and the higher score wins (owner,
+# 2026-08-24). Every darts read is deliberately blind to the opponent — what matters is
+# distance to X, and a team leading 17-3 needs a hoop as badly as anyone — but that is only
+# true while landing on X is still achievable. Once it is not, the blindness is the bug: it
+# had teams spending their last downs on an exact landing they had no time to reach.
+#
+# The crossover is whether a plan that LANDS still fits, measured rather than picked:
+#   * on THIS possession — the hoop shots the plan needs, plus a scoring drive. Over 3,475
+#     darts possessions a scoring drive took a median 9 plays and a p25 of 7, so 7 is the
+#     conservative floor (a plan needing more than that is not fitting into two snaps).
+#   * or on a LATER one — a possession averaged 108 seconds, so a team needs roughly 216s
+#     on the clock to expect the ball back.
+# Neither fits -> the target is gone, and the decision reverts to the ordinary
+# points-against-the-opponent logic every other format uses.
+DARTS_PLAYS_TO_SCORE = 7
+DARTS_NEXT_POSSESSION_SECS = 216
+
+
 # ⚠️ A DARTS KICK THAT LANDS ON THE TARGET WINS THE GAME, SO IT IS NOT WORTH WAITING FOR
 # FOURTH DOWN ONCE IT IS COMFORTABLE (owner, 2026-08-24). On an ordinary drive there is no
 # rush — yards cannot bust, only scores can, so playing on improves the kick for free. That

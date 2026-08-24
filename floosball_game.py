@@ -4887,6 +4887,91 @@ class Game:
                 continue
         return out
 
+    def _dartsPlayForPoints(self) -> bool:
+        """Darts: stop reasoning about the target and play the ordinary points game.
+
+        ⚠️ THE TWO HALVES ARE NOT THE SAME QUESTION and running only the first is a
+        regression. The target being out of reach says the LANDING is dead; it does not say
+        the hoops are worthless, because a hoop point can still tie or win on the clock.
+        Handing those states to the standard path suppresses the shot exactly when it
+        matters — that path applies the hurry-up guard, and a team trailing by one inside a
+        minute is always in hurry-up, so production game 994's tying shot went straight back
+        to 0% the moment this was wired without the second half.
+        """
+        return self._dartsTargetOutOfReach() and not self._dartsHoopSavesTheClockGame()
+
+    def _dartsTargetOutOfReach(self) -> bool:
+        """Darts: landing exactly on the target is no longer achievable in the time left, so
+        the offense should stop chasing it and play for POINTS.
+
+        ⚠️ THE CROSSOVER THE FORMAT WAS MISSING (owner, 2026-08-24). Chasing an exact
+        landing is right for most of a game and becomes actively self-defeating at the end,
+        because if nobody reaches X the higher score wins — so the last minutes are ordinary
+        football and the target is a distraction. Without this the sim burned its final
+        downs on arithmetically-valid plans it had no time to execute: measured over 400
+        games, of the hoop shots taken while trailing late, **17 of 39 could not change the
+        result** — a team on 13 against 18 with 23 seconds hunting three hoops to bridge to
+        a touchdown-plus-two-point landing on 24, when the touchdown alone wins it.
+
+        A plan that lands still fits if EITHER:
+          * it fits this possession — `spend` hoop snaps (which gain no yards) plus a
+            scoring drive, against `_estimateAvailablePlays`; or
+          * there is time for another possession at all.
+
+        Both bounds are measured, not picked — see `DARTS_PLAYS_TO_SCORE` and
+        `DARTS_NEXT_POSSESSION_SECS`.
+
+        ⚠️ Deliberately NOT a fixed clock threshold. A team needing exactly a field goal from
+        the 30 is one snap from landing and should still chase it with a minute left, while a
+        team needing 11 is not, at the same moment on the same clock. The question is whether
+        the PLAN fits, not what the clock says.
+        """
+        if not self._dartsActive():
+            return False
+        offense = getattr(self, 'offensiveTeam', None)
+        if offense is None:
+            return False
+        from constants import DARTS_PLAYS_TO_SCORE, DARTS_NEXT_POSSESSION_SECS
+        # ⚠️ TIME LEFT IN THE GAME, NOT IN THE QUARTER. `gameClockSeconds` counts down within
+        # the current quarter and resets, so reading it directly declared the target out of
+        # reach at the end of EVERY quarter — measured at 14,875 snaps over 400 games, about
+        # 37 a game, against the handful this is meant to cover. A team three minutes from
+        # the end of the first quarter has three quarters left to work with.
+        secondsLeft = (max(0, 4 - self.currentQuarter) * self.gameRules.quarterLengthSeconds
+                       + self.gameClockSeconds)
+        # Time for another drive? Then the target is still live whatever this one does.
+        if secondsLeft >= DARTS_NEXT_POSSESSION_SECS:
+            return False
+        need = float(self.format.bustNeed(self, offense))
+        if need <= 0:
+            return False
+        landings = self._dartsExactLandings()
+        pts = float(getattr(self.gameRules, 'sidelineGoalPoints', 1))
+        reachable = 0.0
+        if self._sidelineGoalsActive():
+            reachable = max(0, self._hoopPairCount()
+                            - len(getattr(self, '_hoopPairResult', None) or {})) * pts
+        try:
+            playsLeft = float(self._estimateAvailablePlays())
+        except Exception:
+            return False        # cannot tell — leave the format alone
+        # The cheapest landing plan: the fewest hoop points that bridge to a conventional
+        # score, each costing a snap that gains nothing.
+        # ⚠️ A LANDING ALREADY IN RANGE IS ONE SNAP, NOT A DRIVE. Needing exactly a field
+        # goal from the 30 is a single kick away and must never read as out of reach —
+        # `DARTS_PLAYS_TO_SCORE` is the cost of GETTING to a score, not of taking one that
+        # is already there. Shipped without this and it declared that state unreachable with
+        # a minute on the clock.
+        kicker = offense.rosterDict.get('k')
+        maxDistance = (kicker.maxFgDistance - self.gameRules.fgSnapDistance) if kicker else 0
+        fgInRange = self.yardsToEndzone <= maxDistance
+        for spend in range(0, int(reachable) + 1):
+            landing = need - spend
+            if landing in landings:
+                cost = 1 if (landing == self._fgValue() and fgInRange) else DARTS_PLAYS_TO_SCORE
+                return playsLeft < spend + cost
+        return True             # no combination lands at all from here
+
     def _dartsHoopSavesTheClockGame(self) -> bool:
         """Darts: the clock is about to decide this game, and a hoop point still reachable
         would tie it or take the lead.
@@ -4967,6 +5052,10 @@ class Game:
         # `_dartsHoopSavesTheClockGame`, and production game 994, which was lost by ONE with
         # the tying hoop in range twice on the final drive.
         if self._dartsHoopSavesTheClockGame():
+            return False
+        # ⚠️ AND WHEN THE LANDING ITSELF IS NO LONGER ACHIEVABLE there is nothing left to
+        # protect — see `_dartsTargetOutOfReach`.
+        if self._dartsTargetOutOfReach():
             return False
         return self.format.bustNeed(self, offense) in self._dartsExactLandings()
 
@@ -5461,7 +5550,7 @@ class Game:
         # Measured before this existed: over 30 games there were 531 snaps where a hoop
         # was the only thing that could land the offense on X, and it shot at 9% — the
         # standard-football logic was declining the format's own win condition.
-        if self._dartsActive():
+        if self._dartsActive() and not self._dartsPlayForPoints():
             need = self.format.bustNeed(self, self.offensiveTeam)
             if need <= 0:
                 return None                      # already there; the game is over
@@ -5547,7 +5636,11 @@ class Game:
         # Coach-scaled rather than automatic (owner, 2026-08-17) — an aggressive coach
         # hunts the hoop, a cautious one plays field position and waits for a better spot,
         # so two teams in the same position play it differently.
-        if self._dartsActive():
+        # ⚠️ ONCE THE TARGET IS OUT OF REACH THE DARTS HUNT HANDS OVER ENTIRELY. Its
+        # load-bearing floor reasons about reaching X, which is the wrong basis when X
+        # can no longer be reached. The standard path below already asks the question
+        # that decides a game the clock is about to end: does this point tie or lead.
+        if self._dartsActive() and not self._dartsPlayForPoints():
             if self._hoopPointsNeeded(scoreDiff) in ('critical', 'helpful'):
                 from constants import (DARTS_HOOP_HUNT_BASE, DARTS_HOOP_HUNT_AGGR_SPAN,
                                        DARTS_HOOP_LAST_CHANCE_LIFT, DARTS_HOOP_CLOSING_YARDS)
