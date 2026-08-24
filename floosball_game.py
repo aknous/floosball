@@ -4918,6 +4918,34 @@ class Game:
             return False
         return self.format.bustNeed(self, offense) in self._dartsExactLandings()
 
+    def _dartsHoopCoverAfterDeclining(self, pairName: str) -> float:
+        """Points the offense could still bank from hoops if it passes up `pairName` and
+        drives on. The test for whether a shot is load-bearing.
+
+        ⚠️ NOT "how many pairs are unused" — how many are still REACHABLE. A closing pair
+        behind the ball is gone (`_dartsClosingPair`), while the END-ZONE pair is always
+        ahead of a drive and is what makes declining a midfield look reasonable most of the
+        time: a team needing 1 point with everything unused still has two chances left.
+
+        ⚠️ Only meaningful for a CLOSING pair. Passing up the end-zone pair does not lose
+        it — it stays in range while the drive continues — so `pairName` should only ever be
+        one the drive destroys by advancing.
+        """
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD, SIDELINE_GOAL_MIDFIELD_YARD
+        used = getattr(self, '_hoopPairResult', None) or {}
+        pts = float(getattr(self.gameRules, 'sidelineGoalPoints', 1))
+        yte = self.yardsToEndzone
+        cover = 0.0
+        if 'endzone' != pairName and 'endzone' not in used:
+            cover += pts                        # always in front of the offense
+        if ('midrange' != pairName and SIDELINE_GOAL_MIDRANGE_YARD
+                and 'midrange' not in used and yte >= SIDELINE_GOAL_MIDRANGE_YARD):
+            cover += pts
+        if ('midfield' != pairName and 'midfield' not in used
+                and yte >= SIDELINE_GOAL_MIDFIELD_YARD):
+            cover += pts
+        return cover
+
     def _dartsClosingPair(self):
         """The nearest unused USE-IT-OR-LOSE-IT hoop pair still ahead of the ball, as
         (name, yard), or None.
@@ -5457,6 +5485,22 @@ class Game:
                 pair = (self._hoopTarget() or (None, 0.0))[0]
                 _closing = self._dartsClosingPair()
                 if _closing is not None and pair == _closing[0]:
+                    # ⚠️ IF PASSING THIS UP LEAVES THE DRIVE UNABLE TO COVER ITS NEED, SHOOT.
+                    # Declining is normally reasonable — a shot costs a down and no yards,
+                    # and the end-zone pair is always still ahead — but once the hoops that
+                    # remain REACHABLE no longer add up to the need, driving on forfeits the
+                    # only path the drive has. Measured over 300 games, 12 of 26 midfield
+                    # crossings at a need of 2 or fewer stranded the offense that way.
+                    #
+                    # ⚠️ CLOSING PAIRS ONLY, and that is not a detail. Declining the END-ZONE
+                    # pair does not lose it — it stays in range as the drive continues, so
+                    # the cost is a down rather than the chance. Applied to it, this fired on
+                    # every red-zone snap and flattened the coach dial the hunt is built on
+                    # (caught by `TheHuntIsCoachScaled`, whose fixture sits at the 12).
+                    from constants import DARTS_HOOP_LOADBEARING_CHANCE
+                    _need = self.format.bustNeed(self, self.offensiveTeam)
+                    if self._dartsHoopCoverAfterDeclining(pair) < _need:
+                        chance = max(chance, DARTS_HOOP_LOADBEARING_CHANCE)
                     yardsToCrossing = max(0.0, self.yardsToEndzone - _closing[1])
                     if yardsToCrossing <= DARTS_HOOP_CLOSING_YARDS:
                         closeness = 1.0 - (yardsToCrossing / DARTS_HOOP_CLOSING_YARDS)

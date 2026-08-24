@@ -128,6 +128,71 @@ class TheOffenseKnowsAHoopIsTheOnlyWay(unittest.TestCase):
         self.assertIsNone(game._hoopPointsNeeded(5), 'a leading team still wants nothing')
 
 
+class AHoopTheDriveCannotAffordToLoseIsShot(unittest.TestCase):
+    """⚠️ Reported (owner, 2026-08-24): teams needing a single point drive straight past the
+    midfield goal. They do — and most of the time that is FINE, which is why the rule is not
+    "always shoot". A shot costs a down and no yards, and the end-zone pair is always still
+    ahead, so a team needing 1 with everything unused has two more chances and is right to
+    keep driving.
+
+    It stops being fine when the hoops still REACHABLE after this one no longer add up to
+    the need: driving on then forfeits the only path the drive has. Measured over 300 games,
+    of 26 snaps where a team needing 2 or fewer drove past the midfield pair, **12 left it
+    unable to cover its need**. That half is the mistake; the other 14 are football.
+
+    ⚠️ CLOSING PAIRS ONLY. Passing up the END-ZONE pair does not lose it — it stays in range
+    as the drive continues — so the cost there is a down, not the chance. Applied to it, this
+    fired on every red-zone snap and flattened the coach dial the whole hunt is built on;
+    `TheHuntIsCoachScaled` caught it, its fixture sitting at the 12.
+    """
+
+    def _rate(self, need, ballOn, hoopsUsed=(), rolls=400):
+        game = dartsGame(offScore=X - need, ballOn=ballOn, hoopsUsed=hoopsUsed).game
+        self.assertIsNotNone(game._hoopTarget(), 'fixture has no pair in range')
+        return sum(game._shouldAttemptHoopShot() for _ in range(rolls)) / rolls
+
+    def test_theCoverCountsOnlyWhatIsStillReachable(self):
+        from constants import SIDELINE_GOAL_MIDRANGE_YARD as MR
+        # At the midfield pair, the midrange pair is still ahead and the end-zone pair always is.
+        far = dartsGame(offScore=X - 1, ballOn=60).game
+        self.assertEqual(far._dartsHoopCoverAfterDeclining('midfield'), 2.0)
+        # Past the midrange pair, only the end-zone pair is left.
+        near = dartsGame(offScore=X - 1, ballOn=int(MR) - 5).game
+        self.assertEqual(near._dartsHoopCoverAfterDeclining('midfield'), 1.0)
+        # A spent pair does not count either.
+        spent = dartsGame(offScore=X - 1, ballOn=60, hoopsUsed=('endzone',)).game
+        self.assertEqual(spent._dartsHoopCoverAfterDeclining('midfield'), 1.0)
+
+    def test_withChancesLeftItStillWeighsTheShot(self):
+        """The control, and the reason this is not just 'always shoot'."""
+        self.assertLess(self._rate(need=1, ballOn=60), 0.75,
+                        'shooting on reflex with two chances still ahead')
+
+    def test_whenDecliningWouldStrandTheDriveItShoots(self):
+        from constants import DARTS_HOOP_LOADBEARING_CHANCE
+        cases = ((1, ('midrange', 'endzone')),   # nothing left behind the midfield pair
+                 (2, ('midrange',)),             # only the end-zone pair, and it is 1 short
+                 (2, ('endzone',)))
+        for need, used in cases:
+            rate = self._rate(need=need, ballOn=60, hoopsUsed=used)
+            self.assertGreater(rate, DARTS_HOOP_LOADBEARING_CHANCE - 0.08,
+                               f'need {need} with {used} spent shot only {rate:.0%}')
+
+    def test_theEndZonePairIsNeverTreatedAsLoadBearing(self):
+        """⚠️ It is not lost by driving on, so declining it costs a down and nothing else —
+        and forcing it would erase the coach dial across the whole red zone."""
+        from constants import DARTS_HOOP_HUNT_BASE
+        rate = self._rate(need=1, ballOn=12, hoopsUsed=('midfield', 'midrange'))
+        self.assertLess(rate, DARTS_HOOP_HUNT_BASE + 0.15,
+                        f'the end-zone pair was forced ({rate:.0%})')
+
+    def test_itIsInertWhenNoHoopIsWanted(self):
+        """Needing exactly a field goal, the hoop is worth nothing and nothing is forced."""
+        game = dartsGame(offScore=X - 3, ballOn=60, hoopsUsed=('midrange', 'endzone')).game
+        rate = sum(game._shouldAttemptHoopShot() for _ in range(200)) / 200
+        self.assertEqual(rate, 0.0)
+
+
 class TheHuntIsCoachScaled(unittest.TestCase):
     """⚠️ Measured over many rolls rather than asserted on one, since the decision is a
     coin weighted by the coach — a single call proves nothing either way."""

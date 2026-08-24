@@ -3779,6 +3779,22 @@ DARTS_HOOP_HUNT_AGGR_SPAN = 0.35
 DARTS_HOOP_CLOSING_YARDS = 6.0
 DARTS_HOOP_LAST_CHANCE_LIFT = 0.40
 
+# ⚠️ A HOOP THE DRIVE CANNOT AFFORD TO LOSE IS SHOT, NOT WEIGHED (owner report, 2026-08-24:
+# teams needing a single point were driving straight past the midfield goal).
+#
+# Declining a pair is normally fine — a shot costs a down and no yards, and the END-ZONE
+# pair is always still ahead, so a team needing 1 with everything unused has two more
+# chances and is right to keep driving. It stops being fine when the hoops that remain
+# REACHABLE after this one can no longer cover the need: then driving on forfeits the only
+# path the drive had. Measured over 300 games, of 26 snaps where a team needing 2 or fewer
+# drove past the midfield pair, **12 were left unable to cover their need** — that is the
+# half that is a mistake, and the other 14 are ordinary football.
+#
+# Sits at the same height as `SIDELINE_GOAL_DESPERATION_CHANCE` (0.92), which is the
+# standard game's "this point is needed to tie or win" rate; the reasoning is identical.
+DARTS_HOOP_LOADBEARING_CHANCE = 0.92
+
+
 # ⚠️ APPROACHING THE MIDFIELD HOOP, A DISCIPLINED SIDE STOPS TRYING TO GO DOWNFIELD (owner,
 # 2026-08-17). It is the only scoring chance a drive can drive PAST: a chunk gain over the
 # 50 is an ordinary good outcome that destroys the pair, and for a team needing 1-2 points
