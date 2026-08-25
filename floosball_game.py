@@ -5881,11 +5881,18 @@ class Game:
             self.play.hoopMade = False
             self.play.playResult = PlayResult.SidelineHoopMiss   # an incompletion; no turnover
             self._hoopPairResult[pairName] = 'missed'
-        # A hoop shot is an incomplete throw, so it stops the clock exactly as one does
-        # — which means under the running-clock rule it does not. ⚠️ Sideline Goals is
-        # its own mechanic toggle rather than a format, so it can be voted on alongside
-        # a running clock in the standard format; the two really do co-occur.
-        self.clockRunning = not self._deadBallStopsClock()
+        # ⚠️ NO CLOCK ASSIGNMENT HERE, DELIBERATELY. This method used to end with
+        # `self.clockRunning = False`, which looked like the hoop making its own clock
+        # determination and was in fact DEAD: the main loop runs
+        # `self.clockRunning = self.shouldClockRun()` a few lines after this returns and
+        # overwrites whatever was set. Leaving it in place meant two different answers
+        # in the file, and only the invisible one was load-bearing.
+        #
+        # `shouldClockRun` gets both cases right on its own, because the flags this
+        # method sets are the ones it reads: a MISS is a pass that never completed, so
+        # it stops the clock exactly like any incompletion and correctly does NOT under
+        # the running-clock rule; a MAKE sets `scoreChange`, and a score stops the clock
+        # under either rule.
 
     def _isHurryUp(self) -> bool:
         """The offense is racing the clock — a 2-minute drill trailing in Q4, or an
