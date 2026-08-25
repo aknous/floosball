@@ -12,6 +12,18 @@ import statistics
 from random import choice
 from time import sleep
 from typing import Dict, Optional
+
+# Sight exponents, sourced from the weather vocabulary that authors them so the two
+# cannot drift. ⚠️ The relationship between them is load-bearing and pinned by
+# test_stadium_weather.py: a DEEP ball needs sight most (steep), a short throw least
+# (mild), and the TACKLER loses ground too — without that third one `visibility` is
+# just a renamed passing penalty.
+try:
+    from managers.stadiumManager import (VISIBILITY_PASS_EXP as _VIS_PASS_EXP,
+                                         VISIBILITY_DEEP_EXP as _VIS_DEEP_EXP,
+                                         VISIBILITY_TACKLE_EXP as _VIS_TACKLE_EXP)
+except Exception:      # pragma: no cover - weather unavailable, sight is neutral
+    _VIS_PASS_EXP, _VIS_DEEP_EXP, _VIS_TACKLE_EXP = 0.5, 1.5, 0.6
 import floosball_player as FloosPlayer
 import floosball_team as FloosTeam
 import floosball_methods as FloosMethods
@@ -963,6 +975,15 @@ class Game:
         # Set when attention is loaded.
         self._criticalityMultiplier: float = 1.0
         self._criticalityActive: bool = False   # inside a fired Criticality window -> L4 charge overdrive
+        # ─── Weather ───────────────────────────────────────────────────────────
+        # The condition this game is played in, rolled once pre-game from the HOME
+        # venue's own table and scaled by the criticality dial above. `_wx` is the
+        # flat multiplier dict every call site reads through `self.wx(key)`.
+        # ⚠️ Weather is SYMMETRIC — nothing below reads home/away. The home team's
+        # only edge is that it is their table, and their only cost is playing 14
+        # games a year in it.
+        self.weather: Optional[dict] = None
+        self._wx: Dict[str, float] = {}
         # Per-game glitch hygiene: hard cap + cooldown so anomaly glitch
         # lines stay rare and spaced out instead of flooding the play feed.
         self._glitchCountThisGame: int = 0
@@ -2739,6 +2760,12 @@ class Game:
         fgProb = baseFgProb * max(0.05, FG_SKILL_BASE + skill)
         if fgDist < 30:
             fgProb = min(0.96, fgProb + 0.10)
+        # ⚠️ WEATHER LANDS HERE, NOT AT THE KICK SITE. This function is the single
+        # source of truth read by the coach's attempt decision, the kick resolution,
+        # the PAT estimate and the OT model — so a crosswind correctly makes a coach
+        # DECLINE a kick he would take on a calm day, rather than only making him miss
+        # one he was always going to attempt.
+        fgProb *= self.wx('fgAccuracy')
         return max(0.02, min(0.96, fgProb))
 
     def _estimateFgProbability(self):
@@ -3837,6 +3864,7 @@ class Game:
         weights = self._applyMatchupMods(weights, coach)
         weights = self._applyCoachMods(weights, coach)
         weights = self._applyGameplanMods(weights)
+        weights = self._applyWeatherMods(weights)
         weights = self._applyAwakenedMods(weights)
         weights = self._applyDriveClockMods(weights, coach)
 
@@ -4333,6 +4361,34 @@ class Game:
             if pl is not None and getattr(pl, 'id', None) in self._awakenedCharge:
                 slots.add(slot)
         return slots
+
+    def _applyWeatherMods(self, weights: dict) -> dict:
+        """Lean the play call away from what the conditions will not let you do.
+
+        ⚠️ ITS OWN LAYER RATHER THAN A BLOCK INSIDE `_applyGameplanMods`, which is
+        where the plan first put it. That method returns early on two conditions
+        that have nothing to do with weather — `gameplan.WIRING_ENABLED` being off
+        (an A/B switch) and a team having no gameplan object — so a block inside it
+        would be silently disabled by an experiment on a different system.
+
+        ⚠️ This is a CALLING lean, not an execution effect: the deep ball still
+        completes at whatever `passAccuracy` and `visibility` leave it at. Both
+        halves are wanted — a coach who keeps airing it out into a fog he can see is
+        a coach nobody believes in. It runs BELOW the situational / desperation
+        layers and ABOVE the awakened and clock layers, so a team that must have a
+        chunk play still takes its shot in bad weather.
+        """
+        deep = self.wx('deepPassChance') * self._wxVisibility(_VIS_DEEP_EXP)
+        if deep == 1.0:
+            return weights
+        # Bounded, and the short game absorbs what the deep game gives up rather than
+        # the whole offense shrinking — weather changes the SHAPE of an attack, it does
+        # not decide how often the ball is thrown at all.
+        deep = max(0.45, min(1.6, deep))
+        weights['deep'] = weights.get('deep', 0) * deep
+        weights['long'] = weights.get('long', 0) * (1 + (deep - 1) * 0.6)
+        weights['short'] = weights.get('short', 0) * (1 + (1 - deep) * 0.35)
+        return weights
 
     def _applyAwakenedMods(self, weights: dict) -> dict:
         """Bias the play call toward an awakened skill player so the offense
@@ -8041,6 +8097,12 @@ class Game:
         # full strength, and a stacked roster's defensive edge was never
         # compressed. Runs last so it picks up the whole stack including the cap.
         self._applyDefensiveModifiers()
+
+        # The world the game is played in. Rolled AFTER the rating layers because it
+        # does not touch ratings at all — weather acts at the call sites, on the ball
+        # and the ground, symmetrically for both teams.
+        self._resolveWeather()
+
         self._snapshotMentalPhase(self.homeTeam, 'afterCap')
         self._snapshotMentalPhase(self.awayTeam, 'afterCap')
 
@@ -10102,6 +10164,130 @@ class Game:
             player.gameAttributes.calculateIntangibles()
             player.gameAttributes.calculateSkills()
 
+    def _resolveWeather(self) -> None:
+        """Roll this game's condition at the HOME venue and stash its multipliers.
+
+        Runs once, pre-game, alongside the other pre-game multiplier layers. Two
+        things make this the right place rather than the first play:
+
+        ⚠️ WEATHER IS ANNOUNCED BEFORE KICKOFF (owner, 2026-08-19) — it is meant to
+        be real input for pick-em and card lineups, so the announcement and the game
+        must agree. `rollWeather` is PURE in (venue, dial, seed), and the seed here
+        is derived only from identifiers the announcement also holds, so the slate
+        can reproduce this exact condition without the game having been played.
+
+        ⚠️ The intensity dial is `_criticalityMultiplier`, which is loaded lazily on
+        the first play, so it is forced here. That loader is idempotent and already
+        falls back to 1.0 on any failure, which is what makes weather inherit the
+        anomaly system's existing safety: if that system is unavailable the league
+        plays in settled conditions rather than raising.
+        """
+        from constants import WEATHER_ENABLED
+        self.weather = None
+        self._wx = {}
+        if not WEATHER_ENABLED:
+            return
+        try:
+            if not self._anomalyAttentionLoaded:
+                self._loadAnomalyAttention()
+        except Exception:
+            pass
+        try:
+            from managers.stadiumManager import getStadiumManager
+            homeId = getattr(self.homeTeam, 'id', None)
+            # Season and week (not just the game id) are in the seed so the same
+            # fixture played in a different week is a different day's weather, and
+            # a replayed game is the same one.
+            seed = (int(self.id or 0) * 1_000_003
+                    + int(self.seasonNumber or 0) * 10_007
+                    + int(self.week or 0) * 101
+                    + int(homeId or 0))
+            wx = getStadiumManager().rollWeather(
+                homeId, float(self._criticalityMultiplier or 1.0), seed=seed)
+            self.weather = wx
+            self._wx = dict(wx.get('effects') or {})
+        except Exception as exc:
+            # Purely additive, exactly like the anomaly layer it rides on.
+            self.weather = None
+            self._wx = {}
+            try:
+                from logger_config import get_logger
+                get_logger("floosball.stadiumManager").debug(f"weather roll failed: {exc}")
+            except Exception:
+                pass
+
+    def wx(self, key: str) -> float:
+        """This game's weather multiplier for `key`, 1.0 when there is none.
+
+        ⚠️ EVERY call site goes through here rather than reading `_wx` directly, so
+        a game with no weather (flag off, no venue, roll failed) is neutral by
+        construction and no call site needs its own guard.
+        """
+        try:
+            v = float(self._wx.get(key, 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+        return v if v > 0 else 1.0
+
+    def _wxFumbleAdjust(self, occurred: bool, threshold: float) -> bool:
+        """Re-roll a fumble outcome under this game's `fumbleRate`.
+
+        ⚠️ SCALING THE THRESHOLD DOES NOT WORK HERE, and it is the obvious
+        implementation. Two things defeat it. First the threshold is INVERTED — a
+        fumble is a roll ABOVE it, so a 1.18x wet ball has to scale `(100 - threshold)`
+        and multiplying the threshold itself runs backwards. Second, and fatally, the
+        check is an integer roll over 1-100 against a ~3% rate, so the whole authored
+        range (1.05 to 1.5) lives INSIDE one step of the roll's resolution: rounding
+        the threshold to the nearest integer erases a 1.05 completely and floor-ing it
+        turns that same 1.05 into a 1.33x. Measured both ways before this was written.
+
+        So the base check is left exactly as it was and the weather is applied as a
+        correction on top of its OUTCOME, which is continuous and exact:
+          - a rougher condition adds fumbles to the plays that did not have one,
+          - a kinder one cancels some of the plays that did.
+
+        ⚠️ It consumes NO randomness at all when there is no weather, so a neutral
+        game's RNG stream is byte-identical to one built before this existed — which
+        is what makes the master switch a usable A/B arm rather than a different sim.
+        """
+        rate = self.wx('fumbleRate')
+        if rate == 1.0:
+            return occurred
+        # The base check's REAL probability, at the roll's own resolution: the number
+        # of integers in 1..100 that beat the threshold.
+        try:
+            baseP = max(0.0, min(1.0, (100 - math.floor(float(threshold))) / 100.0))
+        except (TypeError, ValueError):
+            return occurred
+        if rate > 1.0:
+            if occurred or baseP <= 0.0 or baseP >= 1.0:
+                return occurred
+            # Total must land at baseP * rate, capped so no condition turns a
+            # possession into a coin flip.
+            target = min(0.20, baseP * rate)
+            pAdd = (target - baseP) / (1.0 - baseP)
+            return _random.random() < pAdd
+        if occurred:
+            return _random.random() < rate
+        return occurred
+
+    def _wxVisibility(self, exponent: float) -> float:
+        """The sight term raised to a per-consequence exponent.
+
+        ⚠️ `visibility` is the one two-sided key in the vocabulary: it is NOT a
+        passing penalty wearing a new name. A deep ball needs sight most (steep
+        exponent), a short throw least, and the TACKLER loses something too — a
+        carrier nobody can see is a carrier nobody can bring down. Dropping that
+        last consequence is what would quietly turn this back into a one-sided tax.
+        """
+        v = self.wx('visibility')
+        if v == 1.0:
+            return 1.0
+        try:
+            return float(v) ** float(exponent)
+        except (TypeError, ValueError, OverflowError):
+            return 1.0
+
     def _applyDefensiveModifiers(self):
         """Re-derive both teams' defense ratings from their live pre-game
         attribute copy, so the pre-game chain reaches the defensive half.
@@ -11922,6 +12108,17 @@ class Game:
 
         finalTime = max(8, baseTime + iqOffset + batched_randint(-3, 3))
 
+        # ── Weather on the tempo ──
+        # ⚠️ ABOVE the two clamps below, not under them. Both exist to guarantee the
+        # snap happens with time on the clock, and a condition that stretches a huddle
+        # must never be able to eat the last second of a half — that is the exact
+        # failure `_lastSnapBeforeBreak` was built to stop, and it prices a snap off
+        # this method's output.
+        from constants import WEATHER_PACE_MIN, WEATHER_PACE_MAX
+        _wxPace = max(WEATHER_PACE_MIN, min(WEATHER_PACE_MAX, self.wx('paceMod')))
+        if _wxPace != 1.0:
+            finalTime = max(8, int(round(finalTime * _wxPace)))
+
         # A play that MUST beat the clock this snap rushes to the line and snaps below the
         # normal huddle floor — a FG unit especially doesn't huddle. Without this the 8s
         # floor would burn a tight clock (e.g. 3s left) before the ball is ever snapped, so
@@ -12000,6 +12197,16 @@ class Game:
         acc = getattr(getattr(kicker, 'gameAttributes', None) or kicker.attributes,
                       'accuracy', 75) if kicker else 75
         ceiling = round(leg * PUNT_MAX_YARDS_PER_LEG)
+        # ── Weather on the kick ──
+        # ⚠️ APPLIED TO THE LEG CEILING, not to the finished distance. Everything below
+        # reads `ceiling` — the boomer band, the pin target's clamp, the coffin — so
+        # scaling it means a punter into a headwind picks his punt from what he can
+        # actually hit today, instead of aiming for a corner he cannot reach and having
+        # the yards taken off afterwards.
+        from constants import WEATHER_PUNT_MIN, WEATHER_PUNT_MAX
+        _wxPunt = max(WEATHER_PUNT_MIN, min(WEATHER_PUNT_MAX, self.wx('puntDistance')))
+        if _wxPunt != 1.0:
+            ceiling = max(20, round(ceiling * _wxPunt))
 
         if not PUNT_TYPES_ENABLED:
             dist = batched_randint(max(1, ceiling - 20), max(2, ceiling))
@@ -12120,7 +12327,8 @@ class Game:
                                PUNT_RETURN_BREAK_MEAN, PUNT_FAIRCATCH_BASE,
                                PUNT_FAIRCATCH_DEEP_INSIDE, PUNT_FAIRCATCH_HANG_BONUS,
                                PUNT_FAIRCATCH_INSTINCT_K, PUNT_MUFF_BASE, PUNT_MUFF_HANG_K,
-                               PUNT_MUFF_ATTR_K, PUNT_MUFF_RECOVER_KICKING)
+                               PUNT_MUFF_ATTR_K, PUNT_MUFF_RECOVER_KICKING,
+                               PUNT_FAIRCATCH_SIGHT_K)
         out = {'action': 'return', 'returner': None, 'returnYards': 0, 'muffRecoveredBy': None}
         if not PUNT_RETURN_ENABLED:
             return {'action': 'fairCatch', 'returner': None, 'returnYards': 0,
@@ -12136,7 +12344,16 @@ class Game:
         handsEdge = 0.0
         if a is not None:
             handsEdge = ((getattr(a, 'hands', 78) + getattr(a, 'focus', 80)) / 2 - 80) / 20.0
+        # ── Weather on the catch ──
+        # ⚠️ SIGHT IS THE CAUSE HERE, so this reads `visibility` rather than a punt key
+        # of its own. A ball coming out of a fog or a low sun is the classic muff, and
+        # a returner who cannot pick it up waves it off — so the same darkness that
+        # hands the CARRIER yards below costs the RETURNER the chance to be one.
+        _wxSight = self.wx('visibility')
+        _muffMult = (1.0 / _wxSight) if _wxSight > 0 else 1.0
+        _muffMult = max(0.6, min(2.5, _muffMult))
         muffChance = max(0.0, PUNT_MUFF_BASE + PUNT_MUFF_HANG_K * hang - PUNT_MUFF_ATTR_K * handsEdge)
+        muffChance *= _muffMult
         if _random.random() < muffChance:
             out['action'] = 'muff'
             out['muffRecoveredBy'] = ('kicking' if _random.random() < PUNT_MUFF_RECOVER_KICKING
@@ -12153,6 +12370,9 @@ class Game:
         # A sharp returner both waves off the bad ones AND takes the ones with room,
         # so instinct pushes the decision toward whichever is correct here.
         fairChance += PUNT_FAIRCATCH_INSTINCT_K * instinct * (1.0 if hang or landing <= 20 else -1.0)
+        if _wxSight != 1.0:
+            # A returner who cannot see the coverage take the ball, and knows it.
+            fairChance += (1.0 - _wxSight) * PUNT_FAIRCATCH_SIGHT_K
         if _random.random() < max(0.0, min(0.95, fairChance)):
             out['action'] = 'fairCatch'
             return out
@@ -12162,6 +12382,7 @@ class Game:
         if a is not None:
             edge = ((getattr(a, 'speed', 80) + getattr(a, 'agility', 80)) / 2 - 80) / 20.0
         mean = PUNT_RETURN_BASE + PUNT_RETURN_ATTR_K * edge
+        mean = max(0.0, mean * self.wx('returnYards'))
         breakChance = PUNT_RETURN_BREAK_CHANCE * (1.0 + max(0.0, edge))
         if _random.random() < breakChance:
             yards = _rnd(np.random.exponential(PUNT_RETURN_BREAK_MEAN)) + 10
@@ -14956,6 +15177,15 @@ class Play():
                     remaining = self.yardsToEndzone - self.yardage
                     self.yardage += min(remaining, max(10, _rnd(np.random.exponential(12))))
 
+        # ── Weather on the surface ──
+        # ⚠️ `footing` IS NOT A RUN-ONLY KEY despite being the ground — see the twin
+        # application to yards after catch in passPlay. Applied to the whole carry
+        # rather than to the move/stretch bonuses alone: the gates model how far he
+        # gets, and mud slows every stage of that, not just the flourish at the end.
+        _wxFoot = self.game.wx('footing')
+        if _wxFoot != 1.0:
+            self.yardage = _rnd(self.yardage * _wxFoot)
+
         self.yardage = min(self.yardage, self.yardsToEndzone)
 
         # Awakened (L4) fire — a charged runner whose power covers 'run' breaks free: force a big gain
@@ -15076,6 +15306,7 @@ class Play():
         # Gunslinger tax — a confident, undisciplined back carries it too loose.
         fumbleThreshold = max(88, fumbleThreshold - int(round(self._gunslingerTax(self.runner))))
 
+
         _defFire = bool(self.awakenedFire and self.awakenedFire.get('situation') == 'strip')
         _offFire = bool(self.awakenedFire) and not _defFire
         if _defFire:
@@ -15087,7 +15318,13 @@ class Play():
             self.defense.updateInGameConfidence(.02)
             self.defense.gameDefenseStats['fumRec'] += 1
             self.playResult = PlayResult.Fumble
-        elif (fumbleRoll + fumbleResistModifier) > fumbleThreshold and not _offFire:
+        elif not _offFire and self.game._wxFumbleAdjust(
+                (fumbleRoll + fumbleResistModifier) > fumbleThreshold,
+                # ⚠️ The EFFECTIVE threshold, not the nominal one. The resist modifier
+                # is added to the ROLL rather than subtracted from the bar, so the real
+                # bar this play cleared is `threshold - modifier`; handing over the
+                # nominal number would price the correction off the wrong base rate.
+                fumbleThreshold - fumbleResistModifier):
             self.isFumble = True
             runnerRecoveryMod = self.runner.attributes.getPressureModifier(self.game.gamePressure)
             if (self.defense.defenseRunCoverageRating + batched_randint(-5, 5)) >= \
@@ -15809,6 +16046,13 @@ class Play():
             defRating = (tackling * RUNNER_MOVE_DEF_TACKLING_W
                          + defDiscipline * RUNNER_MOVE_DEF_DISCIPLINE_W)
         disciplineResist = ((defDiscipline - 80.0) / 20.0) * RUNNER_MOVE_DISCIPLINE_RISK_K * spec['risk']
+        # ── Weather on sight, the two-sided half ──
+        # ⚠️ THIS IS THE ROW MOST LIKELY TO BE QUIETLY DROPPED DURING WIRING, and
+        # without it `visibility` is a renamed passing penalty. A carrier nobody can
+        # see is a carrier nobody can square up on, so a dark field LOWERS the
+        # defender's resistance and hands yards to the offense — which is what stops
+        # poor sight being a flat tax on one side of the ball.
+        defRating *= self.game._wxVisibility(_VIS_TACKLE_EXP)
         chanceHit = (RUNNER_MOVE_BASE_SUCCESS
                      + (bestVal - defRating) * RUNNER_MOVE_SWING
                      - disciplineResist)
@@ -16315,6 +16559,17 @@ class Play():
         nonsecuredContact = (contactProb / 100) * (100 - secureProb)
         dropProb = nonsecuredContact * 0.3
 
+        # ── Weather on the throw ──
+        # ⚠️ APPLIED TO THE COMPLETION, NOT TO THROW QUALITY, and that is deliberate.
+        # Throw quality feeds the interception paths above, so taxing it there would
+        # make bad weather manufacture turnovers — the explicit guardrail the passing
+        # rework was held to ("interceptions never moved: 0.33 -> 0.33"). The outcome
+        # roll is an INT -> catch -> drop -> incomplete ladder with INT read FIRST, so
+        # cutting the catch here spills into incompletions and leaves the pick rate
+        # exactly where the attribute model put it.
+        _wxPass = self.game.wx('passAccuracy') * self.game._wxVisibility(_VIS_PASS_EXP)
+        if _wxPass != 1.0:
+            catchProb *= _wxPass
         return {
             'contactProb': round(contactProb, 1),
             'secureProb': round(secureProb, 1),
@@ -16515,6 +16770,15 @@ class Play():
             self.blockingModifier,
             passPlayBook[playKey]['dropback'].value
         )
+        # ── Weather on the protection ──
+        # A surface nobody can push off, or a pocket whose edge the tackles cannot see.
+        # ⚠️ APPLIED HERE AND NOT INSIDE `calculateSackProbability`, which the plan
+        # named. That function is deliberately a PURE CURVE — it is the tuning surface
+        # for the base rate, the cap and the steepness, and `test_sack_curve.py` calls
+        # it unbound precisely to measure the curve with no game around it. Reaching for
+        # game state inside it makes the curve unmeasurable, which is how the sack tail
+        # went unnoticed the first time.
+        sackProbability *= self.game.wx('sackRate')
         # Hail Mary plays leave the QB exposed in the pocket ~2-3x longer than
         # a normal pass while every receiver runs deep — protection is short
         # and the rush has time to win even average matchups. Multiply base
@@ -17119,6 +17383,7 @@ class Play():
                     # Sideline routes still cap YAC via discipline (receiver heads
                     # for the boundary instead of upfield).
                     yac = 0
+                    _wxFootPass = self.game.wx('footing')
                     if passYards < self.yardsToEndzone:
                         # Bad throws can't be caught in stride — limits all YAC.
                         from constants import YAC_THROW_MULT as _YTM
@@ -17209,6 +17474,13 @@ class Play():
                                     # Housecall — exponential tail, bounded by remaining field
                                     remYards = self.yardsToEndzone - passYards - yac
                                     yac += min(remYards, max(8, _rnd(np.random.exponential(caps['housecallMean']) * throwYacMult)))
+
+                    # ── Weather on the surface, receiving half ──
+                    # Yards after catch are ~31% of passing yards in this sim, so the
+                    # ground is a partly-PASSING effect and this is the half of it that
+                    # would be quietly dropped. A receiver in space is a ball carrier.
+                    if _wxFootPass != 1.0:
+                        yac = max(0, _rnd(yac * _wxFootPass))
 
                     self.yardage = passYards + yac
                     if self.yardage > self.yardsToEndzone:
@@ -17343,8 +17615,13 @@ class Play():
                         primaryTackler = safetyPlayer  # Safety made the tackle on deep plays
                     # Surface tackler so play text can credit the defender
                     self.tackledBy = primaryTackler
+                    # The strip check is the receiving half of the same ball-security
+                    # question the run game asks, so it takes the same weather key —
+                    # otherwise a wet ball is only wet when a back is holding it.
+                    _stripThreshold = 97 - _stFumbleBump
+                    _stripped = batched_randint(1, 100) > _stripThreshold
                     if (primaryTackler and self.isInBounds and not self.awakenedFire
-                            and batched_randint(1, 100) > 97 - _stFumbleBump):
+                            and self.game._wxFumbleAdjust(_stripped, _stripThreshold)):
                         # ~3% chance of fumble on catch (wider after a reach-for-the-marker
                         # stretch — _stFumbleBump); only in bounds — a receiver who steps
                         # out of bounds can't be stripped (the play is dead at the boundary).

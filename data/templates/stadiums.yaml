@@ -111,13 +111,13 @@
 1:
   team: Strangers
   name: "Shadow Court"
-  setting: A city the archive holds eight million records for, and not one name.
+  setting: A dim court where the far sideline is never quite legible.
   icon: shadow-figure
   tagline: Nobody Sees You Coming
   description: |
-    The register for this place survives intact and is entirely anonymous. The Cores
-    built a court to match it: the lighting is dim, the corners are dark, and you can
-    never quite make out who is standing on the far sideline.
+    The lighting is low and the corners stay dark. You can play a whole game against
+    somebody and never get a clear look at them. Nobody here introduces themselves and the
+    program lists no names.
   effects:
     passAccuracy: 0.958
     deepPassChance: 0.916
@@ -128,8 +128,8 @@
       effects: {}
     - key: lengthening
       label: "Lengthening Shadows"
-      text: "The shadows are crossing the field. Deep throws vanish into them."
-      effects: {visibility: 0.9}
+      text: "The shadows are crossing the field. Deep throws vanish into them and a kicker loses the ball against the stands."
+      effects: {visibility: 0.925, fgAccuracy: 0.945}
     - key: gloom
       label: "Gloom"
       text: "The light is going out of the place. Receivers are losing the ball late."
@@ -139,18 +139,22 @@
       unrealOnly: true
       text: "The lights have failed entirely. They are playing by sound."
       effects: {visibility: 0.829, fgAccuracy: 0.895, fumbleRate: 1.131}
-
+    - key: roster
+      label: "Full Roster"
+      unrealOnly: true
+      text: "Everyone can be seen at once, clearly, names and all. There are more people out there than there should be."
+      effects: {visibility: 1.25, sackRate: 1.12, fumbleRate: 1.12}
 2:
   team: Normals
   name: "Procedure Field"
-  setting: A city whose only surviving document is a specification, followed exactly.
+  setting: A field built exactly to specification and to nothing else.
   icon: gridlines
   tagline: Everything As Specified
   description: |
-    Nothing came through about this place except a standards document, so the Cores
-    built the standards document. Regulation field, regulation grass, regulation
-    lighting. A sign on the wall reads PROCEDURE and nobody has established what it
-    refers to.
+    Regulation field, regulation grass, regulation lighting, every one of them to the
+    millimeter. There is nothing remarkable about the place in any direction, which is the
+    one thing about it that is. A sign on the wall reads PROCEDURE and nobody has
+    established what it refers to.
   effects:
     deepPassChance: 0.937
     footing: 0.976
@@ -166,24 +170,28 @@
       effects: {passAccuracy: 0.918, fumbleRate: 1.131}
     - key: overcast
       label: "Standard Overcast"
-      text: "Uniform gray cloud, evenly distributed. Deep throws are hard to track against it."
-      effects: {visibility: 0.895}
+      text: "Uniform gray cloud, evenly distributed, and the air under it is heavy. Nothing carries and nothing is easy to track."
+      effects: {visibility: 0.925, puntDistance: 0.945}
     - key: tolerance
       label: "Within Tolerance"
       unrealOnly: true
       text: "Every reading has come back exactly nominal, which has never once happened. The ball is going precisely where it is thrown."
       effects: {visibility: 0.81, fgAccuracy: 1.18, fumbleRate: 0.85}
-
+    - key: outofspec
+      label: "Out of Specification"
+      unrealOnly: true
+      text: "Every reading has drifted and none of them agree. Nothing on the field measures what it is supposed to."
+      effects: {footing: 0.85, fgAccuracy: 0.85, puntDistance: 0.85, paceMod: 1.18}
 3:
   team: Broads
   name: "Asphalt Acres"
-  setting: A street the archive describes only as broad, reconstructed broad enough to lay a field across.
+  setting: A street wide enough to lay a field across, traffic still running on it.
   icon: asphalt
   tagline: Hard Top
   description: |
-    One street survives for this city and the record gives a single property of it. The
-    Cores took the property literally, so the street is wide enough to hold a stadium,
-    and they left the traffic on it.
+    The field is marked out on asphalt between the lanes, and the lanes were never closed.
+    Traffic runs along both touchlines for four quarters. The surface holds heat and gives
+    nothing back.
   effects:
     footing: 1.036
     fumbleRate: 1.053
@@ -210,17 +218,22 @@
       unrealOnly: true
       text: "The surface has gone soft and is pulling at their feet. Yard lines are running."
       effects: {footing: 0.829, paceMod: 1.152, sackRate: 1.183, returnYards: 0.817}
-
+    - key: green
+      label: "Green the Whole Way"
+      unrealOnly: true
+      text: "Every light on the street has gone green at once and none of them are changing back."
+      effects: {paceMod: 1.25, fumbleRate: 1.25, returnYards: 0.8}
 4:
   team: Monuments
   name: "Colossus Ground"
-  setting: A field laid between commemorative colossi the archive cannot name or account for.
+  setting: A field laid between commemorative colossi nobody can name.
   icon: obelisk
   tagline: In the Shadow of Giants
   description: |
-    Stone figures the size of hills stand at each corner, helmeted, holding objects the
-    Cores have logged as sporting equipment. Nothing in the archive records who they
-    commemorate, and the proportions are wrong for anything that was ever human.
+    Stone figures the size of hills stand at each corner, helmeted, holding objects that
+    might be sporting equipment. Nobody knows who they commemorate. The proportions are
+    wrong for anything that was ever human, and the shadows they throw move across the
+    field all afternoon.
   effects:
     fgAccuracy: 0.936
     paceMod: 0.936
@@ -242,18 +255,21 @@
       unrealOnly: true
       text: "Something enormous is moving. The ground will not hold still long enough to kick from."
       effects: {fgAccuracy: 0.761, fumbleRate: 1.269, passAccuracy: 0.916, footing: 0.91}
-
+    - key: turned
+      label: "They Have Turned"
+      unrealOnly: true
+      text: "The colossi are facing the field now. They are not moving. They are just facing it."
+      effects: {passAccuracy: 1.18, footing: 1.18, fgAccuracy: 1.18, fumbleRate: 0.85}
 5:
   team: Melons
   name: "Mellon Quadrangle"
-  setting: A university quadrangle given over entirely to melon cultivation, tended by machines.
+  setting: A university quadrangle given over to melon cultivation, tended by machines.
   icon: melon
   tagline: Watch Your Footing
   description: |
-    The archive records a great research institution here and gives its name twice,
-    spelled differently each time. The Cores resolved the discrepancy agriculturally.
-    The quadrangle is under vines, the research is melons, and the machines still
-    working between the rows are logged as period farm equipment.
+    The quadrangle is under vines and the field is mown out of the middle of it. The
+    research here is melons. Machines still work between the rows on a schedule nobody
+    set, and they do not stop for the game.
   effects:
     fumbleRate: 1.088
     footing: 0.956
@@ -275,17 +291,21 @@
       unrealOnly: true
       text: "The vines are growing fast enough to watch. They are taking the field back."
       effects: {footing: 0.81, paceMod: 1.19, sackRate: 1.158, deepPassChance: 0.842}
-
+    - key: harvest
+      label: "Harvest"
+      unrealOnly: true
+      text: "The machines have decided it is time and they are working straight through the field."
+      effects: {paceMod: 1.18, footing: 0.85, sackRate: 1.18, returnYards: 0.85}
 6:
   team: Rocks
   name: "Bedrock Cavern"
-  setting: A mine. The archive said this city rocked, and the Cores filed that under geology.
+  setting: A mine, a few hundred feet down.
   icon: cavern
   tagline: Carved in Stone
   description: |
-    One phrase survived about this city and what it did. It was parsed as a claim about
-    the bedrock, and the venue was built to match. Play happens under a few hundred feet
-    of stone, every sound comes back twice, and the far end of the cavern is simply dark.
+    Play happens under a few hundred feet of stone. Every sound comes back twice and the
+    far end of the cavern is simply dark. Water finds its way down regardless of what the
+    weather is doing above.
   effects:
     deepPassChance: 0.958
     fumbleRate: 0.964
@@ -305,24 +325,28 @@
       effects: {deepPassChance: 1.1, fgAccuracy: 1.08, puntDistance: 1.05}
     - key: dustfall
       label: "Dust Fall"
-      text: "Fine rock dust drifting down from the ceiling. Nobody can see the roof and nobody wants to."
-      effects: {visibility: 0.902}
+      text: "Fine rock dust drifting down from the ceiling. Nobody can see the roof, and what lands underfoot turns the stone slick."
+      effects: {visibility: 0.925, footing: 0.945}
     - key: collapse
       label: "Rockfall"
       unrealOnly: true
       text: "Pieces of the ceiling are coming down onto the field. They are still playing."
       effects: {fumbleRate: 1.337, passAccuracy: 0.865, footing: 0.852, paceMod: 1.135}
-
+    - key: opens
+      label: "The Cavern Opens"
+      unrealOnly: true
+      text: "The roof is gone. There is sky over the field for the first time and nobody is looking at the ball."
+      effects: {visibility: 1.22, puntDistance: 1.15, footing: 1.15}
 7:
   team: Beans
   name: "Cloud Gate"
-  setting: A valley beneath an enormous polished bean the Cores believe was grown rather than built.
+  setting: A valley beneath an enormous polished bean, warm to the touch.
   icon: fog-bank
   tagline: Soupy
   description: |
-    The archive records a mirrored monument at the center of this city. The
-    reconstruction came back organic: a legume the size of a cathedral, warm to the
-    touch, sitting over the bowl of the ground. The fog is what it gives off.
+    A mirrored legume the size of a cathedral sits over the bowl of the ground, warm to
+    the touch and slightly soft. The field is in the valley underneath it. The fog is what
+    the bean gives off.
   effects:
     deepPassChance: 0.908
     passAccuracy: 0.969
@@ -333,8 +357,8 @@
       effects: {}
     - key: rolling
       label: "Rolling Bank"
-      text: "The fog is moving across in waves. Receivers keep disappearing and coming back."
-      effects: {visibility: 0.903}
+      text: "The fog is moving across in waves. Receivers keep disappearing and coming back, and everything it touches comes away damp."
+      effects: {visibility: 0.925, fumbleRate: 1.058}
     - key: pea
       label: "Pea Soup"
       text: "Visibility is about fifteen yards. Anything longer is thrown on faith."
@@ -344,17 +368,21 @@
       unrealOnly: true
       text: "The fog has closed completely. Nobody on the field can see the ball, including whoever has it."
       effects: {visibility: 0.835, fgAccuracy: 0.9, fumbleRate: 1.1}
-
+    - key: warm
+      label: "It Has Warmed Through"
+      unrealOnly: true
+      text: "The bean has warmed right through and the fog has lifted off the whole valley."
+      effects: {visibility: 1.24, footing: 1.13, fumbleRate: 0.89}
 8:
   team: Caddies
   name: "Eldorado Greens"
-  setting: A marque and a model, one of which the Cores mistook for a golf course.
+  setting: A country club, with bunkers inside the field of play.
   icon: flagstick
   tagline: Play It As It Lies
   description: |
-    Two words survive for this city and both of them are a car. The Cores read the
-    second as a country club and built one, immaculately, with bunkers inside the field
-    of play and a crowd asked to stay quiet at the snap.
+    An immaculate course, kept to the inch, with two bunkers and a water feature inside
+    the field of play. The crowd is asked to stay quiet at the snap and mostly obliges.
+    There is a dress code and it is enforced.
   effects:
     fgAccuracy: 1.04
     footing: 0.97
@@ -377,7 +405,11 @@
       unrealOnly: true
       text: "The horn has sounded and nobody has left the field. It is striking the fairway."
       effects: {visibility: 0.943, paceMod: 1.257, fgAccuracy: 0.817, fumbleRate: 1.183}
-
+    - key: casual
+      label: "Casual Water"
+      unrealOnly: true
+      text: "The course has flooded to the fairway. Everyone is playing it as it lies."
+      effects: {footing: 0.85, puntDistance: 0.85, fumbleRate: 1.18, paceMod: 1.18}
 9:
   team: Pops
   # ⚠️ PAIRED WITH 32 (Salt Lake City Sodas). Owner: the two are RIVALS, and the names
@@ -385,14 +417,13 @@
   # and each is certain it does it better. Write them as a matched pair or the rivalry
   # stops reading. This side argues the word is the SOUND, so it bottles and caps.
   name: "The Bottling Floor"
-  setting: A bottling hall where the field runs between the lines, named for the noise a cap makes.
+  setting: A bottling hall where the field runs between the lines.
   icon: bottle-cap
   tagline: That Is the Sound It Makes
   description: |
-    The archive carries two names for one drink and two cities each certain the other is
-    wrong. This one holds that the word is the sound, and built a hall to prove it. The
-    field runs between the lines, the caps come off all game, and the Cores have entered
-    the noise into the record as evidence.
+    The field runs down the middle of a working bottling floor and the lines never stop.
+    Caps come off all game, which is the noise the city is named for and the whole of its
+    argument. Salt Lake City says the word belongs to the drink. It does not.
   effects:
     paceMod: 1.075
     passAccuracy: 0.944
@@ -414,17 +445,21 @@
       unrealOnly: true
       text: "Every bottle on the line has gone at once. The hall is full of it and the game is still on."
       effects: {fumbleRate: 1.314, footing: 0.84, passAccuracy: 0.886, paceMod: 1.171}
-
+    - key: stops
+      label: "The Line Stops"
+      unrealOnly: true
+      text: "Every machine on the floor has cut out at once. The hall is silent and a snap count carries the length of it."
+      effects: {paceMod: 0.84, passAccuracy: 1.19, fgAccuracy: 1.19, footing: 1.16}
 10:
   team: Cranes
   name: "KACL Tower"
-  setting: A word the archive gives three times meaning three different things, all of them built.
+  setting: A platform at altitude with a live radio booth on the sideline.
   icon: radio-tower
   tagline: We're On the Air
   description: |
-    The record holds cranes at the docks, a bird, and a man who talked for a living, and
-    does not distinguish between them. The venue is a platform at altitude with a live
-    radio booth on the sideline and the city a long way below.
+    The field is a platform high above the water with the city a long way below it. There
+    is a live radio booth on the sideline and it stays on air through the game. Dock
+    cranes work at the waterline and birds ride the updraft off the tower all afternoon.
   effects:
     puntDistance: 1.052
     fgAccuracy: 0.956
@@ -451,17 +486,21 @@
       unrealOnly: true
       text: "Ice is forming on the platform and on the ball. Nothing is being held onto."
       effects: {fumbleRate: 1.33, footing: 0.868, fgAccuracy: 0.832, passAccuracy: 0.904}
-
+    - key: onair
+      label: "The Booth Goes Live"
+      unrealOnly: true
+      text: "The sideline broadcast is coming through everywhere at once, including the part where he reads out the play."
+      effects: {sackRate: 1.18, passAccuracy: 0.85, deepPassChance: 0.85, paceMod: 1.18}
 11:
   team: Pinecones
   name: "Evergreen Park"
-  setting: Forest the archive dates as older than the archive.
+  setting: Old forest, with trees inside the field of play.
   icon: conifer
   tagline: The Grove
   description: |
-    The trees here return a figure the Cores have flagged twice and left standing. The
-    canopy closes over most of the field, and trees inside the field of play are treated
-    as part of it, which the visiting team is never quite ready for.
+    The canopy closes over most of the field and very little light reaches the ground.
+    Trees standing inside the field of play are treated as part of it, which the visiting
+    team is never quite ready for. Nothing here has been cut in a very long time.
   effects:
     deepPassChance: 0.948
     footing: 0.979
@@ -484,17 +523,21 @@
       unrealOnly: true
       text: "Whole trees are coming down at the edge of the field. They have not stopped play."
       effects: {paceMod: 1.176, footing: 0.883, deepPassChance: 0.766, fumbleRate: 1.146}
-
+    - key: canopy
+      label: "The Canopy Opens"
+      unrealOnly: true
+      text: "The trees have moved aside. Nobody saw them do it and there is a clear field where there was forest."
+      effects: {visibility: 1.26, footing: 1.11, puntDistance: 1.11}
 12:
   team: Oysters
   name: "Brine Basin"
-  setting: Oysters, filed at nine thousand feet, and nobody queried it.
+  setting: A salt basin at nine thousand feet, hard as pavement.
   icon: salt-flat
   tagline: Mountain Brine
   description: |
-    The archive places this city's shellfish at altitude and offers no explanation. The
-    reconstruction is a salt basin in the mountains, white to the horizon and hard as
-    pavement, with air that tastes of a sea a thousand miles away.
+    White to the horizon and hard as pavement, with mountains on every side. The air is
+    thin enough to carry a ball a good deal further than it should go, and it tastes of a
+    sea a thousand miles from here.
   effects:
     footing: 1.031
     returnYards: 1.061
@@ -521,17 +564,21 @@
       unrealOnly: true
       text: "The basin is filling. They are playing in standing brine to the ankle."
       effects: {footing: 0.81, paceMod: 1.203, fumbleRate: 1.237, puntDistance: 0.898}
-
+    - key: setsolid
+      label: "The Basin Sets"
+      unrealOnly: true
+      text: "The basin has dried and set. The whole flat is glass and it goes to the horizon."
+      effects: {footing: 1.18, fgAccuracy: 1.18, puntDistance: 1.18, fumbleRate: 1.18}
 13:
   team: Tuesdays
   name: "The Long Tuesday"
-  setting: A carnival Tuesday that will not advance, with the parade still short of the end of its route.
+  setting: A carnival Tuesday on a loop, with the parade still short of the end of its route.
   icon: calendar-day
   tagline: Again
   description: |
-    The archive holds exactly one date for this city, and it is the same date every
-    time it is read: a Tuesday, mid-carnival. The reconstruction runs that Tuesday on a
-    loop, parade included. The parade has not reached the end of the route yet.
+    It is the same Tuesday here every time, mid-carnival, parade included. The parade has
+    not reached the end of its route yet and it never quite does. Everybody in the
+    building knows every turn it is going to take.
   effects:
     paceMod: 0.937
     deepPassChance: 0.937
@@ -557,21 +604,24 @@
       unrealOnly: true
       text: "The same float has passed the end zone four times. Nobody on the field is counting any more."
       effects: {paceMod: 0.812, passAccuracy: 0.906, fumbleRate: 1.188, deepPassChance: 0.812}
-
+    - key: wednesday
+      label: "Wednesday"
+      unrealOnly: true
+      text: "The date has advanced. The parade is gone, the streets are swept, and nobody here knows what to do with a Wednesday."
+      effects: {passAccuracy: 1.18, footing: 1.18, fgAccuracy: 1.18, fumbleRate: 0.85}
 14:
   team: Slippers
   # ⚠️ SETTLED, and the only venue in this file that is. Fan contribution, Wizard of Oz
   # direction, confirmed by the owner 2026-08-19. Do not redesign the location or the
   # vibe. The weather ladder below is ours to tune; the setting is not.
   name: "Poppy Field"
-  setting: An open field ringed by an expanse of red and white poppies, with gentle hills around it.
+  setting: An open field ringed by red and white poppies, with gentle hills around it.
   icon: poppy
   tagline: No Place Like Home
   description: |
-    An open field surrounded by an expanse of red and white poppies, with the end zones
-    marked out by flower patches. Gentle hills rise around the field of play and the
-    fans picnic on them. The scent carries, and visiting teams find themselves slowing
-    down in the third quarter without being able to say why.
+    The end zones are marked out by flower patches and gentle hills rise on every side,
+    where the fans picnic. The scent carries a long way. Visiting teams find themselves
+    slowing down in the third quarter without being able to say why.
   effects:
     paceMod: 1.082
     footing: 0.951
@@ -593,17 +643,21 @@
       unrealOnly: true
       text: "A funnel has come down past the flower patches and it is not moving away."
       effects: {deepPassChance: 0.801, fgAccuracy: 0.862, puntDistance: 0.891, fumbleRate: 1.145}
-
+    - key: fullbloom
+      label: "Full Bloom"
+      unrealOnly: true
+      text: "Every poppy on every hill has opened at once. The scent is on the field now and nobody wants to be anywhere else."
+      effects: {paceMod: 1.22, footing: 0.82, deepPassChance: 0.82, fumbleRate: 1.08}
 15:
   team: Sand Dollars
   name: "Coral Sands"
-  setting: A reef flat where the archive lists the local currency as sand dollars, and the Cores honored it.
+  setting: A reef flat, playable only between tides.
   icon: coral
   tagline: Between Tides
   description: |
-    The record names a currency and the Cores took it at face value, so admission here
-    is still paid in them. The ground is only available for part of the day, coral heads
-    stand around the perimeter, and the yard lines are raked in fresh before every game.
+    The ground is only above water for part of the day, so the fixture is set by the tide
+    rather than the clock. Coral heads stand around the perimeter and the yard lines are
+    raked in fresh before every game. Admission is still paid in sand dollars.
   effects:
     footing: 0.954
     returnYards: 0.947
@@ -626,17 +680,21 @@
       unrealOnly: true
       text: "The water is back over the field and rising. There is no version of this that finishes dry."
       effects: {footing: 0.812, paceMod: 1.188, fumbleRate: 1.219, puntDistance: 0.875}
-
+    - key: springlow
+      label: "Spring Low"
+      unrealOnly: true
+      text: "The water has gone out further than anyone has seen it go. The flat runs for miles and all of it is playable."
+      effects: {footing: 1.18, puntDistance: 1.18, returnYards: 1.18, deepPassChance: 1.18}
 16:
   team: Dry Heat
   name: "Furnace Flats"
-  setting: A city that survives in the archive as a single defensive remark about its temperature.
+  setting: Open ground with no shade built anywhere on it.
   icon: sun-flare
   tagline: But It's a Dry Heat
   description: |
-    The only complete sentence recovered from this place is an argument that the heat is
-    not the problem. The Cores built the heat. There is no roof, no shade structure, and
-    the water tables are the only thing anybody looks at on the sideline.
+    No roof, no shade structure, nothing here built for standing still in. The water
+    tables are the only thing anybody on the sideline looks at. Locals will tell you at
+    length that the heat is not the problem.
   effects:
     paceMod: 1.061
     footing: 1.03
@@ -663,17 +721,21 @@
       unrealOnly: true
       text: "A wall of dust has arrived over the stadium. Nobody can see anybody."
       effects: {visibility: 0.83, fgAccuracy: 0.885, paceMod: 1.09}
-
+    - key: airgoes
+      label: "The Air Goes"
+      unrealOnly: true
+      text: "It is too hot out there to still be air. A thrown ball goes as though there is nothing in the way of it."
+      effects: {deepPassChance: 1.18, fgAccuracy: 1.18, puntDistance: 1.18, paceMod: 1.18}
 17:
   team: Residents
   name: "Neon Hall"
-  setting: A record listing the city's residents, which the Cores read as a residency.
+  setting: An enclosed hall lit like a stage, with the fixture on a marquee.
   icon: marquee
   tagline: The Headliner
   description: |
-    The census for this place was filed under entertainment and reconstructed
-    accordingly. The venue is enclosed, climate controlled and lit like a stage, with
-    the fixture on a marquee outside and the visiting team billed as the support act.
+    Enclosed, climate controlled and lit from above like a stage, with not a breath of
+    wind in it. The fixture is up on a marquee outside and the visiting team is billed as
+    the support act, in smaller letters.
   effects:
     passAccuracy: 1.039
     fgAccuracy: 1.039
@@ -685,8 +747,8 @@
       effects: {}
     - key: haze
       label: "Stage Haze"
-      text: "Haze pumped in for the lighting rig and never vented. It sits at head height."
-      effects: {visibility: 0.899}
+      text: "Haze pumped in for the lighting rig and never vented. It sits at head height, and the air holding it is completely still."
+      effects: {visibility: 0.925, fgAccuracy: 1.058}
     - key: showair
       label: "Show Conditions"
       text: "The room is holding exactly where it was set. Nothing is moving the ball but the thrower."
@@ -700,17 +762,21 @@
       unrealOnly: true
       text: "The rig is failing in banks. The field goes dark in patches and comes back wrong."
       effects: {visibility: 0.825, fgAccuracy: 0.887, fumbleRate: 1.131}
-
+    - key: production
+      label: "Full Production"
+      unrealOnly: true
+      text: "Every light in the rig has come up at once, brighter than daylight. The hall has never looked better than this."
+      effects: {visibility: 1.28, fgAccuracy: 1.12, puntDistance: 1.06}
 18:
   team: Rhyme
   name: "Sonnet Park"
-  setting: A name that rhymes with nothing in the archive, so the Cores made everything else rhyme.
+  setting: A park where the rain and the wind both keep a meter.
   icon: quill
   tagline: In Fourteen Lines
   description: |
-    This city arrived as a name and no context at all. Rather than leave the entry blank
-    the Cores gave the place a prosody: rain here falls in a pattern, and so does the
-    wind. Nobody has explained it and the groundskeepers have stopped being asked.
+    The rain here falls in a pattern and so does the wind, in the same one, and it holds
+    for the length of a game. Nobody has explained it. The groundskeepers have stopped
+    being asked about it.
   effects:
     paceMod: 0.929
     deepPassChance: 0.944
@@ -732,17 +798,21 @@
       unrealOnly: true
       text: "The pattern has broken. The weather is doing whatever it wants and none of it scans."
       effects: {passAccuracy: 0.892, fumbleRate: 1.189, deepPassChance: 0.784, fgAccuracy: 0.865}
-
+    - key: perfect
+      label: "Perfect Rhyme"
+      unrealOnly: true
+      text: "Everything here is in meter now, including the players. Nobody has mentioned it and nobody has stopped."
+      effects: {passAccuracy: 1.18, footing: 1.18, fgAccuracy: 1.18, paceMod: 0.85}
 19:
   team: Waffles
-  name: "The Iron"
-  setting: An exposition and a pressed grid, which the archive gives together and the Cores could not separate.
+  name: "The Griddle"
+  setting: A pressed iron grid under a low ceiling that radiates heat.
   icon: waffle-grid
   tagline: Mind the Grid
   description: |
-    The record ties this city to a world's fair and to a deep square lattice, in the
-    same damaged entry. The reconstruction is both: a pavilion floor pressed into ridges
-    and channels a few inches deep, under a low ceiling that radiates heat.
+    The floor is pressed into deep square ridges and channels a few inches down, and the
+    ceiling sits low over it and radiates heat. Footing depends entirely on what has ended
+    up in the channels. Something usually has.
   effects:
     footing: 0.97
     fumbleRate: 1.05
@@ -754,28 +824,36 @@
       effects: {}
     - key: steam
       label: "Steam"
-      text: "Steam venting up out of the grooves across the whole field."
-      effects: {visibility: 0.901}
+      text: "Steam venting up out of the grooves across the whole field, and condensing straight back down onto the iron."
+      effects: {visibility: 0.925, footing: 0.945}
     - key: syrup
       label: "Syrup"
-      text: "Syrup is standing in the channels. Anyone who goes down comes up slow."
-      effects: {footing: 0.927, paceMod: 1.062, sackRate: 1.078}
+      text: "Syrup is standing in the channels. Everything is slower and nothing gets away, but the ball sticks to whatever touches it."
+      effects: {footing: 0.949, paceMod: 1.054, sackRate: 1.054, passAccuracy: 1.054}
+    - key: butter
+      label: "Butter"
+      text: "The grid is running with it. Everyone is faster than they can steer, nobody can be brought down, and nobody can hold onto the ball either."
+      effects: {footing: 1.054, paceMod: 0.949, sackRate: 0.949, passAccuracy: 0.949}
     - key: press
       label: "The Press Closes"
       unrealOnly: true
       text: "The ceiling is coming down. There is no room to punt and less to throw."
       effects: {deepPassChance: 0.785, puntDistance: 0.877, fgAccuracy: 0.893, paceMod: 1.061}
-
+    - key: gridup
+      label: "The Grid Comes Up"
+      unrealOnly: true
+      text: "The ridges are rising and the channels are going down under them. It is still a field and it is barely a field."
+      effects: {footing: 0.83, fumbleRate: 1.21, returnYards: 0.83, paceMod: 1.09}
 20:
   team: Midnights
   name: "The Small Hours"
-  setting: A sun that circles without setting, at an hour the archive insists is midnight.
+  setting: A sun that circles without setting, at an hour that reads as midnight.
   icon: low-sun
   tagline: It Is Always Late Here
   description: |
-    The timestamp on everything from this city reads the middle of the night. The light
-    does not agree. The sun goes around without going down, the games are played at two
-    in the morning in full daylight, and nobody's body clock survives the trip.
+    The sun goes around without going down, so kickoff is two in the morning in full
+    daylight. The light is flat and comes from a low angle all game. Nobody's body clock
+    survives the trip.
   effects:
     passAccuracy: 0.968
     deepPassChance: 0.937
@@ -796,19 +874,23 @@
     - key: setting
       label: "It Begins to Set"
       unrealOnly: true
-      text: "The sun has started going down for the first time on record, and it is not stopping."
+      text: "The sun has started going down for the first time anyone here has seen, and it is not stopping."
       effects: {passAccuracy: 0.896, deepPassChance: 0.775, fgAccuracy: 0.896, fumbleRate: 1.121}
-
+    - key: noon
+      label: "Noon"
+      unrealOnly: true
+      text: "The sun has come straight overhead at two in the morning. There is not a shadow anywhere on the field."
+      effects: {visibility: 1.24, fgAccuracy: 1.13, puntDistance: 1.12}
 21:
   team: Jetskis
   name: "Marina Bay"
-  setting: A city for which the archive records no land at all.
+  setting: A floating pitch on open water.
   icon: buoy
   tagline: On the Water
   description: |
-    Every fragment from this place is water and the Cores found nothing to moor a
-    stadium to, so they moored the stadium. The pitch is a floating platform that moves
-    with what is under it, and the out of bounds is, in the literal sense, the sea.
+    The pitch is a platform moored to nothing and it moves with whatever is under it. Out
+    of bounds is the sea, in the literal sense, and there is a boat standing by for it.
+    Everything here is wet before kickoff.
   effects:
     fumbleRate: 1.062
     fgAccuracy: 0.969
@@ -831,18 +913,21 @@
       unrealOnly: true
       text: "A squall line has come across the bay. The platform is pitching and nobody has called it."
       effects: {fumbleRate: 1.179, deepPassChance: 0.805, fgAccuracy: 0.87, puntDistance: 0.909}
-
+    - key: deadcalm
+      label: "Dead Calm"
+      unrealOnly: true
+      text: "The bay has gone to glass and the platform has stopped moving entirely. Nothing out here is moving."
+      effects: {fgAccuracy: 1.18, puntDistance: 1.18, deepPassChance: 1.18, fumbleRate: 0.85}
 22:
   team: Phones
   name: "Glass Cube"
-  setting: A glass box reconstructed from a fragment about a device everyone in this city carried.
+  setting: A sealed glass box with the crowd shown on its walls.
   icon: glass-cube
   tagline: Everyone Can See In
   description: |
-    The archive is certain that the people here all carried the same object and looked
-    at it constantly. Nothing records what it did. The reconstruction is a sealed glass
-    box with every face in the crowd showing on its walls, which the Cores consider a
-    reasonable guess.
+    A sealed box of glass on all six faces, with every face in the crowd showing on the
+    walls at once. No wind gets in and no sound gets out. The surface underfoot is perfect
+    and stays perfect.
   effects:
     passAccuracy: 1.024
     footing: 0.952
@@ -854,8 +939,8 @@
       effects: {}
     - key: condensation
       label: "Condensation"
-      text: "The glass has fogged from the inside. The city has gone, and so has the far sideline."
-      effects: {visibility: 0.902}
+      text: "The glass has fogged from the inside. The city has gone, so has the far sideline, and the ball is wet before anybody touches it."
+      effects: {visibility: 0.925, fumbleRate: 1.058}
     - key: deadstill
       label: "Dead Still"
       text: "Nothing is moving in the box at all. The ball goes exactly where it is put."
@@ -869,17 +954,21 @@
       unrealOnly: true
       text: "The panes are crazing. Everyone can hear it and nobody is looking down."
       effects: {passAccuracy: 0.852, footing: 0.832, paceMod: 1.168, fumbleRate: 1.236}
-
+    - key: watching
+      label: "Every Angle"
+      unrealOnly: true
+      text: "The walls are showing the field itself now, from every side at once, including sides the box does not have."
+      effects: {visibility: 1.26, fumbleRate: 1.12, sackRate: 1.1}
 23:
   team: Bees
   name: "The Apiary"
-  setting: A bay the archive misfiled by one letter, and the Cores built what it said.
+  setting: An occupied hive, with comb for stands and roof.
   icon: hexcomb
   tagline: Do Not Swing At Them
   description: |
-    The record names the water this city sits on and the entry is off by a character.
-    Nobody caught it. The stands are comb, the roof is comb, the hive is occupied, and
-    the sound rises noticeably when the home team is on a drive.
+    The stands are comb and so is the roof, and the hive is very much occupied. The sound
+    rises noticeably when the home team is on a drive and drops when they are not.
+    Everything here moves together, including the crowd.
   effects:
     sackRate: 1.055
     paceMod: 1.044
@@ -899,25 +988,28 @@
       effects: {passAccuracy: 1.05, sackRate: 0.9, paceMod: 0.95}
     - key: smoke
       label: "Smoke"
-      text: "Smoke pumped in to settle the hive. It settles the hive and blinds the receivers."
-      effects: {visibility: 0.902}
+      text: "Smoke pumped in to settle the hive. It settles the hive and blinds the receivers, and for once a snap count can be heard."
+      effects: {visibility: 0.925, paceMod: 0.945}
     - key: swarm
       label: "Swarm"
       unrealOnly: true
       text: "The hive has come off the walls and onto the field. Play has not been stopped."
       effects: {visibility: 0.823, paceMod: 1.148, fumbleRate: 1.127}
-
+    - key: onemind
+      label: "One Mind"
+      unrealOnly: true
+      text: "There is no hum any more. Everything in this building is doing the same thing at the same instant, players included, and none of them decided to."
+      effects: {paceMod: 0.82, passAccuracy: 1.2, footing: 1.2, fgAccuracy: 1.11}
 24:
   team: Classics
   name: "Heritage Field"
-  setting: A formula the archive holds for this region and will not display.
+  setting: Wooden stands and a grass field, built around a vault nobody has opened.
   icon: pennant
   tagline: The Original Recipe
   description: |
-    There is a recipe in the record for this place and every attempt to read it returns
-    the same refusal. The Cores built a venue around the vault that contains it and
-    furnished the rest from the period: wooden stands, a hand-operated scoreboard, and a
-    grass field with no drainage worth the name.
+    Wooden stands, a hand-operated scoreboard, and a grass field with no drainage worth
+    the name. At the center of it is a vault holding a recipe, and nobody has read it. The
+    vault is the only modern thing here.
   effects:
     footing: 1.028
     deepPassChance: 0.944
@@ -937,25 +1029,29 @@
       effects: {footing: 1.13, returnYards: 1.09, paceMod: 0.96}
     - key: sepia
       label: "Low Sun"
-      text: "Long low sun through the wooden stands, striping the field in light and dark."
-      effects: {visibility: 0.9}
+      text: "Long low sun through the wooden stands, striping the field in light and dark, and everything in it slows to match."
+      effects: {visibility: 0.925, paceMod: 1.058}
     - key: mire
       label: "The Mire"
       unrealOnly: true
       text: "The field has become a bog end to end. They are playing it out anyway."
       effects: {footing: 0.81, paceMod: 1.19, fumbleRate: 1.217, puntDistance: 0.881}
-
+    - key: vault
+      label: "The Vault Is Open"
+      unrealOnly: true
+      text: "It is standing open and nobody will say what came out of it. The field has never played better."
+      effects: {passAccuracy: 1.18, footing: 1.18, fgAccuracy: 1.18, paceMod: 0.85}
 25:
   team: Extras
   name: "Backlot Nine"
-  setting: A city whose archive records only the people who were not the subject.
+  setting: A studio lot on a city that broke off the mainland and has been drifting since.
   icon: clapperboard
   tagline: From This Angle
   description: |
-    Every image recovered from this place is of somebody standing behind somebody else.
-    The Cores built the background: from the broadcast side it is a full stadium, and
-    from the other side it is scaffolding and painted flats. The weather is supplied by
-    machines and the machines are old.
+    From the broadcast side it is a full stadium. From the other side it is scaffolding
+    and painted flats propped up on sandbags. The land came loose a long time ago, so the
+    whole lot rides on open water and nothing on it stays level for long. The weather is
+    supplied by machines, the machines are old, and past the flats there is only ocean.
   effects:
     passAccuracy: 0.964
     fumbleRate: 1.06
@@ -963,7 +1059,7 @@
   weather:
     - key: setup
       label: "Between Setups"
-      text: "The machines are off. Whatever the real weather is, this is it."
+      text: "The machines are off and the water is flat. Whatever the real weather is, this is it."
       effects: {}
     - key: rainrig
       label: "Rain Rig"
@@ -971,24 +1067,36 @@
       effects: {passAccuracy: 0.928, fumbleRate: 1.144}
     - key: windmachine
       label: "Wind Machines"
-      text: "Four machines aimed across the field, all at slightly different angles."
+      text: "Four machines aimed across the field, all at slightly different angles, and a real one coming off the water behind them."
       effects: {fgAccuracy: 0.934, puntDistance: 0.934, deepPassChance: 0.934}
+    - key: swell
+      label: "Ground Swell"
+      text: "The lot is riding a long swell. The field tilts one way for a while, then the other, and nobody calls it."
+      effects: {footing: 0.932, fgAccuracy: 0.932, puntDistance: 0.932}
+    - key: marine
+      label: "Marine Layer"
+      text: "The layer came in off the water and sat down on the set. The far end zone is a rumor and the air is too thick to kick through."
+      effects: {visibility: 0.925, puntDistance: 0.945}
     - key: strike
       label: "Striking the Set"
       unrealOnly: true
-      text: "The flats are coming down mid-play. There is nothing behind the far end zone."
+      text: "The flats are coming down mid-play. There is nothing behind the far end zone but open water."
       effects: {passAccuracy: 0.909, deepPassChance: 0.752, paceMod: 1.124, fumbleRate: 1.145}
-
+    - key: turnover
+      label: "The Lot Comes About"
+      unrealOnly: true
+      text: "The island has turned. The whole set is facing into the weather now and there is nothing in front of it."
+      effects: {deepPassChance: 0.83, puntDistance: 0.83, fgAccuracy: 0.83, fumbleRate: 1.09}
 26:
   team: Raccoons
   name: "The Back Lot"
-  setting: A city the archive documents exclusively after closing time.
+  setting: A back lot behind the businesses, played after they close.
   icon: trash-lid
   tagline: After Hours
   description: |
-    Nothing was recorded here in daylight. The venue is chain link on three sides,
-    dumpsters in the corner, and a single sodium lamp that covers about sixty percent of
-    the field. Games start when the businesses close.
+    Chain link on three sides, dumpsters in the corner, and a single sodium lamp that
+    covers about sixty percent of the field. Nothing here happens in daylight. Games start
+    when the businesses close and end when somebody complains.
   effects:
     passAccuracy: 0.962
     returnYards: 1.045
@@ -1011,18 +1119,21 @@
       unrealOnly: true
       text: "The one light has failed. Something is still moving out there and it is not all players."
       effects: {visibility: 0.836, fgAccuracy: 0.891, fumbleRate: 1.119}
-
+    - key: open
+      label: "Everything Is Open"
+      unrealOnly: true
+      text: "Every business on the lot has its lights on at three in the morning. Nothing out here has ever been lit before."
+      effects: {visibility: 1.26, returnYards: 1.11, footing: 1.11}
 27:
   team: Curd
   name: "The Creamery"
-  setting: A city where the archive lists a sound as a required property of the food.
+  setting: A creamery floor, played between the vats.
   icon: milk-can
   tagline: You Can Hear the Squeak
   description: |
-    The entry specifies that it must squeak, and the Cores treated that as a
-    construction requirement. Play happens on the creamery floor between the vats, on a
-    surface that squeaks underfoot, which the home side finds reassuring and nobody else
-    does.
+    Play happens on the working creamery floor with the vats left in place around the
+    perimeter. The surface squeaks underfoot, every step of it, which the home side finds
+    reassuring and nobody else does.
   effects:
     footing: 0.954
     fumbleRate: 1.056
@@ -1034,8 +1145,8 @@
       effects: {}
     - key: whey
       label: "Whey Mist"
-      text: "Warm mist off the vats hanging at head height across the floor."
-      effects: {visibility: 0.901}
+      text: "Warm mist off the vats hanging at head height across the floor, settling onto a surface that was slick to begin with."
+      effects: {visibility: 0.925, footing: 0.945}
     - key: washdown
       label: "Wash Down"
       text: "The floor was hosed between quarters and has not dried. Nobody is cutting on it."
@@ -1045,17 +1156,21 @@
       unrealOnly: true
       text: "The room has dropped below freezing with the doors shut. The ball is a stone."
       effects: {fumbleRate: 1.313, passAccuracy: 0.875, footing: 0.875, fgAccuracy: 0.843}
-
+    - key: vats
+      label: "The Vats Go Over"
+      unrealOnly: true
+      text: "Every vat on the floor at once. The room is ankle deep and the doors are on the other side of it."
+      effects: {footing: 0.84, fumbleRate: 1.19, paceMod: 1.17, returnYards: 0.87}
 28:
   team: Trains
   name: "The Overnight"
-  setting: A field aboard a train the Cores believe was steam-hauled, moving far faster than steam.
+  setting: A field aboard a moving train, steam-hauled and far too fast for it.
   icon: railcar
   tagline: We Do Not Stop
   description: |
-    The archive listed this city's line as a period railway, so the reconstruction has
-    soot, a whistle and a coal tender, none of which account for it crossing a continent
-    in an afternoon. The scenery changes by quarter and the crosswind changes with it.
+    The field is aboard a train that crosses a continent in an afternoon, with soot, a
+    whistle and a coal tender that do not begin to account for the speed. The scenery
+    changes by quarter and the crosswind changes with it. Tunnels are not announced.
   effects:
     deepPassChance: 0.95
     puntDistance: 0.95
@@ -1086,17 +1201,21 @@
       unrealOnly: true
       text: "The train is not on the track any more. Play is continuing regardless."
       effects: {visibility: 0.938, fumbleRate: 1.264, fgAccuracy: 0.808, footing: 0.894}
-
+    - key: throttle
+      label: "Full Throttle"
+      unrealOnly: true
+      text: "The train has opened right up. The scenery is a smear and the crosswind has stopped being a wind."
+      effects: {footing: 0.86, deepPassChance: 0.85, puntDistance: 0.85, paceMod: 0.85}
 29:
   team: Grillmeisters
   name: "The Coals"
-  setting: A city and a food the archive gives the same name, resolved in favor of the food.
+  setting: A grating laid over coals, with the heat coming up through it.
   icon: grill-grate
   tagline: Low and Slow
   description: |
-    The place and the meal are the same word in the record and the Cores did not
-    separate them. The surface is grating and the heat comes up through it. Everyone on
-    the sideline is cooking something and the smoke never fully clears the field.
+    The surface is grating and the heat comes up through it all game. Everyone on the
+    sideline is cooking something. The smoke never fully clears the field and nobody has
+    suggested it should.
   effects:
     paceMod: 1.052
     footing: 0.965
@@ -1108,8 +1227,8 @@
       effects: {}
     - key: smoke
       label: "Heavy Smoke"
-      text: "The smoke has come down onto the field and settled there."
-      effects: {visibility: 0.903}
+      text: "The smoke has come down onto the field and settled there, riding heat off the coals that takes a kicked ball a long way."
+      effects: {visibility: 0.925, puntDistance: 1.058}
     - key: flareup
       label: "Flare Ups"
       text: "Fat is hitting the coals. Flames coming up through the grate, in places, without warning."
@@ -1119,18 +1238,21 @@
       unrealOnly: true
       text: "The entire bed is alight under the field. Nobody has stopped it and nobody has left."
       effects: {footing: 0.828, paceMod: 1.215, fumbleRate: 1.245, passAccuracy: 0.89}
-
+    - key: bedout
+      label: "The Bed Goes Out"
+      unrealOnly: true
+      text: "Every coal under the field is dead. The grating has gone cold and hard and the smoke has cleared off it."
+      effects: {footing: 1.18, fgAccuracy: 1.18, puntDistance: 1.18, fumbleRate: 1.18}
 30:
   team: Exoticos
   name: "Arena Dorada"
-  setting: An arena the archive records only in gold, and only at full volume.
+  setting: A gold bowl with the crowd close on all four sides.
   icon: lucha-mask
   tagline: Todo el Mundo
   description: |
-    Every fragment from this city is loud and none of it is dim. The reconstruction is a
-    gold bowl with the crowd very close on all four sides, where everything is
-    theatrical, including the entrances, and the noise does not let up for four
-    quarters.
+    A gold bowl with the crowd very close on all four sides and nothing between them and
+    the field. Everything here is theatrical, the entrances most of all. The noise does
+    not let up for four quarters.
   effects:
     sackRate: 1.067
     paceMod: 1.044
@@ -1142,8 +1264,8 @@
       effects: {}
     - key: pyro
       label: "Pyro Smoke"
-      text: "Entrance pyro has left smoke in the bowl and there is nowhere for it to go."
-      effects: {visibility: 0.901}
+      text: "Entrance pyro has left smoke in the bowl and there is nowhere for it to go. Nobody in here has settled down since."
+      effects: {visibility: 0.925, fumbleRate: 1.058}
     - key: altitude
       label: "Thin Air"
       text: "Sealed, still, and a long way above sea level. The ball goes further here than anywhere."
@@ -1157,17 +1279,21 @@
       unrealOnly: true
       text: "The whole arena is on its feet and the bowl is shaking. Nothing can be heard at all."
       effects: {sackRate: 1.248, paceMod: 1.212, passAccuracy: 0.858, fumbleRate: 1.177}
-
+    - key: silent
+      label: "The Bowl Goes Quiet"
+      unrealOnly: true
+      text: "The whole arena has stopped at once and is only watching. Nobody here has heard this place do that."
+      effects: {paceMod: 0.84, passAccuracy: 1.18, fgAccuracy: 1.18, sackRate: 0.86}
 31:
   team: Buffalo
   name: "The Wintering Ground"
-  setting: A line in the archive where this city's name occurs eight times, parsed as a herd.
+  setting: Flat grassland under snow, with a herd wintering across the back of it.
   icon: bison
   tagline: They Were Here First
   description: |
-    The entry is grammatical and the Cores checked it twice. Their reading produced
-    animals, so there are animals: flat grassland to the horizon, snow on it most of the
-    year, and a herd that moves across the back of the venue on its own schedule.
+    Flat grassland to the horizon with snow on it most of the year and nothing to break
+    the wind for a hundred miles. A herd moves across the back of the venue on its own
+    schedule. Play works around them.
   effects:
     footing: 1.03
     passAccuracy: 0.963
@@ -1194,21 +1320,25 @@
       unrealOnly: true
       text: "Full whiteout with the herd somewhere inside it. The far end zone is a rumor."
       effects: {visibility: 0.846, fgAccuracy: 0.894, fumbleRate: 1.136}
-
+    - key: thaw
+      label: "The Thaw"
+      unrealOnly: true
+      text: "The snow has gone off in an afternoon and everything under it is running. The herd has moved to higher ground."
+      effects: {footing: 0.83, fumbleRate: 1.21, puntDistance: 0.85, paceMod: 1.15}
 32:
   team: Sodas
   # ⚠️ PAIRED WITH 9 (Minnesota Pops). See the note there. This side argues the word
   # belongs to the DRINK rather than to a noise, and that mixing to order beats anything
   # that arrives sealed.
   name: "The Fountain"
-  setting: A field at the foot of an enormous fountain, where the drink is mixed to order and never sealed.
+  setting: A field at the foot of an enormous fountain, mixed to order.
   icon: fizz
   tagline: Mixed, Not Sealed
   description: |
-    The archive carries two names for one drink and two cities each certain the other is
-    wrong. This one holds that the word belongs to the drink and not to a noise, and that
-    anything worth drinking is mixed at a counter rather than capped by a machine. The
-    field sits at the foot of the fountain. The air is full of it.
+    The field sits at the foot of a fountain the size of a building, and the air is full
+    of what comes off it. This city holds that the word belongs to the drink, and that
+    anything worth drinking is mixed at a counter rather than sealed by a machine.
+    Minnesota will tell you otherwise.
   effects:
     paceMod: 1.041
     footing: 0.959
@@ -1231,3 +1361,8 @@
       unrealOnly: true
       text: "The whole fountain has gone up. The field is under it and still in play."
       effects: {fumbleRate: 1.301, footing: 0.836, passAccuracy: 0.88, paceMod: 1.164}
+    - key: fountainstops
+      label: "The Fountain Stops"
+      unrealOnly: true
+      text: "It has shut off mid-arc. The air is clear for the first time and you can see the far end of the field through it."
+      effects: {visibility: 1.24, fgAccuracy: 1.14, puntDistance: 1.11}

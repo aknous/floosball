@@ -218,11 +218,54 @@ tr.unreal .weff {{ color:var(--warn); }}
     Carnegie Mellon, misheard into a crop. Anchorage flipped from a full moon to the
     midnight sun. Anaheim would not decode at all, so the failure to decode became the
     venue.</p>
+    <p><strong>The description describes the place, not the reasoning.</strong> The first
+    draft led with the archive and the Cores on nearly every venue, which explains a joke
+    instead of building a stadium. The reading now lives on the <em>Built on</em> line, one
+    per venue, where a reader can take it or leave it.</p>
     <p><strong>Kansas City is the exception</strong> and stays exactly as contributed.</p>
     <p><strong>Minnesota and Salt Lake City are one venue split in two.</strong> Both
     teams are named for the dispute over what the drink is called, so their stadiums are
     written against each other: bottle versus fountain, sealed versus mixed to order.</p>
-    
+  </div>
+  <div class="panel">
+    <h2>Weather does not only subtract</h2>
+    <p>Real weather almost only ever takes something away, and the first version of this
+    file inherited that without noticing: 92% of every effect in it was a penalty, and pass
+    accuracy was lowered in 40 of 40 conditions. That makes 32 places into 32 amounts of
+    difficulty.</p>
+    <p><strong>Physical.</strong> Thin air at altitude carries the ball. A sealed room has
+    no wind at all, so the best throwing conditions in the league are underground.</p>
+    <p><strong>Subversion.</strong> These are not real places and their weather need not
+    obey. Boston's Criticality snaps to specification instead of degrading, which is worse
+    than any penalty. The subversion has to be earned by the setting.</p>
+  </div>
+  <div class="panel">
+    <h2>Two ways for the world to end</h2>
+    <p>Every venue carries <strong>two Criticality conditions</strong>, drawn in the
+    <span class="mono">Unreal</span> row below. One per venue meant the top of the ladder was
+    the only stage that played the same scene every time, at the moment the whole feature is
+    building toward.</p>
+    <p>The second set is written to be <strong>strange rather than worse</strong> — a cavern
+    whose roof comes off, a hive that stops humming, a vault standing open. Nineteen of the
+    thirty-two help.</p>
+    <p>Measured: the ordinary rungs cost the league nothing (rough 33.7 points a game against
+    a 34.0 control), while Criticality runs at 30.8 on a score spread <strong>64% wider</strong>
+    than normal. High variance, not low scoring.</p>
+  </div>
+  <div class="panel">
+    <h2>Reading the effects</h2>
+    <p>Numbers are multipliers at <span class="mono">Rough</span> strength and every one has
+    a real call site in the engine. A key with nothing reading it is a promise the game does
+    not keep, and the previous vocabulary had ten of them.</p>
+    <p><strong><span class="mono">visibility</span> cuts both ways.</strong> Below 1.0 it
+    costs pass accuracy mildly and deep passing steeply, raises punt muffs and fair catches,
+    and <em>lowers the tackler's resistance</em> — a carrier nobody can see is a carrier
+    nobody can bring down.</p>
+    <p><strong><span class="mono">footing</span> is not run-only.</strong> Runs and receptions
+    share a carrier tail, and yards after catch are about a third of passing yards, so the
+    ground is partly a passing effect.</p>
+    <p>Every condition touches at least two keys. With one there is nothing to vary but the
+    magnitude, and every venue holding one is playing the same condition under another name.</p>
   </div>
 </section>
 <section class="grid">{''.join(cards)}</section>

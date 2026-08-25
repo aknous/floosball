@@ -3853,3 +3853,38 @@ VENUE_PHASE_POSITIONS = {'RB': 1, 'TE': 1, 'QB': -1, 'WR': -1, 'K': 0}
 # call between two comparable players, never enough to invert the position hierarchy.
 # This is the same "tips close calls, never dictates" bar the sentiment tilt is held to.
 VENUE_POSITION_WEIGHT = 0.10
+
+
+# ─── Weather at its call sites ────────────────────────────────────────────────
+# The venue's own effects and the weather rolled at kickoff arrive as one dict of
+# multipliers (see managers/stadiumManager.py). This flag is the master switch for
+# whether any of them REACH the sim — with it off the league plays in a neutral
+# world and every call site below is a no-op, which is what an A/B arm needs.
+#
+# ⚠️ Weather is a PRE-GAME RATING-ADJACENT LAYER, and this codebase has a measured
+# rule for those: rating-multiplier -> win-probability transfer is 1.619, i.e. a
+# +/-10% roster-wide multiplier is worth +/-4.5 wins a season. A weather layer that
+# looks like a few percent can be decisive. Measure with a forced-intensity arm
+# before tuning.
+WEATHER_ENABLED = True
+
+# ⚠️ WEATHER IS SYMMETRIC (owner, 2026-08-19): a wet ball is wet for everyone. No
+# key is ever applied to one side only, so nothing below reads home/away. The venue
+# is only asymmetric in EXPOSURE — the home team plays 14 games a year in it — which
+# is a fairness question handled in the authored severity bands, not here.
+
+# How far a punt's DISTANCE key is allowed to move the gross kick, and how far the
+# pre-snap key is allowed to move the huddle. Both clamp because they feed decisions
+# downstream (the punt/kick tree reads distance; the clock tree reads pre-snap time),
+# and an unclamped multiplier at Unreal could hand those trees a number outside
+# anything they were tuned against.
+WEATHER_PUNT_MIN = 0.55
+WEATHER_PUNT_MAX = 1.30
+WEATHER_PACE_MIN = 0.75
+WEATHER_PACE_MAX = 1.45
+
+# How hard a dark field pushes a returner into waving the punt off. ⚠️ This is the
+# quiet half of `visibility`: the same darkness that hands a CARRIER yards (the
+# tackler cannot see him) costs the RETURNER the chance to become one, so sight
+# stays two-sided on special teams too rather than only helping the offense.
+PUNT_FAIRCATCH_SIGHT_K = 0.45

@@ -51,8 +51,48 @@ expect("every weather state has descriptive text",
        all(w.get('text') for v in raw.values() for w in v['weather']))
 expect("every venue has a calm state listed first",
        all(not (v['weather'][0].get('effects') or {}) for v in raw.values()))
-expect("every venue has at least one Criticality-only state",
-       all(any(w.get('unrealOnly') for w in v['weather']) for v in raw.values()))
+# ⚠️ AT LEAST TWO CRITICALITY CONDITIONS PER VENUE (owner, 2026-08-25). Every OTHER
+# rung of the ladder already draws from three to five conditions, so the top one was the
+# only stage in the feature where a given stadium played the same scene every single
+# time: one `unrealOnly` state per venue, weighted to dominate the roll. Criticality is
+# the payoff the whole intensity ladder builds toward and it was the least varied thing
+# in the league.
+#
+# ⚠️ It is also what fixed the drought. The first 32 Criticality conditions were 31
+# penalties and one boost, and the `unreal` rung DOUBLES every authored deviation, so
+# the top of the ladder measured as 20% less football rather than as a spectacle
+# (27.35 pts/game against a 33.95 control, with the score spread barely moving). The
+# second set skews deliberately STRANGE rather than worse — a cavern whose roof comes
+# off, a hive that stops humming, a vault standing open — which took Criticality to
+# 30.83 pts/game on a spread of 15.52 against the control's 9.44. High variance, not
+# low offense. Softening the rung was the alternative and it contradicts the settled
+# decision that Criticality hits hard.
+crit = {t: sum(1 for w in v['weather'] if w.get('unrealOnly')) for t, v in raw.items()}
+expect(f"every venue has at least two Criticality-only states (min {min(crit.values())})",
+       min(crit.values()) >= 2)
+
+# ⚠️ EVERY CONDITION TOUCHES AT LEAST TWO KEYS (owner, 2026-08-25), the calm state
+# excepted since it is required to be empty. A one-key condition is not thin because of
+# how much it does — a lone `visibility` drives four separate consequences — it is thin
+# because of how much it can DIFFER: with one key there is nothing to vary but the
+# magnitude, so every venue holding one is playing the same condition under a different
+# name, which is the "one weather system wearing 32 names" failure the shape test below
+# exists to catch, arriving through a side door.
+#
+# ⚠️ It came in as a side effect of the SIGHT REWORK rather than by authoring: converting
+# the pass-penalty conditions onto `visibility` collapsed 13 of them to that single key,
+# and they were spread across 13 different venues. The second key must be what the
+# SUBSTANCE doing the obscuring does beyond blocking sight (dust makes the floor slick,
+# a marine layer will not let a punt through, beekeeper's smoke quiets the crowd) — it
+# can NOT be a passing penalty, which the double-charge rule below refuses, and it must
+# not be filler, or this reads as two keys and still measures as one idea.
+thin = [(t, w['label'], w.get('effects')) for t, v in raw.items()
+        for i, w in enumerate(v['weather'])
+        if i > 0 and len(w.get('effects') or {}) < 2]
+expect(f"every condition beyond the calm state touches at least two keys ({thin[:2]})",
+       not thin)
+thinAlways = [(t, v.get('effects')) for t, v in raw.items() if len(v.get('effects') or {}) < 2]
+expect(f"and so does every venue's always-on character ({thinAlways[:2]})", not thinAlways)
 
 # ── the modifier vocabulary ────────────────────────────────────────────────
 used = set()
@@ -186,12 +226,22 @@ expect(f"venues still differ in WHICH keys they touch ({len(shapes)} distinct sh
 # has a standing updraft (Seattle).
 HELPFUL = {'passAccuracy', 'deepPassChance', 'footing', 'fgAccuracy',
            'puntDistance', 'returnYards'}
+# ⚠️ `visibility` IS EXCLUDED, and leaving it in was letting this gate be satisfied by
+# the thing it exists to catch. The rule below reads "not in HELPFUL means lower is
+# better", which is true of sackRate and fumbleRate and paceMod — and exactly backwards
+# for sight, where LOW is the dark field. A pure darkness penalty was therefore being
+# counted as a condition that HELPS, so a league that went back to all-penalty could
+# still pass by making its penalties visual ones. Sight is genuinely two-sided (the
+# carrier gains what the passer loses), so it belongs in neither column: it is scored
+# as neither help nor harm here and pinned separately by the exponent tests below.
+TWO_SIDED = {'visibility'}
 def helps(k, v): return v > 1.0 if k in HELPFUL else v < 1.0
 
 def isBoost(eff):
     """A condition that helps on balance, not one lucky key inside a penalty."""
-    good = sum(1 for k, v in (eff or {}).items() if helps(k, v))
-    return good >= 2 and good > len(eff or {}) - good
+    scored = {k: v for k, v in (eff or {}).items() if k not in TWO_SIDED}
+    good = sum(1 for k, v in scored.items() if helps(k, v))
+    return good >= 2 and good > len(scored) - good
 
 boostVenues = [t for t, v in raw.items() if any(isBoost(w.get('effects')) for w in v['weather'])]
 expect(f"some venues are genuinely GOOD to play in ({len(boostVenues)} of 32)",

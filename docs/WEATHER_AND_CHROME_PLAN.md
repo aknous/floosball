@@ -28,10 +28,43 @@ occasion to pull it.
 | 32 venues, weather tables, intensity ladder | **BUILT** (`data/templates/stadiums.yaml`, `managers/stadiumManager.py`) |
 | Competitive fairness bands, phase bias | **BUILT** (`test_stadium_weather.py`) |
 | Venue-aware roster building | **BUILT** (`test_venue_roster_fit.py`) |
-| The ten modifiers at their call sites | **NOT BUILT** — the engine block |
+| The ten modifiers at their call sites | **BUILT** (`test_weather_effects.py`) — the engine block |
+| Play-calling lean | **BUILT** — `Game._applyWeatherMods`, its own layer in the weight chain |
 | Home-field nudge, persistence, pre-kickoff announcement | **NOT BUILT** |
-| Play-calling lean | **SPECCED** — build with the modifiers so both can be measured |
 | All of chrome | **SPECCED / DESIGN CAPTURE** — nothing in the code |
+
+⚠️ **MEASURED AT THE LADDER: THE ORDINARY RUNGS ARE SCORING-NEUTRAL AND `Unreal` IS
+HIGH-VARIANCE** (96 games a rung, real venue tables, 2026-08-25). Flag off **33.95**
+pts/game on a spread of 9.44; rough **33.69**, severe **32.91**, both inside the
+control's CI — weather changes the SHAPE of an attack without taxing the league, which
+is the intent.
+
+⚠️ **`Unreal` FIRST MEASURED AS A DROUGHT AND HAD TO BE REWRITTEN, NOT RETUNED.** At
+**27.35** pts/game with the spread barely moving (10.9 vs 9.4) it was simply 20% less
+football — the exact failure this plan names. The cause was structural: the original 32
+Criticality conditions were **31 penalties and one boost**, and the rung DOUBLES every
+authored deviation, so a mostly-subtractive set subtracts twice as hard precisely where
+the spectacle belongs. ⚠️ **Softening the rung is the wrong fix** and contradicts settled
+decision 3. Every venue instead gained a SECOND Criticality condition written to be
+**strange rather than worse** (a cavern whose roof comes off, a hive that stops humming,
+a vault standing open), **19 of 32 of them boosts**. Now **30.83 pts/game on a spread of
+15.52** against the control's 9.44 — **64% wider**. High variance, not low offense.
+
+⚠️ **EVERY STAGE MUST BE ABLE TO PRODUCE MORE THAN ONE CONDITION** (owner, 2026-08-25).
+Settled through severe each draw from three to five; `unreal` had exactly one per venue
+and was the only stage in the feature that played the same scene every time. `still` is
+deliberately left at one — at scale 0 every effect collapses to neutral, so a second
+calm state could differ only in wording.
+
+⚠️ **EVERY CONDITION TOUCHES AT LEAST TWO KEYS**, the required-empty calm state excepted.
+A one-key condition is not thin because of how much it DOES (a lone `visibility` drives
+four consequences) but because of how much it can DIFFER — with one key there is nothing
+to vary but the magnitude. It arrived as a side effect of the sight rework rather than by
+authoring: converting the pass-penalty conditions onto `visibility` collapsed **13 of
+them** across 13 venues, so the fix for one-sided darkness quietly created a
+same-condition-everywhere bug. The second key must be what the SUBSTANCE doing the
+obscuring does beyond blocking sight, and can never be a passing penalty (the
+double-charge rule refuses it).
 
 ---
 
