@@ -2363,6 +2363,20 @@ class Game:
             return deficit > 3 * self._oneScore()   # 3 TDs in 2-5 min
         return deficit > 2 * self._maxPossession()       # 2+ scores in under 2 min
 
+    def _deadBallStopsClock(self) -> bool:
+        """Does putting the ball dead actually stop the game clock?
+
+        ⚠️ `clockStopsOnDeadBall` IS A VOTABLE RULE, and turning it off is the fans'
+        "running clock": an incompletion, a step out of bounds and a turnover all stop
+        being clock-stoppers. `shouldClockRun` honours that correctly — but every
+        DECISION that exists in order to stop the clock has to honour it too, or the
+        offense keeps paying for a stoppage it can no longer buy.
+
+        A score, a field goal, a punt, a spike and a timeout still stop the clock under
+        either rule, so those decisions are unaffected and deliberately do not read this.
+        """
+        return bool(getattr(self.gameRules, 'clockStopsOnDeadBall', True))
+
     def _shouldTargetSideline(self, scoreDiff: int, coach) -> bool:
         """Decide whether this pass should target the sideline to stop the clock.
 
@@ -2378,7 +2392,12 @@ class Game:
         # the defense reads (step 3) depends on the sideline route being reliable, not
         # occasional. Owner: "exclusively short-medium passes that target the sideline to
         # stop the clock."
-        if self._isNoHuddle():
+        # ⚠️ AND ONLY WHILE GETTING OUT OF BOUNDS ACTUALLY STOPS THE CLOCK. Under a
+        # running clock it does not, so this would force the single most restrictive
+        # throw in the playbook in exchange for nothing — and no-huddle fires 2.4x more
+        # often there (it keys off `clockRunning`, which a running clock leaves true
+        # almost permanently), so the pointless version is the common one.
+        if self._isNoHuddle() and self._deadBallStopsClock():
             return True
 
         # ⚠️ DARTS: THE HOOPS ARE ON THE SIDELINE. Working toward the midfield pair means
@@ -2402,7 +2421,11 @@ class Game:
         if (self._driveClockActive()
                 and getattr(self.gameRules, 'driveClockUnit', 'seconds') == 'seconds'
                 and self.driveClockRemaining <= _oobThresh
-                and not self._isFgDrainMode()):
+                and not self._isFgDrainMode()
+                # The whole premise is that a stopped GAME clock pauses the drive clock.
+                # Under a running clock nothing here stops it, so the drive clock drains
+                # either way and this buys only the YAC cap.
+                and self._deadBallStopsClock()):
             import random
             drain = 1.0 - max(0.0, self.driveClockRemaining) / max(1.0, _oobThresh)  # 0 at thresh → 1 at 0
             prob = (0.55 + 0.4 * drain) * (0.6 + 0.4 * self._coachClockIQ(coach))
@@ -2439,6 +2462,15 @@ class Game:
                 prob = CHESS_CLOCK_BASE_SIDELINE_PROB * clockIQ
             if random.random() < min(0.97, prob):
                 return True
+        # ⚠️ EVERY REMAINING BRANCH EXISTS TO STOP THE GAME CLOCK, so under a running
+        # clock there is nothing left to decide. Placed BELOW the darts branch on
+        # purpose: working the boundary toward the midfield hoops is field position
+        # aimed at an object on the field, not clock management, and it stays live
+        # under either rule. The chess-clock branch above is unreachable here — the
+        # ballot withholds the running-clock candidate from clockless formats — so it
+        # is deliberately left ungated rather than carrying a guard that cannot fire.
+        if not self._deadBallStopsClock():
+            return False
         if self.currentQuarter not in (2, 4):
             return False
         # A leading team late in Q4 wants the clock RUNNING — never stop it.
@@ -5849,7 +5881,11 @@ class Game:
             self.play.hoopMade = False
             self.play.playResult = PlayResult.SidelineHoopMiss   # an incompletion; no turnover
             self._hoopPairResult[pairName] = 'missed'
-        self.clockRunning = False   # a hoop shot stops the clock (an incomplete throw)
+        # A hoop shot is an incomplete throw, so it stops the clock exactly as one does
+        # — which means under the running-clock rule it does not. ⚠️ Sideline Goals is
+        # its own mechanic toggle rather than a format, so it can be voted on alongside
+        # a running clock in the standard format; the two really do co-occur.
+        self.clockRunning = not self._deadBallStopsClock()
 
     def _isHurryUp(self) -> bool:
         """The offense is racing the clock — a 2-minute drill trailing in Q4, or an
@@ -7348,7 +7384,13 @@ class Game:
                                     else PlayResult.TurnoverOnDowns)
             self._applyMomentumEvent(MOMENTUM_TURNOVER_ON_DOWNS, self.defensiveTeam)
         self.play.driveClockExpired = driveClockExpired
-        self.clockRunning = False  # Clock stops after a turnover on downs
+        # ⚠️ A TURNOVER ON DOWNS IS A TURNOVER, and under the running-clock rule a
+        # turnover does not stop the clock — `shouldClockRun` already runs it on a
+        # fumble or an interception there. Stopping it here unconditionally left the
+        # two kinds of turnover behaving in opposite ways under a rule whose whole
+        # point is that turnovers stop being stoppages, and handed the team that just
+        # failed on downs a free clock stop.
+        self.clockRunning = not self._deadBallStopsClock()
         self.formatPlayText()
         # No text suffix — the DriveClockExpired result badge conveys the reason;
         # the description stays the play itself (like any turnover on downs).
