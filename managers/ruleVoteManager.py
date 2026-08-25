@@ -109,12 +109,16 @@ class RuleVoteManager:
 
     def _isChangedCandidate(self, f, spec, gameRules) -> bool:
         """Whether a candidate is currently OFF its default. For a preset candidate
-        that's whether its `gate` field is off-default; for a scalar, the field."""
+        that's whether its `gate` field is off-default; for a scalar, the field.
+
+        ⚠️ Delegates to `game_rules.changedRuleCandidates` so there is ONE definition of
+        what "a changed rule" means. It used to live only here, with no caller at all,
+        while `/api/rules` counted raw FIELDS instead — which reports a preset as two or
+        three rules and put a wrong number on the Rulebook chip.
+        """
         import game_rules as gr
-        if 'presets' in spec:
-            gate = spec.get('gate')
-            return bool(gate and getattr(gameRules, gate, None) != gr.defaultRuleValue(gate))
-        return getattr(gameRules, f, None) != gr.defaultRuleValue(f)
+        key = spec.get('gate') if 'presets' in spec else f
+        return bool(key and getattr(gameRules, key, None) != gr.defaultRuleValue(key))
 
     def _formatHasClock(self, fmtKey) -> bool:
         """Whether the active format's GAME CLOCK actually drives anything. innings is
@@ -197,9 +201,8 @@ class RuleVoteManager:
         return out
 
     def _changedCount(self, gameRules) -> int:
-        from constants import RULE_VOTE_CANDIDATES
-        return sum(1 for f, spec in RULE_VOTE_CANDIDATES.items()
-                   if self._isChangedCandidate(f, spec, gameRules))
+        import game_rules as gr
+        return len(gr.changedRuleCandidates(gameRules))
 
     # ── Criticality chaos rules ────────────────────────────────────────────────
     def _randomChaosValue(self, field: str):

@@ -521,6 +521,34 @@ def defaultRuleValue(field: str) -> Any:
     return getattr(GameRules(), field, None)
 
 
+
+def changedRuleCandidates(gameRules) -> List[str]:
+    """The RULES that are currently off their default, as a fan would count them.
+
+    ⚠️ A RULE IS A BALLOT CANDIDATE, NOT A FIELD, and counting fields overstates it.
+    A PRESET candidate patches several fields at once — the Darts format sets
+    `gameFormat` AND `targetScore`, a Drive Clock preset sets up to four — so a
+    field-level diff reports one fan-visible change as two or three. Reported from the
+    game board as the Rulebook chip claiming three rules had changed when two had:
+    Darts plus one other counts exactly that way.
+
+    ⚠️ This is deliberately NOT the same list the Rulebook highlights. That one is
+    per-FIELD on purpose, so every row a preset touched lights up and shows its "was X";
+    it is the COUNT that has to speak in rules. Keep both, and keep them separate.
+
+    Lives here rather than on RuleVoteManager because the API needs it too, and the
+    manager's own copy had no callers at all — the correct implementation was sitting
+    there unused while the endpoint grew a different, wrong one.
+    """
+    from constants import RULE_VOTE_CANDIDATES
+    out = []
+    for f, spec in RULE_VOTE_CANDIDATES.items():
+        # A preset is changed when its GATE field is off-default; a scalar, when it is.
+        key = spec.get('gate') if 'presets' in spec else f
+        if key and getattr(gameRules, key, None) != defaultRuleValue(key):
+            out.append(f)
+    return out
+
 def applyRuleChange(gameRules: "GameRules", field: str, value: Any,
                     reason: str = "cores vote", source: str = "cores_vote"):
     """Apply a single rule change to the LIVE gameRules object AND persist it.
