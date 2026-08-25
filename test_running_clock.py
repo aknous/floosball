@@ -68,6 +68,13 @@ DEAD_BALLS = [
     ('a run out of bounds', dict(playType=PlayType.Run, inBounds=False)),
     ('a lost fumble', dict(fumble=True)),
     ('an interception', dict(interception=True)),
+    # ⚠️ A SPIKE IS AN INTENTIONAL INCOMPLETION, and it used to sit in the carve-out list
+    # below (owner, 2026-08-25: "teams shouldnt even attempt a spike because its
+    # effectively an incomplete pass and shouldnt stop the clock"). It was the one
+    # carve-out that was arithmetically inconsistent rather than principled: a punt stops
+    # the clock for a reason of its own, and a score and a kick likewise, but a spike is
+    # the exact event this rule is ABOUT, merely chosen on purpose.
+    ('a spike', dict(playType=PlayType.Spike)),
 ]
 for name, flags in DEAD_BALLS:
     expect(f"{name} stops the clock by default, and does not under a running clock",
@@ -87,7 +94,6 @@ CARVE_OUTS = [
     ('a score', dict(score=True)),
     ('a field goal', dict(playType=PlayType.FieldGoal)),
     ('a punt', dict(playType=PlayType.Punt)),
-    ('a spike', dict(playType=PlayType.Spike)),
 ]
 for name, flags in CARVE_OUTS:
     expect(f"{name} stops the clock under BOTH rules",
@@ -182,6 +188,41 @@ for stops, want in ((True, True), (False, False)):
 # ⚠️ Darts aims at hoops ON the boundary. That is field position toward an object on
 # the field, not clock management, so it must SURVIVE the rule being off — gating the
 # whole method rather than the clock-motivated branches would have silently broken it.
+# ⚠️ HONOURING THE RULE IN `shouldClockRun` IS ONLY HALF OF IT. If the spike stops
+# stopping the clock but the DECISION still fires, the offense forfeits a down for
+# nothing — the identical failure to throwing at the sideline under a running clock, and
+# measured at 1.43 wasted downs a game before this gate. Asserted over full games rather
+# than a state sweep, because the spike is gated on a run of conditions (no timeouts,
+# late, trailing or Q2, a down to spare) that a constructed state can satisfy while a
+# real one rarely does.
+print("\n-- and the offense stops calling a play that can no longer do anything --")
+import asyncio, numpy as np
+from scenario import _makeTeam
+
+async def _game(gid, stops):
+    random.seed(gid); np.random.seed(gid % (2**31))
+    h = _makeTeam('H', 'HOM', 100 + gid * 10); a = _makeTeam('A', 'AWY', 500 + gid * 10)
+    gr = GameRules(); gr.clockStopsOnDeadBall = stops
+    g = FG.Game(h, a, gameRules=gr); g.id = gid
+    g._anomalyAttentionLoaded = True; g._anomalyEnabled = False
+    g._anomalyAttention = {}; g._anomalyState = {}
+    g._criticalityMultiplier = 1.0; g._criticalityActive = False; g._anomalyIntensity = 1.0
+    await g.playGame(); return g
+
+def spikeCount(stops, n=14):
+    total = 0
+    for i in range(n):
+        g = asyncio.run(_game(i, stops))
+        total += sum(1 for f in g.gameFeed
+                     if f.get('play') is not None
+                     and getattr(f['play'], 'playType', None) is PlayType.Spike)
+    return total
+
+onSpikes = spikeCount(True)
+offSpikes = spikeCount(False)
+expect(f"teams still spike by default ({onSpikes} across 14 games)", onSpikes > 0)
+expect(f"and never attempt one under a running clock ({offSpikes})", offSpikes == 0)
+
 print("\n-- and a non-clock reason to work the boundary still applies --")
 s = scen(False, quarter=2, clock=300, offense='home', down=1, distance=10, ballOn=60)
 s.game._isNoHuddle = lambda: False

@@ -2095,7 +2095,13 @@ class Game:
         )
         # Realistic spike budget — using more would forfeit too many downs.
         # Down 1 or 2 → 1 spike between productive plays; 3rd down → 0.
-        spikesAvailable = 1 if self.down < self.gameRules.downsPerSeries - 1 else 0
+        # ⚠️ ZERO UNDER A RUNNING CLOCK. The spike is modeled here as a CHEAP snap (5s
+        # against a huddle's 18s) purely because it stops the clock; once it does not,
+        # it is a forfeited down that buys nothing, so counting one would have the
+        # estimator promise a play the offense can no longer reach.
+        spikesAvailable = (1 if self.down < self.gameRules.downsPerSeries - 1 else 0)
+        if not self._deadBallStopsClock():
+            spikesAvailable = 0
         # ⚠️ THE FIRST SNAP PAYS ITS PRE-SNAP DRAIN TOO, and for a long time it did not.
         # The loop below charges every snap AFTER the first an inter-play gap (3s on a
         # timeout, 5s on a spike, 18s otherwise), but entered on `secs > FINAL_SNAP_SECS`
@@ -6959,6 +6965,9 @@ class Game:
                     and self.down <= self.gameRules.downsPerSeries - 2
                     and self.yardsToEndzone > 5
                     and not self._isFgDrainMode()
+                    # The premise is that stopping the GAME clock pauses the drive clock.
+                    # Under a running clock the spike stops neither.
+                    and self._deadBallStopsClock()
                     and not self._isGarbageTime(scoreDiff)):
                 if _random.random() < (0.35 + 0.55 * gameIQ):
                     self.play.insights['clockMgmt'] = {
@@ -7024,6 +7033,11 @@ class Game:
                     and timeoutsLeft == 0
                     and (scoreDiff <= 0 or self.currentQuarter == 2)  # Q2: stop the clock regardless of score
                     and spikeDownOK
+                    # ⚠️ AND ONLY IF SPIKING STILL STOPS THE CLOCK. Otherwise this is a
+                    # forfeited down in exchange for nothing — the same failure as
+                    # throwing to the sideline under a running clock, and measured at
+                    # 1.43 wasted downs a game before this gate.
+                    and self._deadBallStopsClock()
                     and not self._isGarbageTime(scoreDiff)):
                 if secs <= 30:
                     spikeChance = 0.7 + 0.3 * gameIQ
@@ -14092,8 +14106,14 @@ class Game:
             return False
         if self.play.playType == PlayType.Punt:
             return False   # change of possession — clock stops either way
+        # ⚠️ A SPIKE IS AN INTENTIONAL INCOMPLETION, so it rides the same rule an
+        # accidental one does (owner, 2026-08-25). This used to return False flat, which
+        # made the spike the one carve-out that was arithmetically inconsistent rather
+        # than principled: a punt stops the clock for a reason of its own (a change of
+        # possession), a score and a kick likewise, but a spike is the exact event the
+        # running-clock rule is ABOUT, just chosen on purpose.
         if self.play.playType == PlayType.Spike:
-            return False
+            return not self._deadBallStopsClock()
         if self.play.scoreChange:
             return False  # Score stops clock
         # Turnover — a dead ball; stops the clock unless the running-clock rule is on.
@@ -15611,7 +15631,13 @@ class Play():
         self.kicker.updateInGameRating()
 
     def spike(self):
-        """QB spikes the ball to stop the clock. Costs a down, clock stops, 0 yards."""
+        """QB spikes the ball to stop the clock. Costs a down, 0 yards.
+
+        ⚠️ Whether the clock actually STOPS is `shouldClockRun`'s call, not this one: a
+        spike is an intentional incompletion, so under the running-clock rule it stops
+        nothing. The decision sites gate on that too, so a spike should never be called
+        there in the first place — this stays honest if one ever is.
+        """
         self.playType = PlayType.Spike
         self.yardage = 0
         self.isPassCompletion = False

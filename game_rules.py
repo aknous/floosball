@@ -71,9 +71,19 @@ class GameRules:
 
     # ── Clock stoppage (the Cores can flip this to a "running clock") ──
     # One general dead-ball rule: when True (standard football) the clock stops on an
-    # incompletion, going out of bounds, AND a turnover. When False it's a RUNNING CLOCK
-    # — none of those stop it, so the inter-play clock keeps draining and games have far
-    # fewer plays. (A score, FG, punt, or spike always stops the clock regardless.)
+    # incompletion, going out of bounds, a turnover (including on downs), AND a SPIKE.
+    # When False it's a RUNNING CLOCK — none of those stop it, so the inter-play clock
+    # keeps draining and games have far fewer plays.
+    #
+    # ⚠️ THE LINE IS "INCIDENTAL vs A CHANGE OF POSSESSION BY KICK OR A SCORE", not
+    # "incidental vs deliberate". A score, a field goal and a punt still stop the clock
+    # under either rule, each for a reason of its own that has nothing to do with dead
+    # balls. ⚠️ A SPIKE DOES NOT, and used to: it was the one carve-out that was
+    # arithmetically inconsistent rather than principled, because a spike IS an
+    # incompletion — the exact event this rule is about, merely chosen on purpose
+    # (owner, 2026-08-25). The spike DECISIONS are gated on the same predicate, so the
+    # offense stops calling one rather than forfeiting a down for nothing; measured,
+    # spikes go 1.43/game to 0.
     clockStopsOnDeadBall: bool = True
 
     # ── Scoring values ─────────────────────────────────────────────
