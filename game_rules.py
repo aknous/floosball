@@ -345,8 +345,15 @@ MUTABLE_RULE_FIELDS = {
     "kneelDrainSeconds", "fgSnapDistance",
     # Running-clock rule — one general dead-ball toggle: suppress the incompletion /
     # out-of-bounds / turnover clock stops (gated in shouldClockRun). Far fewer plays
-    # per game. Clock-management play-calling heuristics still assume dead balls stop
-    # the clock, so they degrade gracefully (a later pass can make them rule-aware).
+    # per game: measured 153.1 -> 121.8 and 36.5 -> 27.6 points.
+    # ⚠️ THE CLOCK-MANAGEMENT HEURISTICS ARE NOW RULE-AWARE, and this comment used to say
+    # they were not and "degrade gracefully". They did not. `_shouldTargetSideline`
+    # returned byte-identical answers under both rules across 2,880 end-of-half states,
+    # so a trailing offense kept throwing to the boundary to stop a clock that cannot be
+    # stopped — at 6.68 yards a completion against 8.21 for a normal throw — and
+    # no-huddle, which fires 2.4x more often here because it keys off `clockRunning`,
+    # forced that throw unconditionally. Anything added later that stops the clock on
+    # purpose must read `Game._deadBallStopsClock()`. Regression: test_running_clock.py.
     "clockStopsOnDeadBall",
 }
 
