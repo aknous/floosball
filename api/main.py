@@ -1481,16 +1481,25 @@ async def get_rules():
     which fields have already been changed, and the patch history. Public and
     number-friendly on purpose: this is the one place the raw rules ARE the point.
     """
-    from game_rules import GameRules, loadRuleOverrides, RULEBOOK_EXPOSED_FIELDS
+    from game_rules import (GameRules, loadRuleOverrides, RULEBOOK_EXPOSED_FIELDS,
+                            changedRuleCandidates)
     defaults = GameRules().toDict()
     rules = GameRules()
     overrides = loadRuleOverrides()
     if overrides:
         rules.applyOverrides(overrides, reason="current ruleset view", source="persisted")
     current = rules.toDict()
+    # ⚠️ TWO DIFFERENT QUESTIONS, AND THEY MUST NOT SHARE AN ANSWER. `changed` is
+    # per-FIELD, which is what the Rulebook wants: every row a change touched lights up
+    # and shows its "was X". The COUNT is per-RULE, because a preset candidate patches
+    # several fields at once — the Darts format sets `gameFormat` AND `targetScore`, a
+    # Drive Clock preset up to four — so counting fields reports one fan-visible change
+    # as two or three. Reported from the game board as the chip claiming three rules had
+    # changed when two had, which is exactly Darts plus one other.
     skip = {"patchHistory", "fieldGoalUprights"}
     changed = [k for k, v in current.items()
                if k not in skip and defaults.get(k) != v]
+    changedRules = changedRuleCandidates(rules)
     # The most recent Cores-vote change (drives the Rulebook pill's "what changed"
     # line + its notification dot). Sourced from the persisted rule-vote windows so
     # it survives restarts (patchHistory is in-memory only).
@@ -1504,7 +1513,10 @@ async def get_rules():
         "changed": changed,
         "patchHistory": current.get("patchHistory", []),
         "lastChange": lastChange,
-        "changeCount": len(changed),
+        # Counted in RULES, not fields — see the note above. `changed` stays per-field
+        # for the row highlighting, and `changedRules` is the fan-facing list.
+        "changedRules": changedRules,
+        "changeCount": len(changedRules),
     })
 
 

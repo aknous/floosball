@@ -68,19 +68,32 @@ DEAD_BALLS = [
     ('a run out of bounds', dict(playType=PlayType.Run, inBounds=False)),
     ('a lost fumble', dict(fumble=True)),
     ('an interception', dict(interception=True)),
+    # ⚠️ A SPIKE IS AN INTENTIONAL INCOMPLETION, and it used to sit in the carve-out list
+    # below (owner, 2026-08-25: "teams shouldnt even attempt a spike because its
+    # effectively an incomplete pass and shouldnt stop the clock"). It was the one
+    # carve-out that was arithmetically inconsistent rather than principled: a punt stops
+    # the clock for a reason of its own, and a score and a kick likewise, but a spike is
+    # the exact event this rule is ABOUT, merely chosen on purpose.
+    ('a spike', dict(playType=PlayType.Spike)),
 ]
 for name, flags in DEAD_BALLS:
     expect(f"{name} stops the clock by default, and does not under a running clock",
            clockRuns(True, **flags) is False and clockRuns(False, **flags) is True)
 
-# ⚠️ These are the documented carve-outs. A running clock is not a NO-stoppage clock, or
-# there would be no way to stop it at all and the spike (the only non-timeout stopper
-# left) would stop mattering.
+# ⚠️ These are the documented carve-outs and they are INTENDED, not an oversight. A
+# running clock is not a NO-stoppage clock, or there would be no way to stop it at all
+# and the spike (the only non-timeout stopper left) would stop mattering.
+#
+# ⚠️ THE PUNT IS THE ONE MOST LIKELY TO BE READ AS A BUG, and it was — measured, punts
+# are 7.6 of the 15.4 stoppages a game that survive the rule, i.e. the single biggest
+# residual, which makes a running clock look leaky. Reconfirmed by the owner on
+# 2026-08-25 in the running-clock context specifically (the earlier 2026-08-05 call
+# that "a punt is a change of possession" predates this rule being live): a punt stops
+# the clock under BOTH rules and that is the design. Do not "fix" it.
 CARVE_OUTS = [
     ('a score', dict(score=True)),
     ('a field goal', dict(playType=PlayType.FieldGoal)),
     ('a punt', dict(playType=PlayType.Punt)),
-    ('a spike', dict(playType=PlayType.Spike)),
 ]
 for name, flags in CARVE_OUTS:
     expect(f"{name} stops the clock under BOTH rules",
@@ -92,17 +105,47 @@ expect("a sack in bounds runs the clock under both rules, being no kind of dead 
        clockRuns(True, sack=True) is True and clockRuns(False, sack=True) is True)
 
 # ── 2. nothing stops the clock behind shouldClockRun's back ─────────────────
-# ⚠️ Both of these assigned `clockRunning = False` directly rather than returning a
-# verdict, so the rule could not reach them. A turnover on downs is the sharper case:
-# its two sibling turnovers already run the clock under this rule.
+# ⚠️ Two sites assigned `clockRunning = False` directly instead of returning a verdict,
+# and they needed OPPOSITE fixes, which is why a single blanket rule would have been
+# wrong for one of them.
+#
+#   A TURNOVER ON DOWNS genuinely needs the rule, and is the sharper case: its two
+#   sibling turnovers (a fumble, an interception) already keep the clock running here,
+#   so the third kind stopping it made the rule contradict itself and handed the team
+#   that just failed a free stop. `resolveTurnoverOnDowns` is not reached through
+#   `shouldClockRun`, so it has to ask.
+#
+#   A MISSED SIDELINE GOAL needed the assignment DELETED, not corrected. The line looked
+#   like the hoop making its own clock determination and was in fact dead: the main loop
+#   runs `shouldClockRun()` a few lines later and overwrites it. Proven by removing it
+#   and re-measuring — 378 hoop plays across both rules, zero change. `shouldClockRun`
+#   reads the flags the hoop sets and gets both cases right on its own.
 print("\n-- no stoppage bypasses the rule --")
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         'floosball_game.py')).read()
-expect("a turnover on downs and a missed Sideline Goal both read the rule",
-       src.count('self.clockRunning = not self._deadBallStopsClock()') == 2)
-expect("and neither still carries an unconditional stop",
-       'self.clockRunning = False  # Clock stops after a turnover on downs' not in src
-       and 'a hoop shot stops the clock (an incomplete throw)' not in src)
+expect("a turnover on downs asks the rule rather than assuming",
+       src.count('self.clockRunning = not self._deadBallStopsClock()') == 1
+       and 'self.clockRunning = False  # Clock stops after a turnover on downs' not in src)
+expect("the hoop shot makes NO clock assignment of its own, leaving shouldClockRun to own it",
+       'a hoop shot stops the clock (an incomplete throw)' not in src)
+
+# ⚠️ Asserted BEHAVIORALLY rather than by grepping the source, because the point is the
+# verdict and not where it comes from: a miss is an incompletion and must ride the rule,
+# a make is a score and must stop the clock either way.
+def hoopClockStops(stops, made):
+    s = scen(stops, quarter=2, clock=300, down=1, distance=10, ballOn=60)
+    p = s.game.play
+    p.playType = PlayType.Pass
+    p.isPassCompletion = made
+    p.isInBounds = True
+    p.isFumbleLost = p.isInterception = p.isSack = False
+    p.scoreChange = made          # a made hoop banks points; a miss is an incompletion
+    return s.game.shouldClockRun() is False
+
+expect("a MISSED hoop stops the clock by default and does not under a running clock",
+       hoopClockStops(True, False) is True and hoopClockStops(False, False) is False)
+expect("a MADE hoop stops the clock under both rules, being a score",
+       hoopClockStops(True, True) is True and hoopClockStops(False, True) is True)
 
 # ── 3. no clock-stopping DECISION survives the rule being off ───────────────
 # ⚠️ THE MEASUREMENT THAT FOUND THIS: identical counts under both rules meant the
@@ -145,6 +188,41 @@ for stops, want in ((True, True), (False, False)):
 # ⚠️ Darts aims at hoops ON the boundary. That is field position toward an object on
 # the field, not clock management, so it must SURVIVE the rule being off — gating the
 # whole method rather than the clock-motivated branches would have silently broken it.
+# ⚠️ HONOURING THE RULE IN `shouldClockRun` IS ONLY HALF OF IT. If the spike stops
+# stopping the clock but the DECISION still fires, the offense forfeits a down for
+# nothing — the identical failure to throwing at the sideline under a running clock, and
+# measured at 1.43 wasted downs a game before this gate. Asserted over full games rather
+# than a state sweep, because the spike is gated on a run of conditions (no timeouts,
+# late, trailing or Q2, a down to spare) that a constructed state can satisfy while a
+# real one rarely does.
+print("\n-- and the offense stops calling a play that can no longer do anything --")
+import asyncio, numpy as np
+from scenario import _makeTeam
+
+async def _game(gid, stops):
+    random.seed(gid); np.random.seed(gid % (2**31))
+    h = _makeTeam('H', 'HOM', 100 + gid * 10); a = _makeTeam('A', 'AWY', 500 + gid * 10)
+    gr = GameRules(); gr.clockStopsOnDeadBall = stops
+    g = FG.Game(h, a, gameRules=gr); g.id = gid
+    g._anomalyAttentionLoaded = True; g._anomalyEnabled = False
+    g._anomalyAttention = {}; g._anomalyState = {}
+    g._criticalityMultiplier = 1.0; g._criticalityActive = False; g._anomalyIntensity = 1.0
+    await g.playGame(); return g
+
+def spikeCount(stops, n=14):
+    total = 0
+    for i in range(n):
+        g = asyncio.run(_game(i, stops))
+        total += sum(1 for f in g.gameFeed
+                     if f.get('play') is not None
+                     and getattr(f['play'], 'playType', None) is PlayType.Spike)
+    return total
+
+onSpikes = spikeCount(True)
+offSpikes = spikeCount(False)
+expect(f"teams still spike by default ({onSpikes} across 14 games)", onSpikes > 0)
+expect(f"and never attempt one under a running clock ({offSpikes})", offSpikes == 0)
+
 print("\n-- and a non-clock reason to work the boundary still applies --")
 s = scen(False, quarter=2, clock=300, offense='home', down=1, distance=10, ballOn=60)
 s.game._isNoHuddle = lambda: False
