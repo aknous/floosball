@@ -1048,6 +1048,48 @@ class BustFormat(GameFormat):
             return True
         return self.bustNeed(game, off) >= int(round(fgPoints))
 
+    def stateExtra(self, game) -> dict:
+        """The darts breakdown, for the live board AND for the persisted box score.
+
+        ⚠️ THIS CLASS HAD NO stateExtra AT ALL, so it inherited the base `{}` and
+        `_applyFormatStateToRow` wrote nothing — measured, `games.format_state` was NULL
+        on all 192 darts games of the season. That column exists precisely so a finished
+        game can still say how it was played, and it is NOT backfillable: the state is
+        only ever computed live.
+
+        ⚠️ WORSE THAN A MISSING BOX SCORE, because the client fell back to the LEAGUE'S
+        CURRENT ruleset for the target. The rules are votable, so a finished darts game
+        re-rendered against whatever is live now: vote the format away and the darts row
+        vanishes from games that were played under it; vote the target from 24 to 18 and
+        every historical game claims it was chasing 18. Emitting the game's own target is
+        what lets a reader trust the number.
+
+        `landed` is the one fact the scores cannot carry on their own — whether the game
+        ENDED on the target or ran out of clock. Reconstructing it afterwards means
+        comparing a final score against a target nobody recorded, which is the same
+        problem one layer down.
+        """
+        tgt = self._target(game)
+        home = _cleanNum(game.homeScore)
+        away = _cleanNum(game.awayScore)
+        landed = 'home' if home == tgt else 'away' if away == tgt else None
+        return {'gameFormatInfo': {
+            'format': 'bust',
+            'targetScore': tgt,
+            'homeToGo': max(0, tgt - game.homeScore),
+            'awayToGo': max(0, tgt - game.awayScore),
+            # None while the game is live and nobody has landed yet; on a final it is the
+            # difference between winning the format and merely leading when time ran out.
+            'landed': landed,
+            # ⚠️ Darts rules are OFF in overtime — no busting, no hoops, next score wins —
+            # so a game that reached OT was not decided by the target at all.
+            'overtime': game.currentQuarter >= 5,
+            # The 1-point hoops are the precision instrument the format is built around
+            # (see bundledRules), and nothing else in the box score counts them.
+            'homeHoops': int(getattr(game, 'homeSidelineGoals', 0) or 0),
+            'awayHoops': int(getattr(game, 'awaySidelineGoals', 0) or 0),
+        }}
+
     def checkEarlyEnd(self, game):
         # Reached exactly X → win (the standard higher-score winner picks that team).
         # ⚠️ DEFERS IN OVERTIME, and it has to. `isGameOver` consults this BEFORE the
