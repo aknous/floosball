@@ -17,10 +17,12 @@ that already happened**.
 | Per-play semantics in the engine | **BUILT** — and mostly unemitted, see the table below |
 | `play_choreography.py` — the script writer | **NOT BUILT** — the whole first phase |
 | Formation + pre-snap phase (incl. the disguise reveal) | **NOT BUILT** — offence is READ from the call (23 packages), defence derived |
+| Alignment detail (shotgun/under centre, RB+TE spots, the line as an abstraction) | **NOT BUILT** — mostly a formation table; `dropback` is the one unemitted field |
 | `cast` + `script` on the payload | **NOT BUILT** |
 | Physical attributes on the payload | **NOT BUILT** — required; see "How fast is he" |
 | Delivery: `broadcast_to_watchers` on the existing `/ws/season` | **NOT BUILT** — the watch map already exists |
 | Renderer (dumb: plays a script, applies a camera) | **NOT BUILT** |
+| Spatial simulation (Madden-style, outcomes from geometry) | **DELIBERATELY NOT TAKEN** — costed, see "The fork" |
 
 ## Settled (owner, 2026-08-26)
 
@@ -415,6 +417,88 @@ Two rules follow, and both are assertable in Python:
    text is where the last beat lands. ⚠️ That check is the whole defence against this
    shipping as decoration, and it is only possible because both are built server-side.
 
+## The fork: choreography, or a spatial simulation
+
+> Owner, 2026-08-26: *"it feels like we need to create some kind of actual visual
+> simulation akin to the madden football games where everything happens real time, all
+> the decisions and skill checks, and the browser is rendering it visually. i know thats a
+> massive overhaul, but its worth talking about."*
+
+Two different things were asked for in one breath, and they are not the same size.
+
+**Positional data is small and is already most of the way there.** Shotgun vs under centre
+is `dropback`. Receiver alignment is the package — 23 of them, explicit per play. Corners
+on receivers is `coverageAssignments`. Where the back and tight end set follows from
+whether they release or protect. That is a formation table in the choreographer plus one
+unemitted field, and it is IN this plan.
+
+**A spatial simulation is a different game engine.** Not a bigger field graphic — a
+replacement for how the sport is resolved.
+
+### What a rewrite would cost, measured
+
+| | |
+|---|---|
+| engine | ~22,000 lines |
+| regression suite | 187 files, ~34,000 lines |
+| tests asserting on outcome DISTRIBUTIONS | **41 files** |
+| calibrated balance constants | **624** |
+| `measured` annotations — the calibration record itself | **166** |
+
+Today the chain is attributes → probabilities → outcomes, and those curves are tuned
+against measurements taken over years: the sack curve retuned against SPREAD rather than
+mean, the run gate model landing after seven passes, the YAC tier caps, the FG curve
+recentred, the WPA attribution split, the EP imminence floor. ⚠️ **In a spatial sim
+outcomes emerge from geometry instead, so every one of those calibrations becomes
+meaningless and has to be rediscovered.** That is the true cost, and it dwarfs the
+rendering.
+
+### The argument that decides it for now
+
+⚠️ **NOBODY PLAYS FLOOSBALL, AND THAT CHANGES THE ANSWER.** In Madden the geometry MUST be
+causal because the player's hands are on it — a fake outcome feels wrong immediately.
+Every floosball user is a spectator, and a spectator cannot tell whether a tackle happened
+because a pursuit angle closed or because a gate roll failed, *provided the picture is
+consistent with the attributes and the result*.
+
+So a rewrite buys causality that nobody can perceive, at the price of the entire balance
+record. That asymmetry is specific to this product and is the reason choreography goes
+first.
+
+### What choreography can never do
+
+Stated plainly so this is not oversold. It cannot produce **emergence that was not coded** —
+a broken play, a fumble bouncing somewhere nobody modelled, a receiver improvising, two
+attributes interacting in a way nobody anticipated. The engine already has emergence at
+the OUTCOME level; a spatial sim moves it to the GEOMETRIC level, and that is a real
+difference rather than a rendering one.
+
+⚠️ If the long-term goal is *to be surprised by your own simulation*, choreography does not
+get there and no amount of polish will make it.
+
+### Linemen do not exist
+
+⚠️ **Rosters are six slots and there is no line.** Drawing five anonymous blockers as
+figures would be decoration with no attributes, no effect and nothing true behind it —
+the derived-only rule broken at the most visible point on the screen.
+
+The honest version: the sim HAS `protectionDiff`, `blockingModifier`, `effectivePassRush`
+and per-gap quality, so draw the line **as the values that represent it** — a pocket
+collapsing at a rate set by `protectionDiff`, gaps opening and closing per `gapQualities`.
+Anonymous by design, because the sim genuinely has no individuals there. It reads as a
+line without claiming players who do not exist.
+
+### Why choreography is not a detour
+
+⚠️ **Almost none of this work is wasted under a later rewrite.** The renderer, the camera
+and its projection, the watch-targeted delivery, the `cast`, and the `script` format all
+survive unchanged. Only `play_choreography.py` is replaced — by the sim emitting real
+positions instead of inferring them. **Same wire format, different producer.**
+
+So the order is: build the script pipeline, watch it move, and let that answer whether the
+missing causality is something anyone actually feels. If it is, the spatial engine is
+still open and the entire presentation layer is already built and paid for.
+
 ## Build order
 
 1. **`play_choreography.py`, with no rendering at all.** Take a resolved `Play`, return a
@@ -438,6 +522,10 @@ Two rules follow, and both are assertable in Python:
    even though it happens first: it is the part with no precedent on screen, and it wants
    a renderer already trusted to draw the snap correctly. ⚠️ It is also the phase that
    pays off a system built in 2026-08 and never surfaced.
+8. **Alignment detail.** Shotgun vs under centre, where the back and tight end set, the
+   line drawn as an abstraction over `protectionDiff` and `gapQualities`. Last because it
+   is refinement of a picture that already reads, and because the line is the one place
+   where the temptation to invent is strongest — see "Linemen do not exist".
 
 ⚠️ **Play-by-play is deliberately not persisted** (the feed is far larger than the box
 score, and that trade is settled). So this is a LIVE and in-memory-replay feature; a game
@@ -450,6 +538,11 @@ block inside it. The renderer lands as its own module or it will not be reviewab
 that module is the natural moment to stop calling the game screen a modal.
 
 ## Open questions
+
+⚠️ The choreography-vs-spatial-simulation fork is NOT open — it is decided for now, with
+costs, in "The fork" above. Reopen it after the script pipeline is on screen and there is
+something real to judge, not before.
+
 
 - **Where does it play?** The modal's field only, or the game board's cards too?
 - **Live pacing.** In a scheduled game plays arrive seconds apart; does the animation run
