@@ -16,7 +16,7 @@ that already happened**.
 |---|---|
 | Per-play semantics in the engine | **BUILT** — and mostly unemitted, see the table below |
 | `play_choreography.py` — the script writer | **NOT BUILT** — the whole first phase |
-| Formation + pre-snap phase (incl. the disguise reveal) | **NOT BUILT** — derived from roles, see below |
+| Formation + pre-snap phase (incl. the disguise reveal) | **NOT BUILT** — offence is READ from the call (23 packages), defence derived |
 | `cast` + `script` on the payload | **NOT BUILT** |
 | Physical attributes on the payload | **NOT BUILT** — required; see "How fast is he" |
 | Renderer (dumb: plays a script, applies a camera) | **NOT BUILT** |
@@ -151,23 +151,53 @@ and where a second client (board card, phone) would need its own copy.
 > Owner, 2026-08-26: *"the graphic also needs to know offensive and defensive formations
 > at the start, as well as any per play changes, like when a QB calls an audible."*
 
-⚠️ **THE SIM HAS NO FORMATIONS AND DOES NOT NEED THEM.** There is no "I-formation" or
-"nickel" anywhere in the engine. What it has is ROLES, and a formation is what roles look
-like when you draw them:
+⚠️ **THE OFFENSIVE FORMATION IS EXPLICIT PER PLAY, AND AN EARLIER DRAFT OF THIS PLAN SAID
+OTHERWISE.** It claimed the sim "has no formations and does not need them" — that reading
+came from the playbook entries being called `Play1`..`Play24` rather than being named
+formations, and it was wrong. Counted directly: **23 distinct receiver packages across the
+24 pass plays**, each one a specific combination of who releases, at what depth, and who
+stays in to protect:
+
+```
+wr1:deep, wr2:short, te:short     blocks: rb            three out, back protects
+wr1:long,  wr2:long               blocks: te, rb        two out, max protect
+wr1:hailMary, wr2:hailMary        blocks: te, rb        everything deep
+te:short                          blocks: wr1, wr2, rb  one out, everyone in
+wr2:medium                        blocks: wr1, te, rb   single release
+```
+
+...crossed with **four dropback depths** (short / medium / long / extraLong). So the
+formation is READ, not derived — the play call already states it, and it is known before
+the snap, which is exactly when the graphic needs it.
+
+⚠️ **Half of it is already on the wire and half is not.** `insights.pass.targets` lists
+the releasing receivers with their route depth, so the blockers are its complement — that
+much a client could work out today. **`dropback` is NOT emitted**, and it is the part that
+decides where the quarterback sets up. The package identity should ride along too, so the
+graphic can show the same shape the same way every time rather than reconstructing it from
+the target list.
+
+⚠️ **This is a better position than the earlier draft assumed, and it changes what the
+graphic can teach.** A viewer who watches enough snaps starts to recognise max protect
+from an empty set — the packages are distinct enough to be learnable, and that only works
+if the same package always draws the same way.
+
+The DEFENSIVE side is the part that genuinely has no named formation, and there the
+alignment does have to be derived:
 
 | the engine decides | the alignment that falls out |
 |---|---|
-| `passPlayBook[key]['targets']` — a slot with `None` blocks, otherwise runs a route | who is split wide vs in the backfield |
-| `dropback` depth (3/5/7-step, hail mary) | under centre vs deep |
-| `runConcept` (sweep / counter / draw / sneak) | where the back sets and which way he opens |
-| `passConcept` (screen / standard) | whether the back leaks out |
 | `runStopFocus` | how stacked the box is |
 | `coverageType` (man / zone / match) | pressed on receivers vs spaced off them |
 | `blitzPackage`, `passRusher` | who is walked up |
 | `coverageAssignments` | who is aligned over whom |
 
-So the choreographer DERIVES the formation the same way it derives everything else, and
-the derived-only rule holds through the pre-snap.
+And on run plays the offence is derived too — `runConcept` (sweep / counter / draw /
+sneak) says where the back sets and which way he opens, and `passConcept` (screen) says
+whether he leaks out.
+
+Either way the derived-only rule holds through the pre-snap: the offence is read from the
+call, the defence from the decisions the coordinator already made.
 
 ### The script starts before the snap
 
