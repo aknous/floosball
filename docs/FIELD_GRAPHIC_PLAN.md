@@ -1,0 +1,287 @@
+# The Field Graphic — showing the game instead of summarising it
+
+> Owner direction, 2026-08-26: *"there are many aspects about players that are just
+> values to be read, but you cant actually see how fast a player is, how accurate a QB
+> is, how agile they are. you cant see the defender intercept the ball."*
+
+**The thesis.** The sim already choreographs every play — who covered whom, which gap the
+back chose, how much separation the receiver had, which level he was stopped at, who made
+the tackle. The field graphic then flattens all of it into a single line along the
+midfield axis. The work is not to invent an animation; it is to **stop discarding the one
+that already happened**.
+
+## Status at a glance
+
+| | state |
+|---|---|
+| Per-play semantics in the engine | **BUILT** — and mostly unemitted, see the table below |
+| `play_choreography.py` — the script writer | **NOT BUILT** — the whole first phase |
+| `cast` + `script` on the payload | **NOT BUILT** |
+| Physical attributes on the payload | **NOT BUILT** — required; see "How fast is he" |
+| Renderer (dumb: plays a script, applies a camera) | **NOT BUILT** |
+
+## Settled (owner, 2026-08-26)
+
+1. **Every motion is DERIVED.** Nothing moves unless a real value drives it. Where the
+   data is silent the figure holds; it does not improvise. ⚠️ This is the decision the
+   whole plan hangs on — see "The sticker risk".
+2. **All ten figures, both sides.** A snap is effectively 5-on-5 (six roster slots, and
+   the kicker only kicks), so the full cast is drawable — unlike real football's 22.
+3. **Physical attributes ride the payload**, so pace and cuts are the player's real
+   numbers rather than a property of the play's outcome.
+
+⚠️ **Decisions 1 and 2 look contradictory and are not.** Derived-only says nothing moves
+without a value; all-ten means six figures are usually not named by the play. The
+resolution is that **every player has an ASSIGNMENT even when the play never reaches
+him**, and an assignment is data:
+
+- `coverageAssignments` maps every offensive slot to the defender covering it — computed
+  on every snap for all five defenders.
+- `passBlockers` names who stayed in rather than releasing.
+- `insights.pass.targets` carries `route`, `openness`, `routeQuality` and `coveredBy` for
+  **every** receiver in the pattern, not only the one thrown to. Measured over 1,871
+  production plays: 855 pass plays list 1–3 targets, and **1,599 of 1,601 name a coverer
+  (100%)**.
+
+So a figure moves according to what it was ASKED to do (real), and reacts according to
+what HAPPENED to it (real). Neither is invented.
+
+## What the engine already computes and throws away
+
+Measured by grep against `floosball_game.py`:
+
+| value | what it gives the picture | emitted today |
+|---|---|---|
+| `coverageAssignments` | every defender's man, all five | **no** |
+| `passBlockers` | who blocked instead of releasing | **no** |
+| `_gateOutcome` | `{level, breaks, lineWins, moves, firstContactYards}` — the run's three contests, where contact happened, which moves were used | **no** |
+| `passRusher` / `_captureBlitzer` | who rushed, who blitzed | **no** |
+| `_levelDefender` | the named defender at each level of a run | **no** |
+| `targetSideline` | which boundary the throw worked | partial |
+| `tackledBy`, `forcedFumbleBy`, `runnerMove` | who finished the play, and how | partial |
+
+`insights.pass` and `insights.run` are already rich — air yards, YAC, gap qualities for
+every gap, `designedGap` vs `selectedGap` (the back *chose* a hole), the three gate odds.
+
+## The data contract — the backend hands over a SCRIPT
+
+> Owner, 2026-08-26: *"each play should hand the frontend the script for the play and the
+> front end just renders it."*
+
+⚠️ **THE PRECEDENT IS ALREADY IN THE CODEBASE: the backend writes the play-by-play TEXT.**
+`formatPlayText` turns a resolved play into prose because the sim is what knows what
+happened. A script is the same artifact in a different medium, so it belongs in the same
+place — and the two can then be checked against each other, which is the only way the
+animation and the text can be guaranteed never to disagree.
+
+Three things follow, and they are why this beats emitting raw assignments and letting the
+client work it out:
+
+- **The derived-only rule becomes ENFORCEABLE rather than aspirational.** A client handed
+  a script has nothing to invent from. A client handed `openness: 66` has to decide what
+  that looks like, and that decision is sim knowledge living in TypeScript.
+- **One implementation.** Where the A-gap is, how much separation an openness of 66 means,
+  how long a drop takes — all of it stays in Python, next to the code that produced the
+  numbers, instead of being re-derived client-side and drifting from it.
+- **It is TESTABLE.** A script is data, so it can be asserted on in the Python regressions
+  this project already leans on heavily. A React animation cannot be.
+
+### Shape
+
+⚠️ **KEYFRAMES, NOT FRAMES.** The backend states where each actor is at each moment and
+what happens there; the client eases between. Measured against real payloads (mean 3,163
+bytes a play):
+
+| shape | per play | per game |
+|---|---|---|
+| today | 3,163 B | 361 KB |
+| every-frame script (40 beats) | 4,622 B (**+46%**) | 528 KB |
+| **keyframes (16 beats)** | 3,813 B (**+21%**) | 436 KB |
+| cast repeated per play, on top of either | +1,736 B | — |
+
+⚠️ This rides the WebSocket to every client on every play across sixteen concurrent games,
+so the shape is a real decision and not a formatting preference.
+
+**1. `cast` — once per game.** Names, positions and physical attributes do not change
+during a game, so repeating them per play is pure waste (measured at +1,736 bytes a snap).
+Keyed by slot, referenced from every beat:
+
+```
+cast: {
+  off: { qb|rb|wr1|wr2|te: {name, position, speed, agility, acceleration} },
+  def: { s|lb|cb1|cb2|de:  {name, position, speed, agility} }
+}
+```
+
+The defensive five are the offensive roster's mirror (`DEFENSIVE_POSITION_MAP`: QB→S,
+RB→LB, WR→CB, TE→DE), so both sides come from data that exists today.
+
+**2. `script` — per play.**
+
+```
+script: {
+  dur, los, dir,                       # length in seconds, anchor, attacking direction
+  beats: [
+    {t, a: <slot>, p: [downfield, lateral], k?: <event>, b?: {to, arc, dur}}
+  ]
+}
+```
+
+`t` is seconds from the snap. `p` is **field space** — yards downfield and yards lateral
+from the anchor, never screen pixels (see "The camera"). `k` is an event that happens AT
+that keyframe (`snap`, `drop`, `throw`, `catch`, `drop-ball`, `tackled`, `sack`,
+`intercept`, `break`, `stiffarm`, `cut`, `oob`), and `b` describes the ball when it
+leaves someone's hands.
+
+### Where it is built
+
+A choreographer module — `play_choreography.py` — that takes a resolved `Play` plus game
+state and returns the script, reading the same insights the engine already produces. It is
+the only place that knows what an openness of 66 looks like in yards, and it is unit-
+testable without a browser.
+
+⚠️ **This means the BACKEND now owns a presentation convention**, which is a real change in
+where responsibility sits. It is the right place for it — the alternative is the same
+convention living in the client, where it cannot be tested against the play it describes,
+and where a second client (board card, phone) would need its own copy.
+
+## How fast is he
+
+⚠️ **The payload carries situational ratings, not physical attributes.** `rbVision`,
+`routeQuality`, `qbVision`, `openness` and `reach` are all present; `speed`, `agility`
+and `acceleration` are not. Without them, pace could only be inferred from the outcome —
+which makes speed a property of the PLAY rather than the PLAYER, so the same fast back
+looks slow on a stuffed run. That is precisely the thing this feature exists to fix, so
+the attributes go on the `cast` block.
+
+The split that keeps it honest:
+
+- **Attributes decide HOW a figure moves** — stride, top speed, how sharply it can change
+  direction.
+- **Play values decide WHERE it goes and what happens** — the lane, the separation, the
+  contact point, the result.
+
+So a fast back on a stuffed run is *quick to the hole and met at it*, which is both
+truthful and legible.
+
+## What is NOT derivable
+
+⚠️ **There are no coordinates anywhere in the sim, and there never will be.** Lateral
+placement — how far from the hash a receiver lines up, the exact curve of a route — is a
+**convention**. The script model does not remove that; it decides WHO OWNS IT. The
+choreographer invents the positions, and it does so in one testable place against the play
+it is describing, rather than in a client that cannot check itself.
+
+The convention is acceptable *provided it is consistent and never contradicts a value*: a
+receiver with `openness: 89` must end up visibly more separated than one at `41`, and that
+relationship is exactly the sort of thing a Python regression can assert.
+
+⚠️ **There is also no clock within a play.** The engine knows the play consumed 4–7 seconds
+of game clock, not when each thing happened inside it. SEQUENCE is known (drop → throw →
+catch → YAC → contact → tackle; or gate 1 → 2 → 3), and durations are derived from the
+attributes and distances — so `dur` and every `t` are the choreographer's construction
+from real inputs, not a timeline the sim hands over.
+
+State plainly in the UI what is measured and what is staged, or this becomes the next
+thing a reader mistrusts.
+
+## The camera — broadcast angle, not top-down
+
+> Owner, 2026-08-26: *"it would be interesting to try to make the view an oblique angle
+> like an actual broadcast instead of top down."*
+
+⚠️ **THIS COSTS THE BACKEND NOTHING, AND IT IS WHY THE SCRIPT IS IN FIELD SPACE.** The
+angle is a PROJECTION of positions the script already carries, so the division is clean:
+**the backend owns WHAT HAPPENED AND WHERE (yards); the frontend owns HOW IT IS SEEN
+(pixels).** A camera change never touches the sim, and a choreography change never touches
+the camera. It only stays that clean if the renderer projects at the very end:
+
+```
+field space            projection            screen
+(yards downfield,  ->  identity      ->  top-down
+ yards lateral,        oblique 3x3   ->  broadcast
+ height)               ...
+```
+
+Build it that way and the camera is a swappable function — the two views can be A/B'd,
+and a phone can fall back to top-down without a second renderer. Build it screen-first and
+switching the angle means redoing every position, which is the expensive version of this
+conversation happening later.
+
+What the oblique view then needs, none of it new data:
+
+- **Depth sort.** Figures nearer the camera draw over those further away — a z-order on
+  the lateral axis, which the projection already knows.
+- **Scale with depth.** Distant figures smaller. This is most of what sells the angle.
+- **A converging field.** Yard lines, hashes and numbers skew toward the vanishing point.
+- **Vertical room.** The current graphic is a 600×220 viewBox with everything on one axis;
+  depth needs real height in the box.
+
+⚠️ **IT ALSO RAISES THE STAKES ON THE CONVENTION.** In a top-down schematic, a receiver's
+lateral position reads as diagrammatic and nobody takes it literally. In a broadcast
+angle it reads as WHERE HE ACTUALLY WAS. The lateral placement is the one thing the sim
+cannot tell us (see "What is NOT derivable"), so the more convincing the camera, the more
+carefully that convention has to be chosen — and the more it matters that separation is
+driven by `openness` rather than by eye.
+
+⚠️ **The trade is legibility for immersion, and the graphic still has a day job.** Its
+current purpose is showing FIELD POSITION, and an oblique view compresses distance and
+makes "whose 34?" harder to read at a glance. Whether top-down survives as an option — for
+the board cards, for phones, or as a user preference — is an owner call, but the
+projection architecture above is what keeps that option open for free.
+
+## The sticker risk
+
+⚠️ This is the single easiest place in the project to ship something that looks like a
+system and is decoration. The precedents are on the record: contested scoring read as
+*"flavor on top of the score instead of another gate"*, and the weather plan names itself
+as the same hazard. An animation that contradicts the play text is worse than the line we
+have now, because it is more convincing.
+
+⚠️ **The script model is what turns this from a promise into a property.** A client that
+receives a script cannot embellish, because it has nothing to embellish from — so the rule
+is enforced by the shape of the interface rather than by everyone remembering it.
+
+Two rules follow, and both are assertable in Python:
+
+1. **A figure with no value backing its motion holds position.** A sparse play looking
+   sparse is correct.
+2. **The script and the play text describe the SAME play.** Both are generated from one
+   resolved `Play`, so a regression can take the text and the script and check they agree
+   — that an interception in the prose is an `intercept` beat, that the yardage in the
+   text is where the last beat lands. ⚠️ That check is the whole defence against this
+   shipping as decoration, and it is only possible because both are built server-side.
+
+## Build order
+
+1. **`play_choreography.py`, with no rendering at all.** Take a resolved `Play`, return a
+   script. Prove it over real production plays: every one of the ten figures resolves to a
+   beat on every snap, every script's final position matches the play's yardage, and every
+   outcome in the prose has a matching event. ⚠️ The feature's whole foundation is
+   provable here, before a pixel moves.
+2. **`cast` + `script` on the wire.** Emit them, confirm the measured payload cost, and
+   confirm nothing else on the broadcast regressed.
+3. **A dumb renderer, static.** Play the first beat only — ten figures at their spots. This
+   alone already shows coverage and blocking, which the current graphic cannot.
+4. **Playback.** Tween the keyframes. Top-down projection first, because it is the identity
+   transform and isolates any motion bug from any camera bug.
+5. **The camera.** Swap in the oblique projection; keep top-down selectable.
+6. **The moments.** Interception, sack, forced fumble, broken tackle — each one an event
+   the script already carries, none of them bespoke animation.
+
+⚠️ **Play-by-play is deliberately not persisted** (the feed is far larger than the box
+score, and that trade is settled). So this is a LIVE and in-memory-replay feature; a game
+that has aged out has no plays to animate. Scripts should NOT be persisted either — they
+are derivable from a play, and storing them would be storing the same thing twice.
+
+⚠️ **`GameModalNew.tsx` is 3,698 lines** and the field graphic is already a large inline
+block inside it. The renderer lands as its own module or it will not be reviewable.
+
+## Open questions
+
+- **Where does it play?** The modal's field only, or the game board's cards too?
+- **Live pacing.** In a scheduled game plays arrive seconds apart; does the animation run
+  in real time, or is it a replayable beat the user scrubs?
+- **The 5-on-5 tell.** Drawing the real cast makes it visible that a club fields five, not
+  eleven. That is true of the sim today and nobody has had to look at it — worth an owner
+  call before it is on screen.
