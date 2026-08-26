@@ -190,6 +190,51 @@ def regularSeasonWeeks(schedule) -> int:
     return weeks
 
 
+def _divisionRate(wins: float, losses: float, ties: float) -> float:
+    """Win rate inside the division. Mirrors `seeding._divisionWinPerc`, which is what
+    actually breaks a division tie, so the two cannot disagree."""
+    played = wins + losses + ties
+    if not played:
+        return 0.0
+    return round((wins + 0.5 * ties) / played, 4)
+
+
+def _divisionTiebreakSecured(team, rival, totalGames: int) -> bool:
+    """Would `team` beat `rival` on DIVISION RECORD no matter how the rest plays out?
+
+    The first tiebreaker after win% when both clubs share a division, and the only rung
+    of the chain that can be bounded at all — so it is the only rung a clinch can be
+    proved on. Below it sits SCORE DIFFERENTIAL, which has no ceiling (a club can win by
+    one or by forty), and nothing after that is projectable either. A club that cannot
+    settle it here is genuinely undecided, not merely unproven.
+
+    ⚠️ The bound is TOTAL remaining games, not remaining DIVISION games. Fewer of a
+    club's remaining fixtures are divisional than that, so this over-states how far the
+    rival can climb and how far this club can fall — deliberately, because it needs no
+    schedule lookup and no assumption about the season's shape. The 28-week format is
+    12 division games out of 28 today, and that split has already moved once (it was
+    14/8/6 at 24 clubs); a clinch rule must not quietly depend on it.
+    """
+    myStats = getattr(team, 'seasonTeamStats', {}) or {}
+    rivalStats = getattr(rival, 'seasonTeamStats', {}) or {}
+
+    myLeft = max(0, totalGames - _played(team))
+    rivalLeft = max(0, totalGames - _played(rival))
+
+
+    # This club's floor: every remaining game a divisional LOSS.
+    mine = _divisionRate(
+        (myStats.get('divWins', 0) or 0),
+        (myStats.get('divLosses', 0) or 0) + myLeft,
+        (myStats.get('divTies', 0) or 0))
+    # The rival's ceiling: every remaining game a divisional WIN.
+    theirs = _divisionRate(
+        (rivalStats.get('divWins', 0) or 0) + rivalLeft,
+        (rivalStats.get('divLosses', 0) or 0),
+        (rivalStats.get('divTies', 0) or 0))
+    return mine > theirs
+
+
 def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]]:
     """Who is mathematically IN, who has won their division, who owns the top seed.
 
@@ -235,11 +280,51 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
         myCeiling = ceiling(team)
 
         # Everyone else at their best, this club at its worst.
-        worstSeeds = seedLeague([_projected(t, t is not team, totalGames)
-                                 for t in teams])['seeds']
+        worstShims = [_projected(t, t is not team, totalGames) for t in teams]
+        worstSeeds = seedLeague(worstShims)['seeds']
         # This club at its best, everyone else at their worst.
-        bestSeeds = seedLeague([_projected(t, t is team, totalGames)
-                                for t in teams])['seeds']
+        bestShims = [_projected(t, t is team, totalGames) for t in teams]
+        bestSeeds = seedLeague(bestShims)['seeds']
+
+        # ⚠️ A PROJECTED TIE PROVES NOTHING, and this is what put a wildcard badge on a
+        # club that then missed the playoffs. `_projected` advances wins and losses only:
+        # `divWins` / `lgWins` ride through UNCHANGED, so when the worst case lands on a
+        # TIE, `orderTeams` breaks it on TODAY's division and league records rather than
+        # the ones the finished season will hold. The club won the projected tiebreak,
+        # was shown as clinched, lost in week 28 and lost the real tiebreak with it.
+        #
+        # Reported exactly there: the Broads shown as having clinched a wildcard after
+        # week 27 and out of the field after week 28. A badge that has to be taken away
+        # is the one failure this whole function exists to avoid.
+        #
+        # So a berth has to survive every tie going AGAINST this club: seeded in the
+        # worst case, and nobody left outside the field level with it on points.
+        # ⚠️ ONCE THE SEASON IS OVER THE TIE GUARDS BELOW ARE WRONG. They exist because a
+        # PROJECTED tie is unresolved — `_projected` cannot move div/league records, so a
+        # tie broken on today's numbers is not the tie the finished season will hold. With
+        # every game played there is no projection: the worst case IS the result, the
+        # tiebreakers have run on final numbers, and the field is settled.
+        #
+        # Reported from a finished board — the 7 and 8 seeds shown as NOT having clinched,
+        # tied on record and on league record with the club in 9th. They were in; the
+        # guard was still asking whether a tie could take it away when there was nothing
+        # left to play.
+        #
+        # This is the same correction the division badge already got a commit earlier. It
+        # needed making twice because the berth and the title are computed separately.
+        seasonComplete = bool(teams) and all(_played(t) >= totalGames for t in teams)
+
+        myWorst = next((sh for sh in worstShims if sh.id == tid), None)
+        tiedFromOutside = (not seasonComplete) and myWorst is not None and any(
+            sh.id != tid and worstSeeds.get(sh.id) is None
+            and _points(sh) >= _points(myWorst) for sh in worstShims)
+
+        # The mirror, so elimination is not claimed on a tie either: a club level with
+        # someone inside the field at ITS best could still win that tiebreak.
+        myBest = next((sh for sh in bestShims if sh.id == tid), None)
+        tiedFromInside = (not seasonComplete) and myBest is not None and any(
+            sh.id != tid and bestSeeds.get(sh.id) is not None
+            and _points(sh) <= _points(myBest) for sh in bestShims)
 
         myDivision = divisionOf.get(tid)
         divisionRivals = [t for t in divisions.get(myDivision, [])
@@ -247,36 +332,134 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
         # A title is won when no rival can reach this club, and lost once one is
         # beyond reach. Both are within-division questions, so they stay a points
         # comparison rather than a re-seed.
-        divisionClinched = bool(myDivision) and all(
-            ceiling(t) <= floor for t in divisionRivals)
+        #
+        # ⚠️ STRICTLY LESS THAN. `<=` says a rival who can draw LEVEL cannot take the
+        # title, and that is false: a level finish goes to the tiebreaker chain, which
+        # the leader can lose. Reported from a live board at week 27 — the Sand Dollars
+        # were shown as division champions one game up on the club they still had to
+        # PLAY in week 28, where a loss ties them and hands the title to a tiebreak.
+        #
+        # ⚠️ It also produced a self-contradicting row. `clinchedPlayoffs` runs the real
+        # worst-case seeding, which honours the division rule; a genuine division winner
+        # is therefore always seeded and always reads as clinched too. This test was the
+        # only one using a different, looser rule, so it was the only way the board could
+        # claim a division title and no playoff berth at the same time.
+        #
+        # ⚠️ IT DOES NOT RE-SEED TO BREAK THE TIE, and that is deliberate. Running the
+        # worst case through `seedLeague` and asking whether this club still leads its
+        # division looks like the obvious upgrade and is wrong: `_projected` advances wins
+        # and losses only, so `divWins` / `divLosses` ride through UNCHANGED and a
+        # projected tie would be settled on TODAY's division record while the games that
+        # decide it are unplayed. That is exactly the reported case — the Rocks shown as
+        # champions when a week-28 loss ties them and the Strangers take it on division
+        # record.
+        #
+        # `_divisionTiebreakSecured` answers the same question honestly instead: it moves
+        # the division record to this club's FLOOR and the rival's CEILING, so a clinch is
+        # claimed only where the tie is already decided whatever happens. That is strictly
+        # harsher than what `seedLeague` would do with today's numbers, which is what
+        # keeps `clinchedDivision` from ever outrunning `clinchedPlayoffs`.
+        # A rival who cannot even reach this club's points is beaten outright. One who
+        # can draw LEVEL is only beaten if the tie itself is already decided — see
+        # `_divisionTiebreakSecured`.
+        def rivalBeaten(t) -> bool:
+            rivalCeiling = ceiling(t)
+            if rivalCeiling < floor:
+                return True
+            if rivalCeiling > floor:
+                return False
+            return _divisionTiebreakSecured(team, t, totalGames)
+
+        # ⚠️ A FINISHED DIVISION IS DECIDED BY ITS ACTUAL ORDER, not by projection.
+        # With every game played there is no floor and no ceiling, just a result, and the
+        # rungs below division record settle it — score differential, then head-to-head
+        # point diff, then points for and against. None of those can be bounded, which is
+        # why the projection stops at division record; at season end it does not have to.
+        #
+        # ⚠️ It must be ONE ordering of the whole division, never a pairwise test. Two
+        # clubs tied all the way down the chain each win their own pairwise comparison,
+        # because the sort is stable and each sees itself first — so BOTH were crowned.
+        # Ordering the division once gives exactly one leader by construction.
+        #
+        # Without any of this, two clubs finishing level on record and division record
+        # left the division with NO champion on the board while the seeding beneath had
+        # already picked one and shown that club a berth.
+        divisionMembers = divisions.get(myDivision, []) if myDivision else []
+        seasonOver = bool(divisionMembers) and all(
+            _played(t) >= totalGames for t in divisionMembers)
+        if seasonOver:
+            try:
+                from seeding import orderTeams
+                divisionClinched = orderTeams(list(divisionMembers))[0] is team
+            except Exception:
+                divisionClinched = all(rivalBeaten(t) for t in divisionRivals)
+        else:
+            divisionClinched = bool(myDivision) and all(rivalBeaten(t) for t in divisionRivals)
 
         seededAtWorst = worstSeeds.get(tid)
         seededAtBest = bestSeeds.get(tid)
 
+        # ⚠️ A SECURED DIVISION TITLE IS A BERTH WHATEVER THE POINTS DO — the seed is
+        # guaranteed, so it does not depend on winning a tie for a wildcard place and the
+        # tie test above must not withhold it. `divisionClinched` has already proved the
+        # title survives every tie, so leaning on it here is not circular.
+        safeOnPoints = seededAtWorst is not None and not tiedFromOutside
+
         out[tid] = {
-            # A guaranteed division seed is already inside the worst-case seeding,
-            # so this needs no separate auto-clinch term.
-            'clinchedPlayoffs': seededAtWorst is not None,
+            'clinchedPlayoffs': bool(divisionClinched or safeOnPoints),
             'clinchedDivision': divisionClinched,
-            # The top seed has to survive the worst case as seed 1 specifically.
-            'clinchedTopSeed': seededAtWorst is not None and seededAtWorst[0] == 1,
-            'eliminated': seededAtBest is None,
+            # The top seed has to survive the worst case as seed 1 specifically, and a
+            # tie for it is no more decided than a tie for the last berth.
+            'clinchedTopSeed': (seededAtWorst is not None and seededAtWorst[0] == 1
+                                and not tiedFromOutside),
+            'eliminated': seededAtBest is None and not tiedFromInside,
         }
     return out
 
 
-def gamesBackFrom(cutTeam, team) -> float:
-    """Games behind the club holding the LAST playoff spot.
+def gamesBackFrom(refTeam, team) -> float:
+    """Games behind a reference club. Half-games are real — one club having played a game
+    the other has not shifts the gap by a half.
 
-    Signed so the column reads as a race rather than a ranking: negative is ahead of the
-    cut, 0 is the club on it, positive is chasing. Half-games are real — one club playing
-    a game the other has not shifts the gap by a half.
+    Used against TWO references, and the sign means different things in each:
+
+      - the club ON the playoff cut (`gamesBack`): negative is ahead of the cut, 0 is the
+        club holding the last spot, positive is chasing;
+      - the DIVISION LEADER (`divisionGamesBack`): 0 is the leader and nothing is
+        negative, which is the ordinary standings-table reading.
     """
-    if cutTeam is None:
+    if refTeam is None:
         return 0.0
-    cutW, cutL = _record(cutTeam)
+    refW, refL = _record(refTeam)
     w, l = _record(team)
-    return ((cutW - w) + (l - cutL)) / 2.0
+    return ((refW - w) + (l - refL)) / 2.0
+
+
+def divisionGamesBack(divisions: Dict[str, List[int]], teams: List[Any]) -> Dict[int, float]:
+    """{teamId: games behind ITS OWN division leader}.
+
+    The league column answers "am I making the playoffs"; this one answers "am I winning
+    my division", which at four clubs per division is what most of the league is actually
+    racing for — 24 of 32 will never win a league title.
+
+    ⚠️ The leader is `divisions[name][0]`, which `seedLeague` has already ordered through
+    the full tiebreaker chain (`orderTeams`). Do not re-derive it by max(winPct): that
+    skips the contextual tiebreaker and would disagree with the division-winner rule the
+    same payload reports.
+    """
+    byId = {t.id: t for t in teams}
+    out: Dict[int, float] = {}
+    for memberIds in (divisions or {}).values():
+        if not memberIds:
+            continue
+        leader = byId.get(memberIds[0])
+        if leader is None:
+            continue
+        for tid in memberIds:
+            team = byId.get(tid)
+            if team is not None:
+                out[tid] = gamesBackFrom(leader, team)
+    return out
 
 
 def _emptyStats() -> Dict[str, Any]:

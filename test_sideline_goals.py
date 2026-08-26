@@ -72,11 +72,22 @@ expect("deficit 5 → helpful (FG+2 hoops ties)", need(5) == 'helpful')
 expect("deficit 8 → None (a TD+2pt alone ties)", need(8) is None)
 expect("deficit 9 → critical (no conventional score alone reaches; TD+hoop does)", need(9) == 'critical')
 expect("deficit 10 → critical (TD+2pt+2 hoops ties)", need(10) == 'critical')
-expect("deficit 11 → None (unreachable this drive)", need(11) is None)
+# ⚠️ THE BOUNDARY IS DERIVED, NOT 11. These bands are `maxPossession + remainingHoop`,
+# and the field carries _hoopPairCount() = 3 pairs, not the 2 this arithmetic assumed —
+# so TD+2pt+3 hoops = 11 IS reachable and correctly reads 'critical'. Deriving the edge
+# from the game's own numbers keeps this honest if the pair count moves again.
+_maxReach = int(s.g._maxPossession() + s.g._hoopPairCount() * 1)   # 1 pt per hoop here
+expect(f"deficit {_maxReach} → critical (the furthest a drive can still reach)",
+       need(_maxReach) == 'critical')
+expect(f"deficit {_maxReach + 1} → None (unreachable this drive)",
+       need(_maxReach + 1) is None)
 expect("deficit 9 with one pair already used → critical (TD+2pt+1 hoop = 9 ties)",
        need(9, used={'midfield': 'made'}) == 'critical')
-expect("deficit 10 with one pair already used → None (only 1 hoop left, TD+2pt+1 = 9 < 10)",
-       need(10, used={'midfield': 'made'}) is None)
+# Spending a pair shortens the reach by exactly that pair's points.
+expect(f"deficit {_maxReach} with one pair used → None (reach drops to {_maxReach - 1})",
+       need(_maxReach, used={'midfield': 'made'}) is None)
+expect(f"deficit {_maxReach - 1} with one pair used → still critical",
+       need(_maxReach - 1, used={'midfield': 'made'}) == 'critical')
 expect("tied (deficit 0), regulation → helpful (go-ahead point)", need(0) == 'helpful')
 
 

@@ -2841,10 +2841,41 @@ class PlayerManager:
         from constants import MVP_PERF_WEIGHT, MVP_WPA_WEIGHT, MVP_DEF_WPA_WEIGHT
 
         def wpaRate(p):
-            # Per-snap offensive WPA — a rate, not an accumulated volume, so clutch
-            # play is rewarded without leverage/volume bias.
-            snaps = int(getattr(p, 'seasonWpaSnaps', 0) or 0)
-            return float(getattr(p, 'seasonWpa', 0.0)) / snaps if snaps > 0 else 0.0
+            """Offensive WPA PER GAME.
+
+            ⚠️ THIS WAS PER SNAP, AND IT COST QUARTERBACKS THE AWARD. A snap is logged
+            only when a player is involved, so the denominators are wildly different:
+            measured on production, a QB logs ~1,233 WPA snaps a season against a
+            kicker's ~105 and a receiver's ~290. The QB carries the second-highest RAW
+            WPA in the league and the LOWEST per-snap rate (0.119 against the kicker's
+            2.67), purely because he is involved in everything.
+
+            Measured over 20 simulated seasons, per-snap gave quarterbacks **1 MVP in
+            20** while receivers took 11 — which is exactly how it was reported. Per
+            game at this weight splits it QB 8 / WR 8 / RB 3 / TE 1.
+
+            ⚠️ Per game rewards volume, which is the opposite failure, so it is paired
+            with a REDUCED `MVP_WPA_WEIGHT` (0.30 -> 0.20). At the old 0.30 per game
+            hands QBs 14 of 20 and all but erases receivers; the two changes only make
+            sense together.
+
+            ⚠️ It is NOT per-snap-with-a-fudge and it is not a fairness correction to a
+            denominator: four other explanations were tested against real data and ruled
+            out — QBs logging snaps on run plays (they do not: snaps ≈ attempts + sacks
+            + carries), a lower rating ceiling (one season's noise), interception count
+            versus rate (moves the ceiling by one point), and star receivers inflating
+            their QB (correlation with best-receiver RATING is −0.08).
+            """
+            # ⚠️ `Player.gamesPlayed` is the live counter (floosball_player:281, bumped
+            # per game); `seasonStatsDict['gp']` mirrors it and is what survives a load.
+            # Take whichever is populated — a player whose counter has not been stamped
+            # yet must not silently score zero.
+            games = int(getattr(p, 'gamesPlayed', 0) or 0)
+            if games <= 0:
+                games = int((getattr(p, 'seasonStatsDict', {}) or {}).get('gp', 0) or 0)
+            if games <= 0:
+                return 0.0
+            return float(getattr(p, 'seasonWpa', 0.0)) / games
 
         positionGroups = {
             'QB': self.activeQbs,

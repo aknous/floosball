@@ -97,11 +97,34 @@ def makeTeam(name='OFF', coach=None, kickerMaxFg=55):
     )
 
 
+class StubPlay:
+    """The minimum play surface the decision chain writes to and `classify` reads."""
+    def __init__(self):
+        self.playType = None
+        self.passType = None
+        self.targetSideline = False
+        self.insights = {}
+        self.branch = None
+
+    def passPlay(self, key):
+        self.playType = PlayType.Pass
+        self.passType = key
+
+    def runPlay(self, *a, **kw):
+        self.playType = PlayType.Run
+
+
 def makeGame(*, down=1, ytg=10, quarter=4, clock=20, homeScore=0, awayScore=0,
              offIsHome=True, clockRunning=True, homeTOs=2, awayTOs=2,
              yardsToEndzone=20, offCoach=None, kickerMaxFg=55):
     """Set up a minimal Game state for the play-caller to evaluate."""
     g = object.__new__(FloosGame.Game)
+    # ⚠️ object.__new__ skips Game.__init__, so every attribute the engine grows has to
+    # be set here or the decision chain raises before reaching an assertion.
+    # `gameRules` drives downsPerSeries / scoring values and backs the `format`
+    # property; the standard ruleset is what these late-game cases describe.
+    from game_rules import GameRules
+    g.gameRules = GameRules()
 
     offCoach = offCoach or makeCoach()
     offTeam = makeTeam(name='OFF', coach=offCoach, kickerMaxFg=kickerMaxFg)
@@ -142,7 +165,21 @@ def makeGame(*, down=1, ytg=10, quarter=4, clock=20, homeScore=0, awayScore=0,
     g.isTwoPtConv = False
     g.momentum = 0.0
     g.gamePressure = 0.5
-    g.play = None
+    # ⚠️ NOT None. The play-calling chain writes its reasoning onto `self.play`
+    # (`insights['clockMgmt']` is exactly what `classify` below reads back), so a None
+    # play raises AttributeError inside playCaller and every scenario reported
+    # ERROR:AttributeError=100% instead of a decision.
+    g.play = StubPlay()
+    # Two-minute-warning bookkeeping the clock-management branch reads.
+    g._clockStoppedByWarning = False
+    # WP is read by the late-game branches; even is the neutral start these
+    # scenarios describe (the score/clock in each case is what should drive them).
+    g.homeTeamWinProbability = 50.0
+    g.awayTeamWinProbability = 50.0
+    # Awakened bookkeeping — empty means nobody is charged, the neutral state.
+    g._awakenedReady = {}
+    g._awakenedCharge = {}
+    g._awakenedPower = {}
     return g
 
 

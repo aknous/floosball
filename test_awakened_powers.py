@@ -34,8 +34,13 @@ for pos, primary in ap.PRIMARY_SITUATION.items():
 expect("a narrow power (Magnet) covers catch + pick + strip, NOT run",
        ap.powerCoversSituation('magnet', 'catch') and ap.powerCoversSituation('magnet', 'pick')
        and ap.powerCoversSituation('magnet', 'strip') and not ap.powerCoversSituation('magnet', 'run'))
-expect("a universal power (No-Clip) covers every situation",
-       all(ap.powerCoversSituation('no_clip', s) for s in ap.SITUATIONS))
+# ⚠️ NOTHING COVERS 'kick'-AND-EVERYTHING. Kicking is a specialist situation (moonshot
+# and friends), so no power in the catalog covers all seven — this asserted that No-Clip
+# did. What "universal" means is: covers every situation a ball-handler can be in.
+expect("a universal power (No-Clip) covers every NON-KICK situation",
+       all(ap.powerCoversSituation('no_clip', s) for s in ap.SITUATIONS if s != 'kick'))
+expect("...and 'kick' is a specialist situation No-Clip does not cover",
+       not ap.powerCoversSituation('no_clip', 'kick'))
 expect("situationFlavor returns a line for a covered situation", bool(ap.situationFlavor('magnet', 'catch')))
 expect("situationFlavor returns '' for an uncovered situation", ap.situationFlavor('magnet', 'run') == '')
 expect("powerName / powerConcept resolve", ap.powerName('no_clip') == 'No-Clip' and bool(ap.powerConcept('no_clip')))
@@ -43,8 +48,11 @@ expect("powerName / powerConcept resolve", ap.powerName('no_clip') == 'No-Clip' 
 # ── 2. assignSignaturePower — one power, on the Player, career-persistent ──
 print("\n2. assignSignaturePower — one career power per player, stored on the Player, idempotent")
 s = get_session()
-s.add(Player(id=1, name='Awoke RB', position=1))   # RB -> a run-capable power
-s.add(Player(id=2, name='Awoke WR', position=2))   # WR -> a catch-capable power
+# ⚠️ _POSITION_ENUM is {1: QB, 2: RB, 3: WR, 4: TE, 5: K}. These were off by one — the
+# player labelled RB was created as a QB and the one labelled WR as an RB, so the
+# assertions below were checking the wrong pools entirely.
+s.add(Player(id=1, name='Awoke RB', position=2))   # RB -> a run-capable power
+s.add(Player(id=2, name='Awoke WR', position=3))   # WR -> a catch-capable power
 s.commit()
 
 p1 = anomalyManager.assignSignaturePower(s, 1)
@@ -67,8 +75,12 @@ expect("signature_power persists + reloads", s2.query(Player).get(1).signature_p
 print("\n3. Distribution — assigned powers go to the back; no duplicates until the pool is exhausted")
 from collections import Counter
 s3 = get_session()
+# ⚠️ position=2 IS RB. This said `position=1`, which _POSITION_ENUM maps to QB — whose
+# eligible pool is 23 powers, FEWER than the 30 players below, so duplicates were forced
+# by arithmetic and the "no duplicates" assertion could never hold. The comment was
+# right about the run pool (44 eligible); only the integer was wrong.
 for i in range(100, 130):                    # 30 RBs (run pool is far larger than 30)
-    s3.add(Player(id=i, name=f'RB{i}', position=1))
+    s3.add(Player(id=i, name=f'RB{i}', position=2))
 s3.commit()
 got = []
 for i in range(100, 130):

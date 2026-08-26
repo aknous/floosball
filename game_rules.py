@@ -71,9 +71,19 @@ class GameRules:
 
     # ── Clock stoppage (the Cores can flip this to a "running clock") ──
     # One general dead-ball rule: when True (standard football) the clock stops on an
-    # incompletion, going out of bounds, AND a turnover. When False it's a RUNNING CLOCK
-    # — none of those stop it, so the inter-play clock keeps draining and games have far
-    # fewer plays. (A score, FG, punt, or spike always stops the clock regardless.)
+    # incompletion, going out of bounds, a turnover (including on downs), AND a SPIKE.
+    # When False it's a RUNNING CLOCK — none of those stop it, so the inter-play clock
+    # keeps draining and games have far fewer plays.
+    #
+    # ⚠️ THE LINE IS "INCIDENTAL vs A CHANGE OF POSSESSION BY KICK OR A SCORE", not
+    # "incidental vs deliberate". A score, a field goal and a punt still stop the clock
+    # under either rule, each for a reason of its own that has nothing to do with dead
+    # balls. ⚠️ A SPIKE DOES NOT, and used to: it was the one carve-out that was
+    # arithmetically inconsistent rather than principled, because a spike IS an
+    # incompletion — the exact event this rule is about, merely chosen on purpose
+    # (owner, 2026-08-25). The spike DECISIONS are gated on the same predicate, so the
+    # offense stops calling one rather than forfeiting a down for nothing; measured,
+    # spikes go 1.43/game to 0.
     clockStopsOnDeadBall: bool = True
 
     # ── Scoring values ─────────────────────────────────────────────
@@ -345,8 +355,15 @@ MUTABLE_RULE_FIELDS = {
     "kneelDrainSeconds", "fgSnapDistance",
     # Running-clock rule — one general dead-ball toggle: suppress the incompletion /
     # out-of-bounds / turnover clock stops (gated in shouldClockRun). Far fewer plays
-    # per game. Clock-management play-calling heuristics still assume dead balls stop
-    # the clock, so they degrade gracefully (a later pass can make them rule-aware).
+    # per game: measured 153.1 -> 121.8 and 36.5 -> 27.6 points.
+    # ⚠️ THE CLOCK-MANAGEMENT HEURISTICS ARE NOW RULE-AWARE, and this comment used to say
+    # they were not and "degrade gracefully". They did not. `_shouldTargetSideline`
+    # returned byte-identical answers under both rules across 2,880 end-of-half states,
+    # so a trailing offense kept throwing to the boundary to stop a clock that cannot be
+    # stopped — at 6.68 yards a completion against 8.21 for a normal throw — and
+    # no-huddle, which fires 2.4x more often here because it keys off `clockRunning`,
+    # forced that throw unconditionally. Anything added later that stops the clock on
+    # purpose must read `Game._deadBallStopsClock()`. Regression: test_running_clock.py.
     "clockStopsOnDeadBall",
 }
 
@@ -503,6 +520,34 @@ def defaultRuleValue(field: str) -> Any:
     """The pristine default for a rule field (from a fresh GameRules)."""
     return getattr(GameRules(), field, None)
 
+
+
+def changedRuleCandidates(gameRules) -> List[str]:
+    """The RULES that are currently off their default, as a fan would count them.
+
+    ⚠️ A RULE IS A BALLOT CANDIDATE, NOT A FIELD, and counting fields overstates it.
+    A PRESET candidate patches several fields at once — the Darts format sets
+    `gameFormat` AND `targetScore`, a Drive Clock preset sets up to four — so a
+    field-level diff reports one fan-visible change as two or three. Reported from the
+    game board as the Rulebook chip claiming three rules had changed when two had:
+    Darts plus one other counts exactly that way.
+
+    ⚠️ This is deliberately NOT the same list the Rulebook highlights. That one is
+    per-FIELD on purpose, so every row a preset touched lights up and shows its "was X";
+    it is the COUNT that has to speak in rules. Keep both, and keep them separate.
+
+    Lives here rather than on RuleVoteManager because the API needs it too, and the
+    manager's own copy had no callers at all — the correct implementation was sitting
+    there unused while the endpoint grew a different, wrong one.
+    """
+    from constants import RULE_VOTE_CANDIDATES
+    out = []
+    for f, spec in RULE_VOTE_CANDIDATES.items():
+        # A preset is changed when its GATE field is off-default; a scalar, when it is.
+        key = spec.get('gate') if 'presets' in spec else f
+        if key and getattr(gameRules, key, None) != defaultRuleValue(key):
+            out.append(f)
+    return out
 
 def applyRuleChange(gameRules: "GameRules", field: str, value: Any,
                     reason: str = "cores vote", source: str = "cores_vote"):

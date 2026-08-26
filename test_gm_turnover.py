@@ -20,8 +20,15 @@ class FakeTeam:
 
 
 def _coach(seasons=5, attitude=80):
+    """⚠️ `seasonsWithTeam` IS THE ONE THAT MATTERS. `fireChance` reads tenure at THIS
+    CLUB, not career length — a veteran hired to fix a bad roster gets the grace period
+    for the mess they just walked into. This fixture set only `seasonsCoached`, and
+    `Coach()` initialises `seasonsWithTeam` to 0, so every coach here looked like a
+    first-year hire, took the grace early-return, and `fireChance` came back 0.0 for a
+    4-24 season. Set both; they are the same tenure for a coach who has never moved."""
     c = Coach().generateAttributes()
     c.seasonsCoached = seasons
+    c.seasonsWithTeam = seasons
     c.attitude = attitude
     return c
 

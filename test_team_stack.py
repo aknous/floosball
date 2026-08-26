@@ -86,7 +86,13 @@ r = runStack(cards)
 expect(f"picks the champion group (champs={r.stackChampions})", r.stackChampions == 3)
 
 print("\n6. Gate cut moved to All-Pro; Champion no longer cuts the gate")
-base = CARD_GATE_FP_THRESHOLDS[WR]  # 8
+# ⚠️ THE GATE BAR IS PER-EDITION NOW. The flat CARD_GATE_FP_THRESHOLDS table is not the
+# bar a holographic card gets — CARD_GATE_FP_THRESHOLDS_BY_EDITION raises it by edition
+# (holographic WR = 10, not 8), so both assertions below were measured against the wrong
+# baseline: the champion card's "normal" bar read 10 vs an expected 8, and the All-Pro
+# cut was compared to 0.7 x the wrong number.
+from constants import CARD_GATE_FP_THRESHOLDS_BY_EDITION
+base = CARD_GATE_FP_THRESHOLDS_BY_EDITION['holographic'][WR]  # 10
 ap = buildEffectConfig('holographic', 88, WR, forceEffect='freebie', classification='all_pro')
 ch = buildEffectConfig('holographic', 88, WR, forceEffect='freebie', classification='champion')
 print(f"     base bar={base}  all_pro bar={ap['gate']['threshold']}  champion bar={ch['gate']['threshold']}")

@@ -57,6 +57,13 @@ def _makeGame(adaptability, profile):
     g.homeDefGameplan = DefensiveGameplan()
     g.awayOffGameplan = OffensiveGameplan()
     g.awayDefGameplan = DefensiveGameplan()
+    # ⚠️ Run-concept tallies the adaptation reads to counter an opponent's tendencies
+    # (`oppConcepts=`). Game.__init__ seeds these and __new__ skips it, so without
+    # them the real method raises before adapting anything. All-zero = no tendency
+    # observed yet, which is the neutral start these cases assume.
+    _CONCEPTS = ('power', 'draw', 'counter', 'sweep', 'sneak')
+    g.homeConceptCounts = {k: 0 for k in _CONCEPTS}
+    g.awayConceptCounts = {k: 0 for k in _CONCEPTS}
     for side in ('home', 'away'):
         for k, v in profile.items():
             setattr(g, f'{side}Half{k[0].upper()}{k[1:]}', v)

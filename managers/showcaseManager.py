@@ -373,6 +373,38 @@ def loadShowcaseCardInfos(session, userId: int, season: int) -> list:
     return infos
 
 
+def _earnedAfter(entry, rookieSeason: int) -> bool:
+    """Was this accolade earned after the card's rookie season?
+
+    ⚠️ THE TWO AWARD LISTS ARE DIFFERENT SHAPES AND THIS READ BOTH AS SEASON NUMBERS.
+    `players.all_pro_seasons` is a list of bare ints, but `players.mvp_awards` holds
+    DICTS — `{'Season': N, 'team': abbr, 'teamColor': …}`, written that way by
+    `seasonManager` so the Hall of Fame can show which team a player won it with. So
+    `s > rookieSeason` raised `TypeError: '>' not supported between instances of 'dict'
+    and 'int'` and took `/api/cards/showcase/leaderboard` down with a 500 in production
+    (2026-08-24).
+
+    ⚠️ IT WAS LATENT, NOT NEW. Both conditions have to hold before the comparison is ever
+    reached: the card must be a ROOKIE print (so `rookieSeason` is truthy) AND its player
+    must have won an MVP since. Nobody's showcase had held one before, so the endpoint
+    had been fine for the whole life of the premium. `api/main.py` already knew the shape
+    — `_hofInducteeDict` filters MVP entries with `isinstance(a, dict)` — which is what
+    makes this a missed reader rather than an unknown format.
+
+    An entry whose season cannot be read is treated as NOT after: the premium counts
+    accolades a card earned since it was printed, and a claim we cannot verify should not
+    inflate it.
+    """
+    if isinstance(entry, dict):
+        entry = entry.get('Season')
+    if not rookieSeason:
+        return True
+    try:
+        return int(entry) > int(rookieSeason)
+    except (TypeError, ValueError):
+        return False
+
+
 def buildLegacyLookup(session, cards) -> dict:
     """{playerId: {"hof": bool, "mvp": n, "all_pro": n}} for the ROOKIE cards in a
     showcase, counting only accolades earned AFTER that card's rookie season.
@@ -391,8 +423,8 @@ def buildLegacyLookup(session, cards) -> dict:
     out = {}
     for p in session.query(Player).filter(Player.id.in_(list(wanted))).all():
         rookieSeason = wanted.get(p.id, 0)
-        mvps = [s for s in (p.mvp_awards or []) if not rookieSeason or s > rookieSeason]
-        aps = [s for s in (p.all_pro_seasons or []) if not rookieSeason or s > rookieSeason]
+        mvps = [s for s in (p.mvp_awards or []) if _earnedAfter(s, rookieSeason)]
+        aps = [s for s in (p.all_pro_seasons or []) if _earnedAfter(s, rookieSeason)]
         out[p.id] = {
             "hof": bool(getattr(p, "is_hof", False)),
             "mvp": len(mvps),

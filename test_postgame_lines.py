@@ -234,5 +234,77 @@ class TheyOutliveTheGame(unittest.TestCase):
         self.assertIn('ALTER TABLE games ADD COLUMN postgame_quotes TEXT', src)
 
 
+
+
+class PostgameQuotesAreTimestamped(unittest.TestCase):
+    """⚠️ A postgame line with no timestamp is INVISIBLE, not merely misordered.
+
+    The Bleachers rail merges sideline cutaways with fan posts into one newest-first
+    timeline and deliberately sinks undated entries to the bottom (`if (Number.isNaN(ta))
+    return 1` in GameFeedComposer, so guessing a time cannot float an old line above a
+    fresh shout). A line said at the FINAL WHISTLE therefore sorted below every in-game
+    cutaway and every shout — it read as the oldest thing in the game and never appeared
+    where a reader looks.
+
+    Reported twice as the postgame lines "not coming through". They were arriving,
+    generated and persisted correctly, and buried.
+    """
+
+    def testBuilderStampsCreatedAt(self):
+        import io, re
+        src = io.open('floosball_game.py', encoding='utf-8').read()
+        start = src.index('def _buildPostgameReactions')
+        block = src[start:start + 7000]
+        self.assertIn("eventDict['createdAt']", block,
+                      "postgame reactions must carry a wall-clock stamp or the rail sinks them")
+        # It has to be stamped BEFORE the dict is handed to the feed and the persist list.
+        self.assertLess(block.index("eventDict['createdAt']"), block.index('self.postgameQuotes.append'),
+                        "stamp must land before the dict is stored, or the persisted copy has none")
+
+    def testStoredQuotesGetAGameTimeFallback(self):
+        """Every quote already stored predates the stamp, and those are exactly the games
+        a fan scrolls back to."""
+        from datetime import datetime
+        from game_box_score import _postgamePlays
+
+        class Row:
+            postgame_quotes = '[{"text": "line one"}, {"text": "line two"}]'
+            game_date = datetime(2026, 8, 19, 22, 15, 0)
+            created_at = datetime(2026, 8, 19, 23, 0, 0)
+
+        plays = _postgamePlays(Row())
+        self.assertEqual(len(plays), 2)
+        for p in plays:
+            stamp = p['sidelineCutaway'].get('createdAt')
+            self.assertTrue(stamp, 'an undated stored quote must inherit the game time')
+            self.assertTrue(stamp.endswith('Z'), 'the rail parses these as UTC')
+            self.assertTrue(stamp.startswith('2026-08-19T22:15'), 'game_date wins over created_at')
+
+    def testAnExistingStampIsNotOverwritten(self):
+        from datetime import datetime
+        from game_box_score import _postgamePlays
+
+        class Row:
+            postgame_quotes = '[{"text": "x", "createdAt": "2026-01-01T00:00:00Z"}]'
+            game_date = datetime(2026, 8, 19, 22, 15, 0)
+            created_at = datetime(2026, 8, 19, 23, 0, 0)
+
+        self.assertEqual(_postgamePlays(Row())[0]['sidelineCutaway']['createdAt'],
+                         '2026-01-01T00:00:00Z')
+
+    def testNoGameTimeStillReturnsTheLines(self):
+        """A missing timestamp must not cost the reader the line itself."""
+        from game_box_score import _postgamePlays
+
+        class Row:
+            postgame_quotes = '[{"text": "x"}]'
+            game_date = None
+            created_at = None
+
+        plays = _postgamePlays(Row())
+        self.assertEqual(len(plays), 1)
+        self.assertEqual(plays[0]['sidelineCutaway']['text'], 'x')
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

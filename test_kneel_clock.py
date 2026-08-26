@@ -1,11 +1,13 @@
-"""Kneel clock-drain regression: a kneel only drains the full play clock when the
-clock was RUNNING before the snap.
+"""Kneel clock behavior: the kneel itself drains only the snap-to-knee-down time
+(~4s) and leaves the clock RUNNING, whatever the clock was doing before the snap.
+The remaining ~36s of play clock is drained post-play in the game loop, AFTER the
+defense gets its chance to call timeout.
 
-Guards the reported bug: a defense's last timeout stopped the clock at 31s, then
-the leading offense kneeled on 4th down and the sim drained the full ~40s to 0.
-A kneel from a STOPPED clock burns only the ~4s of the kneel itself (the clock
-restarts at the snap, ball immediately dead), so on 4th down it's a
-turnover-on-downs with time still on the clock.
+⚠️ This originally asserted that a kneel from a STOPPED clock skipped the ~36s drain,
+via a `_kneelClockWasRunning` flag. That rule was superseded and the flag deleted — a
+stopped clock RESTARTS at the snap and then runs off, so the runoff applies either way.
+What still holds, and is guarded below, is that a 4th-down kneel is a turnover on downs
+with time left on the clock.
 
 Run: .venv/bin/python test_kneel_clock.py
 """
@@ -22,6 +24,16 @@ class StubGame:
         self.down = down
         self.gameRules = GameRules()
 
+    # ⚠️ `kneel` runs the clock through `self.game.format.consumeTime`, so a stub without
+    # a format raises AttributeError before reaching a single assertion. Resolved the
+    # same way `Game.format` does (from gameRules.gameFormat, defaulting to standard,
+    # which is a pure pass-through) rather than stubbed to a fake, so this test keeps
+    # exercising the real clock path.
+    @property
+    def format(self):
+        from game_formats import getFormat
+        return getFormat(getattr(self.gameRules, 'gameFormat', 'standard') or 'standard')
+
 
 class StubPlay:
     kneel = fg.Play.kneel
@@ -32,18 +44,26 @@ class StubPlay:
 def main():
     fails = []
 
-    # 1. Clock RUNNING before the snap: kneel drains its 4s snap now; the loop
-    #    will additionally drain (kneelDrainSeconds - 4) because _kneelClockWasRunning.
+    # ⚠️ THE PRIOR-CLOCK-STATE DISTINCTION WAS DELIBERATELY REMOVED. These two cases used
+    # to assert a `_kneelClockWasRunning` flag that the loop read to decide whether to
+    # drain the remaining ~36s. `kneel` no longer sets it and the attribute is gone from
+    # the engine entirely: a stopped clock simply RESTARTS at the snap and then runs off,
+    # so the runoff applies either way, and the defense's protection is its post-play
+    # timeout chance rather than a skipped drain. Asserting the old flag failed with an
+    # AttributeError before reaching cases 3 and 4, which are still live rules.
+    # What remains true of the kneel ITSELF: it drains only the snap-to-knee-down time
+    # and leaves the clock running, from either starting state.
+
+    # 1. Clock RUNNING before the snap: only the ~4s snap comes off here.
     g = StubGame(clockRunning=True); p = StubPlay(g); p.kneel()
-    ok = (g._kneelClockWasRunning is True and g.gameClockSeconds == 27 and g.clockRunning is True)
-    print(f"{'clock RUNNING -> remembers True, drains 4s snap':<58}{'PASS' if ok else 'FAIL'}")
+    ok = (g.gameClockSeconds == 27 and g.clockRunning is True)
+    print(f"{'clock RUNNING -> drains the 4s snap, clock left running':<58}{'PASS' if ok else 'FAIL'}")
     fails.append(not ok)
 
-    # 2. Clock STOPPED before the snap (timeout): kneel must remember that so the
-    #    loop SKIPS the ~36s play-clock drain — only the 4s snap comes off.
+    # 2. Clock STOPPED before the snap (timeout): identical, because the snap restarts it.
     g = StubGame(clockRunning=False); p = StubPlay(g); p.kneel()
-    ok = (g._kneelClockWasRunning is False and g.gameClockSeconds == 27)
-    print(f"{'clock STOPPED -> remembers False (loop skips 36s drain)':<58}{'PASS' if ok else 'FAIL'}")
+    ok = (g.gameClockSeconds == 27 and g.clockRunning is True)
+    print(f"{'clock STOPPED -> same 4s, snap restarts the clock':<58}{'PASS' if ok else 'FAIL'}")
     fails.append(not ok)
 
     # 3. A kneel on the FINAL down is a turnover on downs (so a non-game-ending

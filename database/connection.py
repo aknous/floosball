@@ -3081,13 +3081,21 @@ def clear_db():
     # fresh start resets the counter to 1.  Without this reset, prior-run
     # stamps (e.g. starter_pack_claimed_season=1) carry over and incorrectly
     # match the new season-1, hiding once-per-season offers.
+    # ⚠️ `text` IS NOT IN SCOPE HERE either — it is imported locally inside other
+    # functions in this module, never at module level. This raised NameError on every
+    # fresh start, and the inner bare `except: pass` swallowed it WITHOUT EVEN A
+    # WARNING, so the reset the comment above describes has never once run: a user's
+    # `starter_pack_claimed_season=1` survived the wipe, matched the new season 1, and
+    # hid the starter pack from them permanently.
     try:
+        from sqlalchemy import text as _text
         with engine.connect() as conn:
             for col in ('starter_pack_claimed_season', 'favorite_team_locked_season'):
                 try:
-                    conn.execute(text(f"UPDATE users SET {col} = NULL"))
-                except Exception:
-                    pass
+                    conn.execute(_text(f"UPDATE users SET {col} = NULL"))
+                except Exception as colErr:
+                    # A genuinely missing column is fine (older DB); anything else is not.
+                    logger.warning(f"  Could not reset {col}: {colErr}")
             conn.commit()
     except Exception as e:
         logger.warning(f"Failed to reset per-season user flags on fresh start: {e}")
@@ -3105,11 +3113,19 @@ def clear_db():
     # Deliberately selective: `generational_names_collapsed` and the name-pool markers
     # describe the PRESERVED pool and must NOT be cleared.
     try:
+        # ⚠️ `text` IS NOT IN SCOPE HERE WITHOUT THIS IMPORT. It is imported locally inside
+        # other functions in this module, never at module level, so this block raised
+        # NameError on every fresh start and the bare `except` below logged it as a
+        # warning and moved on. The clear NEVER RAN — which is precisely why the leak
+        # described above "kept reproducing on clean runs". The fix was written and has
+        # never once executed.
+        from sqlalchemy import text as _text
         from managers.fantasyTracker import COMPLETE_SNAPSHOT_SETTING
         with engine.connect() as conn:
-            conn.execute(text("DELETE FROM app_settings WHERE key = :k"),
+            conn.execute(_text("DELETE FROM app_settings WHERE key = :k"),
                          {"k": COMPLETE_SNAPSHOT_SETTING})
             conn.commit()
+        logger.info(f"  Cleared season-scoped app setting: {COMPLETE_SNAPSHOT_SETTING}")
     except Exception as e:
         logger.warning(f"Failed to clear season-scoped app settings on fresh start: {e}")
 

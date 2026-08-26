@@ -217,14 +217,21 @@ expect("surgeon barely turns it over despite high confidence", surgI < 1.5)
 
 # ── 9. RB run game — confidence is multi-position ────────────────────────
 print("9. A confident RB runs for more than a rattled one")
+# ⚠️ UNDERPOWERED AT THE SHARED N. The effect is real and correctly signed, but it is
+# only about +0.6 ypc -- so against a `> +0.5` bar the default sample straddles the
+# threshold and this check failed on a working mechanism (measured: +0.478 at N=400,
+# +0.609 at N=1500). Give this one its own larger sample rather than lowering the bar,
+# which would stop it detecting a genuine regression.
+RB_CONF_N = 1500
+
 def rbYpc(conf):
     s = Scenario(); g = s.game; tot = 0
-    for _ in range(N):
+    for _ in range(RB_CONF_N):
         s.situation(quarter=2, clock=600, offense='home', offScore=0, defScore=0,
                     down=1, distance=10, ballOn=60)
         s.home.rosterDict['rb'].gameAttributes.confidenceModifier = conf
         g.play.runPlay(); tot += g.play.yardage
-    return tot / N
+    return tot / RB_CONF_N
 reseed(2); rbHi = rbYpc(5)
 reseed(2); rbLo = rbYpc(-5)
 expect("confident RB averages more yards than a rattled RB", rbHi > rbLo + 0.5)

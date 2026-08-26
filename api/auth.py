@@ -293,9 +293,15 @@ def isGeneratedUsername(name: str) -> bool:
 def validateUsername(name: str) -> tuple:
     """(cleanedName, errorMessage). errorMessage is None when the name is acceptable.
 
-    Rules are deliberately narrow — letters, digits and underscores, starting with a
-    letter. Anything wider (spaces, punctuation, unicode lookalikes) invites impersonation
-    of other users and renders unpredictably in the places a name appears.
+    Rules are deliberately narrow — letters, digits and underscores. Anything wider
+    (spaces, punctuation, unicode lookalikes) invites impersonation of other users and
+    renders unpredictably in the places a name appears.
+
+    ⚠️ A name may START with a digit or underscore (owner, 2026-08-21). This docstring
+    used to claim "starting with a letter", which `_USERNAME_RE` has never enforced —
+    its first character class is identical to the rest. The regex is the rule. Anyone
+    "fixing" the code to match the old prose would reject names like `9Lives` that are
+    already accepted, and lock existing holders out of their own identity.
     """
     name = (name or "").strip()
     if not name:

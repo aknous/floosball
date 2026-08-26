@@ -233,7 +233,13 @@ PERF_DEFENSE_WEIGHT = 0.3    # defensive-production share of the overall perform
 # overall composite), so there's no separate box defValue term — only the clutch
 # defensive WPA remains, as a secondary term.
 MVP_PERF_WEIGHT = 0.7        # overall (two-way) production-composite z share
-MVP_WPA_WEIGHT = 0.3         # per-snap OFFENSIVE WPA share (offensive clutch)
+MVP_WPA_WEIGHT = 0.2         # per-GAME OFFENSIVE WPA share (offensive clutch)
+# ⚠️ 0.3 -> 0.2, PAIRED with wpaRate moving from per-snap to per-GAME. Measured over
+# 20 simulated seasons: per-snap at 0.30 gave quarterbacks 1 MVP in 20 (receivers took
+# 11), because a QB logs ~1,233 WPA snaps a season against a receiver's ~290 and so
+# carries the league's lowest per-snap rate despite its second-highest raw WPA. Per
+# game at 0.30 over-corrects to QB 14 of 20; at 0.20 it splits QB 8 / WR 8 / RB 3 /
+# TE 1. Changing either half alone reproduces one of the two failures.
 MVP_DEF_WPA_WEIGHT = 0.2     # individual DEFENSIVE WPA share (defensive clutch; secondary)
 # Per-defensive-group box weights (DEF_BOX_WEIGHTS, below) now feed the DEFENSIVE
 # performance rating; defValue's box term and the old MVP_DEF_WEIGHT/MVP_DEF_BOX_WEIGHT
@@ -1571,15 +1577,16 @@ ATTITUDE_DRIFT_MAGNITUDE = 1.5    # win/loss drift multiplier on |winPct-0.5| (d
 # don't re-open a gap. Only matters when a position is genuinely short.
 ROSTER_SUPPLY_BUFFER_PER_POSITION = 3
 
-# ---- League realignment (one-time competitive rebalance) ----
-# One league had drifted persistently stronger than the other. A one-time
-# realignment ranks all teams by combined win% over the last
-# LEAGUE_REALIGN_WINDOW_SEASONS completed seasons and serpentine-splits them
-# evenly across the two leagues (rank 1->A, 2->B, 3->B, 4->A, ...) so neither
-# league stays lopsided. Fires once at a new-season boundary (gated by the
-# `league_realigned` app_setting) and the resulting alignment persists via the
-# `league_alignment` app_setting, honored by LeagueManager.createLeagues.
-LEAGUE_REALIGN_WINDOW_SEASONS = 2
+# ---- League realignment: REMOVED (owner, 2026-08-23) ----
+# `realignByRecentPerformance` serpentine-split the two leagues by recent win% so
+# neither stayed perpetually stronger. It predates divisions, and once league AND
+# division membership are curated in config.json it works against them: it moves
+# clubs between leagues, which invalidates `divisionDistribution` and forces
+# `_assignDivisions` to fall back. Measured on a fresh league it moved 16 teams at
+# season 2 and re-formed every division. Function, caller and window constant are
+# gone. ⚠️ `_applyPersistedAlignment` and the `league_alignment` app_setting STAY —
+# a database where the realignment already ran keeps the leagues it has, because
+# reverting them would move half the league. `league_realigned` is now vestigial.
 
 # ---- Retention limits (parity — docs/PARITY_PROSPECT_PLAN.md Phase 5) ----
 # Force stacked teams to break up by limiting RETENTION, not salary. Two levers,
@@ -2228,6 +2235,28 @@ CONVERSION_FORCEGO_MAKE_FLOOR = 0.72     # a neutral coach's minimum make% to re
 CONVERSION_FORCEGO_AGGR_SWING = 0.30     # +/- the floor across the coach-aggressiveness range
 CONVERSION_FORCEGO_JITTER = 0.08         # per-attempt randomness on the floor (variety)
 
+# ── Darts: take the dart, or bank the points? ────────────────────────────────
+# In darts a rung that lands EXACTLY on the target wins outright, so at a need of 3, 4
+# or 5 the ladder offers a try that ends the game — but the rung that lands is always
+# the LONGEST one still legal, so winning now is always the least likely make. The
+# alternative is to take a shorter non-busting rung, bank the points, and land the
+# remainder on a later drive (a field goal covers 3, a hoop covers 1).
+#
+# ⚠️ NEITHER LINE IS STRICTLY BETTER, which is what makes this a coach call rather than
+# a rule (owner, 2026-08-26: "an aggressive coach would go for the higher score to win,
+# conservative will bank easy points"). Measured at the shipped rung distances, a need of
+# 5 is a 0.34 shot at winning immediately against a 0.70 shot at reaching a need of 3 —
+# and a failed try costs nothing either way, since the touchdown is already banked.
+#
+# Same shape as the CONVERSION_FORCEGO_* floor above: the landing rung is taken when its
+# make estimate clears a floor that aggressiveness lowers.
+DARTS_LAND_MAKE_FLOOR = 0.45   # a neutral coach's minimum make% to try to win it outright
+DARTS_LAND_AGGR_SWING = 0.26   # +/- the floor across the coach-aggressiveness range
+DARTS_LAND_JITTER     = 0.06   # per-attempt randomness on the floor (variety)
+# Only defer to the coach when banking is MATERIALLY safer. Below this the landing rung
+# is close enough in odds that declining a win is just leaving the game on the field.
+DARTS_LAND_MIN_EDGE   = 0.06
+
 # How boldly a TRAILING team reaches for a ladder rung (or the 2-pt) instead of the safe
 # kick — the desire chart in _conversionDesire, now tuned aggressive so comebacks lean on
 # the rungs. Each tier is the base go-for-it probability (before coach aggressiveness and
@@ -2580,12 +2609,15 @@ GAME_FORMAT_PRESETS = [
     #     X=10  98%   X=12  98%   X=15  88%   X=18  84%
     #     X=21  66%   X=24  58%   X=30  30%
     #
-    # ⚠️ SHIPPED AT 21 (owner, 2026-08-18: "higher is better. 21-24"), trading some target
-    # finishes for a longer game — two thirds still land on the number, pre-halftime
-    # finishes drop 35% -> 19%, and a game runs ~138 plays against a standard ~157. 24 is
-    # the far end of the owner's range and was not taken: it puts 46% of games on the
-    # clock, which is the point where the format stops being about landing on a number.
-    # Anything above 24 is out of the certified band entirely.
+    # ⚠️ SHIPPED AT 24 (owner, 2026-08-23), the far end of the range they gave on
+    # 2026-08-18 ("higher is better. 21-24"). It was 21 first, and the trade is stated
+    # plainly rather than hidden: 58% of games are decided by LANDING on the number
+    # against 21's 66%, so ~46% go to the clock instead — the owner raised it knowing
+    # that ("I understand that less games will end with reaching the target"). What it
+    # buys is a longer game and a later finish.
+    # ⚠️ 24 IS THE CEILING, not a step on a ladder. Above it the clock decides most games
+    # and darts stops being a game about landing on a number at all (30 lands only 30% of
+    # the time). `test_darts_format.py` asserts the preset stays at or under it.
     #
     # ⚠️ `GameRules.targetScore` DEFAULTS to 30 — it belongs to the 'target' format ("first
     # to 30") — so darts activated without a patch inherits a target it plays badly at.
@@ -2642,8 +2674,11 @@ GAME_FORMAT_PRESETS = [
     # hides it from users, and the results COUNT — which is the wrong place to debut a
     # format whose endgame is still being tuned. It stays a normal vote preset, so a league
     # can still choose it deliberately; this only stops it arriving by surprise.
-    {"key": "gf_bust_21",        "label": "Darts (land on 21)", "chaosEligible": False,
-     "patch": {"gameFormat": "bust", "targetScore": 21,
+    # ⚠️ THE KEY CARRIES THE TARGET, so it moves with it — `RuleVote.option_key` is
+    # persisted, so renaming orphans any darts vote already cast in an OPEN window. Ship
+    # a target change between windows, not during one.
+    {"key": "gf_bust_24",        "label": "Darts (land on 24)", "chaosEligible": False,
+     "patch": {"gameFormat": "bust", "targetScore": 24,
                "touchdownPoints": 6, "fieldGoalPoints": 3, "safetyPoints": 2,
                "extraPointPoints": 1, "twoPointConversionPoints": 2}},
 ]
@@ -2658,7 +2693,7 @@ GAME_FORMAT_DESCRIPTIONS = {
     "chess_clock": "Each team gets a set amount of time to possess the ball. Once a team runs out, they can't get the ball back.",
     "innings":     "Teams get 3 \"tries\" per inning. Most points wins.",
     "frames":      "Match play. The game splits into frames. The team with the most points in a frame wins the frame. Most frames wins.",
-    "bust":        "Land directly on the target score to win. Overshoot it and the points are voided. Auto-enables sideline targets to help you land it exactly.",
+    "bust":        "Land directly on the target score to win. Overshoot it and the points are voided. Auto-enables sideline targets.",
 }
 
 # ---- Player Fatigue ----
@@ -3744,6 +3779,12 @@ GLITCH_MAX_TRIGGERS = 3
 # ⚠️ It applies on EVERY down including the last, which inverts the standing final-down
 # guard on purpose — that guard exists because a hoop consumes the down without gaining
 # yards, and under a target there is no scoring play it could be forfeiting.
+# How deep into opponent territory counts as "losing the ball here costs little" when a
+# busting field goal is refused on a final down (owner, 2026-08-23). Inside this, go for
+# it — a failed try hands over poor field position anyway, and a hoop can still land the
+# exact remainder. Outside it, punt.
+DARTS_GO_FOR_IT_YARDS = 40.0
+
 DARTS_HOOP_HUNT_BASE = 0.55
 DARTS_HOOP_HUNT_AGGR_SPAN = 0.35
 
@@ -3759,6 +3800,35 @@ DARTS_HOOP_HUNT_AGGR_SPAN = 0.35
 # closing, so there is never a last chance at it.
 DARTS_HOOP_CLOSING_YARDS = 6.0
 DARTS_HOOP_LAST_CHANCE_LIFT = 0.40
+
+# ⚠️ A HOOP THE DRIVE CANNOT AFFORD TO LOSE IS SHOT, NOT WEIGHED (owner report, 2026-08-24:
+# teams needing a single point were driving straight past the midfield goal).
+#
+# Declining a pair is normally fine — a shot costs a down and no yards, and the END-ZONE
+# pair is always still ahead, so a team needing 1 with everything unused has two more
+# chances and is right to keep driving. It stops being fine when the hoops that remain
+# REACHABLE after this one can no longer cover the need: then driving on forfeits the only
+# path the drive had. Measured over 300 games, of 26 snaps where a team needing 2 or fewer
+# drove past the midfield pair, **12 were left unable to cover their need** — that is the
+# half that is a mistake, and the other 14 are ordinary football.
+#
+# ⚠️ IT ALSO COVERS A CLOSING SHOT THAT SIMPLY WINS THE GAME (owner, 2026-08-24: needing one
+# point, the midfield goals are the nearest score and driving past them risks the ball for
+# nothing). That case is DOMINATED rather than merely risky, because crossing the pair loses
+# it either way: declining loses it for nothing, shooting loses it only after a ~71% chance
+# of ending the match, and a miss is an incompletion — the down is spent, the ball is kept,
+# and the end-zone pair is still ahead. Measured over 400 games, drives that passed up an
+# in-range midfield hoop needing 2 points or fewer went on to score AT ALL 11 times out of
+# 22, so "there are chances left" was buying a coin flip with a 71% shot in hand.
+#
+# ⚠️ CLOSING pairs only, in both cases. The END-ZONE pair is not lost by driving on, so
+# declining it costs a down rather than the chance, and forcing it would erase the coach dial
+# across the whole red zone.
+#
+# Sits at the same height as `SIDELINE_GOAL_DESPERATION_CHANCE` (0.92), which is the
+# standard game's "this point is needed to tie or win" rate; the reasoning is identical.
+DARTS_HOOP_LOADBEARING_CHANCE = 0.92
+
 
 # ⚠️ APPROACHING THE MIDFIELD HOOP, A DISCIPLINED SIDE STOPS TRYING TO GO DOWNFIELD (owner,
 # 2026-08-17). It is the only scoring chance a drive can drive PAST: a chunk gain over the
@@ -3781,6 +3851,57 @@ DARTS_APPROACH_DOWNFIELD_DAMP = 0.25   # long + deep, at full discipline
 # stops it and hands the time back. Not applied when trailing: that team wants the drive
 # over so it can restock its hoops on the next possession.
 DARTS_DEAD_DRIVE_RUN_BIAS = 2.5
+
+# ⚠️ A DEAD DARTS DRIVE AT THE GOAL LINE KNEELS IT OUT (owner, 2026-08-24). Both hoop pairs
+# are spent and the remaining need is under a field goal, so nothing this possession does
+# can score — and because a would-bust touchdown is held up short, the offense cannot even
+# cross the goal line. Every snap from there is PURE DOWNSIDE: it cannot gain a point, it
+# can lose yards, and it can lose the ball on a fumble or a pick. A kneel gives up nothing
+# the drive still had (the down is going anyway), removes that risk, drains the play clock,
+# and hands the opponent the ball on their own doorstep.
+#
+# Inside this many yards there is nothing left to gain — `_holdUpShortCap` caps a carrier at
+# `yardsToEndzone - 1`, so from the 3 the whole remaining prize is two yards of pin. Beyond
+# it the offense plays on and works closer first, which is the "as close as possible" half.
+DARTS_KNEEL_OUT_YARDS = 3
+
+# ⚠️ THERE IS A POINT WHERE A TEAM STOPS TRYING TO LAND ON THE TARGET AND JUST ACCUMULATES
+# POINTS, because the clock is going to decide it and the higher score wins (owner,
+# 2026-08-24). Every darts read is deliberately blind to the opponent — what matters is
+# distance to X, and a team leading 17-3 needs a hoop as badly as anyone — but that is only
+# true while landing on X is still achievable. Once it is not, the blindness is the bug: it
+# had teams spending their last downs on an exact landing they had no time to reach.
+#
+# The crossover is whether a plan that LANDS still fits, measured rather than picked:
+#   * on THIS possession — the hoop shots the plan needs, plus a scoring drive. Over 3,475
+#     darts possessions a scoring drive took a median 9 plays and a p25 of 7, so 7 is the
+#     conservative floor (a plan needing more than that is not fitting into two snaps).
+#   * or on a LATER one — a possession averaged 108 seconds, so a team needs roughly 216s
+#     on the clock to expect the ball back.
+# Neither fits -> the target is gone, and the decision reverts to the ordinary
+# points-against-the-opponent logic every other format uses.
+DARTS_PLAYS_TO_SCORE = 7
+DARTS_NEXT_POSSESSION_SECS = 216
+
+
+# ⚠️ A DARTS KICK THAT LANDS ON THE TARGET WINS THE GAME, SO IT IS NOT WORTH WAITING FOR
+# FOURTH DOWN ONCE IT IS COMFORTABLE (owner, 2026-08-24). On an ordinary drive there is no
+# rush — yards cannot bust, only scores can, so playing on improves the kick for free. That
+# stops being true once the kick is already good: every further snap is a fumble, a sack or
+# an interception standing between the team and a won game, and it cannot make a 96% kick
+# meaningfully better.
+#
+# Expressed as a MAKE PROBABILITY rather than a yard line so it scales with the kicker, who
+# is the one taking it. Measured against the live curve over 16 real kickers: 0.80 sits at
+# roughly the opponent's 30 (a 47-yard attempt) for a median leg — inside the 30 the median
+# kicker is at 0.82 or better, and by the 35 (52 yards) it has fallen to 0.69. A big-leg,
+# accurate kicker earns the early kick from further out; a poor one has to get closer.
+#
+# On the FINAL down this does not apply — there the ordinary coach threshold governs, because
+# the alternative is losing the ball rather than getting a better look at it.
+DARTS_WINNING_KICK_COMFORT = 0.80
+
+
 
 # Added trigger chance per ADDITIONAL glitched card in the same lineup (owner, 2026-08-17).
 # Rewards FIELDING several at once rather than merely owning them, which is the half that
@@ -3888,3 +4009,28 @@ WEATHER_PACE_MAX = 1.45
 # tackler cannot see him) costs the RETURNER the chance to become one, so sight
 # stays two-sided on special teams too rather than only helping the offense.
 PUNT_FAIRCATCH_SIGHT_K = 0.45
+
+# ─── Expected-points imminence (win probability) ──────────────────────────────
+# ⚠️ Win probability damped EXPECTED points by 1/possessions-remaining while REALIZED
+# points went undamped, so a drive in field-goal range banked ~1/24th of the points it
+# was about to score and the kick banked the rest. That is the whole source of the
+# kicker's inflated WPA: measured over 20 seasons, kickers ran 9.8x a QB's WPA per snap.
+#
+# Once a drive is in range the points are imminent rather than speculative, so EP is
+# weighted by how close it is to converting instead. Only ever RAISES the weight, so
+# nothing outside range changes and late-game drives (already near 1.0) are untouched.
+#
+# ⚠️ APPLIED TO THE CREDIT MODEL ONLY (`calculateWinProbability(forAttribution=True)`),
+# never to the win probability fans see. WP is not just a readout — `isBigPlay` fires
+# MOMENTUM_BIG_PLAY_BONUS, the one path from WP back into play outcomes — and applying
+# this floor to the display model shifts that distribution. Unifying the two models
+# means retuning the 7.0 big-play threshold to hold the big-play RATE, or accepting the
+# resulting scoring move as a deliberate balance call.
+#
+# ⚠️ Do NOT try to size that scoring move by comparing two fresh sims: between-league
+# variance is ~2.8 pts/game (two leagues with PROVABLY identical gameplay measured 36.06
+# and 33.26), which is as large as the effect, and seasons within one league are not
+# independent samples.
+EP_IMMINENCE_MIN_FIELD_POS = 60          # opponent's 40 — the same line EP calls FG range
+EP_IMMINENCE_POSITIONS = [60, 75, 90, 100]
+EP_IMMINENCE_WEIGHTS = [0.45, 0.70, 0.85, 0.90]

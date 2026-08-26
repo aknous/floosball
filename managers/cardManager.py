@@ -3112,8 +3112,26 @@ class CardManager:
         # showpieces, or legacy prints (past-season templates, which can never be
         # equipped anyway). Selling a current-season fantasy card here would be
         # selling a brick — fantasy is over.
+        #
+        # ⚠️ THE SHELF DECIDES WHAT IS COLLECTIBLE AND THE TILL HONOURS IT (`kind`).
+        # This used to re-derive the answer from the template instead, and the two rules
+        # disagreed for exactly the cards the offseason shelf exists to sell. The
+        # collection shelf is built with `includeCurrentSeason=regularSeasonOver(week)`,
+        # so ONCE THE REGULAR SEASON IS OVER it deliberately stocks CURRENT-season
+        # prestige prints — they can no longer be fielded, which is what makes them
+        # collectibles rather than bricks. But `season_created < currentSeason` is False
+        # for precisely those, so the shelf offered them and the till refused them with
+        # "Only collection cards are available outside the regular season" — an error
+        # whose own wording contradicts the card it was refusing. Reported from
+        # production in the offseason: no collection card could be bought at all.
+        #
+        # Reading `featuredRow.kind` makes the two agree BY CONSTRUCTION rather than by
+        # keeping two copies of one rule in sync, and it is the same thing the API-side
+        # gate checks. The template terms are kept as an OR so this can only ever allow
+        # more than before, never refuse something that already worked.
         if showpieceOnly:
-            _isCollection = (bool(getattr(template, 'is_showpiece', False))
+            _isCollection = ((featuredRow.kind or '') == 'collection'
+                             or bool(getattr(template, 'is_showpiece', False))
                              or (template.season_created or 0) < currentSeason)
             if not _isCollection:
                 raise ValueError(

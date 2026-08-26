@@ -313,12 +313,6 @@ class SeasonManager:
         # Clear previous season data
         self._clearSeasonData()
 
-        # One-time league realignment: rebalance the two leagues by recent win% so
-        # one league isn't perpetually stronger. Must run BEFORE the schedule is
-        # generated (the new alignment drives the matchups). Fires once, at a genuine
-        # new-season boundary; self-gated so it never re-runs.
-        self._maybeRealignLeagues(seasonNumber, resumeFromWeek)
-
         # Create new season schedule — load from DB if resuming, otherwise generate fresh
         scheduleLoaded = False
         if DB_IMPORTS_AVAILABLE and USE_DATABASE and self.game_repo:
@@ -3438,45 +3432,6 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"_syncGameIdCounter failed: {e}")
 
-    def _maybeRealignLeagues(self, seasonNumber: int, resumeFromWeek: int) -> None:
-        """Fire the one-time league realignment exactly once, at a genuine new-season
-        boundary before the schedule generates. Gated by the `league_realigned`
-        app_setting so it never re-runs — this is a one-shot rebalance, not a recurring
-        re-seed. Skipped on a mid-season restart, and when this season's schedule
-        already exists (season already underway). If there's no completed-season
-        history yet the realign is a no-op and stays unstamped, so it retries at the
-        next boundary once data exists."""
-        if resumeFromWeek > 0:
-            return
-        try:
-            from game_rules import _readAppSetting, _writeAppSetting
-        except Exception:
-            return
-        if _readAppSetting('league_realigned'):
-            return
-        try:
-            if self.game_repo and self.game_repo.has_schedule(seasonNumber):
-                return  # season already has a schedule — too late to realign it
-        except Exception:
-            pass
-        if not self.leagueManager:
-            return
-        try:
-            from constants import LEAGUE_REALIGN_WINDOW_SEASONS
-        except Exception:
-            LEAGUE_REALIGN_WINDOW_SEASONS = 2
-        summary = self.leagueManager.realignByRecentPerformance(
-            seasonNumber, LEAGUE_REALIGN_WINDOW_SEASONS)
-        if not summary:
-            return  # no history yet — leave unstamped to retry next season
-        _writeAppSetting('league_realigned', str(seasonNumber))
-        moved = summary.get('moved', [])
-        logger.info(
-            f"League realignment (season {seasonNumber}, window {summary.get('window')}): "
-            f"{len(moved)} teams changed leagues")
-        for m in moved:
-            logger.info(f"  {m['team']}: {m['from']} -> {m['to']}")
-
     def createSchedule(self) -> None:
         """Generate season schedule (matches original floosball.py algorithm)"""
         import floosball_team as FloosTeam
@@ -4056,15 +4011,43 @@ class SeasonManager:
             pass
         return [f"{leagueName} {d}" for d in ("North", "South", "East", "West")]
 
+    def _divisionDistribution(self) -> Dict[str, List[str]]:
+        """`{divisionName: [teamName, ...]}` from config.json, or {} when unset."""
+        try:
+            from config_manager import get_config
+            dist = get_config().get("divisionDistribution") or {}
+            return {d: list(v) for d, v in dist.items() if v}
+        except Exception:
+            return {}
+
     def _assignDivisions(self) -> bool:
         """Split each league into four fixed divisions, stamped on the teams.
 
         Returns True when the league is division-shaped: two leagues of equal size that
-        divide evenly into `DIVISIONS_PER_LEAGUE`. Assignment is POSITIONAL and therefore
-        stable for a given alignment — which is the point: a rivalry needs the same
-        opponents every season, so nothing here reshuffles annually. It also mirrors how
-        leagues themselves are split, by config order, so the owner controls which clubs
-        share a division purely by their order in config.json.
+        divide evenly into `DIVISIONS_PER_LEAGUE`.
+
+        ⚠️ **MEMBERSHIP COMES FROM `config.json`'s `divisionDistribution`, BY NAME.** It
+        used to be POSITIONAL — this function sliced `league.teamList` into fours — and
+        the docstring claimed that was "stable for a given alignment... nothing here
+        reshuffles annually". **It was not, and it did.** `league.teamList` is a mutable
+        list that the playoff seeding overwrote with SEED ORDER, so the next season's
+        divisions were the previous season's final standings sliced into fours: measured
+        on a fresh database over three seasons, membership changed at BOTH boundaries,
+        and on a 20-season database at 19 of 20. It was masked in production only because
+        `createLeagues` restores the saved order at boot and a deploy usually lands in the
+        window between the playoffs and the next schedule generation — incidental
+        protection that fails the first time a season boundary passes without a restart.
+        The seed write-back is fixed separately; naming the divisions here is what makes
+        the assignment independent of list order altogether.
+
+        ⚠️ **IT VALIDATES AGAINST ACTUAL LEAGUE MEMBERSHIP AND FALLS BACK RATHER THAN
+        SPLITTING A LEAGUE ACROSS DIVISIONS.** Config `teamDistribution` is not
+        necessarily who is in which league today — a one-time `realignByRecentPerformance`
+        can have moved clubs, and the saved `league_alignment` wins at boot. So a config
+        map that disagrees with the live leagues is REFUSED (loudly) and the positional
+        split runs instead: a wrong-but-shaped league beats a division holding clubs from
+        two leagues. `tools_check_divisions.py` reports the difference against a live
+        database before a deploy.
 
         Was 2 divisions of 8; now 4 of 4 (owner, 2026-08-07).
         """
@@ -4079,10 +4062,47 @@ class SeasonManager:
         if n < per * 2 or n % per:
             return False
         size = n // per
-        for league in lgs:
+
+        byName = {t: d for d, teams in self._divisionDistribution().items() for t in teams}
+        planned, usable = {}, bool(byName)
+        for league in lgs if usable else []:
             names = self._divisionNames(league.name)
-            for i, team in enumerate(league.teamList):
-                team.division = names[min(i // size, per - 1)]
+            grouped = {d: [] for d in names}
+            for team in league.teamList:
+                d = byName.get(getattr(team, 'name', None))
+                if d not in grouped:
+                    # Either unlisted, or listed under a division belonging to the OTHER
+                    # league — which is what a realignment looks like from in here.
+                    logger.error(
+                        "divisionDistribution does not match live leagues: "
+                        f"{getattr(team, 'name', '?')} is in {league.name} but config "
+                        f"puts it in {d!r}. Falling back to positional divisions.")
+                    usable = False
+                    break
+                grouped[d].append(team)
+            if not usable:
+                break
+            bad = {d: len(m) for d, m in grouped.items() if len(m) != size}
+            if bad:
+                logger.error(
+                    f"divisionDistribution is not {size} clubs per division in "
+                    f"{league.name}: {bad}. Falling back to positional divisions.")
+                usable = False
+                break
+            planned.update(grouped)
+
+        if usable and planned:
+            for d, members in planned.items():
+                for team in members:
+                    team.division = d
+        else:
+            # ⚠️ Order-dependent, and the order is not guaranteed — see the docstring.
+            # Kept only so a config without divisionDistribution still produces a
+            # division-shaped league rather than dropping to the flat round-robin.
+            for league in lgs:
+                names = self._divisionNames(league.name)
+                for i, team in enumerate(league.teamList):
+                    team.division = names[min(i // size, per - 1)]
         # Persist immediately. This only runs at schedule generation, so if the stamp is
         # not written now the next restart finds an un-divisioned league and nothing
         # re-runs to fix it until the following season.
@@ -4937,7 +4957,13 @@ class SeasonManager:
                 season=season,
                 week=getattr(self, 'currentWeek', 0) or 0,
                 category='champion',
-                event_type='floosbowl_champion',
+                # ⚠️ camelCase. `publish` is keyword-only and takes `eventType`; this said
+                # `event_type` and raised TypeError on EVERY Floos Bowl, so the champion
+                # never reached the feed — while the unpin above had ALREADY run, leaving
+                # the previous champion unpinned and no new one published. Same fault as
+                # `_publishCriticalityNews`'s `lead_weight=`, which cost 17 seasons of
+                # criticality rows. Regression: test_publish_kwargs.py sweeps every call.
+                eventType='floosbowl_champion',
                 text='{0} {1} are Floos Bowl champions.'.format(
                     getattr(champion, 'city', ''), champion.name).strip(),
                 teamId=champion.id,
@@ -4956,6 +4982,29 @@ class SeasonManager:
                 broadcast=False,
             )
         except Exception as e:
+            # ⚠️ ROLL BACK, OR A FAILED PUBLISH TAKES THE SITE DOWN. The unpin above is a
+            # bulk UPDATE: it executes immediately and takes SQLite's single write lock.
+            # If anything between it and the publish raises, this except used to just log
+            # and walk away, leaving the shared session holding that write transaction
+            # open indefinitely. Every other session's write then waits the full 30s
+            # busy_timeout and fails — and because `runSimulation()` is a task on the SAME
+            # event loop as the HTTP server, each of those 30s blocks freezes the health
+            # check until Fly pulls the instance. That is exactly what a one-word kwarg
+            # typo (`event_type=` for `eventType=`) did in production on 2026-08-21:
+            # bracket prizes and the favourite-team bonus both died 30s apart, and the
+            # proxy reported no healthy instances.
+            # COMMIT rather than roll back: `publish` commits on success, so this is
+            # already a commit point on the happy path, and rolling back would discard
+            # whatever else was pending on the shared session. The unpin is wanted either
+            # way — the old champion stepping aside is correct even when the new row
+            # fails. Fall back to a rollback only if the session is genuinely broken.
+            try:
+                self.db_session.commit()
+            except Exception:
+                try:
+                    self.db_session.rollback()
+                except Exception:
+                    pass
             logger.error(f"Champion news publish failed: {e}")
 
     def _applyDivisionSeeding(self, qualifiers, league):
@@ -5310,6 +5359,46 @@ class SeasonManager:
             h2h = []
         return orderTeams(list(teams), h2h)
 
+    def _frozenSeedMap(self) -> dict:
+        """{teamId: seed} from the seeds frozen when the field was built.
+
+        ⚠️ THE BRACKET MUST HONOUR THESE, and for a long time it did not. The field is
+        built division-first — the four division winners take seeds 1-4 whatever their
+        records, then the best four remaining take 5-8 — and `_freezePlayoffSeeds` stamps
+        exactly that. The round loop then re-sorted the survivors by RECORD every round,
+        which sorted those winners straight back out of the top seeds, so a division title
+        was a label on the standings board and bought nothing in the bracket.
+
+        Read from the frozen blob rather than from the in-memory field, because that is
+        the copy that survives a restart mid-postseason — the resume path rebuilds
+        `playoffTeams` from a survivor snapshot that carries no seeds at all.
+        """
+        try:
+            from database.repositories.playoff_bracket_repository import PlayoffBracketRepository
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            frozen = PlayoffBracketRepository(self.db_session).getFrozenSeeds(season) or {}
+            out = {}
+            for _conf, entries in (frozen.get('conferences') or {}).items():
+                for entry in entries or []:
+                    tid, seed = entry.get('teamId'), entry.get('seed')
+                    if tid is not None and seed is not None:
+                        out[tid] = seed
+            return out
+        except Exception:
+            return {}
+
+    def _orderByFrozenSeed(self, teams):
+        """Survivors in SEED order — the NFL rule the design describes.
+
+        ⚠️ Falls back to record order only when a seed is missing for someone, which
+        means the freeze never happened. Sorting a partially-seeded field by seed would
+        be worse than sorting all of it by record.
+        """
+        seedMap = self._frozenSeedMap()
+        if not seedMap or any(getattr(t, 'id', None) not in seedMap for t in teams):
+            return self._seedTeams(teams)
+        return sorted(teams, key=lambda t: seedMap[t.id])
+
     async def _simulatePlayoffRounds(self, resumeFromRound: int = 1, restoredState: Optional[dict] = None) -> None:
         """Simulate all playoff rounds.
 
@@ -5340,13 +5429,21 @@ class SeasonManager:
             playoffTeamsList = []
             playoffsByeTeamList = []
             playoffsNonByeTeamList = []
-            league.teamList[:] = self._seedTeams(league.teamList)
+            # ⚠️ DO NOT WRITE THIS BACK INTO `league.teamList`. It used to read
+            # `league.teamList[:] = self._seedTeams(league.teamList)`, which left the
+            # league's roster list permanently in SEED order — and `_assignDivisions`
+            # slices that same list positionally at the next season's schedule
+            # generation, so the next season's divisions became this season's final
+            # standings in fours. Measured on a fresh database, membership changed at
+            # every season boundary. `teamList` is who is IN the league, not how they
+            # finished; the seeded order is a local.
+            seeded = self._seedTeams(league.teamList)
 
             # Division winners take the top seeds. Winning the division is the prize; it
             # buys a favourable matchup, not a free round. Ordered between themselves by
             # record, then the wildcards by record behind them.
             playoffTeamsList[:] = self._applyDivisionSeeding(
-                league.teamList[:int(len(league.teamList) / 2)], league)
+                seeded[:int(len(seeded) / 2)], league)
 
             # ⚠️ The eliminated set is the complement of the ACTUAL field, not the bottom
             # half by record. A division winner can finish outside the top half — at four
@@ -5426,8 +5523,25 @@ class SeasonManager:
                 _winner.seasonTeamStats['divisionChamp'] = True
                 if not hasattr(_winner, 'divisionTitles'):
                     _winner.divisionTitles = []
-                if season_str_div not in _winner.divisionTitles:
-                    _winner.divisionTitles.append(season_str_div)
+                # ⚠️ A DIVISION TITLE CARRIES THE DIVISION'S NAME; the other three
+                # honours do not need one. There is one Floos Bowl and one league
+                # title a season, so the season alone says what was won — but there
+                # are EIGHT division titles a season, and 'Season 4' on its own does
+                # not say which was taken. The division is only knowable HERE, at
+                # award time: `teams.division` is the club's CURRENT division, so a
+                # reader years later would be describing today's alignment, not the
+                # one the title was won in.
+                # Entries are therefore {'season', 'division'} dicts. Rows written
+                # before this are bare 'Season N' strings and every reader must take
+                # both shapes — see _saveChampionshipsToDatabase and the frontend's
+                # trophy case.
+                _wonSeasons = {
+                    (_e.get('season') if isinstance(_e, dict) else _e)
+                    for _e in _winner.divisionTitles
+                }
+                if season_str_div not in _wonSeasons:
+                    _winner.divisionTitles.append(
+                        {'season': season_str_div, 'division': _divName})
                 if not resuming:
                     _divText = '{0} {1} win the {2}!'.format(
                         _winner.city, _winner.name, _divName)
@@ -5565,7 +5679,9 @@ class SeasonManager:
                             from managers.teamManager import logPressureDiag
                             logPressureDiag(team, f"playoff_r{currentRound}", season=self.currentSeason.seasonNumber, week=getattr(self.currentSeason, 'currentWeek', None))
 
-                    teamsInRound[:] = self._seedTeams(teamsInRound)
+                    # ⚠️ BY FROZEN SEED, NOT BY RECORD. Re-sorting on record here is what
+                    # discarded the division-first seeding one screen after it was built.
+                    teamsInRound[:] = self._orderByFrozenSeed(teamsInRound)
 
                     hiSeed = 0
                     lowSeed = len(teamsInRound) - 1
@@ -9659,13 +9775,26 @@ class SeasonManager:
                 playoffTeamIds = set()
                 leaderboardTop = []
                 if isDay4:
-                    # Determine playoff teams: top half of each league by the
-                    # full seeding tiebreaker chain (win% → scoreDiff → H2H → …).
+                    # ⚠️ THE FIELD IS NOT THE TOP HALF BY RECORD. This took
+                    # `_seedTeams(...)[:len//2]`, which is pure record order with no
+                    # division rule — so a DIVISION WINNER with a poor record was told it
+                    # had missed, and the club sitting just above the record cutline was
+                    # told it was in while that winner's guaranteed seed had actually
+                    # taken the berth. Reported exactly there: an end-of-season email
+                    # telling a fan their team had made the playoffs when it had not.
+                    #
+                    # `seedLeague` is the same function `_applyDivisionSeeding` delegates
+                    # to, so the email cannot disagree with the field that gets built.
+                    from standings_view import seedLeague
                     for league in self.leagueManager.leagues:
-                        sortedTeams = self._seedTeams(league.teamList)
-                        cutoff = len(sortedTeams) // 2
-                        for t in sortedTeams[:cutoff]:
-                            playoffTeamIds.add(t.id)
+                        try:
+                            seeded = seedLeague(list(league.teamList))['seeds']
+                            playoffTeamIds.update(seeded.keys())
+                        except Exception:
+                            # Never let a mail path break the season roll.
+                            sortedTeams = self._seedTeams(league.teamList)
+                            for t in sortedTeams[:len(sortedTeams) // 2]:
+                                playoffTeamIds.add(t.id)
 
                     # Season leaderboard top 10
                     for i, entry in enumerate(seasonRanked[:10]):
@@ -10001,7 +10130,16 @@ class SeasonManager:
                                     for league in self.leagueManager.leagues:
                                         for t in league.teamList:
                                             if t.id == user.favorite_team_id:
-                                                if getattr(t, 'clinchPlayoff', False) or getattr(t, 'madePlayoffs', False):
+                                                # ⚠️ BOTH OF THESE WERE MISSPELT AND SO
+                                                # ALWAYS FALSE: the attribute is
+                                                # `clinchedPlayoffs`, and `madePlayoffs`
+                                                # lives in `seasonTeamStats`, never on the
+                                                # team. The season-end mail could
+                                                # therefore never say "Made Playoffs" for
+                                                # anyone — the silent mirror of the day-4
+                                                # mail saying it for the wrong clubs.
+                                                _stats = getattr(t, 'seasonTeamStats', {}) or {}
+                                                if _stats.get('madePlayoffs') or getattr(t, 'clinchedPlayoffs', False):
                                                     playoffResult = playoffResult or "Made Playoffs"
 
                                 favStats = getattr(team, 'seasonTeamStats', {})
@@ -12286,10 +12424,17 @@ class SeasonManager:
             )
             for team in teamManager.teams:
                 for attr, kind in TITLE_KINDS:
-                    for season_str in (getattr(team, attr, None) or []):
+                    for entry in (getattr(team, attr, None) or []):
+                        # ⚠️ divisionTitles entries are {'season','division'} dicts
+                        # (legacy rows are bare strings); every other honour is a
+                        # bare 'Season N' string. A dict reaching int() here parses
+                        # as a ValueError and `continue`s, so the title would be
+                        # silently dropped from the Championship table — written on
+                        # the club and missing from the queryable record.
+                        season_str = entry.get('season') if isinstance(entry, dict) else entry
                         try:
                             season_num = int(str(season_str).replace('Season ', ''))
-                        except ValueError:
+                        except (ValueError, TypeError):
                             continue
                         existing = self.db_session.query(DBChampionship).filter_by(
                             team_id=team.id, season=season_num, championship_type=kind,
