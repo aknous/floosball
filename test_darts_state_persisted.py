@@ -118,6 +118,57 @@ missing = [k for k in GF._FORMATS
 expect(f"no non-standard format is still inheriting the empty base ({missing})",
        not missing)
 
+# ── 7. the archived rebuild reads it back ───────────────────────────────
+# ⚠️ PERSISTING IT IS ONLY HALF A CHAIN. The game endpoint merges format state for a game
+# still in MEMORY, but a game the schedule no longer holds goes through
+# `buildFinishedGame`, which returned before reaching that merge — so the column was
+# written at completion and then never read back. Checked against production: a season-1
+# chess-clock final carried its state in the database and served a payload with no format
+# block at all, which is why an old game had nothing to describe itself with.
+print("\n-- an archived game reads its format back out of the column --")
+import json as _json, tempfile, shutil
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from database.models import Base, Game as _G, Team as _T
+from game_box_score import buildFinishedGame
+
+_tmp = tempfile.mkdtemp()
+try:
+    _eng = create_engine('sqlite:///%s/t.db' % _tmp)
+    Base.metadata.create_all(_eng)
+    _S = sessionmaker(bind=_eng)()
+    for _i, (_n, _a) in enumerate((('Home', 'HOM'), ('Away', 'AWY')), start=1):
+        _S.add(_T(id=_i, name=_n, city=_n, abbr=_a, color='#111',
+                  offense_rating=70, defense_rating=70, overall_rating=70))
+    _cases = {
+        10: _json.dumps({'gameFormatInfo': {'format': 'bust', 'targetScore': 24,
+                                            'landed': 'home', 'homeHoops': 3}}),
+        11: _json.dumps({'chessClock': {'active': True}}),   # a DIFFERENT format's block
+        12: None,                                            # standard: nothing persisted
+    }
+    for _gid, _fs in _cases.items():
+        _S.add(_G(id=_gid, season=1, week=1, home_team_id=1, away_team_id=2,
+                  home_score=24, away_score=17, status='final', format_state=_fs))
+    _S.commit()
+
+    _darts = buildFinishedGame(_S, 10) or {}
+    _info = _darts.get('gameFormatInfo') or {}
+    expect(f"an archived darts final still reports its own target ({_info.get('targetScore')})",
+           _info.get('targetScore') == 24)
+    expect("and how it was won", _info.get('landed') == 'home' and _info.get('homeHoops') == 3)
+    # ⚠️ Not darts-specific: the same read has to serve every format, or the fix only
+    # rescues the one that prompted it while chess-clock and frames finals stay blank.
+    expect("an archived game of another format gets ITS block, not darts'",
+           (buildFinishedGame(_S, 11) or {}).get('chessClock', {}).get('active') is True
+           and 'gameFormatInfo' not in (buildFinishedGame(_S, 11) or {}))
+    # ⚠️ A standard game must stay silent. The client treats the ABSENCE of a block as
+    # "this game recorded no format", which is what stops it guessing from live rules.
+    _std = buildFinishedGame(_S, 12) or {}
+    expect("and a standard archived game carries no format block at all",
+           not any(k in _std for k in ('gameFormatInfo', 'chessClock', 'frames', 'innings')))
+finally:
+    shutil.rmtree(_tmp, ignore_errors=True)
+
 print()
 if fails:
     print(f"FAIL — {len(fails)} problem(s):")

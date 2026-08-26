@@ -229,7 +229,7 @@ def buildFinishedGame(session, gameId: int) -> Optional[Dict[str, Any]]:
                 'quarters': quarters,
             }
 
-        return {
+        out = {
             'id': g.id,
             'season': g.season,
             'week': g.week,
@@ -253,6 +253,25 @@ def buildFinishedGame(session, gameId: int) -> Optional[Dict[str, Any]]:
             'plays': _postgamePlays(g),
             'fromArchive': True,
         }
+        # ⚠️ THE FORMAT THIS GAME WAS PLAYED UNDER, which this rebuild dropped entirely.
+        # `games.format_state` is written at completion precisely so a finished game can
+        # still describe itself, and the in-memory path already merges it — but an
+        # ARCHIVED game returns before reaching that, so the column was persisted and then
+        # never read back. Measured: a season-1 chess-clock final carried its state in the
+        # database and served a payload with no format block at all.
+        #
+        # It matters because the client's only other source is /api/rules, the league's
+        # CURRENT ruleset, and rules are VOTABLE — so without this an old game is rendered
+        # as whatever format the league happens to be running today.
+        try:
+            if g.format_state:
+                import json as _json
+                extra = _json.loads(g.format_state)
+                if isinstance(extra, dict):
+                    out.update(extra)
+        except Exception:
+            logger.debug(f"Could not read format_state for game {gameId}", exc_info=True)
+        return out
     except Exception as e:
         logger.debug(f"Archived game rebuild failed for {gameId}: {e}")
         return None
