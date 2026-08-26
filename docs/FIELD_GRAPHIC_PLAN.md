@@ -156,12 +156,19 @@ and where a second client (board card, phone) would need its own copy.
 ⚠️ **THE INSTINCT IS RIGHT AND A NEW SOCKET IS NOT NEEDED — the targeting already exists
 and is already maintained.** `/ws/season` handles `{type:'watch', gameId}` /
 `{type:'unwatch'}` per connection and keeps `ws_manager.connection_watching`, a map from
-socket to the game that client has open. The game modal already sends it. It is used today
+socket to the game that client has open. The game page already sends it. It is used today
 only for viewer counts.
+
+⚠️ **THE GAME IS A PAGE, NOT A MODAL, AND THE COMPONENT NAME LIES ABOUT IT.** The route is
+`/game/:gameId` → `Views/Game/GamePage.tsx`, which mounts `Components/GameModalNew` with
+`layout="page"` — same field SVG, same play rows, same insights. Anyone reading "modal"
+here and going looking for one will not find the thing they need to change. Verified that
+the watch still fires on that path: `GameModalNew` calls `watchGame(gameId)` on mount and
+`watchGame(null)` on unmount, and the page mounts it unconditionally.
 
 Everything a fourth channel would have to re-solve is therefore already solved:
 
-- **The modal already announces itself** on open and on close.
+- **The page already announces itself** on open and on close.
 - **A dropped socket clears the entry** (`websocket_manager.py:86`), and
   `test_viewer_count.py` asserts it.
 - **A reconnect re-announces the open game** — there is an explicit effect for it in
@@ -187,7 +194,7 @@ fifteen games' worth of choreography it will never draw.
 ### The late joiner
 
 ⚠️ **A client that opens the page mid-drive has missed the `cast`, and must not be sent it
-over the socket.** It comes from `GET /api/games/{id}` — the fetch the modal already
+over the socket.** It comes from `GET /api/games/{id}` — the fetch the page already
 makes on open — so the cast is a property of the REST payload and the socket only ever
 carries scripts. No replay buffer, no catch-up message, and a reconnect re-fetches it for
 free.
@@ -437,8 +444,10 @@ score, and that trade is settled). So this is a LIVE and in-memory-replay featur
 that has aged out has no plays to animate. Scripts should NOT be persisted either — they
 are derivable from a play, and storing them would be storing the same thing twice.
 
-⚠️ **`GameModalNew.tsx` is 3,698 lines** and the field graphic is already a large inline
-block inside it. The renderer lands as its own module or it will not be reviewable.
+⚠️ **`GameModalNew.tsx` is 3,698 lines and now serves two layouts** (the `/game/:gameId`
+page via `GamePage.tsx`, plus its original inline use), and the field graphic is a large
+block inside it. The renderer lands as its own module or it will not be reviewable — and
+that module is the natural moment to stop calling the game screen a modal.
 
 ## Open questions
 
