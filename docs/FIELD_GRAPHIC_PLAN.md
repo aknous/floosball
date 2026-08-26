@@ -16,6 +16,7 @@ that already happened**.
 |---|---|
 | Per-play semantics in the engine | **BUILT** — and mostly unemitted, see the table below |
 | `play_choreography.py` — the script writer | **NOT BUILT** — the whole first phase |
+| Formation + pre-snap phase (incl. the disguise reveal) | **NOT BUILT** — derived from roles, see below |
 | `cast` + `script` on the payload | **NOT BUILT** |
 | Physical attributes on the payload | **NOT BUILT** — required; see "How fast is he" |
 | Renderer (dumb: plays a script, applies a camera) | **NOT BUILT** |
@@ -145,6 +146,81 @@ where responsibility sits. It is the right place for it — the alternative is t
 convention living in the client, where it cannot be tested against the play it describes,
 and where a second client (board card, phone) would need its own copy.
 
+## Formation, and the pre-snap
+
+> Owner, 2026-08-26: *"the graphic also needs to know offensive and defensive formations
+> at the start, as well as any per play changes, like when a QB calls an audible."*
+
+⚠️ **THE SIM HAS NO FORMATIONS AND DOES NOT NEED THEM.** There is no "I-formation" or
+"nickel" anywhere in the engine. What it has is ROLES, and a formation is what roles look
+like when you draw them:
+
+| the engine decides | the alignment that falls out |
+|---|---|
+| `passPlayBook[key]['targets']` — a slot with `None` blocks, otherwise runs a route | who is split wide vs in the backfield |
+| `dropback` depth (3/5/7-step, hail mary) | under centre vs deep |
+| `runConcept` (sweep / counter / draw / sneak) | where the back sets and which way he opens |
+| `passConcept` (screen / standard) | whether the back leaks out |
+| `runStopFocus` | how stacked the box is |
+| `coverageType` (man / zone / match) | pressed on receivers vs spaced off them |
+| `blitzPackage`, `passRusher` | who is walked up |
+| `coverageAssignments` | who is aligned over whom |
+
+So the choreographer DERIVES the formation the same way it derives everything else, and
+the derived-only rule holds through the pre-snap.
+
+### The script starts before the snap
+
+The shape gains a phase. Beats carry **negative `t`** up to the snap at `t = 0`:
+
+```
+script: {
+  dur, los, dir,
+  snap: 0.0,                 # everything before this is the pre-snap
+  beats: [
+    {t: -2.4, a: 'cb1', p: [...], k: 'align'},     # the SHOWN look
+    {t: -1.1, a: 'qb',  k: 'audible'},             # only when one was called
+    {t: -0.6, a: 'lb',  p: [...], k: 'shift'},     # a tipped disguise, before the snap
+    {t:  0.0, a: 'qb',  k: 'snap'},
+    ...
+  ]
+}
+```
+
+⚠️ **This is what makes the audible visible at all.** `insights.audible` is present on
+**45% of plays** and carries `{checked, sawStacked, readRight}` — whether the quarterback
+changed the call, what he thought he saw, and whether he was right. Today that resolves
+entirely between the whistle and the snap and the feed reports only what happened after
+it. A graphic that starts at the snap throws away the most interesting half of the
+decision.
+
+### The disguise, and why this is the medium for it
+
+⚠️ **THE DEFENCE HAS TWO ALIGNMENTS AND THE SCRIPT MUST CARRY BOTH.**
+`insights.disguise` is `{shown, actual, tipped}` — present on **19% of plays**. The
+defence lines up in one look and plays another, `tipped` says whether it failed to hold
+the lie, and `preSnapRead` (**76% of plays**) says what it actually committed to.
+
+CLAUDE.md already states the rule this was designed around:
+
+> the pre-snap line reports what the QB SEES *including when it is a lie*, and the play
+> text reveals the truth — the reader is fooled alongside the quarterback and learns with
+> him
+
+⚠️ **That was specced as PROSE and never built**, with the accompanying note that without
+it "the whole system is invisible work". A field graphic is a far better medium for a lie
+than a sentence: the viewer sees the stacked box, watches the quarterback check into a
+pass against it, and then watches the box empty out at the snap. Nothing has to be
+narrated, and the reveal lands as a thing seen rather than a thing read.
+
+So the pre-snap beats draw `shown`, the snap swaps to `actual`, and `tipped` decides
+whether the swap leaks early enough for a sharp quarterback to have caught it. All three
+are fields that exist today.
+
+⚠️ **Do NOT reveal the disguise before the snap when it was held.** The whole value is
+that the viewer is fooled with the quarterback. A graphic that draws `actual` throughout
+destroys the one system this feature was best placed to make visible.
+
 ## How fast is he
 
 ⚠️ **The payload carries situational ratings, not physical attributes.** `rbVision`,
@@ -268,6 +344,10 @@ Two rules follow, and both are assertable in Python:
 5. **The camera.** Swap in the oblique projection; keep top-down selectable.
 6. **The moments.** Interception, sack, forced fumble, broken tackle — each one an event
    the script already carries, none of them bespoke animation.
+7. **The pre-snap.** Formation, the audible, and the disguise reveal. Deliberately LAST
+   even though it happens first: it is the part with no precedent on screen, and it wants
+   a renderer already trusted to draw the snap correctly. ⚠️ It is also the phase that
+   pays off a system built in 2026-08 and never surfaced.
 
 ⚠️ **Play-by-play is deliberately not persisted** (the feed is far larger than the box
 score, and that trade is settled). So this is a LIVE and in-memory-replay feature; a game
