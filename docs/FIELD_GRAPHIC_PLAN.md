@@ -67,6 +67,69 @@ Measured by grep against `floosball_game.py`:
 `insights.pass` and `insights.run` are already rich — air yards, YAC, gap qualities for
 every gap, `designedGap` vs `selectedGap` (the back *chose* a hole), the three gate odds.
 
+## What the graphic is FOR: making quality legible
+
+> Owner, 2026-08-26: *"the thing that I want to try to have emerge is making it more
+> apparent how good or bad teams are, or individual players. its hard to gauge who is
+> actually a good player by just watching games unless that player is literally
+> unstoppable every time they get the ball."*
+
+⚠️ **THIS IS THE SUCCESS CRITERION, AND IT IS NOT THE SAME AS "LOOKS BETTER".** A graphic
+can be far more impressive and still leave a viewer unable to tell a 91 receiver from a
+72. Everything below is measured over one real production week (1,871 plays).
+
+### Why quality is invisible today
+
+**The graphic shows outcomes; quality lives in the margins.** A four-yard gain looks
+identical whether the back made two men miss or fell forward. The sim computes the margin
+on every snap and the screen shows none of it.
+
+⚠️ **AND WATCHING THE BALL IS A BIASED ESTIMATOR.** The quarterback throws to whoever won
+his matchup, so the receiver you SEE is selected for having beaten his man. Measured:
+
+| | mean separation | n |
+|---|---|---|
+| routes that were TARGETED | **62.2** | 853 |
+| routes that were NOT | **50.4** | 748 |
+
+So the ball-follower sees a systematically flattering sample and never sees the play where
+a receiver lost. **In one week that is 748 route matchups resolved and shown to nobody** —
+and they are exactly the evidence that separates a good receiver from a poor one.
+
+### The signal is there and it is wide enough to see
+
+| what the sim already computes | spread across players |
+|---|---|
+| receiver separation (`openness`) | 43.1 → 74.9, and **corr +0.54** with route quality |
+| throw quality (`throwQuality`) | 54.6 → 86.4 across 18 passers |
+| the gap a blocker opens (`gapQualityUsed`) | 36.1 → 64.6 across 30 blockers |
+
+⚠️ These are per-player AVERAGES over a week, and that is the point: a single snap says
+almost nothing, because football is noisy enough that a great receiver is sometimes
+blanketed. **Quality is legible over a game, not over a play**, and the graphic's job is
+to make each snap contribute a little evidence rather than none.
+
+### What that demands of the design
+
+Three consequences, and the third is a constraint nobody would guess:
+
+1. **All ten figures, every snap** — already settled, but this is the reason WHY. The
+   non-targeted half is where the unbiased evidence lives.
+2. **Draw margins, not just results.** Separation, pocket depth, the width of the gap. A
+   stuffed run and a four-yard run should look different in the same way the numbers
+   behind them differ.
+3. ⚠️ **The mapping must be CONSISTENT play to play, or impressions cannot accumulate.**
+   An `openness` of 66 has to look the same every time it occurs, in every game, or a
+   viewer never learns to read it and the whole effect collapses into decoration. This is
+   a hard constraint on the choreographer, and it is testable: the same inputs must
+   produce the same geometry.
+
+⚠️ **This also settles what "emergence" means here.** It is NOT the spatial-simulation
+kind (see "The fork") — nothing new has to be computed. The sim already knows who is good
+and demonstrates it on every snap. The emergence being asked for is a READER forming an
+accurate impression from watching, which is a presentation problem, and one this plan can
+actually deliver.
+
 ## The data contract — the backend hands over a SCRIPT
 
 > Owner, 2026-08-26: *"each play should hand the frontend the script for the play and the
@@ -503,9 +566,10 @@ still open and the entire presentation layer is already built and paid for.
 
 1. **`play_choreography.py`, with no rendering at all.** Take a resolved `Play`, return a
    script. Prove it over real production plays: every one of the ten figures resolves to a
-   beat on every snap, every script's final position matches the play's yardage, and every
-   outcome in the prose has a matching event. ⚠️ The feature's whole foundation is
-   provable here, before a pixel moves.
+   beat on every snap, every script's final position matches the play's yardage, every
+   outcome in the prose has a matching event, and ⚠️ **the same inputs always produce the
+   same geometry** — the consistency that "making quality legible" depends on. The
+   feature's whole foundation is provable here, before a pixel moves.
 2. **`cast` + `script` on the wire.** The cast on `GET /api/games/{id}`; the script
    through a new `broadcast_to_watchers` so it reaches only the sockets with that game
    open. Confirm the measured payload cost and that nothing else on the broadcast
