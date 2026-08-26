@@ -19,6 +19,7 @@ that already happened**.
 | Formation + pre-snap phase (incl. the disguise reveal) | **NOT BUILT** — offence is READ from the call (23 packages), defence derived |
 | `cast` + `script` on the payload | **NOT BUILT** |
 | Physical attributes on the payload | **NOT BUILT** — required; see "How fast is he" |
+| Delivery: `broadcast_to_watchers` on the existing `/ws/season` | **NOT BUILT** — the watch map already exists |
 | Renderer (dumb: plays a script, applies a camera) | **NOT BUILT** |
 
 ## Settled (owner, 2026-08-26)
@@ -145,6 +146,55 @@ testable without a browser.
 where responsibility sits. It is the right place for it — the alternative is the same
 convention living in the client, where it cannot be tested against the play it describes,
 and where a second client (board card, phone) would need its own copy.
+
+## Delivery — only to the people looking at it
+
+> Owner, 2026-08-26: *"feels like we may need to spin up a new websocket for this that
+> only connects when a user browses to the game page. I dont think we should have all this
+> data coming over for every game all the time."*
+
+⚠️ **THE INSTINCT IS RIGHT AND A NEW SOCKET IS NOT NEEDED — the targeting already exists
+and is already maintained.** `/ws/season` handles `{type:'watch', gameId}` /
+`{type:'unwatch'}` per connection and keeps `ws_manager.connection_watching`, a map from
+socket to the game that client has open. The game modal already sends it. It is used today
+only for viewer counts.
+
+Everything a fourth channel would have to re-solve is therefore already solved:
+
+- **The modal already announces itself** on open and on close.
+- **A dropped socket clears the entry** (`websocket_manager.py:86`), and
+  `test_viewer_count.py` asserts it.
+- **A reconnect re-announces the open game** — there is an explicit effect for it in
+  `SeasonWebSocketContext`, with a note that without it "this viewer silently stops being
+  counted for the rest of the session". ⚠️ That bug class is exactly what a new socket
+  would reintroduce, and it has already been paid for once.
+
+So the addition is **one method**, not a channel: `broadcast_to_watchers(gameId, message)`,
+alongside the existing per-channel and per-user paths.
+
+### What it saves
+
+The script rides only to sockets watching that game. Over a full 16-game slate:
+
+| | reaching one client | server egress at 100 viewers |
+|---|---|---|
+| broadcast to everyone | 1.2 MB | 121.7 MB |
+| **watch-targeted** | **0.1 MB** (6%) | **7.6 MB** |
+
+⚠️ The multiplier is the point: a client that has one game open was going to receive
+fifteen games' worth of choreography it will never draw.
+
+### The late joiner
+
+⚠️ **A client that opens the page mid-drive has missed the `cast`, and must not be sent it
+over the socket.** It comes from `GET /api/games/{id}` — the fetch the modal already
+makes on open — so the cast is a property of the REST payload and the socket only ever
+carries scripts. No replay buffer, no catch-up message, and a reconnect re-fetches it for
+free.
+
+⚠️ **A script is for the play it describes and is worthless afterwards**, so a viewer who
+joins mid-play simply starts at the next snap. Nothing needs to be queued or replayed —
+which is what keeps this from growing a delivery-guarantee problem it does not have.
 
 ## Formation, and the pre-snap
 
@@ -365,8 +415,11 @@ Two rules follow, and both are assertable in Python:
    beat on every snap, every script's final position matches the play's yardage, and every
    outcome in the prose has a matching event. ⚠️ The feature's whole foundation is
    provable here, before a pixel moves.
-2. **`cast` + `script` on the wire.** Emit them, confirm the measured payload cost, and
-   confirm nothing else on the broadcast regressed.
+2. **`cast` + `script` on the wire.** The cast on `GET /api/games/{id}`; the script
+   through a new `broadcast_to_watchers` so it reaches only the sockets with that game
+   open. Confirm the measured payload cost and that nothing else on the broadcast
+   regressed. ⚠️ Assert the negative too — a client watching game A must receive NO
+   script for game B — since the whole saving is in that being true.
 3. **A dumb renderer, static.** Play the first beat only — ten figures at their spots. This
    alone already shows coverage and blocking, which the current graphic cannot.
 4. **Playback.** Tween the keyframes. Top-down projection first, because it is the identity
