@@ -2235,6 +2235,28 @@ CONVERSION_FORCEGO_MAKE_FLOOR = 0.72     # a neutral coach's minimum make% to re
 CONVERSION_FORCEGO_AGGR_SWING = 0.30     # +/- the floor across the coach-aggressiveness range
 CONVERSION_FORCEGO_JITTER = 0.08         # per-attempt randomness on the floor (variety)
 
+# ── Darts: take the dart, or bank the points? ────────────────────────────────
+# In darts a rung that lands EXACTLY on the target wins outright, so at a need of 3, 4
+# or 5 the ladder offers a try that ends the game — but the rung that lands is always
+# the LONGEST one still legal, so winning now is always the least likely make. The
+# alternative is to take a shorter non-busting rung, bank the points, and land the
+# remainder on a later drive (a field goal covers 3, a hoop covers 1).
+#
+# ⚠️ NEITHER LINE IS STRICTLY BETTER, which is what makes this a coach call rather than
+# a rule (owner, 2026-08-26: "an aggressive coach would go for the higher score to win,
+# conservative will bank easy points"). Measured at the shipped rung distances, a need of
+# 5 is a 0.34 shot at winning immediately against a 0.70 shot at reaching a need of 3 —
+# and a failed try costs nothing either way, since the touchdown is already banked.
+#
+# Same shape as the CONVERSION_FORCEGO_* floor above: the landing rung is taken when its
+# make estimate clears a floor that aggressiveness lowers.
+DARTS_LAND_MAKE_FLOOR = 0.45   # a neutral coach's minimum make% to try to win it outright
+DARTS_LAND_AGGR_SWING = 0.26   # +/- the floor across the coach-aggressiveness range
+DARTS_LAND_JITTER     = 0.06   # per-attempt randomness on the floor (variety)
+# Only defer to the coach when banking is MATERIALLY safer. Below this the landing rung
+# is close enough in odds that declining a win is just leaving the game on the field.
+DARTS_LAND_MIN_EDGE   = 0.06
+
 # How boldly a TRAILING team reaches for a ladder rung (or the 2-pt) instead of the safe
 # kick — the desire chart in _conversionDesire, now tuned aggressive so comebacks lean on
 # the rungs. Each tier is the base go-for-it probability (before coach aggressiveness and

@@ -13400,15 +13400,58 @@ class Game:
         need = float(self.format.bustNeed(self, scoringTeam))
         if need <= 0:
             return None                 # already on the target; the try is moot anyway
-        # A go-rung that lands exactly on it ends the game — take the shortest such try.
+        # A go-rung that lands exactly on it ends the game.
         landing = [r for r in goRungs if float(r['points']) == need]
         if landing:
-            return min(landing, key=lambda r: r['distance'])
+            best = min(landing, key=lambda r: r['distance'])
+            alt = self._dartsBankInstead(scoringTeam, goRungs, need, best)
+            return alt if alt is not None else best
         # Otherwise the kick lands it, if anything does.
         if float(getattr(self.gameRules, 'extraPointPoints', 1)) == need:
             return fallback if fallback['kind'] == 'kick' else dict(
                 next(r for r in self._conversionRungs() if r['kind'] == 'kick'))
         return None                     # nothing wins outright — defer, minus the busting rungs
+
+    def _dartsBankInstead(self, scoringTeam, goRungs: list, need: float, landing: dict):
+        """A shorter rung to BANK instead of trying to land the dart now, or None to land.
+
+        ⚠️ THE RUNG THAT WINS IS ALWAYS THE LEAST LIKELY ONE. Landing requires scoring
+        EXACTLY the remainder, so the landing rung is the longest try still legal — at a
+        need of 5 that is the 5-pointer at roughly a third, against a 2-pointer at better
+        than two thirds. The shorter try does not win, but it banks real points and leaves
+        a remainder something else can land (a field goal covers 3, a hoop covers 1).
+
+        ⚠️ NEITHER LINE IS STRICTLY BETTER, so this is a COACH call rather than a rule
+        (owner, 2026-08-26: "an aggressive coach would go for the higher score to win,
+        conservative will bank easy points"). A failed try costs nothing either way — the
+        touchdown is already banked before the try — so this is not risk aversion, it is a
+        genuine read on whether a one-in-three at ending it beats two-in-three at getting
+        closer.
+
+        ⚠️ Returns None whenever there is no real trade-off, which is most of the time:
+        when nothing shorter is legal (a need of 2 — the 2-pointer both lands AND is the
+        safest rung), or when banking is not materially safer (`DARTS_LAND_MIN_EDGE`).
+        Declining a win that is nearly as likely as the alternative is just leaving the
+        game on the field.
+        """
+        from constants import (DARTS_LAND_MAKE_FLOOR, DARTS_LAND_AGGR_SWING,
+                               DARTS_LAND_JITTER, DARTS_LAND_MIN_EDGE)
+        # Strictly-closer rungs only. They cannot bust (they are under the need), and one
+        # that reached the need would be a landing rung, not an alternative to one.
+        shorter = [r for r in goRungs if 0 < float(r['points']) < float(need)]
+        if not shorter:
+            return None
+        pLand = self._estimateConversionProb(scoringTeam, landing['distance'])
+        bank = max(shorter, key=lambda r: self._estimateConversionProb(scoringTeam, r['distance']))
+        pBank = self._estimateConversionProb(scoringTeam, bank['distance'])
+        if pBank - pLand < DARTS_LAND_MIN_EDGE:
+            return None                      # the win is about as likely; take it
+        coach = getattr(scoringTeam, 'coach', None)
+        aggressNorm = (getattr(coach, 'aggressiveness', COACH_ATTR_NEUTRAL)
+                       - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+        jitter = (_random.random() - 0.5) * 2 * DARTS_LAND_JITTER
+        floor = DARTS_LAND_MAKE_FLOOR - aggressNorm * DARTS_LAND_AGGR_SWING + jitter
+        return None if pLand >= floor else bank
 
     def _chooseFramesConversion(self, scoringTeam: FloosTeam.Team, goRungs: list, fallback: dict):
         """Frames post-TD decision, or None to defer to the standard policy.
