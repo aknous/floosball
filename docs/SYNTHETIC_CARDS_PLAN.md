@@ -413,56 +413,74 @@ next restart.
 fantasy and pick-em, and none of those have a claim moment either — so the direct-grant
 branch is shared, exactly like the ledger.
 
-### ⚠️ Measured: the capstone rungs are already the right scarcity
+### ⚠️ Measured on PRODUCTION: the capstone rungs are already the right scarcity
 
-The live achievement set is **106**, and its shape does the sizing work for us:
+The live achievement set is **106**, and its shape does the sizing work for us: all **59
+`guidance`** achievements are `per_season` and almost all are tiered ladders
+(`_i / _ii / _iii / _iv`), with the **tier-IV rung already the slot where the non-Floobit
+reward lives** (a `grand` pack in ten of them). Fourteen capstones in total. That is the
+natural home — already per-season, already a capstone, already understood by a user as
+"this one is a real reward".
 
-| | |
+⚠️ **SEASON 0 IS NOT A SEASON — IT IS THE `once` BUCKET, and it inverts the headline.**
+`once` achievements are stored with `season = 0` (onboarding, collection and the 33
+secrets), so a naive per-user-season query reports **p50 = 0 capstones** across 218
+user-seasons. That figure is an artifact: **141 of those "user-seasons" are the season-0
+bucket**, which by construction holds no capstones at all, because every capstone is
+`per_season`. Excluding it leaves **77 real user-seasons** and a completely different
+picture. Any future per-season achievement analysis has to drop season 0 first.
+
+| production, 189 users | |
 |---|---|
-| `guidance` | **59**, and all of them `per_season` |
-| `onboarding` / `collection` / `secret` | 5 / 9 / 33, all `once` |
-| already grant a pack | 24 |
-| already grant a powerup | **1** |
+| users with ≥1 completion ever | **141 (75%)** |
+| capstones per participating user, **completed** seasons (1-2) | **2.04** |
+| season 1 / 2 / 3 | 48 caps / 27 users · 58 / 25 · **18 / 25 (partial)** |
+| real user-seasons with ≥1 capstone | **49 of 77 (64%)** |
+| real user-seasons with **zero** | 28 (36%) |
+| **tail** | max **9** in one season; 4+ in 12 user-seasons |
 
-⚠️ The guidance set is almost entirely **tiered ladders** — `_i / _ii / _iii / _iv` — and
-the **tier-IV rung is already the slot where the non-Floobit reward lives** (a `grand` pack
-in ten of them). That is the natural home: already per-season, already capstone, already
-understood by a user as "this one is a real reward".
-
-**Measured completion rate: an engaged user finishes 2-3 of the 14 capstones in a season**
-(median 2, max 3), against a median of 14 achievement completions overall. So **one
-component per capstone is self-limiting** — no subset needs picking, the difficulty already
-does it.
-
-⚠️ **Sample caveat, stated because it matters:** that is measured on a development database
-with **two** users across 21 seasons. The targets are fixed and that player's engagement is
-realistic, so the ~2-3 rate is indicative — but re-measure against production before
-committing the number.
+**One component per capstone is self-limiting.** The typical participating user earns
+**2**, which is exactly what the (unreliable) dev database predicted — that estimate stands
+up. No subset of capstones needs picking; the difficulty already does it.
 
 ### The supply picture
 
-| source | per season |
-|---|---|
-| shop, 2/day × 4 game days | **8** |
-| guidance capstones, 1 each | **~2-3** |
-| onboarding, once ever | 1 |
-| **total, engaged user** | **~10-11** against a 7-slot lineup |
+| source | typical | top of tail |
+|---|---|---|
+| shop, 2/day × 4 game days | 8 | 8 |
+| guidance capstones, 1 each | **2** | **9** |
+| onboarding, once ever | 1 | 1 |
+| **total** | **~11** against a 7-slot lineup | **18** |
 
 **Recommend: 1 per guidance capstone, plus 1 on an onboarding achievement.**
 
-⚠️ **The onboarding grant is the one that earns its place**, and it is worth more than its
-size. Under the new starter pack a first-day user holds five or six **metallic** cards —
-real effects, on players the game picked. One component turns that into *your* effects on
-*your* players immediately, instead of waiting for shop days to accumulate. That is
-precisely the complaint this whole feature answers, and it lands in the first session
-rather than the second week.
+⚠️ **THE ACHIEVEMENT FAUCET IS REGRESSIVE AGAINST THE PROBLEM THIS FEATURE SOLVES, and
+that is the finding worth acting on.** The friction report came from **newer** users — "it
+is hard to get the players you want with the effects you want". But shop supply is **flat**
+(8 for anyone who turns up) while achievement supply runs **0 for 36% of participating
+user-seasons and up to 9 for the deepest**. So the grants land hardest on veterans, who
+were never the ones complaining, and give nothing at all to a third of players.
 
-⚠️ **The risk to keep named: achievement grants BYPASS the daily cap.** The shop's whole
-design is that the constraint is *days elapsed*, not Floobits banked — and a burst of
-completions hands over several components at once, which the cap cannot see. At 2-3 a
-season that is a rounding error. If components were later added to all 14 capstones **and**
-the 33 secrets, the gate would stop being the gate. Any future widening of the grant list
-is a change to the cap, whether or not it is discussed as one.
+That is fine as a **reward** — it matches the principle chrome is built on, that the
+meta-game is gated behind engagement rather than wallet. It is not fine as part of the
+**fix**, and should not be counted as one. Two consequences:
+
+1. ⚠️ **The onboarding grant carries more weight than its size suggests** — it is the only
+   component a new user reliably receives, and season 0 shows the reach is real: **141 of
+   189 users** have completions in that bucket. Under the metallic starter pack it turns
+   the game's chosen effects into *their* players in the first session rather than the
+   second week, which is the complaint answered at the moment it is felt.
+2. **The shop's flat 8 is what actually serves the target audience.** Keep the Floobit
+   price modest for that reason and not merely because availability is the gate.
+
+⚠️ **Achievement grants BYPASS the daily cap**, so the tail earns **9 in bursts** the cap
+cannot see — 17-18 components a season against a 7-slot lineup, i.e. two and a half
+rebuilds. That is defensible (they are the most engaged players, and each build still burns
+a pulled donor), but if a predictable ceiling is wanted the guard is cheap: **cap
+achievement-sourced components per season** in the ledger, a count over
+`source = 'achievement'`. At a cap of 4 the typical user is untouched and the tail lands at
+12 rather than 18. ⚠️ Note that widening the grant list later — to all 14 capstones **and**
+the 33 secrets — is a change to the cap whether or not it gets discussed as one.
 
 ### Where it lives in the shop
 
