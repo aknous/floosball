@@ -1088,6 +1088,35 @@ achievement, fantasy and pick-em results, gone in one level. That is a sharper l
 because the fanbase cannot simply grind more Floobits to replace it — they have to go and earn it
 again through play.
 
+## ⚠️ 2026-08-26 — "component" is now a FAMILY, shared with synthetic cards
+
+Owner: the synthetic-cards consumable borrows this plan's word, so the league has **Chrome
+Components** and **Synth Components**. This plan is the mature half of that vocabulary and
+did not change; what follows is what the second member obliges.
+
+**Build the ledger here or inherit it.** `docs/SYNTHETIC_CARDS_PLAN.md` is priority 1 and
+now specs a shared component ledger — one row per component with `user_id`, `type`,
+`source`, `granted_at`, `consumed_at`, and room for a nullable earmark target. Chrome needs
+exactly that table. It should be built once, on whichever plan lands first, and the synth
+plan is scheduled first.
+
+⚠️ **Do not let the shared word unify the ACQUISITION.** Synth Components are shop-bought
+(2/day) plus achievement grants; **chrome components remain earned only**, and that is not
+a flavor difference — the whole "supply becomes the master dial" argument below rests on
+it, and it is what makes R₀ a schedule we set rather than a number emergent from Floobit
+income × price × spending appetite. A shared noun makes "unify the acquisition too" sound
+tidy. It would quietly undo the hardest calibration in this document.
+
+⚠️ **It also pre-empts the open class question.** This plan recommends *generic* components
+and leaves "do components have classes (awakening / power / enhancement)?" open near the
+end. With two family members an inventory reads `Components: 3 Chrome, 2 Synth`, which is a
+class system presentationally whether or not it is one mechanically. Decide it here on
+purpose rather than inheriting it from the card side.
+
+⚠️ Rarity diverges too: this plan floats common/rare tiers for chrome (common nudges an
+augment, rare jumps it). A Synth Component is uniform — one is one. Fine, but it means
+"component" describes a shape, not a rate card.
+
 ## Chrome is EARNED, not bought (owner, 2026-07-31)
 
 > "Maybe we should make chrome something fans earn through the season instead of buy. Rewards from

@@ -264,7 +264,7 @@ or K, so no diamond QB or K card can be minted, so no such donor can exist, so t
 diamond effects stay unreachable. That is consistent with the stated goal and worth being
 explicit about — a user who reads "any effect on any player" will otherwise go looking.
 
-## The consumable — **Synth Key** (owner direction 2026-08-26)
+## The consumable — **Synth Component** (owner direction 2026-08-26)
 
 **Acquisition: 2 available each day in the shop, plus achievement rewards.**
 
@@ -289,7 +289,7 @@ intent were a whole lineup plus room to iterate, the number is 3.
 
 Every synthetic also consumes a **pulled donor card**, so a user needs seven real
 effect-bearing cards to burn to fill a lineup. For a newer user the binding constraint is
-therefore **donors, not Synth Keys** — they will never see the daily cap. For a user with
+therefore **donors, not Synth Components** — they will never see the daily cap. For a user with
 a deep collection, 8 is the wall.
 
 ⚠️ That is the right shape and worth stating out loud: the friction report this feature
@@ -299,7 +299,7 @@ constraint, and pricing it high punishes the same behavior twice.
 
 ### Price
 
-The plan's existing anchor holds: the Synth Key **stacks on**
+The plan's existing anchor holds: the Synth Component **stacks on**
 `TRANSPLANT_COST_BY_EDITION` (40 / 70 / 120 / 180). Against a median user-week of 84 F and
 Accession at 200 F, something in the **60-100 F** band makes a diamond build cost
 `~80 + 180 = 260 F` — three median weeks — while a metallic build stays reachable at
@@ -310,7 +310,7 @@ four weeks and this buys one card.
 
 This is the one place the existing plumbing does not already fit. `POWERUP_CATALOG` items
 are **timed effects** — bought, stamped with `expires_at_week`, and read as "is one active
-right now". A Synth Key is a **charge**: bought, held, and later *spent* on a specific
+right now". A Synth Component is a **charge**: bought, held, and later *spent* on a specific
 transplant. `ShopPurchase` records that a purchase happened; nothing records that it was
 consumed.
 
@@ -322,66 +322,72 @@ Options, in order of preference:
 2. A counter column on `users`. Cheaper to read, but loses the trail and needs its own
    backfill story.
 
-⚠️ **Decide whether unspent Synth Keys carry over.** Across DAYS they must — otherwise
+⚠️ **Decide whether unspent Synth Components carry over.** Across DAYS they must — otherwise
 the cap becomes "log in every single day" rather than 8 a season, which punishes schedule
 rather than spending. Across **SEASONS** is a real call: templates are season-scoped and a
 synthetic expires with its season, so a stockpile carried into a new season is a burst of
 8+ builds on day one. Leaning **expire at the season boundary**, matching how everything
 else card-side is season-scoped.
 
-### Naming — cyberpunk, not Latinate (owner, 2026-08-26)
+### Naming — **Component**, borrowed from chrome (owner, 2026-08-26)
 
-⚠️ **This deliberately breaks the powerup family, and the break is correct.** Dispensation,
-Annulment, Conscription, Accession, Patronage, Endowment are abstract nouns of *permission*
-— the right register for a thing that grants you a temporary privilege. A Requisition would
-have joined them. But this item is not a permission, it is a **component that gets
-consumed**, and the owner's reference is Destiny's consumables, which are almost always
-`[qualifier] + [material/component]`: Ascendant Shard, Enhancement Prism, Exotic Cipher,
-Ascendant Alloy. Different job, different naming family.
+⚠️ **The chrome plan already speaks this vocabulary, and it is the mature half.**
+`WEATHER_AND_CHROME_PLAN.md` writes "chrome components" throughout — earned by play,
+earmarked at gift time, possibly rarity-tiered — so this is synth **joining** an existing
+family rather than a term being coined for it. Two members: **Synth Components** and
+**Chrome Components**.
 
-It also fits the world better than the Latinate set does. The Cores fabricate the league;
-chrome is grafted onto players; a card is a print. A manufacturing component belongs here.
+That settles the naming search recorded below. `Synth Key` was the pick a moment before
+this, and its one argument — the tie to the card's own **SNTH** label — largely survives,
+since `Synth Component` still carries the word. What it buys instead is a family a user
+can learn once.
 
-⚠️ **"CORE" IS UNUSABLE**, and it is the single most Destiny-sounding noun available
-(Enhancement Core, Ascendant Core). **The Cores are the five AIs running the sim.** Any
-consumable named `… Core` collides head-on with the most important proper noun in the
-lore. Rule it out first, before the shortlist gets built around it.
+⚠️ **A SHARED WORD ONLY PAYS OFF IF THE PLUMBING IS SHARED.** Two things that sound alike
+and behave differently are worse than two things with different names. Which makes the
+next part the real content of this decision, not the name.
 
-⚠️ **THE NOUN HAS TO BE AN OBJECT, NOT A NOMINALIZED VERB** (owner, 2026-08-26).
-`Splice` was rejected on exactly this: it names the *action*, so "3 Splices" reads like
-"3 Merges" — a tally of things done rather than a thing held. This item sits in an
-inventory with a count beside it, so it has to be something you can picture holding.
+### ⚠️ This CORRECTS the `ShopPurchase.consumed_at` recommendation above
 
-**Recommendation: `Synth Key`.**
+That was right for a shop-only item and is **wrong for a family whose other member is
+never bought**. Chrome components are **earned, never purchased** — a locked owner ruling
+(2026-07-31) — so they will never have a `ShopPurchase` row to hang a `consumed_at` on.
 
-- **It ties to the card's own label.** The synthetic card wears **SNTH** (ruling 8), so
-  `Synth Key` makes the item and the card read as one system: you spend a Synth Key, you
-  get a SNTH card. Neither name has to explain the other.
-- **`Synth` is the in-world adjective** and is authentically cyberpunk in a way
-  `Synthesis` is not — the latter is clinical, and names the process again rather than the
-  object.
-- **A key is unambiguously an object**, holds a count naturally ("2 Synth Keys today"),
-  and is the standard cyberpunk shape for a one-shot unlock.
-- No collision: `synthetic` appears in this codebase only inside comments (a synthetic
-  clock, a synthetic record group), never as a user-facing name.
+Build a **component ledger** instead: one row per component, carrying `user_id`, `type`
+(`synth` / `chrome`), `source` (shop / achievement / fantasy / pick-em), `granted_at` and
+`consumed_at`. A balance is a count of unconsumed rows of a type; spending is one path.
+Chrome needs this table regardless, so building it here means **priority 3 inherits it
+finished** rather than growing a parallel one.
 
-⚠️ **The one honest weakness**: a key is normally *reusable*, and this is consumed. If that
-grates, **`Synthesis Cipher`** is the fix rather than a different flavor — a cipher is a
-key that is spent, and Destiny's Exotic Cipher is exactly that, which is why it is the
-closest real analogue in the reference. It costs a syllable and the SNTH tie-in.
+⚠️ Chrome additionally earmarks a component to a specific player and augment at gift time
+("a funding race, not an election"), so leave room for a nullable target — but do not
+build the earmark now; a synth component is spent the instant it is used and has nothing
+to point at.
 
-`Synthesis Key` (the owner's own phrasing) is a perfectly good middle option and the safest
-read for a user seeing it cold; `Synth Key` is the same name with the clinical edge filed
-off and the card's label echoed back.
+### ⚠️ Three ways the two members DIVERGE, and one of them is load-bearing
 
-⚠️ **Rejected and why**, so these do not get re-proposed: *Graft* is the owner's own verb
-and reads perfectly, but "graft" also means bribery and corruption, which is a bad off-note
-in a league that runs a fan-voted front office. *Catalyst* is authentically Destiny but a
-catalyst is by definition **not consumed**, which is exactly backwards for a charge that is
-spent. *Blank* is sharp cyberpunk and literally describes a base card — but that is the
-problem: the blank is the card, not the thing you spend on it. *Splice* named the action
-rather than the object (see above). *Requisition* was the earlier Latinate pick and is
-recorded here only so the reasoning that replaced it stays visible.
+| | Synth Component | Chrome Component |
+|---|---|---|
+| acquisition | **shop, 2/day** + achievements | **earned only, never bought** |
+| rarity | uniform | possibly tiered (common nudges, rare jumps) |
+| targeting | spent immediately at synthesis | earmarked to a player + augment |
+
+⚠️ **THE ACQUISITION DIVERGENCE MUST STAY VISIBLE, because the chrome plan's best argument
+depends on it.** Chrome being earned is what makes *supply the master dial*: it turns R₀ —
+the one load-bearing number in the contagion design — from something emergent out of
+Floobit income × price × spending appetite into a schedule we set directly. A shared noun
+invites a later, reasonable-sounding "unify the acquisition too", and that would silently
+undo the only thing making the hardest calibration in that plan tractable.
+
+⚠️ The tension is smaller than it reads, and saying why keeps it from being re-litigated:
+at 2/day with a modest price the synth cap is **days elapsed, not Floobits banked**, which
+is nearly an earned model wearing a shop front. It is still a purchase, and chrome's must
+not become one.
+
+⚠️ **It also brushes an open question in the chrome plan.** That plan recommends *generic*
+components (one type feeds any augment) and leaves "do components have classes?" open. Two
+family members means the inventory reads as `Components: 3 Chrome, 2 Synth` — which is a
+class system presentationally whether or not it is one mechanically. Worth deciding on
+purpose there rather than inheriting it from here.
 
 ### Where it lives in the shop
 
@@ -599,8 +605,8 @@ that season, **five of them below the diamond gate and two below prismatic**.
 5. Transplant rules — lift same-edition and both-effect-bearing **for a base target
    only**; refuse a synthetic target (ruling 6); keep position validity and the
    current-season donor gate.
-6. The Synth Key: catalog entry, `consumed_at` charge tracking, fixed daily shop slot,
-   achievement reward hook.
+6. The Synth Component: the shared component ledger, catalog entry, fixed daily shop
+   slot, achievement reward hook.
 7. Suppress classifications on the synthetic path.
 8. Frontend: the picker's second section, the synthesis target list (no rating gate
    there), and the muted edition color + SNTH label off the serialized flag.
