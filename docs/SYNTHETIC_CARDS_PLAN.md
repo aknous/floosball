@@ -1,7 +1,11 @@
-# Wildcard Transplant — every player, any effect
+# Synthetic Cards — every player, any effect
 
-**Status:** design settled, not started
-**Owner direction:** 2026-08-16
+**Status:** design settled, not started. **Priority 1 for next season** (owner, 2026-08-26).
+**Owner direction:** 2026-08-16, extended 2026-08-26.
+
+> **Renamed 2026-08-26** from "Wildcard Transplant" (owner's word is **synthetic card**).
+> The old name described the mechanism; this one describes the object, which is what a
+> user sees. A synthetic card is a real player, a real effect, and a manufactured pairing.
 
 ## The problem
 
@@ -19,7 +23,7 @@ scarcity is the game. Player scarcity is friction.
 1. **Every player's base card is available from the start of the season.** Users build a
    roster the way the original fantasy implementation worked — pick the players, field
    them for their raw FP.
-2. **A base card is a wildcard in the transplant.** It can receive any effect, from any
+2. **A base card is a wildcard in the transplant** — the mechanism that mints a synthetic. It can receive any effect, from any
    edition, regardless of the depicted player's rating.
 3. **The effect is copied onto the base card. No new card is minted at the donor's
    edition.** The card stays `base`; the donor is consumed as it is today.
@@ -30,6 +34,89 @@ scarcity is the game. Player scarcity is friction.
    and also granted as an achievement reward.
 6. **No `champion` / `all_pro` / `mvp` classification is ever applied** to a card built
    this way.
+
+## ⚠️ Owner rulings, 2026-08-26 — a synthetic card is FANTASY ONLY
+
+Three decisions, and the third answers what this plan had left open as question 5.
+
+1. **Every player is available as a base card** to equip in a card roster. As below, this
+   is distribution, not minting.
+2. **Any effect can be grafted onto one**, at the price of the existing transplant cost
+   PLUS a new consumable.
+3. **A synthetic card cannot be vaulted and cannot be sold for anything.** It is usable in
+   fantasy and nowhere else.
+
+⚠️ **RULING 3 IS A SIMPLIFICATION, NOT AN EXTRA RULE.** The earlier draft split the
+question three ways — sell value 2, 0 Showcase points, no classifications — and left
+vaulting open. One gate now covers all of it, because **the Vault is the mechanism the
+collection is built on**: `cardManager` line 523 states it directly, *only vaulted cards
+can be featured in the Showcase*. So refusing the vault refuses the Showcase for free,
+with no Showcase rule written at all. Sell is the one separate refusal.
+
+The relationship this produces is cleaner than the one the split was reaching for:
+
+> A synthetic is **exactly equal in play** to the real pull and **worth nothing at all**
+> outside the field. You buy a lineup, never a collection.
+
+⚠️ **AND IT CLOSES A LAUNDERING ROUTE THE SPLIT LEFT OPEN.** At sell value 2 a synthetic
+was still a *thing worth something*, which makes the consumable partially refundable and
+makes churn slightly profitable at scale. At zero it cannot be converted into anything,
+which is what the daily-availability gate exists to guarantee.
+
+### What the code already does, and where the gate goes
+
+⚠️ **THE PREDICATE ALREADY EXISTS AND NEEDS NO NEW COLUMN — but take the column anyway.**
+Minting only ever produces a `base` template with `effectName: 'none'`
+(`EDITION_BASE_WEIGHTS['base'] = 0`, and packs exclude the floor print), and transplant
+currently **refuses base on either side** (`_validateTransplantPair`, line 1368). So
+`edition == 'base' AND effect is non-empty` is today an unambiguous signature of a
+synthetic, and is derivable with no schema change.
+
+Take an explicit flag regardless. `card_templates.is_showpiece` is the precedent and the
+**exact mirror** of what is wanted here:
+
+| | can be equipped | can be collected |
+|---|---|---|
+| `is_showpiece` | **no** | yes |
+| synthetic | yes | **no** |
+
+A derived predicate is one future minting decision away from being wrong, and the failure
+mode is silent — a base card minted with an effect for some unrelated reason becomes
+unsellable with nothing to explain why. `_createUpgradedTemplate` is where transplant
+mints, so it is one stamp at one site.
+
+### The refusals are four lines in two places that already do this
+
+`sellCards` (line 1105) and `blendCards` (line 1153) each already refuse vaulted cards
+with the identical shape:
+
+```python
+vaultedIds = [c.id for c in cards if getattr(c, "vaulted", False)]
+if vaultedIds:
+    raise ValueError(f"Cannot sell vaulted cards: {vaultedIds}")
+```
+
+A synthetic check sits beside each one. `vaultCard` (line 1614) takes a single-card
+refusal. Nothing else needs touching, because Showcase rides the vault.
+
+### ⚠️ Three consequences of ruling 3 that need a call
+
+1. **A synthetic has NO DISPOSAL PATH.** Sell is refused; `trashVaultedCard` requires the
+   card to be vaulted, which is also refused. So a synthetic a user stops wanting is stuck
+   in their collection forever, and a user who builds aggressively accumulates dead cards
+   in the surface they browse most. This is a real gap, not a nitpick — **it needs a trash
+   route that returns nothing**, which is what `trashVaultedCard` already is, minus its
+   vault precondition.
+2. **Can a synthetic be a DONOR?** Today's rule is "both cards effect-bearing", which a
+   synthetic satisfies. Allowing it means the consumable is paid once and the effect is
+   re-homeable for the plain transplant fee ever after, which weakens the daily gate on
+   every move after the first. Leaning refuse — a synthetic is a terminal object.
+3. **Can a synthetic be TIER-UPGRADED?** Tier cost is edition-scaled and base is the
+   cheapest rung, so this is the cheapest route to a tier bonus in the game. Tier feeds
+   Showcase scoring, which a synthetic can never reach, so the only thing bought is
+   fantasy strength — arguably correct, but it is a **discount on power**, and this plan's
+   whole premise is that convenience never buys power. Leaning refuse, or price the tier
+   off the EFFECT's tier the same way the power scale is.
 
 ## What the codebase already gives us
 
@@ -43,9 +130,9 @@ one. The templates are there.
 
 Transplant is likewise built (`cardManager.transplantEffect`, `POST /api/cards/transplant`,
 `TRANSPLANT_COST_BY_EDITION`, `test_transplant.py`). The rules it currently enforces, and
-what a wildcard does to each:
+what a synthetic target does to each:
 
-| current rule | wildcard |
+| current rule | synthetic |
 |---|---|
 | same edition | **lifted** for a base target |
 | both cards effect-bearing | **lifted** — the base card is the point |
@@ -78,7 +165,7 @@ at base scale nearly doubles it. And `CARD_GATE_FP_THRESHOLDS_BY_EDITION` has **
 row**, so it falls back to the metallic bar, the lowest: a diamond effect would unlock at
 9 FP instead of 15.
 
-Left alone, the wildcard is **strictly stronger than a real prismatic or diamond pull** —
+Left alone, the synthetic is **strictly stronger than a real prismatic or diamond pull** —
 roughly double output on an easier bar — and weaker than a real holographic one. The
 convenience path becomes the power path for exactly the two tiers that should be hardest
 to reach.
@@ -87,9 +174,9 @@ to reach.
 
 **The card's edition and the effect's tier are separate inputs.**
 
-- The **card** stays `base`. Sell value 2, **0 Showcase points** (base is absent from
-  `SHOWCASE_EDITION_POINTS`, so this needs no new rule), no classifications, no rating
-  gate to collapse.
+- The **card** stays `base`, and is worth **nothing outside fantasy** — not vaultable,
+  not sellable, therefore not showcaseable (see the 2026-08-26 rulings above). No
+  classifications, no rating gate to collapse.
 - The **effect** keeps its own tier for `EDITION_POWER_SCALE` and `buildGateSpec`.
 
 ⚠️ **The donor's edition never needs to be tracked.** `EFFECT_EDITION_TIER[effectName]`
@@ -98,8 +185,8 @@ lands, and that single lookup drives both the strength and the bar.
 
 The resulting relationship is the one we want:
 
-> A wildcard build is **exactly equal in play** and **strictly worse in collection** than
-> the real pull. You pay a consumable for convenience, never for power.
+> A synthetic build is **exactly equal in play** and **worth nothing in collection**
+> against the real pull. You pay a consumable for convenience, never for power.
 
 Genuine pulls keep a permanent edge that has nothing to do with strength: they are the
 only cards worth collecting, the only ones that can carry an accolade, and the only ones
@@ -139,8 +226,8 @@ It is not a fee, it is **the gate** — the thing that stops a user grinding thi
 hold the best roster with the best effects on every slot. The Floobit cost alone cannot do
 that job, because Floobits accumulate; a per-day item does not.
 
-So a wildcard build costs `consumable + 40/70/120/180` by the effect's tier. At a 200 F
-consumable a diamond wildcard is **380 F**, more than four median user-weeks, and the
+So a synthetic build costs `consumable + 40/70/120/180` by the effect's tier. At a 200 F
+consumable a diamond synthetic is **380 F**, more than four median user-weeks, and the
 daily cap means the ceiling on roster-building is *days elapsed*, not Floobits banked.
 
 That has a design consequence worth stating: because availability is the real constraint,
@@ -160,29 +247,31 @@ availability wants its own rotation slot rather than riding
 
    ⚠️ **This does NOT invalidate the Diversified resize** (an earlier draft of this doc
    claimed it did — wrong). Diversified pays a count of distinct output types, max three.
-   Wildcards move it from 48.8 FP expected to **56.1 FP**, which is +15% and is exactly
+   Synthetics move it from 48.8 FP expected to **56.1 FP**, which is +15% and is exactly
    the ceiling the resize was sized against and deliberately kept inside the peer band
    (best mintable holographic ~47; prismatic Anthem 28.4 mean / 76.5 max). The sizing
    holds, and `test_diversified_sizing.py` already pins the CEILING rather than the mean —
-   precisely because 63% of hands reached it even without wildcards.
+   precisely because 63% of hands reached it even without synthetics.
 
    ⚠️ The real caveat is against the measurement, not the card. The 2.61 mean was sampled
    from **random pulls at pack weights**, which was never the population that matters: a
    user who owns Diversified curates their lineup and was probably already near 2.9.
-   Wildcards make the ceiling the TYPICAL case rather than the COMMON one. Re-measure the
+   Synthetics make the ceiling the TYPICAL case rather than the COMMON one. Re-measure the
    cross family against curated hands once this exists; expect a modest lift, not a
    re-break.
 2. **Effect-supply guarantees get routed around.** `_assignEffects` deliberately mints one
    template per effect where a bucket has fewer players than effects, so every effect
-   exists somewhere. Wildcards let a user ignore bucket scarcity entirely. Not a bug —
+   exists somewhere. Synthetics let a user ignore bucket scarcity entirely. Not a bug —
    but the coverage guarantee stops being what limits access.
 3. **The no-duplicate-effect equip rule becomes the real constraint** on hand building,
    where today it is player availability. Worth confirming that is the intended shape.
 4. **Visual identity.** A base-edition card carrying a diamond effect renders with floor
    print styling. Is that the desired read ("this is a build, not a pull") or does the
-   wildcard want a mark of its own? Leaning toward the former — it is honest and free.
-5. **Vault.** A wildcard can be vaulted like anything else, and scores 0 edition points.
-   Confirm that is intended rather than a bug someone reports later.
+   synthetic want a mark of its own? Leaning toward the former — it is honest and free.
+5. ~~**Vault.**~~ **ANSWERED 2026-08-26: a synthetic can never be vaulted or sold.**
+   See the rulings section — this collapsed the Vault, Showcase and sell questions into
+   one refusal, and raised three new ones (disposal, donating, tier upgrades) recorded
+   there.
 
 ## Build order
 
@@ -193,14 +282,16 @@ availability wants its own rotation slot rather than riding
 3. Lift the transplant's same-edition and both-effect-bearing rules for a base target.
    Keep position validity and the current-season donor gate.
 4. The consumable: catalog entry, daily shop availability, achievement reward hook.
-5. Suppress classifications on the wildcard path.
+5. Suppress classifications, and refuse vault + sell, on the synthetic path.
 6. Re-measure the cross-card family (item 1 above).
 
 ## Regression targets
 
-- A wildcard-built prismatic effect scores **identically** to the real prismatic card, same
+- A synthetic prismatic effect scores **identically** to the real prismatic card, same
   bar, same params. This is the whole design in one assertion.
-- A wildcard card sells for 2 and scores 0 Showcase points.
-- No wildcard card ever carries `champion` / `all_pro` / `mvp`.
+- A synthetic card is refused by `sellCards` and by `vaultCard`, and therefore never
+  reaches the Showcase — assert the Showcase consequence too, since it holds only by
+  the vault gate and would break silently if Showcase ever gained its own path.
+- No synthetic card ever carries `champion` / `all_pro` / `mvp`.
 - Position validity still refused (no WR-only effect on a QB base card).
 - An expired donor is still refused.
