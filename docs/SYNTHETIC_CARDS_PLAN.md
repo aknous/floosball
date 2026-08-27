@@ -264,7 +264,7 @@ or K, so no diamond QB or K card can be minted, so no such donor can exist, so t
 diamond effects stay unreachable. That is consistent with the stated goal and worth being
 explicit about — a user who reads "any effect on any player" will otherwise go looking.
 
-## The consumable — **Splice** (owner direction 2026-08-26)
+## The consumable — **Synth Key** (owner direction 2026-08-26)
 
 **Acquisition: 2 available each day in the shop, plus achievement rewards.**
 
@@ -289,7 +289,7 @@ intent were a whole lineup plus room to iterate, the number is 3.
 
 Every synthetic also consumes a **pulled donor card**, so a user needs seven real
 effect-bearing cards to burn to fill a lineup. For a newer user the binding constraint is
-therefore **donors, not Splices** — they will never see the daily cap. For a user with
+therefore **donors, not Synth Keys** — they will never see the daily cap. For a user with
 a deep collection, 8 is the wall.
 
 ⚠️ That is the right shape and worth stating out loud: the friction report this feature
@@ -299,7 +299,7 @@ constraint, and pricing it high punishes the same behavior twice.
 
 ### Price
 
-The plan's existing anchor holds: the Splice **stacks on**
+The plan's existing anchor holds: the Synth Key **stacks on**
 `TRANSPLANT_COST_BY_EDITION` (40 / 70 / 120 / 180). Against a median user-week of 84 F and
 Accession at 200 F, something in the **60-100 F** band makes a diamond build cost
 `~80 + 180 = 260 F` — three median weeks — while a metallic build stays reachable at
@@ -310,7 +310,7 @@ four weeks and this buys one card.
 
 This is the one place the existing plumbing does not already fit. `POWERUP_CATALOG` items
 are **timed effects** — bought, stamped with `expires_at_week`, and read as "is one active
-right now". A Splice is a **charge**: bought, held, and later *spent* on a specific
+right now". A Synth Key is a **charge**: bought, held, and later *spent* on a specific
 transplant. `ShopPurchase` records that a purchase happened; nothing records that it was
 consumed.
 
@@ -322,7 +322,7 @@ Options, in order of preference:
 2. A counter column on `users`. Cheaper to read, but loses the trail and needs its own
    backfill story.
 
-⚠️ **Decide whether unspent Splices carry over.** Across DAYS they must — otherwise
+⚠️ **Decide whether unspent Synth Keys carry over.** Across DAYS they must — otherwise
 the cap becomes "log in every single day" rather than 8 a season, which punishes schedule
 rather than spending. Across **SEASONS** is a real call: templates are season-scoped and a
 synthetic expires with its season, so a stockpile carried into a new season is a burst of
@@ -347,30 +347,41 @@ chrome is grafted onto players; a card is a print. A manufacturing component bel
 consumable named `… Core` collides head-on with the most important proper noun in the
 lore. Rule it out first, before the shortlist gets built around it.
 
-**Recommendation: `Splice`.**
+⚠️ **THE NOUN HAS TO BE AN OBJECT, NOT A NOMINALIZED VERB** (owner, 2026-08-26).
+`Splice` was rejected on exactly this: it names the *action*, so "3 Splices" reads like
+"3 Merges" — a tally of things done rather than a thing held. This item sits in an
+inventory with a count beside it, so it has to be something you can picture holding.
 
-- It **is the mechanic**, in one word — you splice an effect into a card, which is exactly
-  what the transplant does.
-- Cyberpunk register without being modern slang: gene splicing and film splicing both long
-  predate the internet, so it passes the twenty-year test the naming philosophy sets.
-- Counts naturally, which this item needs more than the powerups do because it is bought
-  two at a time and held as a balance: *"2 Splices today"*, *"You have 3 Splices"*.
-- No collision anywhere in the codebase — checked against effect names, constants, the
-  Cores and `data/lore.md`.
-- It sits beside **chrome** without being it, which matters if both ship next season: chrome
-  is grafted into a *player*, a Splice into a *card*.
+**Recommendation: `Synth Key`.**
 
-**Alternates**, if a two-word Destiny cadence is wanted instead: **`Synthesis Cipher`** (a
-cipher is a key, which is what a gated consumable is, and Exotic Cipher is the closest real
-Destiny analogue) or **`Instance Shard`** (a deep cut — the Cores catalogue this league as
-Instance 498b, so a shard of an instance is a piece of the world's own substrate).
+- **It ties to the card's own label.** The synthetic card wears **SNTH** (ruling 8), so
+  `Synth Key` makes the item and the card read as one system: you spend a Synth Key, you
+  get a SNTH card. Neither name has to explain the other.
+- **`Synth` is the in-world adjective** and is authentically cyberpunk in a way
+  `Synthesis` is not — the latter is clinical, and names the process again rather than the
+  object.
+- **A key is unambiguously an object**, holds a count naturally ("2 Synth Keys today"),
+  and is the standard cyberpunk shape for a one-shot unlock.
+- No collision: `synthetic` appears in this codebase only inside comments (a synthetic
+  clock, a synthetic record group), never as a user-facing name.
+
+⚠️ **The one honest weakness**: a key is normally *reusable*, and this is consumed. If that
+grates, **`Synthesis Cipher`** is the fix rather than a different flavor — a cipher is a
+key that is spent, and Destiny's Exotic Cipher is exactly that, which is why it is the
+closest real analogue in the reference. It costs a syllable and the SNTH tie-in.
+
+`Synthesis Key` (the owner's own phrasing) is a perfectly good middle option and the safest
+read for a user seeing it cold; `Synth Key` is the same name with the clinical edge filed
+off and the card's label echoed back.
 
 ⚠️ **Rejected and why**, so these do not get re-proposed: *Graft* is the owner's own verb
 and reads perfectly, but "graft" also means bribery and corruption, which is a bad off-note
 in a league that runs a fan-voted front office. *Catalyst* is authentically Destiny but a
 catalyst is by definition **not consumed**, which is exactly backwards for a charge that is
 spent. *Blank* is sharp cyberpunk and literally describes a base card — but that is the
-problem: the blank is the card, not the thing you spend on it.
+problem: the blank is the card, not the thing you spend on it. *Splice* named the action
+rather than the object (see above). *Requisition* was the earlier Latinate pick and is
+recorded here only so the reasoning that replaced it stays visible.
 
 ### Where it lives in the shop
 
@@ -588,7 +599,7 @@ that season, **five of them below the diamond gate and two below prismatic**.
 5. Transplant rules — lift same-edition and both-effect-bearing **for a base target
    only**; refuse a synthetic target (ruling 6); keep position validity and the
    current-season donor gate.
-6. The Splice: catalog entry, `consumed_at` charge tracking, fixed daily shop slot,
+6. The Synth Key: catalog entry, `consumed_at` charge tracking, fixed daily shop slot,
    achievement reward hook.
 7. Suppress classifications on the synthetic path.
 8. Frontend: the picker's second section, the synthesis target list (no rating gate
