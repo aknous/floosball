@@ -321,12 +321,46 @@ def clinchStatus(teams: List[Any], totalGames: int) -> Dict[int, Dict[str, bool]
 
         # The mirror, so elimination is not claimed on a tie either: a club level with
         # someone inside the field at ITS best could still win that tiebreak.
+        #
+        # ⚠️ IT HAS TO BE A REAL TIE, AGAINST A SEED THIS CLUB CAN ACTUALLY CONTEST, and
+        # this read `<=` over EVERY seeded club. Two separate faults, and together they
+        # made elimination nearly unreachable in a league with one weak division.
+        #
+        #   `<=` rather than `==`: the comment says "level with", and level is the only
+        #   thing that proves anything. Being AHEAD of a club inside the field while
+        #   still outside it yourself is not a tiebreak you might win — it is evidence
+        #   that their berth does not come from their record.
+        #
+        #   ...which is the second fault: a DIVISION WINNER holds a top-four seed at ANY
+        #   record, so a bad one sits inside the field on far fewer points than a healthy
+        #   club sitting outside it. You cannot take that berth by out-pointing them; it
+        #   is their division's, and you are not in it.
+        #
+        # Reported from the live board: the Oysters **3 games back of the wildcard and 4
+        # back in their own division with 2 to play** — no path by either route — shown
+        # as alive, and the Monuments likewise. Reproduced exactly: with one weak
+        # division whose winner sat on 8 points, a club whose ABSOLUTE ceiling was 13
+        # cleared `8 <= 13` and was spared, and **1 club of 16 was eliminated where 5
+        # had no road left**.
+        #
+        # So the tie must be genuine, and the seed contestable: a WILDCARD berth is open
+        # to anyone, a DIVISION berth only to that division's own members.
         myBest = next((sh for sh in bestShims if sh.id == tid), None)
-        tiedFromInside = (not seasonComplete) and myBest is not None and any(
-            sh.id != tid and bestSeeds.get(sh.id) is not None
-            and _points(sh) <= _points(myBest) for sh in bestShims)
-
         myDivision = divisionOf.get(tid)
+
+        def _contestable(otherId) -> bool:
+            seed = bestSeeds.get(otherId)
+            if seed is None:
+                return False
+            kind = seed[1] if isinstance(seed, (tuple, list)) and len(seed) > 1 else None
+            if kind != 'division':
+                return True                      # a wildcard is open to the whole league
+            return divisionOf.get(otherId) == myDivision and myDivision is not None
+
+        tiedFromInside = (not seasonComplete) and myBest is not None and any(
+            sh.id != tid and _contestable(sh.id)
+            and _points(sh) == _points(myBest) for sh in bestShims)
+
         divisionRivals = [t for t in divisions.get(myDivision, [])
                           if getattr(t, 'id', None) != tid] if myDivision else []
         # A title is won when no rival can reach this club, and lost once one is
