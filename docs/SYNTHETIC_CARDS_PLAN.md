@@ -441,7 +441,35 @@ picture. Any future per-season achievement analysis has to drop season 0 first.
 
 **One component per capstone is self-limiting.** The typical participating user earns
 **2**, which is exactly what the (unreliable) dev database predicted — that estimate stands
-up. No subset of capstones needs picking; the difficulty already does it.
+up. **All capstones grant, not one designated capstone**: the scarcity lives in the
+difficulty (a user completes ~2 of 13), not in how many achievements carry the grant.
+Nominating a single one would instead be nominating which *kind* of play earns components,
+since the rungs range from `bracketeer_iv` at 24 to `dynamo_iv` at 30,000.
+
+⚠️ **DEFINE "CAPSTONE" AS "ALREADY GRANTS A PACK OR A POWERUP", NOT BY KEY SUFFIX.** The
+`_iv` convention is not reliable: the `dedicated` ladder runs `i..vi`, so **`dedicated_iv`
+is a MIDDLE rung** and a `%_iv` match sweeps it in — which is exactly what the production
+query above did, making 13 capstones read as 14 and inflating the 2.04. The true rate is a
+little under 2, so treat that figure as a ceiling. The reward config is the honest
+statement of intent and is self-maintaining: a new ladder's top rung earns a component the
+moment it earns its pack, and no naming convention can drift out from under it.
+
+**The 13 real capstones:** `dedicated_vi` (250 F + `exquisite`), `artificer_iii`
+(100 F + `grand`), ten `*_iv` rungs (75-150 F + `grand`), and **`tycoon_iv`, the one
+exception — 150 F + the `income_boost` POWERUP, no pack.** So a capstone pays
+floobits + pack + component, except `tycoon_iv` which pays floobits + powerup + component.
+
+⚠️ **That stacking is complementary rather than reward-soup, and it is worth saying why:
+a pack and a component are the two halves of ONE synthesis.** The pack supplies a donor
+card; the component supplies the licence to put its effect on whoever you actually want. A
+capstone therefore hands over a complete build rather than a card you may not want plus a
+coin.
+
+⚠️ **Placement lever if reach matters more than prestige:** 36% of participating
+user-seasons finish no capstone at all, so as specced a third of engaged players never see
+an achievement component. Moving the grant to **tier III** would broaden it substantially.
+Capstone is the prestige placement, tier III the reach placement — staying on capstone is
+right while the shop's flat 8 is what serves newer users, but this is the dial.
 
 ### The supply picture
 
@@ -452,7 +480,10 @@ up. No subset of capstones needs picking; the difficulty already does it.
 | onboarding, once ever | 1 | 1 |
 | **total** | **~11** against a 7-slot lineup | **18** |
 
-**Recommend: 1 per guidance capstone, plus 1 on an onboarding achievement.**
+**Recommend: 1 per guidance capstone (all 13), capped at `COMPONENT_ACHIEVEMENT_CAP` (4) a
+season, plus 1 on an onboarding achievement.** The cap leaves the typical user untouched
+at 2 and lands the tail at 4 rather than 9 — total 13 max, ~11 typical, against a 7-slot
+lineup. It is one count over `source = 'achievement'` in the ledger.
 
 ⚠️ **THE ACHIEVEMENT FAUCET IS REGRESSIVE AGAINST THE PROBLEM THIS FEATURE SOLVES, and
 that is the finding worth acting on.** The friction report came from **newer** users — "it
