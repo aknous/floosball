@@ -44,8 +44,10 @@ scarcity is the game. Player scarcity is friction.
    is distribution, not minting.
 2. **Any effect can be grafted onto one**, at the price of the existing transplant cost
    PLUS a new consumable.
-3. **A synthetic cannot be vaulted, and sells for 0.** Usable in fantasy and nowhere else.
-4. **It cannot be used in the Combine**, because its value is 0.
+3. **A synthetic cannot be vaulted, and sells for 1.** Usable in fantasy and nowhere else.
+   (0 was the original ruling; 1 was allowed as the simpler build, and turns out to be
+   safer too — see below.)
+4. **It cannot be used in the Combine**, because its value is nil.
 5. **It CAN donate its effect** in a transplant.
 6. **It can never RECEIVE an effect.** A base card takes an effect exactly once, at the
    moment it becomes synthetic; after that the pairing is fixed. So a synthetic is a
@@ -84,9 +86,9 @@ right on power and now **over-values a synthetic everywhere value is read from e
 
 | site | what it now does | guard |
 |---|---|---|
-| `getSellValue` via `sellCards:1113` | sells at the effect edition's price | force 0 |
-| `getSellValue` via `serializeCard:842` | displays that price to the user | force 0 |
-| `getCardValue:379` (Combine fuel) | worth a real prismatic as fuel | ruling 4's refusal |
+| `getSellValue` via `sellCards:1113` | sells at the effect edition's price | force 1 |
+| `getSellValue` via `serializeCard:842` | displays that price to the user | force 1 (same branch) |
+| `getCardValue:379` (Combine fuel) | worth a real prismatic as fuel | ruling 4's refusal, **plus** the forced 1 as a backstop |
 | `SHOWCASE_EDITION_POINTS` (`showcaseManager:99`) | 12 points for a prismatic | ruling 3's vault refusal |
 
 ⚠️ **`is_synthetic` IS NO LONGER OPTIONAL.** The earlier draft noted the predicate was
@@ -106,19 +108,34 @@ since its value is 0" is the intent; under ruling 8 the code would say its value
 Combine fuel in the game — build a synthetic diamond, feed it as diamond-grade fuel. The
 refusal is what makes the stated reason true.
 
-### ⚠️ Selling for 0 must not go through `addFunds`
+### Selling for 1, and why 1 is better than 0 (owner, 2026-08-26)
 
 Ruling 3 gives disposal for free — no new trash endpoint, `sellCards` already deletes the
-row. Two traps:
+row. The owner allowed **1** rather than 0 if it is simpler, and it is, in two ways.
 
-1. `getCardValue` ends in `max(1, …)`, so **0 is unreachable through the normal path**.
-   The synthetic branch has to return 0 directly rather than fall through the multipliers.
-2. ⚠️ **A 0-Floobit payout must skip `addFunds` entirely.** This codebase has already paid
-   for this once: the free daily shop reroll had to branch on `cost > 0` because spending
-   0 still writes a 0-Floobit ledger row and fires the Magnate achievement hook for a
-   purchase that never happened. Granting 0 is the same fault mirrored — a `card_sell` row
-   for 0 Floobits, plus whatever passive-grant hooks `addFunds` carries. Skip the call
-   when the total is 0; a mixed batch of real and synthetic cards still pays the real ones.
+**It is two lines instead of a branch.** Selling for 0 hits two traps: `getCardValue` ends
+in `max(1, …)` so 0 is unreachable through the normal path, and a 0-Floobit payout must
+skip `addFunds` entirely (this codebase already paid for that once — the free daily shop
+reroll had to branch on `cost > 0`, because granting 0 still writes a ledger row and fires
+the Magnate achievement for a purchase that never happened). At 1 both traps vanish:
+`getSellValue(edition, isActive, isSynthetic=False)` returns 1 for a synthetic, and every
+existing caller is already correct.
+
+⚠️ Return **1 directly**, not 0-and-let-the-floor-round-it-up. The floor lives in
+`sellCards:1113` and in `getCardValue`, but **`serializeCard:842` has no floor** — so a 0
+would display "sells for 0" beside a sale that actually pays 1.
+
+**⚠️ AND IT MAKES THE COMBINE REFUSAL FAIL-SAFE INSTEAD OF FAIL-OPEN.** This is the better
+reason. `getCardValue` derives Combine fuel value from `getSellValue`, so under ruling 8 a
+synthetic diamond would be worth **30** as fuel if the refusal were ever missed or removed.
+At a sell value of 1 it is worth 1. The explicit refusal in `blendCards` still ships — it
+is what makes the stated reason ("its value is 0") true to a user — but the economic damage
+if it lapses goes from *cheapest diamond fuel in the game* to *nothing*. One number is now
+doing the guarding as well as the refusal.
+
+⚠️ 1 Floobit is a rounding error against a median user-week of **84 F** and a build cost of
+`consumable + 40-180 F`, so it reopens nothing on the laundering side. It is a delete
+button that happens to hand back a coin.
 
 ### ⚠️ Donor-only (ruling 6) fits the existing rules unchanged
 
@@ -247,38 +264,96 @@ or K, so no diamond QB or K card can be minted, so no such donor can exist, so t
 diamond effects stay unreachable. That is consistent with the stated goal and worth being
 explicit about — a user who reads "any effect on any player" will otherwise go looking.
 
-## The consumable
+## The consumable — **Requisition** (owner direction 2026-08-26)
 
-Not free, not unlimited. Shop-purchasable with **1-3 available per day**, plus achievement
-grants.
+**Acquisition: 2 available each day in the shop, plus achievement rewards.**
 
-Pricing anchors, measured on production user-weeks (seasons 12+):
+### ⚠️ "2 per day" is 8 a season, not 56 — and that is the whole cap
 
-| | Floobits |
-|---|---|
-| median user-week | **84** |
-| p90 user-week | **363** |
-| p99 user-week (post-knee) | **702** |
-| existing transplant cost | 40 / 70 / 120 / 180 by edition |
-| Accession, the priciest powerup | 200, limit 2/season |
+The regular season is **four real calendar days**. 28 weeks at 7 rounds a day across days
+0-3 (Mon-Thu), with the cross-day boundaries at weeks 8 / 15 / 22. And the shop's daily
+allowance resets per **calendar** day: `shop_repository._dailyResetBoundary` takes the most
+recent `_rolloverMomentUtc(date)` that has passed, one moment per date.
 
-⚠️ **The consumable STACKS on top of `TRANSPLANT_COST_BY_EDITION`** (owner, 2026-08-16).
-It is not a fee, it is **the gate** — the thing that stops a user grinding this until they
-hold the best roster with the best effects on every slot. The Floobit cost alone cannot do
-that job, because Floobits accumulate; a per-day item does not.
+So the arithmetic that matters is **2 × 4 = 8 per regular season**, against a lineup of
+**7 slots** (six base + FLEX). Friday's playoffs and Saturday's drafts add days, but a
+synthetic minted then is minted into a season whose cards can no longer be equipped, so
+they do not count.
 
-So a synthetic build costs `consumable + 40/70/120/180` by the effect's tier. At a 200 F
-consumable a diamond synthetic is **380 F**, more than four median user-weeks, and the
-daily cap means the ceiling on roster-building is *days elapsed*, not Floobits banked.
+That is a good cap and it is almost exactly the right size — **one full lineup's worth per
+season, if you spend every day's allowance and never miss a day.** But it must be chosen
+deliberately, because "2 per day" reads like an order of magnitude more than it is. If the
+intent were a whole lineup plus room to iterate, the number is 3.
 
-That has a design consequence worth stating: because availability is the real constraint,
-the Floobit price is free to be modest. Pricing it high as well would punish the same
-behavior twice and push the feature out of reach of exactly the newer users the friction
-report came from.
+### ⚠️ The consumable caps the top and does nothing for the bottom
 
-It should live in `POWERUP_CATALOG` beside Accession and Annulment, and the daily
-availability wants its own rotation slot rather than riding
-`ROTATION_CATEGORY_WEIGHTS`, which rotates *pack* categories.
+Every synthetic also consumes a **pulled donor card**, so a user needs seven real
+effect-bearing cards to burn to fill a lineup. For a newer user the binding constraint is
+therefore **donors, not Requisitions** — they will never see the daily cap. For a user with
+a deep collection, 8 is the wall.
+
+⚠️ That is the right shape and worth stating out loud: the friction report this feature
+answers came from newer users, and the gate lands on the users who were never the problem.
+It also means **the Floobit price should stay modest** — availability is already the
+constraint, and pricing it high punishes the same behavior twice.
+
+### Price
+
+The plan's existing anchor holds: the Requisition **stacks on**
+`TRANSPLANT_COST_BY_EDITION` (40 / 70 / 120 / 180). Against a median user-week of 84 F and
+Accession at 200 F, something in the **60-100 F** band makes a diamond build cost
+`~80 + 180 = 260 F` — three median weeks — while a metallic build stays reachable at
+~120 F. Deliberately below Accession, because Accession buys a whole extra lineup slot for
+four weeks and this buys one card.
+
+### ⚠️ It is a CHARGE, and the powerup machinery has no concept of one
+
+This is the one place the existing plumbing does not already fit. `POWERUP_CATALOG` items
+are **timed effects** — bought, stamped with `expires_at_week`, and read as "is one active
+right now". A Requisition is a **charge**: bought, held, and later *spent* on a specific
+transplant. `ShopPurchase` records that a purchase happened; nothing records that it was
+consumed.
+
+Options, in order of preference:
+
+1. **`ShopPurchase.consumed_at`** (nullable timestamp) — a user's balance is the count of
+   their unconsumed rows. Smallest change, keeps one table, and gives a free audit trail of
+   which build spent which purchase.
+2. A counter column on `users`. Cheaper to read, but loses the trail and needs its own
+   backfill story.
+
+⚠️ **Decide whether unspent Requisitions carry over.** Across DAYS they must — otherwise
+the cap becomes "log in every single day" rather than 8 a season, which punishes schedule
+rather than spending. Across **SEASONS** is a real call: templates are season-scoped and a
+synthetic expires with its season, so a stockpile carried into a new season is a burst of
+8+ builds on day one. Leaning **expire at the season boundary**, matching how everything
+else card-side is season-scoped.
+
+### Naming
+
+**Requisition** — a formal order for a thing to be produced, which is exactly the
+transaction. It sits in the same register as the existing catalog (Dispensation, Annulment,
+Conscription, Accession, Patronage, Endowment: all abstract Latinate nouns of permission or
+provision), shares the `-tion` shape with three of them, counts naturally ("2 Requisitions
+today"), and has no football collision.
+
+Runner-up **Commission**, which is arguably a better fit for the meaning — you commission a
+made thing — but in a league game it reads toward *the commissioner*, and that ambiguity is
+not worth the small gain.
+
+⚠️ Rejected: *Synthesis* (does not count as a noun — "2 Syntheses" is ugly), *Catalyst* and
+*Reagent* (generic game-item register, and this catalog is deliberately formal), *Patent*
+(precise — a licence to manufacture — but reads modern-corporate against the rest).
+
+### Where it lives in the shop
+
+⚠️ Its daily availability wants **its own slot**, not `ROTATION_CATEGORY_WEIGHTS`, which
+rotates *pack* categories. It should be a fixed fixture of the Daily Selection alongside
+the reroll — a consumable that only appears on some days makes lineup planning a lottery,
+which is the opposite of what this feature is for.
+
+Achievement grants ride the existing path unchanged: `reward_config` already queues packs
+and powerups as `PendingReward`.
 
 ## Second-order effects to decide before building
 
@@ -325,11 +400,13 @@ availability wants its own rotation slot rather than riding
    stamp the minted template's `edition` from `EFFECT_EDITION_TIER[donorEffect]` instead
    of from the target, and verify against the measurement table above that power scale
    and gate threshold land on the effect's own rung.
-4. The value guards: sell 0 (skipping `addFunds`), Combine refusal, vault refusal.
+4. The value guards: sell 1 (one branch in `getSellValue`), Combine refusal, vault
+   refusal.
 5. Transplant rules — lift same-edition and both-effect-bearing **for a base target
    only**; refuse a synthetic target (ruling 6); keep position validity and the
    current-season donor gate.
-6. The consumable: catalog entry, daily shop availability, achievement reward hook.
+6. The Requisition: catalog entry, `consumed_at` charge tracking, fixed daily shop slot,
+   achievement reward hook.
 7. Suppress classifications on the synthetic path.
 8. Frontend: muted edition color + SNTH label off the serialized flag.
 9. Re-measure the cross-card family (second-order item 1 above).
@@ -340,8 +417,10 @@ availability wants its own rotation slot rather than riding
   bar, same params. This is the whole design in one assertion — and under ruling 8 it
   should hold by construction rather than by arithmetic, which is worth asserting anyway
   precisely because it now looks free.
-- A synthetic sells for **0** and writes **no** currency transaction — assert the absence
-  of the ledger row, not just the amount.
+- A synthetic sells for **1** — assert the DISPLAYED value and the PAID value agree,
+  since they come from different call sites and only one of them has a floor.
+- A synthetic's Combine fuel value is **1**, asserted independently of the refusal, so the
+  refusal lapsing can never be expensive.
 - A synthetic is refused by `vaultCard` and by `blendCards`, and therefore never reaches
   the Showcase. Assert the Showcase consequence too: it holds only by the vault gate and
   would break silently if Showcase ever gained its own path.
