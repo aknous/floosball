@@ -389,6 +389,81 @@ family members means the inventory reads as `Components: 3 Chrome, 2 Synth` — 
 class system presentationally whether or not it is one mechanically. Worth deciding on
 purpose there rather than inheriting it from here.
 
+### Achievement grants — where they come from and how many
+
+⚠️ **GRANT DIRECTLY TO THE LEDGER, NOT AS A `PendingReward`.** `_applyReward` splits its
+config three ways: floobits credit **immediately**, packs and powerups queue as
+`PendingReward` rows the user claims later. A component belongs with the floobits, and the
+reason is structural rather than convenience:
+
+- **`PendingReward` exists because packs and powerups have a DECISION at claim time.** You
+  open a pack (reveal, then keep), and you activate a powerup (which starts a four-week
+  timer, so *when* matters). A component has no such moment — it sits in a balance until
+  it is spent. A claim step here is pure friction.
+- ⚠️ **And it is friction that can DESTROY things.** `sweepExpiredRewards()` drops every
+  unclaimed, unstashed `PendingReward` at season start. Route components through it and a
+  user who never noticed the claim button silently loses them at the boundary.
+
+So `reward_config` gains `components: {synth: N}`, applied beside the `floobits` branch.
+⚠️ **This needs no migration** — `_seedAchievements` upserts `reward_config` on every boot
+(it is in `refreshFields`), so the grants land on an existing production database at the
+next restart.
+
+⚠️ It is also the path **chrome** needs. Chrome components are earned from achievements,
+fantasy and pick-em, and none of those have a claim moment either — so the direct-grant
+branch is shared, exactly like the ledger.
+
+### ⚠️ Measured: the capstone rungs are already the right scarcity
+
+The live achievement set is **106**, and its shape does the sizing work for us:
+
+| | |
+|---|---|
+| `guidance` | **59**, and all of them `per_season` |
+| `onboarding` / `collection` / `secret` | 5 / 9 / 33, all `once` |
+| already grant a pack | 24 |
+| already grant a powerup | **1** |
+
+⚠️ The guidance set is almost entirely **tiered ladders** — `_i / _ii / _iii / _iv` — and
+the **tier-IV rung is already the slot where the non-Floobit reward lives** (a `grand` pack
+in ten of them). That is the natural home: already per-season, already capstone, already
+understood by a user as "this one is a real reward".
+
+**Measured completion rate: an engaged user finishes 2-3 of the 14 capstones in a season**
+(median 2, max 3), against a median of 14 achievement completions overall. So **one
+component per capstone is self-limiting** — no subset needs picking, the difficulty already
+does it.
+
+⚠️ **Sample caveat, stated because it matters:** that is measured on a development database
+with **two** users across 21 seasons. The targets are fixed and that player's engagement is
+realistic, so the ~2-3 rate is indicative — but re-measure against production before
+committing the number.
+
+### The supply picture
+
+| source | per season |
+|---|---|
+| shop, 2/day × 4 game days | **8** |
+| guidance capstones, 1 each | **~2-3** |
+| onboarding, once ever | 1 |
+| **total, engaged user** | **~10-11** against a 7-slot lineup |
+
+**Recommend: 1 per guidance capstone, plus 1 on an onboarding achievement.**
+
+⚠️ **The onboarding grant is the one that earns its place**, and it is worth more than its
+size. Under the new starter pack a first-day user holds five or six **metallic** cards —
+real effects, on players the game picked. One component turns that into *your* effects on
+*your* players immediately, instead of waiting for shop days to accumulate. That is
+precisely the complaint this whole feature answers, and it lands in the first session
+rather than the second week.
+
+⚠️ **The risk to keep named: achievement grants BYPASS the daily cap.** The shop's whole
+design is that the constraint is *days elapsed*, not Floobits banked — and a burst of
+completions hands over several components at once, which the cap cannot see. At 2-3 a
+season that is a rounding error. If components were later added to all 14 capstones **and**
+the 33 secrets, the gate would stop being the gate. Any future widening of the grant list
+is a change to the cap, whether or not it is discussed as one.
+
 ### Where it lives in the shop
 
 ⚠️ Its daily availability wants **its own slot**, not `ROTATION_CATEGORY_WEIGHTS`, which
