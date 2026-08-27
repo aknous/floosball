@@ -119,16 +119,21 @@ expect(f"4th (final) down → NEVER (rate {r4:.2f} == 0)", r4 == 0.0)
 # ── 4. Late + trailing: reliable, critical overrides the 3rd-down guard ───
 print("4. Late Q4, trailing: deficit-aware banking")
 s = newScenario(); reseed(2)
-# clock=100 (1:40) while trailing is hurry-up; a 'critical' need overrides it, a
-# 'helpful' one does not, so the helpful cases use a late-but-not-hurry-up clock (250s).
+# ⚠️ THIS BLOCK USED TO DODGE THE BUG RATHER THAN CATCH IT. Its comment read "a
+# 'helpful' need does not override hurry-up, so the helpful cases use a late-but-not-
+# hurry-up clock (250s)" — which is true of the old code and is exactly the defect: in
+# regulation `helpful` means scoreDiff <= 0, and `_isHurryUp` fires on precisely
+# `q == 4 and sd <= 0 and secs <= 150`, so the branch could never run in the states it
+# was written for. Choosing 250s made the suite pass over a code path production could
+# not reach. The helpful cases now run at 100s, in hurry-up, like the real game.
 hCrit1 = attemptRate(s, quarter=4, clock=100, down=1, offScore=0, defScore=9)   # critical (also hurry-up)
 hCrit3 = attemptRate(s, quarter=4, clock=100, down=3, offScore=0, defScore=9)   # critical → override
-hHelp1 = attemptRate(s, quarter=4, clock=250, down=1, offScore=0, defScore=4)   # helpful, late, not hurry-up
-hHelp3 = attemptRate(s, quarter=4, clock=250, down=3, offScore=0, defScore=4)   # helpful → NO penultimate override
+hHelp1 = attemptRate(s, ballOn=8, quarter=4, clock=100, down=1, offScore=0, defScore=4)  # helpful, late, IN hurry-up
+hHelp3 = attemptRate(s, ballOn=8, quarter=4, clock=100, down=3, offScore=0, defScore=4)  # helpful → NO penultimate override
 hCrit4 = attemptRate(s, quarter=4, clock=100, down=4, offScore=0, defScore=9)   # final down always blocked
 expect(f"critical, 1st down → reliable, overrides hurry-up (rate {hCrit1:.2f} > 0.8)", hCrit1 > 0.8)
 expect(f"critical, 3rd down → fires anyway, guard lifted (rate {hCrit3:.2f} > 0.8)", hCrit3 > 0.8)
-expect(f"helpful, 1st down (late, not hurry-up) → reliable (rate {hHelp1:.2f} > 0.8)", hHelp1 > 0.8)
+expect(f"helpful, 1st down, IN hurry-up → reliable (rate {hHelp1:.2f} > 0.8)", hHelp1 > 0.8)
 expect(f"helpful, 3rd down → still blocked (rate {hHelp3:.2f} == 0)", hHelp3 == 0.0)
 expect(f"critical, 4th (final) down → still blocked (rate {hCrit4:.2f} == 0)", hCrit4 == 0.0)
 
@@ -141,7 +146,7 @@ otSd1 = attemptRate(s, quarter=5, clock=300, down=1, offScore=7, defScore=7, otP
 otSd3 = attemptRate(s, quarter=5, clock=300, down=3, offScore=7, defScore=7, otPeriod=2)
 otSd4 = attemptRate(s, quarter=5, clock=300, down=4, offScore=7, defScore=7, otPeriod=2)
 # 1st OT before both guaranteed possessions: go-ahead point doesn't end it → 'helpful'.
-ot1st1 = attemptRate(s, quarter=5, clock=300, down=1, offScore=7, defScore=7,
+ot1st1 = attemptRate(s, ballOn=8, quarter=5, clock=300, down=1, offScore=7, defScore=7,
                      otPeriod=1, otSecondPossComplete=False)
 ot1st3 = attemptRate(s, quarter=5, clock=300, down=3, offScore=7, defScore=7,
                      otPeriod=1, otSecondPossComplete=False)
@@ -156,13 +161,46 @@ expect(f"1st-OT tie, 3rd down → not game-ending, guard holds (rate {ot1st3:.2f
 print("6. Regulation tie: boosted only late, and hurry-up is respected")
 s = newScenario(); reseed(4)
 tieEarly1 = attemptRate(s, quarter=2, clock=600, down=1, offScore=14, defScore=14)  # helpful but not late
-tieLate1 = attemptRate(s, quarter=4, clock=200, down=1, offScore=14, defScore=14)   # helpful + late
-tieHurry1 = attemptRate(s, quarter=4, clock=90, down=1, offScore=14, defScore=14)   # hurry-up → blocked
+tieLate1 = attemptRate(s, ballOn=8, quarter=4, clock=200, down=1, offScore=14, defScore=14)  # helpful + late
+# ⚠️ THE REPORTED BUG (owner, live game): tied inside the last minute, driving, and the
+# offense ignored sideline goals entirely. A tied Q4 offense is in hurry-up BY
+# DEFINITION (`sd <= 0`), so the hurry-up guard suppressed the one point that WINS THE
+# GAME. Measured before the fix: 0.0% at 30s / 45s / 55s / 90s / 140s and 91.5% at 200s.
+# ⚠️ The inversion is the tell — a team LEADING by one shot 55.5% at 45s where a TIED
+# team shot 0%: the side for whom the point was nearly worthless took it, the side that
+# would have won by it refused. This assertion used to read `== 0.0` and locked the bug in.
+tieHurry1 = attemptRate(s, ballOn=8, quarter=4, clock=90, down=1, offScore=14, defScore=14)
 expect(f"tied, Q2 (not late) → normal chance, not boosted (rate {tieEarly1:.2f} in 0.3–0.8)",
        0.3 < tieEarly1 < 0.85)
 expect(f"tied, Q4 late → reliable (rate {tieLate1:.2f} > 0.8)", tieLate1 > 0.8)
-expect(f"tied, Q4 hurry-up (≤2:30) → helpful does not override hurry-up (rate {tieHurry1:.2f} == 0)",
-       tieHurry1 == 0.0)
+expect(f"tied, Q4 hurry-up (≤2:30) → the winning point IS taken (rate {tieHurry1:.2f} > 0.8)",
+       tieHurry1 > 0.8)
+
+# ── 6b. Take the shot you can MAKE, not the first one in range ───────────
+print("6b. Late shot quality: hold a heave, take a tap, never forfeit the last chance")
+s = newScenario(); reseed(41)
+# The end-zone pair only gets easier as the drive advances (0.02 make prob a yard), so
+# firing it at max range is dominated by driving one snap closer.
+farEarly = attemptRate(s, ballOn=17, quarter=4, clock=90, down=1, offScore=14, defScore=14)
+nearEarly = attemptRate(s, ballOn=6, quarter=4, clock=90, down=1, offScore=14, defScore=14)
+# ⚠️ ...but only while there is another down to hold FOR. The penultimate-down guard means
+# a 'helpful' shot can only happen on downs 1..downsPerSeries-2, so on the last of those
+# waiting does not buy a better look, it forfeits the shot.
+farLastChance = attemptRate(s, ballOn=17, quarter=4, clock=90, down=2, offScore=14, defScore=14)
+# ⚠️ A 'critical' need is EXEMPT: no conventional score reaches at all, so the hoop is not
+# the better option, it is the only one.
+farCritical = attemptRate(s, ballOn=17, quarter=4, clock=90, down=1, offScore=0, defScore=9)
+# ⚠️ The midfield pair is approach-only — declining it LOSES it, so no quality bar.
+midfieldFar = attemptRate(s, ballOn=60, quarter=4, clock=90, down=1, offScore=14, defScore=14)
+expect(f"long end-zone shot on an early down → held for a better look (rate {farEarly:.2f} == 0)",
+       farEarly == 0.0)
+expect(f"short end-zone shot → taken (rate {nearEarly:.2f} > 0.8)", nearEarly > 0.8)
+expect(f"long shot on the LAST available down → taken anyway (rate {farLastChance:.2f} > 0.8)",
+       farLastChance > 0.8)
+expect(f"long shot, critical need → exempt from the bar (rate {farCritical:.2f} > 0.8)",
+       farCritical > 0.8)
+expect(f"midfield pair (approach-only) → no bar, taken (rate {midfieldFar:.2f} > 0.8)",
+       midfieldFar > 0.8)
 
 
 # ── 7. Full-caller integration: a hoop actually fires end-to-end ─────────
