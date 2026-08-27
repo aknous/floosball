@@ -25,8 +25,11 @@ scarcity is the game. Player scarcity is friction.
    them for their raw FP.
 2. **A base card is a wildcard in the transplant** — the mechanism that mints a synthetic. It can receive any effect, from any
    edition, regardless of the depicted player's rating.
-3. **The effect is copied onto the base card. No new card is minted at the donor's
-   edition.** The card stays `base`; the donor is consumed as it is today.
+3. **The effect is copied onto the base card and the donor is consumed**, as transplant
+   already works. ⚠️ ~~The card stays `base`.~~ **Ruling 8 (below) overrides this**: the
+   minted card takes the EFFECT's edition. It is not a card at the donor's edition — it
+   is a card at the effect's — and the difference is that no collectible identity comes
+   with it.
 4. **The power bar comes with the effect.** A prismatic effect brings prismatic strength
    and the prismatic bar wherever it lands — you get a *simulated* effect, identical in
    play to the real card.
@@ -37,86 +40,116 @@ scarcity is the game. Player scarcity is friction.
 
 ## ⚠️ Owner rulings, 2026-08-26 — a synthetic card is FANTASY ONLY
 
-Three decisions, and the third answers what this plan had left open as question 5.
-
 1. **Every player is available as a base card** to equip in a card roster. As below, this
    is distribution, not minting.
 2. **Any effect can be grafted onto one**, at the price of the existing transplant cost
    PLUS a new consumable.
-3. **A synthetic card cannot be vaulted and cannot be sold for anything.** It is usable in
-   fantasy and nowhere else.
+3. **A synthetic cannot be vaulted, and sells for 0.** Usable in fantasy and nowhere else.
+4. **It cannot be used in the Combine**, because its value is 0.
+5. **It CAN donate its effect** in a transplant.
+6. **It can never RECEIVE an effect.** A base card takes an effect exactly once, at the
+   moment it becomes synthetic; after that the pairing is fixed. So a synthetic is a
+   transplant **donor only, never a target**.
+7. **It can be tier-upgraded.**
+8. ⚠️ **It behaves as the edition the EFFECT came from** — that edition's power scale and
+   that edition's gate threshold. Visually it wears that edition's color, **muted** to set
+   it apart from the real print, and is labeled **SNTH**.
 
-⚠️ **RULING 3 IS A SIMPLIFICATION, NOT AN EXTRA RULE.** The earlier draft split the
-question three ways — sell value 2, 0 Showcase points, no classifications — and left
-vaulting open. One gate now covers all of it, because **the Vault is the mechanism the
-collection is built on**: `cardManager` line 523 states it directly, *only vaulted cards
-can be featured in the Showcase*. So refusing the vault refuses the Showcase for free,
-with no Showcase rule written at all. Sell is the one separate refusal.
+### ⚠️ Ruling 8 DELETES the load-bearing change this plan was built around
 
-The relationship this produces is cleaner than the one the split was reaching for:
+The section below spends its length on "edition is doing two jobs, and they must be
+split." **Ruling 8 dissolves that problem instead of solving it.** Stamp the template's
+`edition` as the EFFECT's home edition (`EFFECT_EDITION_TIER[effectName]`, which already
+declares it) and four separate things come out right with no new code at all:
 
-> A synthetic is **exactly equal in play** to the real pull and **worth nothing at all**
-> outside the field. You buy a lineup, never a collection.
+| reads `template.edition` | outcome |
+|---|---|
+| `EDITION_POWER_SCALE` (`cardEffectCalculator:709`) | prismatic effect gets prismatic strength ✓ |
+| `CARD_GATE_FP_THRESHOLDS_BY_EDITION` (`:809`) | the missing-base-row fallback never happens ✓ |
+| `_tierUpgradeCost` (`cardManager:1491`) | ruling 7 is priced off the effect, not off base ✓ |
+| `serializeCard` → the client (`:1026`) | the frontend colors it by edition already ✓ |
 
-⚠️ **AND IT CLOSES A LAUNDERING ROUTE THE SPLIT LEFT OPEN.** At sell value 2 a synthetic
-was still a *thing worth something*, which makes the consumable partially refundable and
-makes churn slightly profitable at scale. At zero it cannot be converted into anything,
-which is what the daily-availability gate exists to guarantee.
+⚠️ **This also closes the cheapest-tier-bonus hole on its own.** The earlier draft flagged
+tier upgrades as a discount on power, because base is the cheapest rung in
+`CARD_TIER_EDITION_COST_MULT`. Under ruling 8 there is no base rung involved — a synthetic
+prismatic is charged the prismatic tier price. Ruling 7 needs no separate guard.
 
-### What the code already does, and where the gate goes
+**So build step 2 (splitting edition-as-identity from effect-tier) is struck.** What
+replaces it is one assignment at the mint site plus the value guards below.
 
-⚠️ **THE PREDICATE ALREADY EXISTS AND NEEDS NO NEW COLUMN — but take the column anyway.**
-Minting only ever produces a `base` template with `effectName: 'none'`
-(`EDITION_BASE_WEIGHTS['base'] = 0`, and packs exclude the floor print), and transplant
-currently **refuses base on either side** (`_validateTransplantPair`, line 1368). So
-`edition == 'base' AND effect is non-empty` is today an unambiguous signature of a
-synthetic, and is derivable with no schema change.
+### ⚠️ But it INVERTS which side needs guarding, and the flag is now MANDATORY
 
-Take an explicit flag regardless. `card_templates.is_showpiece` is the precedent and the
-**exact mirror** of what is wanted here:
+The old design was safe on value (base is worth nothing) and wrong on power. Ruling 8 is
+right on power and now **over-values a synthetic everywhere value is read from edition**:
+
+| site | what it now does | guard |
+|---|---|---|
+| `getSellValue` via `sellCards:1113` | sells at the effect edition's price | force 0 |
+| `getSellValue` via `serializeCard:842` | displays that price to the user | force 0 |
+| `getCardValue:379` (Combine fuel) | worth a real prismatic as fuel | ruling 4's refusal |
+| `SHOWCASE_EDITION_POINTS` (`showcaseManager:99`) | 12 points for a prismatic | ruling 3's vault refusal |
+
+⚠️ **`is_synthetic` IS NO LONGER OPTIONAL.** The earlier draft noted the predicate was
+derivable — `edition == 'base'` plus a non-empty effect — and recommended a column anyway
+for safety. **Ruling 8 kills the predicate outright**, because a synthetic is not `base`
+any more. Nothing whatsoever distinguishes a synthetic prismatic from a pulled prismatic
+except a stored flag. `card_templates.is_showpiece` is the precedent and the exact mirror:
 
 | | can be equipped | can be collected |
 |---|---|---|
 | `is_showpiece` | **no** | yes |
-| synthetic | yes | **no** |
+| `is_synthetic` | yes | **no** |
 
-A derived predicate is one future minting decision away from being wrong, and the failure
-mode is silent — a base card minted with an effect for some unrelated reason becomes
-unsellable with nothing to explain why. `_createUpgradedTemplate` is where transplant
-mints, so it is one stamp at one site.
+⚠️ **RULING 4'S REFUSAL IS LOAD-BEARING, NOT COSMETIC.** "It can't be used in the Combine
+since its value is 0" is the intent; under ruling 8 the code would say its value is 12 or
+30. Without an explicit refusal in `blendCards` the synthetic becomes the cheapest
+Combine fuel in the game — build a synthetic diamond, feed it as diamond-grade fuel. The
+refusal is what makes the stated reason true.
 
-### The refusals are four lines in two places that already do this
+### ⚠️ Selling for 0 must not go through `addFunds`
 
-`sellCards` (line 1105) and `blendCards` (line 1153) each already refuse vaulted cards
-with the identical shape:
+Ruling 3 gives disposal for free — no new trash endpoint, `sellCards` already deletes the
+row. Two traps:
 
-```python
-vaultedIds = [c.id for c in cards if getattr(c, "vaulted", False)]
-if vaultedIds:
-    raise ValueError(f"Cannot sell vaulted cards: {vaultedIds}")
-```
+1. `getCardValue` ends in `max(1, …)`, so **0 is unreachable through the normal path**.
+   The synthetic branch has to return 0 directly rather than fall through the multipliers.
+2. ⚠️ **A 0-Floobit payout must skip `addFunds` entirely.** This codebase has already paid
+   for this once: the free daily shop reroll had to branch on `cost > 0` because spending
+   0 still writes a 0-Floobit ledger row and fires the Magnate achievement hook for a
+   purchase that never happened. Granting 0 is the same fault mirrored — a `card_sell` row
+   for 0 Floobits, plus whatever passive-grant hooks `addFunds` carries. Skip the call
+   when the total is 0; a mixed batch of real and synthetic cards still pays the real ones.
 
-A synthetic check sits beside each one. `vaultCard` (line 1614) takes a single-card
-refusal. Nothing else needs touching, because Showcase rides the vault.
+### ⚠️ Donor-only (ruling 6) fits the existing rules unchanged
 
-### ⚠️ Three consequences of ruling 3 that need a call
+Ruling 5 plus ruling 8 land somewhere neat: because a synthetic already **is** its
+effect's edition, donating it to a real card of that edition satisfies the existing
+same-edition rule with no exemption written. The only new gate is ruling 6 — **refuse a
+synthetic as a TARGET** — which is one check beside the existing base-card check in
+`_validateTransplantPair`.
 
-1. **A synthetic has NO DISPOSAL PATH.** Sell is refused; `trashVaultedCard` requires the
-   card to be vaulted, which is also refused. So a synthetic a user stops wanting is stuck
-   in their collection forever, and a user who builds aggressively accumulates dead cards
-   in the surface they browse most. This is a real gap, not a nitpick — **it needs a trash
-   route that returns nothing**, which is what `trashVaultedCard` already is, minus its
-   vault precondition.
-2. **Can a synthetic be a DONOR?** Today's rule is "both cards effect-bearing", which a
-   synthetic satisfies. Allowing it means the consumable is paid once and the effect is
-   re-homeable for the plain transplant fee ever after, which weakens the daily gate on
-   every move after the first. Leaning refuse — a synthetic is a terminal object.
-3. **Can a synthetic be TIER-UPGRADED?** Tier cost is edition-scaled and base is the
-   cheapest rung, so this is the cheapest route to a tier bonus in the game. Tier feeds
-   Showcase scoring, which a synthetic can never reach, so the only thing bought is
-   fantasy strength — arguably correct, but it is a **discount on power**, and this plan's
-   whole premise is that convenience never buys power. Leaning refuse, or price the tier
-   off the EFFECT's tier the same way the power scale is.
+⚠️ The two must land together. Allowing a synthetic to receive would make a single
+consumable purchase into a **permanently re-editable effect socket**: pay once, then
+re-graft whatever you pull for the plain transplant fee ever after, which is precisely the
+grinding the daily availability exists to cap.
+
+⚠️ There is a real asymmetry worth being explicit about: a synthetic effect can move onto
+a genuine card, so a user CAN promote a manufactured pairing into a collectible one — but
+only by consuming the synthetic and spending a real card of the right edition to receive
+it. That is a trade, not a loophole, and the collection ends up holding a real card.
+
+### The visual (ruling 8)
+
+The card wears **the effect's edition color, muted**, and is labeled **SNTH**. This is the
+honest read — it says "prismatic strength, manufactured" in one glance — and it is the
+answer to open question 4 below, which had been leaning toward no mark at all. That
+leaning was written when the card was going to render as a floor print and therefore
+already looked different. Under ruling 8 it does not, so it needs the mark.
+
+⚠️ The muting must be a **treatment applied to the edition's own color**, not a separate
+palette — a synthetic diamond has to read as diamond-and-manufactured, never as a sixth
+edition. `serializeCard` already emits `edition`; it needs to emit the flag beside it and
+let the client do the rest.
 
 ## What the codebase already gives us
 
@@ -140,7 +173,14 @@ what a synthetic target does to each:
 | position-valid for the effect | **keep** — a WR-only effect still needs a WR |
 | donor must be current-season | **keep** — this is what stops a retired effect re-entering play |
 
-## ⚠️ The one real design decision: edition is doing two jobs
+## ~~The one real design decision: edition is doing two jobs~~ — SUPERSEDED
+
+> ⚠️ **Kept for the measurements only.** Ruling 8 (2026-08-26) stamps the template with
+> the EFFECT's edition, so the two jobs never come apart and there is nothing to split.
+> The table below still matters as the record of *why* minting at base scale was wrong —
+> it is the evidence that produced the ruling. Do not implement the split.
+
+## The original problem: edition is doing two jobs
 
 Edition is not a label. It is simultaneously:
 
@@ -170,13 +210,14 @@ roughly double output on an easier bar — and weaker than a real holographic on
 convenience path becomes the power path for exactly the two tiers that should be hardest
 to reach.
 
-### The split
+### ~~The split~~ (superseded by ruling 8 — recorded as the reasoning that led there)
 
 **The card's edition and the effect's tier are separate inputs.**
 
-- The **card** stays `base`, and is worth **nothing outside fantasy** — not vaultable,
-  not sellable, therefore not showcaseable (see the 2026-08-26 rulings above). No
-  classifications, no rating gate to collapse.
+- ~~The **card** stays `base`~~ — **under ruling 8 the card IS the effect's edition.**
+  It is still worth nothing outside fantasy: not vaultable, sells for 0, no Combine, no
+  classifications. What changed is that those are now enforced by the `is_synthetic`
+  flag rather than falling out of the card being `base`.
 - The **effect** keeps its own tier for `EDITION_POWER_SCALE` and `buildGateSpec`.
 
 ⚠️ **The donor's edition never needs to be tracked.** `EFFECT_EDITION_TIER[effectName]`
@@ -265,9 +306,10 @@ availability wants its own rotation slot rather than riding
    but the coverage guarantee stops being what limits access.
 3. **The no-duplicate-effect equip rule becomes the real constraint** on hand building,
    where today it is player availability. Worth confirming that is the intended shape.
-4. **Visual identity.** A base-edition card carrying a diamond effect renders with floor
-   print styling. Is that the desired read ("this is a build, not a pull") or does the
-   synthetic want a mark of its own? Leaning toward the former — it is honest and free.
+4. ~~**Visual identity.**~~ **ANSWERED 2026-08-26 (ruling 8): the effect's edition color,
+   muted, labeled SNTH.** The old leaning — no mark, let it render as a floor print — was
+   reasoning from a card that would have looked different anyway. Under ruling 8 it does
+   not, so it needs the mark.
 5. ~~**Vault.**~~ **ANSWERED 2026-08-26: a synthetic can never be vaulted or sold.**
    See the rulings section — this collapsed the Vault, Showcase and sell questions into
    one refusal, and raised three new ones (disposal, donating, tier upgrades) recorded
@@ -275,23 +317,38 @@ availability wants its own rotation slot rather than riding
 
 ## Build order
 
-1. Distribute base cards — grant or make acquirable all 192. Templates already exist.
-2. Split edition-as-identity from effect-tier in `buildEffectConfig` / `buildGateSpec`,
-   driven by `EFFECT_EDITION_TIER`. **This is the load-bearing change**; do it first and
-   measure it against the table above before any UI exists.
-3. Lift the transplant's same-edition and both-effect-bearing rules for a base target.
-   Keep position validity and the current-season donor gate.
-4. The consumable: catalog entry, daily shop availability, achievement reward hook.
-5. Suppress classifications, and refuse vault + sell, on the synthetic path.
-6. Re-measure the cross-card family (item 1 above).
+1. `card_templates.is_synthetic` — model, inline migration, stamped in
+   `_createUpgradedTemplate`. **This comes first now**: under ruling 8 nothing else can
+   tell a synthetic from a real card, so every later step depends on it existing.
+2. Distribute base cards — grant or make acquirable all 192. Templates already exist.
+3. ~~Split edition-as-identity from effect-tier.~~ **STRUCK by ruling 8.** Replaced by:
+   stamp the minted template's `edition` from `EFFECT_EDITION_TIER[donorEffect]` instead
+   of from the target, and verify against the measurement table above that power scale
+   and gate threshold land on the effect's own rung.
+4. The value guards: sell 0 (skipping `addFunds`), Combine refusal, vault refusal.
+5. Transplant rules — lift same-edition and both-effect-bearing **for a base target
+   only**; refuse a synthetic target (ruling 6); keep position validity and the
+   current-season donor gate.
+6. The consumable: catalog entry, daily shop availability, achievement reward hook.
+7. Suppress classifications on the synthetic path.
+8. Frontend: muted edition color + SNTH label off the serialized flag.
+9. Re-measure the cross-card family (second-order item 1 above).
 
 ## Regression targets
 
 - A synthetic prismatic effect scores **identically** to the real prismatic card, same
-  bar, same params. This is the whole design in one assertion.
-- A synthetic card is refused by `sellCards` and by `vaultCard`, and therefore never
-  reaches the Showcase — assert the Showcase consequence too, since it holds only by
-  the vault gate and would break silently if Showcase ever gained its own path.
-- No synthetic card ever carries `champion` / `all_pro` / `mvp`.
+  bar, same params. This is the whole design in one assertion — and under ruling 8 it
+  should hold by construction rather than by arithmetic, which is worth asserting anyway
+  precisely because it now looks free.
+- A synthetic sells for **0** and writes **no** currency transaction — assert the absence
+  of the ledger row, not just the amount.
+- A synthetic is refused by `vaultCard` and by `blendCards`, and therefore never reaches
+  the Showcase. Assert the Showcase consequence too: it holds only by the vault gate and
+  would break silently if Showcase ever gained its own path.
+- A synthetic is accepted as a transplant **donor** and refused as a **target**.
+- A synthetic's tier upgrade costs the **effect edition's** price, not base's.
+- No synthetic ever carries `champion` / `all_pro` / `mvp`.
+- ⚠️ A synthetic and a real card of the same edition are **distinguishable only by the
+  flag** — assert that too, since it is the assumption every guard above rests on.
 - Position validity still refused (no WR-only effect on a QB base card).
 - An expired donor is still refused.
