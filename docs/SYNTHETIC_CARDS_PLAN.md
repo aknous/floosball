@@ -355,6 +355,147 @@ which is the opposite of what this feature is for.
 Achievement grants ride the existing path unchanged: `reward_config` already queues packs
 and powerups as `PendingReward`.
 
+## The surfaces this changes (owner, 2026-08-26)
+
+Three UI/plumbing consequences, all of them following from "every player's base card is
+available" rather than being separate features.
+
+### A. The card picker — base cards are a POOL, not inventory
+
+⚠️ **They must not go into anyone's collection.** 192 base cards handed to every user
+would bury the cards they actually pulled under a wall of floor prints. So the picker gets
+a **second section** — your collection, and every player — and the base half is a
+*universal pool* nobody owns.
+
+⚠️ **But `equipped_cards.user_card_id` is `NOT NULL` and FKs to `user_cards`**, so
+something has to exist to equip. The answer is to **materialize the `UserCard` lazily at
+equip time** rather than granting 192 rows up front, and to **filter `edition == 'base'`
+out of the collection view**. One filter, one get-or-create.
+
+⚠️ **That filter covers the synthetic case for free.** A synthetic is no longer `base`
+(ruling 8), so the moment a base card is synthesized it leaves the pool and appears in the
+collection on its own. No second rule.
+
+⚠️ **It also retires the existing base cards with no migration.** Users hold base cards
+today from the current starter pack; filtering `base` out of the collection quietly folds
+them into the pool. Nothing of value is hidden — they sell for 2.
+
+⚠️ **Check the same-player-twice case.** WR1 and WR2 both accept a WR, so the pool makes
+it newly easy to field one player in both — the base card and a real card of the same
+receiver, or two base cards. Today player scarcity prevented it by accident. Decide
+whether it is refused; the no-duplicate-EFFECT rule will not catch it, because no-effect
+cards are exempt from that rule by design.
+
+### B. The synthesis menu — every player, every edition
+
+The same pool appears in the synthesis screen as the choice of *target*. And per the
+owner: **the rating gate does not apply here.** `EDITION_THRESHOLDS` exists to make a
+diamond card mean something as a collectible; a synthetic is not a collectible, so any
+player can carry any effect from any edition.
+
+⚠️ **This means item D below is about PULLS, not about synthesis.** Once synthesis exists,
+a 65-rated player can already wear a diamond effect — so expanding who is *eligible to be
+minted* at high editions changes what appears in packs and in the collection, and changes
+nothing at all about what a user can field. Worth keeping separate, or the two get argued
+as if they were the same lever.
+
+### C. The starter pack goes back to metallic
+
+⚠️ **The current starter grants a floor lineup, and this plan makes that gift worthless.**
+`_provisionStarterPack` hands out `base` cards for one stated reason — "so every user can
+field a legal lineup on day one" — and the universal pool now does that for everyone, for
+free, forever. Granting base cards after this ships is granting nothing.
+
+⚠️ **The branch already exists.** The function already falls back to metallic when no
+floor templates are found (written for a partially-migrated database), so this inverts a
+condition rather than adding a path.
+
+⚠️ **Count mismatch to resolve while touching it:** the docstring says "5 random base
+cards" and CLAUDE.md says "5 base cards, one per position", but the inline comment says
+one per lineup SLOT — "QB/RB/WR/WR/TE/K — two WR cards for WR1 + WR2" — which is **6**.
+Five positions, six slots. Read the code, then fix whichever of the three is wrong.
+
+## D. Expanding who is eligible for the top editions (do last)
+
+**Owner, 2026-08-26:** a player normally gated out of prismatic and diamond should become
+eligible if they had a strong previous season, or hold an AP / CH / MVP tag. The goal is
+card diversity.
+
+### ⚠️ Measured: SIX players hold the entire diamond pool, and diamond TE is EMPTY
+
+Season 20, 192 rostered players (the exact population that gets cards):
+
+| pos | n | holo ≥75 | prism ≥80 | **diamond ≥90** |
+|---|---|---|---|---|
+| QB | 32 | 17 | 10 | **1** |
+| RB | 32 | 14 | 7 | **1** |
+| WR | 64 | 30 | 21 | **3** |
+| TE | 32 | 14 | 5 | **0** |
+| K | 32 | 20 | 10 | **1** |
+
+⚠️ **A one-player bucket mints that bucket's ENTIRE effect set onto that one player.**
+`_assignEffects` sets `total = max(len(players) * k, len(pool))` when topping up and then
+splits it across the players present — so with a single eligible QB, `counts = [26]` and
+one man wears all 26 diamond QB effects. That is the diversity problem stated exactly: at
+diamond, the card *is* the player, and there is only one of him.
+
+⚠️ **Diamond TE has nobody at all**, so every TE-exclusive diamond effect is unmintable
+this season. That is the same failure CLAUDE.md already records for QB and K in an earlier
+season — it has simply moved position. It recurs because it is structural, not a one-off.
+
+### What the two rules would do
+
+| | prismatic | diamond |
+|---|---|---|
+| rating gate only | 53 | **6** |
+| \+ prev-season perf ≥ 85 | 91 | 72 |
+| \+ prev-season perf ≥ **90** | 66 | **37** |
+| \+ prev-season perf ≥ 92 | 64 | 29 |
+
+**Recommend perf ≥ 90.** It is the ~p90 of the distribution (median 80, p90 93), it takes
+diamond from 6 players to 37 while moving prismatic only 53 → 66, and it fills diamond TE.
+The change should land almost entirely on the tier whose scarcity is pathological.
+
+### ⚠️ It does NOT make diamonds more common — only more varied
+
+`_weightedDraw` is explicitly two-stage: *"roll the edition using packWeights, then pick a
+template within that edition"*. **Edition rates are set by `packWeights` and are
+independent of how many templates exist per edition**, so widening eligibility cannot
+inflate diamond supply. This is the reassurance the change needs, and it is verified in
+the code rather than assumed.
+
+⚠️ **But it does change what a diamond DEPICTS.** Stage two weights by
+`max(1, 120 - playerRating)`, so a 65-rated player is ~2x as likely to be drawn as a
+94-rated one *within* the diamond pool. Add 31 lower-rated players to a pool of 6 elite
+ones and most diamonds pulled will depict merely-good players. ⚠️ Power self-corrects —
+`buildEffectConfig` scales params by rating, so a diamond on a 65 pays less than a diamond
+on a 94 — but the elite diamond becomes rarer relative to its own tier. Decide whether
+that is the intent (it arguably IS the diversity being asked for) or whether stage two
+wants a floor.
+
+### The accolade half is free; the performance half is nearly free
+
+⚠️ **`generateSeasonTemplates` ALREADY receives `mvpPlayerId`, `championPlayerIds` and
+`allProPlayerIds`** and uses them for `_buildClassification`. They sit in scope above the
+bucket loop. The accolade rule is therefore a gate change with **zero new plumbing**.
+
+`PlayerSeasonStats.performance_rating` is persisted and — measured — populated for exactly
+**192 of 480** season rows, which is precisely the rostered population that gets cards. The
+other 288 are free agents and non-rostered players, who are excluded from minting anyway.
+So the performance rule is one join.
+
+⚠️ **AP AND MVP ARE INDIVIDUAL; CHAMPION IS NOT.** The Floos Bowl winner's roster is six
+players, and *five of season 20's six were below the diamond gate* — including whoever
+happened to be at kicker. Granting full edition eligibility for having been on the winning
+team is a far weaker claim than a 90 performance rating, and it hands the top tier to a
+whole roster regardless of how any of them played. **Recommend AP and MVP grant full
+eligibility and champion does not** (or lifts one rung only).
+
+⚠️ **The sharpest single case for this change:** season 20's All-Pro **Tanuki Batman rates
+65** — the league recognized him as the best at his position, and the card system will not
+mint him above metallic, because 65 is below even the *holographic* bar of 75. Six All-Pros
+that season, **five of them below the diamond gate and two below prismatic**.
+
 ## Second-order effects to decide before building
 
 1. **Hand-composition cards reach their ceiling more often.** Assembling a specific
@@ -395,7 +536,10 @@ and powerups as `PendingReward`.
 1. `card_templates.is_synthetic` — model, inline migration, stamped in
    `_createUpgradedTemplate`. **This comes first now**: under ruling 8 nothing else can
    tell a synthetic from a real card, so every later step depends on it existing.
-2. Distribute base cards — grant or make acquirable all 192. Templates already exist.
+2. The base pool — filter `edition == 'base'` out of the collection, add the picker's
+   second section, materialize the `UserCard` lazily at equip. Templates already exist.
+2b. Starter pack back to metallic (surface C) — it must land with step 2, not after: the
+   moment the pool exists the current starter grants nothing.
 3. ~~Split edition-as-identity from effect-tier.~~ **STRUCK by ruling 8.** Replaced by:
    stamp the minted template's `edition` from `EFFECT_EDITION_TIER[donorEffect]` instead
    of from the target, and verify against the measurement table above that power scale
@@ -408,8 +552,12 @@ and powerups as `PendingReward`.
 6. The Requisition: catalog entry, `consumed_at` charge tracking, fixed daily shop slot,
    achievement reward hook.
 7. Suppress classifications on the synthetic path.
-8. Frontend: muted edition color + SNTH label off the serialized flag.
+8. Frontend: the picker's second section, the synthesis target list (no rating gate
+   there), and the muted edition color + SNTH label off the serialized flag.
 9. Re-measure the cross-card family (second-order item 1 above).
+10. **Last, and separable:** expanded edition eligibility (section D). It touches the
+   MINT side only and nothing else here depends on it, so it can ship a season later
+   without stranding anything.
 
 ## Regression targets
 
