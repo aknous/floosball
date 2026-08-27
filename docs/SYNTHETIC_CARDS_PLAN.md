@@ -264,7 +264,7 @@ or K, so no diamond QB or K card can be minted, so no such donor can exist, so t
 diamond effects stay unreachable. That is consistent with the stated goal and worth being
 explicit about — a user who reads "any effect on any player" will otherwise go looking.
 
-## The consumable — **Requisition** (owner direction 2026-08-26)
+## The consumable — **Splice** (owner direction 2026-08-26)
 
 **Acquisition: 2 available each day in the shop, plus achievement rewards.**
 
@@ -289,7 +289,7 @@ intent were a whole lineup plus room to iterate, the number is 3.
 
 Every synthetic also consumes a **pulled donor card**, so a user needs seven real
 effect-bearing cards to burn to fill a lineup. For a newer user the binding constraint is
-therefore **donors, not Requisitions** — they will never see the daily cap. For a user with
+therefore **donors, not Splices** — they will never see the daily cap. For a user with
 a deep collection, 8 is the wall.
 
 ⚠️ That is the right shape and worth stating out loud: the friction report this feature
@@ -299,7 +299,7 @@ constraint, and pricing it high punishes the same behavior twice.
 
 ### Price
 
-The plan's existing anchor holds: the Requisition **stacks on**
+The plan's existing anchor holds: the Splice **stacks on**
 `TRANSPLANT_COST_BY_EDITION` (40 / 70 / 120 / 180). Against a median user-week of 84 F and
 Accession at 200 F, something in the **60-100 F** band makes a diamond build cost
 `~80 + 180 = 260 F` — three median weeks — while a metallic build stays reachable at
@@ -310,7 +310,7 @@ four weeks and this buys one card.
 
 This is the one place the existing plumbing does not already fit. `POWERUP_CATALOG` items
 are **timed effects** — bought, stamped with `expires_at_week`, and read as "is one active
-right now". A Requisition is a **charge**: bought, held, and later *spent* on a specific
+right now". A Splice is a **charge**: bought, held, and later *spent* on a specific
 transplant. `ShopPurchase` records that a purchase happened; nothing records that it was
 consumed.
 
@@ -322,28 +322,55 @@ Options, in order of preference:
 2. A counter column on `users`. Cheaper to read, but loses the trail and needs its own
    backfill story.
 
-⚠️ **Decide whether unspent Requisitions carry over.** Across DAYS they must — otherwise
+⚠️ **Decide whether unspent Splices carry over.** Across DAYS they must — otherwise
 the cap becomes "log in every single day" rather than 8 a season, which punishes schedule
 rather than spending. Across **SEASONS** is a real call: templates are season-scoped and a
 synthetic expires with its season, so a stockpile carried into a new season is a burst of
 8+ builds on day one. Leaning **expire at the season boundary**, matching how everything
 else card-side is season-scoped.
 
-### Naming
+### Naming — cyberpunk, not Latinate (owner, 2026-08-26)
 
-**Requisition** — a formal order for a thing to be produced, which is exactly the
-transaction. It sits in the same register as the existing catalog (Dispensation, Annulment,
-Conscription, Accession, Patronage, Endowment: all abstract Latinate nouns of permission or
-provision), shares the `-tion` shape with three of them, counts naturally ("2 Requisitions
-today"), and has no football collision.
+⚠️ **This deliberately breaks the powerup family, and the break is correct.** Dispensation,
+Annulment, Conscription, Accession, Patronage, Endowment are abstract nouns of *permission*
+— the right register for a thing that grants you a temporary privilege. A Requisition would
+have joined them. But this item is not a permission, it is a **component that gets
+consumed**, and the owner's reference is Destiny's consumables, which are almost always
+`[qualifier] + [material/component]`: Ascendant Shard, Enhancement Prism, Exotic Cipher,
+Ascendant Alloy. Different job, different naming family.
 
-Runner-up **Commission**, which is arguably a better fit for the meaning — you commission a
-made thing — but in a league game it reads toward *the commissioner*, and that ambiguity is
-not worth the small gain.
+It also fits the world better than the Latinate set does. The Cores fabricate the league;
+chrome is grafted onto players; a card is a print. A manufacturing component belongs here.
 
-⚠️ Rejected: *Synthesis* (does not count as a noun — "2 Syntheses" is ugly), *Catalyst* and
-*Reagent* (generic game-item register, and this catalog is deliberately formal), *Patent*
-(precise — a licence to manufacture — but reads modern-corporate against the rest).
+⚠️ **"CORE" IS UNUSABLE**, and it is the single most Destiny-sounding noun available
+(Enhancement Core, Ascendant Core). **The Cores are the five AIs running the sim.** Any
+consumable named `… Core` collides head-on with the most important proper noun in the
+lore. Rule it out first, before the shortlist gets built around it.
+
+**Recommendation: `Splice`.**
+
+- It **is the mechanic**, in one word — you splice an effect into a card, which is exactly
+  what the transplant does.
+- Cyberpunk register without being modern slang: gene splicing and film splicing both long
+  predate the internet, so it passes the twenty-year test the naming philosophy sets.
+- Counts naturally, which this item needs more than the powerups do because it is bought
+  two at a time and held as a balance: *"2 Splices today"*, *"You have 3 Splices"*.
+- No collision anywhere in the codebase — checked against effect names, constants, the
+  Cores and `data/lore.md`.
+- It sits beside **chrome** without being it, which matters if both ship next season: chrome
+  is grafted into a *player*, a Splice into a *card*.
+
+**Alternates**, if a two-word Destiny cadence is wanted instead: **`Synthesis Cipher`** (a
+cipher is a key, which is what a gated consumable is, and Exotic Cipher is the closest real
+Destiny analogue) or **`Instance Shard`** (a deep cut — the Cores catalogue this league as
+Instance 498b, so a shard of an instance is a piece of the world's own substrate).
+
+⚠️ **Rejected and why**, so these do not get re-proposed: *Graft* is the owner's own verb
+and reads perfectly, but "graft" also means bribery and corruption, which is a bad off-note
+in a league that runs a fan-voted front office. *Catalyst* is authentically Destiny but a
+catalyst is by definition **not consumed**, which is exactly backwards for a charge that is
+spent. *Blank* is sharp cyberpunk and literally describes a base card — but that is the
+problem: the blank is the card, not the thing you spend on it.
 
 ### Where it lives in the shop
 
@@ -452,9 +479,15 @@ season — it has simply moved position. It recurs because it is structural, not
 | \+ prev-season perf ≥ **90** | 66 | **37** |
 | \+ prev-season perf ≥ 92 | 64 | 29 |
 
-**Recommend perf ≥ 90.** It is the ~p90 of the distribution (median 80, p90 93), it takes
-diamond from 6 players to 37 while moving prismatic only 53 → 66, and it fills diamond TE.
-The change should land almost entirely on the tier whose scarcity is pathological.
+**SETTLED (owner, 2026-08-26): perf ≥ 90, and CHAMPION IS EXCLUDED.** The bar is the ~p90
+of the distribution (median 80, p90 93); it takes diamond from 6 players to 37 while moving
+prismatic only 53 → 66, and it fills diamond TE. The change lands almost entirely on the
+tier whose scarcity is pathological.
+
+**The eligibility rule, in full:** a player is eligible for an edition if
+`playerRating >= EDITION_THRESHOLDS[edition]` **OR** their previous season's
+`PlayerSeasonStats.performance_rating >= 90` **OR** they hold an **All-Pro** or **MVP** tag
+from the previous season. Champion does not qualify anyone.
 
 ### ⚠️ It does NOT make diamonds more common — only more varied
 
@@ -484,12 +517,18 @@ bucket loop. The accolade rule is therefore a gate change with **zero new plumbi
 other 288 are free agents and non-rostered players, who are excluded from minting anyway.
 So the performance rule is one join.
 
-⚠️ **AP AND MVP ARE INDIVIDUAL; CHAMPION IS NOT.** The Floos Bowl winner's roster is six
-players, and *five of season 20's six were below the diamond gate* — including whoever
-happened to be at kicker. Granting full edition eligibility for having been on the winning
-team is a far weaker claim than a 90 performance rating, and it hands the top tier to a
-whole roster regardless of how any of them played. **Recommend AP and MVP grant full
-eligibility and champion does not** (or lifts one rung only).
+⚠️ **AP AND MVP ARE INDIVIDUAL; CHAMPION IS NOT — SO CHAMPION IS EXCLUDED** (owner,
+2026-08-26). The Floos Bowl winner's roster is six players, and *five of season 20's six
+were below the diamond gate*, including whoever happened to be at kicker. Granting full
+edition eligibility for having been on the winning team is a far weaker claim than a 90
+performance rating, and it hands the top tier to a whole roster regardless of how any of
+them played.
+
+⚠️ **`championPlayerIds` STILL FEEDS `_buildClassification` — do not remove it, only stop
+it feeding the GATE.** The two uses sit a few lines apart and read alike: a champion card
+must keep wearing its CH tag, it just does not become mintable at an edition its player's
+rating and production did not earn. Deleting the set to implement this ruling would strip
+the tag off every champion card in the league.
 
 ⚠️ **The sharpest single case for this change:** season 20's All-Pro **Tanuki Batman rates
 65** — the league recognized him as the best at his position, and the card system will not
@@ -549,7 +588,7 @@ that season, **five of them below the diamond gate and two below prismatic**.
 5. Transplant rules — lift same-edition and both-effect-bearing **for a base target
    only**; refuse a synthetic target (ruling 6); keep position validity and the
    current-season donor gate.
-6. The Requisition: catalog entry, `consumed_at` charge tracking, fixed daily shop slot,
+6. The Splice: catalog entry, `consumed_at` charge tracking, fixed daily shop slot,
    achievement reward hook.
 7. Suppress classifications on the synthetic path.
 8. Frontend: the picker's second section, the synthesis target list (no rating gate
