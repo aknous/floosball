@@ -5395,11 +5395,38 @@ async def get_stats_players(
             finally:
                 _s.close()
 
-            selectedIds = {p.id for p in selected}
-            for playerId, statRows in bySeasonRows.items():
-                if playerId not in selectedIds:
+            # ⚠️ ITERATE THE PLAYERS, NOT THE STAT ROWS. This looped over
+            # `bySeasonRows` and intersected with the selection, so a player with no
+            # `PlayerSeasonStats` row for the season — or one with `games_played == 0`,
+            # which the query above filters out — was DROPPED from the page entirely
+            # while still being counted in `facets`. The two numbers come from the same
+            # `candidates` list and agree by construction, so the mismatch could only be
+            # here.
+            #
+            # ⚠️ FREE AGENTS ARE EXACTLY THE POPULATION THAT HAS NO STAT ROW, which is why
+            # this reads as an FA bug rather than a stats bug. An unsigned free agent
+            # played no games, so they have nothing in the table. Reported from the live
+            # page: the Free Agent chip said 56 and the footer said "Showing 41 of 41";
+            # filtered to QB it said 4 and showed 1. Measured on a season-21 database, 29
+            # teamless non-retired players and **0** with a qualifying stat row.
+            #
+            # ⚠️ The LIVE branch above never had this — it loops `selected` and emits a
+            # row for everyone, empty stats included. This branch is the inconsistent one,
+            # and it is the branch that runs all through the offseason (see `liveSeason`).
+            for p in selected:
+                statRows = bySeasonRows.get(p.id) or []
+                if not statRows:
+                    # On the page as a player, with an empty line — which is the honest
+                    # rendering of someone who did not play, and what the live branch has
+                    # always done.
+                    rows.append(_statsPlayerRow(
+                        p, {g: {} for g in _STAT_GROUPS}, 0, 0, None, None, None,
+                        None, None, None,
+                        _playerStatus(p, pm),
+                        seasons=getattr(p, 'seasonsPlayed', None),
+                        awakened=p.id in awakenedIds,
+                    ))
                     continue
-                p = byId[playerId]
                 statRows.sort(key=lambda r: r.season)
                 blobList = [{
                     'passing': r.passing_stats or {}, 'rushing': r.rushing_stats or {},
