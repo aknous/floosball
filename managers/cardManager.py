@@ -677,6 +677,12 @@ class CardManager:
 
         champIds = championPlayerIds or set()
         apIds = allProPlayerIds or set()
+        # ⚠️ CHAMPION IS PASSED TO THE CLASSIFICATION AND NOT TO THE GATE. The two uses
+        # sit a few lines apart and read alike; handing `champIds` to the override set
+        # would grant the top tier to a whole roster regardless of how any of them
+        # played, and deleting it would strip the CH tag off every champion card.
+        eligibilityOverrides = self.editionEligibilityOverrides(
+            session, seasonNumber, mvpPlayerId=mvpPlayerId, allProPlayerIds=apIds)
 
         templates: List[CardTemplate] = []
 
@@ -701,8 +707,11 @@ class CardManager:
             if rating is None:
                 continue
             positionValue = player.position.value if hasattr(player.position, 'value') else int(player.position)
+            # A strong previous season or an individual accolade opens every edition —
+            # see `editionEligibilityOverrides`. Champion does not qualify anyone.
+            eligibleEverywhere = player.id in eligibilityOverrides
             for edition, threshold in EDITION_THRESHOLDS.items():
-                if rating < threshold:
+                if rating < threshold and not eligibleEverywhere:
                     continue
                 buckets.setdefault((edition, positionValue), []).append((player, teamId))
 
@@ -1193,6 +1202,63 @@ class CardManager:
             raise ValueError(f"Cannot use equipped cards: {list(equippedIds)}")
 
         return cards
+
+    @staticmethod
+    def editionEligibilityOverrides(session, seasonNumber: int, mvpPlayerId=None,
+                                    allProPlayerIds=None) -> set:
+        """Players eligible for EVERY edition regardless of rating.
+
+        ⚠️ SIX PLAYERS OF 192 HELD THE ENTIRE DIAMOND POOL, and one of them held all of
+        it. Measured on season 20: diamond-eligible by rating was QB 1 / RB 1 / WR 3 /
+        TE 0 / K 1 — and because `_assignEffects` tops a bucket up to
+        `max(players * k, len(effects))` and splits it across whoever is present, a
+        ONE-PLAYER bucket mints that bucket's entire effect set onto that one man. At
+        diamond the card simply IS the player. Diamond TE had nobody at all, so every
+        TE-exclusive diamond effect was unmintable — the same failure this file already
+        records for QB and K in an earlier season, moved position, because it is
+        structural rather than a one-off.
+
+        Two routes in, both about the season just PLAYED rather than the rating:
+          * a previous-season `performance_rating` at or above
+            `EDITION_ELIGIBILITY_PERF_BAR` — roughly the p90 of that distribution;
+          * an All-Pro or MVP tag from the previous season.
+
+        ⚠️ **CHAMPION IS DELIBERATELY EXCLUDED** (owner, 2026-08-26). AP and MVP are
+        individual; the Floos Bowl winner's roster is six players, and five of season
+        20's six sat below the diamond gate — including whoever happened to be at kicker.
+        Granting the top tier for having been on the winning team is a far weaker claim
+        than a 90 performance rating, and it hands that tier to a whole roster regardless
+        of how any of them played.
+
+        ⚠️ `championPlayerIds` MUST STILL REACH `_buildClassification`, which sits a few
+        lines from the gate and reads alike. Excluding champion means keeping it OUT OF
+        THE GATE, never deleting the set: a champion card has to keep wearing its CH tag,
+        it just does not become mintable at an edition its player never earned.
+
+        ⚠️ It cannot inflate diamond SUPPLY, only its variety. `_weightedDraw` is
+        explicitly two-stage — roll the edition from `packWeights`, then pick a template
+        within it — so edition rates are independent of how many templates exist. It does
+        change what a diamond DEPICTS: stage two weights by `120 - playerRating`, so a
+        lower-rated player is about twice as likely to be drawn within the tier.
+        """
+        from constants import EDITION_ELIGIBILITY_PERF_BAR
+        out = set()
+        if mvpPlayerId:
+            out.add(int(mvpPlayerId))
+        out.update(int(p) for p in (allProPlayerIds or set()))
+        try:
+            from sqlalchemy import text
+            rows = session.execute(text(
+                "SELECT player_id FROM player_season_stats "
+                "WHERE season = :s AND performance_rating >= :bar"),
+                {"s": seasonNumber - 1, "bar": EDITION_ELIGIBILITY_PERF_BAR}).fetchall()
+            out.update(int(r[0]) for r in rows)
+        except Exception:
+            # ⚠️ Fail CLOSED. A missing or unreadable stats table must leave the rating
+            # gate exactly as it was, never open every edition to everyone.
+            logger.warning("Edition-eligibility perf lookup failed; rating gate only",
+                           exc_info=True)
+        return out
 
     # ─── The base pool ────────────────────────────────────────────────────────
     @staticmethod

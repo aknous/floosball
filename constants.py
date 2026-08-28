@@ -3058,6 +3058,22 @@ POWERUP_CATALOG = {
     "income_boost": POWERUP_INCOME_BOOST,
 }
 
+# ⚠️ EDITION ELIGIBILITY: a strong previous season opens every edition, whatever the
+# rating. Measured on season 20, diamond-eligible BY RATING was six players of 192 — QB 1
+# / RB 1 / WR 3 / TE 0 / K 1 — and a one-player bucket mints that bucket's ENTIRE effect
+# set onto that one man, so at diamond the card simply is the player. Diamond TE had
+# nobody, making every TE-exclusive diamond effect unmintable.
+#
+# 90 is roughly the p90 of the previous-season performance distribution (median 80, p90
+# 93). It takes diamond from 6 players to 37 while moving prismatic only 53 -> 66 — the
+# change lands almost entirely on the tier whose scarcity is pathological.
+#
+# ⚠️ It cannot inflate diamond SUPPLY: `_weightedDraw` rolls the EDITION from packWeights
+# first and only then picks a template within it, so rates are independent of pool size.
+# It changes what a diamond DEPICTS — stage two weights by `120 - rating`, so a 65 is
+# about twice as likely to be drawn within the tier as a 94.
+EDITION_ELIGIBILITY_PERF_BAR = 90
+
 # ─── Synth Components ────────────────────────────────────────────────────────
 # The consumable that gates synthetic cards: graft any effect onto any player's base
 # card. Named for the family it joins — the chrome plan already writes "chrome

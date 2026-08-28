@@ -1,6 +1,7 @@
 # Synthetic Cards — every player, any effect
 
-**Status:** design settled, not started. **Priority 1 for next season** (owner, 2026-08-26).
+**Status:** BUILT (backend + frontend), 2026-08-28. Build steps 1-10 complete.
+**Priority 1 for next season** (owner, 2026-08-26).
 **Owner direction:** 2026-08-16, extended 2026-08-26.
 
 > **Renamed 2026-08-26** from "Wildcard Transplant" (owner's word is **synthetic card**).
@@ -737,9 +738,13 @@ that season, **five of them below the diamond gate and two below prismatic**.
 9. ~~Re-measure the cross-card family.~~ **DONE 2026-08-28** — see "Measured: what
    curating actually buys" below. Nothing re-breaks; regression
    `test_hand_composition_sizing.py`.
-10. **Last, and separable:** expanded edition eligibility (section D). It touches the
-   MINT side only and nothing else here depends on it, so it can ship a season later
-   without stranding anything.
+10. ~~Expanded edition eligibility.~~ **DONE 2026-08-28.**
+   `CardManager.editionEligibilityOverrides` + `EDITION_ELIGIBILITY_PERF_BAR` (90),
+   wired into `generateSeasonTemplates`'s bucket loop. Verified against season 20:
+   diamond **6 → 37** eligible players, prismatic 53 → 66, holographic 95 → 101, and
+   the **empty diamond TE bucket fills**. Regression: `test_edition_eligibility.py`.
+   ⚠️ The rookie path is deliberately untouched — a rookie has no previous season and no
+   accolade, so neither route can apply to one.
 
 ## ⚠️ Measured: what curating actually buys (step 9, 2026-08-28)
 
