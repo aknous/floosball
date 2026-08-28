@@ -74,6 +74,10 @@ donorP, baseP = mkPlayer('Donor Guy'), mkPlayer('Any Player')
 donor = mkCard(mkTemplate(donorP, 'prismatic', EFFECT))
 basePrint = mkCard(mkTemplate(baseP, 'base', 'none'))
 balBefore = s.get(UserCurrency, u.id).balance
+# Synthesis is gated on a Synth Component as well as the Floobit fee — section 7 covers
+# the gate itself; here we just stock it so the mint can be inspected.
+from managers import componentManager as _comp
+_comp.grant(s, u.id, 1, 20, source='test')
 cm.transplantEffect(s, u.id, donor.id, basePrint.id, currentSeason=1, currentWeek=0)
 synth = s.get(UserCard, basePrint.id).card_template
 
@@ -258,6 +262,78 @@ expect("a claimed floor print is still a base card (hidden from the collection)"
 synth2 = s.query(CardTemplate).filter_by(is_synthetic=True).first()
 expect("a synthetic is NOT base, so the same filter shows it in the collection",
        synth2 is not None and synth2.edition != 'base')
+
+
+print("\n7. Synth Components: the gate")
+from managers import componentManager as comp
+from constants import SYNTH_COMPONENT_ACHIEVEMENT_CAP
+
+u2 = User(email='c@c.com', username='comper'); s.add(u2); s.flush()
+CurrencyRepository(s).addFunds(u2.id, 5000, transactionType='test', season=1)
+expect("a new user holds no components", comp.balance(s, u2.id, 1) == 0)
+
+comp.grant(s, u2.id, 1, 2, source='shop')
+expect("granting adds to the balance", comp.balance(s, u2.id, 1) == 2)
+expect("...and a balance is a COUNT of unconsumed rows, not a stored integer",
+       s.query(__import__('database.models', fromlist=['UserComponent']).UserComponent)
+        .filter_by(user_id=u2.id, consumed_at=None).count() == 2)
+
+expect("consuming succeeds while stock lasts", comp.consume(s, u2.id, 1) is True)
+expect("the balance drops", comp.balance(s, u2.id, 1) == 1)
+expect("consuming more than held is refused ALL-OR-NOTHING",
+       comp.consume(s, u2.id, 1, count=5) is False)
+expect("...and takes nothing when it refuses", comp.balance(s, u2.id, 1) == 1)
+
+# ⚠️ Season-scoped: unspent components do not survive the boundary.
+expect("components are season-scoped", comp.balance(s, u2.id, 2) == 0)
+
+# ⚠️ The achievement cap counts GRANTS, not holdings — spending must not refill it.
+comp.grant(s, u2.id, 1, 10, source='achievement', cap=SYNTH_COMPONENT_ACHIEVEMENT_CAP)
+expect(f"the achievement cap bites at {SYNTH_COMPONENT_ACHIEVEMENT_CAP}",
+       comp.grantedFrom(s, u2.id, 1, 'achievement') == SYNTH_COMPONENT_ACHIEVEMENT_CAP)
+comp.consume(s, u2.id, 1, count=3)
+comp.grant(s, u2.id, 1, 5, source='achievement', cap=SYNTH_COMPONENT_ACHIEVEMENT_CAP)
+expect("spending does NOT refill the cap",
+       comp.grantedFrom(s, u2.id, 1, 'achievement') == SYNTH_COMPONENT_ACHIEVEMENT_CAP)
+# ...while the shop source is capped separately (by the day boundary, not here).
+comp.grant(s, u2.id, 1, 1, source='shop')
+expect("a different source has its own budget",
+       comp.grantedFrom(s, u2.id, 1, 'shop') == 3)
+
+
+print("\n8. Synthesis requires and consumes one")
+donor2 = mkCard(mkTemplate(mkPlayer('Donor Three'), 'prismatic', EFFECT))
+base2 = mkCard(mkTemplate(mkPlayer('Base Two'), 'base', 'none'))
+s.query(UserCard).filter_by(id=donor2.id).update({'user_id': u2.id})
+s.query(UserCard).filter_by(id=base2.id).update({'user_id': u2.id})
+s.flush()
+while comp.balance(s, u2.id, 1):
+    comp.consume(s, u2.id, 1)
+balBefore2 = s.get(UserCurrency, u2.id).balance
+try:
+    cm.transplantEffect(s, u2.id, donor2.id, base2.id, 1, 0)
+    expect("synthesis without a component is refused", False)
+except ValueError as e:
+    expect(f"synthesis without a component is refused  ({e})", 'component' in str(e).lower())
+# ⚠️ The component is checked BEFORE the Floobits are taken — the two are charged by
+# different systems, so the reverse order leaves a user poorer with nothing built.
+expect("...and no Floobits were taken", s.get(UserCurrency, u2.id).balance == balBefore2)
+
+comp.grant(s, u2.id, 1, 1, source='shop')
+cm.transplantEffect(s, u2.id, donor2.id, base2.id, 1, 0)
+expect("with one held, synthesis succeeds",
+       s.get(UserCard, base2.id).card_template.is_synthetic is True)
+expect("...and the component is spent", comp.balance(s, u2.id, 1) == 0)
+
+# An ORDINARY transplant costs no component: the gate is on reaching ANY PLAYER, which
+# is the new thing, not on moving an effect, which has always been buyable.
+a = mkCard(mkTemplate(mkPlayer('Ord A'), 'prismatic', 'all_in'))
+b = mkCard(mkTemplate(mkPlayer('Ord B'), 'prismatic', EFFECT))
+s.query(UserCard).filter(UserCard.id.in_([a.id, b.id])).update(
+    {'user_id': u2.id}, synchronize_session=False)
+s.flush()
+cm.transplantEffect(s, u2.id, a.id, b.id, 1, 0)
+expect("an ordinary transplant needs no component", comp.balance(s, u2.id, 1) == 0)
 
 print()
 if failures:

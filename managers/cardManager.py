@@ -1576,6 +1576,7 @@ class CardManager:
                           targetCardId: int, currentSeason: int, currentWeek: int = 0) -> dict:
         """Validate a transplant pairing and return its cost + summary (or raise)."""
         from constants import TRANSPLANT_COST_BY_EDITION
+        from managers import componentManager as _components
         donor, target = self._validateTransplantPair(session, userId, donorCardId,
                                                      targetCardId, currentSeason, currentWeek)
         edition, synthesizing = self._transplantEdition(self._effectName(donor),
@@ -1584,6 +1585,11 @@ class CardManager:
             "cost": TRANSPLANT_COST_BY_EDITION.get(edition, 0),
             "edition": edition,
             "synthetic": synthesizing,
+            # ⚠️ The preview has to report BOTH prices or the button lies. Synthesis costs
+            # a Synth Component on top of the Floobit fee, and a user holding 0 would
+            # otherwise see a payable price and be refused at the till.
+            "componentsRequired": 1 if synthesizing else 0,
+            "componentsHeld": _components.balance(session, userId, currentSeason),
             "donorEffect": self._effectName(donor),
             "targetEffect": self._effectName(target),
             "donorPlayer": donor.card_template.player_name,
@@ -1616,6 +1622,16 @@ class CardManager:
         edition, synthesizing = self._transplantEdition(donorEffect, tt)
         cost = TRANSPLANT_COST_BY_EDITION.get(edition, 0)
 
+        # ⚠️ CHECK THE COMPONENT BEFORE SPENDING FLOOBITS. Synthesis costs a Synth
+        # Component AND the transplant fee, and the two are charged by different systems —
+        # so taking the Floobits first would leave a user 120 F poorer with nothing built
+        # when the component check fails a line later. Check first, spend second, consume
+        # last, and only once everything that can refuse has refused.
+        from managers import componentManager as _components
+        if synthesizing:
+            if _components.balance(session, userId, currentSeason) < 1:
+                raise ValueError("You need a Synth Component to build this card")
+
         if cost > 0:
             currencyRepo = CurrencyRepository(session)
             result = currencyRepo.spendFunds(
@@ -1626,6 +1642,15 @@ class CardManager:
             )
             if result is None:
                 raise ValueError("Insufficient Floobits")
+
+        # ⚠️ The component is spent only on the SYNTHESIS path. An ordinary transplant
+        # between two owned cards of the same edition is unchanged and costs none: the
+        # component gates access to ANY PLAYER, which is the new thing, not the moving of
+        # an effect, which has always been buyable.
+        if synthesizing:
+            if not _components.consume(session, userId, currentSeason,
+                                       consumedFor=f"synth:{tt.player_name}"):
+                raise ValueError("You need a Synth Component to build this card")
 
         oldTemplateId = target.card_template_id
         # Mint an upgraded template on the TARGET's identity/rating carrying the donor's

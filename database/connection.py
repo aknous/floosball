@@ -410,6 +410,33 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # The component ledger — shared by Synth Components and (later) Chrome
+        # Components. A balance is a COUNT of unconsumed rows, never a stored integer.
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS user_components ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL, "
+                "component_type VARCHAR(20) NOT NULL, "
+                "source VARCHAR(40) NOT NULL, "
+                "season INTEGER NOT NULL, "
+                "granted_at DATETIME, "
+                "consumed_at DATETIME, "
+                "consumed_for VARCHAR(80), "
+                "earmark_target_id INTEGER)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_user_components_balance "
+                "ON user_components (user_id, component_type, season, consumed_at)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_user_components_source "
+                "ON user_components (user_id, component_type, season, source)"
+            ))
+            conn.commit()
+            logger.info("  Migration: ensured user_components table")
+        except Exception:
+            conn.rollback()
         # Card Showcase — seasonal 8-slot featured-card payout (vaulted cards).
         try:
             conn.execute(text(

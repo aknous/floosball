@@ -2030,6 +2030,59 @@ class ShopPurchase(Base):
     )
 
 
+class UserComponent(Base):
+    """A single crafting component held by a user — the shared ledger for the whole
+    component family (Synth Components today, Chrome Components next).
+
+    ⚠️ THIS IS NOT `ShopPurchase` WITH A FLAG, AND THE REASON IS CHROME. `POWERUP_CATALOG`
+    items are TIMED EFFECTS: bought, stamped with `expires_at_week`, and read as "is one
+    active right now". A component is a CHARGE — bought or granted, held, and later SPENT
+    on one specific action. `ShopPurchase` records that a purchase happened and nothing
+    records that it was consumed.
+
+    An earlier draft proposed adding `ShopPurchase.consumed_at`. That is right for a
+    shop-only item and wrong for a family whose other member is never bought: **chrome
+    components are EARNED, never purchased** (locked owner ruling), so they would have no
+    `ShopPurchase` row to hang a `consumed_at` on. Building the ledger here means the
+    chrome work inherits it finished rather than growing a parallel one.
+
+    A balance is a COUNT of unconsumed rows of a type — never a stored integer, so a grant
+    and a spend can never disagree about what someone holds, and every component carries
+    its own provenance.
+
+    ⚠️ `earmark_target_id` is chrome's, not synth's. Chrome components are committed to a
+    specific player and augment at gift time ("a funding race, not an election"); a Synth
+    Component is spent the instant it is used and has nothing to point at. The column is
+    here so chrome does not need a migration, and is left NULL by everything today.
+    """
+    __tablename__ = "user_components"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    # 'synth' | 'chrome'
+    component_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # 'shop' | 'achievement' | 'fantasy' | 'pickem' | 'grant'
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    # ⚠️ Season-scoped: unspent components expire at the boundary, matching how
+    # everything else card-side is season-scoped. Without it a stockpile carried across
+    # becomes a burst of builds on day one of a new season.
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    granted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # What the component was spent ON, for the audit trail (a card template id today).
+    consumed_for: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    earmark_target_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        Index("idx_user_components_balance", "user_id", "component_type", "season",
+              "consumed_at"),
+        Index("idx_user_components_source", "user_id", "component_type", "season",
+              "source"),
+    )
+
+
 class UserModifierOverride(Base):
     """Per-user weekly modifier override (from Modifier Nullifier power-up)."""
     __tablename__ = "user_modifier_overrides"

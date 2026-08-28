@@ -3058,6 +3058,41 @@ POWERUP_CATALOG = {
     "income_boost": POWERUP_INCOME_BOOST,
 }
 
+# ─── Synth Components ────────────────────────────────────────────────────────
+# The consumable that gates synthetic cards: graft any effect onto any player's base
+# card. Named for the family it joins — the chrome plan already writes "chrome
+# components" throughout, so this is synth joining an existing vocabulary rather than
+# coining one.
+#
+# ⚠️ IT STACKS ON `TRANSPLANT_COST_BY_EDITION`, IT IS NOT A FEE. Floobits accumulate, so
+# a price can never cap grinding; a per-day item makes the real constraint DAYS ELAPSED.
+# A diamond build therefore costs SYNTH_COMPONENT_PRICE + 180.
+#
+# ⚠️ "2 PER DAY" IS 8 A SEASON, NOT 56, and the number wants choosing on purpose because
+# it reads like an order of magnitude more than it is. The regular season is FOUR real
+# calendar days (28 weeks at 7 rounds a day, cross-day boundaries at weeks 8/15/22) and
+# `shop_repository._dailyResetBoundary` resets per calendar day. Against a seven-slot
+# lineup that is one full lineup's worth a season, if you spend every day and miss none.
+# Want a lineup plus room to iterate? The number is 3.
+#
+# ⚠️ EVERY BUILD ALSO BURNS A PULLED DONOR, so for a newer user donors bind long before
+# the daily cap does and they will never see it. The gate lands on deep collections —
+# the right shape, given the friction this feature answers was reported by new users, but
+# it is also why the Floobit price stays modest. Measured against a median user-week of
+# 84 F and Accession at 200 F (which buys a whole lineup slot for four weeks, where this
+# buys one card).
+SYNTH_COMPONENT_SLUG = 'synth_component'
+SYNTH_COMPONENT_NAME = 'Synth Component'
+SYNTH_COMPONENT_PRICE = 80
+SYNTH_COMPONENT_DAILY_LIMIT = 2
+# ⚠️ ACHIEVEMENT GRANTS BYPASS THE DAILY CAP — a burst of completions arrives at once and
+# the shop's day boundary cannot see it. Measured on production, an engaged user finishes
+# ~2 of the 13 guidance capstones a season (36% finish none, and the tail reaches 9), so
+# one per capstone is self-limiting; this caps the tail at 4 rather than 9 without
+# touching the typical player. ⚠️ Widening the grant list later IS a change to this cap,
+# whether or not it gets discussed as one.
+SYNTH_COMPONENT_ACHIEVEMENT_CAP = 4
+
 # Shop reroll (not a powerup — lives in the Daily Selection section)
 SHOP_REROLL_BASE_COST = 10
 SHOP_REROLL_COST_INCREMENT = 5   # Each reroll costs 5 more than the last

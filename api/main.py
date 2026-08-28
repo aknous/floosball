@@ -11700,6 +11700,101 @@ def rerollThemedPacks(user: _User = Depends(_getCurrentUser)):
 # ============================================================================
 
 
+@app.get("/api/shop/synth-components")
+def getSynthComponents(user: _User = Depends(_getCurrentUser)):
+    """The Synth Component's shop slot: what the user holds, and what is left today.
+
+    ⚠️ A FIXED SLOT IN THE DAILY SELECTION, not part of `ROTATION_CATEGORY_WEIGHTS` —
+    that rotates PACK categories. A consumable that only appears on some days turns
+    lineup planning into a lottery, which is the opposite of what this gates.
+    """
+    from database.connection import get_session
+    from database.repositories.shop_repository import ShopPurchaseRepository
+    from managers import componentManager as _components
+    from constants import (SYNTH_COMPONENT_SLUG, SYNTH_COMPONENT_NAME,
+                           SYNTH_COMPONENT_PRICE, SYNTH_COMPONENT_DAILY_LIMIT)
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+
+    session = get_session()
+    try:
+        boughtToday = ShopPurchaseRepository(session).getPurchasesToday(
+            user.id, SYNTH_COMPONENT_SLUG)
+        return {
+            "slug": SYNTH_COMPONENT_SLUG,
+            "name": SYNTH_COMPONENT_NAME,
+            "price": SYNTH_COMPONENT_PRICE,
+            "held": _components.balance(session, user.id, currentSeason),
+            "boughtToday": boughtToday,
+            "dailyLimit": SYNTH_COMPONENT_DAILY_LIMIT,
+            "remainingToday": max(0, SYNTH_COMPONENT_DAILY_LIMIT - boughtToday),
+        }
+    finally:
+        session.close()
+
+
+@app.post("/api/shop/synth-components/buy")
+def buySynthComponent(user: _User = Depends(_getCurrentUser)):
+    """Buy one Synth Component, up to the daily allowance."""
+    from database.connection import get_session
+    from database.repositories.card_repositories import CurrencyRepository
+    from database.repositories.shop_repository import ShopPurchaseRepository
+    from database.models import ShopPurchase
+    from managers import componentManager as _components
+    from constants import (SYNTH_COMPONENT_SLUG, SYNTH_COMPONENT_PRICE,
+                           SYNTH_COMPONENT_DAILY_LIMIT)
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+
+    session = get_session()
+    try:
+        shopRepo = ShopPurchaseRepository(session)
+        boughtToday = shopRepo.getPurchasesToday(user.id, SYNTH_COMPONENT_SLUG)
+        if boughtToday >= SYNTH_COMPONENT_DAILY_LIMIT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"You've taken today's {SYNTH_COMPONENT_DAILY_LIMIT} Synth Components")
+
+        # ⚠️ SPEND FIRST, GRANT SECOND. The reverse order hands out the component and then
+        # discovers the user cannot pay for it.
+        spent = CurrencyRepository(session).spendFunds(
+            user.id, SYNTH_COMPONENT_PRICE,
+            transactionType="synth_component",
+            description="Synth Component",
+            season=currentSeason,
+        )
+        if spent is None:
+            raise HTTPException(status_code=400, detail="Insufficient Floobits")
+
+        # ⚠️ The `ShopPurchase` row is the DAILY-LIMIT record, not the component itself.
+        # The component lives in its own ledger because it is a CHARGE rather than a
+        # timed effect — see `UserComponent`. Both rows are needed and they say different
+        # things: this one is "you bought one today", that one is "you hold one".
+        session.add(ShopPurchase(
+            user_id=user.id, item_slug=SYNTH_COMPONENT_SLUG,
+            season=currentSeason, week=currentWeek,
+            price_paid=SYNTH_COMPONENT_PRICE,
+        ))
+        _components.grant(session, user.id, currentSeason, 1, source='shop')
+        session.commit()
+        return {
+            "success": True,
+            "held": _components.balance(session, user.id, currentSeason),
+            "remainingToday": max(0, SYNTH_COMPONENT_DAILY_LIMIT - (boughtToday + 1)),
+        }
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
+
+
 @app.get("/api/shop/powerups")
 def getShopPowerups(user: _User = Depends(_getCurrentUser)):
     """Get power-up catalog with prices, limits, and user's current purchase state."""
