@@ -734,10 +734,68 @@ that season, **five of them below the diamond gate and two below prismatic**.
 7. Suppress classifications on the synthetic path.
 8. Frontend: the picker's second section, the synthesis target list (no rating gate
    there), and the muted edition color + SNTH label off the serialized flag.
-9. Re-measure the cross-card family (second-order item 1 above).
+9. ~~Re-measure the cross-card family.~~ **DONE 2026-08-28** — see "Measured: what
+   curating actually buys" below. Nothing re-breaks; regression
+   `test_hand_composition_sizing.py`.
 10. **Last, and separable:** expanded edition eligibility (section D). It touches the
    MINT side only and nothing else here depends on it, so it can ship a season later
    without stranding anything.
+
+## ⚠️ Measured: what curating actually buys (step 9, 2026-08-28)
+
+**THE OBVIOUS READING OF SYNTHESIS IS WRONG, and it is worth writing down before someone
+re-derives it.** It looks like it should make any effect combination reachable. It does
+not: the transplant still consumes a DONOR you had to pull, so effect scarcity — the
+actual game — is untouched. Nor is position validity the constraint it relaxes; measured,
+**99 of 170 effects are valid at every position**, and every output type has 18 or more
+effects legal at each of the five, so a lineup of any one type was always legal on
+paper.
+
+What synthesis removes is the need to pull a **PAIR**. Before it, fielding a floobits
+card in the QB slot meant pulling a card that was floobits-effect **and** depicted a
+quarterback. Chance of assembling a full seven-slot lineup of one output type, over 2,000
+simulated collections:
+
+| collection | type | before | after |
+|---|---|---|---|
+| 20 | fp | 34% | **80%** |
+| 40 | mult | 18% | **54%** |
+| 40 | floobits | 13% | **61%** |
+| 80 | mult | 68% | **98%** |
+| 80 | floobits | 62% | **99%** |
+
+⚠️ **Synthesis is worth roughly a DOUBLING of collection size** for hand building — a
+40-card collection afterwards behaves like an 80-card one before. And the lift is
+**largest for the smallest collections**, which is the opposite shape to the achievement
+faucet and the right one: the friction this feature answers was reported by new users.
+
+### Nothing re-breaks, and the reason is structural
+
+At rating 85:
+
+| card | 40-card | 80-card | ceiling |
+|---|---|---|---|
+| `gold_rush` | 66.3 → 80.2 | 82.3 → 89.8 | 90 |
+| `stacked_deck` | 1.62 → 1.73x | 1.80 → 1.86x | 1.87x |
+| `anthem` | 64.09 → 64.10 | unchanged | 64.1 |
+| `diversified` | 51.2 → 56.1 (+9%) | — | 56.1 |
+
+**Every one of these pays a COUNT over a seven-slot lineup**, so each has a hard ceiling
+that was already the sized number. Synthesis can only move the expectation TOWARD a bound
+that has already been peer-checked — which is exactly why the Diversified resize holds,
+and it generalizes to the whole family. `anthem` does not move at all: it tops out at
+five flat-FP cards and 91 of 170 effects are flat-FP, so it was already maxed.
+
+⚠️ **The rule this leaves behind: a card that reads the HAND must be sized on its CEILING,
+never its mean.** Curated hands are cheap now, so the ceiling IS the typical case.
+
+### ⚠️ The two halves of the family oppose, and that is what keeps it honest
+
+Diversified pays for **variety**; Gold Rush, Stacked Deck and Anthem pay for
+**concentration**. One hand cannot max both — three distinct types across seven slots
+leaves at most five of any one, so curating for either measurably costs the other. That
+is what stops "hands can be built to order" collapsing into a single dominant build, and
+it is a property to preserve rather than an accident.
 
 ## Regression targets
 
