@@ -6500,11 +6500,16 @@ class SeasonManager:
         # ── PHASE: post_bowl ───────────────────────────────────
         # _completeSeasonSimulation sets the phase + target before this runs;
         # we just honor the configured wait. In SCHEDULED that's 1h.
-        # Skipped on resume if we've already moved past this phase — the
-        # waitPostChampionship clock check is itself idempotent (it polls
-        # until target time) so re-entering during the wait is also fine.
+        # Skipped on resume if we've already moved past this phase. Re-entering DURING
+        # the wait is also fine now — but only because the persisted target is passed in
+        # below. ⚠️ This comment used to claim `waitPostChampionship` polled to a target
+        # on its own; it did not, it slept a flat hour, so a restart mid-wait started the
+        # hour over. The claim was true of `waitUntilNoonEt` and had drifted onto the
+        # wrong function.
         if not self._isOffseasonStepComplete('post_bowl'):
-            await self.timingManager.waitPostChampionship()
+            # Hand the wait the target that was persisted when the phase began, so a
+            # restart resumes the REMAINING hour instead of starting a fresh one.
+            await self.timingManager.waitPostChampionship(self._offseasonFlowTarget)
             self._markOffseasonStepComplete('post_bowl')
 
         # Clear stale state from previous season's offseason. Only safe
@@ -6729,7 +6734,11 @@ class SeasonManager:
         # would have pulled free agency to the next top of the hour, i.e. an
         # hour after the Floos Bowl, overnight.
         await self.timingManager.waitForOffseason()
-        await self.timingManager.waitUntilNoonEt()
+        # ⚠️ The frontoffice phase's persisted target IS draft day, and it is what the
+        # countdown has been showing users. Passing it means a restart honors the
+        # scheduled moment rather than recomputing "next noon" — which, a minute after
+        # the target, lands a full day later.
+        await self.timingManager.waitUntilNoonEt(self._offseasonFlowTarget)
 
         # Pre-FA integrity sweep — the draft pool must not include players
         # who are already on a roster (promotions just moved some prospects up,
@@ -8361,6 +8370,22 @@ class SeasonManager:
                 row.offseason_phase = self._offseasonFlowPhase
                 row.offseason_phase_target = self._offseasonFlowTarget
                 row.offseason_completed_steps = self._encodeCompletedSteps()
+                # ⚠️ THE FLAG AND THE PHASE MUST NOT BE ABLE TO DISAGREE, and they could.
+                # `in_offseason` was written only by the application loop, AFTER
+                # `runSeasonSimulation` returns — but the phase is stamped `post_bowl`
+                # INSIDE `_completeSeasonSimulation`, with the season-end broadcast and
+                # the rest of that method still to run. In that window the database said
+                # `offseason_phase='post_bowl'` and `in_offseason=False`, so a restart
+                # matched neither the offseason branch nor the playoff branch, fell
+                # through to "start new season", and **the offseason never ran at all** —
+                # the draft simply did not happen.
+                #
+                # Setting it here closes the window at its source: the moment a phase
+                # exists, the flag says so. Guarded on a non-null phase so the final
+                # `_setOffseasonFlow(None, None)` cannot re-raise it after the loop has
+                # cleared it.
+                if self._offseasonFlowPhase:
+                    row.in_offseason = True
                 sess.commit()
             finally:
                 sess.close()

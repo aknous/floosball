@@ -62644,3 +62644,4 @@ Shutting down API server...
 2026-08-27 16:39:08 - floosball.timingManager - INFO - TimingManager initialized in fast mode
 2026-08-27 16:39:08 - floosball.timingManager - INFO - TimingManager initialized in fast mode
 2026-08-27 16:39:11 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-28 18:43:51 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
