@@ -489,7 +489,7 @@
     - key: onair
       label: "The Booth Goes Live"
       unrealOnly: true
-      text: "The sideline broadcast is coming through everywhere at once, including the part where he reads out the play."
+      text: "The sideline broadcast is coming through everywhere at once, including the part where the play is read out."
       effects: {sackRate: 1.18, passAccuracy: 0.85, deepPassChance: 0.85, paceMod: 1.18}
 11:
   team: Pinecones
@@ -755,7 +755,7 @@
       effects: {passAccuracy: 1.07, fgAccuracy: 1.08, deepPassChance: 1.05}
     - key: glare
       label: "Follow Spots"
-      text: "The spots are tracking the ball carrier, which means they are also in his eyes."
+      text: "The spots are tracking the ball carrier, which means they are also in the carrier's eyes."
       effects: {visibility: 0.963, fumbleRate: 1.144}
     - key: powercut
       label: "Power Cut"

@@ -8442,11 +8442,14 @@ class Game:
             _made = not _mv.endswith('_miss')
             _name = _mv[:-5] if not _made else _mv
             # No defender is named here, because this branch only runs when the
-            # play never identified one.
+            # play never identified one — so the noun has to carry it.
+            # ⚠️ "defender", never "man". Play-by-play is gender-neutral (the scramble
+            # text already is), and these three read as one family: `hurdle` was already
+            # correct, which left the other two both gendered AND inconsistent with it.
             _mvText = {
-                ('stiff arm', True):  ', stiff-arming the first man away',
+                ('stiff arm', True):  ', stiff-arming the first defender away',
                 ('stiff arm', False): ', tries the stiff arm and gets wrapped up',
-                ('spin', True):       ', spinning past the first man',
+                ('spin', True):       ', spinning past the first defender',
                 ('spin', False):      ', spins but gets dragged down anyway',
                 ('hurdle', True):     ', hurdling the first defender',
                 ('hurdle', False):    ', tries to hurdle a defender and is met in mid-air',

@@ -21,7 +21,7 @@ REACTIONS = {
             '{name} gives a thumbs-up so minimal it could be a muscle spasm.',
             '{name}\'s heart rate has not changed. The medical staff has checked twice to confirm.',
             '{name} acknowledges the screaming fans with a single, barely perceptible head nod.',
-            '{name} places the ball on the turf with the tenderness of a man who will never love again.',
+            '{name} places the ball on the turf with the tenderness of someone who will never love again.',
             '{name} sits on the bench. Folds their towel. Stares forward. The void stares back.',
         ],
         'negative': [
