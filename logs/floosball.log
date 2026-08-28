@@ -62678,3 +62678,5 @@ Shutting down API server...
 2026-08-28 09:51:19 - floosball.achievements - INFO - Achievement unlocked: user=1 key=live_one season=0
 2026-08-28 11:18:37 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
 2026-08-28 16:21:54 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-28 17:09:46 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-28 17:09:48 - floosball.websocket - INFO - WebSocket ConnectionManager initialized

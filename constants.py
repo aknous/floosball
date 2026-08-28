@@ -3108,6 +3108,23 @@ SYNTH_COMPONENT_DAILY_LIMIT = 2
 # touching the typical player. ⚠️ Widening the grant list later IS a change to this cap,
 # whether or not it gets discussed as one.
 SYNTH_COMPONENT_ACHIEVEMENT_CAP = 4
+# ⚠️ ANTI-HOARD: A HOLDING CAP ON WHAT CAN BE BOUGHT, NOT ON WHAT CAN BE HELD.
+# The shop refuses to sell while a user is already sitting on this many unspent
+# components; achievement grants are NEVER refused, because a reward the game promised
+# must not evaporate because the shop is full.
+#
+# ⚠️ HOARDING IS ALREADY EXPENSIVE, WHICH IS WHY THE CAP CAN BE GENEROUS. A synthetic
+# only scores in the weeks it is EQUIPPED, so a component spent in week 1 buys 28 weeks
+# of that card and one spent in week 22 buys 7. Sitting on components is paying full
+# price for a card and then leaving it in the box. And the shop allowance does not
+# accumulate on its own — `getPurchasesToday` counts purchases since the day boundary,
+# so a user who skips a day does not get four the next.
+#
+# What the cap actually removes is the INFORMATION play: buy early, watch who is
+# producing, then build a whole lineup at once late with hindsight the pacing was meant
+# to deny. At 3 a user can still bank toward one expensive build; they cannot bank a
+# lineup.
+SYNTH_COMPONENT_HOLD_CAP = 3
 
 # Shop reroll (not a powerup — lives in the Daily Selection section)
 SHOP_REROLL_BASE_COST = 10

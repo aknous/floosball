@@ -11756,24 +11756,38 @@ def getSynthComponents(user: _User = Depends(_getCurrentUser)):
     from database.connection import get_session
     from database.repositories.shop_repository import ShopPurchaseRepository
     from managers import componentManager as _components
+    from managers.cardManager import regularSeasonOver
     from constants import (SYNTH_COMPONENT_SLUG, SYNTH_COMPONENT_NAME,
-                           SYNTH_COMPONENT_PRICE, SYNTH_COMPONENT_DAILY_LIMIT)
+                           SYNTH_COMPONENT_PRICE, SYNTH_COMPONENT_DAILY_LIMIT,
+                           SYNTH_COMPONENT_HOLD_CAP)
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
 
     session = get_session()
     try:
         boughtToday = ShopPurchaseRepository(session).getPurchasesToday(
             user.id, SYNTH_COMPONENT_SLUG)
+        held = _components.balance(session, user.id, currentSeason)
+        offseason = regularSeasonOver(currentWeek)
+        # Say WHICH limit is biting. "Sold out" reads as a bug when the real answer is
+        # "spend the three you are holding" or "cards can't be fielded this week".
+        reason = ('offseason' if offseason
+                  else 'hold_cap' if held >= SYNTH_COMPONENT_HOLD_CAP
+                  else 'daily' if boughtToday >= SYNTH_COMPONENT_DAILY_LIMIT
+                  else None)
         return {
             "slug": SYNTH_COMPONENT_SLUG,
             "name": SYNTH_COMPONENT_NAME,
             "price": SYNTH_COMPONENT_PRICE,
-            "held": _components.balance(session, user.id, currentSeason),
+            "held": held,
             "boughtToday": boughtToday,
             "dailyLimit": SYNTH_COMPONENT_DAILY_LIMIT,
+            "holdCap": SYNTH_COMPONENT_HOLD_CAP,
             "remainingToday": max(0, SYNTH_COMPONENT_DAILY_LIMIT - boughtToday),
+            "canBuy": reason is None,
+            "blockedBy": reason,
         }
     finally:
         session.close()
@@ -11787,8 +11801,9 @@ def buySynthComponent(user: _User = Depends(_getCurrentUser)):
     from database.repositories.shop_repository import ShopPurchaseRepository
     from database.models import ShopPurchase
     from managers import componentManager as _components
+    from managers.cardManager import regularSeasonOver
     from constants import (SYNTH_COMPONENT_SLUG, SYNTH_COMPONENT_PRICE,
-                           SYNTH_COMPONENT_DAILY_LIMIT)
+                           SYNTH_COMPONENT_DAILY_LIMIT, SYNTH_COMPONENT_HOLD_CAP)
 
     sm = floosball_app.seasonManager if floosball_app else None
     currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
@@ -11796,12 +11811,31 @@ def buySynthComponent(user: _User = Depends(_getCurrentUser)):
 
     session = get_session()
     try:
+        # ⚠️ DO NOT SELL SOMETHING THAT CANNOT BE SPENT. Components are season-scoped, so
+        # one bought during the playoffs or the draft days expires unused — cards can't be
+        # equipped outside the regular season, so a synthetic built then never scores.
+        # The shop was happy to take the Floobits for it.
+        if regularSeasonOver(currentWeek):
+            raise HTTPException(
+                status_code=400,
+                detail="Synth Components are only useful during the regular season")
+
         shopRepo = ShopPurchaseRepository(session)
         boughtToday = shopRepo.getPurchasesToday(user.id, SYNTH_COMPONENT_SLUG)
         if boughtToday >= SYNTH_COMPONENT_DAILY_LIMIT:
             raise HTTPException(
                 status_code=400,
                 detail=f"You've taken today's {SYNTH_COMPONENT_DAILY_LIMIT} Synth Components")
+
+        # ⚠️ THE ANTI-HOARD, AND IT GATES BUYING RATHER THAN HOLDING. Refusing a grant
+        # would let an achievement reward evaporate because the shop happened to be full,
+        # which is a promise broken by an unrelated system. A user at the cap is told to
+        # spend, never denied something they earned.
+        held = _components.balance(session, user.id, currentSeason)
+        if held >= SYNTH_COMPONENT_HOLD_CAP:
+            raise HTTPException(
+                status_code=400,
+                detail=f"You're holding {held} Synth Components — build with one first")
 
         # ⚠️ SPEND FIRST, GRANT SECOND. The reverse order hands out the component and then
         # discovers the user cannot pay for it.

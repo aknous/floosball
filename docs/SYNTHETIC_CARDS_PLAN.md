@@ -307,6 +307,35 @@ Accession at 200 F, something in the **60-100 F** band makes a diamond build cos
 ~120 F. Deliberately below Accession, because Accession buys a whole extra lineup slot for
 four weeks and this buys one card.
 
+### ⚠️ Anti-hoard: a cap on BUYING, never on earning (owner, 2026-08-28)
+
+`SYNTH_COMPONENT_HOLD_CAP` (3). The shop refuses to sell while a user already holds that
+many unspent components. **Achievement grants are never refused** — a reward the game
+promised must not evaporate because the shop happened to be full, which would be one
+system breaking another's promise. A user at the cap is told to spend, not denied
+something they earned.
+
+⚠️ **HOARDING IS ALREADY EXPENSIVE, which is why the cap can be generous rather than
+punitive.** A synthetic only scores in the weeks it is EQUIPPED: a component spent in
+week 1 buys **28 weeks** of that card, one spent in week 22 buys **7**. Sitting on
+components is paying full price for a card and leaving it in the box. And the shop
+allowance does not accumulate on its own — `getPurchasesToday` counts purchases since the
+day boundary, so a user who skips a day does not get four the next.
+
+**What the cap actually removes is the INFORMATION play**: buy early, watch who is
+producing, then build a whole lineup at once late with hindsight the daily pacing was
+meant to deny. At 3 a user can still bank toward one expensive build; they cannot bank a
+lineup (six base slots).
+
+### ⚠️ And do not sell what cannot be spent
+
+Components are **season-scoped**, and cards cannot be equipped outside the regular season
+— so a component bought on a playoff or draft day expires unused and the synthetic built
+with it would never score. The shop was happy to take the Floobits for it. Purchases are
+now refused once `regularSeasonOver(currentWeek)`, and the GET reports **which** limit is
+biting (`blockedBy`: `offseason` / `hold_cap` / `daily`), because "sold out" reads as a
+bug when the real answer is "spend the three you are holding".
+
 ### ⚠️ It is a CHARGE, and the powerup machinery has no concept of one
 
 This is the one place the existing plumbing does not already fit. `POWERUP_CATALOG` items

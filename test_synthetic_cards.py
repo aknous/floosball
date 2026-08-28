@@ -335,6 +335,41 @@ s.flush()
 cm.transplantEffect(s, u2.id, a.id, b.id, 1, 0)
 expect("an ordinary transplant needs no component", comp.balance(s, u2.id, 1) == 0)
 
+
+print("\n9. Anti-hoard: the cap gates BUYING, never earning")
+from constants import SYNTH_COMPONENT_HOLD_CAP, SYNTH_COMPONENT_ACHIEVEMENT_CAP
+from managers.cardManager import regularSeasonOver, REGULAR_SEASON_WEEKS
+
+u3 = User(email='h@h.com', username='hoarder'); s.add(u3); s.flush()
+CurrencyRepository(s).addFunds(u3.id, 5000, transactionType='test', season=1)
+
+# ⚠️ The cap is on the SHOP, not on the ledger. An achievement reward must never
+# evaporate because the shop happened to be full — that is a promise broken by an
+# unrelated system.
+comp.grant(s, u3.id, 1, SYNTH_COMPONENT_HOLD_CAP + 3, source='achievement',
+           cap=SYNTH_COMPONENT_ACHIEVEMENT_CAP)
+earned = comp.balance(s, u3.id, 1)
+expect(f"earned components stack past the hold cap ({earned} > {SYNTH_COMPONENT_HOLD_CAP})",
+       earned > SYNTH_COMPONENT_HOLD_CAP)
+expect("...bounded only by the achievement cap, which is its own budget",
+       earned == SYNTH_COMPONENT_ACHIEVEMENT_CAP)
+
+# ⚠️ Hoarding is already expensive, which is why the cap can be generous rather than
+# punitive: a synthetic only scores in the weeks it is EQUIPPED, so a component spent in
+# week 1 buys 28 weeks of that card and one spent in week 22 buys 7. The cap removes the
+# INFORMATION play (bank early, build late with hindsight), not the ability to save.
+expect(f"the hold cap ({SYNTH_COMPONENT_HOLD_CAP}) still allows banking toward one build",
+       SYNTH_COMPONENT_HOLD_CAP >= 2)
+expect("...but never a whole lineup",
+       SYNTH_COMPONENT_HOLD_CAP < len(__import__('managers.cardManager',
+           fromlist=['FUSION_BASE_SLOTS']).FUSION_BASE_SLOTS))
+
+# ⚠️ And the shop must not sell what cannot be spent: components are season-scoped, so
+# one bought during the playoffs expires unused — a synthetic built then never scores,
+# because cards cannot be equipped outside the regular season.
+expect("the regular season is where a component is usable",
+       not regularSeasonOver(1) and regularSeasonOver(REGULAR_SEASON_WEEKS + 1))
+
 print()
 if failures:
     print(f"{len(failures)} FAILED"); sys.exit(1)
