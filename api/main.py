@@ -9752,7 +9752,45 @@ def previewBlend(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
 
 class TransplantRequest(BaseModel):
     donorCardId: int
-    targetCardId: int
+    # ⚠️ Optional, because the SYNTHESIS target comes from the base pool and has no
+    # `UserCard` row until it is used. The client sends `targetTemplateId` for a pool
+    # card; the server materializes it — on the real transplant only.
+    targetCardId: Optional[int] = None
+    targetTemplateId: Optional[int] = None
+
+
+def _resolveTransplantTarget(session, userId: int, req, currentSeason: int,
+                             materialize: bool) -> int:
+    """The target's `UserCard` id, claiming a pool card if that is what was named.
+
+    ⚠️ PREVIEW MUST NOT MATERIALIZE, and that is the whole reason this takes a flag. The
+    synthesis screen prices a target the moment it is picked, so a user browsing players
+    would mint a `UserCard` for every one they clicked — invisible rows (the collection
+    filters `base` out) but real pollution, and growing with idle curiosity rather than
+    with use. Preview resolves READ-ONLY against any row that already exists and prices
+    off the template otherwise; the real transplant is the only thing that creates.
+    """
+    from managers.cardManager import CardManager
+    from database.models import UserCard
+    if req.targetCardId is not None:
+        return req.targetCardId
+    if req.targetTemplateId is None:
+        raise ValueError("No target card")
+    if materialize:
+        return CardManager.claimBaseCard(
+            session, userId, req.targetTemplateId, currentSeason).id
+    existing = (session.query(UserCard)
+                .filter_by(user_id=userId, card_template_id=req.targetTemplateId)
+                .first())
+    if existing is not None:
+        return existing.id
+    # Nothing owned yet — hand back a transient row so the preview can price it, and
+    # never flush it. The session is rolled back by the endpoint either way.
+    tmp = UserCard(user_id=userId, card_template_id=req.targetTemplateId,
+                   acquired_via='base_pool')
+    session.add(tmp)
+    session.flush()
+    return tmp.id
 
 
 @app.post("/api/cards/transplant")
@@ -9768,8 +9806,10 @@ def transplantEffect(req: TransplantRequest, user: _User = Depends(_getCurrentUs
 
     session = get_session()
     try:
+        targetId = _resolveTransplantTarget(session, user.id, req, currentSeason,
+                                            materialize=True)
         result = cardManager.transplantEffect(session, user.id, req.donorCardId,
-                                               req.targetCardId, currentSeason, currentWeek)
+                                               targetId, currentSeason, currentWeek)
         # A transplant replaces the target's template with a new one (donor consumed),
         # so the collection's unique-template set can change — keep Curator in sync.
         from managers import achievementManager as _am
@@ -9804,12 +9844,17 @@ def previewTransplant(req: TransplantRequest, user: _User = Depends(_getCurrentU
 
     session = get_session()
     try:
+        targetId = _resolveTransplantTarget(session, user.id, req, currentSeason,
+                                            materialize=False)
         result = cardManager.previewTransplant(session, user.id, req.donorCardId,
-                                               req.targetCardId, currentSeason, currentWeek)
+                                               targetId, currentSeason, currentWeek)
         return build_success_response(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
+        # ⚠️ ALWAYS ROLL BACK. A preview may have flushed a transient `UserCard` so it
+        # could price an unowned pool card; nothing here is ever meant to persist.
+        session.rollback()
         session.close()
 
 
