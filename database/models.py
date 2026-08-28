@@ -1554,6 +1554,17 @@ class CardTemplate(Base):
     # This is what makes an all-year shop coherent: fantasy cards bought outside
     # the regular season could never be equipped, showpieces lose nothing.
     is_showpiece: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Synthetic: the EXACT MIRROR of a showpiece. A showpiece is collectible and can
+    # never be equipped; a synthetic is equippable and can never be collected — no
+    # vault, no Showcase (which rides the vault), no Combine, sell value 1.
+    #
+    # ⚠️ IT CANNOT BE DERIVED, and that is a consequence of the design rather than an
+    # oversight. A synthetic is minted at the EFFECT's own edition (so a prismatic
+    # effect brings prismatic strength and the prismatic gate wherever it lands), which
+    # means nothing on the row distinguishes it from a pulled prismatic. An earlier
+    # draft leaned on `edition == 'base' and effect != none`; that predicate died the
+    # moment the card stopped being `base`.
+    is_synthetic: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     classification: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # rookie, mvp, champion, all_pro, or compound e.g. mvp_champion
 
     # Snapshot of player at creation time

@@ -62644,3 +62644,23 @@ Shutting down API server...
 2026-08-27 16:39:08 - floosball.timingManager - INFO - TimingManager initialized in fast mode
 2026-08-27 16:39:08 - floosball.timingManager - INFO - TimingManager initialized in fast mode
 2026-08-27 16:39:11 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-28 09:30:14 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-28 09:30:14 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2026-08-28 09:30:14 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2026-08-28 09:30:14 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2026-08-28 09:30:14 - floosball.random_batch - INFO - Cleared all random batch caches
+2026-08-28 09:30:14 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2026-08-28 09:30:14 - floosball.random_batch - INFO - Cleared all random batch caches
+2026-08-28 09:30:14 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2026-08-28 09:30:14 - floosball.random_batch - INFO - Cleared all random batch caches
+2026-08-28 09:30:14 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2026-08-28 09:30:14 - floosball.random_batch - INFO - Cleared all random batch caches
+2026-08-28 09:30:14 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2026-08-28 09:30:14 - floosball.random_batch - INFO - Cleared all random batch caches
+2026-08-28 09:30:14 - floosball.timingManager - INFO - TimingManager initialized in fast mode
+2026-08-28 09:30:14 - floosball.random_batch - INFO - Cleared all random batch caches
+2026-08-28 09:30:35 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-28 09:32:19 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-28 09:32:49 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-28 09:34:41 - floosball.websocket - INFO - WebSocket ConnectionManager initialized
+2026-08-28 09:35:40 - floosball.websocket - INFO - WebSocket ConnectionManager initialized

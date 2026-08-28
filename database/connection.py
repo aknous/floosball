@@ -1516,6 +1516,16 @@ def _runPendingMigrations():
             logger.info("  Migration: added card_templates.is_showpiece")
         except Exception:
             conn.rollback()
+        # Synthetic: equippable, never collectible. Default 0 so every existing card
+        # stays a real pull — nothing minted before this column existed can be one,
+        # since the only path that creates them is the base-target transplant.
+        try:
+            conn.execute(text(
+                "ALTER TABLE card_templates ADD COLUMN is_synthetic BOOLEAN DEFAULT 0 NOT NULL"))
+            conn.commit()
+            logger.info("  Migration: added card_templates.is_synthetic")
+        except Exception:
+            conn.rollback()
         # Per-user themed pack rotation: rotation flipped from global to
         # per-user once we added reroll. Old rows have no user_id so they're
         # unusable — drop them rather than backfill.

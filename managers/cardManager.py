@@ -376,7 +376,8 @@ def getCardValue(card, currentSeason: int) -> int:
     result edition) and lifts sell value too."""
     from constants import CARD_TIER_MULT
     isActive = card.card_template.season_created == currentSeason
-    baseValue = getSellValue(card.card_template.edition, isActive=isActive)
+    baseValue = getSellValue(card.card_template.edition, isActive=isActive,
+                             isSynthetic=getattr(card.card_template, 'is_synthetic', False))
     classification = card.card_template.classification or ""
     multiplier = 1.0
     for tag, mult in CLASSIFICATION_VALUE_MULTIPLIERS.items():
@@ -393,8 +394,27 @@ def computeRarityWeight(edition: str, playerRating: int) -> int:
     return baseWeight * ratingPenalty
 
 
-def getSellValue(edition: str, isActive: bool = True) -> int:
-    """Get sell value for a card edition. Expired cards sell for 20%."""
+def getSellValue(edition: str, isActive: bool = True, isSynthetic: bool = False) -> int:
+    """Get sell value for a card edition. Expired cards sell for 20%.
+
+    ⚠️ A SYNTHETIC IS WORTH 1, WHATEVER EDITION IT WEARS. It is minted at the EFFECT's
+    own edition — that is what gives it the right power scale and gate — so without this
+    branch a manufactured diamond would sell for a real diamond's price.
+
+    ⚠️ 1 RATHER THAN 0, AND 1 IS THE SAFER NUMBER. Zero is unreachable through the normal
+    path (`getCardValue` ends in `max(1, …)`) and would need the payout to skip `addFunds`
+    entirely, the way the free daily shop reroll has to — granting 0 still writes a ledger
+    row and fires the achievement hooks behind it. At 1 every existing caller is already
+    correct. And it makes the Combine refusal FAIL-SAFE rather than fail-open: Combine fuel
+    value derives from this function, so a missed refusal is worth 1 instead of a diamond's
+    30.
+
+    ⚠️ Return 1 DIRECTLY, never 0-and-let-a-floor-round-it. `sellCards` and `getCardValue`
+    both floor at 1, but `serializeCard` does NOT — a 0 here would display "sells for 0"
+    beside a sale that actually pays 1.
+    """
+    if isSynthetic:
+        return 1
     baseValue = EDITION_SELL_VALUES.get(edition, 5)
     if not isActive:
         return max(1, int(baseValue * EXPIRED_SELL_MULTIPLIER))
@@ -839,7 +859,9 @@ class CardManager:
         """Serialize a UserCard + its template into an API-friendly dict."""
         template = userCard.card_template
         isActive = template.season_created == currentSeason
-        sellValue = getSellValue(template.edition, isActive=isActive)
+        sellValue = getSellValue(
+            template.edition, isActive=isActive,
+            isSynthetic=getattr(template, 'is_synthetic', False))
 
         effectConfig = template.effect_config or {}
         classification = template.classification
@@ -1024,6 +1046,10 @@ class CardManager:
             "ratingStars": min(5, max(1, (template.player_rating - 60) // 8 + 1)),
             "position": template.position,
             "edition": template.edition,
+            # ⚠️ The client colors by EDITION, and a synthetic wears the effect's
+            # edition — so without this flag a manufactured diamond is indistinguishable
+            # from a pulled one on screen. The muting and the SNTH label ride on it.
+            "synthetic": bool(getattr(template, "is_synthetic", False)),
             "tier": getattr(userCard, "tier", 1) or 1,
             "tierNote": tierNote,
             "vaulted": bool(getattr(userCard, "vaulted", False)),
@@ -1110,7 +1136,9 @@ class CardManager:
         totalFloobits = 0
         for card in cards:
             isActive = card.card_template.season_created == currentSeason
-            cardValue = getSellValue(card.card_template.edition, isActive=isActive)
+            cardValue = getSellValue(
+                card.card_template.edition, isActive=isActive,
+                isSynthetic=getattr(card.card_template, 'is_synthetic', False))
             classification = card.card_template.classification or ""
             if "rookie" in classification:
                 cardValue *= 2
@@ -1167,10 +1195,34 @@ class CardManager:
         return cards
 
     def _createUpgradedTemplate(self, session, sourceTemplate, newEdition: str,
-                                 forceEffect: str = None, currentSeason: int = 0):
-        """Create a new CardTemplate for an upgraded card."""
+                                 forceEffect: str = None, currentSeason: int = 0,
+                                 synthetic: bool = False):
+        """Create a new CardTemplate for an upgraded card.
+
+        ⚠️ `synthetic=True` MINTS AT THE EFFECT'S OWN EDITION, not the target's. That one
+        assignment is what makes a synthetic exactly equal in play to the real pull and
+        replaces the whole "split edition's two jobs" design this feature was planned
+        around: `EDITION_POWER_SCALE`, `CARD_GATE_FP_THRESHOLDS_BY_EDITION`,
+        `_tierUpgradeCost` and the client's edition color all read `template.edition`, so
+        stamping it correctly makes four separate things right at once.
+
+        ⚠️ Minting at the TARGET's `base` edition instead would be strictly stronger than
+        the real card, not weaker: `EDITION_POWER_SCALE` runs base 1.0 / metallic 1.10 /
+        holographic 1.70 / prismatic 0.70 / diamond 1.0, so prismatic is the LOWEST dial
+        in the set and a prismatic effect at base scale nearly DOUBLES (Anthem 1.93x,
+        Stacked Deck 1.91x, All In 1.79x). `CARD_GATE_FP_THRESHOLDS_BY_EDITION` has no
+        base row at all and falls back to the metallic bar, so a diamond effect would
+        unlock at 9 FP instead of 15.
+
+        The card gives up everything else: no classification (a manufactured pairing can
+        never wear an accolade it did not earn), sell value 1, and `is_synthetic` set so
+        the vault and Combine can refuse it.
+        """
         from database.models import CardTemplate
         from database.repositories.card_repositories import CardTemplateRepository
+        if synthetic:
+            from managers.cardEffects import EFFECT_EDITION_TIER
+            newEdition = EFFECT_EDITION_TIER.get(forceEffect) or newEdition
 
         # ⚠️ PASS THE CLASSIFICATION. The row below carries it, but the GATE is frozen
         # into effect_config at mint and `buildGateSpec` applies the All-Pro discount
@@ -1180,10 +1232,11 @@ class CardManager:
         # `gate.allPro`, which is the flag the lineup reads to draw the AP accent and the
         # "All-Pro: bar lowered 30%" note — reported by a user who transplanted onto an
         # All-Pro card and found that text missing. This is the transplant AND promote path.
+        classification = None if synthetic else sourceTemplate.classification
         effectConfig = _buildEffectConfig(
             newEdition, sourceTemplate.player_rating,
             sourceTemplate.position, sourceTemplate.team_id,
-            classification=sourceTemplate.classification,
+            classification=classification,
             forceEffect=forceEffect,
         )
         isActive = sourceTemplate.season_created == currentSeason
@@ -1192,15 +1245,16 @@ class CardManager:
             edition=newEdition,
             season_created=sourceTemplate.season_created,
             is_rookie=sourceTemplate.is_rookie,
-            classification=sourceTemplate.classification,
+            classification=classification,
             player_name=sourceTemplate.player_name,
             team_id=sourceTemplate.team_id,
             player_rating=sourceTemplate.player_rating,
             position=sourceTemplate.position,
             effect_config=effectConfig,
             rarity_weight=computeRarityWeight(newEdition, sourceTemplate.player_rating),
-            sell_value=getSellValue(newEdition, isActive=isActive),
+            sell_value=getSellValue(newEdition, isActive=isActive, isSynthetic=synthetic),
             is_upgraded=True,
+            is_synthetic=synthetic,
             output_type=getEffectOutputType(effectConfig.get("effectName")),
         )
         templateRepo = CardTemplateRepository(session)
@@ -1226,6 +1280,23 @@ class CardManager:
 
         cards = self._validateUpgradeCards(session, userId, offeringCardIds,
                                            currentSeason, currentWeek)
+        # ⚠️ SYNTHETICS ARE NOT COMBINE FUEL, AND THE REFUSAL BELONGS HERE, NOT IN
+        # `_validateUpgradeCards`. That validator is SHARED by the Combine, the
+        # transplant and the tier ladder — putting it there refused a synthetic as a
+        # transplant DONOR (owner ruling 5 allows it) and refused tier upgrades (ruling 7
+        # allows those too), so one over-broad guard quietly deleted two settled rules.
+        # Caught by `test_synthetic_cards.py`, which asserts both.
+        #
+        # ⚠️ And the refusal is LOAD-BEARING rather than cosmetic. The stated reason is
+        # "its value is nil" — but `getCardValue` derives fuel value from the template's
+        # EDITION, and a synthetic wears the effect's edition, so uncaught the code prices
+        # a manufactured diamond as a real one and it becomes the cheapest diamond-grade
+        # fuel in the game. `getSellValue`'s synthetic branch makes a lapse cost 1 rather
+        # than 30, but this is what makes the stated reason true.
+        synthIds = [c.id for c in cards
+                    if getattr(c.card_template, "is_synthetic", False)]
+        if synthIds:
+            raise ValueError(f"Synthetic cards can't be used in The Combine: {synthIds}")
 
         # Sum classification-aware values
         totalValue = sum(getCardValue(card, currentSeason) for card in cards)
@@ -1365,8 +1436,23 @@ class CardManager:
         byId = {c.id: c for c in cards}
         donor, target = byId[donorCardId], byId[targetCardId]
         dt, tt = donor.card_template, target.card_template
-        if dt.edition == 'base' or tt.edition == 'base':
-            raise ValueError("No-effect (Base) cards can't be transplanted")
+        # ⚠️ A BASE TARGET IS THE SYNTHESIS PATH — it is the one thing this rule now
+        # allows. A base card is the no-effect floor print of a real player, so grafting
+        # an effect onto it is exactly "any effect, any player": the feature. The DONOR
+        # side of the rule stands, because a card with no effect has nothing to give.
+        if dt.edition == 'base':
+            raise ValueError("A no-effect (Base) card has nothing to transplant")
+        # ⚠️ A SYNTHETIC IS A DONOR, NEVER A TARGET (owner ruling 6). A base card takes an
+        # effect exactly once, at the moment it becomes synthetic; after that the pairing
+        # is fixed. Allowing it to receive would turn one Synth Component into a
+        # PERMANENTLY RE-EDITABLE effect socket — pay once, then re-graft whatever you
+        # pull for the plain transplant fee ever after — which is precisely the grinding
+        # the daily availability exists to cap.
+        #
+        # Donating is allowed, and it needs no exemption: a synthetic already IS its
+        # effect's edition, so it satisfies the same-edition rule below on its own.
+        if getattr(tt, 'is_synthetic', False):
+            raise ValueError("A synthetic card's effect is fixed and can't be replaced")
         donorEffect = self._effectName(donor)
         if not donorEffect or donorEffect in ('none', ''):
             raise ValueError("The donor card has no effect to transplant")
@@ -1393,7 +1479,13 @@ class CardManager:
         # exploit, and a collector may want it for a Vault or Showcase piece.
         if dt.season_created != currentSeason:
             raise ValueError("The donor card is from a previous season")
-        if dt.edition != tt.edition:
+        # The same-edition rule is what stops a transplant laundering a stronger effect
+        # onto a weaker card. It does not apply to a BASE target, because a synthetic is
+        # minted at the DONOR EFFECT's own edition rather than the target's — so nothing
+        # is being smuggled downhill; the effect keeps its tier, its power scale and its
+        # gate, and the card keeps nothing at all.
+        synthesizing = (tt.edition == 'base')
+        if not synthesizing and dt.edition != tt.edition:
             raise ValueError("Both cards must be the same edition")
         # Position-specific effects can only land on a player whose position they're
         # valid for; shared effects go on any same-edition card.
@@ -1406,16 +1498,39 @@ class CardManager:
             raise ValueError("Both cards already have that effect")
         return donor, target
 
+    @staticmethod
+    def _transplantEdition(donorEffect: str, targetTemplate) -> tuple:
+        """(edition, synthesizing) for a transplant — the edition that PRICES it and the
+        edition the new template is MINTED at, which are always the same thing.
+
+        ⚠️ ONE DEFINITION BECAUSE THERE WERE ABOUT TO BE TWO. `transplantEffect` and
+        `previewTransplant` each read `target.card_template.edition` independently, and
+        `TRANSPLANT_COST_BY_EDITION` has no `base` row — so a synthesis would have quoted
+        **0** in the preview and been charged 0 by the till, making the most powerful
+        operation in the feature free. Fixing only one site is worse: the button says 0
+        and the balance drops 180.
+
+        For a normal transplant this is the target's own edition (unchanged). For a BASE
+        target it is the DONOR EFFECT's home edition, because that is what the synthetic
+        is minted at — a diamond effect costs a diamond's price wherever it lands.
+        """
+        if getattr(targetTemplate, 'edition', None) != 'base':
+            return targetTemplate.edition, False
+        from managers.cardEffects import EFFECT_EDITION_TIER
+        return (EFFECT_EDITION_TIER.get(donorEffect) or 'metallic'), True
+
     def previewTransplant(self, session, userId: int, donorCardId: int,
                           targetCardId: int, currentSeason: int, currentWeek: int = 0) -> dict:
         """Validate a transplant pairing and return its cost + summary (or raise)."""
         from constants import TRANSPLANT_COST_BY_EDITION
         donor, target = self._validateTransplantPair(session, userId, donorCardId,
                                                      targetCardId, currentSeason, currentWeek)
-        edition = target.card_template.edition
+        edition, synthesizing = self._transplantEdition(self._effectName(donor),
+                                                        target.card_template)
         return {
             "cost": TRANSPLANT_COST_BY_EDITION.get(edition, 0),
             "edition": edition,
+            "synthetic": synthesizing,
             "donorEffect": self._effectName(donor),
             "targetEffect": self._effectName(target),
             "donorPlayer": donor.card_template.player_name,
@@ -1439,7 +1554,13 @@ class CardManager:
                                                      targetCardId, currentSeason, currentWeek)
         tt = target.card_template
         donorEffect = self._effectName(donor)
-        edition = tt.edition
+        # ⚠️ SYNTHESIS IS PRICED OFF THE EFFECT, NOT THE TARGET, and reading the target
+        # here makes it FREE. `TRANSPLANT_COST_BY_EDITION` has no `base` row, so a base
+        # target resolves to 0 through `.get(edition, 0)` — the most powerful operation in
+        # the feature would have cost nothing at all. The synthetic is minted at the
+        # effect's edition, so that is the edition that has to be charged: a diamond
+        # effect costs 180 wherever it lands.
+        edition, synthesizing = self._transplantEdition(donorEffect, tt)
         cost = TRANSPLANT_COST_BY_EDITION.get(edition, 0)
 
         if cost > 0:
@@ -1458,7 +1579,8 @@ class CardManager:
         # effect. Classification follows the target player (baked into _createUpgradedTemplate).
         newTemplate = self._createUpgradedTemplate(session, tt, edition,
                                                    forceEffect=donorEffect,
-                                                   currentSeason=currentSeason)
+                                                   currentSeason=currentSeason,
+                                                   synthetic=synthesizing)
         # Assign the relationship (not just the FK) so the in-session view + serialized
         # result reflect the new template immediately. Keeps tier + vault + identity.
         target.card_template = newTemplate
@@ -1624,6 +1746,12 @@ class CardManager:
         card = cards[0]
         if getattr(card, "vaulted", False):
             raise ValueError("Card is already vaulted")
+        # ⚠️ REFUSING THE VAULT REFUSES THE SHOWCASE FOR FREE, which is why a synthetic
+        # needs no Showcase rule of its own: only vaulted cards can be featured there
+        # (see `vaultCard`'s own contract above). One gate covers both halves of "worth
+        # nothing outside fantasy".
+        if getattr(card.card_template, "is_synthetic", False):
+            raise ValueError("Synthetic cards can't be vaulted")
         equippedIds = EquippedCardRepository(session).getEquippedCardIds(userId, currentSeason, currentWeek)
         if card.id in equippedIds:
             raise ValueError("Unequip the card before vaulting it")
