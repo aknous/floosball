@@ -9444,6 +9444,52 @@ def getCurrencyHistory(
 # ============================================================================
 
 
+@app.get("/api/cards/base-pool")
+def getBasePool(
+    position: Optional[int] = Query(default=None),
+    user: _User = Depends(_getCurrentUser),
+):
+    """Every player's no-effect floor print for this season — the picker's second section.
+
+    ⚠️ NOT the user's collection, and deliberately not granted to anyone: these are
+    available to everybody, so `GET /api/cards/collection` filters `edition == 'base'`
+    out and a `UserCard` is created only when one is actually fielded. A row per user per
+    player would be 192 rows of nothing each.
+
+    Shaped like a collection entry so the picker can render both sections with one card
+    component, but carries `templateId` instead of `userCardId` — the equip endpoint
+    accepts either and materializes the pool side itself.
+    """
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        out = []
+        for tpl in cardManager.basePoolTemplates(session, currentSeason, position):
+            out.append({
+                "templateId": tpl.id,
+                "playerId": tpl.player_id,
+                "playerName": tpl.player_name,
+                "position": tpl.position,
+                "teamId": tpl.team_id,
+                "playerRating": tpl.player_rating,
+                "edition": tpl.edition,
+                "effectName": "none",
+                # No effect, so no gate, no output type and nothing to project. A floor
+                # print is fielded for the player's raw FP and nothing else.
+                "fromPool": True,
+            })
+        out.sort(key=lambda c: (c["position"], -c["playerRating"], c["playerName"]))
+        return {"cards": out, "season": currentSeason}
+    finally:
+        session.close()
+
+
 @app.get("/api/cards/collection")
 def getCardCollection(
     edition: Optional[str] = Query(default=None),
@@ -9497,6 +9543,22 @@ def getCardCollection(
         result = []
         for card in cards:
             tpl = card.card_template
+            # ⚠️ THE BASE POOL IS NOT A COLLECTION. Floor prints are available to
+            # everyone from the start of the season, so listing the ones a user has
+            # happened to field buries the cards they actually pulled and makes the
+            # collection read as noise. They live in the picker's own pool section.
+            #
+            # ⚠️ This ALSO retires the base cards existing users already hold from the
+            # old starter pack, with no migration: those rows simply stop being listed
+            # and fold into the pool they were always duplicating. Nothing of value is
+            # hidden — a floor print sells for 2.
+            #
+            # ⚠️ And it covers synthetics for free. A synthetic is minted at its EFFECT's
+            # edition, so the moment a base card is synthesized it stops being `base`,
+            # leaves the pool and appears in the collection on its own. One filter, two
+            # behaviors, no second rule.
+            if tpl.edition == 'base':
+                continue
             if edition and tpl.edition != edition:
                 continue
             if position is not None and tpl.position != position:
@@ -10455,7 +10517,12 @@ class EquipCardSlot(BaseModel):
     # Fusion: cards are equipped into POSITION slots (QB/RB/WR1/WR2/TE/K/FLEX). The
     # server derives slot_number from the slot via SLOT_TO_ORDINAL.
     slot: str
-    userCardId: int
+    # ⚠️ OPTIONAL, because a POOL card has no `UserCard` row until it is fielded. The
+    # client sends `userCardId` for a card the user owns and `templateId` for one taken
+    # from the base pool; the server materializes the row (see `claimBaseCard`) before
+    # any validation runs, so everything downstream keeps working on ids alone.
+    userCardId: Optional[int] = None
+    templateId: Optional[int] = None
 
 class EquipCardsRequest(BaseModel):
     cards: List[EquipCardSlot]
@@ -10488,13 +10555,35 @@ def setEquippedCards(
     if len(slots) != len(set(slots)):
         raise HTTPException(status_code=400, detail="Duplicate slot")
 
-    # No duplicate card IDs
-    cardIds = [c.userCardId for c in req.cards]
-    if len(cardIds) != len(set(cardIds)):
-        raise HTTPException(status_code=400, detail="Cannot equip the same card in multiple slots")
-
     session = get_session()
     try:
+        # ⚠️ MATERIALIZE POOL CARDS FIRST, BEFORE THE DUPLICATE CHECK AND THE OWNERSHIP
+        # LOOP. Every rule below this point reasons about `userCardId`, so resolving the
+        # pool here means the base pool needs no special case anywhere downstream — the
+        # rest of the handler cannot tell a claimed floor print from a pulled card.
+        #
+        # ⚠️ It also has to run before the duplicate check specifically: two slots asking
+        # for the SAME pool template resolve to the same `UserCard` (claim is
+        # get-or-create), and that is a duplicate the user must be told about rather than
+        # a pair of rows quietly pointing at one card.
+        from managers.cardManager import CardManager as _CM
+        for c in req.cards:
+            if c.userCardId is None:
+                if c.templateId is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Slot {c.slot} names neither a card nor a player")
+                try:
+                    c.userCardId = _CM.claimBaseCard(
+                        session, user.id, c.templateId, currentSeason).id
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+
+        # No duplicate card IDs
+        cardIds = [c.userCardId for c in req.cards]
+        if len(cardIds) != len(set(cardIds)):
+            raise HTTPException(status_code=400,
+                                detail="Cannot equip the same card in multiple slots")
         # Fusion: the equip endpoint OWNS the FantasyRoster row — it's the leaderboard
         # anchor + WeeklyCardBonus.roster_id FK, and the season-end auto-lock only locks
         # rows that exist. Get-or-create it here so a user who only ever equips cards

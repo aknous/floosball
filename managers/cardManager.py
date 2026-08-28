@@ -1194,6 +1194,59 @@ class CardManager:
 
         return cards
 
+    # ─── The base pool ────────────────────────────────────────────────────────
+    @staticmethod
+    def basePoolTemplates(session, currentSeason: int, position: int = None):
+        """Every player's no-effect floor print for this season — the universal pool.
+
+        ⚠️ THESE ARE NOT INVENTORY, and that is the whole point. `_assignEffects` already
+        mints one `base` template per player every season (measured: 192 templates against
+        192 non-prospect players), so "every player is available" is a DISTRIBUTION change
+        rather than a minting one — the rows have been there all along, undistributed.
+
+        ⚠️ They are deliberately NOT granted as `UserCard`s. Handing every user 192 floor
+        prints would bury the cards they actually pulled under a wall of nothing, which is
+        why the collection filters `edition == 'base'` out and the picker shows the pool as
+        its own section instead. A row is created only when a card is actually FIELDED —
+        see `claimBaseCard`.
+        """
+        from database.models import CardTemplate
+        q = (session.query(CardTemplate)
+             .filter(CardTemplate.edition == 'base',
+                     CardTemplate.season_created == currentSeason,
+                     CardTemplate.team_id.isnot(None)))
+        if position is not None:
+            q = q.filter(CardTemplate.position == position)
+        return q.all()
+
+    @staticmethod
+    def claimBaseCard(session, userId: int, templateId: int, currentSeason: int):
+        """Materialize a pool base card into an owned `UserCard`, or return the existing
+        one. Called at EQUIP time, never on read.
+
+        ⚠️ GET-OR-CREATE, NOT CREATE. `equipped_cards.user_card_id` is a NOT NULL FK, so
+        something has to exist to equip — but equipping the same player in consecutive
+        weeks must not mint a second row, or a user's hidden pool holdings grow without
+        bound and every streak/peak lookup keyed on `user_card_id` silently starts over.
+        """
+        from database.models import CardTemplate, UserCard
+        tpl = session.query(CardTemplate).filter_by(id=templateId).first()
+        if tpl is None:
+            raise ValueError("Card not found")
+        if tpl.edition != 'base':
+            raise ValueError("Only base cards can be claimed from the pool")
+        if tpl.season_created != currentSeason:
+            raise ValueError("That card is not active this season")
+        existing = (session.query(UserCard)
+                    .filter_by(user_id=userId, card_template_id=templateId).first())
+        if existing is not None:
+            return existing
+        card = UserCard(user_id=userId, card_template_id=templateId,
+                        acquired_via='base_pool')
+        session.add(card)
+        session.flush()
+        return card
+
     def _createUpgradedTemplate(self, session, sourceTemplate, newEdition: str,
                                  forceEffect: str = None, currentSeason: int = 0,
                                  synthetic: bool = False):
@@ -2012,12 +2065,17 @@ class CardManager:
             # Skip any templates with NULL team_id — defensive guard against legacy
             # prospect/rookie templates polluting fresh pack rolls.
             allTemplates = [t for t in allTemplates if t.team_id is not None]
-        # The no-effect FLOOR print (edition 'base') is the STARTER lineup ONLY: the starter
-        # pack draws exclusively from it, and every OTHER pack excludes it (packs deliver
-        # effect cards). Before the fusion edition rename this filter dropped 'standard';
-        # the floor is now 'base', so the starter must select it, not skip it.
+        # ⚠️ THE STARTER PACK IS METALLIC NOW, AND THIS IS THE SECOND OF TWO PATHS. The
+        # signup grant lives in `auth._provisionStarterPack`; this is the in-shop "Claim
+        # Free Pack". Moving only one leaves the other handing out floor prints, so a user
+        # who claims in the shop gets a different — and now worthless — welcome gift than
+        # one who is provisioned at signup.
+        #
+        # Floor prints stopped being a gift when the base pool made every one of them
+        # available to everybody. Every OTHER pack still excludes `base`, unchanged: packs
+        # deliver effect cards, and the pool is not a pack.
         if packType.name == 'starter':
-            allTemplates = [t for t in allTemplates if t.edition == 'base']
+            allTemplates = [t for t in allTemplates if t.edition == 'metallic']
         else:
             allTemplates = [t for t in allTemplates if t.edition != 'base']
         if not allTemplates:

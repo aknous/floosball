@@ -51,11 +51,17 @@ assert EFFECT_EDITION_TIER[EFFECT] == 'prismatic', 'fixture premise'
 def mkPlayer(n):
     p = Player(name=n); s.add(p); s.flush(); return p
 
+# ⚠️ `team_id` MUST BE SET. `basePoolTemplates` filters `team_id IS NOT NULL` — the same
+# guard the Combine uses — because a null team is an off-roster player (prospect/rookie
+# pollution) and cards are for rostered players only. A fixture without it produced an
+# empty pool and read as a bug in the code under test.
+TEAM = 1
 def mkTemplate(player, edition, effect, **kw):
     cfg = buildEffectConfig(edition, RATING, WR, None, forceEffect=effect)
     t = CardTemplate(player_id=player.id, edition=edition, season_created=1,
                      player_name=player.name, player_rating=RATING, position=WR,
-                     effect_config=cfg, rarity_weight=10, sell_value=20, **kw)
+                     team_id=TEAM, effect_config=cfg, rarity_weight=10,
+                     sell_value=20, **kw)
     s.add(t); s.flush(); return t
 
 def mkCard(t, **kw):
@@ -172,7 +178,7 @@ qbBase = mkPlayer('A Quarterback')
 qbCfg = buildEffectConfig('base', RATING, 1, None, forceEffect='none')
 qbT = CardTemplate(player_id=qbBase.id, edition='base', season_created=1,
                    player_name='A Quarterback', player_rating=RATING, position=1,
-                   effect_config=qbCfg, rarity_weight=10, sell_value=2)
+                   team_id=TEAM, effect_config=qbCfg, rarity_weight=10, sell_value=2)
 s.add(qbT); s.flush()
 qbCard = mkCard(qbT)
 # ⚠️ Pick a GENUINELY restricted effect. `chain_reaction` returns {1,2,3,4,5} — valid
@@ -201,6 +207,57 @@ try:
     expect("an expired donor is still refused", False)
 except ValueError as e:
     expect(f"an expired donor is still refused  ({e})", 'previous season' in str(e).lower())
+
+
+
+print("\n6. The base pool: available to field, absent from the collection")
+from database.models import EquippedCard
+poolP = mkPlayer('Pool Player')
+poolT = mkTemplate(poolP, 'base', 'none')
+pool = cm.basePoolTemplates(s, 1)
+expect(f"the pool lists this season's floor prints ({len(pool)} found)",
+       any(t.id == poolT.id for t in pool))
+expect("every pool entry is a base card",
+       all(t.edition == 'base' for t in pool))
+
+# ⚠️ Nothing is owned until it is fielded — 192 rows of nothing per user is the thing
+# this design exists to avoid.
+owned = s.query(UserCard).filter_by(user_id=u.id, card_template_id=poolT.id).first()
+expect("a pool card is NOT owned before it is fielded", owned is None)
+
+claimed = cm.claimBaseCard(s, u.id, poolT.id, 1)
+expect("claiming materializes a UserCard", claimed is not None and claimed.user_id == u.id)
+again = cm.claimBaseCard(s, u.id, poolT.id, 1)
+# ⚠️ Get-or-create, not create: a second claim must return the SAME row, or equipping the
+# same player two weeks running mints duplicates and every streak/peak lookup keyed on
+# user_card_id silently restarts.
+expect("claiming twice returns the SAME card, never a duplicate", again.id == claimed.id)
+expect("only one row exists for it",
+       s.query(UserCard).filter_by(user_id=u.id, card_template_id=poolT.id).count() == 1)
+
+try:
+    cm.claimBaseCard(s, u.id, real.id, 1)
+    expect("a non-base card can't be claimed from the pool", False)
+except ValueError as e:
+    expect(f"a non-base card can't be claimed from the pool  ({e})", 'base' in str(e).lower())
+
+oldPool = mkTemplate(mkPlayer('Old Pool'), 'base', 'none')
+oldPool.season_created = 0; s.flush()
+try:
+    cm.claimBaseCard(s, u.id, oldPool.id, 1)
+    expect("a previous season's floor print can't be claimed", False)
+except ValueError as e:
+    expect(f"a previous season's floor print can't be claimed  ({e})",
+           'not active' in str(e).lower())
+
+# ⚠️ The collection filter is `edition == 'base'`, which is also what makes a SYNTHETIC
+# appear there automatically: synthesis moves the card off `base`, so it leaves the pool
+# and enters the collection with no second rule written.
+expect("a claimed floor print is still a base card (hidden from the collection)",
+       claimed.card_template.edition == 'base')
+synth2 = s.query(CardTemplate).filter_by(is_synthetic=True).first()
+expect("a synthetic is NOT base, so the same filter shows it in the collection",
+       synth2 is not None and synth2.edition != 'base')
 
 print()
 if failures:
