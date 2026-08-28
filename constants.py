@@ -2361,6 +2361,13 @@ SIDELINE_GOAL_ATTEMPT_MAX = 0.90         # cap on the attempt chance
 # mandatory) even on the penultimate down / in hurry-up.
 SIDELINE_GOAL_DESPERATION_SECS = 360     # "late": Q4 game clock at/under this (all of OT qualifies)
 SIDELINE_GOAL_DESPERATION_CHANCE = 0.92  # attempt chance when the hoop point is needed to tie/win
+# ⚠️ HOLD THE END-ZONE SHOT UNTIL IT IS MAKEABLE. That pair only gets easier as the drive
+# advances (0.02 make prob per yard over an 18-yard window — 49% from the 18 against 79%
+# from the 3 for a neutral QB), so firing it the moment it comes into range is dominated
+# by driving one more snap. 0.60 sits at roughly the 12-13 yard line. ⚠️ It applies to the
+# END-ZONE pair alone: the midfield and mid-range pairs are approach-only, so declining
+# one loses it, and a 49% shot in hand beats no shot at all.
+SIDELINE_GOAL_LATE_MIN_MAKE = 0.60
 
 # ── Contested Scoring (dormant mechanic — docs/CONTESTED_SCORING_PLAN.md) ──────
 # Rugby-flavored: a rushing / receiving / QB-scramble TD is only PROVISIONAL — the

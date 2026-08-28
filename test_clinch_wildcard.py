@@ -149,6 +149,43 @@ undecided = [t.name for t in levels
 expect(f"clubs tied on record and league record are still resolved ({undecided})",
        not undecided)
 
+
+# ── A weak division winner does not keep the rest of the league alive ────────
+# ⚠️ THE REPORTED CASE (owner, live board): the Oysters were 3 games back of the wildcard
+# and 4 back in their own division with 2 to play — no road by either route — and the
+# board showed them alive. The Monuments likewise.
+#
+# The cause was `tiedFromInside` asking `_points(other) <= _points(myBest)` over EVERY
+# seeded club. A DIVISION WINNER holds a top-four seed at ANY record, so one bad division
+# puts a club inside the field on far fewer points than healthy clubs sitting outside it —
+# and every one of those clubs then cleared the test by being AHEAD of it. Being ahead of
+# a division winner you cannot displace is not a tiebreak you might win; it is proof their
+# berth has nothing to do with record.
+print("Weak division winner does not spare the rest of the league")
+weakDiv = [
+    ('North', [(18, 8), (17, 9), (16, 10), (15, 11)]),
+    ('South', [(15, 11), (14, 12), (13, 13), (11, 15)]),   # the last of these is the report
+    ('East',  [(14, 12), (13, 13), (12, 14), (11, 15)]),
+    ('West',  [(8, 18), (7, 19), (6, 20), (5, 21)]),       # winner seeded on 8 points
+]
+wt = build([r for _div, _recs in weakDiv for r in _recs])
+wstatus = clinchStatus(wt, TOTAL)
+# 3 back of the cut and 4 back in the division, with 2 to play: a ceiling of 13 against a
+# cut whose FLOOR is 14 and a division leader whose floor is 15.
+oysters = wt[7]
+expect("a club short of both the wildcard and its division is eliminated",
+       wstatus[oysters.id]['eliminated'])
+# The mirror, and the reason the fix is not simply "eliminate more": the weak division's
+# own clubs are genuinely alive, because the title is still reachable inside it.
+westAlive = [t for t in wt if t.division == 'West' and not wstatus[t.id]['eliminated']]
+expect(f"clubs who can still win the weak division stay alive ({len(westAlive)} of 4)",
+       len(westAlive) == 3)
+# ⚠️ And the guard still does its real job: a genuine tie for a WILDCARD proves nothing
+# either way, so a club whose ceiling exactly meets the cut's floor is not eliminated.
+tieForWildcard = wt[10]        # East 12-14: ceiling 14, cut floor 14
+expect("a club level with the cut on points is NOT eliminated",
+       not wstatus[tieForWildcard.id]['eliminated'])
+
 print()
 if fails:
     print(f"{len(fails)} FAILED"); sys.exit(1)

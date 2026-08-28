@@ -5766,6 +5766,99 @@ class Game:
             return 'helpful'
         return None
 
+    def _hoopPlanFits(self, scoreDiff: int) -> bool:
+        """Is there TIME to run the plan this hoop point is one leg of?
+
+        ⚠️ THE HURRY-UP GUARD WAS DOUBLING AS A FEASIBILITY CHECK, and lifting it for a
+        late `helpful` need exposed that nothing else performs one. `_hoopPointsNeeded`
+        answers "would this point bridge to a tie or a lead" purely in ARITHMETIC — down
+        five with three pairs open is `helpful`, because a field goal plus two hoops
+        reaches it — and says nothing about whether three more snaps exist. Caught by
+        `test_theHoopHuntStandsDownWhenPlayingForPoints`: trailing 13-18 on the offense's
+        own 46 with **23 seconds left**, the offense went hunting hoops at 91%, chasing a
+        three-part plan it had no time to run.
+
+        `_estimateAvailablePlays` is the right instrument because it already reserves
+        ~7s for a closing kick, so "n plays available" means n productive snaps AND the
+        field goal after them — exactly the shape of a bridging plan.
+
+        ⚠️ Tied or ahead needs only ONE snap, and that is the case the whole fix is for:
+        a made hoop takes the lead by itself, with no conventional score to fit around it.
+        """
+        import math as _math
+        pts = float(getattr(self.gameRules, 'sidelineGoalPoints', 1) or 1)
+        if scoreDiff >= 0:
+            hoopsNeeded = 1
+        else:
+            # ⚠️ THE 'helpful' BAND IS BY DEFINITION THE FIELD-GOAL BRIDGE, so count the
+            # hoops against the KICK — never against the best touchdown. A first pass
+            # short-circuited on `max(fg, maxPossession) >= deficit` and reported ONE hoop
+            # for the 13-18 fixture, because a touchdown covers five points; but a
+            # touchdown covers it with or WITHOUT the hoop, so the shot buys nothing and
+            # the plan being timed is the two-hoop one.
+            hoopsNeeded = int(_math.ceil((-scoreDiff - self._fgValue()) / pts))
+        snapsNeeded = max(1, hoopsNeeded)
+        # ⚠️ AND THE FIELD GOAL THE BRIDGE LEANS ON HAS TO BE KICKABLE FROM SOMEWHERE.
+        # `_estimateAvailablePlays` reserves TIME for a closing kick but never asks
+        # whether a kick exists — so on the offense's own 46 it happily reserved seven
+        # seconds for a seventy-one-yard attempt. Counting only the hoop snaps therefore
+        # priced a plan of "two hoops plus a field goal" as two snaps when the drive also
+        # has to cover twenty-five yards to have a kick at all. Out of range costs at
+        # least one more snap; that is deliberately generous, since a single completion
+        # can do it, and it is enough to refuse the plans that were never going to run.
+        kicker = self.offensiveTeam.rosterDict.get('k')
+        if kicker is not None:
+            maxFg = kicker.maxFgDistance - self.gameRules.fgSnapDistance
+            if self.yardsToEndzone > maxFg:
+                snapsNeeded += 1
+        return self._estimateAvailablePlays() >= snapsNeeded
+
+    def _hoopWorthTakingNow(self) -> bool:
+        """Take the shot you can MAKE, not the first one that comes into range.
+
+        ⚠️ THE END-ZONE PAIR ONLY EVER GETS EASIER, so firing it at maximum range is
+        dominated by driving one snap closer. `SIDELINE_GOAL_DISTANCE_PENALTY` is 0.02 a
+        yard over an 18-yard window: a neutral QB makes **49% from the 18 and 79% from
+        the 3**, a thirty-point swing available for free. The desperation branch fired at
+        0.92 on whatever was in range, so a drive that reached the red zone took the
+        worst shot of the possession.
+
+        ⚠️ THIS IS THE ONE PAIR IT APPLIES TO, and that is the whole reason it is safe.
+        The midfield and mid-range pairs are reachable only while APPROACHING them
+        (`_hoopTarget` drops them once the line of scrimmage is past), so declining one
+        LOSES it — the same use-it-or-lose-it asymmetry the darts hunt already reasons
+        about. The end-zone pair is still there on the next snap and worth more.
+
+        ⚠️ No last-chance override is needed, and that is a property of where this sits
+        rather than an omission: `_shouldAttemptHoopShot` is consulted from
+        `_executeWeightedPlay`, i.e. only once the play-caller has already chosen to run
+        a normal snap. A closing half or a final down has been taken by
+        `_lastSnapBeforeBreak` / `_fourthDownCaller` long before this, and on a genuine
+        last snap in range a field goal beats any hoop anyway. The hoop's job late is
+        INSURANCE banked while downs remain — a guaranteed point in hand before the kick
+        is attempted — which is exactly what holding for a makeable shot protects.
+        """
+        from constants import SIDELINE_GOAL_LATE_MIN_MAKE
+        target = self._hoopTarget()
+        if target is None:
+            return False
+        pairName, downfield = target
+        if pairName != 'endzone':
+            return True
+        if self._hoopMakeProbability(downfield) >= SIDELINE_GOAL_LATE_MIN_MAKE:
+            return True
+        # ⚠️ HOLD ONLY WHILE THERE IS ANOTHER DOWN TO HOLD FOR. The guard above refuses a
+        # 'helpful' shot from the penultimate down on, so the shot can only ever happen on
+        # downs 1..downsPerSeries-2 — and on the LAST of those, waiting for a closer look
+        # does not buy a better shot, it forfeits the shot entirely. Take what is there.
+        #
+        # ⚠️ Positional, not hardcoded: `downsPerSeries` is a VOTABLE rule (3 to 5). At
+        # three downs only the first is available, so the bar correctly never holds at
+        # all; at five it holds through two downs and relaxes on the third. A literal 2
+        # here would silently become "never hold" or "hold too long" the next time the
+        # fans move the rule.
+        return self.down >= self.gameRules.downsPerSeries - 2
+
     def _shouldAttemptHoopShot(self) -> bool:
         """Choice to throw at a sideline hoop instead of a normal play, when a fresh
         pair is IN RANGE (near midfield or in the red zone). A make or a miss both
@@ -5871,12 +5964,45 @@ class Game:
         late = (getattr(self, 'isOvertime', False)
                 or (self.currentQuarter >= 4 and self.gameClockSeconds <= SIDELINE_GOAL_DESPERATION_SECS))
         critical = late and need == 'critical'
-        # Normal guards (penultimate down + hurry-up) apply unless the point is mandatory.
+        helpfulLate = late and need == 'helpful'
+        # ⚠️ A LATE 'helpful' POINT LIFTS THE HURRY-UP GUARD, AND WITHOUT THAT ITS OWN
+        # BRANCH BELOW IS UNREACHABLE BY CONSTRUCTION. In regulation `helpful` means the
+        # offense is TIED (the point takes the lead) or a field goal alone cannot tie —
+        # both of which are `scoreDiff <= 0`, and `_isHurryUp` returns True for exactly
+        # `q == 4 and sd <= 0 and secs <= 150`. So the conditions that make the point
+        # valuable are the same conditions that switch on the guard suppressing it, and
+        # the "late and helpful → take it reliably" branch never once ran in Q4.
+        #
+        # Measured, tied in the red zone with a fresh pair in range: **0.0% attempt rate
+        # at 30s / 45s / 55s / 90s / 140s, and 91.5% at 200s** — the instant the hurry-up
+        # window opens the offense stops seeing a point that WINS THE GAME. Reported from
+        # a live game as the offense ignoring sideline goals entirely and marching for a
+        # FG. ⚠️ The inversion is the tell: a team LEADING by one shot 55.5% at 45s, where
+        # a TIED team shot 0% — the side for whom the point is nearly worthless took it
+        # and the side that would have won by it refused.
+        #
+        # ⚠️ IT LIFTS THE TEMPO GUARD ONLY, NOT THE PENULTIMATE-DOWN ONE. Hurry-up is
+        # about not spending seconds on slow developing plays, and a hoop shot is a quick
+        # throw; the penultimate-down guard is about not spending the DOWN a real scoring
+        # play still needs, which is just as true late. Only a 'critical' need — where no
+        # conventional score reaches at all — is worth that down.
         if not critical:
-            if self.down >= self.gameRules.downsPerSeries - 1 or self._isHurryUp():
+            if self.down >= self.gameRules.downsPerSeries - 1:
+                return False
+            if self._isHurryUp() and not helpfulLate:
                 return False
         # Mandatory or FG-bridging point → attempt reliably (go grab both hoops).
-        if critical or (late and need == 'helpful'):
+        if critical or helpfulLate:
+            # ⚠️ THE QUALITY BAR IS FOR 'helpful' ONLY. A 'critical' need means NO
+            # conventional score reaches the deficit at all, so the hoop is not the better
+            # option — it is the only one, and holding out for a shorter shot risks a
+            # drive that stalls at the 15 never taking one. Where the offense still has a
+            # field goal or a touchdown to fall back on, a 49% heave is worth declining
+            # for a 70% tap one snap later; where it does not, take what is there. This
+            # is the same split the guards above already make.
+            if helpfulLate and not (self._hoopPlanFits(scoreDiff)
+                                    and self._hoopWorthTakingNow()):
+                return False
             return _random.random() < SIDELINE_GOAL_DESPERATION_CHANCE
         chance = SIDELINE_GOAL_ATTEMPT_INRANGE
         if self.down >= 2 and self.yardsToFirstDown >= self.gameRules.firstDownDistance - 2:
@@ -5885,6 +6011,31 @@ class Game:
         aggr = getattr(coach, 'aggressiveness', 80) if coach else 80
         chance += max(0.0, (aggr - 80) / 20.0) * SIDELINE_GOAL_ATTEMPT_AGGR_SPAN
         return _random.random() < min(SIDELINE_GOAL_ATTEMPT_MAX, chance)
+
+    def _hoopMakeProbability(self, downfield: float) -> float:
+        """Probability a hoop shot from `downfield` yards out is made.
+
+        ⚠️ THE SINGLE SOURCE OF TRUTH, shared by the play-caller's attempt decision and
+        by the resolution. It lived inline in `_executeHoopShot` while the caller had no
+        idea how likely the shot was — so the offense could not tell a 49% heave from a
+        79% tap and fired at whichever came into range first. `fgMakeProbability` is the
+        precedent: four copies of that curve existed once and drifted.
+        """
+        from constants import (SIDELINE_GOAL_BASE_MAKE, SIDELINE_GOAL_DISTANCE_PENALTY,
+                               SIDELINE_GOAL_ACCURACY_SPAN, SIDELINE_GOAL_PRESSURE_PENALTY,
+                               SIDELINE_GOAL_MIN_MAKE, SIDELINE_GOAL_MAX_MAKE)
+        qb = self.offensiveTeam.rosterDict.get('qb')
+        ga = getattr(qb, 'gameAttributes', None)
+        acc = getattr(ga, 'accuracy', 80) if ga else 80
+        arm = getattr(ga, 'armStrength', 80) if ga else 80
+        skill = 0.7 * acc + 0.3 * arm
+        passCov = getattr(self.defensiveTeam, 'defensePassCoverageRating', 75) or 75
+        pressure = max(0.0, min(1.0, (passCov - 75) / 25.0))
+        p = (SIDELINE_GOAL_BASE_MAKE
+             - float(downfield) * SIDELINE_GOAL_DISTANCE_PENALTY
+             + (skill - 80) * SIDELINE_GOAL_ACCURACY_SPAN
+             - pressure * SIDELINE_GOAL_PRESSURE_PENALTY)
+        return max(SIDELINE_GOAL_MIN_MAKE, min(SIDELINE_GOAL_MAX_MAKE, p))
 
     def _executeHoopShot(self) -> None:
         """Resolve a sideline hoop shot. Make probability EMERGES from the throw — the
@@ -5903,17 +6054,7 @@ class Game:
         self.play.yardage = 0
         qb = self.offensiveTeam.rosterDict.get('qb')
         self.play.passer = qb
-        ga = getattr(qb, 'gameAttributes', None)
-        acc = getattr(ga, 'accuracy', 80) if ga else 80
-        arm = getattr(ga, 'armStrength', 80) if ga else 80
-        skill = 0.7 * acc + 0.3 * arm
-        passCov = getattr(self.defensiveTeam, 'defensePassCoverageRating', 75) or 75
-        pressure = max(0.0, min(1.0, (passCov - 75) / 25.0))
-        makeProb = (SIDELINE_GOAL_BASE_MAKE
-                    - downfield * SIDELINE_GOAL_DISTANCE_PENALTY
-                    + (skill - 80) * SIDELINE_GOAL_ACCURACY_SPAN
-                    - pressure * SIDELINE_GOAL_PRESSURE_PENALTY)
-        makeProb = max(SIDELINE_GOAL_MIN_MAKE, min(SIDELINE_GOAL_MAX_MAKE, makeProb))
+        makeProb = self._hoopMakeProbability(downfield)
         self.play.insights['hoopMakeProb'] = round(makeProb, 3)
         self.play.insights['hoopPair'] = pairName
         # One shot per pair per drive — _hoopPairResult maps the used pair to its result
