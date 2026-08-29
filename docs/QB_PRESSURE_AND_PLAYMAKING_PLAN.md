@@ -250,6 +250,92 @@ behavior to implement; it is **what remains when every other option is absent**.
 also why it correctly reads as a low-rated trait without the archetype being a rating proxy
 (Part III).
 
+## The decision tree, cell by cell
+
+Three axes at every checkpoint — **pocket**, **coverage**, and **whether another checkpoint
+follows** — resolved against what the quarterback actually has available.
+
+**Coverage has three states, and the middle one only exists before the last checkpoint:**
+
+- **OPEN** — someone is at or above the QB's comfortable-throw bar *right now*
+- **DEVELOPING** — nobody yet, but a deeper route is still coming (see routes-develop above)
+- **COVERED** — nobody, and nothing arriving
+
+### ⚠️ The tiers differ in HOW MANY OPTIONS THEY HAVE, not in choosing better
+
+This is the load-bearing idea in the whole table, and it is what stops the model needing a
+"makes bad decisions" knob:
+
+> A below-average quarterback is not choosing badly. **He has fewer legal moves**, and the
+> bad outcome is what is left when the menu runs out.
+
+| tier | rating | owns | can he… |
+|---|---|---|---|
+| below average | < 72 | **0 skills** | not escape, not tuck. Reads late, so DEFER is often unavailable too |
+| average | 72-80 | **1 skill** | bail or check down reliably; one escape route if that is the one he owns |
+| above average | 80+ | **2-3 skills** | defer, bail, escape, tuck — the pocket collapsing is survivable |
+
+### Non-final checkpoint — another one is coming, so DEFER is on the menu
+
+| pocket | coverage | below average | average | above average |
+|---|---|---|---|---|
+| clean | open | **throw** | **throw** | throw, or **defer** for the better route arriving |
+| clean | developing | ⚠️ **forces it early** — cannot read that it is early | **defer** | **defer** |
+| pressured | open | throw (rushed, quality penalty) | throw | throw |
+| pressured | developing | **checkdown or force** | **checkdown** | defer if composed · **escape** if owned |
+| collapsing | open | force it | throw | throw |
+| collapsing | developing | ⚠️ **sack** | checkdown · throwaway | **escape** (skill) — and the play survives to the next checkpoint |
+
+### Final checkpoint — nothing is coming, so DEFER is gone
+
+| pocket | coverage | below average | average | above average |
+|---|---|---|---|---|
+| any | open | throw | throw | throw |
+| clean | covered | ⚠️ **force it** (the interception cell) | **throwaway** | throwaway |
+| pressured | covered | force · sack | throwaway | throwaway · **tuck and run** (skill) |
+| collapsing | covered | ⚠️ **sack** | sack · throwaway | **tuck and run** · **escape and throw** (skills) |
+
+### ⚠️ What splits two QBs of the SAME tier
+
+Option count is quality. Which option gets taken is **archetype** (Part III), and whether he
+reaches for it at all is **state** (Part VI). So the tables above give the menu; these give
+the pick:
+
+| axis | leans toward |
+|---|---|
+| **pocket vs athlete** (mental − physical contrast) | pocket QB throws it away · athlete escapes or tucks |
+| **composed vs rattled** (`pressureHandling` + `attitude`) | composed defers and bails cleanly · rattled forces or freezes |
+
+⚠️ **Two average QBs therefore play differently without any extra machinery**, which is
+the whole point of deriving archetypes from a contrast rather than from a rating.
+
+### The three cells that carry the design
+
+1. **Clean pocket, developing coverage, below average → forces it early.** He has time and
+   throws anyway, because reading "this is early, the route is still coming" is a *vision*
+   check he fails. ⚠️ This finally gives `vision` (**6 reads**, Part IV) a real job — DEFER
+   is a read, and failing the read is what makes a poor QB impatient rather than stupid.
+2. **Collapsing pocket, developing coverage, above average → escape.** The play survives
+   into the next checkpoint. This is the only cell that *extends* a play, and it is why an
+   escape skill is worth owning.
+3. **Collapsing pocket, covered, below average → sack.** ⚠️ Nothing is written here. It is
+   the cell where every other option has been ruled out by not owning a skill, and it is
+   how "taking the sack is for low-rated players" becomes true without being coded.
+
+### ⚠️ What this predicts, and how to check it
+
+If it is built right, these should fall out of a sim rather than being tuned in:
+
+- throwaways concentrate in **average and above** QBs (the below-average tier mostly forces)
+- interceptions concentrate in **below average** ones, and specifically at the **final
+  checkpoint with a clean pocket** — the "he had all day and threw it to nobody" pick
+- sacks concentrate in **below average** and in **deep dropbacks** (more checkpoints)
+- **escape** plays appear almost exclusively at 80+, because they need an owned skill
+- a QB's throwaway-to-interception ratio becomes a readable signature of his archetype
+
+⚠️ Any of those coming out flat means the option menu is not actually narrowing by tier —
+which is the single thing this design has to get right.
+
 ## Calibration guardrail
 
 ⚠️ Raising throwaways necessarily lowers something else. Completion rate is already **72.5%
