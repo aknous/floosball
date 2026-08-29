@@ -491,6 +491,112 @@ attributes their jobs:
 So the conversion is smaller than it sounds for the offense (the acts exist; ownership is
 what is new) and is genuinely new work for the QB duress set and the whole defensive side.
 
+---
+
+# Part VI — The player still chooses, and right now that choice barely exists
+
+**Owner, 2026-08-29:** the player still has to decide whether to reach for a skill —
+"it's the difference between a completely locked in player and one who has checked out."
+
+⚠️ That points at mental **STATE**, not the trait, and the code does not currently give it
+that authority — in one of the two paths it gives it none at all.
+
+## Measured: two election paths, and they disagree about whether state exists
+
+| path | formula | state weight |
+|---|---|---|
+| `_runnerMove` | `0.05 + 0.18·flair + 0.06·state` | **0.06** |
+| `_contactContest` | `0.18 + 0.55·flair` | **none** |
+
+⚠️ **`flairOf` IS PURE TRAIT.** It is creativity + xFactor and nothing else. CLAUDE.md
+describes willingness as *"`_flair` … plus mental state (`_confidenceState` +
+`_determinationState`)"* — that is the DESIGN; the function never sees state. Only
+`_runnerMove` adds it, separately, at `RUNNER_MOVE_STATE_K = 0.06`.
+
+So a carrier at rock bottom and one on fire elect a move at **the same rate** whenever the
+contest runs through `_contactContest`, and differ by at most **six percentage points**
+elsewhere — against a flair term worth 18 to 55. "Locked in versus checked out" is
+currently a rounding error on one path and literally nothing on the other.
+
+⚠️ **The duplicated decision is a defect on its own merits**, independent of any redesign:
+the same question is answered two ways and only one of them knows how the player feels.
+Same class as the two copies of the transplant price.
+
+## What Part VI needs
+
+1. **Teach `_contactContest` to see state.** Non-negotiable — it is the path that cannot.
+2. **Give state real authority.** At 0.06 it cannot express "checked out"; a genuinely
+   disengaged player should approach *never reaching*, which means state must be able to
+   drive the elect chance toward zero on its own rather than shading it.
+3. **⚠️ Add `attitude` as the disposition underneath.** 32-100 spread, 63 distinct values,
+   **3 reads** — one of Part IV's most-wasted attributes, and it is the trait version of
+   exactly this axis. Confidence and determination are in-game STATE; attitude is the
+   standing disposition. High attitude in a bad state reaches anyway; low attitude checks
+   out sooner. That is "locked in versus checked out" as both a person and a moment.
+
+⚠️ **The consequence worth having: ownership and USE come apart.** If checked-out genuinely
+suppresses reaching, a three-skill star having a bad afternoon plays like a one-skill
+player — visibly, in the feed. That is a thing a fan notices and talks about, and it is
+free once state has authority.
+
+---
+
+# Part VII — Luck
+
+**Owner, 2026-08-29:** "lucky players just seem to have things go their way more often than
+not **when they shouldn't**, and unlucky just the opposite."
+
+## ⚠️ It already exists, and it is well-positioned
+
+`luck_modifier` is on `player_attributes` today: assigned `randint(-5, 5)` at generation,
+**uniformly distributed** (14-20 players at each of the eleven values across a 192-player
+league), and — measured — **`corr(luck, rating) = −0.02`**. Completely free of quality,
+which is exactly what an axis like this needs and what no other attribute in Part IV's
+table manages. Do not add a column.
+
+⚠️ **But its three uses are FLAT ADDITIVE BONUSES** — two fumble-resist calculations and
+one sack check, each adding luck straight into a rating sum. **A flat bonus is not luck, it
+is a small attribute.** It shifts the mean, which is the one thing luck should not do.
+
+⚠️ **And it is invisible.** Nothing in the frontend surfaces it, so nobody can perceive the
+thing whose entire point is being perceived.
+
+## "When they shouldn't" is the whole design constraint
+
+Luck has to act on the **tail, not the mean** — on outcomes that were going the other way.
+Which makes it **exactly the same shape as an owned skill**: both fire only *after* the
+player has lost the contest.
+
+> **A skill is a save you EARNED and can name. Luck is a save you were BORN with and
+> cannot.**
+
+That is the synthesis, and it falls out of the two ideas meeting rather than being designed.
+It also supplies the guardrails:
+
+- **Luck must be far weaker than a skill.** A skill is a real rescue; luck is a nudge at
+  the margin. If they are comparable, luck becomes a free skill and the ownership model
+  the whole of Part V rests on stops meaning anything.
+- **Luck applies where skills do not** — which is what stops a zero-skill player being
+  purely hopeless. A third of the league owns nothing (Part V); luck is what still lets
+  one of them come up with something, rarely, and it is the reason those players are not
+  simply worse in every frame.
+- **Do not display the number.** The owner's word is *"seem"* — the perception is the
+  feature. Showing `Luck: +4` turns a run of fortune into an explanation and kills it.
+
+## Where it should be felt
+
+The play marker from Part II gains a natural pair, and the distinction is exactly the one
+a fan would draw watching:
+
+| what happened | marker |
+|---|---|
+| lost the rep, spent an owned skill | **made a play** — named ("stiff arm", "one-armed catch") |
+| lost the rep, no skill, luck intervened | **got away with one** — unnamed |
+
+⚠️ Unnamed on purpose. A named luck event is an explanation; an unnamed one is a shrug,
+which is what luck feels like. Over a season the tally is what makes it visible — "this
+club has got away with eleven of those" — rather than any single play.
+
 ## Open questions
 
 1. **Part I: what is the target throwaway rate?** The code says 3-5%; that is the NFL
