@@ -336,6 +336,69 @@ If it is built right, these should fall out of a sim rather than being tuned in:
 ⚠️ Any of those coming out flat means the option menu is not actually narrowing by tier —
 which is the single thing this design has to get right.
 
+## Phase 4 — the broken play: schoolyard football
+
+**Owner, 2026-08-29:** when the receivers have run their routes and the QB still has the
+ball and is scrambling, it becomes schoolyard football — **receivers should be trying to
+get open for him.**
+
+This is not a fifth checkpoint. It is what happens **after the structure is gone**, and it
+obeys different rules from everything above.
+
+⚠️ **THE COVERAGE CLOCK INVERTS, AND THAT IS THE WHOLE MECHANIC.**
+
+> **In structure, time favours the DEFENCE.** Routes have a designed break; miss it and the
+> coverage closes. That is what makes every checkpoint above a countdown.
+>
+> **Off-script, time favours the OFFENCE.** Defenders are covering with their backs to the
+> ball; the longer the play lives the more likely someone comes free.
+
+Nothing in the sim expresses that today. `_resolveQbScramble` resolves the QB as a
+**runner** — "SPEED drives the yardage" — and the receivers are simply not consulted. A
+scramble is a rush, full stop. There is no scramble drill, no second chance to throw, and
+**"escape and throw" does not exist** (Part I's catalogue).
+
+### What changes once structure is gone
+
+| | in structure | broken play |
+|---|---|---|
+| openness comes from | `routeRunning` vs coverage | **`instinct`** — does the receiver recognise it and break off? |
+| the trend | tightens with the route's break | **loosens the longer it lasts** |
+| defender's job | run the coverage | **`discipline`** — stay on the man while the ball moves |
+| QB throw | from the pocket | on the run — `armStrength` matters more, `accuracy` degrades |
+| play call | governs everything | **irrelevant — it is over** |
+
+⚠️ **`instinct` (9 reads) and `discipline` (26) become the deciding pair**, and neither is
+the attribute that decided anything before the play broke. A receiver who runs beautiful
+routes but does not read a scramble is a different player from one who does — a distinction
+the sim currently cannot make, because `routeRunning` is the only separation input there is.
+
+⚠️ **AND THIS IS THE NATURAL HOME FOR DEFENSIVE FLAIR** (Part III's gap). The defender's
+side of a broken play is a real decision: hold the man, or leave him and break on the
+quarterback. Getting it right is a play; getting it wrong is a touchdown. That is a skill
+worth owning, and it is defensive, and it fires on a contest the defence was otherwise
+losing — the same post-loss shape as everything else.
+
+### Getting in, and getting out
+
+- **The way in is the `escape` skill.** That is what makes escape worth owning beyond
+  surviving one checkpoint: it does not merely extend the play, it moves the play into the
+  phase where *time is on your side*.
+- **A below-average QB never gets here at all** — no escape skill, so a collapsing pocket
+  ends in the sack cell. Which is another way the option menu narrows by tier without
+  anything being written.
+- **It has to end.** Either the QB throws (a scramble-drill completion, the big play), runs
+  (`_resolveQbScramble` as today), goes down, or leaves the pocket and throws it away.
+  ⚠️ Without a hard bound this becomes an unbounded extension loop, which is the failure
+  mode to design against first.
+
+### ⚠️ Why this cell is worth the work
+
+Everything above makes a quarterback's *failures* legible — forced throws, sacks, bails.
+This is the only part that makes his **best moments** legible, and they are the ones a fan
+remembers. It is also the cheapest place in the whole plan to put a play marker, since a
+broken-play completion is self-evidently exceptional and needs no gate at all.
+
 ## Calibration guardrail
 
 ⚠️ Raising throwaways necessarily lowers something else. Completion rate is already **72.5%
