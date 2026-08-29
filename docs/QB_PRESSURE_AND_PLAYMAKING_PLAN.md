@@ -186,6 +186,124 @@ first and named for what it actually rewards.
 
 ---
 
+---
+
+# Part III — Archetypes, and flair for the defense
+
+**Owner, 2026-08-28:** an extended catalogue of flair plays, especially for QBs, and
+**players should have archetypes** — "not all QBs will pull down the ball and run, some
+might just throw the ball away, some might take the sack (kind of an anti-flair, mostly
+for low rated players), some might roll out and try to make a play."
+
+## ⚠️ First: defenders have NO flair today, so there is nothing to mark
+
+Checked rather than assumed. `_flair()` is called **four times in the whole engine**, and
+every subject is offensive:
+
+| call | subject |
+|---|---|
+| runner move — elect | carrier |
+| break-through | carrier |
+| stretch for the marker | carrier |
+| diving catch | receiver |
+| `flairOf` — coffin-corner punt | kicker |
+
+The only other reads of `creativity` / `xFactor` are `qbMobility` and a QB throw-quality
+argument — offensive both — plus two attribute LISTS used for serialization, not
+resolution.
+
+⚠️ **AND THE ASYMMETRY IS SHARPER THAN "NOT YET DONE".** In the runner-move contest a
+defender resists with `tackling × 0.65 + discipline × 0.35`: skill and composure, no
+creativity, no xFactor. **Defenders are the thing flair is used AGAINST, never a thing
+that has any.** They can nullify a hurdle; they cannot do anything a marker would notice.
+
+So this is not a gate change, it is the same feature the runner moves were — those
+attributes were "nearly inert in resolution", and that was fixed **for the offense only**.
+The defensive half was never built. Candidate acts, each with a contest already in place
+to hang off: jumping a route for the interception, the strip attempt at the tackle, a
+gambling break on the ball that either takes it away or surrenders the completion.
+
+⚠️ **`players.archetype` / `players.demeanor` DO NOT EXIST.** CLAUDE.md calls them
+"legacy-nullable"; the columns are absent from the model and from a live database. The real
+precedent for an assigned trait is `personality` (1 of 28) and `quirk` (1 of ~20).
+
+## ⚠️ Measured: an archetype CAN be derived from attributes — but only from a CONTRAST
+
+The obvious risk is that any attribute-derived archetype collapses into a rating ladder,
+because generation makes good players good at everything. That risk is real and this
+codebase has already been bitten by it (`flairOf` correlates **+0.77** with `instinct`,
+which is why the audible grid uses `_undiscipline` instead). Measured over 32 production
+QBs, every single attribute correlates with overall rating:
+
+| | corr with rating |
+|---|---|
+| vision | +0.53 |
+| instinct | +0.51 |
+| xFactor | +0.47 |
+| creativity | +0.39 |
+| accuracy | +0.38 |
+| discipline | +0.35 |
+| agility | +0.33 |
+| **pressure handling** | **−0.11** |
+
+**So any single-attribute archetype is a rating ladder wearing a costume.** But the
+attributes form two clusters that correlate **negatively with each other** (−0.20 to
+−0.34): a MENTAL/pocket group (creativity, xFactor, discipline, instinct, focus, vision)
+and a PHYSICAL group (agility, speed, accuracy). And the contrast between them is nearly
+free of quality:
+
+| axis | corr with rating |
+|---|---|
+| mental cluster alone | **+0.53** — a ladder |
+| physical cluster alone | **+0.29** — a ladder |
+| **mental − physical** | **+0.14** — a STYLE axis |
+| **pressure handling** | **−0.11** — a second style axis |
+| the two axes against each other | **−0.01** — genuinely independent |
+
+⚠️ **THAT IS THE WHOLE DESIGN CONSTRAINT IN ONE LINE: build the archetype from the
+CONTRAST, never from a cluster.** Both axes are rating-neutral and orthogonal to each
+other, which is exactly what an archetype needs and what no single attribute provides.
+
+The 2×2 populates on the live league, and the owner's four examples land in it
+unprompted — which is the encouraging part, since the axes were chosen from the
+correlation structure rather than from the list:
+
+| quadrant | QBs | mean rating | what they do under duress |
+|---|---|---|---|
+| athlete / composed | 7 | 73.4 | rolls out and makes a play |
+| athlete / rattled | 10 | 73.4 | pulls it down and runs |
+| pocket / composed | 9 | 73.8 | throws it away |
+| pocket / rattled | 6 | 79.7 | takes the sack |
+
+Three of the four sit within 0.4 rating points of each other. The fourth is 6 higher on
+**n = 6**, which is small-sample noise rather than signal — but it is the number to re-check
+at league scale before committing.
+
+### ⚠️ How to keep "taking the sack is for low-rated players" true anyway
+
+The owner's intuition and rating-neutrality look contradictory and are not. Resolve it as:
+
+> **The archetype decides WHAT you do under duress. The rating decides HOW OFTEN you are
+> under duress at all.**
+
+A well-rated pocket/rattled QB rarely faces a collapsed pocket with nobody open; when he
+does, he goes down. A poorly-rated one faces it on a third of his dropbacks. The
+sack-taker therefore reads as a low-rated trait in the box score — which is what a viewer
+notices — without the archetype itself being a rating proxy. That also keeps the axis
+honest: if archetypes were assigned by rating, every bad QB would be the same bad QB.
+
+### Why derive rather than assign
+
+`personality` and `quirk` are assigned strings, and that is right for flavor which should
+not follow from ability. An archetype is different: it describes how a player *plays*, so
+it should be readable off who they are — a scout looking at the attributes should be able
+to see it coming, and a player's style should shift if their attributes shift with age.
+Deriving it also means no column, no migration, and no generation change.
+
+⚠️ Derive it **once per player per season and cache it**, not per snap: `_scoutError`
+already sets the precedent that a belief re-rolled every call produces incoherent
+behavior, and an archetype that flickers between snaps is the same failure.
+
 ## Open questions
 
 1. **Part I: what is the target throwaway rate?** The code says 3-5%; that is the NFL
@@ -195,6 +313,11 @@ first and named for what it actually rewards.
 3. **Part II: does the marker need a per-player season tally** ("12 playmaking plays this
    season") or is the per-play badge enough? A tally is what would make it accumulate into
    a reputation, which is the stated goal.
-4. **Part II: defenders.** Every act measured here is offensive. A cornerback breaking up a
-   throw is exactly as much "skill creating a play", and the clutch system already credits
-   defensive risers — so the gate should be built where it can reach both.
+4. ~~**Part II: defenders.**~~ **ANSWERED** — see Part III. There is nothing to mark
+   because defenders have no flair at all; it needs the ACTS built first, and the owner
+   has asked for them.
+5. **Part III: is the pocket/rattled rating bump real?** 79.7 against ~73.5 on n = 6.
+   Re-measure at league scale (all positions, several seasons) before the axis is trusted.
+6. **Part III: do archetypes apply beyond QB?** The contrast axis is computed from
+   attributes every position has, so it generalizes mechanically — but "what a receiver
+   does under duress" is a different and thinner question than it is for a quarterback.
