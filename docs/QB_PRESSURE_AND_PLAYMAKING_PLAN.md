@@ -64,44 +64,87 @@ the `>= 80` gate — yet it shows the same rate as 80-89. Those are not decision
 `selectedTarget is None`, the empty-target-list path. So **almost every throwaway in the
 sim today is an accident of having no targets, not a quarterback choosing.**
 
-## The shape to build
+## ⚠️ WHY THIS PART WAS THIN: the pocket has no TIME, so "held it too long" cannot exist
 
-The owner listed six outcomes. Five of the six already exist somewhere in the code; what
-is missing is a single decision that chooses between them, and a QB-identity model that
-decides how.
+The owner's list is not six branches of one choice. Read it again and it is a **sequence** —
+what a quarterback does at different POINTS in a collapsing pocket:
 
-| outcome | today |
+| when | what |
 |---|---|
-| hold too long → sack | `calculateSackProbability`, no QB decision involved |
-| force a throw → INT risk | the "force it anyway" roll (the default, at 70-95%) |
-| throw it away | `PassType.throwAway`, gated at discipline 80+, no pressure term |
-| escape and find someone | ❌ **does not exist** |
-| pull it down and run | `_qbTucksAndRuns` → `_resolveQbScramble` (0.6%) |
-| escape and throw it away | ❌ **does not exist** (escape always ends in a run) |
+| immediately | first read gone, pressure already there → throw it away |
+| middle | slide, climb, escape the pocket |
+| late | tuck and run, or force it into coverage |
+| too late | **the sack** |
 
-**The proposal: one `_qbUnderDuress` decision**, reached when the read fails or the pocket
-collapses, resolving to one of the six. Three inputs, matching the model this codebase
-already uses for every other audacious act (`_flair`, runner moves, punt selection):
+⚠️ **THE SIM HAS NO WITHIN-PLAY CLOCK, SO EVERY ONE OF THOSE IS THE SAME INSTANT.**
+`dropbackDepth` is a property of the PLAY CALL (3-step / 5-step / 7-step), not of what the
+QB does, and `calculateSackProbability` fires **once**, before the throw resolves. There is
+no duration, no degradation, nothing that "too long" could be long relative to.
 
-- **willingness** — `_undiscipline` (gunslinger vs controlled). ⚠️ NOT `flairOf`, which
-  correlates **+0.77** with `instinct` and would collapse the grid onto its diagonal; that
-  is settled in `NO_HUDDLE_AUDIBLES_PLAN.md` and applies identically here.
-- **ability to escape** — agility and speed, the terms `_qbEscapesSack` already uses.
-- **pressure** — the missing input. `rushDifferential` and time-to-throw have to reach the
-  decision, or "heavy pressure" stays unmodelable.
+So a plan that says "one `_qbUnderDuress` decision picking between six outcomes"
+degenerates into a weighted pick — which is what the first draft of this part proposed, and
+why it reads thin against Parts V-VII. **The phenomenon is a progression and the model was
+a coin with six faces.**
 
-⚠️ **THE INTERESTING CELL IS THE BAD ONE.** A gunslinger with poor vision forcing it into
-coverage is the interception; a controlled QB with poor mobility taking the sack is the
-"held it too long". Those two are what make quarterbacks feel different from one another,
-and both are currently near-impossible to observe because the throwaway never fires and
-the sack is a pure attribute roll with no decision behind it.
+## The fix: give the pocket gates, the way the run game got them
 
-⚠️ **CALIBRATION GUARDRAIL.** Raising throwaways necessarily lowers something else. The
-completion rate is already **72.5% against a real-world ~65%**, so the honest place to take
-it from is *forced throws that currently complete*, not from sacks — and the interception
-rate must be watched, since the whole point of a throwaway is that it is the alternative to
-a bad decision. `SACK_PROB_CAP` was retuned once already by chasing a mean while the tail
-was the fault; measure the distribution, not just the rate.
+⚠️ **THE RUN GAME ALREADY SOLVED THIS EXACT PROBLEM AND THE PASS GAME NEVER GOT IT.**
+`_resolveRunGates` replaced "a flat pass/fail cascade in which a broken tackle was a
+post-hoc yardage bonus" with three staged contests where **the carrier's state carries
+between them** — clean, contacted, fought. That is the same shape a pocket needs, and the
+same reason: a single roll cannot express a sequence.
+
+**Pocket phases, not a real-time clock.** Three discrete phases, each with a read and a
+decision, state carrying forward:
+
+| phase | the pocket | what the QB can do |
+|---|---|---|
+| **1 — clean** | protection holding | work the progression normally |
+| **2 — pressured** | edge is loose | throw it away · check down · **escape** (skill) · hold |
+| **3 — collapsing** | it is gone | force it · **tuck and run** (skill) · **escape and throw** (skill) · go down |
+
+⚠️ This is deliberately NOT the real-time spatial model that `FIELD_GRAPHIC_PLAN.md` costed
+and deferred. Three phases is enough to make "too long" mean something — a QB who is still
+holding at phase 3 held it too long, and that is a fact the feed can state — without any of
+the geometry.
+
+**Where each phase comes from** — and note that this is what finally consumes Part IV's
+most-wasted attribute:
+
+- **`blocking`** sets how fast the pocket degrades. 37 distinct values, **read once** in the
+  entire engine today, and it is the natural source of the pressure signal this part has
+  been missing from the start. One inert attribute and one absent input are the same hole.
+- **`dropbackDepth`** biases the starting phase, as it already biases the sack roll.
+- The defense's rush rating moves the transition odds, as it already moves the sack.
+
+## ⚠️ And the outcomes are SKILLS — this part predates Part V and was never reconciled
+
+Two of the owner's six outcomes are already in the Part V catalogue by name: **tuck and
+run** and **escape and throw**. They should not be a bespoke branch inside the passing code;
+they are owned abilities like a stiff arm, subject to the same rules:
+
+- **Not everyone has them.** A QB without *escape and throw* cannot make that play, which is
+  what makes quarterbacks differ under pressure without a personality table saying so.
+- **They fire on a LOSS.** The pocket collapsing IS the lost contest, so the post-loss save
+  model applies unchanged — no second mechanic.
+- **The player still has to reach** (Part VI), so a checked-out QB with the skill goes down
+  anyway.
+
+⚠️ **THE SACK IS THE ANTI-SKILL, AND THAT FALLS OUT RATHER THAN BEING WRITTEN.** A QB who
+reaches phase 3, owns nothing, and is not composed enough to bail has one outcome left. The
+owner's *"take the sack — kind of an anti-flair, mostly for low rated players"* is not a
+behavior to implement; it is **what remains when every other option is absent**. Which is
+also why it correctly reads as a low-rated trait without the archetype being a rating proxy
+(Part III).
+
+## Calibration guardrail
+
+⚠️ Raising throwaways necessarily lowers something else. Completion rate is already **72.5%
+against a real-world ~65%**, so the honest source is *forced throws that currently complete*
+— not sacks. Watch the interception rate too: a throwaway is the alternative to a bad
+decision, so if picks do not move at all, the forcing branch is not being reached.
+`SACK_PROB_CAP` was retuned once by chasing a mean while the tail was the fault; measure the
+distribution.
 
 ---
 
