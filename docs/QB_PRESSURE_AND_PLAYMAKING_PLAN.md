@@ -129,6 +129,58 @@ counting down to a sack, and every QB should bail at phase 1.
 receiver wins, not merely whether — and it is what would let the field graphic show a route
 coming open, if that is ever built.
 
+## ⚠️ THE NUMBER OF CHECKPOINTS IS THE PLAY'S DEPTH — and the sim already has the parameter
+
+**Owner, 2026-08-29:** a pass play has multiple checkpoints depending on its type, the way
+a run has gates — so there need to be more sampled moments where decisions can be made or
+deferred.
+
+That is the run-gate parallel made exact, and the parameter already exists.
+`passPlayBook` carries a `dropback` on every one of the 24 pass plays:
+
+| dropback | value | plays |
+|---|---|---|
+| short | 0 | 5 |
+| medium | 2 | 7 |
+| long | 4 | 7 |
+| extraLong | 6 | 5 |
+
+⚠️ **AND IT IS CURRENTLY SPENT ON A PROBABILITY PENALTY.**
+`calculateSackProbability` does `rushDifferential += (dropbackDepth - 1) * 2` — that is the
+whole of it. A seven-step drop is riskier by **a flat modifier**.
+
+But a deep drop is not dangerous because of a +4; it is dangerous because **the quarterback
+is in the pocket for more moments, each of which can go wrong.** That is precisely the
+substitution `_resolveRunGates` already made on the ground — it replaced "a flat pass/fail
+cascade in which a broken tackle was a post-hoc yardage bonus" with staged contests — and
+the passing game never got it.
+
+> **Depth should buy CHECKPOINTS, not a modifier.**
+
+| dropback | checkpoints | what that means |
+|---|---|---|
+| short (0) | **1** | ball is out; barely a decision, which is correct for the quick game |
+| medium (2) | **2** | one chance to hold or bail |
+| long (4) | **3** | the full sequence |
+| extraLong (6) | **4** | most time for the route to arrive, most time to be buried |
+
+⚠️ **THE RISK/REWARD OF THE DEEP BALL THEN BECOMES EMERGENT RATHER THAN TUNED.** More
+checkpoints means more chances to be sacked AND more chances for the deep route to come
+open — which is the actual trade a quarterback makes, and today it is a hand-set constant
+on one side and nothing at all on the other. The same is true of the quick game: a one-
+checkpoint play is *structurally* safe, so `RB_CHECKDOWN_PRESSURE_CHANCE` and the
+quick-game suppression logic stop needing to assert it.
+
+⚠️ **A checkpoint is a moment where a decision can be DEFERRED, not only made** — which is
+the owner's word and the important half. Deferring is what "holding the ball" IS, and it
+has to be a real option with a real cost or the sequence collapses back into a countdown
+where bailing early always wins.
+
+⚠️ Note this also fixes a measurement artifact recorded in CLAUDE.md: the sack model's tail
+was mis-shaped because **"14 of those 24 plays leave only ONE back/TE in to block"**, which
+is a per-play protection fact currently folded into a single roll. Staged checkpoints let
+protection be spent over time rather than averaged into one number.
+
 ## ⚠️ Checkdowns already exist — this is not new ground
 
 `RB_CHECKDOWN_ENABLED` is on, with **two** separate triggers already modelling exactly this
