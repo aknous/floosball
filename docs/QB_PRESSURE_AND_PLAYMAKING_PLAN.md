@@ -86,6 +86,62 @@ degenerates into a weighted pick — which is what the first draft of this part 
 why it reads thin against Parts V-VII. **The phenomenon is a progression and the model was
 a coin with six faces.**
 
+## ⚠️ AND THERE ARE TWO CLOCKS, NOT ONE — coverage degrades the play as surely as pressure
+
+The owner's original sentence was *"either there's nobody open **or** there's heavy
+pressure"* — two conditions — and the first draft of this part collapsed them into one
+pressure-driven progression. That is wrong, and the second condition is the more
+interesting one.
+
+⚠️ **NEITHER CLOCK EXISTS.** `calculateReceiverOpenness` is called **once** per receiver,
+samples a Gaussian, and returns a number. Routes do not develop; coverage does not tighten;
+a receiver is as open on the imaginary first second as on the imaginary fourth. So coverage
+is a snapshot exactly as the pocket is a single roll — and between them, **nothing in a
+dropback has a time dimension at all.**
+
+**Pocket and coverage are independent, and the 2×2 is the whole play:**
+
+| | someone open | nobody open |
+|---|---|---|
+| **pocket clean** | the ordinary completion | ⚠️ **the interesting cell** — he has TIME and no target |
+| **pocket collapsing** | get it out, under duress | the desperate cell — bail, escape, tuck, or go down |
+
+⚠️ **COVERAGE IS WHAT MAKES TIME DANGEROUS.** If someone is open the ball goes there and
+the pocket clock never matters. The pocket only becomes a threat while the coverage
+question is *unresolved* — which is precisely the top-right cell, and precisely where
+"held the ball too long" happens in real football. It is a **coverage sack**, and the sim
+cannot currently produce one, because holding costs nothing and openness never changes.
+
+## ⚠️ Routes must DEVELOP, or there is no reason to hold and no decision to make
+
+This is the piece that makes the phase model a decision rather than a countdown. Openness
+should be sampled **per phase**, not once, and the depth of the route should decide when it
+peaks:
+
+- a **short** route is open early and the defender recovers;
+- a **deep** route is covered early and comes open late — if there is a late.
+
+That single change creates the actual quarterback decision: **hold on and the deep route
+arrives, but the pocket degrades while you wait.** Without it the phases are just a timer
+counting down to a sack, and every QB should bail at phase 1.
+
+⚠️ It also gives `routeRunning` (**5 reads**, Part IV) a real second job — how *fast* a
+receiver wins, not merely whether — and it is what would let the field graphic show a route
+coming open, if that is ever built.
+
+## ⚠️ Checkdowns already exist — this is not new ground
+
+`RB_CHECKDOWN_ENABLED` is on, with **two** separate triggers already modelling exactly this
+split: `RB_CHECKDOWN_PRESSURE_CHANCE` (12% of would-be sacks dumped to the back) and
+`RB_CHECKDOWN_OPEN_CHANCE` (**55% of "no one open" dropbacks**). The play even records
+`checkdownReason` as `'pressure'` vs `'checkdown'`, and `insights.pass.checkedDown` flags a
+QB who took a shallower target than the concept called for.
+
+So the sim already distinguishes the two clocks **in its checkdown code** and nowhere else.
+The phase model should absorb those triggers rather than sit beside them — a checkdown is
+what a composed QB does at phase 2 with nobody deep, which is a decision the phases can
+express and a flat 55% roll cannot.
+
 ## The fix: give the pocket gates, the way the run game got them
 
 ⚠️ **THE RUN GAME ALREADY SOLVED THIS EXACT PROBLEM AND THE PASS GAME NEVER GOT IT.**
@@ -97,11 +153,16 @@ same reason: a single roll cannot express a sequence.
 **Pocket phases, not a real-time clock.** Three discrete phases, each with a read and a
 decision, state carrying forward:
 
-| phase | the pocket | what the QB can do |
-|---|---|---|
-| **1 — clean** | protection holding | work the progression normally |
-| **2 — pressured** | edge is loose | throw it away · check down · **escape** (skill) · hold |
-| **3 — collapsing** | it is gone | force it · **tuck and run** (skill) · **escape and throw** (skill) · go down |
+| phase | the pocket | the routes | what the QB can do |
+|---|---|---|---|
+| **1 — clean** | holding | short routes at their peak | throw the open short one · **hold for the deep one** |
+| **2 — pressured** | edge loose | intermediate arriving | throw it away · **check down** · **escape** (skill) · hold |
+| **3 — collapsing** | gone | deep route at its peak, or nothing | force it · **tuck and run** (skill) · **escape and throw** (skill) · go down |
+
+⚠️ Read the right-hand columns together: the reason to survive phase 3 is that it is where
+the deep ball lives. A QB who bails at phase 1 every time is safe and never throws deep,
+which is a real and recognisable kind of quarterback — and the point is that it should be a
+CHOICE with a cost, not the only sane play.
 
 ⚠️ This is deliberately NOT the real-time spatial model that `FIELD_GRAPHIC_PLAN.md` costed
 and deferred. Three phases is enough to make "too long" mean something — a QB who is still
