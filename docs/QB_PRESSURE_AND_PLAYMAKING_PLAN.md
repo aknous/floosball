@@ -1,6 +1,7 @@
 # The QB under pressure, and marking the plays only good players make
 
-**Status:** measured, not started. Two requests (owner, 2026-08-28), and they turn out to
+**Status:** measured, not started. **Parts II and III are superseded in part by Part V** —
+owned skills become the archetype, and they dissolve Part II's gate problem. Two requests (owner, 2026-08-28), and they turn out to
 be the same goal approached from two sides — **making a player's quality visible in the
 feed** — which is also what `docs/FIELD_GRAPHIC_PLAN.md` concluded its whole feature was
 for. These are the cheap versions of it.
@@ -376,6 +377,119 @@ argument for using them rather than inventing more:
 established that the QB duress decision **cannot see pressure at all**, and an offensive
 line's blocking is the most natural source of that signal. One inert attribute and one
 missing input turn out to be the same hole.
+
+---
+
+# Part V — Skills as owned abilities: what a player has learned
+
+**Owner, 2026-08-28/29.** Players roll on BASE attributes (speed, power, agility, arm
+strength, accuracy, hands, reach). On top of that they own **skills** — stiff arm, hurdle,
+spin, one-armed catch, diving catch, stutter step, tuck and run, escape and throw — learned
+at higher skill levels and unlockable in offseason training. **If a player LOSES the base
+head-to-head, a skill can give them a boost to make the play anyway.** Average and
+below-average players have one skill or none.
+
+> "Players now have more than just attribute numbers — they have skills that they've
+> learned, and fans can see what they are capable of."
+
+## ⚠️ Why "lose first, THEN spend the skill" is the load-bearing part
+
+It is not how the sim works today. A runner move is currently folded into the roll as a
+PRE-EMPTIVE bonus (`carrierRating = bestVal + RUN_MOVE_BONUS`), one roll decides
+everything, and `_miss` is a relabel applied afterwards. A post-loss save is materially
+different and better on three counts:
+
+- **It cannot inflate the baseline.** A player who WINS the contest never spends the skill,
+  so league rates barely move and the recalibration is small. A pre-roll bonus lifts
+  everything, which is why the run gates needed seven tuning passes.
+- **It only fires in the moments worth watching.** The near-miss becomes the highlight.
+- **It is legible.** "He lost that rep and got out of it anyway" is a sentence a fan can
+  read; "+7 to his contact rating" is not.
+
+## ⚠️ THIS DISSOLVES PART II'S ENTIRE PROBLEM
+
+Part II's difficulty was that flair acts happen ~24 times a game — runner moves alone are
+one play in nine — against a clutch marker that fires 0.3 times, so a badge on every stiff
+arm would be wallpaper. The whole design there was the GATE: how do you pick the
+exceptional ones out of the ordinary ones?
+
+**Under this model the question disappears.** A skill only fires on a rep the player was
+LOSING, so **every skill use is by construction a play they would otherwise have failed.**
+There is nothing to select — the mechanic is its own filter. The marker becomes "a skill
+fired", which is nameable ("stiff arm", "one-armed catch") rather than a generic badge.
+
+Volume drops on two independent axes at once — ownership, and the loss condition — which
+takes runner moves from 17.85 a game toward a few, exactly the band a marker wants.
+
+## ⚠️ The rating trap, and why the owner's version does NOT fall into it
+
+Part IV measured that every attribute correlates **+0.33 to +0.53** with overall rating, so
+anything derived from attributes drifts into a rating ladder. Skills unlocked "at higher
+skill levels" look like they should trip that — and they do not, because of the split the
+owner drew:
+
+> **Quality decides HOW MANY skills you have. Identity decides WHICH ones.**
+
+That is the same resolution Part III reached for the sack-taker (archetype = what you do,
+rating = how often you must). A 94-rated back has three skills and is genuinely more
+capable; *which* three is who he is, and among the many players holding two, the pair is
+the archetype. ⚠️ **Never let rating pick WHICH** — that is the version that collapses,
+and it is the version where every elite back is the same elite back.
+
+Offseason training choosing the unlock is ideal here: it makes the choice a player's own
+history rather than a derivation, and it gives training something concrete to grant.
+
+## Measured: what a skill-count curve does to the real league
+
+192 rostered players, ratings 60-94 (p25 70, median 74, p75 80). A candidate curve —
+**0 skills below 72, 1 at 72+, 2 at 80+, 3 at 88+**:
+
+| skills | players | share |
+|---|---|---|
+| **0** | 62 | **32%** |
+| 1 | 77 | 40% |
+| 2 | 45 | 23% |
+| **3** | **8** | **4%** |
+
+**Eight three-skill players in the entire league.** That is rare enough that a fan could
+name them, which is the point. And a third of the league owning nothing is a real
+population rather than a rounding error — the baseline that makes the rest legible.
+
+**64% of ball-handling starters would own at least one skill**, so roughly a third of
+touches come from a player with no save at all.
+
+⚠️ Both thresholds are design calls, not derivations. At 88 the top tier is 8 players; at
+86 it would be perhaps twice that. Choose them against how often a fan should see something
+special, then hold them — the curve is the feature.
+
+## The three layers, and where the inert attributes land
+
+This does not replace the flair model, it completes it — and it gives Part IV's unused
+attributes their jobs:
+
+| layer | decided by | question |
+|---|---|---|
+| the contest | base attributes | did you win the rep |
+| the reach | `creativity` / `xFactor` | do you TRY something (3 reads each today) |
+| **the save** | **the owned skill** | what you can try, and how well |
+| the cost | `resilience` / `selfBelief` | what a FAILED save does to you, and whether you reach again |
+
+## Catalogue — the acts that exist, and the ones that do not
+
+| skill | today |
+|---|---|
+| stiff arm / spin / hurdle | BUILT, but **every carrier can elect all three** |
+| diving catch | BUILT (`_diveCatch`), universal |
+| stretch for the marker | BUILT, universal |
+| coffin-corner punt | BUILT, `flairOf`-gated, universal |
+| **one-armed catch** | ❌ |
+| **stutter step** (receiver separation) | ❌ |
+| **tuck and run** | exists as `_qbTucksAndRuns`, not owned |
+| **escape and throw** | ❌ — escaping always ends in a run (Part I) |
+| **any defensive skill** | ❌ — defenders have no flair at all (Part III) |
+
+So the conversion is smaller than it sounds for the offense (the acts exist; ownership is
+what is new) and is genuinely new work for the QB duress set and the whole defensive side.
 
 ## Open questions
 
