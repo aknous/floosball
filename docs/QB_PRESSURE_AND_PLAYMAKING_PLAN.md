@@ -387,10 +387,31 @@ losing — the same post-loss shape as everything else.
 - **A below-average QB never gets here at all** — no escape skill, so a collapsing pocket
   ends in the sack cell. Which is another way the option menu narrows by tier without
   anything being written.
-- **It has to end.** Either the QB throws (a scramble-drill completion, the big play), runs
-  (`_resolveQbScramble` as today), goes down, or leaves the pocket and throws it away.
-  ⚠️ Without a hard bound this becomes an unbounded extension loop, which is the failure
-  mode to design against first.
+- **It has to end, and the rushers are what end it** (owner, 2026-08-29). The pursuit is
+  still coming, so a broken play gets **a couple of checkpoints, not unlimited time**, and
+  the menu narrows to four:
+
+  | outcome | note |
+  |---|---|
+  | throw to a receiver | the scramble-drill completion — the big play |
+  | throw it away | now trivially legal; he is outside the pocket |
+  | pull it down and run | `_resolveQbScramble` as it works today |
+  | **get sacked** | ⚠️ the sim cannot currently produce this — a scramble is always a run |
+
+  ⚠️ **DEFER SURVIVES, BUT ONLY ONCE.** Two checkpoints means exactly one decision to
+  extend, which is what keeps this bounded without a hard timer: the loop cannot run away
+  because there is nowhere for it to run to.
+
+⚠️ **SO PHASE 4 IS A MINIATURE OF THE POCKET SEQUENCE, NOT A NEW MECHANISM** — same staged
+shape, fewer checkpoints, narrower menu, and both clocks inverted. That is worth stating
+because it means it costs almost nothing extra to build once the checkpoint machinery
+exists.
+
+⚠️ **AND ITS CLOCK IS THE QB'S OWN LEGS.** What paces the pursuit is his speed and agility
+against the rush, so **an athlete QB genuinely gets more schoolyard time than a pocket
+one** — the archetype axis from Part III stops merely choosing *which* option he takes and
+starts deciding *how many he gets*. Escape is therefore worth more to an athlete than to a
+pocket passer, which is the right answer arrived at without a special case.
 
 ### ⚠️ Why this cell is worth the work
 
