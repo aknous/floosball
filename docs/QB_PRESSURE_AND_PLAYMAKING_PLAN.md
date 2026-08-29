@@ -304,6 +304,79 @@ Deriving it also means no column, no migration, and no generation change.
 already sets the precedent that a belief re-rolled every call produces incoherent
 behavior, and an archetype that flickers between snaps is the same failure.
 
+---
+
+# Part IV — Do we need new attributes? No. Eight already exist with no job.
+
+**Owner, 2026-08-28:** "I also wonder if there are attributes we can add to flesh out
+archetypes and flair for each player."
+
+⚠️ **MEASURED, AND THE ANSWER IS THE OPPOSITE OF ADDING.** Comments and docstrings stripped
+(prose like "reaches the marker" otherwise inflates `reach` from 11 to 65), here is how
+hard each attribute actually works in `floosball_game.py`:
+
+| attribute | reads | spread in the live league |
+|---|---|---|
+| `blocking` | **1** | 55-93, 37 distinct |
+| `clutchFactor` | 2 | **0 for all 480 players — deprecated on purpose** |
+| `resilience` | **2** | 33-100, 61 distinct |
+| `selfBelief` | **2** | 32-100, 61 distinct |
+| `attitude` | **3** | 32-100, 63 distinct |
+| `creativity` | **3** | 60-100, 41 distinct |
+| `luckModifier` | 3 | −5..+5, 11 distinct |
+| `xFactor` | **3** | 52-100, 47 distinct |
+| `routeRunning` | 5 | |
+| `vision` | 6 | |
+| `pressureHandling` | 7 | −10..+10, 21 distinct |
+| `hands` / `determinationModifier` | 8 | |
+| …then the workhorses | | |
+| `power` | 30 | |
+| `discipline` | 26 | |
+| `agility` | 19 | |
+
+**Eight attributes are read four times or fewer.** Three of them — `resilience`,
+`selfBelief` and `attitude` — carry the **widest spreads in the entire set** (a 68-point
+range across 61-63 distinct values) and are read **two or three times each**. That variety
+is being generated, stored, shown on the player page, and then thrown away at resolution.
+
+⚠️ **`blocking` is the single most wasted**: a whole skill dimension, 37 distinct values,
+**read once**.
+
+⚠️ **`clutchFactor` is NOT a candidate — it is deliberately dead.** `floosball_player.py`
+hardcodes `self.clutchFactor = 0` with a comment saying the column is kept only so DB sync
+does not break. Do not revive it on the strength of its name; the clutch marker that exists
+is computed from mental-state swings, not from this.
+
+## Why adding would make archetypes WORSE, not better
+
+The archetype axes in Part III are built from `creativity` + `xFactor` (**3 reads each**)
+against the physical cluster, with `pressureHandling` (**7 reads**) as the second axis. So
+**the archetype work already IS the plan for putting inert attributes to work** — it is the
+same project, and the runner-move feature was the first instalment of it ("xFactor and
+creativity were nearly inert in play resolution before this").
+
+Adding a ninth unused attribute does not create style. It creates another number on the
+player page that nothing reads, and it dilutes the ones that could be carrying the
+distinction. **The variety is already generated; the engine simply does not consult it.**
+
+## What to give the inert ones, if a job is wanted
+
+Each of these has a natural home in exactly the work Parts I-III describe, which is the
+argument for using them rather than inventing more:
+
+| attribute | the job it is missing |
+|---|---|
+| `resilience` | how a player carries a FAILED flair attempt — a missed hurdle should cost a brittle player more than a resilient one |
+| `selfBelief` | whether they try again after failing one, this drive or this game |
+| `attitude` | whether a flair act is selfish or situational (hero-ball vs taking what is there) |
+| `blocking` | the pocket's integrity — which is precisely the pressure term Part I needs and cannot currently see |
+| `luckModifier` | the coin-flip tail on an audacious act, where a small nudge is exactly right |
+
+⚠️ **`blocking` is the one to do first**, because it is not merely underused — Part I
+established that the QB duress decision **cannot see pressure at all**, and an offensive
+line's blocking is the most natural source of that signal. One inert attribute and one
+missing input turn out to be the same hole.
+
 ## Open questions
 
 1. **Part I: what is the target throwaway rate?** The code says 3-5%; that is the NFL
@@ -318,6 +391,10 @@ behavior, and an archetype that flickers between snaps is the same failure.
    has asked for them.
 5. **Part III: is the pocket/rattled rating bump real?** 79.7 against ~73.5 on n = 6.
    Re-measure at league scale (all positions, several seasons) before the axis is trusted.
-6. **Part III: do archetypes apply beyond QB?** The contrast axis is computed from
+6. **Part IV: is `pressureHandling` big enough to be an axis?** It is a MODIFIER
+   (−10..+10, 21 distinct), not a 60-100 attribute like the rest — narrower than the
+   contrast axis it is paired with. It measured rating-neutral and independent, so it
+   works, but it may want widening if it is to carry half an archetype.
+7. **Part III: do archetypes apply beyond QB?** The contrast axis is computed from
    attributes every position has, so it generalizes mechanically — but "what a receiver
    does under duress" is a different and thinner question than it is for a quarterback.
