@@ -6508,6 +6508,75 @@ def admin_grant_floobits(payload: Dict[str, Any],
         session.close()
 
 
+@app.post("/api/admin/grant-components")
+def admin_grant_components(payload: Dict[str, Any],
+                           _auth: None = Depends(_checkAdminAuth)):
+    """Grant crafting components to a user — for testing.
+
+    Body: {"email": ..., "count": N, "type": "synth"|"chrome"}
+
+    ⚠️ GRANTED WITH `source='admin'` AND NO CAP, deliberately. The shop grant is capped per
+    DAY and the achievement grant per SEASON, and `componentManager.grant` enforces those by
+    counting rows from that source — so an admin grant sharing a source would eat somebody's
+    real allowance, and a capped admin grant could not hand out enough to test a full
+    lineup. Its own source keeps both true and makes the test grants greppable afterwards.
+
+    ⚠️ IT DOES NOT ESCAPE THE HOLD CAP, AND THAT IS NOT A BUG. `SYNTH_COMPONENT_HOLD_CAP`
+    (3) is checked against the BALANCE rather than against a source, so granting more than
+    three closes the shop until they are spent — verified live: 8 granted, shop reported
+    `hold_cap`. Grant at most the cap if the shop path itself is what is being tested;
+    grant freely if the transplant is.
+    """
+    from database.connection import get_session
+    from database.models import User
+    from managers import componentManager as _components
+
+    email = (payload.get("email") or "").strip().lower()
+    count = payload.get("count", 1)
+    componentType = (payload.get("type") or _components.SYNTH).strip().lower()
+
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required")
+    if not isinstance(count, int) or count <= 0:
+        raise HTTPException(status_code=400, detail="count must be a positive integer")
+    if componentType not in (_components.SYNTH, _components.CHROME):
+        raise HTTPException(status_code=400,
+                            detail=f"type must be '{_components.SYNTH}' or '{_components.CHROME}'")
+
+    session = get_session()
+    try:
+        user = session.query(User).filter_by(email=email).first()
+        if not user:
+            raise HTTPException(status_code=404, detail=f"No user with email: {email}")
+
+        # ⚠️ `_currentSeasonNumber()` IS None WHEN THE SIM IS NOT RUNNING, and
+        # `user_components.season` is NOT NULL — so the grant would fail at commit with a
+        # constraint error rather than anything readable. Components are season-scoped, so
+        # granting into "no season" is meaningless: refuse it plainly.
+        season = _currentSeasonNumber()
+        if not season or season < 1:
+            raise HTTPException(status_code=400,
+                                detail="No active season; components are season-scoped")
+        granted = _components.grant(session, user.id, season, count=count,
+                                    source='admin', componentType=componentType)
+        session.commit()
+        held = _components.balance(session, user.id, season, componentType)
+        return build_success_response({
+            "message": f"Granted {granted} {componentType} component(s) to {email}",
+            "granted": granted,
+            "held": held,
+            "season": season,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error granting components: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
 @app.post("/api/admin/users/{userId}/reroll-username")
 def admin_reroll_username(userId: int, _auth: None = Depends(_checkAdminAuth)):
     """Admin: re-roll a user's username."""
