@@ -547,8 +547,17 @@ class PackTypeRepository:
                 cards_per_pack=5,
                 cards_kept=5,
                 guaranteed_rarity=None,
-                rarity_weights={'base': 100, 'holographic': 0, 'prismatic': 0, 'diamond': 0},
-                description='Free starter. 5 base cards to fill your hand. Once per season.',
+                # ⚠️ METALLIC, AND IT MUST MATCH `_drawPackCards`'s POOL FILTER. The
+                # base-pool change moved the starter pack's pool to metallic-only — floor
+                # prints stopped being a gift once every one of them became free to
+                # everybody — but left these weights at `base: 100`. The draw rolls the
+                # EDITION first and picks a template within it second, so it rolled `base`,
+                # found no base templates in a metallic-only pool, and drew NOTHING: the
+                # starter pack came back empty. Reported from the app.
+                # ⚠️ AN EDITION WEIGHTED HERE BUT ABSENT FROM THE POOL DRAWS NOTHING AND
+                # RAISES NOTHING — `test_pack_weights.py` sweeps every pack for that.
+                rarity_weights={'metallic': 100, 'holographic': 0, 'prismatic': 0, 'diamond': 0},
+                description='Free starter. 5 cards to fill your hand. Once per season.',
             ),
             PackType(
                 name='humble',
