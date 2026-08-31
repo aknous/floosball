@@ -208,16 +208,36 @@ class PlayerDevelopment:
         alone is genuinely less effective than being coached, and floored at
         FA_SELF_DEV_MIN so sitting in the pool is stagnation, never decay.
         """
-        from constants import (FA_SELF_DEV_ATTRS, FA_SELF_DEV_SCALE, FA_SELF_DEV_MIN)
+        from constants import (FA_SELF_DEV_ATTRS, FA_SELF_DEV_SCALE, FA_SELF_DEV_MIN,
+                               FA_SELF_DEV_YEARS_BONUS, FA_SELF_DEV_YEARS_CAP,
+                               FA_SELF_DEV_TOTAL_CAP)
         attrs = getattr(player, 'attributes', None)
         if attrs is None:
             return FA_SELF_DEV_MIN
+
+        # ⚠️ THE UNSIGNED YEARS TERM IS WHAT STOPS THE POOL BEING A HOLDING PEN. The
+        # floor above means an unsigned player stagnates rather than declines, but a GM
+        # signs by comparing against an incumbent, so a player who stagnates below that
+        # bar misses again next season and every season after — the pool then only ever
+        # drains through retirement. Each season unsigned adds to their own bias, on the
+        # reading that a player with nothing else to do works at it.
+        #
+        # ⚠️ Self-limiting rather than tuned: it accrues ONLY while unsigned, and
+        # signing resets `freeAgentYears` to 0. Capped so nobody trains their way into a
+        # superstar from the pool — the road back is meant to be real, not a shortcut
+        # that beats being coached.
+        years = int(getattr(player, 'freeAgentYears', 0) or 0)
+        yearsBonus = min(years * FA_SELF_DEV_YEARS_BONUS, FA_SELF_DEV_YEARS_CAP)
+
         vals = [float(getattr(attrs, a, 0) or 0) for a in FA_SELF_DEV_ATTRS]
         vals = [v for v in vals if v > 0]
         if not vals:
-            return FA_SELF_DEV_MIN
+            return max(FA_SELF_DEV_MIN, min(int(yearsBonus), FA_SELF_DEV_TOTAL_CAP))
         selfDrive = sum(vals) / len(vals)
-        bias = round((selfDrive - 60) / 10 * FA_SELF_DEV_SCALE)
+        bias = round((selfDrive - 60) / 10 * FA_SELF_DEV_SCALE) + yearsBonus
+        # Clamped to the best coach in the league. Without this the years term stacks on
+        # top of self-drive and going unsigned outperforms being coached.
+        bias = min(bias, FA_SELF_DEV_TOTAL_CAP)
         return max(FA_SELF_DEV_MIN, int(bias))
 
     @staticmethod

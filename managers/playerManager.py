@@ -3869,6 +3869,7 @@ class PlayerManager:
         nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
 
         generated = {}
+        newPlayers = []
         for pos, count in deficits.items():
             for _ in range(count):
                 physicalSeed = int(physicalSeeds.pop()) if physicalSeeds else meanPlayerSkill
@@ -3880,11 +3881,24 @@ class PlayerManager:
                 nextPlayerId += 1
                 newPlayer.team = 'Free Agent'
                 newPlayer.freeAgentYears = 0
+                newPlayers.append(newPlayer)
                 self.freeAgents.append(newPlayer)
                 if newPlayer not in self.activePlayers:
                     self.activePlayers.append(newPlayer)
                 self.addToPositionList(newPlayer)
                 generated[pos.name] = generated.get(pos.name, 0) + 1
+
+        # ⚠️ GUARANTEE THE CLASS HAS A TOP END. The class size is the retirement count
+        # (8.6 a season measured), and at the generator's 8.6% rate for an 85+ that is
+        # one every 1.4 seasons and one 90+ every five — which is why the league's 85+
+        # population fell 47 -> 22 over five simulated seasons while every replacement
+        # arrived on schedule. Raising the class size is not available: rosters are
+        # fixed and this method fills a deficit.
+        #
+        # ⚠️ THE BLUE CHIP REPLACES, IT NEVER ADDS. Adding a player would push the pool
+        # past its target depth, and a player above target is one nobody signs — they
+        # sit until they retire. Swapping keeps intake exactly equal to attrition.
+        self._promoteBlueChip(newPlayers)
 
         # Assign tiers/contracts to the new free agents.
         self.sortPlayersByPosition()
@@ -3895,6 +3909,162 @@ class PlayerManager:
                 f"{numTeams} teams, buffer {buffer})"
             )
         return generated
+
+    def injectFreeAgentClass(self, count: int = None, targetPosition=None) -> dict:
+        """Add a class of new players to the free-agent pool, on a schedule.
+
+        Independent of `ensurePositionSupply`, which is a FLOOR: it generates only the
+        shortfall against fixed demand and therefore produces nothing at all until
+        somebody retires. In a young league that is zero new players a season, forever —
+        prod has run four seasons and created none beyond its initial buffer.
+
+        ⚠️ THE TWO COEXIST AND MUST NOT BE MERGED. This is the faucet and the supply
+        floor is the safety net: with a class arriving each season the floor sees a pool
+        already above target and correctly generates nothing, but it still catches a
+        position genuinely stripped by a bad run of retirements.
+
+        ⚠️ Positions are drawn WEIGHTED BY ROSTER SLOTS, not uniformly. WR is two slots
+        of every six, so a uniform draw starves it by half against demand and a league
+        would drift toward carrying spare kickers and no receivers.
+
+        The class runs through the blue-chip guarantee, which is the point: a scheduled
+        class is what lets that guarantee actually fire every season.
+        """
+        import numpy as np
+        from constants import FA_INJECTION_ENABLED, FA_INJECTION_PER_SEASON
+        if count is None:
+            count = FA_INJECTION_PER_SEASON
+        if not FA_INJECTION_ENABLED or count <= 0:
+            return {}
+
+        slotsPerPosition = {
+            FloosPlayer.Position.QB: 1,
+            FloosPlayer.Position.RB: 1,
+            FloosPlayer.Position.WR: 2,
+            FloosPlayer.Position.TE: 1,
+            FloosPlayer.Position.K: 1,
+        }
+        positions = list(slotsPerPosition)
+        weights = np.array([slotsPerPosition[p] for p in positions], dtype=float)
+        weights /= weights.sum()
+
+        meanPlayerSkill, stdDevPlayerSkill = 78, 7
+        physicalSeeds = np.clip(np.random.normal(meanPlayerSkill, stdDevPlayerSkill, count), 60, 100)
+        mentalSeeds = np.clip(np.random.normal(meanPlayerSkill, stdDevPlayerSkill, count), 60, 100)
+        nextPlayerId = max([p.id for p in self.activePlayers], default=0) + 1
+
+        newPlayers, generated = [], {}
+        for i in range(int(count)):
+            # ⚠️ The FIRST player is forced to the target position so the blue-chip
+            # promotion has something at that position to promote. Without this the
+            # target is only a preference and silently does nothing whenever the random
+            # draw misses it, which for a 5-position league is most of the time.
+            if i == 0 and targetPosition is not None:
+                pos = targetPosition
+            else:
+                pos = positions[int(np.random.choice(len(positions), p=weights))]
+            newPlayer = self.createPlayer(pos, int(physicalSeeds[i]), int(mentalSeeds[i]))
+            if not newPlayer:
+                continue
+            newPlayer.id = nextPlayerId
+            nextPlayerId += 1
+            newPlayer.team = 'Free Agent'
+            newPlayer.freeAgentYears = 0
+            newPlayers.append(newPlayer)
+            self.freeAgents.append(newPlayer)
+            if newPlayer not in self.activePlayers:
+                self.activePlayers.append(newPlayer)
+            self.addToPositionList(newPlayer)
+            generated[pos.name] = generated.get(pos.name, 0) + 1
+
+        self._promoteBlueChip(newPlayers, preferPosition=targetPosition)
+        self.sortPlayersByPosition()
+        if generated:
+            best = max((p.playerRating for p in newPlayers), default=0)
+            logger.info(f"Free agent intake: {generated} (best {best})")
+        return generated
+
+    def _promoteBlueChip(self, newPlayers: list, preferPosition=None) -> dict:
+        """Make sure an intake class has at least one top-end arrival.
+
+        If nothing in `newPlayers` reaches BLUE_CHIP_RATING_FLOOR, the best of them is
+        re-rolled from a high seed until it does, IN PLACE. Returns a small dict for
+        logging, or an empty dict when nothing was done.
+
+        ⚠️ IT SWAPS THE PLAYER'S ATTRIBUTES, IT DOES NOT ADD A PLAYER. Class size is
+        what keeps free-agent supply equal to attrition; one extra body a season is a
+        body nobody signs, and the pool becomes a holding pen that only drains through
+        retirement.
+
+        ⚠️ IT PROMOTES THE BEST ONE, NOT A RANDOM ONE. Re-rolling the worst would leave
+        the class bimodal — a star and a hole — and the promoted player keeps their
+        position, so promoting the best also keeps the class's positional shape closest
+        to what the deficit actually asked for.
+
+        ⚠️ Bounded, and a miss is not an error. If the re-roll budget runs out the class
+        ships as generated: a season without a blue chip is a worse league, not a broken
+        one, and raising the floor high enough to be unreachable should degrade to the
+        old behaviour rather than hang.
+        """
+        from constants import (BLUE_CHIP_ENABLED, BLUE_CHIP_RATING_FLOOR,
+                               BLUE_CHIP_MAX_ATTEMPTS, BLUE_CHIP_SEED_MEAN,
+                               BLUE_CHIP_SEED_SD, BLUE_CHIP_CANDIDATE_POOL)
+        if not BLUE_CHIP_ENABLED or not newPlayers:
+            return {}
+
+        # ⚠️ Promote within the TARGET position when one is given, not the best player
+        # overall. Promoting the best overall is what made delivery a coin flip: the
+        # star's position was whatever the class happened to produce, and the worst club
+        # only cuts for an upgrade at a position it is actually weak in.
+        pool = newPlayers
+        if preferPosition is not None:
+            atTarget = [p for p in newPlayers if getattr(p, 'position', None) == preferPosition]
+            if atTarget:
+                pool = atTarget
+        best = max(pool, key=lambda p: getattr(p, 'playerRating', 0) or 0)
+        if (getattr(best, 'playerRating', 0) or 0) >= BLUE_CHIP_RATING_FLOOR:
+            # The class produced one on its own, which is the point of a floor rather
+            # than a quota: in a good year this does nothing at all.
+            return {}
+
+        import numpy as np
+        before = best.playerRating
+        position = best.position
+
+        # ⚠️ TAKE THE LOWEST CANDIDATE THAT CLEARS, NOT THE FIRST. Accepting the first
+        # success draws from the seed distribution truncated at the floor, which lands
+        # well above it — measured, an 88 floor produced a 95. The guarantee is that the
+        # class HAS a top end, not that it gets a generational player every single year;
+        # a 95 arriving on schedule every season is a different and worse league than
+        # one where 95s are rare and 88s are reliable.
+        clearing = []
+        for _ in range(int(BLUE_CHIP_MAX_ATTEMPTS)):
+            seedPhys = int(np.clip(np.random.normal(BLUE_CHIP_SEED_MEAN, BLUE_CHIP_SEED_SD), 60, 100))
+            seedMent = int(np.clip(np.random.normal(BLUE_CHIP_SEED_MEAN, BLUE_CHIP_SEED_SD), 60, 100))
+            candidate = self.createPlayer(position, seedPhys, seedMent)
+            if candidate is None:
+                continue
+            if (getattr(candidate, 'playerRating', 0) or 0) >= BLUE_CHIP_RATING_FLOOR:
+                clearing.append(candidate)
+                if len(clearing) >= BLUE_CHIP_CANDIDATE_POOL:
+                    break
+        if clearing:
+            pick = min(clearing, key=lambda c: c.playerRating)
+            # Move the attributes onto the player already wired into freeAgents,
+            # activePlayers and the position lists. Re-registering a new object
+            # means unpicking three collections, and the name is already drawn
+            # from the pool — discarding it here would leak a name every season.
+            best.attributes = pick.attributes
+            best.updateRating()
+            logger.info(
+                f"Blue chip: promoted {best.name} ({position.name}) "
+                f"{before} -> {best.playerRating} (floor {BLUE_CHIP_RATING_FLOOR})")
+            return {'name': best.name, 'position': position.name,
+                    'from': before, 'to': best.playerRating}
+        logger.warning(
+            f"Blue chip: no candidate reached {BLUE_CHIP_RATING_FLOOR} in "
+            f"{BLUE_CHIP_MAX_ATTEMPTS} attempts; class ships as generated")
+        return {}
 
     # ── Prospect Pipeline: rookie class generation + draft ──────────────
 
