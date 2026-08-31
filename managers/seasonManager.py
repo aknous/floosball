@@ -2447,9 +2447,17 @@ class SeasonManager:
                         if totalFP > 0:
                             roster.card_bonus_points = (roster.card_bonus_points or 0) + totalFP
                         import json as _json
+                        # ⚠️ A SECOND SERIALIZER, AND IT IS THE ONE THAT PERSISTS.
+                        # `fantasyTracker._breakdownToDict` builds the LIVE payload; this
+                        # inline copy builds the BANKED row, with its own hardcoded key
+                        # list. Adding a field to one and not the other is invisible until
+                        # a week settles and the new field is simply absent — which is
+                        # exactly what happened to `synthetic`: the live view was right and
+                        # every banked week still said PRSM.
                         breakdownDicts = [{
                             "slotNumber": b.slotNumber,
                             "edition": b.edition,
+                            "synthetic": bool(getattr(b, 'synthetic', False)),
                             "tier": b.tier,
                             "playerId": b.playerId,
                             "playerName": b.playerName,
