@@ -11360,9 +11360,15 @@ class Game:
         a game with no weather (flag off, no venue, roll failed) is neutral by
         construction and no call site needs its own guard.
         """
+        # ⚠️ `getattr`, NOT `self._wx`. The promise above is that a game with no weather is
+        # neutral BY CONSTRUCTION — and an object that never ran `_resolveWeather` has no
+        # `_wx` at all, which raises AttributeError straight past a guard that only catches
+        # TypeError and ValueError. Four suites that pass on main failed here for exactly
+        # that: they drive a StubGame through `fgMakeProbability`, which asks for
+        # `wx('fgAccuracy')`. A stub is the case this accessor exists to absorb.
         try:
-            v = float(self._wx.get(key, 1.0))
-        except (TypeError, ValueError):
+            v = float((getattr(self, '_wx', None) or {}).get(key, 1.0))
+        except (TypeError, ValueError, AttributeError):
             return 1.0
         return v if v > 0 else 1.0
 
