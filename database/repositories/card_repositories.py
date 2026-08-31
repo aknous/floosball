@@ -271,6 +271,40 @@ class EquippedCardRepository:
         ).update({"locked": True}, synchronize_session='fetch')
         self.session.flush()
 
+    def releaseStaleLocks(self) -> int:
+        """Release every equipped-card lock. Call at BOOT, before the season loop runs.
+
+        ⚠️ THE LOCK HAD EXACTLY ONE RELEASE AND IT WAS THE WEEK-END HANDLER.
+        `lockAllForWeek` fires when a week's games kick off and `unlockWeek` fires when that
+        week finishes — so a restart BETWEEN those two points left every lineup frozen with
+        nothing that would ever thaw it. Reported from the app as being unable to unequip or
+        change slots while no games were running, on a database with 448 scheduled games and
+        ZERO of them final.
+
+        ⚠️ A DEPLOY MID-WEEK DOES THIS IN PRODUCTION. Not a dev-only artifact of restarting
+        by hand: any deploy landing between kickoff and the final whistle freezes every
+        user's lineup, and if the restart also re-schedules the week, it never thaws.
+
+        ⚠️ IT RELEASES EVERYTHING, AND THAT IS DELIBERATE RATHER THAN LAZY. The obvious
+        narrower rule — keep the lock where a game is still running — cannot be written:
+        `games.status` only ever holds 'scheduled' or 'final', because a live game is Active
+        in MEMORY and never persists that state. A filter on 'in_progress' matches nothing
+        and silently degrades to exactly this, without saying so.
+
+        At boot no slate is being played yet, so no lock is doing any work; the season loop
+        re-locks at each week's kickoff through `lockAllForWeek`. The trade is a resume that
+        lands PAST a kickoff, where the week stays unlocked until the next one — which is
+        the mild direction, against lineups frozen forever.
+
+        Returns how many rows were released.
+        """
+        released = self.session.query(EquippedCard).filter(
+            EquippedCard.locked == True  # noqa: E712
+        ).update({"locked": False}, synchronize_session='fetch')
+        if released:
+            self.session.flush()
+        return int(released or 0)
+
     def unlockWeek(self, season: int, week: int):
         """Unlock all equipped cards after a week completes."""
         self.session.query(EquippedCard).filter_by(
@@ -547,8 +581,17 @@ class PackTypeRepository:
                 cards_per_pack=5,
                 cards_kept=5,
                 guaranteed_rarity=None,
-                rarity_weights={'base': 100, 'holographic': 0, 'prismatic': 0, 'diamond': 0},
-                description='Free starter. 5 base cards to fill your hand. Once per season.',
+                # ⚠️ METALLIC, AND IT MUST MATCH `_drawPackCards`'s POOL FILTER. The
+                # base-pool change moved the starter pack's pool to metallic-only — floor
+                # prints stopped being a gift once every one of them became free to
+                # everybody — but left these weights at `base: 100`. The draw rolls the
+                # EDITION first and picks a template within it second, so it rolled `base`,
+                # found no base templates in a metallic-only pool, and drew NOTHING: the
+                # starter pack came back empty. Reported from the app.
+                # ⚠️ AN EDITION WEIGHTED HERE BUT ABSENT FROM THE POOL DRAWS NOTHING AND
+                # RAISES NOTHING — `test_pack_weights.py` sweeps every pack for that.
+                rarity_weights={'metallic': 100, 'holographic': 0, 'prismatic': 0, 'diamond': 0},
+                description='Free starter. 5 cards to fill your hand. Once per season.',
             ),
             PackType(
                 name='humble',

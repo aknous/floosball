@@ -207,6 +207,10 @@ class CardBreakdown:
     """Per-card breakdown for display and persistence."""
     slotNumber: int = 0
     edition: str = ""
+    # ⚠️ A SYNTHETIC IS MINTED AT ITS EFFECT'S EDITION, so `edition` alone cannot tell a
+    # built card from a pulled one — every display that shows an edition chip needs this
+    # beside it or a synthetic diamond reads as a real diamond in the scoring breakdown.
+    synthetic: bool = False
     tier: int = 1            # Upgrade tier (1-4 / I-IV); display as "Showoff III"
     playerId: int = 0
     playerName: str = ""
@@ -918,6 +922,7 @@ def _computeCardPass(
     return CardBreakdown(
         slotNumber=eq.slot_number,
         edition=cardEdition,
+        synthetic=bool(getattr(template, 'is_synthetic', False)),
         tier=tier,
         playerId=cardPlayerId,
         playerName=template.player_name,

@@ -1554,6 +1554,17 @@ class CardTemplate(Base):
     # This is what makes an all-year shop coherent: fantasy cards bought outside
     # the regular season could never be equipped, showpieces lose nothing.
     is_showpiece: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Synthetic: the EXACT MIRROR of a showpiece. A showpiece is collectible and can
+    # never be equipped; a synthetic is equippable and can never be collected — no
+    # vault, no Showcase (which rides the vault), no Combine, sell value 1.
+    #
+    # ⚠️ IT CANNOT BE DERIVED, and that is a consequence of the design rather than an
+    # oversight. A synthetic is minted at the EFFECT's own edition (so a prismatic
+    # effect brings prismatic strength and the prismatic gate wherever it lands), which
+    # means nothing on the row distinguishes it from a pulled prismatic. An earlier
+    # draft leaned on `edition == 'base' and effect != none`; that predicate died the
+    # moment the card stopped being `base`.
+    is_synthetic: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     classification: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # rookie, mvp, champion, all_pro, or compound e.g. mvp_champion
 
     # Snapshot of player at creation time
@@ -2016,6 +2027,59 @@ class ShopPurchase(Base):
     __table_args__ = (
         Index("idx_shop_purchase_user_season", "user_id", "season"),
         Index("idx_shop_purchase_item_week", "item_slug", "user_id", "season", "week"),
+    )
+
+
+class UserComponent(Base):
+    """A single crafting component held by a user — the shared ledger for the whole
+    component family (Synth Components today, Chrome Components next).
+
+    ⚠️ THIS IS NOT `ShopPurchase` WITH A FLAG, AND THE REASON IS CHROME. `POWERUP_CATALOG`
+    items are TIMED EFFECTS: bought, stamped with `expires_at_week`, and read as "is one
+    active right now". A component is a CHARGE — bought or granted, held, and later SPENT
+    on one specific action. `ShopPurchase` records that a purchase happened and nothing
+    records that it was consumed.
+
+    An earlier draft proposed adding `ShopPurchase.consumed_at`. That is right for a
+    shop-only item and wrong for a family whose other member is never bought: **chrome
+    components are EARNED, never purchased** (locked owner ruling), so they would have no
+    `ShopPurchase` row to hang a `consumed_at` on. Building the ledger here means the
+    chrome work inherits it finished rather than growing a parallel one.
+
+    A balance is a COUNT of unconsumed rows of a type — never a stored integer, so a grant
+    and a spend can never disagree about what someone holds, and every component carries
+    its own provenance.
+
+    ⚠️ `earmark_target_id` is chrome's, not synth's. Chrome components are committed to a
+    specific player and augment at gift time ("a funding race, not an election"); a Synth
+    Component is spent the instant it is used and has nothing to point at. The column is
+    here so chrome does not need a migration, and is left NULL by everything today.
+    """
+    __tablename__ = "user_components"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    # 'synth' | 'chrome'
+    component_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # 'shop' | 'achievement' | 'fantasy' | 'pickem' | 'grant'
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    # ⚠️ Season-scoped: unspent components expire at the boundary, matching how
+    # everything else card-side is season-scoped. Without it a stockpile carried across
+    # becomes a burst of builds on day one of a new season.
+    season: Mapped[int] = mapped_column(Integer, nullable=False)
+    granted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # What the component was spent ON, for the audit trail (a card template id today).
+    consumed_for: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    earmark_target_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    user: Mapped["User"] = relationship("User")
+
+    __table_args__ = (
+        Index("idx_user_components_balance", "user_id", "component_type", "season",
+              "consumed_at"),
+        Index("idx_user_components_source", "user_id", "component_type", "season",
+              "source"),
     )
 
 

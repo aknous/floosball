@@ -347,11 +347,34 @@ class TimingManager:
             logger.debug(f"{self.mode.value} mode: between games delay {self.delays['between_games']}s")
             await asyncio.sleep(self.delays['between_games'])
 
-    async def waitPostChampionship(self) -> None:
-        """Wait after Floos Bowl before starting offseason, so users can see results."""
+    async def waitPostChampionship(self, target=None) -> None:
+        """Wait after Floos Bowl before starting offseason, so users can see results.
+
+        ⚠️ HONOR THE PERSISTED TARGET WHEN THERE IS ONE. This was a bare
+        `asyncio.sleep(delay)` — a FIXED DURATION — while `_handleOffseason`'s own comment
+        described it as *"idempotent (it polls until target time), so re-entering during
+        the wait is also fine"*. It was not. A restart five minutes into the hour slept a
+        fresh full hour, and repeated restarts could push the offseason back indefinitely.
+        That comment describes `waitUntilNoonEt`, which really does poll.
+
+        ⚠️ The target was already being written down and never read: `_setOffseasonFlow`
+        persists `offseason_phase_target` at the moment the phase begins, precisely so the
+        UI can count down to it. Reading it here costs nothing and makes a restart resume
+        the REMAINING wait instead of restarting it.
+
+        A target already in the past means the wait is over — proceed, do not sleep. That
+        is the correct reading of "the hour has elapsed", not a skip.
+        """
         if self._isFastCatchingUp:
             return
         delay = self.delays.get('post_championship', 30.0)
+        if target is not None and self.mode in (TimingMode.SCHEDULED, TimingMode.CATCHUP):
+            pollInterval = min(self.delays.get('daily_check', 30.0), 30.0)
+            logger.info(f"{self.mode.value} mode: post-championship until {target.isoformat()} "
+                        f"(polling every {pollInterval}s)")
+            while datetime.datetime.utcnow() < target:
+                await asyncio.sleep(pollInterval)
+            return
         if self.mode in (TimingMode.SCHEDULED, TimingMode.SEQUENTIAL, TimingMode.TURBO, TimingMode.TURBO_SILENT, TimingMode.CATCHUP):
             logger.info(f"{self.mode.value} mode: post-championship delay {delay}s")
             await asyncio.sleep(delay)
@@ -369,7 +392,7 @@ class TimingManager:
             # Test-scheduled: shorter delay
             await asyncio.sleep(self.delays['offseason'] / 2)
 
-    async def waitUntilNoonEt(self) -> None:
+    async def waitUntilNoonEt(self, target=None) -> None:
         """Wait until the next noon Eastern — draft day.
 
         Holds the offseason so free agency lands the day AFTER the Floos Bowl
@@ -385,7 +408,17 @@ class TimingManager:
         if self._isFastCatchingUp:
             return
         if self.mode == TimingMode.SCHEDULED:
-            target = self._nextNoonEasternUtc()
+            # ⚠️ HONOR THE PERSISTED TARGET RATHER THAN RECOMPUTING ONE. This polled
+            # honestly — but always to `_nextNoonEasternUtc()`, recomputed at call time.
+            # A restart even a MINUTE after the scheduled moment finds that noon already
+            # gone, computes the NEXT one, and delays the draft a full DAY. A restart a
+            # minute earlier is fine. That is a 24-hour miss decided by deploy timing,
+            # and it is the sharpest of the offseason-restart faults.
+            #
+            # The stored target is the one the season actually scheduled and the one the
+            # countdown has been showing users. A target in the past means draft day has
+            # arrived, so proceed immediately — which is the correct answer, not a skip.
+            target = target or self._nextNoonEasternUtc()
             pollInterval = self.delays.get('daily_check', 30.0)
             logger.info(f"SCHEDULED mode: waiting for draft day at {target.isoformat()} ET-noon (polling every {pollInterval}s)")
             while datetime.datetime.utcnow() < target:

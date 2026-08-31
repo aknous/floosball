@@ -12,7 +12,7 @@ suppression cycle, instability dial, all already shipped + gated).
 > by Aris / reversion by Pyre; player resurrection by Vera/Cassian, paid for in facility levels).
 > Those build on the machinery defined here.
 >
-> **Related:** `docs/CHROME.md` — the cyberpunk-chrome *character* layer (the Cores get bored and
+> **Related:** `docs/WEATHER_AND_CHROME_PLAN.md` (Part II) — the cyberpunk-chrome *character* layer (the Cores get bored and
 > start installing cybernetic augments into players). Top-down counterpart to this doc's bottom-up
 > awakening; leading proposal is chrome = the visible escalation of awakening.
 

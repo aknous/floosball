@@ -354,6 +354,25 @@ class FloosballApplication:
             else:
                 logger.info(f"Resuming simulation from Season {savedState['current_season']}, Week {savedState['current_week']}")
 
+            # ⚠️ RELEASE STALE LINEUP LOCKS BEFORE THE SEASON LOOP RUNS. `lockAllForWeek`
+            # fires at kickoff and `unlockWeek` only at the final whistle, so a restart
+            # between the two froze every lineup with nothing that would ever thaw it —
+            # and a mid-week DEPLOY does the same thing in production. Safe here because
+            # no slate is being played yet; the loop re-locks at the next kickoff.
+            try:
+                from database.connection import get_session as _lockSession
+                from database.repositories.card_repositories import EquippedCardRepository
+                _s = _lockSession()
+                try:
+                    _freed = EquippedCardRepository(_s).releaseStaleLocks()
+                    _s.commit()
+                    if _freed:
+                        logger.info(f"Released {_freed} stale equipped-card lock(s) at boot")
+                finally:
+                    _s.close()
+            except Exception as e:
+                logger.error(f"Failed to release stale equipped-card locks: {e}")
+
             # Update game state
             gameState.setState('totalSeasons', totalSeasons)
             gameState.setState('seasonsPlayed', seasonsPlayed)

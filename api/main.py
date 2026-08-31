@@ -5395,11 +5395,38 @@ async def get_stats_players(
             finally:
                 _s.close()
 
-            selectedIds = {p.id for p in selected}
-            for playerId, statRows in bySeasonRows.items():
-                if playerId not in selectedIds:
+            # ⚠️ ITERATE THE PLAYERS, NOT THE STAT ROWS. This looped over
+            # `bySeasonRows` and intersected with the selection, so a player with no
+            # `PlayerSeasonStats` row for the season — or one with `games_played == 0`,
+            # which the query above filters out — was DROPPED from the page entirely
+            # while still being counted in `facets`. The two numbers come from the same
+            # `candidates` list and agree by construction, so the mismatch could only be
+            # here.
+            #
+            # ⚠️ FREE AGENTS ARE EXACTLY THE POPULATION THAT HAS NO STAT ROW, which is why
+            # this reads as an FA bug rather than a stats bug. An unsigned free agent
+            # played no games, so they have nothing in the table. Reported from the live
+            # page: the Free Agent chip said 56 and the footer said "Showing 41 of 41";
+            # filtered to QB it said 4 and showed 1. Measured on a season-21 database, 29
+            # teamless non-retired players and **0** with a qualifying stat row.
+            #
+            # ⚠️ The LIVE branch above never had this — it loops `selected` and emits a
+            # row for everyone, empty stats included. This branch is the inconsistent one,
+            # and it is the branch that runs all through the offseason (see `liveSeason`).
+            for p in selected:
+                statRows = bySeasonRows.get(p.id) or []
+                if not statRows:
+                    # On the page as a player, with an empty line — which is the honest
+                    # rendering of someone who did not play, and what the live branch has
+                    # always done.
+                    rows.append(_statsPlayerRow(
+                        p, {g: {} for g in _STAT_GROUPS}, 0, 0, None, None, None,
+                        None, None, None,
+                        _playerStatus(p, pm),
+                        seasons=getattr(p, 'seasonsPlayed', None),
+                        awakened=p.id in awakenedIds,
+                    ))
                     continue
-                p = byId[playerId]
                 statRows.sort(key=lambda r: r.season)
                 blobList = [{
                     'passing': r.passing_stats or {}, 'rushing': r.rushing_stats or {},
@@ -6503,6 +6530,75 @@ def admin_grant_floobits(payload: Dict[str, Any],
     except Exception as e:
         session.rollback()
         logger.error(f"Error granting floobits: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+
+@app.post("/api/admin/grant-components")
+def admin_grant_components(payload: Dict[str, Any],
+                           _auth: None = Depends(_checkAdminAuth)):
+    """Grant crafting components to a user — for testing.
+
+    Body: {"email": ..., "count": N, "type": "synth"|"chrome"}
+
+    ⚠️ GRANTED WITH `source='admin'` AND NO CAP, deliberately. The shop grant is capped per
+    DAY and the achievement grant per SEASON, and `componentManager.grant` enforces those by
+    counting rows from that source — so an admin grant sharing a source would eat somebody's
+    real allowance, and a capped admin grant could not hand out enough to test a full
+    lineup. Its own source keeps both true and makes the test grants greppable afterwards.
+
+    ⚠️ IT DOES NOT ESCAPE THE HOLD CAP, AND THAT IS NOT A BUG. `SYNTH_COMPONENT_HOLD_CAP`
+    (3) is checked against the BALANCE rather than against a source, so granting more than
+    three closes the shop until they are spent — verified live: 8 granted, shop reported
+    `hold_cap`. Grant at most the cap if the shop path itself is what is being tested;
+    grant freely if the transplant is.
+    """
+    from database.connection import get_session
+    from database.models import User
+    from managers import componentManager as _components
+
+    email = (payload.get("email") or "").strip().lower()
+    count = payload.get("count", 1)
+    componentType = (payload.get("type") or _components.SYNTH).strip().lower()
+
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required")
+    if not isinstance(count, int) or count <= 0:
+        raise HTTPException(status_code=400, detail="count must be a positive integer")
+    if componentType not in (_components.SYNTH, _components.CHROME):
+        raise HTTPException(status_code=400,
+                            detail=f"type must be '{_components.SYNTH}' or '{_components.CHROME}'")
+
+    session = get_session()
+    try:
+        user = session.query(User).filter_by(email=email).first()
+        if not user:
+            raise HTTPException(status_code=404, detail=f"No user with email: {email}")
+
+        # ⚠️ `_currentSeasonNumber()` IS None WHEN THE SIM IS NOT RUNNING, and
+        # `user_components.season` is NOT NULL — so the grant would fail at commit with a
+        # constraint error rather than anything readable. Components are season-scoped, so
+        # granting into "no season" is meaningless: refuse it plainly.
+        season = _currentSeasonNumber()
+        if not season or season < 1:
+            raise HTTPException(status_code=400,
+                                detail="No active season; components are season-scoped")
+        granted = _components.grant(session, user.id, season, count=count,
+                                    source='admin', componentType=componentType)
+        session.commit()
+        held = _components.balance(session, user.id, season, componentType)
+        return build_success_response({
+            "message": f"Granted {granted} {componentType} component(s) to {email}",
+            "granted": granted,
+            "held": held,
+            "season": season,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error granting components: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         session.close()
@@ -9444,6 +9540,52 @@ def getCurrencyHistory(
 # ============================================================================
 
 
+@app.get("/api/cards/base-pool")
+def getBasePool(
+    position: Optional[int] = Query(default=None),
+    user: _User = Depends(_getCurrentUser),
+):
+    """Every player's no-effect floor print for this season — the picker's second section.
+
+    ⚠️ NOT the user's collection, and deliberately not granted to anyone: these are
+    available to everybody, so `GET /api/cards/collection` filters `edition == 'base'`
+    out and a `UserCard` is created only when one is actually fielded. A row per user per
+    player would be 192 rows of nothing each.
+
+    Shaped like a collection entry so the picker can render both sections with one card
+    component, but carries `templateId` instead of `userCardId` — the equip endpoint
+    accepts either and materializes the pool side itself.
+    """
+    from database.connection import get_session
+    from managers.cardManager import CardManager
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    cardManager = CardManager(floosball_app.serviceContainer if floosball_app else None)
+
+    session = get_session()
+    try:
+        out = []
+        for tpl in cardManager.basePoolTemplates(session, currentSeason, position):
+            out.append({
+                "templateId": tpl.id,
+                "playerId": tpl.player_id,
+                "playerName": tpl.player_name,
+                "position": tpl.position,
+                "teamId": tpl.team_id,
+                "playerRating": tpl.player_rating,
+                "edition": tpl.edition,
+                "effectName": "none",
+                # No effect, so no gate, no output type and nothing to project. A floor
+                # print is fielded for the player's raw FP and nothing else.
+                "fromPool": True,
+            })
+        out.sort(key=lambda c: (c["position"], -c["playerRating"], c["playerName"]))
+        return {"cards": out, "season": currentSeason}
+    finally:
+        session.close()
+
+
 @app.get("/api/cards/collection")
 def getCardCollection(
     edition: Optional[str] = Query(default=None),
@@ -9497,6 +9639,22 @@ def getCardCollection(
         result = []
         for card in cards:
             tpl = card.card_template
+            # ⚠️ THE BASE POOL IS NOT A COLLECTION. Floor prints are available to
+            # everyone from the start of the season, so listing the ones a user has
+            # happened to field buries the cards they actually pulled and makes the
+            # collection read as noise. They live in the picker's own pool section.
+            #
+            # ⚠️ This ALSO retires the base cards existing users already hold from the
+            # old starter pack, with no migration: those rows simply stop being listed
+            # and fold into the pool they were always duplicating. Nothing of value is
+            # hidden — a floor print sells for 2.
+            #
+            # ⚠️ And it covers synthetics for free. A synthetic is minted at its EFFECT's
+            # edition, so the moment a base card is synthesized it stops being `base`,
+            # leaves the pool and appears in the collection on its own. One filter, two
+            # behaviors, no second rule.
+            if tpl.edition == 'base':
+                continue
             if edition and tpl.edition != edition:
                 continue
             if position is not None and tpl.position != position:
@@ -9690,7 +9848,45 @@ def previewBlend(req: BlendRequest, user: _User = Depends(_getCurrentUser)):
 
 class TransplantRequest(BaseModel):
     donorCardId: int
-    targetCardId: int
+    # ⚠️ Optional, because the SYNTHESIS target comes from the base pool and has no
+    # `UserCard` row until it is used. The client sends `targetTemplateId` for a pool
+    # card; the server materializes it — on the real transplant only.
+    targetCardId: Optional[int] = None
+    targetTemplateId: Optional[int] = None
+
+
+def _resolveTransplantTarget(session, userId: int, req, currentSeason: int,
+                             materialize: bool) -> int:
+    """The target's `UserCard` id, claiming a pool card if that is what was named.
+
+    ⚠️ PREVIEW MUST NOT MATERIALIZE, and that is the whole reason this takes a flag. The
+    synthesis screen prices a target the moment it is picked, so a user browsing players
+    would mint a `UserCard` for every one they clicked — invisible rows (the collection
+    filters `base` out) but real pollution, and growing with idle curiosity rather than
+    with use. Preview resolves READ-ONLY against any row that already exists and prices
+    off the template otherwise; the real transplant is the only thing that creates.
+    """
+    from managers.cardManager import CardManager
+    from database.models import UserCard
+    if req.targetCardId is not None:
+        return req.targetCardId
+    if req.targetTemplateId is None:
+        raise ValueError("No target card")
+    if materialize:
+        return CardManager.claimBaseCard(
+            session, userId, req.targetTemplateId, currentSeason).id
+    existing = (session.query(UserCard)
+                .filter_by(user_id=userId, card_template_id=req.targetTemplateId)
+                .first())
+    if existing is not None:
+        return existing.id
+    # Nothing owned yet — hand back a transient row so the preview can price it, and
+    # never flush it. The session is rolled back by the endpoint either way.
+    tmp = UserCard(user_id=userId, card_template_id=req.targetTemplateId,
+                   acquired_via='base_pool')
+    session.add(tmp)
+    session.flush()
+    return tmp.id
 
 
 @app.post("/api/cards/transplant")
@@ -9706,8 +9902,10 @@ def transplantEffect(req: TransplantRequest, user: _User = Depends(_getCurrentUs
 
     session = get_session()
     try:
+        targetId = _resolveTransplantTarget(session, user.id, req, currentSeason,
+                                            materialize=True)
         result = cardManager.transplantEffect(session, user.id, req.donorCardId,
-                                               req.targetCardId, currentSeason, currentWeek)
+                                               targetId, currentSeason, currentWeek)
         # A transplant replaces the target's template with a new one (donor consumed),
         # so the collection's unique-template set can change — keep Curator in sync.
         from managers import achievementManager as _am
@@ -9742,12 +9940,17 @@ def previewTransplant(req: TransplantRequest, user: _User = Depends(_getCurrentU
 
     session = get_session()
     try:
+        targetId = _resolveTransplantTarget(session, user.id, req, currentSeason,
+                                            materialize=False)
         result = cardManager.previewTransplant(session, user.id, req.donorCardId,
-                                               req.targetCardId, currentSeason, currentWeek)
+                                               targetId, currentSeason, currentWeek)
         return build_success_response(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
+        # ⚠️ ALWAYS ROLL BACK. A preview may have flushed a transient `UserCard` so it
+        # could price an unowned pool card; nothing here is ever meant to persist.
+        session.rollback()
         session.close()
 
 
@@ -10455,7 +10658,12 @@ class EquipCardSlot(BaseModel):
     # Fusion: cards are equipped into POSITION slots (QB/RB/WR1/WR2/TE/K/FLEX). The
     # server derives slot_number from the slot via SLOT_TO_ORDINAL.
     slot: str
-    userCardId: int
+    # ⚠️ OPTIONAL, because a POOL card has no `UserCard` row until it is fielded. The
+    # client sends `userCardId` for a card the user owns and `templateId` for one taken
+    # from the base pool; the server materializes the row (see `claimBaseCard`) before
+    # any validation runs, so everything downstream keeps working on ids alone.
+    userCardId: Optional[int] = None
+    templateId: Optional[int] = None
 
 class EquipCardsRequest(BaseModel):
     cards: List[EquipCardSlot]
@@ -10488,13 +10696,35 @@ def setEquippedCards(
     if len(slots) != len(set(slots)):
         raise HTTPException(status_code=400, detail="Duplicate slot")
 
-    # No duplicate card IDs
-    cardIds = [c.userCardId for c in req.cards]
-    if len(cardIds) != len(set(cardIds)):
-        raise HTTPException(status_code=400, detail="Cannot equip the same card in multiple slots")
-
     session = get_session()
     try:
+        # ⚠️ MATERIALIZE POOL CARDS FIRST, BEFORE THE DUPLICATE CHECK AND THE OWNERSHIP
+        # LOOP. Every rule below this point reasons about `userCardId`, so resolving the
+        # pool here means the base pool needs no special case anywhere downstream — the
+        # rest of the handler cannot tell a claimed floor print from a pulled card.
+        #
+        # ⚠️ It also has to run before the duplicate check specifically: two slots asking
+        # for the SAME pool template resolve to the same `UserCard` (claim is
+        # get-or-create), and that is a duplicate the user must be told about rather than
+        # a pair of rows quietly pointing at one card.
+        from managers.cardManager import CardManager as _CM
+        for c in req.cards:
+            if c.userCardId is None:
+                if c.templateId is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Slot {c.slot} names neither a card nor a player")
+                try:
+                    c.userCardId = _CM.claimBaseCard(
+                        session, user.id, c.templateId, currentSeason).id
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+
+        # No duplicate card IDs
+        cardIds = [c.userCardId for c in req.cards]
+        if len(cardIds) != len(set(cardIds)):
+            raise HTTPException(status_code=400,
+                                detail="Cannot equip the same card in multiple slots")
         # Fusion: the equip endpoint OWNS the FantasyRoster row — it's the leaderboard
         # anchor + WeeklyCardBonus.roster_id FK, and the season-end auto-lock only locks
         # rows that exist. Get-or-create it here so a user who only ever equips cards
@@ -11609,6 +11839,135 @@ def rerollThemedPacks(user: _User = Depends(_getCurrentUser)):
 # ============================================================================
 # POWER-UPS
 # ============================================================================
+
+
+@app.get("/api/shop/synth-components")
+def getSynthComponents(user: _User = Depends(_getCurrentUser)):
+    """The Synth Component's shop slot: what the user holds, and what is left today.
+
+    ⚠️ A FIXED SLOT IN THE DAILY SELECTION, not part of `ROTATION_CATEGORY_WEIGHTS` —
+    that rotates PACK categories. A consumable that only appears on some days turns
+    lineup planning into a lottery, which is the opposite of what this gates.
+    """
+    from database.connection import get_session
+    from database.repositories.shop_repository import ShopPurchaseRepository
+    from managers import componentManager as _components
+    from managers.cardManager import regularSeasonOver
+    from constants import (SYNTH_COMPONENT_SLUG, SYNTH_COMPONENT_NAME,
+                           SYNTH_COMPONENT_PRICE, SYNTH_COMPONENT_DAILY_LIMIT,
+                           SYNTH_COMPONENT_HOLD_CAP)
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+
+    session = get_session()
+    try:
+        boughtToday = ShopPurchaseRepository(session).getPurchasesToday(
+            user.id, SYNTH_COMPONENT_SLUG)
+        held = _components.balance(session, user.id, currentSeason)
+        offseason = regularSeasonOver(currentWeek)
+        # Say WHICH limit is biting. "Sold out" reads as a bug when the real answer is
+        # "spend the three you are holding" or "cards can't be fielded this week".
+        reason = ('offseason' if offseason
+                  else 'hold_cap' if held >= SYNTH_COMPONENT_HOLD_CAP
+                  else 'daily' if boughtToday >= SYNTH_COMPONENT_DAILY_LIMIT
+                  else None)
+        return {
+            "slug": SYNTH_COMPONENT_SLUG,
+            "name": SYNTH_COMPONENT_NAME,
+            "price": SYNTH_COMPONENT_PRICE,
+            "held": held,
+            "boughtToday": boughtToday,
+            "dailyLimit": SYNTH_COMPONENT_DAILY_LIMIT,
+            "holdCap": SYNTH_COMPONENT_HOLD_CAP,
+            "remainingToday": max(0, SYNTH_COMPONENT_DAILY_LIMIT - boughtToday),
+            "canBuy": reason is None,
+            "blockedBy": reason,
+        }
+    finally:
+        session.close()
+
+
+@app.post("/api/shop/synth-components/buy")
+def buySynthComponent(user: _User = Depends(_getCurrentUser)):
+    """Buy one Synth Component, up to the daily allowance."""
+    from database.connection import get_session
+    from database.repositories.card_repositories import CurrencyRepository
+    from database.repositories.shop_repository import ShopPurchaseRepository
+    from database.models import ShopPurchase
+    from managers import componentManager as _components
+    from managers.cardManager import regularSeasonOver
+    from constants import (SYNTH_COMPONENT_SLUG, SYNTH_COMPONENT_PRICE,
+                           SYNTH_COMPONENT_DAILY_LIMIT, SYNTH_COMPONENT_HOLD_CAP)
+
+    sm = floosball_app.seasonManager if floosball_app else None
+    currentSeason = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    currentWeek = sm.currentSeason.currentWeek if sm and sm.currentSeason else 0
+
+    session = get_session()
+    try:
+        # ⚠️ DO NOT SELL SOMETHING THAT CANNOT BE SPENT. Components are season-scoped, so
+        # one bought during the playoffs or the draft days expires unused — cards can't be
+        # equipped outside the regular season, so a synthetic built then never scores.
+        # The shop was happy to take the Floobits for it.
+        if regularSeasonOver(currentWeek):
+            raise HTTPException(
+                status_code=400,
+                detail="Synthesis Components are only useful during the regular season")
+
+        shopRepo = ShopPurchaseRepository(session)
+        boughtToday = shopRepo.getPurchasesToday(user.id, SYNTH_COMPONENT_SLUG)
+        if boughtToday >= SYNTH_COMPONENT_DAILY_LIMIT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"You've taken today's {SYNTH_COMPONENT_DAILY_LIMIT} Synthesis Components")
+
+        # ⚠️ THE ANTI-HOARD, AND IT GATES BUYING RATHER THAN HOLDING. Refusing a grant
+        # would let an achievement reward evaporate because the shop happened to be full,
+        # which is a promise broken by an unrelated system. A user at the cap is told to
+        # spend, never denied something they earned.
+        held = _components.balance(session, user.id, currentSeason)
+        if held >= SYNTH_COMPONENT_HOLD_CAP:
+            raise HTTPException(
+                status_code=400,
+                detail=f"You're holding {held} Synthesis Components. Build with one first.")
+
+        # ⚠️ SPEND FIRST, GRANT SECOND. The reverse order hands out the component and then
+        # discovers the user cannot pay for it.
+        spent = CurrencyRepository(session).spendFunds(
+            user.id, SYNTH_COMPONENT_PRICE,
+            transactionType="synth_component",
+            description="Synthesis Component",
+            season=currentSeason,
+        )
+        if spent is None:
+            raise HTTPException(status_code=400, detail="Insufficient Floobits")
+
+        # ⚠️ The `ShopPurchase` row is the DAILY-LIMIT record, not the component itself.
+        # The component lives in its own ledger because it is a CHARGE rather than a
+        # timed effect — see `UserComponent`. Both rows are needed and they say different
+        # things: this one is "you bought one today", that one is "you hold one".
+        session.add(ShopPurchase(
+            user_id=user.id, item_slug=SYNTH_COMPONENT_SLUG,
+            season=currentSeason, week=currentWeek,
+            price_paid=SYNTH_COMPONENT_PRICE,
+        ))
+        _components.grant(session, user.id, currentSeason, 1, source='shop')
+        session.commit()
+        return {
+            "success": True,
+            "held": _components.balance(session, user.id, currentSeason),
+            "remainingToday": max(0, SYNTH_COMPONENT_DAILY_LIMIT - (boughtToday + 1)),
+        }
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        session.close()
 
 
 @app.get("/api/shop/powerups")
