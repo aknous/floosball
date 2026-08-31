@@ -1363,7 +1363,13 @@ class CardManager:
             player_id=sourceTemplate.player_id,
             edition=newEdition,
             season_created=sourceTemplate.season_created,
-            is_rookie=sourceTemplate.is_rookie,
+            # ⚠️ ROOKIE IS AN ACCOLADE TOO, AND IT LIVES IN ITS OWN COLUMN. The rule
+            # above — a synthetic never wears an accolade it did not earn — was applied to
+            # `classification` (CH / MVP / AP) and missed this, because `is_rookie` is not
+            # part of that string. Reported from the app: a transplant onto a base card
+            # came back wearing the R tag. A synthetic is built this season out of a floor
+            # print and a donated effect; it was never drafted.
+            is_rookie=False if synthetic else sourceTemplate.is_rookie,
             classification=classification,
             player_name=sourceTemplate.player_name,
             team_id=sourceTemplate.team_id,
