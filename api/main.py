@@ -11904,7 +11904,7 @@ def buySynthComponent(user: _User = Depends(_getCurrentUser)):
         if held >= SYNTH_COMPONENT_HOLD_CAP:
             raise HTTPException(
                 status_code=400,
-                detail=f"You're holding {held} Synthesis Components — build with one first")
+                detail=f"You're holding {held} Synthesis Components. Build with one first.")
 
         # ⚠️ SPEND FIRST, GRANT SECOND. The reverse order hands out the component and then
         # discovers the user cannot pay for it.
