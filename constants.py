@@ -4068,7 +4068,11 @@ VENUE_POSITION_WEIGHT = 0.10
 # +/-10% roster-wide multiplier is worth +/-4.5 wins a season. A weather layer that
 # looks like a few percent can be decisive. Measure with a forced-intensity arm
 # before tuning.
-WEATHER_ENABLED = True
+# ⚠️ OFF FOR THIS SEASON (owner, 2026-08-30). Weather and the venues it reads from are
+# built and tested but are not shipping yet. The flag returns from `_resolveWeather` BEFORE
+# any roll, so with it off the game consumes no extra randomness and plays exactly as it
+# does on main — it is a real no-op, not an approximate one.
+WEATHER_ENABLED = False
 
 # ⚠️ WEATHER IS SYMMETRIC (owner, 2026-08-19): a wet ball is wet for everyone. No
 # key is ever applied to one side only, so nothing below reads home/away. The venue
