@@ -3292,7 +3292,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 150, "packs": [], "powerups": [], "deferred": False}},
             {"key": "dedicated_vi", "name": "Dedicated VI", "category": "guidance", "scope": "per_season", "sort_order": 125, "target": 28,
              "description": "Submit prognostications every week of the regular season (not counting autopicks).",
-             "reward_config": {"floobits": 250, "packs": ["exquisite"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 250, "packs": ["exquisite"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             {"key": "curator", "name": "Curator", "category": "guidance", "scope": "per_season", "sort_order": 130, "target": 15,
              "description": "Collect 15 unique cards this season.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
@@ -3302,10 +3302,10 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "full_spectrum", "name": "Full Spectrum", "category": "collection", "scope": "once", "sort_order": 320, "target": 1,
              "description": "Vault the base, holographic, prismatic and diamond print of a single player.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             {"key": "all_pro_set", "name": "All-Pro Set", "category": "collection", "scope": "once", "sort_order": 330, "target": 1,
              "description": "Vault every All-Pro card from a single season.",
-             "reward_config": {"floobits": 400, "packs": ["exquisite"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 400, "packs": ["exquisite"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             {"key": "ice_cold_i", "name": "Ice Cold I", "category": "collection", "scope": "once", "sort_order": 340, "target": 3,
              "description": "Vault 3 Diamond cards.",
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
@@ -3314,16 +3314,16 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "ice_cold_iii", "name": "Ice Cold III", "category": "collection", "scope": "once", "sort_order": 342, "target": 20,
              "description": "Vault 20 Diamond cards.",
-             "reward_config": {"floobits": 250, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 250, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             {"key": "archivist_i", "name": "Archivist I", "category": "collection", "scope": "once", "sort_order": 350, "target": 10,
              "description": "Vault cards of 10 different players.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
             {"key": "archivist_ii", "name": "Archivist II", "category": "collection", "scope": "once", "sort_order": 351, "target": 50,
              "description": "Vault cards of 50 different players.",
-             "reward_config": {"floobits": 200, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 200, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             {"key": "archivist_iii", "name": "Archivist III", "category": "collection", "scope": "once", "sort_order": 352, "target": 150,
              "description": "Vault cards of 150 different players.",
-             "reward_config": {"floobits": 600, "packs": ["exquisite"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 600, "packs": ["exquisite"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # Card upgrades — seasonal (tiers reset each season unless vaulted).
             {"key": "artificer_i", "name": "Artificer I", "category": "guidance", "scope": "per_season", "sort_order": 260, "target": 1,
              "description": "Level up a card this season.",
@@ -3333,7 +3333,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 50, "packs": [], "powerups": [], "deferred": False}},
             {"key": "artificer_iii", "name": "Artificer III", "category": "guidance", "scope": "per_season", "sort_order": 262, "target": 12,
              "description": "Level up cards 12 times this season.",
-             "reward_config": {"floobits": 100, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 100, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             {"key": "ascendant", "name": "Ascendant", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 1,
              "description": "Bring a card to its max tier (IV) this season.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
@@ -3351,7 +3351,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "tycoon_iv", "name": "Tycoon IV", "category": "guidance", "scope": "per_season", "sort_order": 143, "target": 10000,
              "description": "Earn 10,000 floobits in a single season.",
-             "reward_config": {"floobits": 150, "packs": [], "powerups": ["income_boost"], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": [], "powerups": ["income_boost"], "components": {"synth": 1}, "deferred": False}},
             {"key": "veteran", "name": "Veteran", "category": "guidance", "scope": "per_season", "sort_order": 150, "target": 20,
              "description": "Set a fantasy roster for 20+ weeks of the regular season.",
              # extra_swap retired in the fusion (swaps are gone); rolled its 50F shop value
@@ -3373,7 +3373,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "banner_week_iv", "name": "Banner Week IV", "category": "guidance", "scope": "per_season", "sort_order": 163, "target": 5000,
              "description": "Earn 5,000+ fantasy points in a single week.",
-             "reward_config": {"floobits": 75, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 75, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # Racket tiers — floobits earned from card effects in a single week
             # (renamed from Windfall to avoid clashing with the card effect of
             # the same name). Targets widened (next-season).
@@ -3388,7 +3388,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "racket_iv", "name": "Racket IV", "category": "guidance", "scope": "per_season", "sort_order": 193, "target": 400,
              "description": "Earn 400+ floobits from card effects in a single week.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # Dynamo tiers — cumulative season fantasy points. Targets
             # halved to match the Balatro pullback (_BAL_FP_MULT = 0.5).
             # Tier IV is still a meaningful "great season" milestone given
@@ -3404,7 +3404,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "dynamo_iv", "name": "Dynamo IV", "category": "guidance", "scope": "per_season", "sort_order": 203, "target": 30000,
              "description": "Earn 30,000 total fantasy points this season.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # Oracle tiers — cumulative season prognostication points
             {"key": "oracle_i", "name": "Oracle I", "category": "guidance", "scope": "per_season", "sort_order": 210, "target": 300,
              "description": "Earn 300 total prognostication points this season.",
@@ -3417,7 +3417,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "oracle_iv", "name": "Oracle IV", "category": "guidance", "scope": "per_season", "sort_order": 213, "target": 1800,
              "description": "Earn 1,800 total prognostication points this season.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # Bracketeer tiers — playoff bracket points this season (28 max).
             {"key": "bracketeer_i", "name": "Bracketeer I", "category": "guidance", "scope": "per_season", "sort_order": 214, "target": 6,
              "description": "Score 6 points in the playoff bracket challenge.",
@@ -3430,7 +3430,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "bracketeer_iv", "name": "Bracketeer IV", "category": "guidance", "scope": "per_season", "sort_order": 217, "target": 24,
              "description": "Score 24 points in the playoff bracket challenge.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # Magnate tiers — cumulative season floobits spent. Targets
             # widened (next-season) so tier IV is a real spender milestone
             # given the floobit-curve income changes.
@@ -3445,7 +3445,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "magnate_iv", "name": "Magnate IV", "category": "guidance", "scope": "per_season", "sort_order": 223, "target": 10000,
              "description": "Spend 10,000 floobits this season.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # Podium tiers — weekly fantasy leaderboard top-3 finishes this season
             {"key": "podium_i", "name": "Podium I", "category": "guidance", "scope": "per_season", "sort_order": 230, "target": 5,
              "description": "Place top 3 on the weekly fantasy leaderboard 5 times this season.",
@@ -3458,7 +3458,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "podium_iv", "name": "Podium IV", "category": "guidance", "scope": "per_season", "sort_order": 233, "target": 20,
              "description": "Place top 3 on the weekly fantasy leaderboard 20 times this season.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # Pundit tiers — weekly pick-em leaderboard top-3 finishes this season
             {"key": "pundit_i", "name": "Pundit I", "category": "guidance", "scope": "per_season", "sort_order": 240, "target": 5,
              "description": "Place top 3 on the weekly prognostication leaderboard 5 times this season.",
@@ -3471,7 +3471,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "pundit_iv", "name": "Pundit IV", "category": "guidance", "scope": "per_season", "sort_order": 243, "target": 20,
              "description": "Place top 3 on the weekly prognostication leaderboard 20 times this season.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # Benefactor tiers — cumulative floobits contributed to your favorite team this season
             {"key": "benefactor_i", "name": "Benefactor I", "category": "guidance", "scope": "per_season", "sort_order": 250, "target": 250,
              "description": "Contribute 250 floobits to your team this season.",
@@ -3484,7 +3484,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "benefactor_iv", "name": "Benefactor IV", "category": "guidance", "scope": "per_season", "sort_order": 253, "target": 5000,
              "description": "Contribute 5,000 floobits to your team this season.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # Compound tiers — single-week total FP multiplier (stored as
             # multiplier × 100). Rescaled (Balatro pass): with single FPx
             # cards like Snake Eyes hitting 3.10× and Cornucopia capable of
@@ -3506,7 +3506,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "compound_iv", "name": "Compound IV", "category": "guidance", "scope": "per_season", "sort_order": 263, "target": 850,
              "description": "Reach a 8.5x total FP multiplier in a single week.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # ── Secret achievements — hidden until unlocked ────────────────────────
             # Mostly floobits with selective packs for the genuinely hard
             # ones. Easier/niche secrets dropped to floobit-only since they're
@@ -3522,7 +3522,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}},
             {"key": "giant_slayer", "name": "Giant Slayer", "category": "secret", "scope": "once", "sort_order": 530, "target": 1,
              "description": "Finish top 3 on a weekly fantasy leaderboard with every roster player rated 3 stars or lower.",
-             "reward_config": {"floobits": 100, "packs": ["humble"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 100, "packs": ["humble"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             {"key": "purist", "name": "Purist", "category": "secret", "scope": "once", "sort_order": 540, "target": 1,
              "description": "Play a full week with zero cards equipped.",
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}, "retired": True},
@@ -3543,7 +3543,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 0, "packs": [], "powerups": [], "deferred": False}},
             {"key": "zenith", "name": "Zenith", "category": "secret", "scope": "once", "sort_order": 600, "target": 1,
              "description": "Earn a Perfect Week and 800+ fantasy points in the same week.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             {"key": "consecration", "name": "Consecration", "category": "secret", "scope": "once", "sort_order": 610, "target": 1,
              "description": "Your favorite team wins the Floosbowl.",
              "reward_config": {"floobits": 0, "packs": [], "powerups": [], "deferred": False}},
@@ -3573,14 +3573,14 @@ def _seedAchievements():
              "reward_config": {"floobits": 100, "packs": [], "powerups": [], "deferred": False}, "retired": True},
             {"key": "underwriter", "name": "Underwriter", "category": "secret", "scope": "once", "sort_order": 685, "target": 5,
              "description": "Single-handedly fund five facility bars, upkeep or project, from empty to full.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             # Card-upgrade secrets
             {"key": "overclocked", "name": "Overclocked", "category": "secret", "scope": "once", "sort_order": 690, "target": 1,
              "description": "Hold three max-tier (IV) cards in a single season.",
              "reward_config": {"floobits": 150, "packs": [], "powerups": [], "deferred": False}},
             {"key": "dynasty", "name": "Dynasty", "category": "secret", "scope": "once", "sort_order": 695, "target": 1,
              "description": "Vault a fully upgraded (tier IV) card.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             {"key": "crown_jewel", "name": "Crown Jewel", "category": "secret", "scope": "once", "sort_order": 700, "target": 1,
              "description": "Take a Diamond card to its max tier (IV).",
              "reward_config": {"floobits": 200, "packs": [], "powerups": [], "deferred": False}},
@@ -3595,10 +3595,10 @@ def _seedAchievements():
              "reward_config": {"floobits": 150, "packs": [], "powerups": [], "deferred": False}},
             {"key": "anthology", "name": "Anthology", "category": "secret", "scope": "once", "sort_order": 720, "target": 1,
              "description": "Buy one of every pack type in a single season.",
-             "reward_config": {"floobits": 250, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 250, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             {"key": "flawless", "name": "Flawless", "category": "secret", "scope": "once", "sort_order": 730, "target": 1,
              "description": "Predict every playoff advancer correctly in a single bracket.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
             {"key": "pool_shark", "name": "Pool Shark", "category": "secret", "scope": "once", "sort_order": 740, "target": 1,
              "description": "Finish #1 on the season playoff bracket leaderboard.",
              "reward_config": {"floobits": 0, "packs": [], "powerups": [], "deferred": False}},
@@ -3631,7 +3631,7 @@ def _seedAchievements():
              "reward_config": {"floobits": 75, "packs": [], "powerups": [], "deferred": False}},
             {"key": "perfect_week", "name": "Perfect Week", "category": "guidance", "scope": "per_season", "sort_order": 180, "target": 1,
              "description": "Get every prognostication correct in a single week.",
-             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "deferred": False}},
+             "reward_config": {"floobits": 150, "packs": ["grand"], "powerups": [], "components": {"synth": 1}, "deferred": False}},
         ]
         added = 0
         updated = 0
