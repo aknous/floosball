@@ -11887,14 +11887,14 @@ def buySynthComponent(user: _User = Depends(_getCurrentUser)):
         if regularSeasonOver(currentWeek):
             raise HTTPException(
                 status_code=400,
-                detail="Synth Components are only useful during the regular season")
+                detail="Synthesis Components are only useful during the regular season")
 
         shopRepo = ShopPurchaseRepository(session)
         boughtToday = shopRepo.getPurchasesToday(user.id, SYNTH_COMPONENT_SLUG)
         if boughtToday >= SYNTH_COMPONENT_DAILY_LIMIT:
             raise HTTPException(
                 status_code=400,
-                detail=f"You've taken today's {SYNTH_COMPONENT_DAILY_LIMIT} Synth Components")
+                detail=f"You've taken today's {SYNTH_COMPONENT_DAILY_LIMIT} Synthesis Components")
 
         # ⚠️ THE ANTI-HOARD, AND IT GATES BUYING RATHER THAN HOLDING. Refusing a grant
         # would let an achievement reward evaporate because the shop happened to be full,
@@ -11904,14 +11904,14 @@ def buySynthComponent(user: _User = Depends(_getCurrentUser)):
         if held >= SYNTH_COMPONENT_HOLD_CAP:
             raise HTTPException(
                 status_code=400,
-                detail=f"You're holding {held} Synth Components — build with one first")
+                detail=f"You're holding {held} Synthesis Components — build with one first")
 
         # ⚠️ SPEND FIRST, GRANT SECOND. The reverse order hands out the component and then
         # discovers the user cannot pay for it.
         spent = CurrencyRepository(session).spendFunds(
             user.id, SYNTH_COMPONENT_PRICE,
             transactionType="synth_component",
-            description="Synth Component",
+            description="Synthesis Component",
             season=currentSeason,
         )
         if spent is None:

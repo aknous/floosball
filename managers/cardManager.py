@@ -1702,7 +1702,7 @@ class CardManager:
         from managers import componentManager as _components
         if synthesizing:
             if _components.balance(session, userId, currentSeason) < 1:
-                raise ValueError("You need a Synth Component to build this card")
+                raise ValueError("You need a Synthesis Component to build this card")
 
         if cost > 0:
             currencyRepo = CurrencyRepository(session)
@@ -1722,7 +1722,7 @@ class CardManager:
         if synthesizing:
             if not _components.consume(session, userId, currentSeason,
                                        consumedFor=f"synth:{tt.player_name}"):
-                raise ValueError("You need a Synth Component to build this card")
+                raise ValueError("You need a Synthesis Component to build this card")
 
         oldTemplateId = target.card_template_id
         # Mint an upgraded template on the TARGET's identity/rating carrying the donor's

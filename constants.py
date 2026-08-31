@@ -3098,7 +3098,13 @@ EDITION_ELIGIBILITY_PERF_BAR = 90
 # 84 F and Accession at 200 F (which buys a whole lineup slot for four weeks, where this
 # buys one card).
 SYNTH_COMPONENT_SLUG = 'synth_component'
-SYNTH_COMPONENT_NAME = 'Synth Component'
+# ⚠️ "SYNTHESIS", NOT "SYNTH" (owner). The family will hold Chrome Components too, so the
+# user-facing name has to say WHICH kind it is and say it in full — "Synth" reads as an
+# abbreviation of the card type ("a synth component" sounds like a part OF a synthetic)
+# rather than as the process it pays for. The SLUG stays `synth_component`: it is a
+# database key with rows already written against it, and renaming it would need a
+# migration to buy nothing.
+SYNTH_COMPONENT_NAME = 'Synthesis Component'
 SYNTH_COMPONENT_PRICE = 80
 SYNTH_COMPONENT_DAILY_LIMIT = 2
 # ⚠️ ACHIEVEMENT GRANTS BYPASS THE DAILY CAP — a burst of completions arrives at once and
