@@ -60,6 +60,7 @@ from constants import (
     FO_CUT_MIN_CONFIDENCE,
     SENTIMENT_MAX_VALUE_SWING,
     FO_SCOUT_FACILITY_ENABLED, FO_SCOUT_WINNERS_CURSE_CORRECTION,
+    FO_SCOUT_INCUMBENT_NOISE_SCALE,
     FA_PREFERENCE_ENABLED, FA_PREF_MAX_DEMAND, FA_PREF_VET_FULL_SEASONS,
     FA_PREF_VET_WEIGHT, FA_PREF_JITTER,
 )
@@ -298,9 +299,36 @@ class FrontOfficeBrain:
         seen = current + (forward - current) * vision
 
         # Error shrinks to zero as vision approaches 1.
-        seen += self._scoutError(player, coach, self._noiseSigma(vision), rng)
+        # ⚠️ And it shrinks further for a player this club already has. A GM has watched
+        # its own starter in practice for years; it has watched a free agent on tape. The
+        # large noise exists to make per-team BOARDS differ, which is about strangers, and
+        # applying it to an incumbent is what let clubs release their best walk-year
+        # player and re-sign two lesser ones.
+        sigma = self._noiseSigma(vision)
+        if self._isIncumbent(player, team):
+            sigma *= FO_SCOUT_INCUMBENT_NOISE_SCALE
+        seen += self._scoutError(player, coach, sigma, rng)
 
         return max(0.0, seen) * positionValue(player, venueBiasFor(team))
+
+    @staticmethod
+    def _isIncumbent(player, team) -> bool:
+        """Is this player already on this club's roster?
+
+        ⚠️ Compared by NAME, not by object identity. `player.team` is sometimes the Team
+        and sometimes its name (a free agent carries the literal string 'Free Agent'),
+        so an identity test silently returns False for half the league and the discount
+        would apply to nobody.
+        """
+        if player is None or team is None:
+            return False
+        pt = getattr(player, 'team', None)
+        if pt is None:
+            return False
+        ptName = getattr(pt, 'name', pt)
+        if not isinstance(ptName, str):
+            return False
+        return ptName == getattr(team, 'name', None)
 
     @staticmethod
     def _noiseSigma(vision: float) -> float:

@@ -1440,8 +1440,16 @@ FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 
 # The lone deliberate change: SMALL-market PENALTIES become neutral — a built
 # facility can't be a penalty, so the floor rises from "penalized" to "neutral,
 # just hasn't built much yet" (Lv0/Lv1 = 0). Lv5 is a new above-MEGA ceiling.
-# Curves are back-loaded (real effects at Lv3+) to hold migration parity; the
-# smoothing of low levels is a tuning task (see plan doc §14).
+# ⚠️ THE LOW LEVELS ARE NO LONGER DEAD (2026-08-31). The curves were back-loaded so
+# the one-time tier migration reproduced the old perks exactly, and the smoothing was
+# left as a pending tuning task — which it stayed, long past the migration that needed
+# it. Measured on the live league: 25 of 32 clubs held a Scouting Department at level 1
+# or 2, where the ladder read 0, so they had paid Floobits and upkeep for literally no
+# effect. Recovery was 30 of 32 and the Locker Room 29 of 32. Reported by fans as
+# pouring money into scouting and watching the team get worse anyway — they were right,
+# and it was worse than they thought: it was doing nothing at all.
+# Levels 3-5 are UNCHANGED, so anything the migration pinned is still pinned; only the
+# two levels that paid nothing now interpolate toward level 3.
 FACILITY_MAX_LEVEL = 5
 
 # facility_key -> {name, effect (which sim effect it drives), levels[0..5]}
@@ -1449,11 +1457,11 @@ FACILITY_CATALOG = {
     'training':    {'name': 'Training Facility',    'effect': 'dev_bonus',
                     'levels': [0, 0.4, 0.8, 1.2, 1.6, 2.0]},             # player-dev bias; every level a real step (resolved to int probabilistically in apply_offseason_training)
     'locker_room': {'name': 'Locker Room',          'effect': 'morale',
-                    'levels': [0.0, 0.0, 0.0, 0.0025, 0.0075, 0.01]},    # pregame morale nudge (cf FUNDING_MORALE_MODIFIER)
+                    'levels': [0.0, 0.001, 0.0018, 0.0025, 0.0075, 0.01]},    # pregame morale nudge (cf FUNDING_MORALE_MODIFIER)
     'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
-                    'levels': [0.0, 0.0, 0.0, 0.15, 0.30, 0.35]},        # weekly fatigue-gain reduction (cf FUNDING_FATIGUE_REDUCTION)
+                    'levels': [0.0, 0.05, 0.10, 0.15, 0.30, 0.35]},        # weekly fatigue-gain reduction (cf FUNDING_FATIGUE_REDUCTION)
     'scouting':    {'name': 'Scouting Department',    'effect': 'scouting_bonus',
-                    'levels': [0, 0, 0, 3, 5, 7]},                       # rookie scouting accuracy (cf FUNDING_SCOUTING_BONUS)
+                    'levels': [0, 1, 2, 3, 5, 7]},                       # rookie scouting accuracy (cf FUNDING_SCOUTING_BONUS)
     'stadium':     {'name': 'Stadium',               'effect': 'home_morale',
                     'levels': [0.0, 0.001, 0.002, 0.003, 0.004, 0.005]}, # NEW — everyone starts Lv0; effect unwired until a later phase
 }
@@ -2107,6 +2115,23 @@ FO_SCOUT_VISION_CEILING = 100     # scouting at this = near-perfect arc vision
 # 12.0 puts a club's own top target around the consensus #2-3, so one team's
 # man really is another's fifth choice, without making the whole league blind.
 FO_SCOUT_NOISE_MAX = 12.0
+# ⚠️ A GM KNOWS ITS OWN PLAYERS. The noise above is deliberately large — it was raised
+# from 6.0 so that per-team boards actually differ, since at 6.0 every club named the
+# same top free agent — but it was applied to a club's OWN walk-year starter as heavily
+# as to a stranger it has never coached. A league-average GM (scouting 81) therefore
+# misjudged a player on its own roster by ±5.7 rating points, and a poor one by ±12.
+#
+# Measured on three 5-season runs: in 65% of team-seasons where somebody was kept and
+# somebody walked, a WALKED player out-rated a KEPT one. Position weighting justifies
+# three quarters of those — a 74 QB really is worth more than an 84 kicker — but a
+# quarter were not explicable that way, e.g. keeping a 74 TE while an 85 RB walked.
+# Reported by fans as teams letting their best player go and re-signing lesser ones.
+#
+# So evaluation error is scaled DOWN for a player already on the roster. This is
+# deliberately partial rather than perfect: GM skill should still show in retention,
+# and the owner's framing was that it needs tightening, not removing. Free-agent
+# evaluation is untouched, so boards stay diverse and that fix stays intact.
+FO_SCOUT_INCUMBENT_NOISE_SCALE = 0.30
 
 # The Scouting Department facility adds to the GM's EFFECTIVE scouting, in the
 # same attribute points the coach attribute uses. This is what finally consumes

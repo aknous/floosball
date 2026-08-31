@@ -266,10 +266,16 @@ class BlueChipTargetingTests(unittest.TestCase):
                     FloosPlayer.Position.WR, FloosPlayer.Position.TE):
             pm = bareManager()
             pm.injectFreeAgentClass(count=8, targetPosition=pos)
-            top = max(pm.freeAgents, key=lambda p: p.playerRating)
-            self.assertGreaterEqual(top.playerRating, constants.BLUE_CHIP_RATING_FLOOR)
-            self.assertEqual(pos, top.position,
-                             f"the guaranteed star should play {pos.name}")
+            # ⚠️ Assert the guarantee AT THE TARGET, not that the target holds the
+            # class maximum. An ordinary draw clears 88 about 4% of the time, so over
+            # seven other players another position out-rolls the promoted one roughly a
+            # quarter of the time — asserting the global max makes this flaky rather
+            # than wrong.
+            atTarget = [p for p in pm.freeAgents if p.position == pos]
+            self.assertTrue(atTarget, f"no {pos.name} was generated for the target")
+            self.assertGreaterEqual(max(p.playerRating for p in atTarget),
+                                    constants.BLUE_CHIP_RATING_FLOOR,
+                                    f"no guaranteed star at the target position {pos.name}")
 
     def testUntargetedStillWorks(self):
         """Targeting returns None on any missing piece, and that path must still
@@ -290,6 +296,87 @@ class BlueChipTargetingTests(unittest.TestCase):
         for pos in ('QB', 'RB', 'WR'):
             self.assertGreater(w[pos], w['TE'],
                                f"{pos} should be weighted above TE")
+
+
+class IncumbentKnowledgeTests(unittest.TestCase):
+    """⚠️ A GM knows its own roster better than the open market. `FO_SCOUT_NOISE_MAX` is
+    large on purpose — it was raised from 6.0 so per-team boards differ — but it was
+    applied to a club's own walk-year starter as heavily as to a stranger, so a
+    league-average GM misjudged its own player by ±5.7 rating points.
+
+    Measured over three 5-season runs: in 65% of team-seasons where somebody was kept
+    and somebody walked, a walked player out-rated a kept one. Position weighting
+    explains 75% of those; a quarter were not explicable, e.g. a 74 TE kept while an
+    85 RB walked."""
+
+    class _Team:
+        def __init__(self, name): self.name = name
+
+    class _Player:
+        def __init__(self, team): self.team = team
+
+    def testAnIncumbentIsRecognisedByName(self):
+        """⚠️ `player.team` is sometimes the Team and sometimes its name — a free agent
+        carries the literal string 'Free Agent'. An identity test returns False for half
+        the league and the discount would apply to nobody."""
+        from managers.frontOfficeBrain import FrontOfficeBrain as B
+        team = self._Team('Pinecones')
+        self.assertTrue(B._isIncumbent(self._Player('Pinecones'), team))
+        self.assertTrue(B._isIncumbent(self._Player(self._Team('Pinecones')), team))
+
+    def testAFreeAgentIsNotAnIncumbent(self):
+        from managers.frontOfficeBrain import FrontOfficeBrain as B
+        team = self._Team('Pinecones')
+        self.assertFalse(B._isIncumbent(self._Player('Free Agent'), team))
+        self.assertFalse(B._isIncumbent(self._Player('Slippers'), team))
+
+    def testMissingPiecesAreSafe(self):
+        from managers.frontOfficeBrain import FrontOfficeBrain as B
+        self.assertFalse(B._isIncumbent(None, self._Team('X')))
+        self.assertFalse(B._isIncumbent(self._Player('X'), None))
+        self.assertFalse(B._isIncumbent(self._Player(None), self._Team('X')))
+
+    def testTheDiscountIsPartialNotPerfect(self):
+        """GM skill must still show in retention. The owner asked for tightening, not
+        for removing the variance."""
+        self.assertGreater(constants.FO_SCOUT_INCUMBENT_NOISE_SCALE, 0.0,
+                           "a zero scale makes every GM a perfect judge of its own roster")
+        self.assertLess(constants.FO_SCOUT_INCUMBENT_NOISE_SCALE, 1.0,
+                        "the discount must actually reduce the error")
+
+
+class FacilityCurveTests(unittest.TestCase):
+    """⚠️ THE LOW LEVELS PAID NOTHING, AND MOST OF THE LEAGUE WAS IN THEM. The ladders
+    were back-loaded so a one-time tier migration reproduced the old perks, and the
+    smoothing was left as a pending task. Measured on the live league: 25 of 32 clubs
+    held a Scouting Department at level 1 or 2, where the ladder read 0."""
+
+    def testNoFacilityHasADeadPaidLevel(self):
+        from constants import FACILITY_CATALOG
+        for key, cfg in FACILITY_CATALOG.items():
+            levels = cfg.get('levels') or []
+            for lvl in (1, 2):
+                if lvl < len(levels):
+                    self.assertGreater(levels[lvl], 0,
+                                       f"{key} level {lvl} costs Floobits and returns nothing")
+
+    def testTheLaddersStillRise(self):
+        from constants import FACILITY_CATALOG
+        for key, cfg in FACILITY_CATALOG.items():
+            levels = cfg.get('levels') or []
+            for a, b in zip(levels, levels[1:]):
+                self.assertGreaterEqual(b, a, f"{key} ladder goes backwards: {levels}")
+
+    def testMigrationLevelsAreUnchanged(self):
+        """⚠️ Levels 3-5 are what the tier migration pinned. Smoothing must not move
+        them, or a club that migrated in at Lv3/Lv4 silently changes strength."""
+        from constants import FACILITY_CATALOG
+        expected = {'scouting': [3, 5, 7],
+                    'recovery': [0.15, 0.30, 0.35],
+                    'locker_room': [0.0025, 0.0075, 0.01]}
+        for key, tail in expected.items():
+            self.assertEqual(tail, list(FACILITY_CATALOG[key]['levels'][3:]),
+                             f"{key} levels 3-5 moved")
 
 
 if __name__ == '__main__':
