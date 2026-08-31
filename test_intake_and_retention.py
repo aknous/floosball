@@ -379,5 +379,73 @@ class FacilityCurveTests(unittest.TestCase):
                              f"{key} levels 3-5 moved")
 
 
+class PerformanceDivergenceTests(unittest.TestCase):
+    """⚠️ THE GM USED TO IGNORE WHAT PLAYERS ACTUALLY DID. `perceivedValue` read
+    attributes and career arc only; `performance_rating` was computed, stored and never
+    consulted. Measured on the live league the two correlate at just +0.50, and 13 of
+    184 rostered players sit 15+ points apart.
+
+    ⚠️ IT IS A DEADBAND, NOT A WEIGHT (owner). A 90 playing like an 85 tells you
+    nothing. Only a 90 playing like a 75, or a 75 like a 90, is evidence."""
+
+    class _P:
+        def __init__(self, pid=1): self.id = pid
+
+    def brain(self, history):
+        from managers.frontOfficeBrain import FrontOfficeBrain
+        b = FrontOfficeBrain.__new__(FrontOfficeBrain)
+        b.performanceMap = {1: history}
+        return b
+
+    def testInsideTheBandIsExactlyZero(self):
+        """Ordinary variation must not be able to move a decision at all."""
+        for perf in (82, 85, 88, 92, 95, 98):
+            adj = self.brain([(3, 90, perf)]).performanceAdjustment(self._P())
+            if abs(perf - 90) <= constants.FO_PERF_DEADBAND:
+                self.assertEqual(0.0, adj, f"{perf} vs 90 is inside the band")
+
+    def testAConsistentUnderperformerIsMarkedDown(self):
+        adj = self.brain([(1,90,75),(2,90,74),(3,90,76)]).performanceAdjustment(self._P())
+        self.assertLess(adj, 0.0)
+
+    def testAConsistentOverperformerIsMarkedUp(self):
+        adj = self.brain([(1,75,90),(2,75,91),(3,75,89)]).performanceAdjustment(self._P())
+        self.assertGreater(adj, 0.0)
+
+    def testOneSeasonIsTrustedLessThanThree(self):
+        """⚠️ One season is an outlier, two is a pattern (owner)."""
+        one = self.brain([(3,90,75)]).performanceAdjustment(self._P())
+        many = self.brain([(1,90,75),(2,90,75),(3,90,75)]).performanceAdjustment(self._P())
+        self.assertGreater(abs(many), abs(one),
+                           "a repeated divergence must count for more than a single one")
+
+    def testDisagreeingSeasonsCancel(self):
+        """A player 20 over one year and 20 under the next reads as noise, which is
+        what he is — the MEAN divergence is what the band tests."""
+        adj = self.brain([(2,80,100),(3,80,60)]).performanceAdjustment(self._P())
+        self.assertEqual(0.0, adj)
+
+    def testItIsCapped(self):
+        adj = self.brain([(1,95,50),(2,95,50),(3,95,50)]).performanceAdjustment(self._P())
+        self.assertEqual(-constants.FO_PERF_MAX_ADJUST, adj)
+
+    def testNoHistoryIsNeutral(self):
+        self.assertEqual(0.0, self.brain([]).performanceAdjustment(self._P()))
+
+    def testTheFlagTurnsItOff(self):
+        original = constants.FO_PERF_ENABLED
+        constants.FO_PERF_ENABLED = False
+        try:
+            import importlib, managers.frontOfficeBrain as fob
+            importlib.reload(fob)
+            b = fob.FrontOfficeBrain.__new__(fob.FrontOfficeBrain)
+            b.performanceMap = {1: [(1,95,50),(2,95,50)]}
+            self.assertEqual(0.0, b.performanceAdjustment(self._P()))
+        finally:
+            constants.FO_PERF_ENABLED = original
+            import importlib, managers.frontOfficeBrain as fob
+            importlib.reload(fob)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

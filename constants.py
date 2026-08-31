@@ -2133,6 +2133,30 @@ FO_SCOUT_NOISE_MAX = 12.0
 # evaluation is untouched, so boards stay diverse and that fix stays intact.
 FO_SCOUT_INCUMBENT_NOISE_SCALE = 0.30
 
+# ---- Production, when it clearly disagrees with the attribute sheet ----
+# ⚠️ THE GM USED TO IGNORE WHAT PLAYERS ACTUALLY DID. `perceivedValue` read attributes
+# and career arc and nothing else — `performance_rating` and `wpa` are computed, stored
+# and never consulted. Measured on the live league, attribute rating and season
+# performance correlate at only +0.50, and 13 of 184 rostered players sit 15+ points
+# apart on the two, so a monster season on modest attributes was invisible to the man
+# who employs him.
+#
+# ⚠️ BUT MOST OF THE GAP IS NOISE, WHICH IS WHY THIS IS A DEADBAND AND NOT A WEIGHT
+# (owner, 2026-08-31). A 90 playing like an 85 tells you nothing. A 90 playing like a
+# 75, or a 75 playing like a 90, is worth acting on. Inside the band the term is
+# exactly zero, so ordinary variation cannot move a decision at all.
+FO_PERF_ENABLED = True
+FO_PERF_DEADBAND = 10.0       # rating points of divergence treated as noise
+# How much of the divergence PAST the band reaches the valuation. Deliberately partial:
+# production is evidence about a player, not a replacement for what he can do.
+FO_PERF_WEIGHT = 0.5
+FO_PERF_MAX_ADJUST = 8.0      # cap, so one freak season cannot rewrite a player
+# ⚠️ ONE SEASON IS AN OUTLIER, TWO IS A PATTERN (owner). A single divergent season is
+# discounted to this fraction; a player with more seasons on record is trusted further,
+# and a player whose seasons DISAGREE with each other is discounted back toward noise.
+FO_PERF_SINGLE_SEASON_TRUST = 0.5
+FO_PERF_HISTORY_SEASONS = 3   # how far back the GM reads
+
 # The Scouting Department facility adds to the GM's EFFECTIVE scouting, in the
 # same attribute points the coach attribute uses. This is what finally consumes
 # FACILITY_CATALOG['scouting']['effect'] = 'scouting_bonus' (levels 0/0/0/3/5/7):

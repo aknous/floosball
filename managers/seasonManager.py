@@ -7489,9 +7489,57 @@ class SeasonManager:
                 sentimentMap = buildSentimentMap(get_session())
         except Exception as e:
             logger.warning(f"GM brain: sentiment unavailable, running neutral: {e}")
-        brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap)
+        performanceMap = {}
+        try:
+            performanceMap = self._buildPerformanceMap()
+        except Exception as e:
+            logger.warning(f"GM brain: performance history unavailable, "
+                           f"valuing on attributes alone: {e}")
+        brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap,
+                                 performanceMap=performanceMap)
         self._foBrainCache = (season, brain)
         return brain
+
+    def _buildPerformanceMap(self) -> dict:
+        """{playerId: [(season, ratingThatSeason, performanceThatSeason), ...]}, oldest first.
+
+        ⚠️ THE RATING IS THE ONE THE PLAYER CARRIED THAT SEASON, from
+        `player_rating_history`, not today's number. Judging a developed player's rookie
+        production against his current sheet scores every improver as a chronic
+        underachiever, and every declining veteran as an overachiever — the exact
+        opposite of the truth in both cases.
+
+        A season with no recorded rating is skipped rather than falling back to the
+        current one, because that fallback IS the bug above.
+        """
+        from database.connection import get_session
+        from sqlalchemy import text
+        from constants import FO_PERF_ENABLED, FO_PERF_HISTORY_SEASONS
+        if not FO_PERF_ENABLED:
+            return {}
+        season = getattr(self.currentSeason, 'seasonNumber', None) or 0
+        oldest = max(0, season - int(FO_PERF_HISTORY_SEASONS))
+        out = {}
+        session = get_session()
+        try:
+            rows = session.execute(text("""
+                SELECT s.player_id, s.season, h.rating, s.performance_rating
+                FROM player_season_stats s
+                JOIN player_rating_history h
+                  ON h.player_id = s.player_id AND h.season = s.season
+                WHERE s.performance_rating IS NOT NULL
+                  AND s.performance_rating > 0
+                  AND s.season >= :oldest
+                ORDER BY s.player_id, s.season
+            """), {'oldest': oldest}).fetchall()
+            for pid, seasonNum, rating, perf in rows:
+                out.setdefault(pid, []).append((seasonNum, float(rating), float(perf)))
+        finally:
+            session.close()
+        if out:
+            logger.info(f"GM brain: performance history for {len(out)} players "
+                        f"(seasons {oldest}+)")
+        return out
 
     def _buildFaDraftBoards(self) -> None:
         """Give every team its own ranking of the free agents who'd sign there.
