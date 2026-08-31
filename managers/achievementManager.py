@@ -159,6 +159,41 @@ def _applyReward(session: Session, userId: int, cfg: dict, source: str) -> None:
             description=source,
         )
 
+    # ⚠️ COMPONENTS GO DIRECT TO THE LEDGER, BESIDE THE FLOOBITS — NOT INTO
+    # `PendingReward`. That queue exists because packs and powerups carry a DECISION at
+    # claim time (a pack is revealed and kept; a powerup starts a four-week timer whose
+    # start matters). A component has none — it sits in a balance until it is spent, so a
+    # claim step is pure friction.
+    #
+    # ⚠️ And it is friction that can DESTROY things: `sweepExpiredRewards()` drops every
+    # unclaimed, unstashed `PendingReward` at season start, so routing components through
+    # it would silently take them from anyone who never noticed the claim button.
+    #
+    # ⚠️ Chrome needs this same branch — its sources (achievements, fantasy, pick-em) have
+    # no claim moment either — which is the other half of why the ledger is shared.
+    components = cfg.get("components") or {}
+    if components:
+        try:
+            from managers import componentManager as _components
+            from constants import SYNTH_COMPONENT_ACHIEVEMENT_CAP
+            # The sim's own notion of 'now' — the same helper the currency grants
+            # use, so a component and the floobits beside it land on one season.
+            season = CurrencyRepository(session)._currentSeasonNumber()
+            if not season:
+                raise ValueError('no current season')
+            for kind, count in components.items():
+                # ⚠️ The cap is per SOURCE and counts GRANTS, not holdings, so spending
+                # does not refill it. Achievement grants bypass the shop's daily cap
+                # entirely — a burst of completions arrives at once — and this is what
+                # bounds the tail.
+                cap = (SYNTH_COMPONENT_ACHIEVEMENT_CAP
+                       if kind == _components.SYNTH else None)
+                _components.grant(session, userId, season, int(count or 0),
+                                  source='achievement', componentType=kind, cap=cap)
+        except Exception:
+            logger.warning(f"Component grant failed for user={userId} source={source}",
+                           exc_info=True)
+
     now = datetime.utcnow()
     packs = cfg.get("packs") or []
     powerups = cfg.get("powerups") or []

@@ -183,8 +183,19 @@ expect("gate.allPro set (drives the accent + the lowered-bar note)",
        bool(_ap['gate'].get('allPro')))
 
 _src = open('managers/cardManager.py').read()
-expect("transplant/promote passes the classification",
-       'classification=sourceTemplate.classification,\n            forceEffect=forceEffect' in _src)
+# ⚠️ THE TRANSPLANT HALF OF THIS WAS A STATIC SOURCE-STRING MATCH AND IS GONE. It grepped
+# cardManager for the literal `classification=sourceTemplate.classification,` followed by
+# `forceEffect=forceEffect`, which broke the moment synthetic cards routed that argument
+# through a local (`classification = None if synthetic else sourceTemplate.classification`)
+# — a rename, with the behavior unchanged and every behavioral assertion above still
+# passing. A test that fails on a refactor it does not affect trains people to edit the
+# test, which is the opposite of what it is for.
+#
+# It was also redundant: the four assertions directly above already prove the classified
+# path end to end (the tag survives, the gate keeps its All-Pro discount, `gate.allPro`
+# is set, the text names it), and `test_synthetic_cards.py` proves the mirror — that the
+# SYNTHETIC path suppresses the classification, since a manufactured pairing must never
+# wear an accolade it did not earn.
 expect("blend passes the classification",
        'classification=resultClassification,\n        )' in _src)
 

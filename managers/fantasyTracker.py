@@ -1838,6 +1838,9 @@ class FantasyTracker:
         return {
             "slotNumber": b.slotNumber,
             "edition": b.edition,
+            # ⚠️ Historical rows predate this and default False, which is correct: nothing
+            # minted before synthetics existed was one.
+            "synthetic": bool(getattr(b, 'synthetic', False)),
             "tier": b.tier,
             "playerId": b.playerId,
             "playerName": b.playerName,

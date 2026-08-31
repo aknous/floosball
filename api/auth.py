@@ -452,21 +452,34 @@ def _provisionStarterPack(session, user, currentSeason: Optional[int] = None):
         )
         session.add(tx)
 
-        # Fusion: the starter gives the no-effect FLOOR lineup — one 'base' card
-        # per lineup slot (QB/RB/WR/WR/TE/K — two WR cards for WR1 + WR2) — so every
-        # user can field a legal lineup on day one and earns effect cards from
-        # packs/play. Fall back to metallic only if no floor templates exist yet
-        # (partially-migrated DB).
+        # ⚠️ METALLIC, NOT THE FLOOR PRINT — AND THE BASE-POOL CHANGE IS WHAT DEMANDS IT.
+        # The starter used to hand out one `base` card per lineup slot for one stated
+        # reason: "so every user can field a legal lineup on day one". The universal base
+        # pool now does that for EVERYONE, for free, forever — so granting floor prints
+        # after it exists grants nothing at all, and a new user's welcome gift becomes
+        # six cards they already had.
+        #
+        # ⚠️ It has to land WITH the pool rather than after it. The moment the pool is
+        # reachable the old starter is inert, and a new user's first session is the exact
+        # moment this feature is supposed to answer for.
+        #
+        # Metallic is real: an effect apiece, on players the game picked — which is also
+        # what makes the onboarding Synth Component worth granting, since one turns those
+        # chosen effects into the player the user actually wants.
+        #
+        # The `base` branch is kept as the FALLBACK, inverted from what it was: a database
+        # with no metallic templates yet (partially migrated, or mid-generation) still
+        # yields a legal lineup rather than an empty pack.
         baseTemplates = (
             session.query(CardTemplate)
-            .filter_by(edition='base')
+            .filter_by(edition='metallic')
             .order_by(CardTemplate.season_created.desc())
             .all()
         )
         if not baseTemplates:
             baseTemplates = (
                 session.query(CardTemplate)
-                .filter_by(edition='metallic')
+                .filter_by(edition='base')
                 .order_by(CardTemplate.season_created.desc())
                 .all()
             )

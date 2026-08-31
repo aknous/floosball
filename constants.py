@@ -3058,6 +3058,80 @@ POWERUP_CATALOG = {
     "income_boost": POWERUP_INCOME_BOOST,
 }
 
+# ⚠️ EDITION ELIGIBILITY: a strong previous season opens every edition, whatever the
+# rating. Measured on season 20, diamond-eligible BY RATING was six players of 192 — QB 1
+# / RB 1 / WR 3 / TE 0 / K 1 — and a one-player bucket mints that bucket's ENTIRE effect
+# set onto that one man, so at diamond the card simply is the player. Diamond TE had
+# nobody, making every TE-exclusive diamond effect unmintable.
+#
+# 90 is roughly the p90 of the previous-season performance distribution (median 80, p90
+# 93). It takes diamond from 6 players to 37 while moving prismatic only 53 -> 66 — the
+# change lands almost entirely on the tier whose scarcity is pathological.
+#
+# ⚠️ It cannot inflate diamond SUPPLY: `_weightedDraw` rolls the EDITION from packWeights
+# first and only then picks a template within it, so rates are independent of pool size.
+# It changes what a diamond DEPICTS — stage two weights by `120 - rating`, so a 65 is
+# about twice as likely to be drawn within the tier as a 94.
+EDITION_ELIGIBILITY_PERF_BAR = 90
+
+# ─── Synth Components ────────────────────────────────────────────────────────
+# The consumable that gates synthetic cards: graft any effect onto any player's base
+# card. Named for the family it joins — the chrome plan already writes "chrome
+# components" throughout, so this is synth joining an existing vocabulary rather than
+# coining one.
+#
+# ⚠️ IT STACKS ON `TRANSPLANT_COST_BY_EDITION`, IT IS NOT A FEE. Floobits accumulate, so
+# a price can never cap grinding; a per-day item makes the real constraint DAYS ELAPSED.
+# A diamond build therefore costs SYNTH_COMPONENT_PRICE + 180.
+#
+# ⚠️ "2 PER DAY" IS 8 A SEASON, NOT 56, and the number wants choosing on purpose because
+# it reads like an order of magnitude more than it is. The regular season is FOUR real
+# calendar days (28 weeks at 7 rounds a day, cross-day boundaries at weeks 8/15/22) and
+# `shop_repository._dailyResetBoundary` resets per calendar day. Against a seven-slot
+# lineup that is one full lineup's worth a season, if you spend every day and miss none.
+# Want a lineup plus room to iterate? The number is 3.
+#
+# ⚠️ EVERY BUILD ALSO BURNS A PULLED DONOR, so for a newer user donors bind long before
+# the daily cap does and they will never see it. The gate lands on deep collections —
+# the right shape, given the friction this feature answers was reported by new users, but
+# it is also why the Floobit price stays modest. Measured against a median user-week of
+# 84 F and Accession at 200 F (which buys a whole lineup slot for four weeks, where this
+# buys one card).
+SYNTH_COMPONENT_SLUG = 'synth_component'
+# ⚠️ "SYNTHESIS", NOT "SYNTH" (owner). The family will hold Chrome Components too, so the
+# user-facing name has to say WHICH kind it is and say it in full — "Synth" reads as an
+# abbreviation of the card type ("a synth component" sounds like a part OF a synthetic)
+# rather than as the process it pays for. The SLUG stays `synth_component`: it is a
+# database key with rows already written against it, and renaming it would need a
+# migration to buy nothing.
+SYNTH_COMPONENT_NAME = 'Synthesis Component'
+SYNTH_COMPONENT_PRICE = 80
+SYNTH_COMPONENT_DAILY_LIMIT = 2
+# ⚠️ ACHIEVEMENT GRANTS BYPASS THE DAILY CAP — a burst of completions arrives at once and
+# the shop's day boundary cannot see it. Measured on production, an engaged user finishes
+# ~2 of the 13 guidance capstones a season (36% finish none, and the tail reaches 9), so
+# one per capstone is self-limiting; this caps the tail at 4 rather than 9 without
+# touching the typical player. ⚠️ Widening the grant list later IS a change to this cap,
+# whether or not it gets discussed as one.
+SYNTH_COMPONENT_ACHIEVEMENT_CAP = 4
+# ⚠️ ANTI-HOARD: A HOLDING CAP ON WHAT CAN BE BOUGHT, NOT ON WHAT CAN BE HELD.
+# The shop refuses to sell while a user is already sitting on this many unspent
+# components; achievement grants are NEVER refused, because a reward the game promised
+# must not evaporate because the shop is full.
+#
+# ⚠️ HOARDING IS ALREADY EXPENSIVE, WHICH IS WHY THE CAP CAN BE GENEROUS. A synthetic
+# only scores in the weeks it is EQUIPPED, so a component spent in week 1 buys 28 weeks
+# of that card and one spent in week 22 buys 7. Sitting on components is paying full
+# price for a card and then leaving it in the box. And the shop allowance does not
+# accumulate on its own — `getPurchasesToday` counts purchases since the day boundary,
+# so a user who skips a day does not get four the next.
+#
+# What the cap actually removes is the INFORMATION play: buy early, watch who is
+# producing, then build a whole lineup at once late with hindsight the pacing was meant
+# to deny. At 3 a user can still bank toward one expensive build; they cannot bank a
+# lineup.
+SYNTH_COMPONENT_HOLD_CAP = 3
+
 # Shop reroll (not a powerup — lives in the Daily Selection section)
 SHOP_REROLL_BASE_COST = 10
 SHOP_REROLL_COST_INCREMENT = 5   # Each reroll costs 5 more than the last
@@ -3967,6 +4041,59 @@ CORES_AMBIENT_NEWS_EVERY_WEEKS = 3
 #
 # ⚠️ Templates mint ONCE PER SEASON, so a change here lands at the next season boundary.
 CARD_EFFECTS_PER_PLAYER = 3
+
+# ─── Venue-aware roster building ──────────────────────────────────────────────
+# A GM knows their own stadium. Where the venue suppresses the passing game they
+# should value the run (RB, and TE for its blocking) over QB and WR, and the inverse
+# where passing is favored. Sign convention matches stadiumManager.phaseBias:
+# +1 = run-side position, -1 = pass-side, 0 = unaffected.
+VENUE_PHASE_POSITIONS = {'RB': 1, 'TE': 1, 'QB': -1, 'WR': -1, 'K': 0}
+
+# ⚠️ DELIBERATELY MODEST. A team plays 14 home games and 14 away, so a roster fitted
+# hard to one venue is paid for in the other half of the season. At 0.10 a max-bias
+# venue moves RB from 0.72 to 0.79 and QB from 1.00 to 0.90 — enough to flip a close
+# call between two comparable players, never enough to invert the position hierarchy.
+# This is the same "tips close calls, never dictates" bar the sentiment tilt is held to.
+VENUE_POSITION_WEIGHT = 0.10
+
+
+# ─── Weather at its call sites ────────────────────────────────────────────────
+# The venue's own effects and the weather rolled at kickoff arrive as one dict of
+# multipliers (see managers/stadiumManager.py). This flag is the master switch for
+# whether any of them REACH the sim — with it off the league plays in a neutral
+# world and every call site below is a no-op, which is what an A/B arm needs.
+#
+# ⚠️ Weather is a PRE-GAME RATING-ADJACENT LAYER, and this codebase has a measured
+# rule for those: rating-multiplier -> win-probability transfer is 1.619, i.e. a
+# +/-10% roster-wide multiplier is worth +/-4.5 wins a season. A weather layer that
+# looks like a few percent can be decisive. Measure with a forced-intensity arm
+# before tuning.
+# ⚠️ OFF FOR THIS SEASON (owner, 2026-08-30). Weather and the venues it reads from are
+# built and tested but are not shipping yet. The flag returns from `_resolveWeather` BEFORE
+# any roll, so with it off the game consumes no extra randomness and plays exactly as it
+# does on main — it is a real no-op, not an approximate one.
+WEATHER_ENABLED = False
+
+# ⚠️ WEATHER IS SYMMETRIC (owner, 2026-08-19): a wet ball is wet for everyone. No
+# key is ever applied to one side only, so nothing below reads home/away. The venue
+# is only asymmetric in EXPOSURE — the home team plays 14 games a year in it — which
+# is a fairness question handled in the authored severity bands, not here.
+
+# How far a punt's DISTANCE key is allowed to move the gross kick, and how far the
+# pre-snap key is allowed to move the huddle. Both clamp because they feed decisions
+# downstream (the punt/kick tree reads distance; the clock tree reads pre-snap time),
+# and an unclamped multiplier at Unreal could hand those trees a number outside
+# anything they were tuned against.
+WEATHER_PUNT_MIN = 0.55
+WEATHER_PUNT_MAX = 1.30
+WEATHER_PACE_MIN = 0.75
+WEATHER_PACE_MAX = 1.45
+
+# How hard a dark field pushes a returner into waving the punt off. ⚠️ This is the
+# quiet half of `visibility`: the same darkness that hands a CARRIER yards (the
+# tackler cannot see him) costs the RETURNER the chance to become one, so sight
+# stays two-sided on special teams too rather than only helping the offense.
+PUNT_FAIRCATCH_SIGHT_K = 0.45
 
 # ─── Expected-points imminence (win probability) ──────────────────────────────
 # ⚠️ Win probability damped EXPECTED points by 1/possessions-remaining while REALIZED

@@ -358,7 +358,12 @@ class LeaderboardLineupTests(unittest.TestCase):
             src = fh.read()
         marker = 'weekBonus = WeeklyCardBonus('
         self.assertIn(marker, src)
-        guard = src[max(0, src.index(marker) - 4200):src.index(marker)]
+        # ⚠️ A FIXED BYTE WINDOW IS FRAGILE — this was 4200 and a comment added inside the
+        # serializer above pushed `if userEquipped:` out of it, failing a test about
+        # something the comment did not touch. Anchor on the enclosing block instead, so
+        # the window tracks the code rather than its length.
+        anchor = src.rindex('for userId, userEquipped in', 0, src.index(marker))
+        guard = src[anchor:src.index(marker)]
         self.assertNotIn('if totalFP > 0 or result.floobitsEarned > 0:', guard,
                          'the week snapshot is conditional on the lineup paying out')
         self.assertIn('if userEquipped:', guard)
