@@ -7882,8 +7882,13 @@ class SeasonManager:
             # Raw count of clubs picking first, which the confidence model needs
             # (pickDepth is already the discounted expectation built from it).
             teamsAhead = brain.faTeamsAhead(team, faOrder)
+            # ⚠️ `teamsAhead` is load-bearing here now, not just for cuts. The re-sign
+            # decision asks how likely a better player survives to this club's pick, and
+            # with teamsAhead defaulting to 0 every club believes it picks first, so
+            # nobody is ever worth keeping over the market.
             kept = brain.chooseResigns(expiring, limit, coach=coach,
-                                       pickDepth=pickDepth, team=team)
+                                       pickDepth=pickDepth, team=team,
+                                       teamsAhead=teamsAhead)
             keptIds = {id(p) for p in kept}
             for p in expiring:
                 p._gmResigned = id(p) in keptIds

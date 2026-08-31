@@ -677,7 +677,7 @@ class FrontOfficeBrain:
         return int(index * FO_FA_CONTENTION)
 
     def rankResignCandidates(self, expiring, coach=None, pool=None, rng=None,
-                             pickDepth=0, team=None):
+                             pickDepth=0, team=None, teamsAhead=0):
         """Rank walk-year incumbents by how much they beat the best replacement
         at their own position ("surplus").
 
@@ -693,16 +693,34 @@ class FrontOfficeBrain:
         ranked = []
         for player in expiring:
             incumbent = self.decisionValue(player, coach, rng=rng, team=team)
-            replacement = self.bestReplacementValue(player, coach, pool=pool, rng=rng,
-                                                    pickDepth=pickDepth, team=team)
-            surplus = incumbent - replacement
-            if surplus >= FO_RESIGN_SURPLUS_MARGIN:
-                ranked.append((player, surplus))
+            # ⚠️ WHAT WOULD I ACTUALLY LOSE, not "does one named free agent beat him".
+            # This used to price `bestReplacementValue` — the pickDepth-th best on the
+            # board — and let the incumbent walk whenever that one player won. It is the
+            # same flaw the CUT side carried before `upgradeConfidence` replaced it:
+            # measured, a club signs that specific man 8% of the time, so the decision
+            # rested on an outcome that almost never happened. Fans reported clubs
+            # letting their best walk-year player go and re-signing two lesser ones;
+            # measured, a walked player out-rated a kept one in 65% of team-seasons and
+            # a quarter of those were not explicable by position weighting.
+            replaceable = self.upgradeConfidence(
+                player, coach=coach, pool=pool, rng=rng,
+                teamsAhead=teamsAhead, team=team, margin=FO_RESIGN_SURPLUS_MARGIN)
+            # Expected loss from letting him go: what he is worth, times how likely it
+            # is that nobody better is actually there when this club picks.
+            # ⚠️ This is what stops a star walking on paper depth. A great player is
+            # beaten by very few free agents, and the top of any board goes first, so
+            # his replaceability is near zero and he ranks by his own value. A modest
+            # player is beaten by most of the pool, so some of it survives any run on
+            # the position and he is genuinely replaceable — which is the value-over-
+            # replacement logic the old code intended and did not implement.
+            priority = incumbent * (1.0 - replaceable)
+            if priority >= FO_RESIGN_SURPLUS_MARGIN:
+                ranked.append((player, priority))
         ranked.sort(key=lambda pair: -pair[1])
         return ranked
 
     def chooseResigns(self, expiring, limit, coach=None, pool=None, rng=None,
-                      pickDepth=0, team=None):
+                      pickDepth=0, team=None, teamsAhead=0):
         """The re-sign decision: at most `limit` keepers, best surplus first.
 
         `limit` is the caller's — RESIGN_LIMIT_PER_OFFSEASON is a parity
@@ -715,9 +733,9 @@ class FrontOfficeBrain:
         """
         if limit <= 0:
             return []
-        return [p for p, _surplus in self.rankResignCandidates(
+        return [p for p, _priority in self.rankResignCandidates(
             expiring, coach=coach, pool=pool, rng=rng,
-            pickDepth=pickDepth, team=team)[:limit]]
+            pickDepth=pickDepth, team=team, teamsAhead=teamsAhead)[:limit]]
 
     # -------------------------------------------------------------- cuts
 
