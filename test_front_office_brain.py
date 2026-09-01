@@ -218,14 +218,21 @@ def test_pick_depth_saves_the_franchise_player():
     brain = FrontOfficeBrain(FakePlayerManager(freeAgents=pool))
     sharp = FakeCoach(scouting=100)
 
-    def keptAt(depth):
+    # ⚠️ THE LEVER IS `teamsAhead`, NOT `pickDepth`, SINCE THE RE-SIGN REWRITE. The
+    # decision used to price the pickDepth-th best free agent and keep the incumbent if
+    # that one player lost; it now asks how likely it is that ANYONE better survives to
+    # this club's pick, which is the same model the cut side already uses. `pickDepth`
+    # is still accepted for signature compatibility but no longer drives the ranking, so
+    # a test that only sets it would pass vacuously at every depth.
+    def keptAt(ahead):
         incumbent = FakePlayer('Franchise QB', 85, position=Position.QB)
-        kept = brain.chooseResigns([incumbent], limit=2, coach=sharp, pickDepth=depth)
+        kept = brain.chooseResigns([incumbent], limit=2, coach=sharp,
+                                   pickDepth=ahead, teamsAhead=ahead)
         return bool(kept)
 
     assert not keptAt(0), "picking first, the 88 is gettable — letting him walk is right"
-    assert keptAt(4), "picking deep, only an 82 remains — the 85 must be kept"
-    print("PASS pick depth: 85 QB walks at depth 0, is kept at depth 4")
+    assert keptAt(4), "picking deep, the 88/87/86 are likely gone — the 85 must be kept"
+    print("PASS pick depth: 85 QB walks picking first, is kept with 4 clubs ahead")
 
 
 def test_pick_depth_scales_with_fa_order():
@@ -247,8 +254,11 @@ def test_picked_clean_position_keeps_incumbent():
     brain = FrontOfficeBrain(FakePlayerManager(freeAgents=pool))
     incumbent = FakePlayer('Starter', 70, position=Position.TE)
 
+    # ⚠️ `teamsAhead`, not `pickDepth` — see the note in the pick-depth test above.
+    # Nine clubs picking first will almost certainly have taken the only TE in the pool,
+    # so nobody better survives and the 70 is worth keeping.
     kept = brain.chooseResigns([incumbent], limit=2,
-                               coach=FakeCoach(scouting=100), pickDepth=9)
+                               coach=FakeCoach(scouting=100), pickDepth=9, teamsAhead=9)
     assert [p.name for p in kept] == ['Starter']
     print("PASS a picked-clean position keeps the incumbent")
 

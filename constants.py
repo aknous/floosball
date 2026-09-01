@@ -1440,8 +1440,16 @@ FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 
 # The lone deliberate change: SMALL-market PENALTIES become neutral — a built
 # facility can't be a penalty, so the floor rises from "penalized" to "neutral,
 # just hasn't built much yet" (Lv0/Lv1 = 0). Lv5 is a new above-MEGA ceiling.
-# Curves are back-loaded (real effects at Lv3+) to hold migration parity; the
-# smoothing of low levels is a tuning task (see plan doc §14).
+# ⚠️ THE LOW LEVELS ARE NO LONGER DEAD (2026-08-31). The curves were back-loaded so
+# the one-time tier migration reproduced the old perks exactly, and the smoothing was
+# left as a pending tuning task — which it stayed, long past the migration that needed
+# it. Measured on the live league: 25 of 32 clubs held a Scouting Department at level 1
+# or 2, where the ladder read 0, so they had paid Floobits and upkeep for literally no
+# effect. Recovery was 30 of 32 and the Locker Room 29 of 32. Reported by fans as
+# pouring money into scouting and watching the team get worse anyway — they were right,
+# and it was worse than they thought: it was doing nothing at all.
+# Levels 3-5 are UNCHANGED, so anything the migration pinned is still pinned; only the
+# two levels that paid nothing now interpolate toward level 3.
 FACILITY_MAX_LEVEL = 5
 
 # facility_key -> {name, effect (which sim effect it drives), levels[0..5]}
@@ -1449,11 +1457,11 @@ FACILITY_CATALOG = {
     'training':    {'name': 'Training Facility',    'effect': 'dev_bonus',
                     'levels': [0, 0.4, 0.8, 1.2, 1.6, 2.0]},             # player-dev bias; every level a real step (resolved to int probabilistically in apply_offseason_training)
     'locker_room': {'name': 'Locker Room',          'effect': 'morale',
-                    'levels': [0.0, 0.0, 0.0, 0.0025, 0.0075, 0.01]},    # pregame morale nudge (cf FUNDING_MORALE_MODIFIER)
+                    'levels': [0.0, 0.001, 0.0018, 0.0025, 0.0075, 0.01]},    # pregame morale nudge (cf FUNDING_MORALE_MODIFIER)
     'recovery':    {'name': 'Recovery Center',       'effect': 'fatigue_reduction',
-                    'levels': [0.0, 0.0, 0.0, 0.15, 0.30, 0.35]},        # weekly fatigue-gain reduction (cf FUNDING_FATIGUE_REDUCTION)
+                    'levels': [0.0, 0.05, 0.10, 0.15, 0.30, 0.35]},        # weekly fatigue-gain reduction (cf FUNDING_FATIGUE_REDUCTION)
     'scouting':    {'name': 'Scouting Department',    'effect': 'scouting_bonus',
-                    'levels': [0, 0, 0, 3, 5, 7]},                       # rookie scouting accuracy (cf FUNDING_SCOUTING_BONUS)
+                    'levels': [0, 1, 2, 3, 5, 7]},                       # rookie scouting accuracy (cf FUNDING_SCOUTING_BONUS)
     'stadium':     {'name': 'Stadium',               'effect': 'home_morale',
                     'levels': [0.0, 0.001, 0.002, 0.003, 0.004, 0.005]}, # NEW — everyone starts Lv0; effect unwired until a later phase
 }
@@ -1610,8 +1618,34 @@ _RETENTION_OFF = _os.environ.get('FLOOS_RETENTION') == 'off'
 # The machinery is intact — `playerManager.hasReachedResignLimit` still reads
 # both of these and `players.team_resign_count` is still tracked and persisted —
 # so re-enabling is flipping this one flag, not a rebuild.
+# ⚠️ RE-ENABLED AT A LIMIT OF 2 (owner, 2026-08-31). The objection that switched it
+# off was the LIMIT, not the rule: at 1 a player was forced out after a single
+# re-sign, capping a club career at roughly two contracts. Measured on the season-4
+# league, a limit of 1 would force 99 of 192 rostered players to walk in one
+# offseason; a limit of 2 forces 14. Contract terms run 1-3 seasons (mean ~2.3), so
+# three contracts is a ~7-season club career and a career-long one-club player is
+# possible again.
+# ⚠️ THIS IS A CIRCULATION LEVER, NOT A PARITY ONE, and it is worth being clear about
+# because it looks like a dynasty-breaker. Measured: the 14 players it forces out sit
+# on 14 DIFFERENT teams, one each, and include the two worst clubs in the league. A 76
+# is a starter for a weak team and bench quality for a strong one, so the rule costs
+# the bottom at least as much as the top. What it buys is ~14 known-quality players
+# (avg rating 78) entering free agency each year against the 8.6 the generator makes.
+# ⚠️ TRIED AT 2 AND REVERTED ON MEASUREMENT (2026-08-31). The sizing fix was right —
+# at a limit of 1 it would have forced 99 of 192 rostered players to walk in one
+# offseason against 14 at a limit of 2, and `team_resign_count` confirmed the cap
+# binding in the sim (treatment topped out at 2, control ran to 5). But over three
+# 5-season arms it made the BOTTOM of the league worse, not the top: worst record fell
+# 6.3 -> 3.7 with non-overlapping run ranges ([7,6,6] against [2,4,5]) and the win
+# spread widened 4.2 -> 4.7.
+# That matches what the pre-build measurement said and I under-weighted: the 14 players
+# it forces out sit on 14 DIFFERENT teams, one each, including the two worst clubs. A 76
+# is a starter for a weak team and bench depth for a strong one, so a rule that circulates
+# players uniformly costs the bottom more than the top. It is not a parity lever.
+# The circulation it was meant to provide now comes from the free-agent injection below,
+# which adds players instead of moving them.
 RESIGN_ONCE_ENABLED = False
-RESIGN_ONCE_LIMIT = 1             # re-signs allowed with the SAME team before a forced walk
+RESIGN_ONCE_LIMIT = 2             # re-signs allowed with the SAME team before a forced walk
                                   # (only consulted while RESIGN_ONCE_ENABLED)
 RESIGN_LIMIT_ENABLED = not _RETENTION_OFF
 RESIGN_LIMIT_PER_OFFSEASON = 2    # max players a team may re-sign per offseason
@@ -1885,6 +1919,114 @@ FA_SELF_DEV_SCALE = 0.7       # damping vs a coached player — self-training is
                               # neutral coach's +2 and the worst coach's 0.
 FA_SELF_DEV_MIN = 0           # floor: unsigned never decays
 
+# ---- Blue chip: guarantee the intake class has a top end ----
+# ⚠️ THE PROBLEM IS THE TAIL, NOT THE COUNT. Rosters are fixed at 32x6, and
+# `ensurePositionSupply` generates only the DEFICIT, so the size of an intake class
+# is the retirement count and nothing else — measured at 8.6 players a season.
+# Raising ROSTER_SUPPLY_BUFFER_PER_POSITION does not make a bigger class, it makes a
+# deeper pool of players nobody signs.
+#
+# Measured on the generator's own seed (N(78,7) clipped to 60..100) over 2,000 draws:
+# rating mean 76.0, p90 84, p99 92, with 8.6% at 85+ and 2.4% at 90+. At 8.6 players a
+# season that is one 85+ every 1.4 seasons and one 90+ every FIVE. The founding class
+# held 47 players at 85+; five simulated seasons later that was 22, and only 4 of the
+# 42 generated replacements cleared it. To hold 47 the generator would need a 24% rate.
+#
+# So: guarantee the class HAS a top end rather than hoping for one. If nothing
+# generated this season clears the bar, the best of them is re-rolled until it does.
+# ⚠️ IT REPLACES, IT DOES NOT ADD. The class size is unchanged, which is what keeps
+# the free-agent pool at its target depth — an extra body would be a player nobody
+# signs, sitting in the pool until they retire.
+BLUE_CHIP_ENABLED = True
+BLUE_CHIP_RATING_FLOOR = 88   # what counts as a top-end arrival
+BLUE_CHIP_MAX_ATTEMPTS = 40   # re-roll budget; a miss leaves the class as generated
+# The seed the re-roll draws from. Deliberately high and NARROW: the point is to land
+# just over the bar, not to manufacture a 99. A 92 seed lands around a 88-91 rating.
+BLUE_CHIP_SEED_MEAN = 90
+BLUE_CHIP_SEED_SD = 4
+# ⚠️ Roll a few and keep the LOWEST that clears. Taking the first success samples the
+# seed distribution truncated at the floor, which lands well above it: measured, an 88
+# floor produced a 95. A guaranteed 95 every season is a different league from a
+# guaranteed 88 — the point is that the class has a top end, not that a generational
+# player arrives on a schedule.
+BLUE_CHIP_CANDIDATE_POOL = 6
+
+# ---- Aim the blue chip at where the bottom of the league is weakest ----
+# ⚠️ THE GATE WAS NEVER THE BLOCKER — POSITION MATCH WAS. `upgradeConfidence` returns
+# 1.00 for the team picking first, so the worst club is already certain nothing gets
+# sniped. What stops it acting is that the guaranteed star plays whatever position the
+# class's best player happened to play, and the worst club only cuts if that is a
+# position where ITS incumbent is worse by the margin. With five positions and one blue
+# chip a season those rarely line up, so the star goes to whichever club happens to have
+# a matching hole — measured at 44%, 40% and 46% landing in the bottom half across three
+# configurations, i.e. a coin flip every time.
+#
+# So the position is chosen rather than left to chance. Nothing else changes: the player
+# is still an ordinary free agent anyone may sign, and the existing worst-first draft and
+# cut-for-upgrade path do the delivering.
+BLUE_CHIP_TARGET_NEED = True
+BLUE_CHIP_NEED_TEAMS = 5      # how many clubs from the bottom to read need from
+# ⚠️ KICKER IS EXCLUDED OUTRIGHT (owner). `POSITION_VALUE` prices K at 0.35, so a
+# guaranteed 88 kicker is the least useful star the league could manufacture, and
+# targeting raw need would hand one over regularly — the bottom clubs are weak at K as
+# often as anywhere. TE is included but discounted for the same reason at 0.60.
+BLUE_CHIP_NEED_WEIGHTS = {'QB': 1.0, 'RB': 0.9, 'WR': 0.9, 'TE': 0.5, 'K': 0.0}
+
+# ---- New players arrive on a schedule, not only when someone retires ----
+# ⚠️ INTAKE USED TO BE PURELY A REPLACEMENT VALVE, and in a young league that means no
+# intake at all. `ensurePositionSupply` generates only the DEFICIT against fixed demand
+# (32 x slots + buffer = 207), and prod holds exactly 207 players: 192 rostered plus the
+# 15-player buffer, generated once when the floor first ran. Four seasons in, ZERO
+# players have been added since and zero have retired. The valve cannot open until
+# somebody ages out, which is season 6-7 at the earliest.
+#
+# ⚠️ THAT IS ALSO WHY THE BLUE CHIP MEASURED INERT. It fires when a class is generated,
+# and no deficit means no class, so the guarantee never ran in the seasons that mattered.
+# A scheduled injection is what makes "every draft has someone worth taking" true.
+#
+# Sized against the drain rather than guessed. `_processFreeAgentRetirements` is
+# tier-graded (D 65% / C 40% / B 25% / A 15% / S 5% at three unsigned years, +15% a year
+# after), so the pool self-cleans from the bottom and an injection cannot run away.
+# Modelled at 8 a season: pool settles ~31 in a league with no retirements yet, ~18
+# through the ramp, and is fully absorbed once retirements reach ~8.6 a season. Above
+# ~20 it bloats into the holding pen this is meant to avoid.
+FA_INJECTION_ENABLED = True
+# ⚠️ 12 WAS TRIED AND IS WORSE. The theory was that a deeper pool would put a SECOND
+# qualifying free agent at a position, which is what `upgradeConfidence` needs before
+# anyone past pick 2 can act. It did raise cutting (5.2 -> 7.8 a season) but bought
+# nothing that mattered: delivery stayed uniform (median club rank 13 -> 16 of 32,
+# against 16 for a coin flip), the 85+ population did not improve (28.0 -> 27.3), the
+# worst record fell back 5.7 -> 4.3, and the FREE-AGENT POOL BLOATED TO 37.7 against a
+# target of 15 — the holding pen this whole design is meant to avoid. My own model had
+# predicted ~23 and was wrong, because signings absorb less than it assumed and the
+# tier-graded drain does not start until three unsigned seasons.
+# ⚠️ AND THE REAL LESSON IS THAT DELIVERY IS NOT A SUPPLY PROBLEM. Across three
+# configurations the share of new stars landing in the bottom half of the table ran
+# 44%, 40%, 46% — a coin flip every time. Roster holes come overwhelmingly from
+# RETIREMENT, which is blind to the standings, and no pool depth makes it otherwise.
+# Getting a star to the worst team specifically needs a reservation rule, not a constant.
+FA_INJECTION_PER_SEASON = 8
+
+# ---- Free agency is not purgatory ----
+# ⚠️ A player who goes unsigned must have a road back, or the pool becomes a holding
+# pen that only empties through retirement. `selfDevelopmentBias` already floors an
+# unrostered player at stagnation rather than decay, but stagnation alone never
+# clears the bar a GM is comparing them against, so a player who misses once tends to
+# miss forever.
+# Each season unsigned adds to their own development bias, capped, on the reading that
+# a player with nothing else to do works at it. Self-limiting by construction: it only
+# accrues while unsigned, and signing resets `freeAgentYears` to 0.
+FA_SELF_DEV_YEARS_BONUS = 1   # extra devBias per season spent unsigned
+FA_SELF_DEV_YEARS_CAP = 2     # ... up to this much, so nobody trains into a superstar
+# ⚠️ AND A CAP ON THE TOTAL, not just on the years term. Caught by the regression: the
+# years bonus is added on top of the self-drive term, so a maximally self-driven player
+# left unsigned reached devBias 6 against an elite coach's 4 — going unsigned became the
+# better career move, which inverts the whole point of a development staff. This is the
+# coached formula's own ceiling, (100 - 60) / 10, so the two cannot drift apart: an
+# unsigned player can at best match the best coach in the league and never beat one who
+# also has a funded training facility.
+FA_SELF_DEV_TOTAL_CAP = 4
+
 # ---- Coach generation: specialists, not uniformly good/bad (AFO plan Part B) ----
 # Coaches used to draw every attribute from normal(center, 10) around ONE
 # per-coach center, so a coach was uniformly strong or weak and the aggregate
@@ -1973,6 +2115,47 @@ FO_SCOUT_VISION_CEILING = 100     # scouting at this = near-perfect arc vision
 # 12.0 puts a club's own top target around the consensus #2-3, so one team's
 # man really is another's fifth choice, without making the whole league blind.
 FO_SCOUT_NOISE_MAX = 12.0
+# ⚠️ A GM KNOWS ITS OWN PLAYERS. The noise above is deliberately large — it was raised
+# from 6.0 so that per-team boards actually differ, since at 6.0 every club named the
+# same top free agent — but it was applied to a club's OWN walk-year starter as heavily
+# as to a stranger it has never coached. A league-average GM (scouting 81) therefore
+# misjudged a player on its own roster by ±5.7 rating points, and a poor one by ±12.
+#
+# Measured on three 5-season runs: in 65% of team-seasons where somebody was kept and
+# somebody walked, a WALKED player out-rated a KEPT one. Position weighting justifies
+# three quarters of those — a 74 QB really is worth more than an 84 kicker — but a
+# quarter were not explicable that way, e.g. keeping a 74 TE while an 85 RB walked.
+# Reported by fans as teams letting their best player go and re-signing lesser ones.
+#
+# So evaluation error is scaled DOWN for a player already on the roster. This is
+# deliberately partial rather than perfect: GM skill should still show in retention,
+# and the owner's framing was that it needs tightening, not removing. Free-agent
+# evaluation is untouched, so boards stay diverse and that fix stays intact.
+FO_SCOUT_INCUMBENT_NOISE_SCALE = 0.30
+
+# ---- Production, when it clearly disagrees with the attribute sheet ----
+# ⚠️ THE GM USED TO IGNORE WHAT PLAYERS ACTUALLY DID. `perceivedValue` read attributes
+# and career arc and nothing else — `performance_rating` and `wpa` are computed, stored
+# and never consulted. Measured on the live league, attribute rating and season
+# performance correlate at only +0.50, and 13 of 184 rostered players sit 15+ points
+# apart on the two, so a monster season on modest attributes was invisible to the man
+# who employs him.
+#
+# ⚠️ BUT MOST OF THE GAP IS NOISE, WHICH IS WHY THIS IS A DEADBAND AND NOT A WEIGHT
+# (owner, 2026-08-31). A 90 playing like an 85 tells you nothing. A 90 playing like a
+# 75, or a 75 playing like a 90, is worth acting on. Inside the band the term is
+# exactly zero, so ordinary variation cannot move a decision at all.
+FO_PERF_ENABLED = True
+FO_PERF_DEADBAND = 10.0       # rating points of divergence treated as noise
+# How much of the divergence PAST the band reaches the valuation. Deliberately partial:
+# production is evidence about a player, not a replacement for what he can do.
+FO_PERF_WEIGHT = 0.5
+FO_PERF_MAX_ADJUST = 8.0      # cap, so one freak season cannot rewrite a player
+# ⚠️ ONE SEASON IS AN OUTLIER, TWO IS A PATTERN (owner). A single divergent season is
+# discounted to this fraction; a player with more seasons on record is trusted further,
+# and a player whose seasons DISAGREE with each other is discounted back toward noise.
+FO_PERF_SINGLE_SEASON_TRUST = 0.5
+FO_PERF_HISTORY_SEASONS = 3   # how far back the GM reads
 
 # The Scouting Department facility adds to the GM's EFFECTIVE scouting, in the
 # same attribute points the coach attribute uses. This is what finally consumes
@@ -2058,8 +2241,19 @@ FO_RESIGN_SURPLUS_MARGIN = 0.5
 # double-count it and, with a near-minimum pool, suppress cuts almost entirely.
 # So the threshold is flat and the dial lives in one place.
 FO_CUT_ENABLED = True
-FO_CUT_UPGRADE_MARGIN = 6.0   # value points the replacement must beat the
-                              # incumbent by. Raised from 4.0: at 4.0 a QB was
+# ⚠️ LOWERED 6.0 -> 3.0 (2026-08-31). The 6.0 comment below is superseded: it was
+# raised from 4.0 to guard against "the risk of a hole you may not refill", and
+# `upgradeConfidence` now does exactly that job properly, as a probability rather than
+# as a margin standing in for one.
+# ⚠️ AND THE MARGIN IS PROBABLY NOT THE BINDING CONSTRAINT. Measured on the season-4
+# pool, the number of teams holding at least ONE qualifying free agent barely moves with
+# the margin (20 at 6.0, 22 at 2.0) and the number holding TWO is ZERO at every margin.
+# With one qualifying free agent only picks 1-2 clear FO_CUT_MIN_CONFIDENCE, which
+# predicts ~2 cuts a season against the 3.3 measured. The real limit is pool depth per
+# position: ~17 free agents over 5 positions is ~3 each. If lowering this does not move
+# delivery, raise FA_INJECTION_PER_SEASON rather than dropping the margin further.
+FO_CUT_UPGRADE_MARGIN = 3.0   # value points the replacement must beat the
+                              # incumbent by. Was 4.0, then 6.0: at 4.0 a QB was
                               # cut for a 4-rating-point upgrade, which isn't
                               # worth the risk of a hole you may not refill.
 # Soft per-team cap. The plan left cuts uncapped and expected churn to

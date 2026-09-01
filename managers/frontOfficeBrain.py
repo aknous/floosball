@@ -48,6 +48,7 @@ import os as _os
 _SOFT_APPEAL = _os.environ.get('FLOOS_SOFT_APPEAL') == '1'
 _SOFT_APPEAL_PENALTY = float(_os.environ.get('FLOOS_SOFT_APPEAL_PENALTY', '0.75'))
 
+import math
 from constants import (
     POSITION_VALUE,
     VENUE_PHASE_POSITIONS,
@@ -60,6 +61,9 @@ from constants import (
     FO_CUT_MIN_CONFIDENCE,
     SENTIMENT_MAX_VALUE_SWING,
     FO_SCOUT_FACILITY_ENABLED, FO_SCOUT_WINNERS_CURSE_CORRECTION,
+    FO_SCOUT_INCUMBENT_NOISE_SCALE,
+    FO_PERF_ENABLED, FO_PERF_DEADBAND, FO_PERF_WEIGHT, FO_PERF_MAX_ADJUST,
+    FO_PERF_SINGLE_SEASON_TRUST, FO_PERF_HISTORY_SEASONS,
     FA_PREFERENCE_ENABLED, FA_PREF_MAX_DEMAND, FA_PREF_VET_FULL_SEASONS,
     FA_PREF_VET_WEIGHT, FA_PREF_JITTER,
 )
@@ -148,7 +152,7 @@ class FrontOfficeBrain:
     """Per-league GM brain. Stateless between calls except for the injected
     playerManager, so it can be constructed cheaply wherever it's needed."""
 
-    def __init__(self, playerManager, sentimentMap=None):
+    def __init__(self, playerManager, sentimentMap=None, performanceMap=None):
         self.playerManager = playerManager
         # {playerId: -1.0..+1.0}, already rater-gated. Injected (not queried
         # per player) because the sweep values every roster on every team and
@@ -156,6 +160,9 @@ class FrontOfficeBrain:
         # or unknown players read neutral, so the brain works unchanged with no
         # sentiment layer at all.
         self.sentimentMap = sentimentMap or {}
+        # {playerId: [(season, ratingThatSeason, performanceThatSeason), ...]}, newest
+        # last. Injected like sentimentMap so the brain stays free of database access.
+        self.performanceMap = performanceMap or {}
         # {(gmKey, playerId): standard-normal draw} — this GM's SETTLED opinion
         # of a player, held for as long as the brain lives (one offseason; see
         # seasonManager._foBrainForOffseason). See _scoutError.
@@ -298,9 +305,41 @@ class FrontOfficeBrain:
         seen = current + (forward - current) * vision
 
         # Error shrinks to zero as vision approaches 1.
-        seen += self._scoutError(player, coach, self._noiseSigma(vision), rng)
+        # ⚠️ And it shrinks further for a player this club already has. A GM has watched
+        # its own starter in practice for years; it has watched a free agent on tape. The
+        # large noise exists to make per-team BOARDS differ, which is about strangers, and
+        # applying it to an incumbent is what let clubs release their best walk-year
+        # player and re-sign two lesser ones.
+        sigma = self._noiseSigma(vision)
+        if self._isIncumbent(player, team):
+            sigma *= FO_SCOUT_INCUMBENT_NOISE_SCALE
+        seen += self._scoutError(player, coach, sigma, rng)
+
+        # ⚠️ Applied to the RATING, before position weighting, so a divergent kicker is
+        # still scaled by what a kicker is worth. Adding it after would let production
+        # smuggle a kicker past a quarterback.
+        seen += self.performanceAdjustment(player)
 
         return max(0.0, seen) * positionValue(player, venueBiasFor(team))
+
+    @staticmethod
+    def _isIncumbent(player, team) -> bool:
+        """Is this player already on this club's roster?
+
+        ⚠️ Compared by NAME, not by object identity. `player.team` is sometimes the Team
+        and sometimes its name (a free agent carries the literal string 'Free Agent'),
+        so an identity test silently returns False for half the league and the discount
+        would apply to nobody.
+        """
+        if player is None or team is None:
+            return False
+        pt = getattr(player, 'team', None)
+        if pt is None:
+            return False
+        ptName = getattr(pt, 'name', pt)
+        if not isinstance(ptName, str):
+            return False
+        return ptName == getattr(team, 'name', None)
 
     @staticmethod
     def _noiseSigma(vision: float) -> float:
@@ -369,6 +408,48 @@ class FrontOfficeBrain:
             return 0.0
         trust = self._attrLean(coach, 'fanTrust')
         return sentiment * trust * SENTIMENT_MAX_VALUE_SWING
+
+    def performanceAdjustment(self, player) -> float:
+        """Rating points to add or subtract because production disagrees with the sheet.
+
+        ⚠️ A DEADBAND, NOT A WEIGHT (owner). A 90 playing like an 85 tells you nothing;
+        inside FO_PERF_DEADBAND this returns exactly 0.0, so ordinary variation cannot
+        move a decision. Only a 90 playing like a 75 — or a 75 playing like a 90 — is
+        evidence, and then only the part PAST the band counts.
+
+        ⚠️ ONE SEASON IS AN OUTLIER, TWO IS A PATTERN. A lone divergent season is
+        discounted by FO_PERF_SINGLE_SEASON_TRUST. Seasons that disagree with each
+        other cancel, because the mean divergence is what is tested — a player who was
+        20 over one year and 20 under the next reads as noise, which is what he is.
+
+        Divergence is measured per season against the rating the player CARRIED THAT
+        SEASON, not against today's number. Judging a 27-year-old's rookie form against
+        his current sheet would score every developed player as a chronic underachiever.
+        """
+        if not FO_PERF_ENABLED:
+            return 0.0
+        pid = getattr(player, 'id', None)
+        if pid is None:
+            return 0.0
+        history = self.performanceMap.get(pid) or []
+        if not history:
+            return 0.0
+        recent = history[-int(FO_PERF_HISTORY_SEASONS):]
+        divergences = [float(perf) - float(rating)
+                       for _season, rating, perf in recent
+                       if rating and perf]
+        if not divergences:
+            return 0.0
+
+        mean = sum(divergences) / len(divergences)
+        if abs(mean) <= FO_PERF_DEADBAND:
+            return 0.0
+        # Only the excess past the band is evidence.
+        excess = mean - math.copysign(FO_PERF_DEADBAND, mean)
+
+        trust = 1.0 if len(divergences) > 1 else FO_PERF_SINGLE_SEASON_TRUST
+        adjust = excess * FO_PERF_WEIGHT * trust
+        return _clamp(adjust, -FO_PERF_MAX_ADJUST, FO_PERF_MAX_ADJUST)
 
     def decisionValue(self, player, coach=None, rng=None, team=None) -> float:
         """perceivedValue plus the sentiment tilt — the number decisions use."""
@@ -649,7 +730,7 @@ class FrontOfficeBrain:
         return int(index * FO_FA_CONTENTION)
 
     def rankResignCandidates(self, expiring, coach=None, pool=None, rng=None,
-                             pickDepth=0, team=None):
+                             pickDepth=0, team=None, teamsAhead=0):
         """Rank walk-year incumbents by how much they beat the best replacement
         at their own position ("surplus").
 
@@ -665,16 +746,34 @@ class FrontOfficeBrain:
         ranked = []
         for player in expiring:
             incumbent = self.decisionValue(player, coach, rng=rng, team=team)
-            replacement = self.bestReplacementValue(player, coach, pool=pool, rng=rng,
-                                                    pickDepth=pickDepth, team=team)
-            surplus = incumbent - replacement
-            if surplus >= FO_RESIGN_SURPLUS_MARGIN:
-                ranked.append((player, surplus))
+            # ⚠️ WHAT WOULD I ACTUALLY LOSE, not "does one named free agent beat him".
+            # This used to price `bestReplacementValue` — the pickDepth-th best on the
+            # board — and let the incumbent walk whenever that one player won. It is the
+            # same flaw the CUT side carried before `upgradeConfidence` replaced it:
+            # measured, a club signs that specific man 8% of the time, so the decision
+            # rested on an outcome that almost never happened. Fans reported clubs
+            # letting their best walk-year player go and re-signing two lesser ones;
+            # measured, a walked player out-rated a kept one in 65% of team-seasons and
+            # a quarter of those were not explicable by position weighting.
+            replaceable = self.upgradeConfidence(
+                player, coach=coach, pool=pool, rng=rng,
+                teamsAhead=teamsAhead, team=team, margin=FO_RESIGN_SURPLUS_MARGIN)
+            # Expected loss from letting him go: what he is worth, times how likely it
+            # is that nobody better is actually there when this club picks.
+            # ⚠️ This is what stops a star walking on paper depth. A great player is
+            # beaten by very few free agents, and the top of any board goes first, so
+            # his replaceability is near zero and he ranks by his own value. A modest
+            # player is beaten by most of the pool, so some of it survives any run on
+            # the position and he is genuinely replaceable — which is the value-over-
+            # replacement logic the old code intended and did not implement.
+            priority = incumbent * (1.0 - replaceable)
+            if priority >= FO_RESIGN_SURPLUS_MARGIN:
+                ranked.append((player, priority))
         ranked.sort(key=lambda pair: -pair[1])
         return ranked
 
     def chooseResigns(self, expiring, limit, coach=None, pool=None, rng=None,
-                      pickDepth=0, team=None):
+                      pickDepth=0, team=None, teamsAhead=0):
         """The re-sign decision: at most `limit` keepers, best surplus first.
 
         `limit` is the caller's — RESIGN_LIMIT_PER_OFFSEASON is a parity
@@ -687,9 +786,9 @@ class FrontOfficeBrain:
         """
         if limit <= 0:
             return []
-        return [p for p, _surplus in self.rankResignCandidates(
+        return [p for p, _priority in self.rankResignCandidates(
             expiring, coach=coach, pool=pool, rng=rng,
-            pickDepth=pickDepth, team=team)[:limit]]
+            pickDepth=pickDepth, team=team, teamsAhead=teamsAhead)[:limit]]
 
     # -------------------------------------------------------------- cuts
 

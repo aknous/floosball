@@ -799,6 +799,20 @@ class SeasonManager:
                     self.playerManager._processFreeAgentRetirements(
                         self.currentSeason.seasonNumber, faHighlights, preIncrement=True
                     )
+                    # This season's intake, on a schedule rather than only when the
+                    # roster count falls short. ⚠️ BEFORE the supply check, not after:
+                    # the floor generates the DEFICIT, so a pool already topped up by
+                    # the injection correctly produces nothing and the two do not both
+                    # fill the same hole. Reversed, the floor fires first and the
+                    # injection lands on top of a pool already at target.
+                    try:
+                        self.playerManager.injectFreeAgentClass(
+                            targetPosition=self._blueChipTargetPosition())
+                    except Exception as _inj:
+                        # Intake must never take the front office down with it — a
+                        # season with no new players is a worse league, not a broken
+                        # one, and the supply floor below still guarantees rosters fill.
+                        logger.warning(f"Free agent intake failed: {_inj}", exc_info=True)
                     # Top up any thin position into the FA pool BEFORE fans ballot
                     # the FA draft (so they can rank the new players).
                     self._ensurePositionSupply(reason='week-22 supply check')
@@ -7475,9 +7489,57 @@ class SeasonManager:
                 sentimentMap = buildSentimentMap(get_session())
         except Exception as e:
             logger.warning(f"GM brain: sentiment unavailable, running neutral: {e}")
-        brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap)
+        performanceMap = {}
+        try:
+            performanceMap = self._buildPerformanceMap()
+        except Exception as e:
+            logger.warning(f"GM brain: performance history unavailable, "
+                           f"valuing on attributes alone: {e}")
+        brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap,
+                                 performanceMap=performanceMap)
         self._foBrainCache = (season, brain)
         return brain
+
+    def _buildPerformanceMap(self) -> dict:
+        """{playerId: [(season, ratingThatSeason, performanceThatSeason), ...]}, oldest first.
+
+        ⚠️ THE RATING IS THE ONE THE PLAYER CARRIED THAT SEASON, from
+        `player_rating_history`, not today's number. Judging a developed player's rookie
+        production against his current sheet scores every improver as a chronic
+        underachiever, and every declining veteran as an overachiever — the exact
+        opposite of the truth in both cases.
+
+        A season with no recorded rating is skipped rather than falling back to the
+        current one, because that fallback IS the bug above.
+        """
+        from database.connection import get_session
+        from sqlalchemy import text
+        from constants import FO_PERF_ENABLED, FO_PERF_HISTORY_SEASONS
+        if not FO_PERF_ENABLED:
+            return {}
+        season = getattr(self.currentSeason, 'seasonNumber', None) or 0
+        oldest = max(0, season - int(FO_PERF_HISTORY_SEASONS))
+        out = {}
+        session = get_session()
+        try:
+            rows = session.execute(text("""
+                SELECT s.player_id, s.season, h.rating, s.performance_rating
+                FROM player_season_stats s
+                JOIN player_rating_history h
+                  ON h.player_id = s.player_id AND h.season = s.season
+                WHERE s.performance_rating IS NOT NULL
+                  AND s.performance_rating > 0
+                  AND s.season >= :oldest
+                ORDER BY s.player_id, s.season
+            """), {'oldest': oldest}).fetchall()
+            for pid, seasonNum, rating, perf in rows:
+                out.setdefault(pid, []).append((seasonNum, float(rating), float(perf)))
+        finally:
+            session.close()
+        if out:
+            logger.info(f"GM brain: performance history for {len(out)} players "
+                        f"(seasons {oldest}+)")
+        return out
 
     def _buildFaDraftBoards(self) -> None:
         """Give every team its own ranking of the free agents who'd sign there.
@@ -7868,8 +7930,13 @@ class SeasonManager:
             # Raw count of clubs picking first, which the confidence model needs
             # (pickDepth is already the discounted expectation built from it).
             teamsAhead = brain.faTeamsAhead(team, faOrder)
+            # ⚠️ `teamsAhead` is load-bearing here now, not just for cuts. The re-sign
+            # decision asks how likely a better player survives to this club's pick, and
+            # with teamsAhead defaulting to 0 every club believes it picks first, so
+            # nobody is ever worth keeping over the market.
             kept = brain.chooseResigns(expiring, limit, coach=coach,
-                                       pickDepth=pickDepth, team=team)
+                                       pickDepth=pickDepth, team=team,
+                                       teamsAhead=teamsAhead)
             keptIds = {id(p) for p in kept}
             for p in expiring:
                 p._gmResigned = id(p) in keptIds
@@ -8093,6 +8160,72 @@ class SeasonManager:
                 session.close()
         except Exception as e:
             logger.error(f"HoF ballot seeding failed (non-fatal): {e}")
+
+    def _blueChipTargetPosition(self):
+        """The position the bottom of the league is weakest at, or None.
+
+        Read from the worst `BLUE_CHIP_NEED_TEAMS` clubs by record: for each position,
+        how far their starters sit below the league average there, scaled by how much
+        that position is worth having. The largest weighted deficit wins.
+
+        ⚠️ KICKER IS WEIGHTED TO ZERO. Raw need would nominate K regularly — weak clubs
+        are weak everywhere — and `POSITION_VALUE` prices a kicker at 0.35, so a
+        guaranteed 88 kicker every season is the least useful star the league could
+        manufacture. TE is included at 0.5 for the same reason, less sharply.
+
+        Returns None on any missing piece rather than raising: an untargeted blue chip
+        is the previous behaviour, which is merely uniform, not broken.
+        """
+        from constants import (BLUE_CHIP_TARGET_NEED, BLUE_CHIP_NEED_TEAMS,
+                               BLUE_CHIP_NEED_WEIGHTS)
+        import floosball_player as _FP
+        if not BLUE_CHIP_TARGET_NEED:
+            return None
+        try:
+            teamManager = self.serviceContainer.getService('team_manager')
+            teams = list(getattr(teamManager, 'teams', []) or [])
+            if not teams:
+                return None
+
+            def winPct(t):
+                stats = getattr(t, 'seasonTeamStats', None) or {}
+                return stats.get('winPerc', 0.0)
+
+            worst = sorted(teams, key=winPct)[:int(BLUE_CHIP_NEED_TEAMS)]
+            slots = {'QB': ['qb'], 'RB': ['rb'], 'WR': ['wr1', 'wr2'],
+                     'TE': ['te'], 'K': ['k']}
+
+            # League average at each position, so "need" is relative to the league
+            # rather than to an absolute rating that drifts as the league does.
+            leagueAvg = {}
+            for name, slotNames in slots.items():
+                vals = [getattr(t.rosterDict.get(sl), 'playerRating', None)
+                        for t in teams for sl in slotNames]
+                vals = [v for v in vals if v]
+                leagueAvg[name] = sum(vals) / len(vals) if vals else 0
+
+            best, bestScore = None, 0.0
+            for name, slotNames in slots.items():
+                weight = BLUE_CHIP_NEED_WEIGHTS.get(name, 0.0)
+                if weight <= 0:
+                    continue
+                vals = [getattr(t.rosterDict.get(sl), 'playerRating', None)
+                        for t in worst for sl in slotNames]
+                vals = [v for v in vals if v]
+                if not vals:
+                    continue
+                deficit = leagueAvg[name] - (sum(vals) / len(vals))
+                score = deficit * weight
+                if score > bestScore:
+                    best, bestScore = name, score
+            if not best:
+                return None
+            logger.info(f"Blue chip target: {best} (weighted deficit {bestScore:.1f} "
+                        f"across the {len(worst)} weakest clubs)")
+            return getattr(_FP.Position, best)
+        except Exception as e:
+            logger.warning(f"Blue chip targeting failed, falling back to untargeted: {e}")
+            return None
 
     def _ensurePositionSupply(self, reason: str = '') -> dict:
         """Guarantee enough living players at each position to fill all roster
