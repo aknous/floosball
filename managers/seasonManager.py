@@ -283,6 +283,15 @@ class SeasonManager:
         if self.playerManager:
             self.playerManager.releaseDueNames(seasonNumber)
 
+        # Last season's champion stops holding the top of the news feed. The pin exists
+        # to carry the result through the OFFSEASON, which is the window the publisher's
+        # own docstring describes: a rule change or a Cores line would otherwise push the
+        # biggest result of the year off the front page within a day. Once real games are
+        # about to be played it is no longer the most recent moment, and it was reported
+        # stuck — the only unpin lived in `_publishChampionNews`, so the row held the lead
+        # until the NEXT Floos Bowl, some 32 weeks later.
+        self._unpinStaleChampions(seasonNumber)
+
         # Rulebook resets to defaults every NEW season, so each season is a fresh canvas
         # and the fan-voted rule mutations only live for the season that voted them in.
         # Reset BEFORE the Season is built so its GameRules loads clean defaults. This is
@@ -4935,6 +4944,39 @@ class SeasonManager:
             )
         except Exception as e:
             logger.debug(f"Team news publish skipped ({category}): {e}")
+
+    def _unpinStaleChampions(self, seasonNumber: int) -> None:
+        """Release the pin on any Floos Bowl champion from a previous season.
+
+        ⚠️ Scoped `season < seasonNumber` rather than unpinning every champion row, so a
+        champion crowned in THIS season is never unpinned by a mid-season restart —
+        `startNewSeason` also runs on resume, and an unconditional clear there would
+        quietly drop the pin the moment the server bounced.
+
+        Idempotent, and best-effort: a feed that keeps a stale pin is a cosmetic fault,
+        and it must never be able to stop a season from starting.
+        """
+        try:
+            from database.models import LeagueNewsItem
+            changed = (self.db_session.query(LeagueNewsItem)
+                       .filter(LeagueNewsItem.event_type == 'floosbowl_champion',
+                               LeagueNewsItem.pinned == True,          # noqa: E712
+                               LeagueNewsItem.season < seasonNumber)
+                       .update({'pinned': False}, synchronize_session=False))
+            if changed:
+                # ⚠️ Commit rather than leaving it on the shared session. A bulk update
+                # executes immediately and takes SQLite's single write lock; leaving it
+                # open here is the shape that took production down once already, when a
+                # publisher raised between an unpin and its commit.
+                self.db_session.commit()
+                logger.info(f"Unpinned {changed} stale champion news item(s) "
+                            f"at the start of season {seasonNumber}")
+        except Exception as e:
+            try:
+                self.db_session.rollback()
+            except Exception:
+                pass
+            logger.warning(f"Could not unpin stale champion news: {e}")
 
     def _publishChampionNews(self, champion, runnerUp, game) -> None:
         """Put the Floos Bowl winner in the league-news feed, PINNED as the lead.
