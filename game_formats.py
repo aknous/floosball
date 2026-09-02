@@ -569,6 +569,39 @@ class InningsFormat(GameFormat):
             game._inningsContinues = 0
 
     def possessionReceiver(self, game, giver, receiver):
+        # ⚠️ THE `giver` IS NOT ALWAYS THE BATTING TEAM, AND EVERYTHING BELOW ASSUMED IT WAS.
+        # `Game.turnover(offense, defense, ...)` means "this side is handing the ball over",
+        # and on a DEFENSIVE SCORE the engine correctly passes the SCORING team as the giver
+        # — in standard football the team that just scored kicks off, so the scorer gives and
+        # the scored-on team receives. Innings reinterprets `giver` as "whose at-bat this
+        # is", and on a pick-six those are OPPOSITE TEAMS.
+        #
+        # ⚠️ SO A PICK-SIX HANDED THE BALL BACK TO THE TEAM THAT JUST SCORED, inside the
+        # other team's half, and spent one of the BATTING team's tries doing it. Reported by
+        # a user; found in production game 1630 (Sand Dollars 81, Strangers 10), where the
+        # feed reads:
+        #     i2 bottom try1  NYS 20   Turnover! ... picked off ... Pick six!
+        #     i2 bottom try2  SND 20   Bernie Plackett takes the pitch ...
+        # Bottom of the second is the STRANGERS' at-bat and Sand Dollars are on offense in
+        # it. That is the 38-point inning on the line score.
+        #
+        # ⚠️ THE CONTROL IS IN THE SAME GAME: a plain interception one inning earlier
+        # (i1 bottom try2, no score) correctly left the batting team on offense at try3,
+        # because that path calls `turnover(offensiveTeam, defensiveTeam, ...)` with the
+        # giver genuinely batting. Only the defensive-SCORE path swaps the pair.
+        #
+        # The at-bat is a property of the INNING, not of who last touched the ball, so it is
+        # read from the half — the same rule `openingOffense` and the batting-change marker
+        # already use (top = away bats, bottom = home). Fixing it here rather than at the
+        # call site keeps the engine's argument order correct for every other format.
+        # ⚠️ BOTH SIDES COME FROM THE HALF, not from the arguments. Deriving the fielding
+        # team as "whichever of giver/receiver is not batting" degenerates the moment the
+        # batting team is neither of them, and a caller that nominates the wrong pair is
+        # exactly the bug being fixed -- so the gate must not depend on the pair at all.
+        _top = getattr(game, '_inningsHalf', 'top') == 'top'
+        batting = game.awayTeam if _top else game.homeTeam
+        notBatting = game.homeTeam if _top else game.awayTeam
+        giver = batting
         # One-shot: set when this resolution inserts an inning-style feed marker (a batting
         # change or an extended try), so the post-score "next try" marker knows to stay
         # quiet. A flag, not a peek at the feed head — an interleaved entry (a rally line,
@@ -648,7 +681,10 @@ class InningsFormat(GameFormat):
                 game._maybeReadjustGameplans('inning')
             except Exception:
                 pass
-        return receiver
+        # ⚠️ THE OTHER TEAM, not the caller's `receiver` — on a defensive score the caller's
+        # receiver IS the team that was batting, so returning it would flip the at-bat and
+        # then hand the ball straight back to the same side.
+        return notBatting
 
     def checkEarlyEnd(self, game):
         N = self._innings(game)
