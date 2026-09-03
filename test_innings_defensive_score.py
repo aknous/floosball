@@ -10,6 +10,29 @@ other team's half:
     i2 bottom try1  NYS 20   Turnover! ... picked off ... Pick six!
     i2 bottom try2  SND 20   Bernie Plackett takes the pitch ...
 
+VALIDATED END TO END, not just here. Two arms of a forced-innings season, 463 games each,
+instrumented at `Game.turnover` to ask the user's own question -- after a defensive score, is
+the team on offense the one the inning half says is batting?
+
+    WITHOUT the fix   3 defensive scores in innings  ->  3 gave the ball back wrongly
+    WITH the fix      5 defensive scores in innings  ->  0
+
+⚠️ IT FAILS BOTH WAYS, which is why the fix reads the half rather than patching the caller.
+Game 180 of the broken arm flipped the at-bat and then handed the ball to the team that had
+just finished batting (scorer WAS, on offense STL, should have been WAS) -- the mirror of the
+reported symptom, from the same cause.
+
+⚠️ AND THE FIRST VERSION OF THAT HARNESS LIED TWICE, both worth knowing before rebuilding it.
+`self.play` is ALREADY THE CONVERSION when `turnover()` runs -- `_attemptConversion` replaces
+it -- so keying the probe off `play.isTd` found ZERO defensive scores across 8,250 innings
+turnovers. And judging against the half read BEFORE the call reports a legitimate third-out
+flip as a violation. The signature is the argument order; the verdict is the post-call half.
+
+⚠️ FORCING A FORMAT LOCALLY ALSO NEEDS THE SEASON STAMP. `tools_force_format.py` writes
+`rule_overrides` but not `rule_overrides_season`, so season start takes the branch that
+writes the stamp itself -- and that write raced the shared session and died with "database is
+locked" before a single game ran. Stamping it alongside the override skips the branch.
+
 ⚠️ THE TEST ASSERTS AGAINST THE HALF, NOT AGAINST THE ARGUMENTS. Checking that the return
 differs from the giver would pass for the wrong reason the moment somebody "fixed" it by
 swapping the call site; who bats in the bottom of an inning is a rule, and that is what is
