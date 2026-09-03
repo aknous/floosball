@@ -37,7 +37,7 @@ def mkStub():
     g = SimpleNamespace(_inningsTries=0, _inningsContinue=False, _inningsContinues=0,
                         _inningsHalf='top', _inningsNumber=1, gameFeed=[],
                         gameRules=SimpleNamespace(triesPerInning=3, inningsPerGame=3),
-                        homeTeam='H', awayTeam='A')
+                        homeTeam='FIELD', awayTeam='BAT')   # top of the inning -> AWAY bats
     g._maybeReadjustGameplans = lambda _x: None
     return g
 
