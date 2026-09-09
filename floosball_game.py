@@ -12704,8 +12704,11 @@ class Game:
         # Skip for formats that don't allow a MID-PLAY latch (chess_clock ends on
         # score+budget conditions a defensive score can flip within the same play —
         # the main loop marks it Final at a stable point instead).
+        # ⚠️ AND NOT WHILE A TRY IS STILL OWED -- see `_tryStillOwed`. This is a DISPLAY
+        # concern that mutates real state, and `isGameOver()` short-circuits on it, so a
+        # touchdown latched here ends the game before its own extra point is kicked.
         if (self.status != GameStatus.Final and self.format.latchFinalMidPlay()
-                and self.isGameOver()):
+                and not self._tryStillOwed() and self.isGameOver()):
             self.status = GameStatus.Final
 
         # (WP/WPA computed above in _resolvePlayWpa for real plays; newHomeWp/newAwayWp/
@@ -14278,6 +14281,41 @@ class Game:
         scoring = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
         other = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
         return scoring > other
+
+    def _tryStillOwed(self) -> bool:
+        """True while a touchdown's conversion has not been taken yet.
+
+        ⚠️ A TOUCHDOWN IS NOT A FINISHED SCORING PLAY, AND THE ENGINE DECLARED GAMES OVER ON
+        ONE (prod game 2141, ended 21-21 in regulation). A trailing team scored as the clock
+        hit 0:00 -- one point down with the try still to come -- and the touchdown's own
+        broadcast ran `isGameOver()`, which at Q4 with an expired clock answers "yes, the
+        scores differ". That latched `status = Final`, the extra point went through and tied
+        it, and the main loop's next `isGameOver()` short-circuits on `status == Final`. The
+        tying kick landed on a game that had already been declared over, so it never reached
+        overtime and the tie stood.
+
+        ⚠️ IT ONLY HAPPENS IN PRODUCTION, WHICH IS WHY NO SIM EVER SHOWED IT. The latch sits
+        BELOW `broadcastGameState`'s `if not BROADCASTING_AVAILABLE or not
+        broadcaster.is_enabled(): return`, so with the broadcaster off -- every local sim,
+        every fitting run, every `--timing=fast` season -- the line never executes and the
+        same game goes to overtime correctly. **Whether a game ends in a tie depended on
+        whether anybody was watching.**
+
+        ⚠️ IT ASKS `_conversionIsMoot`, NOT A COMPARISON OF ITS OWN. That is the same
+        predicate `_attemptConversion` uses to decide whether to take the try at all, so
+        "the try is coming" and "the game may be declared over" cannot drift apart -- and it
+        keeps the walk-off latching exactly as before, since a scorer who has gone AHEAD owes
+        no meaningful try and the game really is finished. It is format-agnostic for free:
+        `_conversionIsMoot` defers to `isGameOver()`, which defers to `format.checkEarlyEnd`.
+        """
+        play = getattr(self, 'play', None)
+        if play is None or getattr(play, 'playResult', None) is not PlayResult.Touchdown:
+            return False
+        # ⚠️ `scoringTeam` IS STAMPED BY `_addScore`, which every scoring path goes through --
+        # deliberately not `play.isTd`, which is set on five of the six touchdown paths and
+        # missing from the main offensive one (`floosball_game.py:10329`).
+        scorer = getattr(play, 'scoringTeam', None)
+        return scorer is not None and not self._conversionIsMoot(scorer)
 
     def _attemptConversion(self, scoringTeam: 'FloosTeam.Team', opposingTeam: 'FloosTeam.Team',
                            trackPtsAllowed: bool = True):
