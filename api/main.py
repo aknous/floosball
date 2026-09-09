@@ -82,6 +82,28 @@ async def health_check():
 floosball_app = None
 
 
+def _mvpCardEquipped(session, userId: int, season: int, week: int) -> bool:
+    """Is this user fielding an MVP-classified card, which unlocks the FLEX slot on its own.
+
+    ⚠️ ONE DEFINITION, BECAUSE TWO PLACES ASK AND THEY MUST NOT DISAGREE. The equipped-cards
+    endpoint uses it to decide who HAS the FLEX slot; the shop uses it to warn a user that
+    Accession would buy them a slot they already hold. If those two ever drift, the shop
+    stops warning about the exact case it exists to warn about.
+    """
+    from database.models import EquippedCard, UserCard, CardTemplate
+    return session.query(EquippedCard.id).join(
+        UserCard, EquippedCard.user_card_id == UserCard.id
+    ).join(
+        CardTemplate, UserCard.card_template_id == CardTemplate.id
+    ).filter(
+        EquippedCard.user_id == userId,
+        EquippedCard.season == season,
+        EquippedCard.week == week,
+        CardTemplate.classification.isnot(None),
+        CardTemplate.classification.contains("mvp"),
+    ).first() is not None
+
+
 def _areGamesStarted() -> bool:
     """True only when at least one game is Active or Final (not just Scheduled).
 
@@ -10557,21 +10579,12 @@ def getEquippedCards(user: _User = Depends(_getCurrentUser)):
                 "swapBonusActive": swapBonusActive,
             })
 
-        # Check if user qualifies for 6th slot: MVP card equipped OR active temp_card_slot power-up
+        # Who gets the FLEX slot: an MVP card equipped, OR an active temp_card_slot power-up.
+        # ⚠️ ONE SLOT, NOT ONE EACH -- this is an if/else onto a single `hasExtraSlot`, so
+        # the two sources do NOT stack and MVP wins. The guide says so now; the SHOP does
+        # not, and will happily sell Accession to somebody already holding an MVP card.
         from database.repositories.shop_repository import ShopPurchaseRepository
-        mvpEquipped = (
-            session.query(EquippedCard.id)
-            .join(UserCard, EquippedCard.user_card_id == UserCard.id)
-            .join(CardTemplate, UserCard.card_template_id == CardTemplate.id)
-            .filter(
-                EquippedCard.user_id == user.id,
-                EquippedCard.season == currentSeason,
-                EquippedCard.week == currentWeek,
-                CardTemplate.classification.isnot(None),
-                CardTemplate.classification.contains("mvp"),
-            )
-            .first()
-        ) is not None
+        mvpEquipped = _mvpCardEquipped(session, user.id, currentSeason, currentWeek)
         extraSlotSource = None  # "mvp" | "temp_card_slot"
         extraSlotInfo = None
         if mvpEquipped:
@@ -12064,6 +12077,17 @@ def getShopPowerups(user: _User = Depends(_getCurrentUser)):
                     activeSlot is None
                     and seasonCount < info.get("seasonLimit", 2) and currentWeek > 0
                 )
+                # ⚠️ ACCESSION AND AN MVP CARD UNLOCK THE **SAME SINGLE SLOT**, so buying this
+                # while fielding an MVP card buys nothing -- 200 Floobits and one of only two
+                # season purchases, for a slot already held. `getEquippedCards` resolves the
+                # source with an if/else in which MVP wins, so the powerup is not merely
+                # redundant, it is inert. WARN, DO NOT BLOCK (owner, 2026-09-09): an MVP card
+                # can be unequipped at any time, so a user stocking up before a lineup change
+                # is making a real choice and the shop has no business refusing it.
+                if item["available"] and _mvpCardEquipped(session, user.id, currentSeasonNum, currentWeek):
+                    item["warning"] = ("You already have the FLEX slot from an equipped MVP card. "
+                                       "Accession unlocks the same slot, so it adds nothing until "
+                                       "that card comes out of your lineup.")
 
             elif slug == "fortunes_favor":
                 # 1 active at a time, 2 per season (mirrors temp_flex)
@@ -12206,7 +12230,7 @@ def buyPowerup(req: BuyPowerupRequest, user: _User = Depends(_getCurrentUser)):
             if activeSlot:
                 if activeSlot.week > currentWeek:
                     raise HTTPException(status_code=409, detail="You already have Accession starting next week")
-                raise HTTPException(status_code=409, detail="You already have an active 6th card slot")
+                raise HTTPException(status_code=409, detail="You already have an active FLEX slot")
             seasonCount = shopRepo.getSeasonPurchaseCount(user.id, currentSeasonNum, slug)
             seasonLimit = itemInfo.get("seasonLimit", 2)
             if seasonCount >= seasonLimit:

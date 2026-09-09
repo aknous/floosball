@@ -1956,10 +1956,32 @@ class SeasonManager:
                 # Team data from live objects (ELO, streaks, losses, playoff status)
                 teamManager = self.serviceContainer.getService('team_manager')
 
-                # Count big plays from in-memory game objects per team
+                # Count big plays from in-memory game objects per team.
+                #
+                # ⚠️ `activeGames` IS ALREADY NONE BY THE TIME THIS RUNS, AND HIGHLIGHT REEL HAS
+                # THEREFORE NEVER PAID A SINGLE FLOOBIT. The week loop nulls it at
+                # `self.currentSeason.activeGames = None` (~:989, "so roster swaps are unlocked
+                # between weeks") and keeps the reference in `completedWeekGames`; scoring runs
+                # far downstream of that -- `_onWeekComplete` (~:1091) -> `_processWeekCardEffects`
+                # (~:1531) -> here. So the guard was always False, `bigPlaysByTeam` was always
+                # empty, `favoriteTeamBigPlays` always 0, and the card returned its
+                # "waiting for big plays" branch every week for every owner. Reported by a user
+                # whose team had ten big plays and got nothing.
+                #
+                # ⚠️ THE PROJECTION DISAGREED AND THAT IS WHY IT READ AS A BROKEN CARD RATHER THAN
+                # AN UNTRIGGERED ONE. `cardProjection` reads `seasonTeamStats['bigPlays']`, which
+                # IS populated, so the shop and the lineup showed a plausible number beside a
+                # payout that could not happen.
+                #
+                # ⚠️ CREDITING BOTH TEAMS IS DELIBERATE, not a shortcut -- `recordManager` says so
+                # where it accumulates the same figure: the card counts big plays in games the
+                # favorite team PLAYED IN, whichever side executed them. Leave it; changing it
+                # here alone would put the payout and the projection at odds.
                 bigPlaysByTeam = {}
-                if self.currentSeason and self.currentSeason.activeGames:
-                    for game in self.currentSeason.activeGames:
+                weekGames = (self.currentSeason.completedWeekGames
+                             or self.currentSeason.activeGames or []) if self.currentSeason else []
+                if weekGames:
+                    for game in weekGames:
                         homeId = getattr(game, 'homeTeam', {})
                         awayId = getattr(game, 'awayTeam', {})
                         if hasattr(homeId, 'id'):
@@ -3122,7 +3144,7 @@ class SeasonManager:
                         purchase.user_id,
                         'powerup_expired',
                         'Accession Expired',
-                        'Your Accession power-up has expired. The 6th card slot is no longer available.',
+                        'Your Accession power-up has expired. The FLEX slot is no longer available.',
                         data={'itemSlug': 'temp_card_slot', 'expiredAtWeek': currentWeek - 1},
                     )
                     notifiedCount += 1
