@@ -3057,8 +3057,8 @@ class Game:
         this, not the running total."""
         if getattr(self.format, 'key', '') != 'frames':
             return None
-        fh = self.homeScore - getattr(self, '_frameStartHome', 0)
-        fa = self.awayScore - getattr(self, '_frameStartAway', 0)
+        from game_formats import framePoints
+        fh, fa = framePoints(self)
         return (fh - fa) if self.offensiveTeam is self.homeTeam else (fa - fh)
 
     def _frameDecisionDiff(self):
@@ -3084,8 +3084,8 @@ class Game:
         # Project the frames-won with the current frame's lean (mirrors awardFrames).
         fh = float(getattr(self, '_framesWonHome', 0.0))
         fa = float(getattr(self, '_framesWonAway', 0.0))
-        curH = self.homeScore - getattr(self, '_frameStartHome', 0)
-        curA = self.awayScore - getattr(self, '_frameStartAway', 0)
+        from game_formats import framePoints
+        curH, curA = framePoints(self)
         if curH > curA:
             fh += 1
         elif curA > curH:
@@ -3113,8 +3113,8 @@ class Game:
         if getattr(self.format, 'key', '') != 'frames':
             return None
         isHome = self.offensiveTeam is self.homeTeam
-        curH = self.homeScore - getattr(self, '_frameStartHome', 0)
-        curA = self.awayScore - getattr(self, '_frameStartAway', 0)
+        from game_formats import framePoints
+        curH, curA = framePoints(self)
         if isHome:
             curH += points
         else:
@@ -3284,8 +3284,8 @@ class Game:
             return None
         fh = float(getattr(self, '_framesWonHome', 0.0))
         fa = float(getattr(self, '_framesWonAway', 0.0))
-        curH = self.homeScore - getattr(self, '_frameStartHome', 0)
-        curA = self.awayScore - getattr(self, '_frameStartAway', 0)
+        from game_formats import framePoints
+        curH, curA = framePoints(self)
         if curH > curA:
             fh += 1
         elif curA > curH:
@@ -13853,8 +13853,8 @@ class Game:
 
         fh = float(getattr(self, '_framesWonHome', 0.0))
         fa = float(getattr(self, '_framesWonAway', 0.0))
-        curH = self.homeScore - getattr(self, '_frameStartHome', 0)
-        curA = self.awayScore - getattr(self, '_frameStartAway', 0)
+        from game_formats import framePoints
+        curH, curA = framePoints(self)
         if curH > curA:
             fh += 1
         elif curA > curH:
