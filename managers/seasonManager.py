@@ -1808,6 +1808,49 @@ class SeasonManager:
             session.flush()
             logger.info(f"Auto-carried equipped cards for {carried} users into week {currentWeek}")
 
+    def _bigPlaysByTeam(self) -> dict:
+        """{teamId: big plays in the week's games} — what Highlight Reel pays on.
+
+        ⚠️ IT READS `completedWeekGames`, AND READING `activeGames` MEANT THE CARD NEVER PAID
+        A FLOOBIT TO ANYBODY. The week loop nulls `activeGames` ("so roster swaps are unlocked
+        between weeks") and keeps the reference in `completedWeekGames`; card scoring runs far
+        downstream of that -- the null at ~:989, then `_onWeekComplete`, then
+        `_processWeekCardEffects`, then this. So the old guard was always False, the map was
+        always empty, `favoriteTeamBigPlays` was always 0, and `_computeHighlightReel` returned
+        its "waiting for big plays" branch every week of every season.
+
+        ⚠️ IT IS A METHOD SO IT CAN BE TESTED. Inline in the middle of a 400-line scoring
+        routine the only way to check it was to read it, which is how it survived. The
+        regression hands it a REALLY SIMULATED game and asserts a real count -- the four cases
+        before it assert only the shape and would all still pass if `isBigPlay` were never set
+        on a play, or if the count never reached the payout.
+
+        ⚠️ CREDITING BOTH TEAMS IS DELIBERATE, not a shortcut. `recordManager` states the same
+        intent where it accumulates the season figure: the card counts big plays in games the
+        favorite team PLAYED IN, whichever side executed them, and `cardProjection` reads that
+        same both-teams number. Attributing by WPA here alone would put the payout and the
+        projection at odds.
+        """
+        out: dict = {}
+        season = self.currentSeason
+        games = (season.completedWeekGames or season.activeGames or []) if season else []
+        for game in games:
+            homeId = getattr(game, 'homeTeam', None)
+            awayId = getattr(game, 'awayTeam', None)
+            homeId = homeId.id if hasattr(homeId, 'id') else homeId
+            awayId = awayId.id if hasattr(awayId, 'id') else awayId
+            count = sum(
+                1 for entry in getattr(game, 'gameFeed', [])
+                if getattr(entry.get('play') if isinstance(entry, dict) else None,
+                           'isBigPlay', False)
+            )
+            if not count:
+                continue
+            for tid in (homeId, awayId):
+                if tid is not None:
+                    out[tid] = out.get(tid, 0) + count
+        return out
+
     def _processWeekCardEffects(self, season: int, week: int) -> None:
         """Calculate and persist card effect bonuses for all users after a week completes."""
         try:
@@ -1956,48 +1999,7 @@ class SeasonManager:
                 # Team data from live objects (ELO, streaks, losses, playoff status)
                 teamManager = self.serviceContainer.getService('team_manager')
 
-                # Count big plays from in-memory game objects per team.
-                #
-                # ⚠️ `activeGames` IS ALREADY NONE BY THE TIME THIS RUNS, AND HIGHLIGHT REEL HAS
-                # THEREFORE NEVER PAID A SINGLE FLOOBIT. The week loop nulls it at
-                # `self.currentSeason.activeGames = None` (~:989, "so roster swaps are unlocked
-                # between weeks") and keeps the reference in `completedWeekGames`; scoring runs
-                # far downstream of that -- `_onWeekComplete` (~:1091) -> `_processWeekCardEffects`
-                # (~:1531) -> here. So the guard was always False, `bigPlaysByTeam` was always
-                # empty, `favoriteTeamBigPlays` always 0, and the card returned its
-                # "waiting for big plays" branch every week for every owner. Reported by a user
-                # whose team had ten big plays and got nothing.
-                #
-                # ⚠️ THE PROJECTION DISAGREED AND THAT IS WHY IT READ AS A BROKEN CARD RATHER THAN
-                # AN UNTRIGGERED ONE. `cardProjection` reads `seasonTeamStats['bigPlays']`, which
-                # IS populated, so the shop and the lineup showed a plausible number beside a
-                # payout that could not happen.
-                #
-                # ⚠️ CREDITING BOTH TEAMS IS DELIBERATE, not a shortcut -- `recordManager` says so
-                # where it accumulates the same figure: the card counts big plays in games the
-                # favorite team PLAYED IN, whichever side executed them. Leave it; changing it
-                # here alone would put the payout and the projection at odds.
-                bigPlaysByTeam = {}
-                weekGames = (self.currentSeason.completedWeekGames
-                             or self.currentSeason.activeGames or []) if self.currentSeason else []
-                if weekGames:
-                    for game in weekGames:
-                        homeId = getattr(game, 'homeTeam', {})
-                        awayId = getattr(game, 'awayTeam', {})
-                        if hasattr(homeId, 'id'):
-                            homeId = homeId.id
-                        if hasattr(awayId, 'id'):
-                            awayId = awayId.id
-                        homeCount = 0
-                        awayCount = 0
-                        for entry in getattr(game, 'gameFeed', []):
-                            play = entry.get('play') if isinstance(entry, dict) else None
-                            if getattr(play, 'isBigPlay', False):
-                                # Count for both teams since we can't easily tell which
-                                homeCount += 1
-                                awayCount += 1
-                        bigPlaysByTeam[homeId] = bigPlaysByTeam.get(homeId, 0) + homeCount
-                        bigPlaysByTeam[awayId] = bigPlaysByTeam.get(awayId, 0) + awayCount
+                bigPlaysByTeam = self._bigPlaysByTeam()
 
                 # ─── Get weekly modifier ──────────────────────────────────────
                 activeModifier = ""

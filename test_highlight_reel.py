@@ -37,15 +37,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 season = open(os.path.join(HERE, 'managers', 'seasonManager.py')).read()
 
 print("\n1. The count reads the field that still holds the week's games")
-block = season.split('bigPlaysByTeam = {}')[1].split('# ─── Get weekly modifier')[0]
+block = season.split('def _bigPlaysByTeam')[1].split('    def ', 1)[0]
 expect('it reads completedWeekGames', 'completedWeekGames' in block)
 expect('with activeGames only as a fallback',
        block.index('completedWeekGames') < block.index('activeGames'))
 
-print("\n2. ...and the clear really does happen first")
-clearAt = season.index('self.currentSeason.activeGames = None', season.index('completedWeekGames = self.currentSeason.activeGames'))
-countAt = season.index('bigPlaysByTeam = {}')
-expect('activeGames is nulled before the card scoring reads anything', clearAt < countAt)
+print("\n2. ...and the clear really does happen before scoring reads anything")
+clearAt = season.index('self.currentSeason.activeGames = None',
+                       season.index('completedWeekGames = self.currentSeason.activeGames'))
+useAt = season.index('bigPlaysByTeam = self._bigPlaysByTeam()')
+expect('activeGames is nulled first', clearAt < useAt)
 
 print("\n3. The card pays on a real count and says so when there is none")
 from managers.cardEffects import _computeHighlightReel
@@ -74,6 +75,68 @@ expect('and credits both sides of the game',
 proj = open(os.path.join(HERE, 'managers', 'cardProjection.py')).read()
 expect('the projection reads that same both-teams figure',
        "favStats.get('bigPlays'" in proj)
+
+print("\n5. END TO END -- a really simulated game, through the real counting code")
+# ⚠️ CASES 1-4 ONLY ASSERT THE SHAPE. They read the source and call the compute function with
+# a number I typed in, so they would ALL still pass if `isBigPlay` were never set on a play,
+# or if the count never reached the payout. This case plays a real game and carries its feed
+# through `_bigPlaysByTeam` into `_computeHighlightReel`.
+import asyncio, random
+import numpy as np
+from scenario import _makeTeam
+from game_rules import GameRules
+import floosball_game as FG
+from managers.seasonManager import SeasonManager
+
+
+async def _play(gid):
+    random.seed(gid); np.random.seed(gid % (2 ** 31))
+    h, a = _makeTeam('H', 'HOM', 100 + gid * 10), _makeTeam('A', 'AWY', 500 + gid * 10)
+    h.id, a.id = 101, 202
+    g = FG.Game(h, a, gameRules=GameRules()); g.id = gid
+    g._anomalyAttentionLoaded = True; g._anomalyEnabled = False
+    g._anomalyAttention = {}; g._anomalyState = {}
+    g._criticalityMultiplier = 1.0; g._criticalityActive = False; g._anomalyIntensity = 1.0
+    g.previousHomeWinProbability = g.previousAwayWinProbability = 50.0
+    await g.playGame()
+    return g
+
+
+# a seed whose game actually contains big plays, so the assertion is about the wiring
+played = None
+for seed in range(12):
+    g = asyncio.run(_play(seed))
+    if sum(1 for e in g.gameFeed
+           if getattr(e.get('play') if isinstance(e, dict) else None, 'isBigPlay', False)):
+        played = g
+        break
+expect('a simulated game contains big plays at all', played is not None)
+
+truth = sum(1 for e in played.gameFeed
+            if getattr(e.get('play') if isinstance(e, dict) else None, 'isBigPlay', False))
+
+class _Season:
+    """The season as it looks when card scoring runs: activeGames already cleared."""
+    completedWeekGames = [played]
+    activeGames = None
+
+sm = SeasonManager.__new__(SeasonManager)       # no boot; the method reads only currentSeason
+sm.currentSeason = _Season()
+counted = sm._bigPlaysByTeam()
+expect(f'the count reaches both teams in the game ({counted})',
+       counted.get(101) == truth and counted.get(202) == truth)
+
+# ⚠️ AND THE SAME OBJECT WITH ONLY `activeGames` SET IS THE BUG, REPRODUCED.
+class _Cleared:
+    completedWeekGames = None
+    activeGames = None
+sm.currentSeason = _Cleared()
+expect('with nothing to read it pays nothing rather than raising', sm._bigPlaysByTeam() == {})
+
+payout = _computeHighlightReel({'rewardValue': 6}, type('C', (), {
+    'favoriteTeamBigPlays': counted.get(101, 0)})(), None, None)
+expect(f'and a fan of the home team is paid for them ({payout.floobits}F on {truth} plays)',
+       payout.floobits == 6 * truth and truth > 0)
 
 print(f"\n{len(fails)} failed" if fails else "\nall good")
 sys.exit(1 if fails else 0)
