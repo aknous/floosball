@@ -44,6 +44,34 @@ def _cleanNum(v):
     return int(n) if n == int(n) else n
 
 
+def framePoints(game):
+    """This frame's points for (home, away), at the precision the engine keeps its scores.
+
+    ⚠️ A TIED FRAME WAS BEING AWARDED TO ONE SIDE, AND THE BOX SCORE SHOWED THE TIE. Every
+    caller computed `game.homeScore - game._frameStartHome` inline and compared the raw
+    floats. Scores are FRACTIONAL under a chaos ruleset -- `_randomChaosValue` returns
+    `round(uniform(lo, hi), 1)`, so a touchdown can be worth 7.1 -- and subtracting two
+    accumulated floats leaves an ulp behind: `27.8 - 20.7` is **7.100000000000001** against
+    a home frame of exactly `7.1`. So `a > h`, the frame went to the away side, and
+    `_cleanNum` rounded both to 7.1 for display. Reported from a frames game on a Criticality
+    week as a frame that looked tied and was not halved.
+
+    ⚠️ AND THE BOX SCORE WAS THE SMALLER HALF. Five decision helpers ran the same
+    subtraction -- `_frameScoreDiff`, `_frameDecisionDiff`, `_framesMatchResultIfAdd`,
+    `_framesLeadingNow` and `_chooseFramesConversion` -- so "am I leading this frame" and
+    the whole `_framesFgWins` / `_framesFgFutile` family were answering off an ulp. A coach
+    kicking to win a match he had already drawn is the same bug, one layer in.
+
+    ⚠️ ROUNDING TO 2dp IS EXACT HERE, NOT A FUDGE. `_addScore` already keeps every running
+    total at `round(x, 2)` and chaos values carry ONE decimal, so a real frame margin is
+    always a multiple of 0.1 and can never hide under the rounding. One definition, because
+    six copies of a comparison is how the two halves came to disagree in the first place.
+    """
+    h = round(game.homeScore - getattr(game, '_frameStartHome', 0), 2)
+    a = round(game.awayScore - getattr(game, '_frameStartAway', 0), 2)
+    return h, a
+
+
 class GameFormat:
     """Standard football: cumulative score, higher wins at the end of regulation/OT.
     Every hook here is the identity/no-op the engine assumes by default."""
@@ -846,8 +874,7 @@ class FramesFormat(GameFormat):
         target = min(N, int(self._elapsed(game) / frameLen)) if frameLen else N
         awarded = False
         while getattr(game, '_frameIndex', 0) < target:
-            h = game.homeScore - getattr(game, '_frameStartHome', 0)
-            a = game.awayScore - getattr(game, '_frameStartAway', 0)
+            h, a = framePoints(game)
             if h > a:
                 game._framesWonHome = getattr(game, '_framesWonHome', 0.0) + 1
                 winner = 'home'
@@ -986,8 +1013,8 @@ class FramesFormat(GameFormat):
             'frameClock': game.formatTime(frameRem),
             'framesWonHome': _cleanNum(getattr(game, '_framesWonHome', 0.0)),
             'framesWonAway': _cleanNum(getattr(game, '_framesWonAway', 0.0)),
-            'frameHome': _cleanNum(game.homeScore - getattr(game, '_frameStartHome', 0)),
-            'frameAway': _cleanNum(game.awayScore - getattr(game, '_frameStartAway', 0)),
+            'frameHome': _cleanNum(framePoints(game)[0]),
+            'frameAway': _cleanNum(framePoints(game)[1]),
             # Per-frame line: completed frames (points + winner); the current frame's
             # in-progress points are frameHome/frameAway, future frames render blank.
             'frameResults': [{'home': _cleanNum(r.get('home')), 'away': _cleanNum(r.get('away')),
