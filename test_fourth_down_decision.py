@@ -1,4 +1,4 @@
-"""4th & 1 is one decision, fitted to the NFL.
+"""The normal-game 4th down is one model, fitted to the NFL.
 
 ⚠️ GOING FOR IT ON 4TH & 1 WAS ROLLED IN ABOUT EIGHT PLACES, each with its own threshold
 and its own idea of score and field position — a team trailing in the first half outside
@@ -11,7 +11,12 @@ directly, which never picks a run concept, so the QB sneak (which is allowed on 
 4th & short) only ever fired on 3rd down. The go play now runs through the normal play
 path.
 
-Run: .venv/bin/python test_fourth_and_one.py
+⚠️ AND THE KICK WAS A HARD CUTOFF. Inside the opponent's 40 a makeable field goal was
+taken ~90% of the time out to 57 yards, where NFL coaches mostly go for it or punt. The
+kick-or-punt choice now follows the kicker's make probability along the NFL's 52-58 yard
+cliff, so a big leg earns longer tries.
+
+Run: .venv/bin/python test_fourth_down_decision.py
 """
 import os
 import sys
@@ -30,7 +35,7 @@ def prob(ballOn, offScore=14, defScore=14, quarter=2, clock=600, distance=1, agg
     s.situation(quarter=quarter, clock=clock, down=4, distance=distance, ballOn=ballOn,
                 offScore=offScore, defScore=defScore)
     s.home.coach.aggressiveness = aggr
-    return s.game._fourthAndOneGoProbability(s._scoreDiff(), s.home.coach)
+    return s.game._fourthDownGoProbability(s._scoreDiff(), s.home.coach)
 
 
 class TheCurve(unittest.TestCase):
@@ -56,8 +61,13 @@ class TheCurve(unittest.TestCase):
         self.assertIsNone(prob(40, quarter=2, clock=45))
         self.assertIsNone(prob(40, quarter=5, clock=400))
 
-    def testOnlyFourthAndOne(self):
-        self.assertIsNone(prob(40, distance=2))
+    def testTheShortYardageGoPeaksBetweenTheThirtyAndTheFortyFive(self):
+        """Too far for an easy kick, too close to punt. In the red zone the short field
+        goal is the play, so a 4th & 3 goes LESS there than at the 40."""
+        self.assertGreater(prob(40, distance=3), prob(15, distance=3) + 0.2)
+
+    def testLongYardageAlmostNeverGoes(self):
+        self.assertLess(prob(40, distance=12), 0.1)
 
 
 class TheDecision(unittest.TestCase):
@@ -81,6 +91,31 @@ class TheDecision(unittest.TestCase):
         kinds, _ = self._calls(quarter=1, clock=600, ballOn=90, offScore=0, defScore=0)
         punts = sum(1 for k in kinds if k is PlayType.Punt)
         self.assertGreater(punts / len(kinds), 0.75)
+
+
+class TheKick(unittest.TestCase):
+
+    def _share(self, ballOn, leg):
+        s = Scenario()
+        s.situation(quarter=2, clock=600, down=4, distance=8, ballOn=ballOn)
+        s.setKickerLeg('home', leg)
+        g = s.game
+        kicker = g.offensiveTeam.rosterDict['k']
+        maxDist = kicker.maxFgDistance - g.gameRules.fgSnapDistance
+        return g._fourthDownKickShare(g._estimateFgProbability(), g._coachFgThreshold(g.offensiveTeam.coach),
+                                      maxDist, True)
+
+    def testAShortKickIsTakenAndALongOneMostlyIsNot(self):
+        self.assertGreater(self._share(25, 62), 0.9)        # 42 yards
+        self.assertLess(self._share(41, 62), 0.3)           # 58 yards
+
+    def testOutOfRangeIsNeverAKick(self):
+        self.assertEqual(self._share(45, 55), 0.0)          # 62 yards, range 55
+
+    def testAFutileKickIsNeverTaken(self):
+        s = Scenario()
+        s.situation(quarter=2, clock=600, down=4, distance=8, ballOn=20)
+        self.assertEqual(s.game._fourthDownKickShare(0.95, 0.38, 60, False), 0.0)
 
 
 if __name__ == '__main__':

@@ -3639,35 +3639,47 @@ class Game:
                     'medium' if self.yardsToFirstDown <= 12 else 'long'))
             return
 
-        # ── 4TH & 1: ONE DECISION, NOT EIGHT ──
-        # ⚠️ Going for it on 4th & 1 used to be rolled separately in about eight branches
-        # below, each with its own threshold and its own idea of score and field position
-        # (a team trailing in the first half outside FG range NEVER went for it). Against
-        # NFL 2021-25 the sim went 32-52% of the time in opponent territory where the NFL
-        # goes 85-94%, and 0-10% in its own half where the NFL goes 32-64% — while
-        # converting MORE often than the NFL does (76% vs 70%). One curve now decides it.
-        # The late-game clock branches below still own the final 5:00 of Q4, the last
-        # minute of Q2 and overtime, where the decision is about the clock first.
-        goOnOne = self._fourthAndOneGoProbability(scoreDiff, coach)
-        if goOnOne is not None:
+        # ── THE NORMAL-GAME 4TH DOWN: GO, KICK OR PUNT, ON ONE MODEL ──
+        # ⚠️ This used to be a tree of ~20 branches, each rolling its own threshold with
+        # its own idea of score and field position — a team trailing in the first half
+        # outside FG range NEVER went for it on 4th & 1, and inside the opponent's 40 a
+        # 55-yard kick was taken ~90% of the time. Against NFL 2021-25 the sim went for it
+        # on 4th & 1 in opponent territory 32-52% of the time (NFL 85-94%), on 4th & 2-3
+        # about half as often as the NFL, and kicked from 52-57 yards where NFL coaches
+        # mostly go or punt — while CONVERTING 4th & 1 more often than the NFL (76% vs 70%).
+        # Two fitted pieces now decide it: `_fourthDownGoProbability` (go or not) and
+        # `_fourthDownKickShare` (kick or punt, off THIS kicker's make probability, so a
+        # big leg genuinely earns longer tries). The late-game clock branches below still
+        # own the final 5:00 of Q4, the last minute of Q2 and overtime, where the decision
+        # is about the clock first; other formats keep their own strategy.
+        goProb = self._fourthDownGoProbability(scoreDiff, coach)
+        if goProb is not None:
+            kickShare = self._fourthDownKickShare(fgProb, fgThreshold, kickerMaxDistance, fgHelps)
             self.play.insights['fourthDown'] = {
-                'decision': None, 'goProbability': round(goOnOne * 100, 1),
+                'decision': None, 'goProbability': round(goProb * 100, 1),
+                'kickShareIfNotGoing': round(kickShare * 100, 1),
                 'fgProbability': round(fgProb * 100, 1), 'inFgRange': inFieldGoalRange,
                 'yardsToEndzone': self.yardsToEndzone,
                 'coachAggr': coach.aggressiveness if coach else None,
             }
-            goes = _random.random() < goOnOne
-            # Declined: take a kick that helps, or punt — but never punt from inside the
-            # opponent's 40, which nets almost nothing (the rule the branches below keep).
-            if not goes and not (inFieldGoalRange and fgHelps) and self.yardsToEndzone <= 40:
+            if (chargedInRange and fgHelps and self.yardsToFirstDown > 2
+                    and self.yardsToEndzone > 8):
+                # A charged awakened kicker takes the free three (unchanged rule).
+                self.play.insights['fourthDown']['decision'] = 'chargedKick'
+                self.play.playType = PlayType.FieldGoal
+                return
+            goes = _random.random() < goProb
+            # Nothing to kick and too close to punt: go. (Only reachable with no kicker, or
+            # one whose range stops short of a 50-yarder, since a declined go otherwise kicks.)
+            if not goes and kickShare <= 0 and self.yardsToEndzone <= 35:
                 goes = True
             if goes:
                 self.play.insights['fourthDown']['decision'] = 'goForIt'
-                # Through the normal play path, so a 4th & 1 gets the same concepts, QB
-                # sneak and audible as a 3rd & 1. A bare runPlay() here never picked a
+                # Through the normal play path, so a 4th & short gets the same concepts, QB
+                # sneak and audible as a 3rd & short. A bare runPlay() here never picked a
                 # concept, which meant a final-down sneak could not happen at all.
                 self._executeWeightedPlay(self._computePlayWeights(scoreDiff, coach))
-            elif inFieldGoalRange and fgHelps:
+            elif _random.random() < kickShare:
                 self.play.insights['fourthDown']['decision'] = 'fieldGoal'
                 self.play.playType = PlayType.FieldGoal
             else:
@@ -4074,29 +4086,49 @@ class Game:
                 self.play.playType = PlayType.Punt
                 return
 
-    def _fourthAndOneGoProbability(self, scoreDiff: int, coach) -> float:
-        """Chance the offense goes for it on 4th & 1, or None where this curve does not
-        decide it (other formats, the end-of-half clock windows, overtime, 4th & 2+).
+    def _fourthDownGoProbability(self, scoreDiff: int, coach) -> float:
+        """Chance the offense goes for it on this 4th down, or None where this model does
+        not decide it (other formats, the end-of-half clock windows, overtime).
 
-        Fitted to NFL 2021-25: ~89% anywhere in opponent territory, falling through
-        midfield to 64% at the offense's own 43, 32% at its 28 and 9% deep in its own
-        end. Score and coach aggressiveness move it in log-odds: the NFL goes 97% trailing
-        by 9+ in opponent territory and 80% leading by 9+, and 73% vs 20% in its own half.
+        The base comes from `FOURTH_GO_TABLE`, NFL 2021-25 go rates by yards to go and
+        yards to the end zone (smoothed). Its shape is the point: for 4th & 2+ the NFL
+        goes MOST between the opponent's 30 and 45 — too far for an easy kick, too close
+        to punt — and less in the red zone, where the short field goal is the percentage
+        play. Score and coach aggressiveness shift it in log-odds (the NFL goes on 4th &
+        1 in opponent territory 97% of the time trailing by 9+, 80% leading by 9+).
         """
-        from constants import (FOURTH_ONE_GO_YTE, FOURTH_ONE_GO_PROB,
-                               FOURTH_ONE_SCORE_POINTS, FOURTH_ONE_SCORE_SHIFT,
-                               FOURTH_ONE_AGGR_K)
-        if self.yardsToFirstDown > 1 or getattr(self.format, 'key', 'standard') != 'standard':
+        from constants import (FOURTH_GO_YTE, FOURTH_GO_YTG, FOURTH_GO_TABLE,
+                               FOURTH_GO_SCORE_POINTS, FOURTH_GO_SCORE_SHIFT,
+                               FOURTH_GO_AGGR_K)
+        if getattr(self.format, 'key', 'standard') != 'standard':
             return None
         q, secs = self.currentQuarter, self.gameClockSeconds
         if q >= 5 or (q == 4 and secs <= 300) or (q == 2 and secs <= 60):
             return None
-        base = float(np.interp(self.yardsToEndzone, FOURTH_ONE_GO_YTE, FOURTH_ONE_GO_PROB))
-        base = min(0.995, max(0.005, base))
-        shift = float(np.interp(scoreDiff, FOURTH_ONE_SCORE_POINTS, FOURTH_ONE_SCORE_SHIFT))
+        byYtg = [float(np.interp(self.yardsToEndzone, FOURTH_GO_YTE, row)) for row in FOURTH_GO_TABLE]
+        base = float(np.interp(self.yardsToFirstDown, FOURTH_GO_YTG, byYtg))
+        base = min(0.995, max(0.002, base))
+        shift = float(np.interp(scoreDiff, FOURTH_GO_SCORE_POINTS, FOURTH_GO_SCORE_SHIFT))
         aggrNorm = ((coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE) if coach else 0.0
-        logit = math.log(base / (1 - base)) + shift + FOURTH_ONE_AGGR_K * aggrNorm
+        logit = math.log(base / (1 - base)) + shift + FOURTH_GO_AGGR_K * aggrNorm
         return 1.0 / (1.0 + math.exp(-logit))
+
+    def _fourthDownKickShare(self, fgProb: float, fgThreshold: float,
+                             kickerMaxDistance: float, fgHelps: bool) -> float:
+        """Given the offense is NOT going for it, the chance it kicks rather than punts.
+
+        ⚠️ KEYED ON THIS KICKER'S MAKE PROBABILITY, NOT ON DISTANCE. The NFL's kick share
+        when not going falls off a cliff between 52 and 58 yards (97% at 50-52, 60% at
+        54-56, 21% at 56-58, 3% at 58-60); run through the sim's median kicker that is a
+        logistic centred on a ~61% make chance, which a big leg reaches from further out.
+        The midpoint moves with `_coachFgThreshold`, so an aggressive coach and a kicker
+        who has been reliable today both stretch it, and a miss earlier makes a staff
+        more cautious — the personality the old hard cutoff carried."""
+        from constants import FOURTH_KICK_MID, FOURTH_KICK_SCALE
+        if not fgHelps or fgProb <= 0 or self.yardsToEndzone > kickerMaxDistance:
+            return 0.0
+        mid = FOURTH_KICK_MID + (fgThreshold - self.gameRules.fgMinAttemptProb)
+        return 1.0 / (1.0 + math.exp(-(fgProb - mid) / FOURTH_KICK_SCALE))
 
     def _freshSeriesDistance(self) -> int:
         """Yards to go for a new set of downs at the current spot: the rule's first-down

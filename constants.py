@@ -563,17 +563,37 @@ LEAD_PROTECT_LEAD_SCALE = [0.8, 0.8, 0.95, 1.15]
 TRAIL_SHIFT_MAX = 1.75
 TRAIL_SHIFT_Q4_START = 0.4
 
-# ---- 4th & 1 go-for-it (Game._fourthAndOneGoProbability) ----
-# Base go probability by yards to the end zone, fitted to NFL 2021-25 (standard format,
-# outside the end-of-half clock windows): flat ~89% in opponent territory, then falling
-# through midfield into the offense's own end. Score and coach aggressiveness shift it in
-# log-odds. The sim CONVERTS 4th & 1 more often than the NFL (76% vs 70%), so matching the
-# NFL's aggressiveness is, if anything, conservative for sim teams.
-FOURTH_ONE_GO_YTE = [1, 45, 57, 72, 90]
-FOURTH_ONE_GO_PROB = [0.89, 0.89, 0.62, 0.24, 0.06]
-FOURTH_ONE_SCORE_POINTS = [-16, -9, -4, 0, 4, 9, 16]
-FOURTH_ONE_SCORE_SHIFT = [1.5, 1.2, 0.5, 0.0, -0.2, -0.6, -0.9]
-FOURTH_ONE_AGGR_K = 0.8           # log-odds swing from a timid (-1) to a bold (+1) coach
+# ---- Normal-game 4th down (Game._fourthDownGoProbability / _fourthDownKickShare) ----
+# Go-for-it base rates from NFL 2021-25 (standard game, outside the last 5:00 of each half,
+# within two scores), smoothed: FOURTH_GO_TABLE[i][j] is the go rate at FOURTH_GO_YTG[i]
+# yards to go and FOURTH_GO_YTE[j] yards to the end zone, interpolated in both directions.
+# ⚠️ The peak for 4th & 2+ sits at the opponent's 30-45 (too far for an easy kick, too
+# close to punt) and it FALLS in the red zone, where the short field goal is the play.
+# The sim converts 4th & 1 more often than the NFL (76% vs 70%), so matching the NFL's
+# aggressiveness is, if anything, conservative for sim teams.
+FOURTH_GO_YTE = [5, 15, 25, 35, 42.5, 47.5, 53.5, 61, 68.5, 76, 85, 95]
+FOURTH_GO_YTG = [1, 2, 3, 4, 5.5, 8, 12, 18]
+FOURTH_GO_TABLE = [
+    # One fitting pass against the REALIZED go rate (the score and aggressiveness shifts
+    # inflate small base rates, since the NFL numbers already average over the score);
+    # three sparse own-end cells smoothed back in line with their neighbours.
+    [0.868, 0.851, 0.835, 0.937, 0.961, 0.926, 0.710, 0.478, 0.280, 0.170, 0.040, 0.030],  # 4th & 1
+    [0.480, 0.515, 0.441, 0.560, 0.787, 0.430, 0.195, 0.088, 0.026, 0.020, 0.005, 0.005],  # 4th & 2
+    [0.287, 0.188, 0.213, 0.483, 0.661, 0.247, 0.053, 0.033, 0.007, 0.003, 0.002, 0.000],  # 4th & 3
+    [0.139, 0.101, 0.137, 0.439, 0.506, 0.133, 0.052, 0.031, 0.014, 0.010, 0.002, 0.000],  # 4th & 4
+    [0.034, 0.006, 0.020, 0.202, 0.263, 0.063, 0.021, 0.004, 0.008, 0.006, 0.004, 0.000],  # 4th & 5-6
+    [0.012, 0.004, 0.020, 0.044, 0.092, 0.026, 0.020, 0.005, 0.005, 0.005, 0.003, 0.000],  # 4th & 7-9
+    [0.005, 0.004, 0.009, 0.030, 0.023, 0.009, 0.006, 0.005, 0.003, 0.003, 0.001, 0.002],  # 10-15
+    [0.005, 0.010, 0.010, 0.010, 0.005, 0.003, 0.002, 0.002, 0.002, 0.002, 0.002, 0.002],  # 16+
+]
+FOURTH_GO_SCORE_POINTS = [-16, -9, -4, 0, 4, 9, 16]
+FOURTH_GO_SCORE_SHIFT = [1.5, 1.2, 0.5, 0.0, -0.2, -0.6, -0.9]
+FOURTH_GO_AGGR_K = 0.8            # log-odds swing from a timid (-1) to a bold (+1) coach
+# Kick-vs-punt when not going: logistic in the kicker's make probability, centred on
+# FOURTH_KICK_MID (offset by the coach's FG threshold). Fitted through the sim's median
+# kicker to the NFL's 52-58 yard cliff.
+FOURTH_KICK_MID = 0.61
+FOURTH_KICK_SCALE = 0.043
 
 # ── Defensive disguise ────────────────────────────────────────────────────
 # ⚠️ THE PIECE THAT MAKES THE OTHERS A SYSTEM. Without it the QB reads an honest defense
