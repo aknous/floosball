@@ -19,26 +19,53 @@ def expect(d, c):
     print(f"  [{'OK' if c else 'FAIL'}] {d}")
     if not c: fails.append(d)
 
-from constants import SEASON_START_WEEKDAY, SEASON_START_HOUR_ET
+from constants import (SEASON_FIRST_GAME_WEEKDAY, SEASON_FIRST_KICKOFF_HOUR_ET,
+                       CROSS_DAY_ROLLOVER_LEAD_MINUTES)
 from managers.timingManager import TimingManager, _isEdtDate
 from managers.seasonManager import SeasonManager
 
 def toEt(utc):
     return utc - datetime.timedelta(hours=4 if _isEdtDate(utc) else 5)
 
-print("\n1. The anchor is Sunday 19:00 Eastern")
-expect("configured as Sunday (weekday 6)", SEASON_START_WEEKDAY == 6)
-expect("...at 19:00 ET", SEASON_START_HOUR_ET == 19)
+print("\n1. The anchor is 19:00 Eastern the evening before the first game day")
+expect("games start on Monday (weekday 0)", SEASON_FIRST_GAME_WEEKDAY == 0)
+expect("first kickoff is noon ET", SEASON_FIRST_KICKOFF_HOUR_ET == 12)
+# 12:00 ET minus a 17h lead is 19:00 ET the night before -- DERIVED, not written down.
 for name, fn in (("next", TimingManager._nextSeasonAnchorUtc),
                  ("last", TimingManager._lastSeasonAnchorUtc)):
     et = toEt(fn())
-    expect(f"{name} anchor lands on a Sunday at 19:00 ET ({et:%a %Y-%m-%d %H:%M})",
-           et.weekday() == SEASON_START_WEEKDAY and et.hour == SEASON_START_HOUR_ET
-           and et.minute == 0)
-expect("next is in the future", TimingManager._nextSeasonAnchorUtc() > datetime.datetime.utcnow())
-expect("last is in the past", TimingManager._lastSeasonAnchorUtc() < datetime.datetime.utcnow())
-expect("they are a week apart",
+    expect(f"{name} anchor lands Sunday 19:00 ET ({et:%a %Y-%m-%d %H:%M})",
+           et.weekday() == 6 and et.hour == 19 and et.minute == 0)
+expect("it tracks the rollover lead rather than repeating it",
+       (SEASON_FIRST_KICKOFF_HOUR_ET * 60 - CROSS_DAY_ROLLOVER_LEAD_MINUTES) == -300)
+expect("the two anchors are a week apart",
        (TimingManager._nextSeasonAnchorUtc() - TimingManager._lastSeasonAnchorUtc()).days == 7)
+
+print("\n1b. It does NOT skip a week when the anchor hour has already passed")
+# ⚠️ THIS COST A PRODUCTION WEEK (2026-09-13). Keyed on the anchor's own weekday and asked
+# for "the next Sunday 19:00 ET that has not passed", a deploy at 22:33 on a Sunday answered
+# SEVEN DAYS LATER: season 6 was stamped 2026-09-20 23:00 UTC and its first game day moved
+# from Monday the 14th to Monday the 21st. The question is which MONDAY games start on; the
+# anchor follows from the lead and is allowed to sit in the past.
+import managers.timingManager as _tm
+_realNow = _tm._nowEastern
+try:
+    for label, fakeEt, wantGameDay in (
+            ("Sunday 22:33 ET (the deploy that broke it)",
+             datetime.datetime(2026, 9, 13, 22, 33), datetime.date(2026, 9, 14)),
+            ("Sunday 18:00 ET, before the anchor",
+             datetime.datetime(2026, 9, 13, 18, 0), datetime.date(2026, 9, 14)),
+            ("Monday 09:00 ET, before kickoff",
+             datetime.datetime(2026, 9, 14, 9, 0), datetime.date(2026, 9, 14)),
+            ("Monday 14:00 ET, after kickoff",
+             datetime.datetime(2026, 9, 14, 14, 0), datetime.date(2026, 9, 21)),
+            ("Wednesday 10:00 ET, mid-offseason",
+             datetime.datetime(2026, 9, 16, 10, 0), datetime.date(2026, 9, 21))):
+        _tm._nowEastern = (lambda v: (lambda: v))(fakeEt)
+        got = SeasonManager._firstGameDate(TimingManager._nextSeasonAnchorUtc())
+        expect(f"{label} -> first game day {got:%a %Y-%m-%d}", got == wantGameDay)
+finally:
+    _tm._nowEastern = _realNow
 
 print("\n2. Day 0 is Monday whatever the anchor is, in BOTH DST regimes")
 # (anchor UTC, what it is in ET, the Monday it must produce)

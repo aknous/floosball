@@ -3614,8 +3614,21 @@ CROSS_DAY_ROLLOVER_LEAD_MINUTES = 1020
 # ⚠️ THIS IS THE ANCHOR, NOT THE FIRST KICKOFF. Week 1 still kicks at 12:00 ET Monday --
 # `seasonManager._firstGameDate` derives day 0 as the Monday on or after the anchor, so the
 # anchor's own weekday and hour cannot move the schedule.
-SEASON_START_WEEKDAY = 6         # Sunday (Monday=0, matching datetime.weekday())
-SEASON_START_HOUR_ET = 19        # ...at 7pm Eastern
+# ⚠️ THE ANCHOR IS DERIVED FROM THE FIRST GAME DAY, NOT STATED INDEPENDENTLY, and stating it
+# independently cost a week of production (2026-09-13). It was `SEASON_START_WEEKDAY = 6` /
+# `SEASON_START_HOUR_ET = 19` with the helper answering "the next Sunday 19:00 ET that has not
+# passed". At 22:33 on a Sunday that is SEVEN DAYS AWAY, so a deploy landing late on a Sunday
+# evening anchored season 6 to the FOLLOWING Sunday and pushed its first game day from Monday
+# the 14th to Monday the 21st. The old code could not do this: it asked for "this Monday
+# 04:00" and simply landed slightly in the past.
+#
+# ⚠️ THE ANCHOR MAY BE IN THE PAST AND THAT IS CORRECT. It is the moment the league OPENS --
+# 17 hours before the first kickoff -- so once the offseason finishes, the imminent Monday is
+# the first game day whether or not 19:00 the night before has already gone. Deriving it means
+# the 19:00 ET Sunday figure falls out of `CROSS_DAY_ROLLOVER_LEAD_MINUTES` instead of being a
+# second copy of it that can drift.
+SEASON_FIRST_GAME_WEEKDAY = 0    # Monday (Monday=0, matching datetime.weekday())
+SEASON_FIRST_KICKOFF_HOUR_ET = 12   # mirrors getWeekStartTime's startTimeHoursList[0]
 
 # ⚠️ THERE IS NO `DAILY_RESET_HOUR_UTC` ANY MORE, AND REINTRODUCING ONE REOPENS A BUG.
 # The shop's daily allowances (reroll costs, per-day buy limits) used to reset at a fixed
