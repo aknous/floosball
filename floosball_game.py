@@ -4698,7 +4698,7 @@ class Game:
     # works for the defense's own read.
     DISGUISE_READ_PENALTY = 0.30
 
-    def _maybeAudible(self, playCall: str) -> str:
+    def _maybeAudible(self, playCall: str, weights: dict = None) -> str:
         """The QB looks at the box and changes the call, or does not.
 
         ⚠️ THE OFFENSIVE MIRROR OF `_applyPreSnapRead`. The defense has committed
@@ -4731,6 +4731,7 @@ class Game:
         from constants import (AUDIBLE_ENABLED, AUDIBLE_BOX_STACKED, AUDIBLE_READ_BASE,
                                AUDIBLE_READ_SKILL, AUDIBLE_QB_WEIGHT, AUDIBLE_COACH_WEIGHT,
                                AUDIBLE_WILLINGNESS_BASE, AUDIBLE_WILLINGNESS_SWING,
+                               AUDIBLE_SITUATION_AWARE, AUDIBLE_LEAN_EXPONENT,
                                COACH_ATTR_NEUTRAL)
         if not AUDIBLE_ENABLED:
             return playCall
@@ -4789,6 +4790,26 @@ class Game:
         # slip that made `calculateSackProbability` look missing earlier.
         undis = self.play._undiscipline(qb)
         willing = AUDIBLE_WILLINGNESS_BASE + AUDIBLE_WILLINGNESS_SWING * undis
+        # ⚠️ THE BOX IS NOT THE ONLY THING ON THE FIELD. The read above looks at the defense
+        # alone, so on its own it checks at the same ~15% on every down: into a run on 3rd &
+        # 8 because the box is light, out of a run while protecting a late lead because the
+        # box is stacked. Measured against NFL 2021-25 that flattened every situation —
+        # 3rd & 7-10 ran 24% of the time against the NFL's 3%, and turning audibles off
+        # recovered ~10 points of 3rd-down pass rate on its own.
+        #
+        # The caller's `weights` already encode down, distance, score, clock and the
+        # ruleset, so they ARE the situation. A check into a call the situation argues
+        # against is scaled down by how hard it argues; a check toward the lean, or on a
+        # genuine coin-flip down, is untouched. One rule rather than a list of exceptions,
+        # and it follows the rules vote for free (5 downs, long first downs).
+        if weights and AUDIBLE_SITUATION_AWARE:
+            _tot = sum(max(0.0, float(weights.get(k, 0) or 0))
+                       for k in ('run', 'short', 'medium', 'long', 'deep'))
+            if _tot > 0:
+                _runShare = max(0.0, float(weights.get('run', 0) or 0)) / _tot
+                _destShare = _runShare if wantsRun else 1.0 - _runShare
+                if _destShare < 0.5:
+                    willing *= (_destShare / 0.5) ** AUDIBLE_LEAN_EXPONENT
         if _random.random() >= willing:
             self.play.insights['audible'] = {'checked': False, 'sawStacked': perceivedStacked,
                                              'readRight': readRight}
@@ -4823,7 +4844,7 @@ class Game:
                      weights['long'], weights.get('deep', 0)]
         )[0]
 
-        playCall = self._maybeAudible(playCall)
+        playCall = self._maybeAudible(playCall, weights)
 
         self.play.insights['playCall'] = playCall
         # Reset per-play RPO / trick state (set only by _executeRpo / _executeTrickPlay).

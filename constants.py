@@ -539,6 +539,14 @@ AUDIBLE_COACH_WEIGHT = 0.30
 # anyway. Measured, that takes the trap cell (bold + blind) from 6% of QBs to 26%.
 AUDIBLE_WILLINGNESS_BASE = 0.30   # a fully disciplined QB still checks sometimes
 AUDIBLE_WILLINGNESS_SWING = 0.55  # a gunslinger checks far more often
+# ⚠️ A CHECK HAS TO FIT THE SITUATION, NOT JUST THE BOX (2026-09-14). Willingness is scaled
+# down when the check lands on a call the caller's own weights argue against: a check into
+# a run on a down where the caller wanted 12% runs is taken at (0.12 / 0.5) ** exponent of
+# the usual rate. A check toward the situation's lean is never scaled. Measured against
+# NFL 2021-25: without it, audibles fired at a flat ~15% everywhere and ran 3rd & long a
+# quarter of the time.
+AUDIBLE_SITUATION_AWARE = True
+AUDIBLE_LEAN_EXPONENT = 1.0
 
 # ── Defensive disguise ────────────────────────────────────────────────────
 # ⚠️ THE PIECE THAT MAKES THE OTHERS A SYSTEM. Without it the QB reads an honest defense
