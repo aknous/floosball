@@ -867,3 +867,106 @@ consistent with the ruling (the threshold measures the roster, not the effort), 
 correct, but it should be a known property rather than a surprise. The same applies more
 strongly if the threshold is made league-relative: another club improving could drop you
 under it.
+
+---
+
+# Addendum 7 — sizing the tax against the real economy
+
+_2026-09-14. Picking the threshold and rate now that the Treasury's other claim is measured._
+
+## The share unit is ~5,485, not the 300 floor
+
+`computeShareUnit` = last season's capped faucet ÷ 32. Measured: season 4 → **6,299**,
+season 5 → **5,485**. So a season of upkeep by facility level is **[0, 27, 82, 247, 631,
+2194]**, and a club's whole-roster upkeep runs **164 to 2,632** (median 369).
+
+That matters because an earlier read of this at the 300 floor made the facility economy look
+trivial next to Treasury balances. It is not. At the real unit it binds.
+
+## ⚠️ Three clubs are ALREADY insolvent on upkeep alone, before any tax exists
+
+| club | treasury | season upkeep | short by |
+|---|---:|---:|---:|
+| **Pinecones** | 200F | 383F | **−183F** |
+| Jetskis | 200F | 273F | −73F |
+| Phones | 295F | 328F | −33F |
+
+**The league's best team is broke.** Pinecones carry 48% title odds and 25.6 forecast wins,
+and they cannot cover their own buildings this offseason. They will lose a facility level
+whether or not a competitive-balance tax is ever built.
+
+## Which means the tax's PAYMENT limb is inert for its own target
+
+Modelled at threshold 495 across four rates:
+
+| rate (shares/excess pt) | Pinecones owes | Residents owes | Broads owes |
+|---|---:|---:|---:|
+| 0.002 | 165F | 77F | 55F |
+| 0.005 | 411F | 192F | 137F |
+| 0.01 | 823F | 384F | 274F |
+| 0.02 | 1,646F | 768F | 548F |
+
+_(spare after upkeep: Pinecones **−183F**, Residents 2,404F, Broads 7,532F)_
+
+⚠️ **Pinecones cannot pay 165F any more than they can pay 1,646F.** The rate is irrelevant to
+the club the tax exists for. Every rate produces the same outcome for them: decay, then —
+once the consecutive cap bites — a forced trade.
+
+**So the tax does not collect money from the clubs it targets. It converts financial
+pressure into ROSTER pressure.** That is the whole point and it is worth stating plainly,
+because the facility economy was already going to take Pinecones' buildings; what it could
+never do is make them give up the 96-rated receiver. Only the tax reaches the roster.
+
+## The THRESHOLD is the real dial; the rate only reaches solvent clubs
+
+At rate 0.01:
+
+| threshold | clubs over | can pay | must decay | who cannot pay |
+|---:|---:|---:|---:|---|
+| 485 | 12 | 8 | **4** | Curd, Exoticos, Phones, Pinecones |
+| 490 | 7 | 6 | 1 | Pinecones |
+| **495** | **3** | **2** | **1** | Pinecones |
+| 500 | 2 | 1 | 1 | Pinecones |
+
+⚠️ **485 is a league-wide shock** — a third of the league over the line and four clubs pushed
+into decay at once, including Curd (2nd-best team, 48F spare) and Phones (already insolvent).
+495 isolates the one club that is actually running away with the league.
+
+## Recommended values
+
+**Threshold: league-relative at `mean + 1 standard deviation`.** Measured, Σ rating has
+mean **480** and sd **15.0**, so mean + 1sd = **495** — the column that behaves best above,
+arrived at by a rule rather than by picking a number. This also settles open question 14: a
+fixed 495 drifts the moment `LEAGUE_COMPRESSION_MEAN`, the rating curve, or the returning
+draft moves the distribution, and all three are live. A relative threshold self-normalizes,
+exactly as the anomaly threshold already does.
+
+**Rate: 0.01 shares per excess rating point.** At that rate a *solvent* club over the line
+pays 274–384F — about one level-3 facility's annual upkeep. Noticeable, not ruinous, and it
+gives the payment limb real work to do in the middle of the table where clubs can actually
+pay. Below 0.005 it is not worth collecting; above 0.02 it starts pushing solvent clubs into
+decay, which is the 485 failure in a different costume.
+
+## ⚠️ Two consequences to decide
+
+**Facility decay is self-limiting, and that is mostly good.** Losing a level lowers next
+season's upkeep, so a club shrinks until its buildings fit its income. That makes the ladder
+shorter in practice than the raw level counts suggested — but it also means a club could
+shrink to a minimal footprint and then pay the tax forever from a tiny base. The consecutive
+cap is what stops that, which is a second reason to keep it low (2).
+
+**Three clubs being already insolvent is a finding about the ECONOMY, not the tax**, and it
+lands this offseason either way. Worth deciding on its own merits: is a club with 9
+favourites and the league's best roster supposed to be unable to afford a level-3 locker
+room? The Treasury correlates +0.39 with favourites and −0.01 with winning, so on the
+current design a great team with a small fanbase simply goes broke. That is defensible
+(fan-funded clubs), but it is not a rule anybody chose.
+
+## Revised open questions
+
+23. **Is the threshold `mean + 1sd`, or a fixed number reviewed each season?** Relative
+    self-normalizes against three live sources of drift; fixed is legible to fans.
+24. **Should the tax be charged BEFORE or AFTER upkeep in the waterfall?** (Open question 16,
+    now sharper: at these numbers the order decides whether Pinecones lose a facility to the
+    tax or to the buildings, and the decay counter only advances for one of those.)
+25. **Is the already-insolvent trio a bug or the design?** It fires this offseason regardless.
