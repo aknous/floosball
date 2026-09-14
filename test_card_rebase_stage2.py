@@ -81,9 +81,22 @@ print("7. Ordinary re-based effects carry the FP power bar")
 # The power-bar redesign gates ordinary effects uniformly (owner call 2026-07-23).
 # EXCEPTIONS (added later): effects whose trigger IS low scoring are ungated, and chance
 # cards use a probability bar instead of the on/off gate (fusion chance rework 2026-07-26).
-for e in ('closer', 'walk_off', 'odometer', 'honor_roll', 'piggy_bank', 'catalyst'):
+# ⚠️ `piggy_bank` WAS IN THIS LIST AND IS NOT AN ORDINARY EFFECT — it pays in FLOOBITS, and
+# a floobit card has no bar at all (owner, 2026-09-13). The bar asks whether the depicted
+# player had a good fantasy week and withholds his fantasy output when he did not; a card
+# whose entire output is income is not making that bargain. See buildGateSpec, which
+# returns None for any effect whose output type is 'floobits'. Kept as a named exclusion
+# rather than a silent deletion, since the list reads as "ordinary" and piggy_bank looks
+# ordinary until you check what it pays in.
+for e in ('closer', 'walk_off', 'odometer', 'honor_roll', 'catalyst'):
     cfg = buildEffectConfig('metallic', 80, 3, forceEffect=e)
     expect(f"{e}: carries the FP power bar", cfg.get('gate', {}).get('threshold'))
+
+# ⚠️ buildGateSpec is (effectName, position, classification, edition) — passing the
+# edition second makes it return None for EVERYTHING and the assertion passes vacuously.
+for e in ('piggy_bank', 'allowance', 'cha_ching'):
+    expect(f"{e}: floobit card, NO power bar", buildGateSpec(e, 3) is None)
+expect("control: an ordinary effect DOES carry the bar", buildGateSpec('closer', 3) is not None)
 
 print("8. Low-scoring-trigger effects are ungated; chance cards use a probability bar")
 # Underperformance effects (trigger IS a bad game) get no on/off gate; rising_tide still does.
