@@ -807,3 +807,63 @@ deliberately.
     the outcome, and is harder to game with a token swap.
 22. **Does the cull ship with the draft or after it?** At a ~13/season surplus, "after"
     means the pool grows by 13 a season until it arrives.
+
+---
+
+# Addendum 6 — decay counter reset (settled)
+
+_2026-09-14. **Owner ruling: the consecutive-decay counter resets on getting back UNDER the
+threshold, not on making a trade.**_
+
+The reason to prefer it is that a token swap cannot buy a reset — only the outcome counts.
+Three things follow.
+
+## 1. The forced trade must CLEAR the threshold, not merely happen
+
+If a token trade cannot reset the counter, a token trade cannot satisfy the forced move
+either — otherwise the rule bans gaming at one end and permits it at the other. So when the
+cap is hit, the trade the sim makes has to put the club back under the line.
+
+## ✅ 2. That is always possible, and it is surgical
+
+The worry with "must clear" is that it could be a dead end, or a fire sale. Measured against
+the live league at a 495 threshold, it is neither:
+
+| club | Σ rating | must shed | legal clearing swaps | smallest swap | overshoot |
+|---|---:|---:|---:|---|---:|
+| Residents | 502 | 7 | **52** | WR 73 → Midnights for WR 66 | **0** |
+| Pinecones | 510 | 15 | **26** | TE 87 → Raccoons for TE 72 | **0** |
+| Broads | 500 | 5 | **51** | WR 78 → Beans for WR 73 | **0** |
+
+**Zero overshoot in every case.** The rating curve is fine-grained enough that a club can
+shed exactly what it owes — Pinecones give up 15 points of talent to clear 15 points of
+excess. The forced trade is proportionate, not a punishment dressed as a trade. (The filter
+also requires the *partner* not to cross the threshold themselves, so these are legal on both
+sides.)
+
+## ✅ 3. It composes with Treasury-as-consideration, in the right direction
+
+Every partner in that table can pay: Raccoons **11,997F**, Midnights **21,250F**, Beans
+**38,742F**. So a forced trade is naturally *player-for-player-plus-Floobits* — the partner
+buys the upgrade.
+
+That closes the loop the whole design has been circling. The taxed club is over the
+threshold **and broke** (Pinecones: Σ510, 200F). The forced trade sheds exactly the rating
+they owe **and** hands them the Treasury they lack, from a club that is rich and weak. Money
+flows rich-weak → poor-strong, which is precisely the anti-correlation measured in
+addendum 1 (`corr(treasury, wins) = −0.012`).
+
+## ⚠️ Two things to name now rather than discover
+
+**The measurement moment must be single and shared with the tax.** Σ rating moves all
+offseason — retirements, walks, re-signs, the FA draft, promotions each change it. Assess
+the tax and read the counter at **the same instant**, and the natural one is season end,
+where `resolveSeasonEnd` already runs the waterfall the tax is charged into. One moment, one
+number, both rules reading it.
+
+**A club can fall under the threshold passively.** A player declining with age, or a
+retirement, drops Σ rating with no decision taken — and the counter resets for free. That is
+consistent with the ruling (the threshold measures the roster, not the effort), and it is
+correct, but it should be a known property rather than a surprise. The same applies more
+strongly if the threshold is made league-relative: another club improving could drop you
+under it.
