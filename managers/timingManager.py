@@ -8,7 +8,8 @@ import datetime
 from enum import Enum
 from typing import Optional, Dict, Any
 from logger_config import get_logger
-from constants import SEASON_START_WEEKDAY, SEASON_START_HOUR_ET
+from constants import (SEASON_FIRST_GAME_WEEKDAY, SEASON_FIRST_KICKOFF_HOUR_ET,
+                       CROSS_DAY_ROLLOVER_LEAD_MINUTES)
 
 logger = get_logger("floosball.timingManager")
 
@@ -459,7 +460,8 @@ class TimingManager:
         """Wait between seasons.
 
         SCHEDULED mode: poll until the season anchor -- 19:00 Eastern Sunday, the same
-        moment a new GAME DAY opens (see `SEASON_START_WEEKDAY` in `constants.py`).
+        moment a new GAME DAY opens (derived from `SEASON_FIRST_GAME_WEEKDAY` and the
+        cross-day rollover lead -- see `_seasonAnchorFor`).
         SEQUENTIAL / TURBO: fixed delay from config.
         """
         if self.mode == TimingMode.SCHEDULED:
@@ -501,39 +503,46 @@ class TimingManager:
         return now + datetime.timedelta(hours=1)
 
     @staticmethod
-    def _nextSeasonAnchorUtc(weekday: int = None, hour: int = None) -> datetime.datetime:
-        """The next season-start anchor at the given Eastern hour, as naive UTC.
+    def _seasonAnchorFor(firstGameDate) -> datetime.datetime:
+        """The anchor for a season whose first game day is `firstGameDate` (an ET date).
 
-        ⚠️ THE WEEKDAY AND HOUR ARE CONFIGURATION, NOT LITERALS. This was `_nextMondayUtc`
-        with the Monday written into its name, its arithmetic and its docstring, so moving
-        the season's opening moment meant editing three of those plus every caller. The
-        league opens at `SEASON_START_WEEKDAY`/`SEASON_START_HOUR_ET` and nothing here needs
-        to know which day that is.
+        The league opens `CROSS_DAY_ROLLOVER_LEAD_MINUTES` before the day's first kickoff --
+        the same lead every other game day uses -- so at a 17h lead this is 19:00 ET the
+        evening before. Derived rather than written down, so the two cannot drift.
         """
-        weekday = SEASON_START_WEEKDAY if weekday is None else weekday
-        hour = SEASON_START_HOUR_ET if hour is None else hour
-        nowEt = _nowEastern()
-        daysAhead = (weekday - nowEt.weekday()) % 7
-        if daysAhead == 0 and nowEt.hour >= hour:
-            daysAhead = 7          # already past it today — go round again
-        targetEt = nowEt.replace(hour=hour, minute=0, second=0, microsecond=0) + datetime.timedelta(days=daysAhead)
-        # Convert naive ET back to naive UTC
-        offset = 4 if _isEdtDate(targetEt) else 5
-        return targetEt + datetime.timedelta(hours=offset)
+        et = datetime.datetime(firstGameDate.year, firstGameDate.month, firstGameDate.day,
+                               SEASON_FIRST_KICKOFF_HOUR_ET)
+        offset = 4 if _isEdtDate(et) else 5
+        return et + datetime.timedelta(hours=offset) - datetime.timedelta(
+            minutes=CROSS_DAY_ROLLOVER_LEAD_MINUTES)
 
     @staticmethod
-    def _lastSeasonAnchorUtc(weekday: int = None, hour: int = None) -> datetime.datetime:
-        """The most recent season-start anchor at the given Eastern hour, as naive UTC."""
-        weekday = SEASON_START_WEEKDAY if weekday is None else weekday
-        hour = SEASON_START_HOUR_ET if hour is None else hour
+    def _nextSeasonAnchorUtc() -> datetime.datetime:
+        """When the next season opens, as naive UTC.
+
+        ⚠️ IT IS KEYED ON THE FIRST GAME DAY, NOT ON THE ANCHOR'S OWN WEEKDAY. Asked as "the
+        next Sunday 19:00 ET that has not passed", a deploy at 22:33 on a Sunday answered
+        SEVEN DAYS LATER and pushed a production season back a full week. The question is
+        really "which Monday do games start on", and the answer is the next one whose kickoff
+        is still ahead of us -- the anchor then follows from the lead and may sit in the past,
+        which is exactly right for a league that is ready to play tomorrow.
+        """
         nowEt = _nowEastern()
-        daysBack = (nowEt.weekday() - weekday) % 7
-        if daysBack == 0 and nowEt.hour < hour:
-            daysBack = 7           # not yet reached today — take last week's
-        targetEt = nowEt.replace(hour=hour, minute=0, second=0, microsecond=0) - datetime.timedelta(days=daysBack)
-        # Convert naive ET back to naive UTC
-        offset = 4 if _isEdtDate(targetEt) else 5
-        return targetEt + datetime.timedelta(hours=offset)
+        ahead = (SEASON_FIRST_GAME_WEEKDAY - nowEt.weekday()) % 7
+        gameDay = (nowEt + datetime.timedelta(days=ahead)).date()
+        if ahead == 0 and nowEt.hour >= SEASON_FIRST_KICKOFF_HOUR_ET:
+            gameDay = gameDay + datetime.timedelta(days=7)   # today's kickoff has gone
+        return TimingManager._seasonAnchorFor(gameDay)
+
+    @staticmethod
+    def _lastSeasonAnchorUtc() -> datetime.datetime:
+        """The most recent season anchor, as naive UTC (CATCHUP backdating)."""
+        nowEt = _nowEastern()
+        back = (nowEt.weekday() - SEASON_FIRST_GAME_WEEKDAY) % 7
+        gameDay = (nowEt - datetime.timedelta(days=back)).date()
+        if back == 0 and nowEt.hour < SEASON_FIRST_KICKOFF_HOUR_ET:
+            gameDay = gameDay - datetime.timedelta(days=7)   # today's games have not started
+        return TimingManager._seasonAnchorFor(gameDay)
 
     async def waitForPlayoffRound(self, roundStartTime: 'datetime.datetime | None' = None, earlyMinutes: int = 15) -> None:
         """Wait between playoff rounds.
