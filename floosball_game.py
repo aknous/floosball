@@ -3639,6 +3639,42 @@ class Game:
                     'medium' if self.yardsToFirstDown <= 12 else 'long'))
             return
 
+        # ── 4TH & 1: ONE DECISION, NOT EIGHT ──
+        # ⚠️ Going for it on 4th & 1 used to be rolled separately in about eight branches
+        # below, each with its own threshold and its own idea of score and field position
+        # (a team trailing in the first half outside FG range NEVER went for it). Against
+        # NFL 2021-25 the sim went 32-52% of the time in opponent territory where the NFL
+        # goes 85-94%, and 0-10% in its own half where the NFL goes 32-64% — while
+        # converting MORE often than the NFL does (76% vs 70%). One curve now decides it.
+        # The late-game clock branches below still own the final 5:00 of Q4, the last
+        # minute of Q2 and overtime, where the decision is about the clock first.
+        goOnOne = self._fourthAndOneGoProbability(scoreDiff, coach)
+        if goOnOne is not None:
+            self.play.insights['fourthDown'] = {
+                'decision': None, 'goProbability': round(goOnOne * 100, 1),
+                'fgProbability': round(fgProb * 100, 1), 'inFgRange': inFieldGoalRange,
+                'yardsToEndzone': self.yardsToEndzone,
+                'coachAggr': coach.aggressiveness if coach else None,
+            }
+            goes = _random.random() < goOnOne
+            # Declined: take a kick that helps, or punt — but never punt from inside the
+            # opponent's 40, which nets almost nothing (the rule the branches below keep).
+            if not goes and not (inFieldGoalRange and fgHelps) and self.yardsToEndzone <= 40:
+                goes = True
+            if goes:
+                self.play.insights['fourthDown']['decision'] = 'goForIt'
+                # Through the normal play path, so a 4th & 1 gets the same concepts, QB
+                # sneak and audible as a 3rd & 1. A bare runPlay() here never picked a
+                # concept, which meant a final-down sneak could not happen at all.
+                self._executeWeightedPlay(self._computePlayWeights(scoreDiff, coach))
+            elif inFieldGoalRange and fgHelps:
+                self.play.insights['fourthDown']['decision'] = 'fieldGoal'
+                self.play.playType = PlayType.FieldGoal
+            else:
+                self.play.insights['fourthDown']['decision'] = 'punt'
+                self.play.playType = PlayType.Punt
+            return
+
         # Deep own territory: default punt, but override if trailing late in Q4
         # (or Q2 end-of-half past midfield)
         if self.yardsToSafety <= 35:
@@ -4037,6 +4073,30 @@ class Game:
                         return
                 self.play.playType = PlayType.Punt
                 return
+
+    def _fourthAndOneGoProbability(self, scoreDiff: int, coach) -> float:
+        """Chance the offense goes for it on 4th & 1, or None where this curve does not
+        decide it (other formats, the end-of-half clock windows, overtime, 4th & 2+).
+
+        Fitted to NFL 2021-25: ~89% anywhere in opponent territory, falling through
+        midfield to 64% at the offense's own 43, 32% at its 28 and 9% deep in its own
+        end. Score and coach aggressiveness move it in log-odds: the NFL goes 97% trailing
+        by 9+ in opponent territory and 80% leading by 9+, and 73% vs 20% in its own half.
+        """
+        from constants import (FOURTH_ONE_GO_YTE, FOURTH_ONE_GO_PROB,
+                               FOURTH_ONE_SCORE_POINTS, FOURTH_ONE_SCORE_SHIFT,
+                               FOURTH_ONE_AGGR_K)
+        if self.yardsToFirstDown > 1 or getattr(self.format, 'key', 'standard') != 'standard':
+            return None
+        q, secs = self.currentQuarter, self.gameClockSeconds
+        if q >= 5 or (q == 4 and secs <= 300) or (q == 2 and secs <= 60):
+            return None
+        base = float(np.interp(self.yardsToEndzone, FOURTH_ONE_GO_YTE, FOURTH_ONE_GO_PROB))
+        base = min(0.995, max(0.005, base))
+        shift = float(np.interp(scoreDiff, FOURTH_ONE_SCORE_POINTS, FOURTH_ONE_SCORE_SHIFT))
+        aggrNorm = ((coach.aggressiveness - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE) if coach else 0.0
+        logit = math.log(base / (1 - base)) + shift + FOURTH_ONE_AGGR_K * aggrNorm
+        return 1.0 / (1.0 + math.exp(-logit))
 
     def _freshSeriesDistance(self) -> int:
         """Yards to go for a new set of downs at the current spot: the rule's first-down

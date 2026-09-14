@@ -563,6 +563,18 @@ LEAD_PROTECT_LEAD_SCALE = [0.8, 0.8, 0.95, 1.15]
 TRAIL_SHIFT_MAX = 1.75
 TRAIL_SHIFT_Q4_START = 0.4
 
+# ---- 4th & 1 go-for-it (Game._fourthAndOneGoProbability) ----
+# Base go probability by yards to the end zone, fitted to NFL 2021-25 (standard format,
+# outside the end-of-half clock windows): flat ~89% in opponent territory, then falling
+# through midfield into the offense's own end. Score and coach aggressiveness shift it in
+# log-odds. The sim CONVERTS 4th & 1 more often than the NFL (76% vs 70%), so matching the
+# NFL's aggressiveness is, if anything, conservative for sim teams.
+FOURTH_ONE_GO_YTE = [1, 45, 57, 72, 90]
+FOURTH_ONE_GO_PROB = [0.89, 0.89, 0.62, 0.24, 0.06]
+FOURTH_ONE_SCORE_POINTS = [-16, -9, -4, 0, 4, 9, 16]
+FOURTH_ONE_SCORE_SHIFT = [1.5, 1.2, 0.5, 0.0, -0.2, -0.6, -0.9]
+FOURTH_ONE_AGGR_K = 0.8           # log-odds swing from a timid (-1) to a bold (+1) coach
+
 # ── Defensive disguise ────────────────────────────────────────────────────
 # ⚠️ THE PIECE THAT MAKES THE OTHERS A SYSTEM. Without it the QB reads an honest defense
 # and an audible is just a skill check the good QB always passes. With it, what the
