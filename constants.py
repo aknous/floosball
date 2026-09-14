@@ -594,6 +594,11 @@ FOURTH_GO_AGGR_K = 0.8            # log-odds swing from a timid (-1) to a bold (
 # kicker to the NFL's 52-58 yard cliff.
 FOURTH_KICK_MID = 0.61
 FOURTH_KICK_SCALE = 0.043
+# The sim's median kicker's make curve (measured over the harness league), and the range
+# beyond which he cannot kick at all. Used to recover the kick share the NFL go table
+# implicitly assumes, so the go rate can be conditioned on THIS team's kicker.
+FOURTH_TYPICAL_FG_DIST = [20, 45, 50, 52, 54, 56, 58, 60]
+FOURTH_TYPICAL_FG_PROB = [0.99, 0.90, 0.79, 0.73, 0.66, 0.59, 0.50, 0.41]
 
 # ── Defensive disguise ────────────────────────────────────────────────────
 # ⚠️ THE PIECE THAT MAKES THE OTHERS A SYSTEM. Without it the QB reads an honest defense

@@ -3668,18 +3668,28 @@ class Game:
                 self.play.insights['fourthDown']['decision'] = 'chargedKick'
                 self.play.playType = PlayType.FieldGoal
                 return
-            goes = _random.random() < goProb
-            # Nothing to kick and too close to punt: go. (Only reachable with no kicker, or
-            # one whose range stops short of a 50-yarder, since a declined go otherwise kicks.)
-            if not goes and kickShare <= 0 and self.yardsToEndzone <= 35:
-                goes = True
+            # ⚠️ THE GO RATE IS CONDITIONED ON THIS TEAM'S KICK. The table is the NFL's go
+            # rate for a TYPICAL kicker at this spot; a team with no viable field goal goes
+            # for it more (the NFL goes on ~26-36% of its non-kick 4th & 7+ calls at the
+            # opponent's 36-40) and one with a big leg kicks more. So the table rate becomes
+            # the go SHARE of non-kick decisions for a typical kicker, applied to whatever
+            # this kicker leaves. A typical kicker reproduces the table exactly; with no kick
+            # inside field-goal range the share goes to 1, so "too close to punt" falls out.
+            typKick = self._typicalKickShare()
+            pKick = (1.0 - goProb) * kickShare
+            goShare = goProb / max(1e-6, 1.0 - (1.0 - goProb) * typKick)
+            pGo = min(1.0, goShare) * (1.0 - pKick)
+            self.play.insights['fourthDown']['goProbability'] = round(pGo * 100, 1)
+            roll = _random.random()
+            goes = roll < pGo
+            kicks = (not goes) and roll < pGo + pKick
             if goes:
                 self.play.insights['fourthDown']['decision'] = 'goForIt'
                 # Through the normal play path, so a 4th & short gets the same concepts, QB
                 # sneak and audible as a 3rd & short. A bare runPlay() here never picked a
                 # concept, which meant a final-down sneak could not happen at all.
                 self._executeWeightedPlay(self._computePlayWeights(scoreDiff, coach))
-            elif _random.random() < kickShare:
+            elif kicks:
                 self.play.insights['fourthDown']['decision'] = 'fieldGoal'
                 self.play.playType = PlayType.FieldGoal
             else:
@@ -4129,6 +4139,18 @@ class Game:
             return 0.0
         mid = FOURTH_KICK_MID + (fgThreshold - self.gameRules.fgMinAttemptProb)
         return 1.0 / (1.0 + math.exp(-(fgProb - mid) / FOURTH_KICK_SCALE))
+
+    def _typicalKickShare(self) -> float:
+        """How often the sim's MEDIAN kicker would kick rather than punt from here, when
+        not going for it — the kicker the NFL go table implicitly assumes. See
+        `_fourthDownKickShare`; this is the same logistic on a median make curve."""
+        from constants import (FOURTH_TYPICAL_FG_DIST, FOURTH_TYPICAL_FG_PROB,
+                               FOURTH_KICK_MID, FOURTH_KICK_SCALE)
+        dist = self.yardsToEndzone + self.gameRules.fgSnapDistance
+        if dist > FOURTH_TYPICAL_FG_DIST[-1]:
+            return 0.0
+        p = float(np.interp(dist, FOURTH_TYPICAL_FG_DIST, FOURTH_TYPICAL_FG_PROB))
+        return 1.0 / (1.0 + math.exp(-(p - FOURTH_KICK_MID) / FOURTH_KICK_SCALE))
 
     def _freshSeriesDistance(self) -> int:
         """Yards to go for a new set of downs at the current spot: the rule's first-down

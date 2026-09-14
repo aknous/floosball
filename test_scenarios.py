@@ -52,15 +52,28 @@ fgs = sum(s.situation(quarter=4, clock=400, offense='home', offScore=14, defScor
 expect("attempts the FG most of the time (>=30/40)", fgs >= 30)
 
 
-# ── 3. Never punt from inside the opponent's 40 ──────────────────────────
-print("3. Never punt from inside the opponent's 40 (out of FG range -> go for it)")
+# ── 3. Out of FG range inside the opponent's 40: punt or go, like the NFL ────
+# ⚠️ THIS USED TO ASSERT "NEVER PUNT INSIDE THE 40", and the NFL does not play that way:
+# at the opponent's 36-40 on 4th & 7-9 it kicks 52%, PUNTS 35% and goes 13% (2021-25).
+# The normal-game 4th down is now fitted to that (2026-09-14), with the go rate
+# conditioned on the kick — a team with no viable field goal goes for it more than one
+# with a kicker, but on 4th & long it still mostly pins them with a punt. What must hold:
+# long yardage is a real punt-or-go call, and short yardage from the same spot goes.
+print("3. Out of FG range at the opp 38: 4th & 8 is punt-or-go, 4th & 2 goes")
 s = Scenario()
 s.setKickerLeg('home', 45)  # weak leg: 38+17=55 is out of range
 random.seed(2)
-punts = sum(s.situation(quarter=2, clock=600, offense='home', offScore=10, defScore=10,
-                        down=4, distance=8, ballOn=38).fourthDownPlay() is PlayType.Punt
-            for _ in range(50))
-expect("0 punts from the opp 38 out of FG range", punts == 0)
+calls = [s.situation(quarter=2, clock=600, offense='home', offScore=10, defScore=10,
+                     down=4, distance=8, ballOn=38).fourthDownPlay() for _ in range(50)]
+punts = sum(c is PlayType.Punt for c in calls)
+goes = sum(c in (PlayType.Run, PlayType.Pass) for c in calls)
+expect(f"4th & 8: no field goal out of range ({50 - punts - goes} kicks)", punts + goes == 50)
+expect(f"4th & 8: goes for it sometimes ({goes}/50 >= 2)", goes >= 2)
+expect(f"4th & 8: mostly punts ({punts}/50 >= 25)", punts >= 25)
+calls = [s.situation(quarter=2, clock=600, offense='home', offScore=10, defScore=10,
+                     down=4, distance=2, ballOn=38).fourthDownPlay() for _ in range(50)]
+goes = sum(c in (PlayType.Run, PlayType.Pass) for c in calls)
+expect(f"4th & 2: mostly goes ({goes}/50 >= 35)", goes >= 35)
 
 
 # ── 4. Late-game timeout for a tied team in FG range ─────────────────────
