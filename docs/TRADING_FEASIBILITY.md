@@ -413,3 +413,130 @@ use-him-or-lose-him asset is one a GM will move.
     trade for a player and then being unable to field him is the most visible fantasy-side
     consequence of in-season roster movement. (A traded *rostered* player is fine — he
     already has a card; it just carries the old club's `team_id`.)
+
+---
+
+# Addendum 3 — the competitive-balance tax
+
+_2026-09-14. Owner: to get around inflation, either a salary cap or a tax where a team
+exceeding a limit on player skill pays from its Treasury, as MLB does._
+
+## ⚠️ First, a correction: there are TWO inflations and a tax fixes only one
+
+The word is doing double duty in this thread and the two problems have different fixes.
+
+**Population inflation** — the FA list filling with players who never see a roster. This is
+caused by `ensurePositionSupply` excluding prospects from its supply count (they are locked
+to their drafting team), so every prospect held makes the floor generate one extra free
+agent. **Money is not in that loop anywhere.** The floor compares roster demand against
+draftable supply; a team's wealth or payroll is not a term in it. **A tax cannot touch this,
+and neither could a salary cap.** The only fixes are to not restore the pipeline, or to make
+the floor count prospects so the league population stays fixed.
+
+**Skill concentration** — one club accumulating the league's talent. **A tax fixes this
+well**, and it is the problem the season 6 forecast actually shows.
+
+So the tax is a good idea for its own reason, not as a solution to the FA-pool bloat. If the
+pipeline comes back, the bloat comes back with it, taxed or not.
+
+## A tax is structurally safer than a cap here, and that is not a close call
+
+Rosters are exactly **six position-locked slots**. A cap constrains *how much a team may
+have* — but with a fixed roster size a team cannot have *more* players, only better ones. So
+a cap has nowhere to bite except by **blocking a signing**, and blocking a signing collides
+head-on with the rule that a roster must never carry an empty slot: **an empty slot rates 50**
+against a league of 73-85.
+
+A tax never blocks anything and never leaves a hole. It charges for the roster a club has
+already built. With a fixed roster size that is strictly safer.
+
+This is very likely why the cap did not survive the first time. `c8e1ec7` removed it in
+favour of **retention limits** (re-sign-once + count-limit) as the parity model — and the
+cap's own machinery included *"the `_attemptRosterFill` budget gate"*, i.e. exactly the
+signing-blocker described above.
+
+⚠️ **And the chosen replacement is now half-disabled**: `RESIGN_ONCE_ENABLED` is **False**
+(owner, 2026-08-13 — at a limit of 1 a career-long one-club player was impossible). So the
+model that displaced the cap has had its main limb turned off, and there is currently **no
+roster-economic parity mechanism at all**. Parity today rests on `LEAGUE_COMPRESSION_FACTOR`
+and the defense modifiers. A tax would be filling a real hole rather than adding a third
+overlapping system.
+
+## The tax base: `cap_hit` is free but too coarse
+
+`players.cap_hit` is already populated on **all 224 players** — the star tier frozen at
+signing, S=5 down to D=1 — and it survived the cap removal as a vestigial column. Summing
+the six starters gives a payroll for nothing.
+
+⚠️ **But it has almost no room to set a threshold.** Measured on prod:
+
+| base | range | usable thresholds |
+|---|---|---|
+| payroll (Σ `cap_hit`) | **13–20** (on a theoretical 6–30) | 18 or 19, and that is all |
+| rating sum (Σ `player_rating`) | **439–510**, sd 15.0 | anywhere |
+
+At a payroll threshold of 18, eleven teams are over; at 20, zero are. Seven points of spread
+across a 32-club league is a step function, not a dial — the tiers are five coarse buckets
+and every club has exactly six players, so there is no roster-size lever to create spread.
+
+The rating sum gives **71 points** of spread and scales smoothly with excess. The owner said
+"a limit on player **skill**", which is rating rather than tier — that instinct is right, and
+`cap_hit` is the wrong base despite being free.
+
+Correlations on the payroll base, for reference: `rating` **+0.879**, `wins` **+0.724**,
+`treasury` **−0.183**.
+
+## Measured: the tax lands on exactly the right team, and it cannot pay
+
+At a rating-sum threshold of **495**:
+
+| team | Σ rating | excess | treasury | forecast wins | title odds |
+|---|---:|---:|---:|---:|---:|
+| Pinecones | 510 | 15 | **200F** | 25.6 | **48%** |
+| Residents | 502 | 7 | 2,732F | 20.2 | 20% |
+| Broads | 500 | 5 | 8,739F | 14.3 | 0% |
+
+✅ **The runaway favorite is taxed hardest and holds the league minimum.** Pinecones carry
+48% title odds across 25 runs and have **200 Floobits**. Under a tax they must shed talent,
+which manufactures precisely the seller that in-season trading needs — and it is aimed at
+the one problem the forecast actually identified. That is the MLB dynamic working.
+
+The Treasury being anti-correlated with talent (−0.18 against payroll, −0.10 against rating)
+is what gives the tax its bite: the clubs that owe are the clubs without money.
+
+## ⚠️ Two problems to settle before building it
+
+**1. What happens when a club cannot pay?** MLB's answer is "you just pay" — that is not
+available here, because the best team has 200F. This is the central design question and it
+must be decided rather than discovered. Options: a forced sale (the sim trades someone),
+Treasury debt carried against next season's income, or a rating/development penalty. A tax
+whose penalty is unpayable and has no fallback is a dead end that will surface in the first
+season it fires.
+
+**2. The base produces false positives.** Broads sit third in rating sum (500) and forecast
+**14.3 wins with zero titles in 25 runs**. Rating sum correlates +0.72 with winning — strong,
+but loose enough to tax a club that is not dominating anything. Either accept that (a tax on
+payroll, not on success, is defensible and is what MLB does) or move the base closer to
+outcome, at the cost of taxing last season rather than this roster.
+
+## Where this leaves the whole proposal
+
+- **Picks** as trade assets: free, no population cost, no tax needed. ✅
+- **Treasury** as consideration: already live, anti-correlated with strength. ✅
+- **A rating-sum tax** paid from Treasury: a real parity lever aimed at a measured problem,
+  and it makes the Treasury *matter* — a club near the line must weigh a trade against the
+  bill. It also gives the strong-but-broke clubs a reason to sell, which is the missing half
+  of a trade market. ✅
+- **The prospect pipeline**: still the only piece that inflates the player population, and a
+  tax does not change that. ⚠️
+
+## Revised open questions
+
+12. **Unpayable tax** — forced sale, carried debt, or a non-Floobit penalty?
+13. **Threshold and rate** — a flat percentage of excess, or MLB's escalating repeat-offender
+    rate? The escalator is what actually breaks dynasties and is barely more work.
+14. **Is the threshold fixed or league-relative?** A fixed number drifts as
+    `LEAGUE_COMPRESSION_MEAN` or the rating curve moves; a percentile of the league's own
+    rating sum self-normalizes, the way the anomaly threshold already does.
+15. **Does the tax alone remove the need for the pipeline?** If the goal of prospects was
+    trade assets, picks plus Treasury plus a tax may cover it with no population cost.
