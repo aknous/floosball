@@ -1076,3 +1076,109 @@ which pushes a third of the league into decay at once.
     no tax in existence. That fires this offseason and wants deciding on its own merits.
 29. **The 3-round opener** still lands in the one window (seasons 6-8) where retirement
     outflow is still small.
+
+---
+
+# Addendum 9 — the owner is right about the draft, and it changes what the tax is for
+
+_2026-09-14. Owner: "it's not rising substantially now, but it will when we re-introduce the
+prospect draft." Tested; confirmed; and it invalidates the threshold recommendation in
+addendum 7._
+
+## Today the league is NOT inflating
+
+`player_rating_history` holds the real series. Rostered players only:
+
+| season | mean | 4★+ (≥84) | 5★ (≥92) |
+|---:|---:|---:|---:|
+| 1 | 78.9 | 25% | 4% |
+| 2 | 79.5 | 32% | 5% |
+| 3 | 79.9 | 34% | 5% |
+| 4 | 80.3 | 34% | 5% |
+| 5 | 80.4 | 36% | 6% |
+| 6 | 80.0 | 34% | 5% |
+
+It rose while the league was young and has been **flat for three seasons** at ~34% 4★+. The
+FA pool sits at 66.8 against a rostered 80.0, so the system is *sorting*, not inflating.
+
+## ⚠️ But the draft breaks that, and the mechanism is selection pressure
+
+192 roster spots are fixed. Grow the candidate population and the best 192 are simply better
+— nothing about generation has to change. Modelled by resampling the SAME empirical rating
+distribution at larger N, which isolates selection pressure from every other effect:
+
+| population | rostered mean | 4★+ | 5★ | cut line |
+|---:|---:|---:|---:|---:|
+| 224 (today) | 80.5 | 35% | 5% | 69 |
+| 300 | 83.0 | 48% | 7% | 76 |
+| 400 | 85.0 | **63%** | 10% | 78 |
+| 500 | 86.5 | **78%** | 12% | 81 |
+
+At 32 intake a season against ~19 replacement need, the surplus is ~13/season:
+
+| season | no cull | 4★+ | cull 13/yr | 4★+ | 3-round opener, no cull | 4★+ |
+|---:|---:|---:|---:|---:|---:|---:|
+| 6 | 218 | 34% | 218 | 35% | 314 | **50%** |
+| 10 | 270 | 43% | 218 | 34% | 366 | 58% |
+| 14 | 322 | 50% | 218 | 34% | 418 | 66% |
+| 20 | 400 | **63%** | 218 | **34%** | 496 | **78%** |
+
+⚠️ **The 3-round opener alone takes the league from 34% to ~50% four-star in a single
+offseason.** It is the riskiest decision in this plan, and it is riskiest immediately.
+
+✅ **And a cull at the surplus rate holds the league exactly flat at 34% indefinitely.** The
+cull is not hygiene. It is the entire defense against the thing the owner is worried about,
+and it has to ship WITH the draft, not after it.
+
+## ⚠️ This invalidates the relative threshold, and the tax's purpose
+
+Addendum 7 recommended a threshold at league **mean + 1 sd**. Against this concern that is
+exactly wrong.
+
+**A relative threshold is a RANK rule.** It catches the top ~3 clubs whatever the league's
+level — if every roster drifts to Σ520 the threshold drifts with it and nobody is ever over
+it. It cannot, by construction, prevent everyone ending up with four-star players.
+
+So the two concerns need different tools, and they were being conflated:
+
+| concern | the right lever | what the tax does |
+|---|---|---|
+| **level** — everyone ends up with stars | the **cull** (and a FIXED threshold, if a tax is used at all) | nothing, if relative |
+| **rank** — one club stockpiles for years | the **re-sign limit**, mostly | reaches the club that signed long |
+
+## And on the rank concern, the tax buys about one season
+
+Persistence is real — wins correlate **+0.818** S4→S5, the top-4 repeat count has gone 0, 1,
+1, **3**, and Pinecones have been top-4 in three of five seasons with two titles. So the
+re-sign limit is not a complete answer.
+
+But modelled forward, it catches even the long-contract club **on a lag**:
+
+| | Broads |
+|---|---|
+| end S6 | 1 expiring → re-sign, Σ500, still over |
+| end S7 | **4 expiring**, keep 2, lose 78 and 75 → **Σ477, under the line** |
+
+⚠️ So against Broads — the single club the tax uniquely reaches — the forced trade would fire
+at the end of S7 and the re-sign limit would have corrected them at the end of S7 anyway.
+**The tax buys one season, on one club, worth 5 rating points.** That is a lot of machinery
+(threshold, rate, waterfall ordering, decay ladder, counter, forced-trade engine) for that
+return.
+
+## Recommendation
+
+**Build the cull; treat the tax as optional and decide it later.** The cull is load-bearing
+against the owner's actual concern and nothing else addresses it. The tax addresses a
+narrower problem that the re-sign limit already handles within a season, and its relative
+threshold addresses the main concern not at all.
+
+If a tax is built anyway, it should use a **fixed** threshold so that it bites more clubs as
+the league rises — that is the only form that does anything about the level.
+
+## Revised open questions
+
+30. **Does the tax survive at all**, given it buys ~one season on one club and the cull does
+    the heavy lifting?
+31. **If yes: fixed threshold, not relative.** What number, and reviewed how often?
+32. **Is the 3-round opener worth 50% four-star in one offseason?** A 1-round opener with the
+    cull running from day one keeps the league flat.
