@@ -548,6 +548,15 @@ AUDIBLE_WILLINGNESS_SWING = 0.55  # a gunslinger checks far more often
 AUDIBLE_SITUATION_AWARE = True
 AUDIBLE_LEAN_EXPONENT = 1.0
 
+# ---- Protecting a Q4 lead (Game._protectLeadShift) ----
+# Log-odds of passing drop by SHIFT_MAX * exp(-secondsLeft / TAU) * leadScale * the
+# coach's clock-IQ scale (0.7-1.0, 0.85 for a neutral coach). Fitted to NFL 2021-25:
+# ~0.5 with 10-15 min left, ~1.3 at 5-10, ~2.5 at 2-5, 3.5-4.4 inside 2:00, on EVERY down.
+LEAD_PROTECT_SHIFT_MAX = 5.65
+LEAD_PROTECT_TAU_SECS = 330.0
+LEAD_PROTECT_LEAD_POINTS = [1, 3, 8, 16]
+LEAD_PROTECT_LEAD_SCALE = [0.8, 0.8, 0.95, 1.15]
+
 # ── Defensive disguise ────────────────────────────────────────────────────
 # ⚠️ THE PIECE THAT MAKES THE OTHERS A SYSTEM. Without it the QB reads an honest defense
 # and an audible is just a skill check the good QB always passes. With it, what the

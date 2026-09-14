@@ -4245,6 +4245,51 @@ class Game:
         weights['deep'] = weights.get('deep', 0) * max(0.2, 1 - 0.6 * bias)
         return weights
 
+    def _protectLeadShift(self, scoreDiff: int, secs: float) -> float:
+        """How far a Q4 lead pulls the log-odds of passing down, before coach scaling.
+
+        ⚠️ THE OLD LAYERS WERE MULTIPLIERS ON THE RUN WEIGHT, AND THAT CAPS OUT. They
+        topped out near 2.7x, which takes 1st & 10 to ~73% runs but leaves 3rd & 8 at
+        ~68% pass, because a multiplier can only move a pass-heavy row so far. Measured
+        against NFL 2021-25, a leading team's pass rate falls by about the SAME LOG-ODDS
+        amount on every down as the clock runs: ~0.5 with 10-15 minutes left, ~1.3 at
+        5-10, ~2.5 at 2-5 and 3.5-4.4 inside two minutes. That takes 1st & 10 to 2% and
+        3rd & 8 to 28% — not zero, because a first down still ends the game. Scaling
+        every pass tier by exp(-shift) is exactly that shift, on any row, which a run
+        multiplier is not.
+
+        Bigger leads protect somewhat more (NFL, final 5:00: 33% pass up 1-3, 16% up 17+).
+        The caller multiplies by a clock-IQ scale of 0.7-1.0, so a poor clock manager
+        still protects less, which is the personality the old branches carried."""
+        from constants import (LEAD_PROTECT_SHIFT_MAX, LEAD_PROTECT_TAU_SECS,
+                               LEAD_PROTECT_LEAD_POINTS, LEAD_PROTECT_LEAD_SCALE)
+        if scoreDiff <= 0:
+            return 0.0
+        leadScale = float(np.interp(scoreDiff, LEAD_PROTECT_LEAD_POINTS, LEAD_PROTECT_LEAD_SCALE))
+        return LEAD_PROTECT_SHIFT_MAX * math.exp(-max(0.0, secs) / LEAD_PROTECT_TAU_SECS) * leadScale
+
+    def _leadProtectKeep(self, scoreDiff: int = None, coach=None) -> float:
+        """The factor a leading team's pass options are multiplied by late in Q4, 0-1.
+
+        exp(-shift) scales the log-odds of passing down by exactly `shift`, so every
+        route to a throw should use it — the play-call tiers AND the RPO, whose give-or-
+        throw choice happens after the weights and otherwise leaked ~30% of late-lead
+        passes back in. Coach-scaled on a narrower band than `sit`: inside two minutes
+        every NFL staff runs the clock, and averaging a poor clock manager's pass rate
+        in at 40% strength dragged the whole league's late-lead rate up."""
+        if self.currentQuarter < 4:
+            return 1.0
+        if scoreDiff is None:
+            isHome = self.offensiveTeam is self.homeTeam
+            scoreDiff = (self.homeScore - self.awayScore) * (1 if isHome else -1)
+        if scoreDiff <= 0:
+            return 1.0
+        if coach is None:
+            coach = getattr(self.offensiveTeam, 'coach', None)
+        shift = (self._protectLeadShift(scoreDiff, self.gameClockSeconds)
+                 * (0.7 + 0.3 * self._coachClockIQ(coach)))
+        return math.exp(-shift)
+
     def _applySituationalMods(self, weights: dict, scoreDiff: int, coach=None) -> dict:
         """Apply game-state multipliers: quarter, score, clock, field position.
 
@@ -4402,33 +4447,17 @@ class Game:
                 # Cruise control — no adjustment, vulnerable to comeback
                 self._tallyCoachArchetype('leading_cruise')
 
-        # ── PROTECTING A ONE-SCORE LEAD late in Q4/OT ──
-        # The big-lead branch above only fires at 8+. A 1-7 point lead in the
-        # final minutes is exactly when a real coach runs the ball in-bounds to
-        # bleed clock and force the opponent to spend timeouts — incompletions
-        # would stop your own clock. Ramps as the clock winds down; coach-scaled
-        # via _mul so poor clock managers protect less.
-        elif 0 < scoreDiff <= self._oneScore() and q >= 4:
-            if secs <= 120:
-                protectUrgency = 1.0
-            elif secs <= 300:
-                protectUrgency = 0.6
-            else:
-                protectUrgency = 0.0
-            if protectUrgency > 0:
-                _mul('run',    1 + 0.7 * protectUrgency)
-                _mul('short',  1 + 0.2 * protectUrgency)
-                _mul('medium', 1 - 0.1 * protectUrgency)
-                _mul('long',   1 - 0.5 * protectUrgency)
-                _mul('deep',   1 - 0.7 * protectUrgency)
+        # (A one-score-lead Q4 branch used to sit here. It is folded into the
+        # lead-protection shift below, which covers every Q4 lead on one curve.)
 
         # ── LEAD-PROTECTION FLOOR (any Q4/OT lead) ──
         # Independent of coach archetype AND clock-IQ: no team should be chucking
         # deep with a 4th-quarter lead — an incompletion stops your OWN clock. The
         # branches above differentiate HOW WELL a coach drains (archetype) and how
-        # hard (clock-IQ via _mul); this guarantees a run lean + deep/long
-        # suppression for EVERYONE, ramping as the clock winds down. Uses _flat
-        # (no clock-IQ scaling) so even a poor clock-manager stops firing deep.
+        # hard (clock-IQ via _mul); this guarantees deep/long suppression for
+        # EVERYONE via _flat (no clock-IQ scaling, so even a poor clock-manager stops
+        # firing deep), plus the run lean from _protectLeadShift, which IS clock-IQ
+        # scaled.
         # Stacks on the mods above. Not Q2 — the half ends either way (handled
         # below); this is about protecting a lead, which only exists end-of-GAME.
         if scoreDiff > 2 * self._oneScore() and q == 3:
@@ -4442,12 +4471,16 @@ class Game:
             _mul('long',   0.7)
             _mul('deep',   0.6)
         if scoreDiff > 0 and q >= 4:
+            # The SHAPE of a leading team's passing game: shorter, never deep.
             floorUrg = 1.0 if secs <= 120 else (0.6 if secs <= 300 else 0.25)
-            _flat('run',    1 + 0.6 * floorUrg)
-            _flat('short',  1 + 0.15 * floorUrg)
             _flat('medium', 1 - 0.2 * floorUrg)
             _flat('long',   1 - 0.6 * floorUrg)
             _flat('deep',   1 - 0.8 * floorUrg)
+            # How OFTEN it passes at all: see _protectLeadShift.
+            keep = self._leadProtectKeep(scoreDiff, coach)
+            if keep < 1.0:
+                for _k in ('short', 'medium', 'long', 'deep'):
+                    weights[_k] = weights.get(_k, 0) * keep
 
         # Q2 two-minute drill: REGARDLESS of score, push to score before the
         # half. A leading team does NOT sit on the ball in Q2 (clock-milking is
@@ -6300,6 +6333,9 @@ class Game:
         aggrLean = max(0.0, (aggr - 60) / 40.0)              # 0 conservative -> 1 aggressive
         offLean = 0.6 + max(0.0, (offMind - 60) / 40.0) * 0.4
         p = (0.05 + 0.22 * fit) * (0.35 + 1.0 * aggrLean) * offLean
+        # An RPO is a pass option, so a team protecting a late lead takes it as rarely
+        # as it takes any other throw.
+        p *= self._leadProtectKeep()
         return _random.random() < max(0.0, min(0.40, p))
 
     def _executeRpo(self):
