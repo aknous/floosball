@@ -22,7 +22,7 @@ from managers.playerManager import PlayerManager
 class Pos:
     def __init__(s, v): s.value = v; s.name = {1:'QB',2:'RB',3:'WR',4:'TE',5:'K'}[v]
 class Tier:
-    def __init__(s, v): s.value = v
+    def __init__(s, v): s.value = v; s.name = v
 class Attrs:
     def __init__(s, r): s.skillRating = r
 class P:
@@ -121,6 +121,68 @@ got, _ = runPick(60, 95, filledThisDraft=('rb',))
 expect("a slot filled EARLIER IN THIS DRAFT is off limits (no churn)", got.id == 10)
 expect("the margin is well above the ordinary offseason one",
        FO_DRAFT_CUT_UPGRADE_MARGIN > 6.0)
+
+print("\n5. A player who turns a club down is SAID so, not silently missing")
+# ⚠️ THE FAN-FACING HALF (owner, 2026-09-13: *"if a player does refuse a team, we need to
+# make that known somehow so fans dont think their team just completely missed a player"*).
+# Destination preference drops a man from a board with no trace, so the pick that follows
+# reads as the club ignoring him.
+import managers.frontOfficeBrain as FOB
+from managers.facilitiesManager import computeAppeal
+
+def draftWithPreference(soft):
+    """One pick by a bare club with a demanding star and a modest one available."""
+    saved = FOB._SOFT_APPEAL
+    FOB._SOFT_APPEAL = soft
+    try:
+        b = FrontOfficeBrain(playerManager=None)
+        t = T()
+        t.facilities = {k: 0 for k in t.facilities}      # Appeal 0: suits nobody senior
+        t.rosterDict = {'qb':P(20,1,80),'rb':None,'wr1':P(21,3,80),'wr2':P(22,3,80),
+                        'te':P(23,4,80),'k':P(24,5,80)}
+        for p in t.rosterDict.values():
+            if p is not None: p.team = t
+        star   = P(30, 2, 95, seasons=14)                # demands a real club
+        modest = P(31, 2, 71, seasons=0)                 # goes anywhere
+        pool = [star, modest]
+        board = b.buildDraftBoard(t, pool, coach=Coach(85), rng=random.Random(3))
+        class Stub:
+            def __init__(s):
+                s.freeAgents = list(pool); s._faDraftBoards = {14: board}
+                s._faPreferenceNotes = dict(b.preferenceNotes)
+            def _leftThisTeamThisOffseason(s, p, tm): return False
+            def _getPlayerTerm(s, p): return 2
+        hl, ev = [], []
+        PlayerManager._attemptRosterFill(Stub(), t, [t], [], [star, modest], [], [], [],
+                                         {}, hl, ev)
+        return t.rosterDict['rb'], hl, ev, b.preferenceNotes.get(14, {})
+    finally:
+        FOB._SOFT_APPEAL = saved
+
+got, hl, ev, notes = draftWithPreference(soft=False)
+expect(f"hard gate: the club signs the modest RB ({got.playerRating:.0f}), not the star",
+       got.id == 31)
+expect("...and the star is recorded as having refused",
+       30 in (notes.get('refused') or set()))
+declined = [e for e in ev if e.get('type') == 'declined']
+expect(f"...and the draft SAYS he refused ({declined[0]['player'] if declined else 'nothing said'})",
+       len(declined) == 1 and declined[0]['reason'] == 'refused'
+       and declined[0]['playerId'] == 30)
+expect("...in the highlight feed too",
+       any('would not sign with' in (h.get('event') or {}).get('text', '') for h in hl))
+
+got, hl, ev, notes = draftWithPreference(soft=True)
+# ⚠️ UNDER SOFT APPEAL NOBODY REFUSES, so a refusal-only message would go permanently silent
+# the day that flag is thrown. The poor fit is still recorded and still explained.
+expect("soft appeal: nobody is refused outright", not (notes.get('refused') or set()))
+expect("...the poor fit is still recorded", 30 in (notes.get('poorFit') or set()))
+declined = [e for e in ev if e.get('type') == 'declined']
+if got.id == 31:
+    expect("...and if the club still passes on him, it is explained",
+           len(declined) == 1 and declined[0]['reason'] == 'poor_fit')
+else:
+    expect(f"...and the club can now actually sign him (rb {got.playerRating:.0f})",
+           got.id == 30)
 
 print("\n" + ("FAIL" if fails else "PASS") + " — the draft takes the obvious man and can upgrade a filled slot.")
 for f in fails: print("   -", f)

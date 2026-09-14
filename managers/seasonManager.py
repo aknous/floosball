@@ -7670,6 +7670,10 @@ class SeasonManager:
                 # the pre-existing behavior — never a missing pick.
                 logger.warning(f"FA board build failed for {getattr(team, 'name', '?')}: {e}")
         self.playerManager._faDraftBoards = boards
+        # ⚠️ AND WHY ANYONE IS MISSING FROM A BOARD, so a pick can explain itself. See
+        # `buildDraftBoard`'s note: a fan watching a five-star go unpicked assumes the club
+        # blundered, and the club may simply have been turned down.
+        self.playerManager._faPreferenceNotes = dict(getattr(brain, 'preferenceNotes', {}) or {})
 
         # One line per draft so a surprising pick can be traced back to the
         # board that produced it.

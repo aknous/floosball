@@ -46,6 +46,12 @@ import os as _os
 # Appeal demand values them lower, so they go to a club that suits them when one
 # exists and still get signed when none does. Off by default.
 _SOFT_APPEAL = _os.environ.get('FLOOS_SOFT_APPEAL') == '1'
+# ⚠️ 0.75 IS A 25% DISCOUNT AND THAT IS NOT A GENTLE TILT. Measured: a club a veteran does
+# not suit will still take a 71-rated rookie who does over that veteran until he is **95** --
+# 24 rating points better. So the soft mode's real effect is that a poor fit can be SIGNED
+# when nobody better is available (which is what stops a veteran going unsigned league-wide),
+# not that clubs weigh him sensibly. The knob if a genuine tilt is wanted: 0.90 puts the
+# crossover 8 points out, 0.95 puts it 4.
 _SOFT_APPEAL_PENALTY = float(_os.environ.get('FLOOS_SOFT_APPEAL_PENALTY', '0.75'))
 
 import math
@@ -167,6 +173,11 @@ class FrontOfficeBrain:
         # of a player, held for as long as the brain lives (one offseason; see
         # seasonManager._foBrainForOffseason). See _scoutError.
         self._scoutBeliefs: dict = {}
+        # {teamId: {'refused': {playerId}, 'poorFit': {playerId}}} — why a player is off (or
+        # discounted on) this club's board, written by buildDraftBoard. See the note there:
+        # without it, a player who declined a club is indistinguishable to a reader from a
+        # player the club simply did not rate.
+        self.preferenceNotes: dict = {}
 
     # ---------------------------------------------------------------- arc
 
@@ -644,9 +655,29 @@ class FrontOfficeBrain:
         cut-for-upgrade math.
         """
         board = {}
+        # ⚠️ WHY A PLAYER IS OFF THE BOARD HAS TO SURVIVE THE BOARD BUILD (owner, 2026-09-13:
+        # *"if a player does refuse a team, we need to make that known somehow so fans dont
+        # think their team just completely missed a player"*). This is the ONLY place the
+        # question is asked, and a filtered-out player is otherwise indistinguishable from a
+        # player the GM simply rated low -- which is exactly what a fan watching a 5-star go
+        # unpicked would assume.
+        #
+        # ⚠️ IT RECORDS THE POOR FIT IN BOTH MODES, not just refusals. Under `_SOFT_APPEAL`
+        # nobody is ever refused, so a refusal-only record would go permanently empty the day
+        # that flag is thrown and the feature would quietly die. `refused` is the hard gate
+        # turning a player away; `poorFit` is the soft one discounting him. A reader wants the
+        # same sentence either way: this club is not where he wants to be.
+        refused, poorFit = set(), set()
         for fa in pool or []:
             if fa is None or getattr(fa, 'willRetire', False):
                 continue
+            pid0 = getattr(fa, 'id', None)
+            if pid0 is not None and FA_PREFERENCE_ENABLED:
+                try:
+                    if self.teamAppeal(team) < self.appealDemand(fa):
+                        (poorFit if _SOFT_APPEAL else refused).add(pid0)
+                except Exception:
+                    pass
             if not self.willSignWith(fa, team):
                 continue
             pid = getattr(fa, 'id', None)
@@ -658,6 +689,10 @@ class FrontOfficeBrain:
             if p is None or pid is None:
                 continue
             board[pid] = self.decisionValue(p, coach, rng=rng, team=team)
+        # Hung on the brain rather than returned, so no caller signature changes and a caller
+        # that does not care is unaffected.
+        self.preferenceNotes[getattr(team, 'id', None)] = {'refused': refused,
+                                                           'poorFit': poorFit}
         return board
 
     def upgradeConfidence(self, player, coach=None, pool=None, rng=None,

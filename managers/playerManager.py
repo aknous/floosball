@@ -4601,6 +4601,43 @@ class PlayerManager:
 
         teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
 
+        # ⚠️ SAY SO WHEN A BETTER PLAYER WAS AVAILABLE BUT NOT TO THIS CLUB (owner,
+        # 2026-09-13). Destination preference removes a player from a club's board
+        # silently, so the pick that follows looks like the club ignoring him. This names
+        # the best such player whenever he out-rates the man actually taken, which is
+        # exactly the case a reader would otherwise call a blunder.
+        try:
+            notes = (getattr(self, '_faPreferenceNotes', None) or {}).get(
+                getattr(team, 'id', None)) or {}
+            away = (notes.get('refused') or set()) | (notes.get('poorFit') or set())
+            if away and kind != 'prospect':
+                openPos = set(firstOpenSlotByPos)
+                passedOver = [p for posVal in openPos
+                              for p in POS_TO_FALIST.get(posVal, [])
+                              if getattr(p, 'id', None) in away
+                              and getattr(p, 'playerRating', 0) > getattr(candidate, 'playerRating', 0)]
+                if passedOver:
+                    snub = max(passedOver, key=lambda p: getattr(p, 'playerRating', 0))
+                    declined = getattr(snub, 'id', None) in (notes.get('refused') or set())
+                    why = ('would not sign with' if declined else 'had better offers than')
+                    leagueHighlights.insert(0, {'event': {'text':
+                        f'{snub.name} ({snub.position.name}) {why} {team.name}'}})
+                    if eventLog is not None:
+                        eventLog.append({
+                            'type': 'declined',
+                            'team': team.name,
+                            'teamAbbr': teamAbbr,
+                            'playerId': getattr(snub, 'id', None),
+                            'player': snub.name,
+                            'position': snub.position.name,
+                            'rating': round(getattr(snub, 'playerRating', 0), 1),
+                            'reason': 'refused' if declined else 'poor_fit',
+                        })
+        except Exception as e:
+            # ⚠️ NEVER BREAK A PICK TO EXPLAIN ONE. This is commentary; a draft that stops
+            # because its narration raised is strictly worse than a draft with none.
+            logger.debug(f"preference note skipped for {getattr(team, 'name', '?')}: {e}")
+
         if kind == 'upgrade':
             # ⚠️ THE CUT HAPPENS ONLY NOW, once this upgrade has actually WON the pick.
             # Building the candidate must not move anybody: a club that ends up taking a
