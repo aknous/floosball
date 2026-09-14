@@ -7557,6 +7557,24 @@ class Game:
 
         self._executeWeightedPlay(weights, targetSideline=targetSideline)
 
+    @property
+    def reportedDriveStart(self):
+        """Where this drive began, or None when the spot is not this offense's to report.
+
+        ⚠️ ONE DEFINITION, because there are TWO payloads. The WS broadcast and the REST
+        `currentGames` builder both describe the same live game, and the drive start was added
+        to the broadcast alone -- so a fresh page load got no trail on the field until the next
+        socket event happened to arrive. A rule stated in one of two payload builders is a rule
+        the other one silently lacks.
+
+        ⚠️ AND THE GUARD IS PART OF IT. A possession-change broadcast fires from inside
+        `turnover()`, before the loop re-derives the drive, so the spot is still the PREVIOUS
+        offense's -- reporting it then draws somebody else's drive under this team's ball.
+        """
+        if self._driveTeam is not self.offensiveTeam:
+            return None
+        return self.driveStartYardsToEZ
+
     def _noteDriveStart(self) -> None:
         """Remember where this drive began, the first time we see a new offense.
 
@@ -9322,21 +9340,6 @@ class Game:
             # time (prod game 108, Q3 4:06). Ask the feed itself as well.
             lastPlayFormatted = (getattr(self, '_pendingPossessionChange', False)
                                  or self._playAlreadyInFeed(getattr(self, 'play', None)))
-            # ⚠️ THE DRIVE'S STARTING SPOT IS DERIVED HERE, NOT STAMPED WHERE POSSESSION
-            # CHANGES. `offensiveTeam` is assigned in TEN places -- turnovers, kickoffs, the
-            # opening drive, and both conversion paths, which swap it and swap it back -- and
-            # writing the spot at each is how this file has repeatedly ended up with one site
-            # missed and a silent wrong value. Asking "is the offense the one I saw last
-            # time" is one place that cannot be forgotten.
-            #
-            # ⚠️ THIS LOOP IS PER DRIVE, NOT PER PLAY, and that is easy to misread -- the
-            # comment here said "the top of the play loop" until it was measured: over a
-            # 133-play game this runs **20 times**, once per possession plus the odd quarter
-            # transition, because the plays themselves run in a loop inside it (which is why
-            # `lastPlayFormatted` a few lines up "dies with each drive"). The derivation is
-            # unaffected -- once per possession is exactly when the answer can change -- but
-            # anything that needs to happen per PLAY must not be put here.
-            self._noteDriveStart()
             if self.totalPlays > 0 and self.gameClockSeconds <= 0:
                 # Broadcast the last play with the CURRENT quarter before advanceQuarter() changes it.
                 # Use playResult (not playText) to check if the play actually ran.
@@ -9829,6 +9832,22 @@ class Game:
                 self._decayMomentum()
                 self._applyMomentumEffect()
 
+                # ⚠️ THE DRIVE'S STARTING SPOT IS DERIVED HERE, NOT STAMPED WHERE POSSESSION
+                # CHANGES. `offensiveTeam` is assigned in TEN places -- turnovers, kickoffs,
+                # the opening drive, and both conversion paths, which swap it and swap it
+                # back -- and writing the spot at each is how this file has repeatedly ended
+                # up with one site missed and a silent wrong value. Asking "is the offense
+                # the one I saw last play" is one place that cannot be forgotten, and reading
+                # it immediately BEFORE the play means the spot is the one the drive starts
+                # from and a conversion's temporary swap has already been undone.
+                #
+                # ⚠️ IT USED TO SIT IN THE OUTER LOOP, WHICH IS PER DRIVE, NOT PER PLAY -- and
+                # that cost the FIRST DRIVE OF EVERY GAME its trail. That loop's first pass
+                # runs before the opening kickoff has placed anybody, so the guard below
+                # correctly declined to record a start; but the loop does not come round
+                # again until drive TWO, so drive one never got one. Measured: plays 1-6
+                # reported no drive start at all, then it worked from drive two on.
+                self._noteDriveStart()
                 # Call and execute play
                 self._timeoutCalled = False
                 self.playCaller()
@@ -13007,8 +13026,7 @@ class Game:
             # re-derived the drive, so the spot on it is still the previous offense's --
             # measured at 15 broadcasts a game-trio. Reporting it then draws somebody else's
             # drive under this team's ball.
-            'driveStartYardsToEndzone': (self.driveStartYardsToEZ
-                                         if self._driveTeam is self.offensiveTeam else None),
+            'driveStartYardsToEndzone': self.reportedDriveStart,
             'isPossessionChange': isPossessionChange,
             'lastPlay': lastPlayData,
             'finalPlay': finalPlayData,

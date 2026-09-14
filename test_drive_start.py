@@ -101,6 +101,19 @@ expect(f"the ball reaches several spots under one start ({len(multi)} of {len(ru
 wobbled = [r for r in runs if len({s for s, _n in r}) != 1]
 expect(f"and the start never moves within a run (0 expected, {len(wobbled)} found)", not wobbled)
 
+print("\n3b. The FIRST drive of the game has a start too")
+# ⚠️ IT DID NOT, AND THE CAUSE WAS THE HOOK'S PLACEMENT. `_noteDriveStart` sat in the
+# per-DRIVE loop, whose first pass runs BEFORE the opening kickoff has placed anybody — so
+# the guard correctly declined to record a start, and the loop did not come round again
+# until drive TWO. Measured on a full game: plays 1-6 reported no drive start at all, then
+# it worked from drive two on. Reported by the owner as the field showing no progress "at
+# the start of the game". The hook now runs per PLAY, immediately before the play.
+early = [r for r in broadcastStates(4) if r[2] not in (None, 0)][:6]
+expect(f"the opening drive reports a start on its first play ({early[0][1] if early else '-'})",
+       bool(early) and early[0][1] is not None)
+expect("...and the same one for the rest of that drive",
+       len({r[1] for r in early if r[0]}) <= 2)
+
 print("\n4. It survives several games unchanged")
 for seed in (7, 12, 21):
     _g, d, st = playOne(seed)

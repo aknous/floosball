@@ -822,6 +822,12 @@ class GameResponseBuilder(ResponseBuilder):
             'yardsToFirstDown': yardsToFirstDown,
             'yardLine': yardLine,
             'yardsToEndzone': yardsToEndzone,
+            # ⚠️ THE DRIVE START BELONGS IN *BOTH* PAYLOADS. It was added to the WS
+            # `game_state` broadcast only, so a client that had just loaded the page had the
+            # ball's spot and no idea where the possession began — the drive line drew a
+            # football and no trail until the next socket event arrived. Same source as the
+            # broadcast (`Game.reportedDriveStart`) so the two cannot disagree.
+            'driveStartYardsToEndzone': getattr(game, 'reportedDriveStart', None),
             'downText': downText,
             'homeWinProbability': GameResponseBuilder.finalWinProbability(game, 'home'),
             'awayWinProbability': GameResponseBuilder.finalWinProbability(game, 'away'),
