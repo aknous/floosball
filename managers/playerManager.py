@@ -3237,6 +3237,7 @@ class PlayerManager:
         # Initialize team completion status
         for team in teams:
             team.freeAgencyComplete = False
+            team._draftFilledSlots = set()
 
         logger.info(f"Free agency starting with {len(self.freeAgents)} free agents and {len(teams)} teams")
 
@@ -3423,6 +3424,9 @@ class PlayerManager:
             openPositions = [k for k in ('qb', 'rb', 'wr1', 'wr2', 'te', 'k')
                             if team.rosterDict.get(k) is None]
             team.freeAgencyComplete = len(openPositions) == 0
+            # ⚠️ CLEARED PER DRAFT. It lives on the Team, which outlives the offseason, so
+            # leaving it would make every slot filled in season N permanently un-upgradable.
+            team._draftFilledSlots = set()
 
         # Build directive queues per team (ordered list of target player IDs)
         freeAgentLists = {
@@ -4459,9 +4463,10 @@ class PlayerManager:
                     firstOpenSlotByPos[posVal] = s
                     break
 
-        # No open slots → roster complete.
-        if not firstOpenSlotByPos:
-            return True
+        # ⚠️ THE "ROSTER COMPLETE" RETURN MOVED BELOW THE UPGRADE CHECK. A full roster used
+        # to return True here, which is exactly the club that a draft-time upgrade is FOR --
+        # so the feature was unreachable for its main case and the regression caught it.
+        # Completeness is now answered after asking whether there is an obvious upgrade left.
 
         # Build candidates: for each open position, best FA + best prospect.
         # A team may not re-sign a player it just released this offseason (cut by
@@ -4495,8 +4500,50 @@ class PlayerManager:
                 return None
             return eligible[0] if eligible else None
 
+        # ⚠️ A CLUB MAY ALSO CUT FOR AN OBVIOUS UPGRADE AT A FILLED POSITION (owner,
+        # 2026-09-13). Until now candidates were built ONLY for positions with an empty
+        # slot, so a team with a filled slot could not take a far better player at it no
+        # matter how far better he was -- the one upgrade path over a filled slot was the
+        # pre-draft cut decider, which fires rarely and measures near-neutral.
+        #
+        # ⚠️ A SLOT FILLED DURING THIS DRAFT IS OFF LIMITS (owner). Without that a club
+        # signs a man in round 2 and cuts him in round 4 when a better one surfaces, which
+        # is churn that reads as incompetence and takes away the player a fan just watched
+        # arrive. `_draftFilledSlots` is stamped whenever this function fills a slot.
+        from constants import FO_DRAFT_CUT_UPGRADE_MARGIN
+        filledThisDraft = getattr(team, '_draftFilledSlots', None) or set()
+
+        def _upgradeCandidates():
+            """(slot, freeAgent, 'upgrade') where the board says he clearly beats the man
+            in the slot. Board currency on both sides -- incumbents are priced onto the
+            same board (see `_buildFaDraftBoards`), so this is never rating-vs-value."""
+            if not board:
+                return []          # no board, no comparable numbers; do nothing
+            out = []
+            for posVal, slots in POS_TO_SLOTS.items():
+                if posVal in firstOpenSlotByPos:
+                    continue       # there is a hole here; filling it is not a cut
+                faList = POS_TO_FALIST.get(posVal, [])
+                best = _bestFaFor(faList, True, True)
+                if best is None:
+                    continue
+                bestVal = board.get(getattr(best, 'id', None))
+                if bestVal is None:
+                    continue
+                # replace the WEAKEST man at the position (WR has two slots)
+                held = [(sl, team.rosterDict.get(sl)) for sl in slots
+                        if sl not in filledThisDraft and team.rosterDict.get(sl) is not None]
+                held = [(sl, p, board.get(getattr(p, 'id', None))) for sl, p in held]
+                held = [h for h in held if h[2] is not None]
+                if not held:
+                    continue
+                sl, incumbent, incVal = min(held, key=lambda h: h[2])
+                if bestVal - incVal >= FO_DRAFT_CUT_UPGRADE_MARGIN:
+                    out.append((sl, best, 'upgrade'))
+            return out
+
         def _gather(applyReleaseBlock, applyBoard=True):
-            cands = []  # (slot, player, kind) where kind ∈ {'fa', 'prospect'}
+            cands = []  # (slot, player, kind) where kind ∈ {'fa', 'prospect', 'upgrade'}
             for posVal, slot in firstOpenSlotByPos.items():
                 faList = POS_TO_FALIST.get(posVal, [])
                 bestFa = _bestFaFor(faList, applyReleaseBlock, applyBoard)
@@ -4525,8 +4572,15 @@ class PlayerManager:
                       or _gather(applyReleaseBlock=False)
                       or _gather(applyReleaseBlock=True, applyBoard=False)
                       or _gather(applyReleaseBlock=False, applyBoard=False))
+        # ⚠️ APPENDED, NOT PART OF THE WIDENING CHAIN. The chain widens only when the tier
+        # above it found NOTHING, and an upgrade is not a fallback for an unfillable hole --
+        # it is an extra option that competes on value. Folding it into the `or` chain would
+        # make it fire only when the club could fill nothing at all, which is backwards.
+        candidates = list(candidates) + _upgradeCandidates()
         if not candidates:
-            return False  # open slots exist but no FAs or prospects to fill them
+            # Nothing left to do: either the roster is full and no upgrade clears the bar
+            # (complete), or slots are open and nothing can fill them (not complete).
+            return not firstOpenSlotByPos
 
         def _rating(c):
             """Ranking score across positions. With a board that's this GM's own
@@ -4546,6 +4600,93 @@ class PlayerManager:
         slot, candidate, kind = max(candidates, key=_rating)
 
         teamAbbr = getattr(team, 'abbr', team.name[:3].upper())
+
+        # ⚠️ SAY SO WHEN A BETTER PLAYER WAS AVAILABLE BUT NOT TO THIS CLUB (owner,
+        # 2026-09-13). Destination preference removes a player from a club's board
+        # silently, so the pick that follows looks like the club ignoring him. This names
+        # the best such player whenever he out-rates the man actually taken, which is
+        # exactly the case a reader would otherwise call a blunder.
+        try:
+            notes = (getattr(self, '_faPreferenceNotes', None) or {}).get(
+                getattr(team, 'id', None)) or {}
+            away = (notes.get('refused') or set()) | (notes.get('poorFit') or set())
+            if away and kind != 'prospect':
+                openPos = set(firstOpenSlotByPos)
+                passedOver = [p for posVal in openPos
+                              for p in POS_TO_FALIST.get(posVal, [])
+                              if getattr(p, 'id', None) in away
+                              and getattr(p, 'playerRating', 0) > getattr(candidate, 'playerRating', 0)]
+                if passedOver:
+                    snub = max(passedOver, key=lambda p: getattr(p, 'playerRating', 0))
+                    declined = getattr(snub, 'id', None) in (notes.get('refused') or set())
+                    why = ('would not sign with' if declined else 'had better offers than')
+                    leagueHighlights.insert(0, {'event': {'text':
+                        f'{snub.name} ({snub.position.name}) {why} {team.name}'}})
+                    if eventLog is not None:
+                        eventLog.append({
+                            'type': 'declined',
+                            'team': team.name,
+                            'teamAbbr': teamAbbr,
+                            'playerId': getattr(snub, 'id', None),
+                            'player': snub.name,
+                            'position': snub.position.name,
+                            'rating': round(getattr(snub, 'playerRating', 0), 1),
+                            'reason': 'refused' if declined else 'poor_fit',
+                        })
+        except Exception as e:
+            # ⚠️ NEVER BREAK A PICK TO EXPLAIN ONE. This is commentary; a draft that stops
+            # because its narration raised is strictly worse than a draft with none.
+            logger.debug(f"preference note skipped for {getattr(team, 'name', '?')}: {e}")
+
+        if kind == 'upgrade':
+            # ⚠️ THE CUT HAPPENS ONLY NOW, once this upgrade has actually WON the pick.
+            # Building the candidate must not move anybody: a club that ends up taking a
+            # different position would otherwise have released a starter for nothing.
+            incumbent = team.rosterDict.get(slot)
+            if incumbent is not None:
+                # ⚠️ ONE RELEASE IMPLEMENTATION. This inlined its own copy first, which is how
+                # the two drifted apart on the sort key alone; `releasePlayerToFreeAgency`
+                # already clears the slot, frees the shirt number, stamps `previousTeam` and
+                # files the player into the right position list.
+                self.releasePlayerToFreeAgency(incumbent, team, {
+                    'qb': freeAgentQbList, 'rb': freeAgentRbList, 'wr': freeAgentWrList,
+                    'te': freeAgentTeList, 'k': freeAgentKList})
+                incumbent.termRemaining = 0
+                leagueHighlights.insert(0, {'event': {'text':
+                    f'{team.name} released {incumbent.name} ({incumbent.position.name}) '
+                    f'to sign {candidate.name}'}})
+                # ⚠️ A CUT IS A TRANSACTION AND HAS TO BE REPORTED AS ONE (owner, 2026-09-13).
+                # It was announced only in the highlight feed, which is not persisted, so a
+                # player would vanish off a roster mid-draft with nothing in the transactions
+                # list to say why. The generator yields every `eventLog` entry and
+                # `OffseasonEvent.cut` already exists, so this reaches the live draft feed,
+                # the offseason transactions list and the Season Recap.
+                if eventLog is not None:
+                    eventLog.append({
+                        'type': 'cut',
+                        'team': team.name,
+                        'teamAbbr': teamAbbr,
+                        'playerId': getattr(incumbent, 'id', None),
+                        'player': incumbent.name,
+                        'position': incumbent.position.name,
+                        'rating': round(getattr(incumbent, 'playerRating', 0), 1),
+                        'tier': getattr(getattr(incumbent, 'playerTier', None), 'name', ''),
+                        'slot': slot,
+                        'forPlayer': candidate.name,
+                    })
+                freeAgencyDict[f"{team.name}_cut_{incumbent.name}"] = {
+                    'name': incumbent.name,
+                    'pos': incumbent.position.name,
+                    'rating': incumbent.attributes.skillRating,
+                    'tier': getattr(getattr(incumbent, 'playerTier', None), 'value', ''),
+                    'term': 0,
+                    'previousTeam': team.name,
+                    'roster': 'Released',
+                }
+                logger.info(f"FA draft upgrade: {team.name} cuts {incumbent.name} "
+                            f"({incumbent.playerRating}) for {candidate.name} "
+                            f"({candidate.playerRating}) at {slot}")
+            kind = 'fa'          # the signing itself is an ordinary signing from here
 
         if kind == 'fa':
             # Stale-list defense: if the chosen player is already on a
@@ -4571,6 +4712,11 @@ class PlayerManager:
             selectedPlayer.team = team
             selectedPlayer.freeAgentYears = 0
             team.rosterDict[slot] = selectedPlayer
+            # ⚠️ STAMPED SO THIS SLOT CANNOT BE UPGRADED AGAIN THIS DRAFT. Without it a club
+            # signs a man in one round and cuts him in a later one as a better name surfaces.
+            if getattr(team, '_draftFilledSlots', None) is None:
+                team._draftFilledSlots = set()
+            team._draftFilledSlots.add(slot)
             team.assignPlayerNumber(selectedPlayer)
             selectedPlayer.term = self._getPlayerTerm(selectedPlayer)
             selectedPlayer.termRemaining = selectedPlayer.term

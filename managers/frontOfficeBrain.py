@@ -45,15 +45,20 @@ import os as _os
 # FLOOS_SOFT_APPEAL=1 lets any player sign anywhere, but a club below the player's
 # Appeal demand values them lower, so they go to a club that suits them when one
 # exists and still get signed when none does. Off by default.
-_SOFT_APPEAL = _os.environ.get('FLOOS_SOFT_APPEAL') == '1'
-_SOFT_APPEAL_PENALTY = float(_os.environ.get('FLOOS_SOFT_APPEAL_PENALTY', '0.75'))
+_SOFT_APPEAL = _os.environ.get('FLOOS_SOFT_APPEAL', '1') != '0'
+# ⚠️ 0.90, NOT THE 0.75 THIS SHIPPED WITH (owner, 2026-09-13). Measured, 0.75 is a 25%
+# discount and not a gentle tilt at all: a club a veteran does not suit would still take a
+# 71-rated rookie who does over that veteran until he reached **95**, 24 rating points
+# better. That is a veto wearing a preference's name. At 0.90 the crossover is **8 points**,
+# which is a club weighing fit against talent rather than refusing to look. 0.95 puts it at 4.
+_SOFT_APPEAL_PENALTY = float(_os.environ.get('FLOOS_SOFT_APPEAL_PENALTY', '0.90'))
 
 import math
 from constants import (
     POSITION_VALUE,
     VENUE_PHASE_POSITIONS,
     VENUE_POSITION_WEIGHT,
-    FO_SCOUT_VISION_FLOOR, FO_SCOUT_VISION_CEILING, FO_SCOUT_NOISE_MAX,
+    FO_SCOUT_VISION_FLOOR, FO_SCOUT_VISION_CEILING, FO_SCOUT_NOISE_MAX, FO_SCOUT_NOISE_FLOOR,
     FO_CEILING_CREDIT, FO_DEVELOPING_HEADROOM,
     FO_DECLINE_PER_YEAR_PAST, FO_DECLINE_MAX,
     FO_RESIGN_SURPLUS_MARGIN, FO_FA_CONTENTION,
@@ -167,6 +172,11 @@ class FrontOfficeBrain:
         # of a player, held for as long as the brain lives (one offseason; see
         # seasonManager._foBrainForOffseason). See _scoutError.
         self._scoutBeliefs: dict = {}
+        # {teamId: {'refused': {playerId}, 'poorFit': {playerId}}} — why a player is off (or
+        # discounted on) this club's board, written by buildDraftBoard. See the note there:
+        # without it, a player who declined a club is indistinguishable to a reader from a
+        # player the club simply did not rate.
+        self.preferenceNotes: dict = {}
 
     # ---------------------------------------------------------------- arc
 
@@ -310,7 +320,7 @@ class FrontOfficeBrain:
         # large noise exists to make per-team BOARDS differ, which is about strangers, and
         # applying it to an incumbent is what let clubs release their best walk-year
         # player and re-sign two lesser ones.
-        sigma = self._noiseSigma(vision)
+        sigma = self._noiseSigma(vision, forward - current)
         if self._isIncumbent(player, team):
             sigma *= FO_SCOUT_INCUMBENT_NOISE_SCALE
         seen += self._scoutError(player, coach, sigma, rng)
@@ -342,9 +352,26 @@ class FrontOfficeBrain:
         return ptName == getattr(team, 'name', None)
 
     @staticmethod
-    def _noiseSigma(vision: float) -> float:
-        """Spread of this GM's misjudgement, in rating points."""
-        return FO_SCOUT_NOISE_MAX * (1.0 - vision)
+    def _noiseSigma(vision: float, arcGap: float = None) -> float:
+        """Spread of this GM's misjudgement, in rating points.
+
+        ⚠️ HE IS WRONG ABOUT THE PROJECTION, NOT ABOUT THE SHEET. `arcGap` is how far the
+        player's forward rating sits from today's number -- the only part of a valuation that
+        is actually a guess. A flat spread over the whole rating made a bad GM blind rather
+        than bad: measured, a scouting-60 front office ranked a 2-star WR above a 5-star RB
+        **28.5%** of the time, and an average one **11.4%**, because RB's 0.72 position
+        weight compresses a 22-point talent gap to 11.6 board points and a +-12 blanket
+        swamps it. `FO_SCOUT_NOISE_FLOOR` keeps a small irreducible read error so two boards
+        still differ, and it is deliberately far too small to cross a tier.
+
+        Called with no `arcGap` it keeps the old blanket, which is what
+        `bestReplacementValue`'s winner's-curse correction wants: that term prices the spread
+        of a whole POOL of candidates, not one player's arc.
+        """
+        if arcGap is None:
+            return FO_SCOUT_NOISE_MAX * (1.0 - vision)
+        return (1.0 - vision) * min(FO_SCOUT_NOISE_MAX,
+                                    FO_SCOUT_NOISE_FLOOR + abs(float(arcGap)))
 
     @staticmethod
     def _gmKey(coach):
@@ -627,9 +654,29 @@ class FrontOfficeBrain:
         cut-for-upgrade math.
         """
         board = {}
+        # ⚠️ WHY A PLAYER IS OFF THE BOARD HAS TO SURVIVE THE BOARD BUILD (owner, 2026-09-13:
+        # *"if a player does refuse a team, we need to make that known somehow so fans dont
+        # think their team just completely missed a player"*). This is the ONLY place the
+        # question is asked, and a filtered-out player is otherwise indistinguishable from a
+        # player the GM simply rated low -- which is exactly what a fan watching a 5-star go
+        # unpicked would assume.
+        #
+        # ⚠️ IT RECORDS THE POOR FIT IN BOTH MODES, not just refusals. Under `_SOFT_APPEAL`
+        # nobody is ever refused, so a refusal-only record would go permanently empty the day
+        # that flag is thrown and the feature would quietly die. `refused` is the hard gate
+        # turning a player away; `poorFit` is the soft one discounting him. A reader wants the
+        # same sentence either way: this club is not where he wants to be.
+        refused, poorFit = set(), set()
         for fa in pool or []:
             if fa is None or getattr(fa, 'willRetire', False):
                 continue
+            pid0 = getattr(fa, 'id', None)
+            if pid0 is not None and FA_PREFERENCE_ENABLED:
+                try:
+                    if self.teamAppeal(team) < self.appealDemand(fa):
+                        (poorFit if _SOFT_APPEAL else refused).add(pid0)
+                except Exception:
+                    pass
             if not self.willSignWith(fa, team):
                 continue
             pid = getattr(fa, 'id', None)
@@ -641,6 +688,10 @@ class FrontOfficeBrain:
             if p is None or pid is None:
                 continue
             board[pid] = self.decisionValue(p, coach, rng=rng, team=team)
+        # Hung on the brain rather than returned, so no caller signature changes and a caller
+        # that does not care is unaffected.
+        self.preferenceNotes[getattr(team, 'id', None)] = {'refused': refused,
+                                                           'poorFit': poorFit}
         return board
 
     def upgradeConfidence(self, player, coach=None, pool=None, rng=None,

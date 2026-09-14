@@ -305,19 +305,18 @@ class SeasonManager:
 
         # Anchor season start to the correct Monday
         from managers.timingManager import TimingMode, TimingManager
+        # ⚠️ ONE ANCHOR HELPER, NOT A SECOND COPY OF THE ARITHMETIC. This branch used to
+        # compute its own "next Monday" off `utcnow().weekday()` at `hour=4` **UTC**, while
+        # `waitBetweenSeasons` polled until 04:00 **Eastern** -- two different moments four or
+        # five hours apart, stamping a `startDate` that had already passed by the time the wait
+        # it was supposed to match had finished. Both now read `TimingManager`.
         if self.timingManager.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
-            # CATCHUP: backdate to last Monday so schedule anchors to the past
-            self.currentSeason.startDate = TimingManager._lastMondayUtc(hour=4)
+            # CATCHUP: backdate to the last anchor so the schedule anchors to the past
+            self.currentSeason.startDate = TimingManager._lastSeasonAnchorUtc()
             logger.info(f"{self.timingManager.mode.value} mode: season start backdated to {self.currentSeason.startDate.isoformat()}")
         elif self.timingManager._isScheduledMode:
-            # SCHEDULED: anchor to next Monday (or today if already Monday)
-            now = datetime.datetime.utcnow()
-            daysUntilMonday = (7 - now.weekday()) % 7  # 0 if already Monday
-            nextMonday = (now + datetime.timedelta(days=daysUntilMonday)).replace(
-                hour=4, minute=0, second=0, microsecond=0
-            )
-            self.currentSeason.startDate = nextMonday
-            logger.info(f"Scheduled mode: season start anchored to {nextMonday.isoformat()}")
+            self.currentSeason.startDate = TimingManager._nextSeasonAnchorUtc()
+            logger.info(f"Scheduled mode: season start anchored to {self.currentSeason.startDate.isoformat()}")
 
         # Clear previous season data
         self._clearSeasonData()
@@ -673,9 +672,9 @@ class SeasonManager:
                 # cross-day transition, so it only gets the 15-minute setup lead, and
                 # 15 minutes is not enough time for the league to vote on opening day's
                 # format. Opening here gives the whole run-up from season creation to
-                # first kickoff — in prod the season rolls over early Monday morning
-                # (startDate anchors to Monday 04:00 UTC) and week 1 kicks at 12:00 ET,
-                # so the ballot is up for the morning rather than 15 minutes. Idempotent
+                # first kickoff — in prod the season opens at 19:00 ET Sunday
+                # (`SEASON_START_WEEKDAY`) and week 1 kicks at 12:00 ET Monday, so the
+                # ballot is up overnight rather than 15 minutes. Idempotent
                 # — the rollover call below no-ops once this window exists.
                 self._maybeOpenRuleVote(nextWeek, weekStartTime)
 
@@ -3904,6 +3903,28 @@ class SeasonManager:
         except Exception as e:
             logger.warning(f"Could not restore season start date: {e}")
 
+    @staticmethod
+    def _firstGameDate(seasonStart: datetime.datetime) -> datetime.date:
+        """Day 0 of the schedule: the Monday on or after the season anchor, in Eastern.
+
+        ⚠️ THE SCHEDULE USED `seasonStart.date()` DIRECTLY, WHICH MADE THE ANCHOR'S HOUR
+        LOAD-BEARING AND DST-UNSTABLE. `startDate` is a naive UTC stamp, so taking its date
+        asks what day it is in London. That happened to work while the anchor was 04:00 ET
+        Monday (08:00/09:00 UTC, still Monday either way) and breaks the moment it moves:
+        19:00 ET Sunday is **23:00 UTC Sunday in EDT and 00:00 UTC Monday in EST**, so the
+        naive read would have put the whole season on Sunday for half the year and Monday for
+        the other half -- a silent one-day shift twice a year.
+
+        ⚠️ SO DAY 0 IS DERIVED, NOT READ. Convert to Eastern, then take the Monday on or
+        after it. Games are played Monday to Thursday whatever hour the league opens at, which
+        is what lets the anchor be a configuration (`SEASON_START_WEEKDAY`) instead of a fact
+        the scheduler depends on. An anchor already ON a Monday is its own day 0, so this is
+        exactly what the old code did for the old anchor -- it is a generalisation, not a move.
+        """
+        offset = 4 if _isEdt(seasonStart.date()) else 5
+        etDate = (seasonStart - datetime.timedelta(hours=offset)).date()
+        return etDate + datetime.timedelta(days=(0 - etDate.weekday()) % 7)
+
     def getWeekStartTime(self, now:datetime.datetime, week:int):
         from managers.timingManager import TimingMode
 
@@ -3935,14 +3956,14 @@ class SeasonManager:
             playoffHours = {1: 12, 2: 13, 3: 14, 4: 15}
             etHour = playoffHours.get(playoffRound, 12)
             seasonStart = self.currentSeason.startDate if self.currentSeason else now
-            targetDate = (seasonStart + datetime.timedelta(days=4)).date()
+            targetDate = self._firstGameDate(seasonStart) + datetime.timedelta(days=4)
         else:
             # Regular season: 28 rounds across 4 game days (7 rounds/day), anchored to
             # the season's actual start date instead of "next Thursday"
             etHour = startTimeHoursList[week % 7]
             dayNumber = math.floor(week / 7)  # 0–3
             seasonStart = self.currentSeason.startDate if self.currentSeason else now
-            targetDate = (seasonStart + datetime.timedelta(days=dayNumber)).date()
+            targetDate = self._firstGameDate(seasonStart) + datetime.timedelta(days=dayNumber)
 
         # Convert ET hour to UTC manually — avoids reliance on container tzdata
         # which can be stale and return EST offsets for EDT dates.
@@ -7631,15 +7652,28 @@ class SeasonManager:
         brain = self._foBrainForOffseason()
         for team in teams:
             try:
+                # ⚠️ THE INCUMBENTS ARE PRICED ONTO THE BOARD TOO, so the draft-time
+                # upgrade decision compares a free agent against the man he would replace
+                # in ONE currency. `buildDraftBoard`'s own docstring records why that
+                # matters -- decisionValue is position-weighted and a raw playerRating is
+                # not, so mixing them makes every comparison a unit mismatch. Prospects
+                # were already handled this way; the roster was not, because until now
+                # nothing ever compared a free agent to a filled slot.
+                roster = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
+                          if p is not None]
                 boards[team.id] = brain.buildDraftBoard(
                     team, pool, coach=getattr(team, 'coach', None),
-                    alsoValue=list(getattr(team, 'prospects', None) or []),
+                    alsoValue=list(getattr(team, 'prospects', None) or []) + roster,
                 )
             except Exception as e:
                 # A team with no board falls back to true-rating order, which is
                 # the pre-existing behavior — never a missing pick.
                 logger.warning(f"FA board build failed for {getattr(team, 'name', '?')}: {e}")
         self.playerManager._faDraftBoards = boards
+        # ⚠️ AND WHY ANYONE IS MISSING FROM A BOARD, so a pick can explain itself. See
+        # `buildDraftBoard`'s note: a fan watching a five-star go unpicked assumes the club
+        # blundered, and the club may simply have been turned down.
+        self.playerManager._faPreferenceNotes = dict(getattr(brain, 'preferenceNotes', {}) or {})
 
         # One line per draft so a surprising pick can be traced back to the
         # board that produced it.
@@ -7804,6 +7838,33 @@ class SeasonManager:
                         # and the pick visually disappears (or worse, attaches
                         # to the wrong team in the UI). Imperceptible to users.
                         await asyncio.sleep(0.1)
+                    elif entry['type'] == 'cut':
+                        # ⚠️ A DRAFT-TIME CUT IS A TRANSACTION. Without this branch the
+                        # release was announced only in the un-persisted highlight feed, so a
+                        # player vanished off a roster mid-draft with nothing in the
+                        # transactions list or the Season Recap to say why. `OffseasonEvent.cut`
+                        # already existed; nothing was calling it from here.
+                        await broadcaster.broadcast_season_event(
+                            OffseasonEvent.cut(
+                                entry['team'], entry['teamAbbr'], entry['player'],
+                                entry['position'], entry['rating'], entry.get('tier', ''),
+                            )
+                        )
+                        self._offseasonTransactions.append(entry)
+                        self._recordOffseasonEvent(
+                            'cut', teamName=entry['team'], teamAbbr=entry['teamAbbr'],
+                            playerId=entry.get('playerId'), playerName=entry['player'],
+                            position=entry['position'], rating=entry['rating'],
+                            tier=entry.get('tier', ''),
+                            detail=f"released to sign {entry.get('forPlayer', 'an upgrade')}")
+                        await asyncio.sleep(0.1)
+                    elif entry['type'] == 'declined':
+                        # ⚠️ AND SO IS A REFUSAL, for the same reason: it is the explanation
+                        # for the pick the fan is about to see. It goes in the transactions
+                        # feed but NOT through `_recordOffseasonEvent` -- that is idempotent
+                        # per (season, eventType, playerId), and one player can decline
+                        # several clubs in one draft, so all but the first would be dropped.
+                        self._offseasonTransactions.append(entry)
                     elif entry['type'] == 'team_complete':
                         await broadcaster.broadcast_season_event(
                             OffseasonEvent.team_complete(entry['team'], entry['teamAbbr'])

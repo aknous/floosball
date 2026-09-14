@@ -3529,7 +3529,7 @@ async def get_season_info(response: Response):
         nextSeasonStartTime = None
         if current_season.isComplete and season_mgr.timingManager._isScheduledMode:
             from managers.timingManager import TimingManager
-            nextSeasonStart = TimingManager._nextMondayUtc(hour=4)
+            nextSeasonStart = TimingManager._nextSeasonAnchorUtc()
             nextSeasonStartTime = nextSeasonStart.isoformat() + 'Z'
 
         # Phased offseason — current top-level flow phase + ISO target time

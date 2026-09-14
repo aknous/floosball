@@ -75,6 +75,25 @@ def framePoints(game):
 class GameFormat:
     """Standard football: cumulative score, higher wins at the end of regulation/OT.
     Every hook here is the identity/no-op the engine assumes by default."""
+
+    # ⚠️ HOW MUCH FANTASY THIS FORMAT PRODUCES, AGAINST STANDARD = 1.0. The card power bar is
+    # a fixed FP threshold frozen at mint, but the format is VOTED and changes week to week, so
+    # a format that yields less fantasy silently makes every card in the league harder to
+    # unlock -- and one that yields more makes every card easier. That is a difficulty swing
+    # nobody chose and no card can see.
+    #
+    # ⚠️ MEASURED, NOT ASSERTED, AND THE MEASUREMENT CONTRADICTED THE GUESS. Over 40 full games
+    # per format on matched rosters and seeds: darts (`bust`) was the suspected culprit and is
+    # not -- it runs **1.06x the plays and 1.08x the fantasy** of standard. The real outlier is
+    # Drive Clock (`play_limit`) at **0.78x plays / 0.80x FP**, and Innings runs HOT at 1.32x
+    # (46.0 points a game against standard's 33.2). A 6-game pilot ranked these differently and
+    # would have had darts at 0.82; the scales here come from the 40-game run.
+    #
+    # ⚠️ IT LIVES ON THE FORMAT, NOT IN A TABLE IN `constants.py`, because it is a fact about
+    # how this format plays -- the same reason `stateExtra` is here. A new format that forgets
+    # to set it gets 1.0, which is the honest default rather than a silent zero.
+    fpScale: float = 1.0
+
     key = 'standard'
     label = 'Standard'
 
@@ -340,6 +359,8 @@ class PlayLimitFormat(GameFormat):
     aggression translate because "plays remaining" is proportional to "seconds
     remaining"). Each play drains one slice so exactly `playsPerQuarter` plays end a
     quarter; the standard clock/OT end conditions then fire off the synthetic clock."""
+
+    fpScale = 0.8   # a hard play cap is a hard cap on fantasy: 0.78x the plays of a standard game
     key = 'play_limit'
     label = 'Play Limit'
 
@@ -531,6 +552,8 @@ class InningsFormat(GameFormat):
     final (or an extra) inning and HOME is ahead, HOME has won and doesn't need to bat.
     Extra innings on a tie. The engine's clock/quarter loop is left INERT (the clock
     never drains); the game is driven by the try/inning counters via the possession gate."""
+
+    fpScale = 1.32   # measured 46.0 points a game against standard's 33.2 -- the bar RISES so the gate stays the same gamble
     key = 'innings'
     label = 'Innings'
     EXTRA_INNINGS_CAP = 5   # accept a tie after this many extra innings (anti-stalemate)
