@@ -53,7 +53,7 @@ from constants import (
     POSITION_VALUE,
     VENUE_PHASE_POSITIONS,
     VENUE_POSITION_WEIGHT,
-    FO_SCOUT_VISION_FLOOR, FO_SCOUT_VISION_CEILING, FO_SCOUT_NOISE_MAX,
+    FO_SCOUT_VISION_FLOOR, FO_SCOUT_VISION_CEILING, FO_SCOUT_NOISE_MAX, FO_SCOUT_NOISE_FLOOR,
     FO_CEILING_CREDIT, FO_DEVELOPING_HEADROOM,
     FO_DECLINE_PER_YEAR_PAST, FO_DECLINE_MAX,
     FO_RESIGN_SURPLUS_MARGIN, FO_FA_CONTENTION,
@@ -310,7 +310,7 @@ class FrontOfficeBrain:
         # large noise exists to make per-team BOARDS differ, which is about strangers, and
         # applying it to an incumbent is what let clubs release their best walk-year
         # player and re-sign two lesser ones.
-        sigma = self._noiseSigma(vision)
+        sigma = self._noiseSigma(vision, forward - current)
         if self._isIncumbent(player, team):
             sigma *= FO_SCOUT_INCUMBENT_NOISE_SCALE
         seen += self._scoutError(player, coach, sigma, rng)
@@ -342,9 +342,26 @@ class FrontOfficeBrain:
         return ptName == getattr(team, 'name', None)
 
     @staticmethod
-    def _noiseSigma(vision: float) -> float:
-        """Spread of this GM's misjudgement, in rating points."""
-        return FO_SCOUT_NOISE_MAX * (1.0 - vision)
+    def _noiseSigma(vision: float, arcGap: float = None) -> float:
+        """Spread of this GM's misjudgement, in rating points.
+
+        ⚠️ HE IS WRONG ABOUT THE PROJECTION, NOT ABOUT THE SHEET. `arcGap` is how far the
+        player's forward rating sits from today's number -- the only part of a valuation that
+        is actually a guess. A flat spread over the whole rating made a bad GM blind rather
+        than bad: measured, a scouting-60 front office ranked a 2-star WR above a 5-star RB
+        **28.5%** of the time, and an average one **11.4%**, because RB's 0.72 position
+        weight compresses a 22-point talent gap to 11.6 board points and a +-12 blanket
+        swamps it. `FO_SCOUT_NOISE_FLOOR` keeps a small irreducible read error so two boards
+        still differ, and it is deliberately far too small to cross a tier.
+
+        Called with no `arcGap` it keeps the old blanket, which is what
+        `bestReplacementValue`'s winner's-curse correction wants: that term prices the spread
+        of a whole POOL of candidates, not one player's arc.
+        """
+        if arcGap is None:
+            return FO_SCOUT_NOISE_MAX * (1.0 - vision)
+        return (1.0 - vision) * min(FO_SCOUT_NOISE_MAX,
+                                    FO_SCOUT_NOISE_FLOOR + abs(float(arcGap)))
 
     @staticmethod
     def _gmKey(coach):

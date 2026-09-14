@@ -7652,9 +7652,18 @@ class SeasonManager:
         brain = self._foBrainForOffseason()
         for team in teams:
             try:
+                # ⚠️ THE INCUMBENTS ARE PRICED ONTO THE BOARD TOO, so the draft-time
+                # upgrade decision compares a free agent against the man he would replace
+                # in ONE currency. `buildDraftBoard`'s own docstring records why that
+                # matters -- decisionValue is position-weighted and a raw playerRating is
+                # not, so mixing them makes every comparison a unit mismatch. Prospects
+                # were already handled this way; the roster was not, because until now
+                # nothing ever compared a free agent to a filled slot.
+                roster = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
+                          if p is not None]
                 boards[team.id] = brain.buildDraftBoard(
                     team, pool, coach=getattr(team, 'coach', None),
-                    alsoValue=list(getattr(team, 'prospects', None) or []),
+                    alsoValue=list(getattr(team, 'prospects', None) or []) + roster,
                 )
             except Exception as e:
                 # A team with no board falls back to true-rating order, which is

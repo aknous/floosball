@@ -2084,10 +2084,27 @@ ROOKIE_DRAFT_ENABLED = False
 # perceivedValue = projectedRating x POSITION_VALUE, which is what stops
 # "best available" handing a team a great kicker while the QB slot rots.
 # Universal table for now; small per-GM biases are a later flavour option.
+# ⚠️ RB SITS ABOVE WR, AND IT USED TO BE THE OTHER WAY ROUND (owner, 2026-09-13: *"if a team
+# needs a RB, WR, and TE ... the priority should be RB-WR-TE"*). This table IS the league's
+# position priority -- with two players of equal rating the higher multiplier gets taken first
+# -- and at RB 0.72 / WR 0.78 it ordered them QB-WR-RB-TE-K, which is not what anyone reading
+# the league would expect.
+#
+# ⚠️ AND THE ENGINE'S OWN MEASUREMENT AGREED WITH THE OWNER, NOT WITH THE TABLE. `FLOOS_POS_FORCE`
+# prices a position's CAUSAL impact on winning by boosting one roster slot league-wide and
+# reading the win-rate gap: **QB +2.52, RB +1.25, WR +0.91, TE +0.54, K -0.93 wins a season**.
+# That is QB > RB > WR > TE > K, exactly the asked-for order, and the table had two of them
+# inverted against it.
+#
+# ⚠️ A STRAIGHT RESCALE ONTO THOSE NUMBERS WAS REJECTED. Normalised to QB = 1.00 they give
+# RB 0.50 / WR 0.36 / TE 0.21 and a NEGATIVE kicker, which would make quarterbacks
+# overwhelming, break the kicker's valuation outright, and move every contract in the league.
+# Swapping the two that are in the wrong order fixes the ordering, matches the measurement,
+# and leaves the spread -- and therefore the economy -- where it was.
 POSITION_VALUE = {
     'QB': 1.00,
-    'RB': 0.72,
-    'WR': 0.78,
+    'RB': 0.78,
+    'WR': 0.72,
     'TE': 0.60,
     'K':  0.35,
 }
@@ -2115,6 +2132,23 @@ FO_SCOUT_VISION_CEILING = 100     # scouting at this = near-perfect arc vision
 # 12.0 puts a club's own top target around the consensus #2-3, so one team's
 # man really is another's fifth choice, without making the whole league blind.
 FO_SCOUT_NOISE_MAX = 12.0
+# ⚠️ AND THE ERROR IS ON THE PROJECTION, NOT ON THE SHEET (owner, 2026-09-13: *"why would
+# any GM do that? even an incompetent GM should take the obvious pick of a 5 star RB"*).
+# `FO_SCOUT_NOISE_MAX` was applied as a flat blanket over a player's WHOLE rating, so a GM
+# was as likely to misread a 92 everyone can see as he was to misjudge a project's ceiling --
+# which is not scouting, it is blindness. Measured, a scouting-60 GM ranked a 2-star WR (70)
+# above a 5-star RB (92) **28.5%** of the time and an average scout did it **11.4%** of the
+# time, because RB's 0.72 position weight compresses a 22-point talent gap to 11.6 board
+# points and a +-12 blanket swamps it.
+#
+# ⚠️ THE COMMENT ABOVE ALREADY DESCRIBED THE RIGHT MODEL and the code did something else:
+# "a poor scout is genuinely WRONG (buys the fading vet, passes on the ascender)". Both of
+# those are errors about the ARC. So the spread is now bounded by how much arc there is to be
+# wrong about -- `abs(forward - current)` -- plus a small floor for the sheet itself. A prime
+# player has no arc to misjudge and is read nearly exactly; a developing player with a
+# 20-point ceiling gap is where boards genuinely diverge, which is what the per-team board
+# exists for in the first place.
+FO_SCOUT_NOISE_FLOOR = 2.0        # ...even a fool can read today's number to within this
 # ⚠️ A GM KNOWS ITS OWN PLAYERS. The noise above is deliberately large — it was raised
 # from 6.0 so that per-team boards actually differ, since at 6.0 every club named the
 # same top free agent — but it was applied to a club's OWN walk-year starter as heavily
@@ -2256,6 +2290,21 @@ FO_CUT_UPGRADE_MARGIN = 3.0   # value points the replacement must beat the
                               # incumbent by. Was 4.0, then 6.0: at 4.0 a QB was
                               # cut for a 4-rating-point upgrade, which isn't
                               # worth the risk of a hole you may not refill.
+
+# ⚠️ AND A CLUB CAN CUT FOR AN UPGRADE DURING THE DRAFT ITSELF (owner, 2026-09-13). Until now
+# `_attemptRosterFill` only ever built candidates for positions with an EMPTY slot, so a club
+# with a filled position simply could not take a far better player at it -- the documented
+# "only upgrade path over a filled slot" was the pre-draft cut decider, which fires rarely and
+# is measured near-neutral. This is a MUCH higher bar than `FO_CUT_UPGRADE_MARGIN` on purpose:
+# that one is a considered offseason decision with a confidence gate in front of it, this one
+# happens with the player sitting right there on the board, so it has to be an obvious
+# upgrade rather than a marginal one. Expressed in BOARD currency (position-weighted
+# decisionValue), so 12 points at RB's 0.72 weight is roughly a 17-point raw rating gap.
+#
+# ⚠️ A SLOT FILLED DURING THIS DRAFT IS OFF LIMITS (owner), or a club would sign a man and
+# cut him again a round later as a better one surfaced -- churn that reads as incompetence
+# and costs the fan the player they just watched arrive.
+FO_DRAFT_CUT_UPGRADE_MARGIN = 12.0
 # Soft per-team cap. The plan left cuts uncapped and expected churn to
 # self-limit; a fresh-league sim produced 70 cuts in ONE offseason (half the
 # league), because a brand-new FA pool is fat and every roster has an upgrade
