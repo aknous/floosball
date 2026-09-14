@@ -409,16 +409,66 @@ class RuleVoteManager:
             session.close()
 
     # ── resolve ──────────────────────────────────────────────────────────────
-    def resolveOpenWindow(self, season: int, gameRules, requireClosed: bool = False) -> Optional[str]:
+    def expireStaleWindows(self, season: int, currentWeek: int) -> int:
+        """Close any open window whose GAME DAY has already passed. Returns the count.
+
+        ⚠️ A BALLOT CANNOT OUTLIVE THE DAY IT GOVERNS, and one did: season 6 day 0 was
+        written with a `closes_at` a week in the future (captured from the schedule
+        before the season-anchor fix corrected it), so `requireClosed` refused to
+        resolve it on its own day and it sat open while the day played out in the
+        standard format.
+
+        ⚠️ Correcting the timestamp is not sufficient, because `getOpenWindow` orders
+        by `day_index DESC` — the moment day 1's window opened, day 0's became
+        UNREACHABLE by the resolver no matter what its close time said. That is why
+        this sweeps by day rather than relying on the clock at all.
+
+        Resolved as **'none', applied=0**: the day it governed is over, so there is no
+        honest way to apply its winner — a day-0 format change landing in day 1 is a
+        rule nobody voted for. The votes are kept; only the window closes.
+        """
+        if not self._enabled() or not currentWeek:
+            return 0
+        currentDay = self.dayIndexForWeek(currentWeek)
+        from database.connection import get_session
+        session = get_session()
+        closed = 0
+        try:
+            repo = self._repo(session)
+            for w in repo.getStaleOpenWindows(season, currentDay):
+                w.resolved = True
+                w.winner_key = 'none'
+                w.applied = False
+                closed += 1
+                logger.warning(
+                    f"Rule vote EXPIRED: S{season} day {w.day_index} ({w.kind}) was still "
+                    f"open during day {currentDay} — closed with no rule change "
+                    f"(closes_at was {w.closes_at})")
+            if closed:
+                session.commit()
+        except Exception as e:
+            logger.warning(f"Rule vote stale sweep failed: {e}")
+        finally:
+            session.close()
+        return closed
+
+    def resolveOpenWindow(self, season: int, gameRules, requireClosed: bool = False,
+                          currentWeek: Optional[int] = None) -> Optional[str]:
         """Resolve the season's open vote (most-voted wins). Applies the winner to
         the live rules + persists it, and announces the outcome. Returns the winner
         key ('none' or a field), or None if there was nothing to resolve.
 
         `requireClosed` (the sim's auto-resolve) only resolves a window whose close
         time has actually arrived, so a still-open window (esp. a debug-opened one
-        with a future close time) is left alone until it's genuinely due."""
+        with a future close time) is left alone until it's genuinely due.
+
+        `currentWeek` lets the sim sweep windows whose game day has passed first —
+        see expireStaleWindows. Omitted by the debug endpoint, which resolves the
+        newest window on demand and wants no sweep."""
         if not self._enabled():
             return None
+        if currentWeek:
+            self.expireStaleWindows(season, currentWeek)
         from database.connection import get_session
         session = get_session()
         try:
@@ -426,7 +476,12 @@ class RuleVoteManager:
             window = repo.getOpenWindow(season)
             if window is None:
                 return None
-            if requireClosed and window.closes_at is not None \
+            # ⚠️ A window whose own day has passed is due REGARDLESS of its close time.
+            # The clock is the normal gate; the day is the backstop, because a wrong
+            # timestamp is exactly the failure this has already had once.
+            dayPassed = (currentWeek is not None
+                         and self.dayIndexForWeek(currentWeek) > window.day_index)
+            if requireClosed and not dayPassed and window.closes_at is not None \
                     and datetime.datetime.utcnow() < window.closes_at:
                 return None  # not due yet — leave it open (manual/debug window)
             specs = repo.optionSpecsOf(window)
