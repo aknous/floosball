@@ -2621,6 +2621,24 @@ CONVERSION_GO_AGGRESSION     = 1.3       # master multiplier on the whole chart 
 # dampened since it's earlier and a miss has more time to hurt.
 CONVERSION_GO_Q3_DAMPEN      = 0.55
 
+# ── Conversion by win value (Game._chooseConversionByValue, standard games) ────
+# Per-possession outcome rates for the win model, [nothing, FG, TD, TD] — the two touchdown
+# entries are summed, because the conversion after a FUTURE touchdown is chosen by the
+# model itself. From the sim's own drives (~11 per team a game: ~24% end in a touchdown,
+# ~12% in a made field goal). Uses the sim's REAL two-point make rate (~70%, vs the NFL's ~48%), which is
+# why the chart comes out more aggressive than the NFL's (owner, 2026-09-14).
+CONVERSION_DRIVE_ODDS = (0.64, 0.12, 0.22, 0.02)
+CONVERSION_SECS_PER_DRIVE = 165.0     # regulation seconds per drive, both teams combined
+CONVERSION_TRAIL_SECS_PER_DRIVE = 150.0   # a trailing team's hurry-up drive, for counting the drives it can still get
+CONVERSION_CHASE_WIN_BELOW = 0.10     # below this win chance a trailing team weighs edges relative to its odds
+CONVERSION_VALUE_MIN_GAIN = 0.005     # win-chance edge below which the kick is automatic
+CONVERSION_VALUE_BASE = 0.35          # go probability at the smallest real edge ...
+CONVERSION_VALUE_GAIN_SCALE = 20.0    # ... rising 20 pts per point of win chance gained
+# Quarters where the value model decides; standard games kick before that. Q4 only
+# (owner, 2026-09-14): at a ~70% make rate the model would otherwise go for two on
+# nearly every touchdown whenever plenty of game is left.
+CONVERSION_VALUE_QUARTERS = (4,)
+
 # ── Innings: conversion-gated continuation (docs/INNINGS_REDESIGN_PLAN.md) ──────
 # In the innings format a TD whose TOP conversion (the max-value 'go' rung — the 2-pt
 # when the ladder is off, the longest rung when it's on) is MADE keeps the at-bat alive

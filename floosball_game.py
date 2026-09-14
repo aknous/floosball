@@ -13907,12 +13907,139 @@ class Game:
         pct = max(0.40, min(0.95, 0.75 + aggressNorm * 0.15))
         return random.random() < pct
 
+    def _conversionOptions(self, scoringTeam: FloosTeam.Team, kickAllowed: bool, goRungs: list,
+                           kick: dict) -> list:
+        """Every conversion choice the rules offer right now, as (rung, points, makeChance).
+        The kick when it exists, plus every go rung — under the Conversion Ladder that is
+        2-5 point tries and NO kick."""
+        opts = []
+        if kickAllowed:
+            kicker = scoringTeam.rosterDict.get('k')
+            pKick = (self.fgMakeProbability(kicker, kick['distance'] + self.gameRules.fgSnapDistance)
+                     if kicker else 0.0)
+            opts.append((kick, float(kick['points']), pKick))
+        for r in goRungs:
+            opts.append((r, float(r['points']), self._estimateConversionProb(scoringTeam, r['distance'])))
+        return opts
+
+    def _conversionWinChance(self, margin: float, drives: int, options: list) -> float:
+        """Chance the scoring team wins from `margin` (negative = behind) with `drives`
+        possessions left in regulation, the OPPONENT receiving first and the ball
+        alternating after that.
+
+        ⚠️ FUTURE TOUCHDOWNS CHOOSE THEIR OWN CONVERSION. Each drive ends in nothing, a
+        field goal or a touchdown (`CONVERSION_DRIVE_ODDS`), and after a touchdown the side
+        that scored picks whichever of `options` does it the most good at that margin.
+        Treating a later touchdown as "TD + kick" is what made a first version kick down
+        10 and go down 9 — backwards — because it could not see that a team down 8 goes
+        for two. Both sides play it the same way (opponent minimises, we maximise). Point
+        values are the CURRENT rules, so a voted scoring change reshapes the chart. A tie
+        at the end counts half (overtime is a coin flip)."""
+        from constants import CONVERSION_DRIVE_ODDS
+        rules = self.gameRules
+        td = float(getattr(rules, 'touchdownPoints', 6))
+        fg = float(self._fgValue())
+        pNone, pFg, pTdKick, pTdTwo = CONVERSION_DRIVE_ODDS
+        pTd = pTdKick + pTdTwo
+        choices = [(pts, p) for _, pts, p in options]
+        memo = {}
+
+        def v(m, k, oursNext):
+            if k <= 0:
+                return 1.0 if m > 0 else 0.5 if m == 0 else 0.0
+            key = (m, k, oursNext)
+            if key in memo:
+                return memo[key]
+            sign = 1.0 if oursNext else -1.0
+            nxt = lambda mm: v(mm, k - 1, not oursNext)
+            afterTd = m + sign * td
+            conv = [p * nxt(afterTd + sign * pts) + (1 - p) * nxt(afterTd) for pts, p in choices]
+            best = (max(conv) if oursNext else min(conv)) if conv else nxt(afterTd)
+            out = pNone * nxt(m) + pFg * nxt(m + sign * fg) + pTd * best
+            memo[key] = out
+            return out
+
+        return v(float(margin), int(drives), False)
+
+    def _chooseConversionByValue(self, scoringTeam: FloosTeam.Team, options: list) -> dict:
+        """Pick the conversion that leaves the best chance of winning.
+
+        ⚠️ THE OLD CHART ONLY EVER LET A TRAILING TEAM GO, AND LET IT GO ALMOST
+        EVERYWHERE. Leading teams never went for two — up 1 (make it 3, so a field goal
+        only ties) and up 5 (make it 7, so a touchdown only ties) are the plainest calls
+        in the sport, and the NFL goes for two there essentially every time in Q4. And
+        any one-score deficit that did not tie or save a possession took the "real
+        aggression" tier, so a team down 7 went for two 65% of the time on a flat rule.
+        The kick makes it down 6 (a touchdown wins); the try buys insurance against an
+        opponent field goal first (down 8 after one is still tied up by a touchdown and
+        two, down 9 is not), so it is a close call the model now makes on its merits —
+        ~19% of Q4 cases — while down 3, where the kick already leaves a field goal to
+        win, is never taken.
+
+        ⚠️ IT USES THE SIM'S OWN ODDS, NOT THE NFL'S (owner, 2026-09-14). Two-point tries
+        convert ~70% here against the NFL's ~48%, so the chart is more aggressive than
+        the NFL's (it also goes up 2 and up 6, for instance). The comeback aggression the
+        old chart was tuned for mostly survives because it mostly PAYS at 70%; only the
+        dominated tries go. Under the Conversion Ladder there is no kick, and this picks
+        the rung — the one that best serves the score, not just the one a bold coach
+        reaches for.
+
+        The safest option is the default; another is taken only for a real edge, nearly
+        always for a clear one, with coach aggressiveness deciding the marginal ones."""
+        from constants import (CONVERSION_SECS_PER_DRIVE, CONVERSION_VALUE_MIN_GAIN,
+                               CONVERSION_VALUE_BASE, CONVERSION_VALUE_GAIN_SCALE)
+        import random
+        q = self.currentQuarter
+        quarterLen = float(getattr(self.gameRules, 'quarterLengthSeconds', 900))
+        secsLeft = max(0.0, float(self.gameClockSeconds)) + max(0, 4 - q) * quarterLen
+        drives = min(8, max(1, round(secsLeft / CONVERSION_SECS_PER_DRIVE)))
+        mine = self.homeScore if scoringTeam is self.homeTeam else self.awayScore
+        theirs = self.awayScore if scoringTeam is self.homeTeam else self.homeScore
+        margin = float(mine - theirs)
+        # ⚠️ A TEAM BEHIND PLAYS FOR THE POSSESSIONS IT NEEDS, clock permitting. The even
+        # clock split gives a team down 18 with 5:49 left ONE more drive, from which no
+        # conversion changes anything — so the model shrugged and kicked what is really a
+        # free roll. A trailing side hurries and onside-kicks for more, so it plans on as
+        # many own drives as the deficit needs, up to one per CONVERSION_TRAIL_SECS_PER_DRIVE
+        # of clock (and always at least one: a stop, an onside kick). Opponent receives first.
+        if margin < 0:
+            from constants import CONVERSION_TRAIL_SECS_PER_DRIVE
+            needed = math.ceil(-margin / (self._maxPossession() or 8.0))
+            affordable = 1 + int(secsLeft // CONVERSION_TRAIL_SECS_PER_DRIVE)
+            drives = max(drives, 2 * max(1, min(needed, affordable)))
+        stand = self._conversionWinChance(margin, drives, options)
+        valued = []
+        for rung, pts, p in options:
+            win = p * self._conversionWinChance(margin + pts, drives, options) + (1 - p) * stand
+            valued.append((win, p, rung))
+        safest = max(valued, key=lambda t: t[1])          # the highest make chance
+        best = max(valued, key=lambda t: (t[0], t[1]))
+        gain = best[0] - safest[0]
+        # ⚠️ A CHASING TEAM MAXIMISES ITS CHANCES HOWEVER SMALL THEY ARE. Down 18 the win
+        # chance is ~1% either way, so the absolute edge of a free roll is a rounding error
+        # and a flat threshold kicked it — but 1% -> 2% doubles the team's chances. Behind,
+        # the edge is measured RELATIVE to where it stands; ahead it stays absolute, so a
+        # decided game is not run up with a two-pointer. Only a genuine long shot gets this
+        # (under CONVERSION_CHASE_WIN_BELOW): applied to an ordinary one-score deficit it
+        # amplified the expected-points edge of a 70% two-pointer into going for two on
+        # nearly every Q4 touchdown, dominated tries included.
+        from constants import CONVERSION_CHASE_WIN_BELOW
+        if margin < 0 and safest[0] < CONVERSION_CHASE_WIN_BELOW:
+            gain = gain / max(0.02, 2.0 * safest[0])
+        if best[2] is safest[2] or gain <= CONVERSION_VALUE_MIN_GAIN:
+            return safest[2]
+        coach = getattr(scoringTeam, 'coach', None)
+        aggressNorm = (getattr(coach, 'aggressiveness', 80) - COACH_ATTR_NEUTRAL) / COACH_ATTR_RANGE
+        pct = CONVERSION_VALUE_BASE + gain * CONVERSION_VALUE_GAIN_SCALE + aggressNorm * 0.15
+        return best[2] if random.random() < max(0.05, min(0.97, pct)) else safest[2]
+
     def _chooseConversion(self, scoringTeam: FloosTeam.Team) -> dict:
         """Pick the post-TD conversion rung (Conversion-Ladder-aware). Returns a
         rung dict {kind, points, distance}. Generalizes the old _shouldGoForTwo:
         when the ladder is OFF there is only the 2-pt go-rung, so this reduces
         EXACTLY to the kick-vs-2-pt decision. The TD points are already banked
-        before this is called; only Q4 trailing teams gamble.
+        before this is called. In a standard game with the kick available the choice
+        is `_chooseConversionByValue`, for leading and trailing teams alike.
         """
         import random
         rungs = self._conversionRungs()
@@ -13955,6 +14082,23 @@ class Game:
                        if not self.format.voidsScore(self, scoringTeam, r['points'])]
             if not goRungs:
                 return fallback
+        # A standard game decides on WIN VALUE in the quarters where the exact margin matters
+        # (`CONVERSION_VALUE_QUARTERS`, Q4), leading or trailing, over whatever the rules
+        # offer — kick and two-point, or the ladder's 2-5 point rungs with no kick. See
+        # `_chooseConversionByValue`. Before that: the kick by convention (or, under the
+        # ladder, the coach's aggressiveness-picked rung).
+        # ⚠️ NOT "ALL GAME" ON PURPOSE (owner, 2026-09-14). Two-point tries convert ~70% in
+        # this sim, so on expected points alone (1.4 vs 0.95) the model goes for two on
+        # nearly every touchdown when there is a lot of game left — correct for the sim's
+        # odds, and nothing like football. Other formats keep the desire chart below.
+        if goRungs and self.currentQuarter <= 4 and getattr(self.format, 'key', 'standard') == 'standard':
+            from constants import CONVERSION_VALUE_QUARTERS
+            if self.currentQuarter in CONVERSION_VALUE_QUARTERS:
+                return self._chooseConversionByValue(
+                    scoringTeam, self._conversionOptions(scoringTeam, kickAllowed, goRungs, kick))
+            # Before then: the kick, or under the ladder / no-kick mode the coach's
+            # aggressiveness-picked rung, exactly as before.
+            return fallback
         if self.currentQuarter not in (3, 4) or not goRungs:   # Q1-Q2 / OT: the safe kick (or forced go-rung)
             return fallback
         scoringScore = self.homeScore if scoringTeam is self.homeTeam else self.awayScore

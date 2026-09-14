@@ -88,9 +88,20 @@ for d in freeRoll:
     r = goRate(d)
     expect(f"down {d}: goes for two ({r:.2f} >= 0.80)", r >= 0.80)
 
-print(f"\n3. Kick-dominant deficits {kickDominates} — the try gains nothing and risks a possession")
-expect("at least one such deficit exists", bool(kickDominates))
-for d in kickDominates:
+# ⚠️ POSSESSION-COUNTING DOMINANCE IS NOT WIN DOMINANCE (2026-09-14). This section used to
+# assert every deficit in `kickDominates` above — down 9 at default rules — and down 9 is no
+# longer one. Counting possessions treats 7 and 8 as the same "one score", but at the sim's
+# ~70% two-point make rate they are not: from 7 a later touchdown plus two WINS, from 8 it
+# only ties. The conversion is now chosen on win value with the sim's own odds (owner), so
+# the assertion is the deficits that stay dominated in WIN terms, derived from the rules:
+#   down a FIELD GOAL      — the kick leaves a field goal to win, the make can do no better,
+#                            and a miss leaves a field goal only to tie;
+#   down a TOUCHDOWN + KICK — same shape one score up: the kick leaves TD + kick to win.
+FGV = float(g0._fgValue())
+TD = float(getattr(g0.gameRules, 'touchdownPoints', 6))
+winDominated = [int(FGV), int(TD + XP)]
+print(f"\n3. Win-dominated deficits {winDominated} — the kick already reaches the winning number")
+for d in winDominated:
     r = goRate(d)
     expect(f"down {d}: mostly kicks ({r:.2f} <= 0.35)", r <= 0.35)
 
@@ -100,8 +111,8 @@ expect(f"down {tieNow}: goes for the tie/win ({goRate(tieNow):.2f} >= 0.80)",
        goRate(tieNow) >= 0.80)
 
 print("\n5. Sanity — the two classes never overlap")
-expect("no deficit is both a free roll and kick-dominant",
-       not (set(freeRoll) & set(kickDominates)))
+expect("no deficit is both a free roll and win-dominated",
+       not (set(freeRoll) & set(winDominated)))
 
 print()
 if fails:
