@@ -45,14 +45,13 @@ import os as _os
 # FLOOS_SOFT_APPEAL=1 lets any player sign anywhere, but a club below the player's
 # Appeal demand values them lower, so they go to a club that suits them when one
 # exists and still get signed when none does. Off by default.
-_SOFT_APPEAL = _os.environ.get('FLOOS_SOFT_APPEAL') == '1'
-# ⚠️ 0.75 IS A 25% DISCOUNT AND THAT IS NOT A GENTLE TILT. Measured: a club a veteran does
-# not suit will still take a 71-rated rookie who does over that veteran until he is **95** --
-# 24 rating points better. So the soft mode's real effect is that a poor fit can be SIGNED
-# when nobody better is available (which is what stops a veteran going unsigned league-wide),
-# not that clubs weigh him sensibly. The knob if a genuine tilt is wanted: 0.90 puts the
-# crossover 8 points out, 0.95 puts it 4.
-_SOFT_APPEAL_PENALTY = float(_os.environ.get('FLOOS_SOFT_APPEAL_PENALTY', '0.75'))
+_SOFT_APPEAL = _os.environ.get('FLOOS_SOFT_APPEAL', '1') != '0'
+# ⚠️ 0.90, NOT THE 0.75 THIS SHIPPED WITH (owner, 2026-09-13). Measured, 0.75 is a 25%
+# discount and not a gentle tilt at all: a club a veteran does not suit would still take a
+# 71-rated rookie who does over that veteran until he reached **95**, 24 rating points
+# better. That is a veto wearing a preference's name. At 0.90 the crossover is **8 points**,
+# which is a club weighing fit against talent rather than refusing to look. 0.95 puts it at 4.
+_SOFT_APPEAL_PENALTY = float(_os.environ.get('FLOOS_SOFT_APPEAL_PENALTY', '0.90'))
 
 import math
 from constants import (

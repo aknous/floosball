@@ -40,7 +40,7 @@ class T:
         s.id = 14; s.name = 'Slippers'; s.abbr = 'KCS'; s.coach = None; s.prospects = []
         s.facilities = {'training':2,'locker_room':2,'recovery':2,'clubhouse':2,'stadium':2}
         s.rosterDict = {'qb':None,'rb':None,'wr1':None,'wr2':None,'te':None,'k':None}
-        s._draftFilledSlots = set()
+        s._draftFilledSlots = set(); s.playerNumbersList = []
     def assignPlayerNumber(s, p): pass
 class Coach:
     def __init__(s, sc): s.id = sc; s.scouting = sc; s.playerDevelopment = 80
@@ -92,6 +92,7 @@ class Stub:
         s.freeAgents = list(fas); s._faDraftBoards = {14: board}
     def _leftThisTeamThisOffseason(s, p, t): return False
     def _getPlayerTerm(s, p): return 2
+    releasePlayerToFreeAgency = PlayerManager.releasePlayerToFreeAgency
 
 def runPick(incumbentRating, faRating, filledThisDraft=()):
     t = T()
@@ -105,19 +106,31 @@ def runPick(incumbentRating, faRating, filledThisDraft=()):
     for p in list(t.rosterDict.values()) + [fa]:
         board[p.id] = brain.decisionValue(p, None, rng=random.Random(0), team=t)
     pm = Stub([fa], board)
-    hl = []
-    PlayerManager._attemptRosterFill(pm, t, [t], [], [fa], [], [], [], {}, hl)
-    return t.rosterDict['rb'], hl
+    hl, ev, txn = [], [], {}
+    PlayerManager._attemptRosterFill(pm, t, [t], [], [fa], [], [], [], txn, hl, ev)
+    return t.rosterDict['rb'], hl, ev, txn
 
-got, hl = runPick(60, 95)
+got, hl, ev, txn = runPick(60, 95)
 expect(f"a 95 free agent replaces a 60 incumbent (rb is now {got.playerRating:.0f})",
        got.id == 11)
 expect("and the cut is announced", any('released' in (h.get('event') or {}).get('text','')
                                        for h in hl))
-got, _ = runPick(88, 92)
+# ⚠️ THE HIGHLIGHT FEED IS NOT PERSISTED, so announcing it there alone means a player
+# vanishes off a roster mid-draft with nothing in the transactions list to say why
+# (owner, 2026-09-13). The generator yields every eventLog entry, so this is what reaches
+# the live draft feed, the offseason transactions list and the Season Recap.
+cuts = [e for e in ev if e.get('type') == 'cut']
+expect(f"...as a draft transaction ({len(cuts)} cut event)",
+       len(cuts) == 1 and cuts[0]['playerId'] == 10 and cuts[0]['position'] == 'RB')
+expect("...naming who it was for", cuts[0].get('forPlayer') == 'P11' if cuts else False)
+expect("...and in the free-agency transaction list",
+       any(v.get('roster') == 'Released' for v in txn.values()))
+expect("...with the signing recorded beside it",
+       any(v.get('roster') == 'Starting' for v in txn.values()))
+got, _, _, _ = runPick(88, 92)
 expect(f"a marginal upgrade does NOT cost a starter his job (rb is still "
        f"{got.playerRating:.0f})", got.id == 10)
-got, _ = runPick(60, 95, filledThisDraft=('rb',))
+got, _, _, _ = runPick(60, 95, filledThisDraft=('rb',))
 expect("a slot filled EARLIER IN THIS DRAFT is off limits (no churn)", got.id == 10)
 expect("the margin is well above the ordinary offseason one",
        FO_DRAFT_CUT_UPGRADE_MARGIN > 6.0)
@@ -152,6 +165,7 @@ def draftWithPreference(soft):
                 s._faPreferenceNotes = dict(b.preferenceNotes)
             def _leftThisTeamThisOffseason(s, p, tm): return False
             def _getPlayerTerm(s, p): return 2
+            releasePlayerToFreeAgency = PlayerManager.releasePlayerToFreeAgency
         hl, ev = [], []
         PlayerManager._attemptRosterFill(Stub(), t, [t], [], [star, modest], [], [], [],
                                          {}, hl, ev)

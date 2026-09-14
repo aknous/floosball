@@ -4644,22 +4644,45 @@ class PlayerManager:
             # different position would otherwise have released a starter for nothing.
             incumbent = team.rosterDict.get(slot)
             if incumbent is not None:
-                incumbent.team = 'Free Agent'
-                incumbent.freeAgentYears = 0
-                incumbent.previousTeam = team.name
+                # ⚠️ ONE RELEASE IMPLEMENTATION. This inlined its own copy first, which is how
+                # the two drifted apart on the sort key alone; `releasePlayerToFreeAgency`
+                # already clears the slot, frees the shirt number, stamps `previousTeam` and
+                # files the player into the right position list.
+                self.releasePlayerToFreeAgency(incumbent, team, {
+                    'qb': freeAgentQbList, 'rb': freeAgentRbList, 'wr': freeAgentWrList,
+                    'te': freeAgentTeList, 'k': freeAgentKList})
                 incumbent.termRemaining = 0
-                team.rosterDict[slot] = None
-                if incumbent not in self.freeAgents:
-                    self.freeAgents.append(incumbent)
-                posList = POS_TO_FALIST.get(incumbent.position.value)
-                if posList is not None and incumbent not in posList:
-                    # keep the position list sorted the way the draft expects it
-                    posList.append(incumbent)
-                    posList.sort(key=lambda p: getattr(p, 'playerRating',
-                                                       p.attributes.skillRating), reverse=True)
                 leagueHighlights.insert(0, {'event': {'text':
                     f'{team.name} released {incumbent.name} ({incumbent.position.name}) '
                     f'to sign {candidate.name}'}})
+                # ⚠️ A CUT IS A TRANSACTION AND HAS TO BE REPORTED AS ONE (owner, 2026-09-13).
+                # It was announced only in the highlight feed, which is not persisted, so a
+                # player would vanish off a roster mid-draft with nothing in the transactions
+                # list to say why. The generator yields every `eventLog` entry and
+                # `OffseasonEvent.cut` already exists, so this reaches the live draft feed,
+                # the offseason transactions list and the Season Recap.
+                if eventLog is not None:
+                    eventLog.append({
+                        'type': 'cut',
+                        'team': team.name,
+                        'teamAbbr': teamAbbr,
+                        'playerId': getattr(incumbent, 'id', None),
+                        'player': incumbent.name,
+                        'position': incumbent.position.name,
+                        'rating': round(getattr(incumbent, 'playerRating', 0), 1),
+                        'tier': getattr(getattr(incumbent, 'playerTier', None), 'name', ''),
+                        'slot': slot,
+                        'forPlayer': candidate.name,
+                    })
+                freeAgencyDict[f"{team.name}_cut_{incumbent.name}"] = {
+                    'name': incumbent.name,
+                    'pos': incumbent.position.name,
+                    'rating': incumbent.attributes.skillRating,
+                    'tier': getattr(getattr(incumbent, 'playerTier', None), 'value', ''),
+                    'term': 0,
+                    'previousTeam': team.name,
+                    'roster': 'Released',
+                }
                 logger.info(f"FA draft upgrade: {team.name} cuts {incumbent.name} "
                             f"({incumbent.playerRating}) for {candidate.name} "
                             f"({candidate.playerRating}) at {slot}")

@@ -10,6 +10,14 @@ primary_region = "ord"
   # Keep fewer backups: the DB is ~90M and grows each season, so the default 7
   # (~630M) overran the 974M volume. 3 leaves ample headroom and 3 recovery points.
   BACKUP_KEEP = "3"
+  # Destination preference is a PREFERENCE, not a veto: a club below a player's Appeal
+  # demand rates him lower instead of being unable to sign him at all. Stated here rather
+  # than left to the code default so the deployed behaviour is visible in the deploy config.
+  # 0.90 puts the crossover at about 8 rating points -- a club weighing fit against talent.
+  # At the old 0.75 a poor-fit club still preferred a 71 who suited it over a 94 who did not,
+  # which is a veto wearing a preference's name. FLOOS_SOFT_APPEAL = "0" restores the veto.
+  FLOOS_SOFT_APPEAL = "1"
+  FLOOS_SOFT_APPEAL_PENALTY = "0.90"
 
 [http_service]
   internal_port = 8080

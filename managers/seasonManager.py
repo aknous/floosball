@@ -7838,6 +7838,33 @@ class SeasonManager:
                         # and the pick visually disappears (or worse, attaches
                         # to the wrong team in the UI). Imperceptible to users.
                         await asyncio.sleep(0.1)
+                    elif entry['type'] == 'cut':
+                        # ⚠️ A DRAFT-TIME CUT IS A TRANSACTION. Without this branch the
+                        # release was announced only in the un-persisted highlight feed, so a
+                        # player vanished off a roster mid-draft with nothing in the
+                        # transactions list or the Season Recap to say why. `OffseasonEvent.cut`
+                        # already existed; nothing was calling it from here.
+                        await broadcaster.broadcast_season_event(
+                            OffseasonEvent.cut(
+                                entry['team'], entry['teamAbbr'], entry['player'],
+                                entry['position'], entry['rating'], entry.get('tier', ''),
+                            )
+                        )
+                        self._offseasonTransactions.append(entry)
+                        self._recordOffseasonEvent(
+                            'cut', teamName=entry['team'], teamAbbr=entry['teamAbbr'],
+                            playerId=entry.get('playerId'), playerName=entry['player'],
+                            position=entry['position'], rating=entry['rating'],
+                            tier=entry.get('tier', ''),
+                            detail=f"released to sign {entry.get('forPlayer', 'an upgrade')}")
+                        await asyncio.sleep(0.1)
+                    elif entry['type'] == 'declined':
+                        # ⚠️ AND SO IS A REFUSAL, for the same reason: it is the explanation
+                        # for the pick the fan is about to see. It goes in the transactions
+                        # feed but NOT through `_recordOffseasonEvent` -- that is idempotent
+                        # per (season, eventType, playerId), and one player can decline
+                        # several clubs in one draft, so all but the first would be dropped.
+                        self._offseasonTransactions.append(entry)
                     elif entry['type'] == 'team_complete':
                         await broadcaster.broadcast_season_event(
                             OffseasonEvent.team_complete(entry['team'], entry['teamAbbr'])
