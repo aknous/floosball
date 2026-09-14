@@ -540,3 +540,148 @@ outcome, at the cost of taxing last season rather than this roster.
     rating sum self-normalizes, the way the anomaly threshold already does.
 15. **Does the tax alone remove the need for the pipeline?** If the goal of prospects was
     trade assets, picks plus Treasury plus a tax may cover it with no population cost.
+
+---
+
+# Addendum 4 — tax penalty, tax-aware GMs, and culling the pool
+
+_2026-09-14. Owner: an unpayable tax forces a trade or drops a facility a level; GMs must
+weigh the threshold when signing; and the FA pool should be fixed by removing low-rated
+players who have never been rostered or have been off one for multiple seasons, returning
+the name to the pool without the Jr._
+
+## The unpayable-tax penalty already exists as built, tested machinery
+
+`facilitiesManager.resolveSeasonEnd` already runs an **upkeep waterfall out of the
+Treasury**: each facility's shortfall is covered from the pot, and a facility whose upkeep
+goes unmet decays a level. `test_facility_immediate_build.py` pins exactly that — *"empty
+treasury -> any upkeep charge forces decay"*.
+
+So **"can't pay → a facility drops a level" needs no new penalty code.** Charge the tax into
+the same waterfall and a club that cannot cover it loses a level precisely as it would from
+unpaid upkeep. It also inherits an ordering that is already thought through: the waterfall
+sorts `key=lambda x: -x['level']`, protecting the **highest**-level facilities first, so
+decay lands on the cheapest one rather than the crown jewel.
+
+✅ And there is a second-order effect that falls out for free and points the right way:
+**facilities drive Appeal, and Appeal gates free-agent destination preference**
+(`willSignWith` / `appealDemand`). A taxed club that loses a facility becomes *less
+attractive to free agents* — the penalty compounds exactly as it should, with nothing coded
+for it.
+
+## ⚠️ Tax-aware GMs must DISCOUNT a signing, never REFUSE one
+
+This is the single most important implementation note in this document, because it is the
+mistake the codebase has already made once.
+
+`c8e1ec7` removed, among other things, *"the `_attemptRosterFill` **budget gate**"* — the
+salary cap's mechanism for keeping a club under the line. **A gate refuses a signing. A
+refused signing leaves an empty slot. An empty slot rates 50.** That is why a cap was unsafe
+on a six-slot roster and it is the same trap here.
+
+The right shape already exists in the same function. `decisionValue` ends with:
+
+```python
+if self.teamAppeal(team) < self.appealDemand(player):
+    value *= _SOFT_APPEAL_PENALTY
+```
+
+That soft penalty was **deliberately chosen over a hard gate** for this exact reason — the
+comment says so: *"Below the player's Appeal demand this club is a worse fit, so it ranks
+them lower — it does NOT lose the right to sign them."* The tax term belongs in the same
+place, in the same shape: multiply `decisionValue` by a penalty that scales with how far the
+signing pushes the club past the threshold. A club over the line then *prefers* cheaper
+talent and *sells* willingly, which is the trade pressure wanted — and it can still fill a
+hole when the alternative is a rating-50 slot.
+
+## ⚠️ The FA pool is currently healthy, and there is nothing to cull
+
+Measured on the prod snapshot:
+
+| | |
+|---|---:|
+| free agents | **26** |
+| of those, players with **0** pro seasons | **0** |
+| players anywhere in the DB with `seasonsPlayed = 0` | **0** |
+| every free agent's `seasonsPlayed` | **6** — all of them |
+
+Every player in the pool is a six-season veteran who was cut or walked. **The "never been on
+a roster" limb of the rule catches nobody today**, because the bloat being remembered was
+the draft era and the deficit-fill model already fixed it — 224 players have ever existed,
+192 rostered, 26 free, 6 retired.
+
+So the cull is a **good prophylactic if the pipeline ever returns**, and has no work to do
+now. (A related worry checked and dismissed: `_generateReplacementPlayers` generates
+`max(numRetired, 3)` a season regardless of need — a genuine second faucet — but the live
+path passes `skipRetirements=True` and `conductFreeAgencySimulation` has no callers at all,
+so it is dormant.)
+
+## ⚠️ And hard removal is unsafe for everyone currently in the pool
+
+Those 26 free agents are not orphans. They hold:
+
+| | |
+|---|---:|
+| `game_player_stats` rows | **2,782** |
+| `player_season_stats` rows | 130 |
+| `player_career_stats` rows | 26 |
+| `card_templates` | 378 |
+| **cards owned by real users right now** | **253** |
+
+Deleting one blanks a card in somebody's collection and removes history from the record
+book. That collides head-on with the locked design pillar — *never wipe games, seasons or
+players; the currency is control and anomaly, never records*.
+
+**So the rule needs scoping to `seasonsPlayed == 0`: a player who never took a snap.** That
+population genuinely is orphan-free — no game rows, no season rows, and `generateSeasonTemplates`
+requires a real `teamId`, so a never-rostered player mints **no cards at all** (confirmed:
+zero season-6 templates exist for any current free agent). It is also exactly the population
+a restored pipeline would create, so the rule is aimed correctly — just narrower than "low
+rated and off a roster for two seasons".
+
+**Never played → remove. Played → retire.** Retirement already exists and is the right exit
+for a washed-up veteran; it keeps the record and the cards.
+
+## The existing cull is loose in exactly the ways described
+
+`_processFreeAgentRetirements` (`playerManager:3593`):
+
+- fires only at **`freeAgentYears >= 3`** — three full seasons unrostered before anything
+  can happen;
+- is a **roll, not a rule**: TierD 65% + 15%/year, so a bottom-tier player has a 35% chance
+  of surviving year three and can linger for years;
+- keys off **tier**, an absolute five-bucket measure, not the league's own average.
+
+The owner's *"rating well below the average team roster skill"* is the better test precisely
+because it **self-normalizes** as `LEAGUE_COMPRESSION_MEAN` and the rating curve move — the
+same argument that made the anomaly threshold adaptive instead of a fixed constant.
+
+## ✅ The name handling is right, and it prevents a documented bug class
+
+`_recyclePlayerName` (`seasonManager:8412`) **always advances the ladder**: Base → Jr. → III
+→ IV → … There is no path through it that returns a base name.
+
+Returning the base *unchanged* for a culled player is not a convenience, it is correctness. A
+rung is earned **because the holder is gone** — a Junior commemorates a predecessor who
+actually played. A player who never took a snap established no lineage, so minting a "Jr."
+for him invents a father nobody ever saw **and puts a second form of that lineage into
+circulation**. That is precisely the fault that left the season-1 production database with
+**39 orphaned variants**, 8 live players collapsed back and 3 reassigned.
+
+One further detail: a culled name should probably go **straight to `unused_names`**, not
+through `addPendingName`'s `NAME_REUSE_DELAY_SEASONS` hold. That hold exists so a *familiar*
+name does not reappear the next season — and nobody is familiar with a player who never
+played.
+
+## Revised open questions
+
+16. **Does the tax charge into the upkeep waterfall, or before it?** Charging first means the
+    tax can cost a facility while upkeep was affordable; charging last means upkeep is
+    protected and the tax is what goes unpaid. Both are defensible; it decides whether the
+    tax or the buildings have priority on a thin Treasury.
+17. **Forced trade vs facility decay — who chooses?** If the GM may pick, a club with cheap
+    facilities will always take the decay and never trade, which removes the trade pressure
+    the tax exists to create. Facility decay may need to be the *fallback* rather than the
+    option.
+18. **Is the cull scoped to `seasonsPlayed == 0`** (safe, orphan-free) with retirement
+    handling everyone else? Anything broader deletes owned cards and record-book history.
