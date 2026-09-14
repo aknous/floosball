@@ -799,18 +799,25 @@ class GameResponseBuilder(ResponseBuilder):
             'status': game.status.name if hasattr(game.status, 'name') else str(game.status),
             'homeScore': game.homeScore,
             'awayScore': game.awayScore,
+            # ⚠️ `ot` IS PART OF THE LINE SCORE AND THIS PAYLOAD OMITTED IT. The WS
+            # `game_state` broadcast has sent it all along, so an overtime game's OT column
+            # was simply absent from the REST view and the card could not draw one. Second
+            # time the same two-payload gap has bitten (see `driveStartYardsToEndzone`): a
+            # field added to one builder is a field the other silently lacks.
             'quarterScores': {
                 'home': {
                     'q1': getattr(game, 'homeScoreQ1', 0),
                     'q2': getattr(game, 'homeScoreQ2', 0),
                     'q3': getattr(game, 'homeScoreQ3', 0),
-                    'q4': getattr(game, 'homeScoreQ4', 0)
+                    'q4': getattr(game, 'homeScoreQ4', 0),
+                    'ot': getattr(game, 'homeScoreOT', 0)
                 },
                 'away': {
                     'q1': getattr(game, 'awayScoreQ1', 0),
                     'q2': getattr(game, 'awayScoreQ2', 0),
                     'q3': getattr(game, 'awayScoreQ3', 0),
-                    'q4': getattr(game, 'awayScoreQ4', 0)
+                    'q4': getattr(game, 'awayScoreQ4', 0),
+                    'ot': getattr(game, 'awayScoreOT', 0)
                 }
             },
             'quarter': quarter,
