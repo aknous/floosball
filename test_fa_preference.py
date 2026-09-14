@@ -152,14 +152,47 @@ def test_veterans_differ_from_each_other():
 
 
 def test_a_richer_club_is_open_to_more_players():
+    """Facilities still open the veteran market -- but as a VALUATION, not a veto.
+
+    ⚠️ THIS TEST USED TO ASSERT THE HARD GATE and locked in the fault that replaced it.
+    `willSignWith` became a preference on 2026-09-13 (see `_SOFT_APPEAL`), so it now returns
+    True for everybody and a count of who "will sign" is identical at every club -- the
+    assertion read (59, 59). The preference did not disappear; it moved into `decisionValue`,
+    which is where a club below a player's Appeal demand now values him lower. Testing the
+    old location would keep passing while the rule moved out from under it.
+
+    ⚠️ THE HARD GATE REFUSED 53% OF 8-SEASON VETERANS FROM EVERY TEAM IN THE LEAGUE at the
+    live Appeal of 8.0, because `appealDemand` was calibrated against a 24-club league whose
+    Appeal spanned 4 to 20 and every club now sits on exactly 8.0.
+    """
     brain = _brain()
     poor, rich = _team('Poor', 0, tid=1), _team('Rich', 4, tid=2)
     vets = [FakePlayer(f'V{i}', 80, seasons=12, pid=i) for i in range(1, 60)]
-    poorCount = sum(1 for v in vets if brain.willSignWith(v, poor))
-    richCount = sum(1 for v in vets if brain.willSignWith(v, rich))
-    assert richCount > poorCount, (poorCount, richCount)
-    print(f"PASS facilities open the veteran market: "
-          f"poor {poorCount}/{len(vets)}, rich {richCount}/{len(vets)}")
+
+    # nobody is locked out of anywhere any more
+    assert all(brain.willSignWith(v, poor) for v in vets)
+    assert all(brain.willSignWith(v, rich) for v in vets)
+
+    # ...but the richer club rates the veterans it suits more highly
+    poorVal = sum(brain.decisionValue(v, None, team=poor) for v in vets)
+    richVal = sum(brain.decisionValue(v, None, team=rich) for v in vets)
+    assert richVal > poorVal, (poorVal, richVal)
+    print(f"PASS facilities price the veteran market rather than closing it: "
+          f"poor {poorVal:.0f}, rich {richVal:.0f} over {len(vets)} vets")
+
+
+def test_a_veteran_is_never_unsignable_league_wide():
+    """The failure mode the hard gate actually produced: a player no club may sign.
+
+    Every club sits on the same Appeal today, so a demand above it was a demand above
+    EVERY club -- the player was not choosing between suitors, he had none.
+    """
+    brain = _brain()
+    league = [_team(f'T{i}', 2, tid=i) for i in range(1, 33)]   # the live 8.0 Appeal
+    vets = [FakePlayer(f'V{i}', 88, seasons=12, pid=i) for i in range(1, 200)]
+    homeless = [v for v in vets if not any(brain.willSignWith(v, t) for t in league)]
+    assert not homeless, f"{len(homeless)}/{len(vets)} veterans can sign nowhere"
+    print(f"PASS no veteran is refused by all 32 clubs (0/{len(vets)})")
 
 
 def test_preference_can_be_switched_off():
@@ -212,15 +245,29 @@ def test_no_team_reads_as_the_old_behavior():
 
 # ---------------------------------------------------------------------- board
 
-def test_boards_exclude_players_who_will_not_come():
+def test_boards_rank_a_poor_fit_lower_rather_than_dropping_him():
+    """⚠️ RENAMED FROM `test_boards_exclude_players_who_will_not_come`, because boards no
+    longer exclude anybody (`_SOFT_APPEAL`, 2026-09-13). A bare club still rates a veteran
+    who does not suit it BELOW what a club that suits him would -- which is the preference --
+    but he is on the board, so he can be signed rather than going unsigned league-wide."""
     brain = _brain()
-    bare = _team('Bare', 0)
+    bare, plush = _team('Bare', 0, tid=1), _team('Plush', 4, tid=2)
     pool = [FakePlayer('Kid', 70, seasons=0, pid=1),
             FakePlayer('Vet', 95, seasons=14, pid=2)]
     board = brain.buildDraftBoard(bare, pool, coach=FakeCoach())
     assert 1 in board, "the rookie should sign anywhere"
-    assert 2 not in board, "a 14-season vet should not join a bare club"
-    print("PASS a board holds only the players who'd sign there")
+    assert 2 in board, "a veteran must still be signable somewhere"
+    plushBoard = brain.buildDraftBoard(plush, pool, coach=FakeCoach())
+    assert plushBoard[2] > board[2], (board[2], plushBoard[2])
+    # ⚠️ THE ROOKIE MOVES A LITTLE TOO, and that is a different facility doing it: a plush
+    # club has a better Scouting Department, so `scoutingVision` sharpens its read of
+    # everybody. The Appeal penalty is what must land on the VETERAN and not on the rookie,
+    # so compare the two gaps rather than asserting the rookie is untouched.
+    vetGap = (plushBoard[2] - board[2]) / board[2]
+    kidGap = abs(plushBoard[1] - board[1]) / board[1]
+    assert vetGap > kidGap * 3, (kidGap, vetGap)
+    print(f"PASS a poor fit is ranked lower, not dropped: bare {board[2]:.1f} "
+          f"vs plush {plushBoard[2]:.1f}")
 
 
 def test_two_teams_rank_the_same_pool_differently():
@@ -281,21 +328,27 @@ def test_retiring_free_agents_stay_off_the_board():
 
 # ------------------------------------------------------- replacement value
 
-def test_replacement_value_ignores_players_who_will_not_sign():
-    """The reason preference is settled pre-draft: a club must not cut its
-    starter for an upgrade that was never going to take the call."""
+def test_replacement_value_discounts_a_poor_fit():
+    """A club must not plan a cut around an upgrade it cannot realistically land.
+
+    ⚠️ THIS USED TO ASSERT ZERO, which was the hard gate's answer: a poor-fit veteran was
+    not a replacement at ALL. Under the preference (`_SOFT_APPEAL`, 2026-09-13) he is a
+    replacement the club rates LOWER, because he will actually come if asked. The property
+    worth protecting is unchanged and is the one tested here -- a club that suits him values
+    him more, so the bare club is the one least likely to cut its starter for him.
+    """
     brain = _brain()
     bare = _team('Bare', 0)
-    incumbent = FakePlayer('Starter', 75, seasons=3, pid=1)
-    unavailableStar = FakePlayer('Star', 99, seasons=14, pid=2)
-    value = brain.bestReplacementValue(
-        incumbent, coach=FakeCoach(), pool=[unavailableStar], team=bare)
-    assert value == 0.0, value
-    # ...and with a club they WOULD join, the same star counts.
     rich = _team('Rich', 5, tid=2)
-    assert brain.bestReplacementValue(
-        incumbent, coach=FakeCoach(), pool=[unavailableStar], team=rich) > 0.0
-    print("PASS an unavailable free agent is not a replacement")
+    incumbent = FakePlayer('Starter', 75, seasons=3, pid=1)
+    star = FakePlayer('Star', 99, seasons=14, pid=2)
+    bareVal = brain.bestReplacementValue(
+        incumbent, coach=FakeCoach(), pool=[star], team=bare)
+    richVal = brain.bestReplacementValue(
+        incumbent, coach=FakeCoach(), pool=[star], team=rich)
+    assert richVal > bareVal > 0.0, (bareVal, richVal)
+    print(f"PASS a poor fit is discounted as a replacement: bare {bareVal:.1f} "
+          f"vs rich {richVal:.1f}")
 
 
 if __name__ == '__main__':
