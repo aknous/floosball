@@ -1,0 +1,131 @@
+"""The drive's starting spot, which the compact drive line on a game card is drawn from.
+
+⚠️ IT IS DERIVED, NOT STAMPED. `offensiveTeam` is assigned in TEN places -- turnovers,
+kickoffs, the opening drive, and both conversion paths, which swap it and swap it back -- so
+writing the spot at each is how this file has repeatedly ended up with one site missed and a
+silently wrong value. `_noteDriveStart` asks "is the offense the one I saw last play" at the
+top of the play loop instead, which cannot be forgotten by a new possession site and reads
+AFTER a conversion's temporary swap has been undone.
+
+Run: .venv/bin/python test_drive_start.py
+"""
+import sys, os, random, asyncio
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import logging; logging.disable(logging.WARNING)
+
+fails = []
+def expect(d, c):
+    print(f"  [{'OK' if c else 'FAIL'}] {d}")
+    if not c: fails.append(d)
+
+from scenario import Scenario
+from game_rules import GameRules
+
+def playOne(seed):
+    """One full game; returns every drive-start transition it recorded."""
+    random.seed(seed)
+    s = Scenario(gameRules=GameRules())
+    g = s.game
+    drives, states = [], []
+    orig = g._noteDriveStart
+    idx = [0]
+    def spy():
+        before = g._driveTeam
+        orig()
+        if g._driveTeam is not before:
+            idx[0] += 1
+            drives.append((g._driveTeam.abbr, g.driveStartYardsToEZ, g.currentQuarter))
+        if g.driveStartYardsToEZ is not None:
+            # ⚠️ KEYED ON A DRIVE INDEX, NOT ON THE START VALUE. Two drives in a row very
+            # often begin on the SAME yard -- a touchback is the common case -- so watching
+            # the value change counts 17 where there were 20 drives, which is the test
+            # measuring the wrong thing rather than the code being wrong.
+            states.append((idx[0], g.driveStartYardsToEZ, g.yardsToEndzone))
+    g._noteDriveStart = spy
+    asyncio.run(g.playGame())
+    return g, drives, states
+
+print("\n1. Drives are detected, and alternate")
+g, drives, states = playOne(4)
+expect(f"a full game produces a sensible number of drives ({len(drives)} over {g.totalPlays} plays)",
+       8 <= len(drives) <= 40)
+sameTwice = sum(1 for a, b in zip(drives, drives[1:]) if a[0] == b[0])
+expect(f"possession alternates (only {sameTwice} back-to-back by one team)",
+       sameTwice <= 2)
+
+print("\n2. Every start is a spot a drive could really begin")
+bad = [d for d in drives if d[1] is None or not (0 < d[1] <= 100)]
+expect(f"none is missing or off the field ({len(bad)} bad)", not bad)
+# ⚠️ THE OPENING DRIVE IS THE ONE THAT WAS WRONG. The loop's first pass runs BEFORE the
+# opening kickoff has placed anybody, so `yardsToEndzone` was still 0 and the first drive
+# recorded a start on its own goal line -- which is not a place a drive can start.
+expect(f"the opening drive is not recorded at the goal line (it was {drives[0][1]})",
+       drives[0][1] != 0)
+
+print("\n3. The start HOLDS while the ball moves -- that is what makes it a drive")
+# ⚠️ OBSERVED FROM THE BROADCAST, NOT FROM THE HOOK. The first version of this watched
+# `_noteDriveStart` and concluded the ball barely moved -- because that hook runs once per
+# POSSESSION (20 calls in a 133-play game), so it can only ever see one spot per drive. It
+# was measuring where the code is called, not what the data does. The broadcast fires per
+# play, which is where the question can actually be answered.
+import floosball_game as FG
+def broadcastStates(seed):
+    random.seed(seed)
+    sc = Scenario(gameRules=GameRules())
+    gg = sc.game
+    out = []
+    orig = FG.Game.broadcastGameState
+    def spy(self, *a, **k):
+        try:
+            return orig(self, *a, **k)
+        finally:
+            out.append((self._driveTeam is self.offensiveTeam,
+                        self.driveStartYardsToEZ, self.yardsToEndzone))
+    FG.Game.broadcastGameState = spy
+    try:
+        asyncio.run(gg.playGame())
+    finally:
+        FG.Game.broadcastGameState = orig
+    return out
+
+st = [r for r in broadcastStates(4) if r[0] and r[1] is not None and r[2] is not None]
+runs, cur = [], []
+for owned, start, now in st:
+    if cur and cur[-1][0] != start:
+        runs.append(cur); cur = []
+    cur.append((start, now))
+if cur: runs.append(cur)
+multi = [r for r in runs if len({n for _s, n in r}) >= 2]
+expect(f"the ball reaches several spots under one start ({len(multi)} of {len(runs)} runs)",
+       len(multi) >= max(1, len(runs) // 3))
+wobbled = [r for r in runs if len({s for s, _n in r}) != 1]
+expect(f"and the start never moves within a run (0 expected, {len(wobbled)} found)", not wobbled)
+
+print("\n3b. The FIRST drive of the game has a start too")
+# ⚠️ IT DID NOT, AND THE CAUSE WAS THE HOOK'S PLACEMENT. `_noteDriveStart` sat in the
+# per-DRIVE loop, whose first pass runs BEFORE the opening kickoff has placed anybody — so
+# the guard correctly declined to record a start, and the loop did not come round again
+# until drive TWO. Measured on a full game: plays 1-6 reported no drive start at all, then
+# it worked from drive two on. Reported by the owner as the field showing no progress "at
+# the start of the game". The hook now runs per PLAY, immediately before the play.
+early = [r for r in broadcastStates(4) if r[2] not in (None, 0)][:6]
+expect(f"the opening drive reports a start on its first play ({early[0][1] if early else '-'})",
+       bool(early) and early[0][1] is not None)
+expect("...and the same one for the rest of that drive",
+       len({r[1] for r in early if r[0]}) <= 2)
+
+print("\n4. It survives several games unchanged")
+for seed in (7, 12, 21):
+    _g, d, st = playOne(seed)
+    bad = [x for x in d if x[1] is None or not (0 < x[1] <= 100)]
+    expect(f"seed {seed}: {len(d)} drives, none off the field", d and not bad)
+
+print("\n5. It reaches the broadcast payload under its own name")
+import floosball_game as FG, inspect
+src = inspect.getsource(FG.Game.broadcastGameState)
+expect("gameStateData carries driveStartYardsToEndzone",
+       "'driveStartYardsToEndzone'" in src)
+
+print("\n" + ("FAIL" if fails else "PASS") + " — the drive start is derived, holds, and ships.")
+for f in fails: print("   -", f)
+sys.exit(1 if fails else 0)

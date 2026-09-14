@@ -1074,6 +1074,10 @@ class Game:
         self.yardsToFirstDown = 0
         self.yardsToEndzone = 0
         self.yardsToSafety = 0
+        # Where the current drive began, as yards to the offense's target end zone. Paired
+        # with `yardsToEndzone` this is the whole of a drive: started there, is here now.
+        self.driveStartYardsToEZ = None
+        self._driveTeam = None
         self.offensiveTeam: FloosTeam.Team = None
         self.defensiveTeam: FloosTeam.Team = None
         self.homeTeamElo = getattr(homeTeam, 'elo', 1500) if homeTeam else 1500
@@ -1400,6 +1404,8 @@ class Game:
             gameStatsDict['downText'] = '{0} & {1}'.format(down, self.yardsToFirstDown)
         gameStatsDict['yardsToEZ'] = self.yardsToEndzone
         gameStatsDict['yardLine'] = self.yardLine
+        # Where this drive started, so a client can draw the drive rather than just the ball.
+        gameStatsDict['driveStartYardsToEZ'] = self.driveStartYardsToEZ
         gameStatsDict['playsLeft'] = GAME_MAX_PLAYS - self.totalPlays
         gameStatsDict['status'] = self.status.name
 
@@ -1583,6 +1589,8 @@ class Game:
             gameStatsDict['yardsTo1stDwn'] = self.yardsToFirstDown
         gameStatsDict['yardsToEZ'] = self.yardsToEndzone
         gameStatsDict['yardLine'] = self.yardLine
+        # Where this drive started, so a client can draw the drive rather than just the ball.
+        gameStatsDict['driveStartYardsToEZ'] = self.driveStartYardsToEZ
         gameStatsDict['playsLeft'] = GAME_MAX_PLAYS - self.totalPlays
         gameStatsDict['status'] = self.status.name
 
@@ -7549,6 +7557,43 @@ class Game:
 
         self._executeWeightedPlay(weights, targetSideline=targetSideline)
 
+    @property
+    def reportedDriveStart(self):
+        """Where this drive began, or None when the spot is not this offense's to report.
+
+        ⚠️ ONE DEFINITION, because there are TWO payloads. The WS broadcast and the REST
+        `currentGames` builder both describe the same live game, and the drive start was added
+        to the broadcast alone -- so a fresh page load got no trail on the field until the next
+        socket event happened to arrive. A rule stated in one of two payload builders is a rule
+        the other one silently lacks.
+
+        ⚠️ AND THE GUARD IS PART OF IT. A possession-change broadcast fires from inside
+        `turnover()`, before the loop re-derives the drive, so the spot is still the PREVIOUS
+        offense's -- reporting it then draws somebody else's drive under this team's ball.
+        """
+        if self._driveTeam is not self.offensiveTeam:
+            return None
+        return self.driveStartYardsToEZ
+
+    def _noteDriveStart(self) -> None:
+        """Remember where this drive began, the first time we see a new offense.
+
+        ⚠️ IT IS THE SPOT BEFORE THE PLAY, not after it. Called at the top of the loop, so a
+        drive that starts on its own 25 records 75 whatever the first snap then does with it.
+        """
+        team = self.offensiveTeam
+        if team is self._driveTeam:
+            return
+        # ⚠️ NOT UNTIL THE OFFENSE ACTUALLY HAS A SPOT. On the very first pass of the loop
+        # the opening kickoff has not run, so `yardsToEndzone` is still 0 and the opening
+        # drive recorded a start on its own goal line. A drive cannot begin at 0 -- you
+        # cannot start one in the end zone -- so a falsy value here means "not placed yet"
+        # and the next play asks again.
+        if not self.yardsToEndzone:
+            return
+        self._driveTeam = team
+        self.driveStartYardsToEZ = self.yardsToEndzone
+
     def turnover(self, offense: FloosTeam.Team, defense: FloosTeam.Team, yards):
         # OT possession tracking: detect when each team's possession ends
         # offense = team giving up ball, defense = team receiving ball
@@ -9787,6 +9832,22 @@ class Game:
                 self._decayMomentum()
                 self._applyMomentumEffect()
 
+                # ⚠️ THE DRIVE'S STARTING SPOT IS DERIVED HERE, NOT STAMPED WHERE POSSESSION
+                # CHANGES. `offensiveTeam` is assigned in TEN places -- turnovers, kickoffs,
+                # the opening drive, and both conversion paths, which swap it and swap it
+                # back -- and writing the spot at each is how this file has repeatedly ended
+                # up with one site missed and a silent wrong value. Asking "is the offense
+                # the one I saw last play" is one place that cannot be forgotten, and reading
+                # it immediately BEFORE the play means the spot is the one the drive starts
+                # from and a conversion's temporary swap has already been undone.
+                #
+                # ⚠️ IT USED TO SIT IN THE OUTER LOOP, WHICH IS PER DRIVE, NOT PER PLAY -- and
+                # that cost the FIRST DRIVE OF EVERY GAME its trail. That loop's first pass
+                # runs before the opening kickoff has placed anybody, so the guard below
+                # correctly declined to record a start; but the loop does not come round
+                # again until drive TWO, so drive one never got one. Measured: plays 1-6
+                # reported no drive start at all, then it worked from drive two on.
+                self._noteDriveStart()
                 # Call and execute play
                 self._timeoutCalled = False
                 self.playCaller()
@@ -12957,6 +13018,15 @@ class Game:
             'yardLine': self.yardLine if hasattr(self, 'yardLine') else None,
             'yardsToEndzone': self.yardsToEndzone if hasattr(self, 'yardsToEndzone') else None,
             'yardsToSafety': (100 - self.yardsToEndzone) if hasattr(self, 'yardsToEndzone') else None,
+            # Where THIS drive began, same units as `yardsToEndzone` — so a client has both
+            # ends of the drive and can draw it rather than just the ball. Null before the
+            # opening kickoff has placed anybody. See `_noteDriveStart`.
+            # ⚠️ ONLY WHEN IT BELONGS TO THE TEAM THAT HAS THE BALL. A possession-change
+            # broadcast fires from inside `turnover()`, BEFORE the play loop's next pass has
+            # re-derived the drive, so the spot on it is still the previous offense's --
+            # measured at 15 broadcasts a game-trio. Reporting it then draws somebody else's
+            # drive under this team's ball.
+            'driveStartYardsToEndzone': self.reportedDriveStart,
             'isPossessionChange': isPossessionChange,
             'lastPlay': lastPlayData,
             'finalPlay': finalPlayData,

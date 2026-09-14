@@ -799,18 +799,25 @@ class GameResponseBuilder(ResponseBuilder):
             'status': game.status.name if hasattr(game.status, 'name') else str(game.status),
             'homeScore': game.homeScore,
             'awayScore': game.awayScore,
+            # ⚠️ `ot` IS PART OF THE LINE SCORE AND THIS PAYLOAD OMITTED IT. The WS
+            # `game_state` broadcast has sent it all along, so an overtime game's OT column
+            # was simply absent from the REST view and the card could not draw one. Second
+            # time the same two-payload gap has bitten (see `driveStartYardsToEndzone`): a
+            # field added to one builder is a field the other silently lacks.
             'quarterScores': {
                 'home': {
                     'q1': getattr(game, 'homeScoreQ1', 0),
                     'q2': getattr(game, 'homeScoreQ2', 0),
                     'q3': getattr(game, 'homeScoreQ3', 0),
-                    'q4': getattr(game, 'homeScoreQ4', 0)
+                    'q4': getattr(game, 'homeScoreQ4', 0),
+                    'ot': getattr(game, 'homeScoreOT', 0)
                 },
                 'away': {
                     'q1': getattr(game, 'awayScoreQ1', 0),
                     'q2': getattr(game, 'awayScoreQ2', 0),
                     'q3': getattr(game, 'awayScoreQ3', 0),
-                    'q4': getattr(game, 'awayScoreQ4', 0)
+                    'q4': getattr(game, 'awayScoreQ4', 0),
+                    'ot': getattr(game, 'awayScoreOT', 0)
                 }
             },
             'quarter': quarter,
@@ -822,6 +829,12 @@ class GameResponseBuilder(ResponseBuilder):
             'yardsToFirstDown': yardsToFirstDown,
             'yardLine': yardLine,
             'yardsToEndzone': yardsToEndzone,
+            # ⚠️ THE DRIVE START BELONGS IN *BOTH* PAYLOADS. It was added to the WS
+            # `game_state` broadcast only, so a client that had just loaded the page had the
+            # ball's spot and no idea where the possession began — the drive line drew a
+            # football and no trail until the next socket event arrived. Same source as the
+            # broadcast (`Game.reportedDriveStart`) so the two cannot disagree.
+            'driveStartYardsToEndzone': getattr(game, 'reportedDriveStart', None),
             'downText': downText,
             'homeWinProbability': GameResponseBuilder.finalWinProbability(game, 'home'),
             'awayWinProbability': GameResponseBuilder.finalWinProbability(game, 'away'),

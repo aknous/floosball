@@ -2641,12 +2641,21 @@ async def get_week_games(week: int, response: Response):
                 'status': 'Final',
                 'homeScore': g.home_score,
                 'awayScore': g.away_score,
+                # ⚠️ `ot` WAS MISSING HERE AND THE COLUMN HAS ALWAYS EXISTED. A past
+                # overtime game served four quarters that do not sum to its own final
+                # score, and the points that decided it appeared nowhere on the line —
+                # the readers derive the OT column from this field, so omitting it is
+                # indistinguishable from the game never having gone to overtime.
                 'quarterScores': {
                     'home': {'q1': g.home_score_q1, 'q2': g.home_score_q2,
-                             'q3': g.home_score_q3, 'q4': g.home_score_q4},
+                             'q3': g.home_score_q3, 'q4': g.home_score_q4,
+                             'ot': g.home_score_ot},
                     'away': {'q1': g.away_score_q1, 'q2': g.away_score_q2,
-                             'q3': g.away_score_q3, 'q4': g.away_score_q4},
+                             'q3': g.away_score_q3, 'q4': g.away_score_q4,
+                             'ot': g.away_score_ot},
                 },
+                # ⚠️ A finished game reports quarter 4 even when it went to overtime —
+                # the OT points are the only witness, which is why the readers test both.
                 'quarter': 4,
                 'timeRemaining': '0:00',
                 # Win probability intentionally omitted for finished past games —
