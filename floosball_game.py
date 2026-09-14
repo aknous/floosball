@@ -4038,6 +4038,11 @@ class Game:
                 self.play.playType = PlayType.Punt
                 return
 
+    def _freshSeriesDistance(self) -> int:
+        """Yards to go for a new set of downs at the current spot: the rule's first-down
+        distance, or the goal line when that is closer. Read AFTER the spot is final."""
+        return max(1, min(int(self.gameRules.firstDownDistance), int(self.yardsToEndzone)))
+
     def _getBasePlayWeights(self) -> dict:
         """Return raw down/distance base weights before any modifier layers.
         Tuned to land roughly 60/40 pass/run across a typical drive, which
@@ -7647,7 +7652,8 @@ class Game:
         self.yardsToEndzone = yards
         self.yardsToSafety = self.gameRules.fieldLength - self.yardsToEndzone
         self.down = 1
-        self.yardsToFirstDown = self.gameRules.firstDownDistance
+        # A turnover returned to the 5 is 1st & goal, not 1st & 10.
+        self.yardsToFirstDown = self._freshSeriesDistance()
         # New possession → fresh drive clock (no-op unless the mechanic is on).
         self._resetDriveClock()
         # New drive → both sideline-hoop pairs are available again (Sideline Goals).
@@ -10151,7 +10157,7 @@ class Game:
                         # attacking coordinates that is `landing` yards out.
                         self.yardsToEndzone = max(1, landing)
                         self.down = 1
-                        self.yardsToFirstDown = min(10, self.yardsToEndzone)
+                        self.yardsToFirstDown = self._freshSeriesDistance()
                         lastPlayFormatted = True
                         break
 
@@ -10446,12 +10452,16 @@ class Game:
                             self.away1stDownsTotal += 1
                             if downBefore == _setupDown: self.away3rdDownConv += 1
                             elif downBefore == _lastDown: self.away4thDownConv += 1
-                        if self.yardsToEndzone < self.gameRules.firstDownDistance:
-                            self.yardsToFirstDown = self.yardsToEndzone
-                        else:
-                            self.yardsToFirstDown = self.gameRules.firstDownDistance
+                        # ⚠️ MOVE THE BALL FIRST, THEN ASK HOW FAR TO GO. The goal-to-go
+                        # test used to run BEFORE the spot moved, so it read where the play
+                        # STARTED: a 15-yard gain from the 20 checked "20 out", set 1st &
+                        # 10, then placed the ball on the 5. Measured against NFL play-by-
+                        # play, 86% of the sim's 1st downs inside the 10 carried a distance
+                        # of 10 — so the play caller read 1st & goal from the 3 as 1st &
+                        # 10, and 3rd & goal from the 2 as 3rd & long.
                         self.yardsToSafety += self.play.yardage
                         self.yardsToEndzone -= self.play.yardage
+                        self.yardsToFirstDown = self._freshSeriesDistance()
                         # Drive Clock: a first down refills it in 'series' mode; in
                         # 'possession' mode it keeps draining, so a spent hard cap
                         # ends the drive even on a first down.
