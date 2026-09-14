@@ -41,24 +41,11 @@ import statistics
 from random import gauss
 
 import os as _os
-# Destination preference is a RANKING PENALTY, not a veto: any player will sign anywhere,
-# but a club below his Appeal demand values him lower, so he goes somewhere that suits him
-# when such a club exists and still gets signed when none does.
-#
-# ⚠️ ON BY DEFAULT SINCE 2026-09-13, AND THE HARD GATE IS WHAT WAS WRONG. `appealDemand` was
-# calibrated against a live 24-club league whose Appeal ran "min 4, p25 4, median 11, p75 17,
-# max 20" -- see the table in `constants.py`. Every club now sits at exactly **8.0**, so the
-# top half of the range the curve was written against no longer exists: a demand of 11 was
-# meant to read "the top half of the league" and now reads "nobody". Measured against the
-# live facilities, the hard gate refuses **53% of 8-season veterans from every team in the
-# league**, and 18.5% at 6 seasons. It looks inert today only because the league is too young
-# for anyone to have reached six seasons.
-#
-# ⚠️ THE SWITCH WAS BUILT FOR THIS AND NEVER THROWN. It shipped in `7dbca7d` alongside the
-# retention limit, both as env-gated A/B switches defaulting to the old behaviour; the
-# retention one was later turned off and this one was not, which is why it reads as though it
-# had been. Revert with FLOOS_SOFT_APPEAL=0.
-_SOFT_APPEAL = _os.environ.get('FLOOS_SOFT_APPEAL', '1') != '0'
+# A/B: soften destination preference from a hard veto into a ranking penalty.
+# FLOOS_SOFT_APPEAL=1 lets any player sign anywhere, but a club below the player's
+# Appeal demand values them lower, so they go to a club that suits them when one
+# exists and still get signed when none does. Off by default.
+_SOFT_APPEAL = _os.environ.get('FLOOS_SOFT_APPEAL') == '1'
 _SOFT_APPEAL_PENALTY = float(_os.environ.get('FLOOS_SOFT_APPEAL_PENALTY', '0.75'))
 
 import math
