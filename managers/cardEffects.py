@@ -6603,6 +6603,21 @@ def buildGateSpec(effectName: str, position: int, classification: str = None,
     if (not effectName or effectName in ('none', '')
             or effectName in _UNGATED_EFFECTS or effectName in _CHANCE_EFFECTS):
         return None
+    # ⚠️ A FLOOBIT CARD HAS NO BAR AT ALL (owner, 2026-09-13: *"the floobits cards just
+    # shouldnt have a bar, similar to those cards that are based on players performing
+    # poorly"*). The power bar asks whether the depicted player had a good fantasy WEEK and
+    # withholds his fantasy output when he did not -- that is the bargain. A card whose
+    # entire output is INCOME is not making that bargain, so gating it charged one bad week
+    # twice: no points AND no earnings. `_UNGATED_EFFECTS` already carries the same
+    # exemption for the cards whose trigger IS a poor week, for the same reason -- a bar
+    # that fights its own effect is not a gamble, it is a contradiction.
+    #
+    # ⚠️ THIS IS THE PURE CASE ONLY, and the mixed case is handled separately: a card paying
+    # BOTH fantasy and floobits keeps its bar for the fantasy half, while `_applyGateRatio`
+    # leaves its floobits alone. So the rule is one sentence in both places -- floobits are
+    # never gated -- rather than two different policies.
+    if getEffectOutputType(effectName) == 'floobits':
+        return None
     # Edition-scaled: higher rarity depicts a better player + has a higher ceiling, so it
     # needs a higher bar. Fall back to the metallic base row for an unknown/missing edition.
     threshold = (CARD_GATE_FP_THRESHOLDS_BY_EDITION.get(edition, {}).get(position)
@@ -6626,6 +6641,31 @@ def buildGateSpec(effectName: str, position: int, classification: str = None,
     else:
         text = f"Unlocks once this player reaches {threshold} FP{apNote}"
     return {'threshold': threshold, 'inverse': inverse, 'text': text, 'allPro': allPro}
+
+
+def formatGateScale() -> float:
+    """How far the live game format moves the power bar, 1.0 in a standard week.
+
+    ⚠️ THE BAR IS FROZEN AT MINT AND THE FORMAT IS VOTED EVERY WEEK, so this CANNOT be baked
+    into `gate.threshold` the way the edition and All-Pro adjustments are. A card minted in a
+    standard season would carry a standard bar into a Drive Clock week and be measurably
+    harder to unlock for reasons its owner never agreed to. It is applied at scoring time,
+    which is the only place that knows which format is actually being played.
+
+    ⚠️ IT READS THE FORMAT'S OWN `fpScale` rather than a table here, so a new format declares
+    its own supply and nothing in the card system needs editing. See `game_formats.GameFormat`
+    for the measurement.
+
+    Fails soft to 1.0: a missing table, an unknown format or a DB hiccup must leave the bar
+    exactly where it is, never at zero.
+    """
+    try:
+        from game_rules import loadRuleOverrides
+        from game_formats import getFormat
+        scale = float(getattr(getFormat(loadRuleOverrides().get('gameFormat')), 'fpScale', 1.0))
+        return scale if scale > 0 else 1.0
+    except Exception:
+        return 1.0
 
 
 def gateRatio(gate: dict, ctx, cardPlayerId: int) -> float:
@@ -6665,6 +6705,11 @@ def gateRatio(gate: dict, ctx, cardPlayerId: int) -> float:
     threshold = gate.get('threshold', 0) or 0
     if threshold <= 0:
         return 1.0
+    # ⚠️ THE LIVE FORMAT MOVES THE BAR, because it moves the FP supply the bar is measured
+    # against. See `formatGateScale`. Floored at 1 so no format can make a gate free.
+    scale = formatGateScale()
+    if scale != 1.0:
+        threshold = max(1, round(threshold * scale))
     inverse = bool(gate.get('inverse'))
     if getattr(ctx, 'isProjection', False):
         if getattr(ctx, 'projectionVariant', 'expected') == 'optimistic':
@@ -6687,17 +6732,26 @@ def _applyGateRatio(result: 'EffectResult', ratio: float) -> 'EffectResult':
     """Apply the power-bar switch. `ratio` >= 1.0 leaves the effect; 0.0 zeros it. A
     FRACTIONAL ratio (only produced by the expected-value projection) SCALES the output by
     the player's clear probability — live scoring never sees a fraction (gateRatio is pure
-    on/off there), so this is a projection-only path."""
+    on/off there), so this is a projection-only path.
+
+    ⚠️ FLOOBITS ARE NOT GATED (owner, 2026-09-13). The power bar asks whether the depicted
+    player had a good WEEK, and scaling his fantasy output by that is the bargain the gate
+    exists for. Floobits are not fantasy output -- they are the card's income, and several
+    cards pay both, so a quiet week zeroed a user's earnings as well as his points. Charging
+    one performance twice is what made a missed bar feel like a dead card rather than a
+    gamble that did not come in.
+
+    ⚠️ IT IS DONE HERE RATHER THAN PER EFFECT, because this is the only place the bar is
+    ever applied -- live and both projection variants -- so there is exactly one rule and no
+    effect can opt itself out of it or forget to. `floobits` is simply no longer touched."""
     if result is None or ratio >= 1.0:
         return result
     if ratio <= 0.0:
         result.fpBonus = 0.0
-        result.floobits = 0
         if result.multBonus and result.multBonus > 1.0:
             result.multBonus = 1.0
         return result
     result.fpBonus = round(result.fpBonus * ratio, 2)
-    result.floobits = int(round(result.floobits * ratio))
     if result.multBonus and result.multBonus > 1.0:
         result.multBonus = round(1.0 + (result.multBonus - 1.0) * ratio, 3)
     return result

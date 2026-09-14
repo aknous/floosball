@@ -8,6 +8,7 @@ import datetime
 from enum import Enum
 from typing import Optional, Dict, Any
 from logger_config import get_logger
+from constants import SEASON_START_WEEKDAY, SEASON_START_HOUR_ET
 
 logger = get_logger("floosball.timingManager")
 
@@ -457,12 +458,12 @@ class TimingManager:
     async def waitBetweenSeasons(self) -> None:
         """Wait between seasons.
 
-        SCHEDULED mode: poll until next Monday at 04:00 Eastern.
-        This gives a maintenance window (Sunday) between offseason and new season.
+        SCHEDULED mode: poll until the season anchor -- 19:00 Eastern Sunday, the same
+        moment a new GAME DAY opens (see `SEASON_START_WEEKDAY` in `constants.py`).
         SEQUENTIAL / TURBO: fixed delay from config.
         """
         if self.mode == TimingMode.SCHEDULED:
-            targetUtc = self._nextMondayUtc(hour=4)
+            targetUtc = self._nextSeasonAnchorUtc()
             pollInterval = self.delays.get('daily_check', 30.0)
             logger.info(f"SCHEDULED mode: waiting for next season start at {targetUtc.isoformat()} (polling every {pollInterval}s)")
             while datetime.datetime.utcnow() < targetUtc:
@@ -474,7 +475,7 @@ class TimingManager:
         elif self.mode == TimingMode.TEST_SCHEDULED:
             await asyncio.sleep(self.delays['season_transition'])
         elif self.mode in (TimingMode.CATCHUP, TimingMode.FAST_CATCHUP):
-            logger.info(f"{self.mode.value} mode: starting season immediately (backdated to last Monday)")
+            logger.info(f"{self.mode.value} mode: starting season immediately (backdated to the last season anchor)")
 
     @staticmethod
     def _nextNoonEasternUtc() -> datetime.datetime:
@@ -500,29 +501,35 @@ class TimingManager:
         return now + datetime.timedelta(hours=1)
 
     @staticmethod
-    def _nextMondayUtc(hour: int = 4) -> datetime.datetime:
-        """Compute the next Monday at the given Eastern hour, returned as naive UTC."""
-        nowEt = _nowEastern()
+    def _nextSeasonAnchorUtc(weekday: int = None, hour: int = None) -> datetime.datetime:
+        """The next season-start anchor at the given Eastern hour, as naive UTC.
 
-        # Find next Monday (weekday 0)
-        daysAhead = (7 - nowEt.weekday()) % 7  # 0=Monday
-        if daysAhead == 0:
-            # It's already Monday — if before target hour, use today; otherwise next week
-            if nowEt.hour >= hour:
-                daysAhead = 7
+        ⚠️ THE WEEKDAY AND HOUR ARE CONFIGURATION, NOT LITERALS. This was `_nextMondayUtc`
+        with the Monday written into its name, its arithmetic and its docstring, so moving
+        the season's opening moment meant editing three of those plus every caller. The
+        league opens at `SEASON_START_WEEKDAY`/`SEASON_START_HOUR_ET` and nothing here needs
+        to know which day that is.
+        """
+        weekday = SEASON_START_WEEKDAY if weekday is None else weekday
+        hour = SEASON_START_HOUR_ET if hour is None else hour
+        nowEt = _nowEastern()
+        daysAhead = (weekday - nowEt.weekday()) % 7
+        if daysAhead == 0 and nowEt.hour >= hour:
+            daysAhead = 7          # already past it today — go round again
         targetEt = nowEt.replace(hour=hour, minute=0, second=0, microsecond=0) + datetime.timedelta(days=daysAhead)
         # Convert naive ET back to naive UTC
         offset = 4 if _isEdtDate(targetEt) else 5
         return targetEt + datetime.timedelta(hours=offset)
 
     @staticmethod
-    def _lastMondayUtc(hour: int = 4) -> datetime.datetime:
-        """Compute the most recent Monday at the given Eastern hour, returned as naive UTC."""
+    def _lastSeasonAnchorUtc(weekday: int = None, hour: int = None) -> datetime.datetime:
+        """The most recent season-start anchor at the given Eastern hour, as naive UTC."""
+        weekday = SEASON_START_WEEKDAY if weekday is None else weekday
+        hour = SEASON_START_HOUR_ET if hour is None else hour
         nowEt = _nowEastern()
-
-        daysBack = nowEt.weekday()  # Monday=0, so 0 days back on Monday
+        daysBack = (nowEt.weekday() - weekday) % 7
         if daysBack == 0 and nowEt.hour < hour:
-            daysBack = 7  # Before target hour on Monday — use previous Monday
+            daysBack = 7           # not yet reached today — take last week's
         targetEt = nowEt.replace(hour=hour, minute=0, second=0, microsecond=0) - datetime.timedelta(days=daysBack)
         # Convert naive ET back to naive UTC
         offset = 4 if _isEdtDate(targetEt) else 5

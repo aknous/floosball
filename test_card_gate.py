@@ -45,7 +45,51 @@ expect(f"a value effect gets a bar at the WR threshold  {g}",
 expect("a cross / hand-modifier effect gets a bar too (uniform)",
        buildGateSpec("copycat", 1) is not None)
 expect("a re-based / on-card effect gets a bar too",
-       buildGateSpec("possession", WR) is not None and buildGateSpec("piggy_bank", WR) is not None)
+       buildGateSpec("possession", WR) is not None)
+
+# ⚠️ FLOOBIT CARDS HAVE NO BAR (owner, 2026-09-13). The bar withholds a player's FANTASY
+# output on a bad week; a card whose whole output is INCOME is not making that bargain, so
+# gating it charged one quiet week twice -- no points and no earnings. This test used to
+# assert the opposite (`piggy_bank` was the example of "everything gets a bar"), which is
+# exactly the assertion that would have kept the old rule alive.
+print("1b. Floobit-output cards carry no bar at all")
+from managers.cardEffects import EFFECT_OUTPUT_TYPE
+_floobitEffects = sorted(k for k, v in EFFECT_OUTPUT_TYPE.items() if v == 'floobits')
+_stillBarred = [e for e in _floobitEffects
+                for ed in ('metallic', 'holographic', 'prismatic', 'diamond')
+                if buildGateSpec(e, WR, edition=ed) is not None]
+expect(f"none of the {len(_floobitEffects)} floobit effects gets a bar, at any edition",
+       not _stillBarred)
+expect("piggy_bank specifically is ungated", buildGateSpec("piggy_bank", WR) is None)
+expect("an FP card in the same breath still gets one", buildGateSpec("freebie", WR) is not None)
+
+# ⚠️ AND A MIXED CARD KEEPS ITS BAR WHILE ITS FLOOBITS STILL PAY. Several effects pay both;
+# the rule is one sentence in both places -- floobits are never gated -- so the FP half is
+# withheld and the income half is not.
+from managers.cardEffects import _applyGateRatio, EffectResult
+_missed = _applyGateRatio(EffectResult(fpBonus=10.0, floobits=25, multBonus=1.4), 0.0)
+expect("a missed bar zeroes FP and FPx", _missed.fpBonus == 0.0 and _missed.multBonus == 1.0)
+expect("...and pays the floobits in full", _missed.floobits == 25)
+_half = _applyGateRatio(EffectResult(fpBonus=10.0, floobits=25, multBonus=1.4), 0.5)
+expect("a projection ratio scales FP but not floobits",
+       _half.fpBonus == 5.0 and _half.floobits == 25)
+
+# ⚠️ THE LIVE FORMAT MOVES THE BAR, because it moves the FP supply the bar is measured
+# against -- and it cannot be frozen at mint, because the format is voted every week.
+print("1c. The game format scales the bar")
+from managers.cardEffects import formatGateScale
+from game_formats import getFormat
+expect("standard is the 1.0 reference", getFormat('standard').fpScale == 1.0)
+expect("Drive Clock lowers it (measured 0.78x plays / 0.80x FP)",
+       getFormat('play_limit').fpScale < 1.0)
+expect("Innings raises it (measured 46.0 pts/game against standard's 33.2)",
+       getFormat('innings').fpScale > 1.0)
+expect("darts is NOT low-output and is left alone (measured 1.06x plays, 1.08x FP)",
+       getFormat('bust').fpScale == 1.0)
+expect("every format declares a positive scale",
+       all(getFormat(k).fpScale > 0 for k in
+           ('standard', 'target', 'play_limit', 'chess_clock', 'innings', 'frames', 'bust')))
+expect("the live read fails soft to a real number", formatGateScale() > 0)
 expect("the no-effect floor card gets no gate", buildGateSpec("none", WR) is None)
 # CHANCE cards are exempt from the on/off gate — their bar is a probability meter instead
 # (fill = trigger odds), so buildGateSpec returns None (fusion chance rework 2026-07-26).
