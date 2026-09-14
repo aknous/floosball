@@ -4045,41 +4045,42 @@ class Game:
 
     def _getBasePlayWeights(self) -> dict:
         """Return raw down/distance base weights before any modifier layers.
-        Tuned to land roughly 60/40 pass/run across a typical drive, which
-        is the NFL-realistic split. Previously was running 85/15 in games
-        with extended trailing — the base 1st-down and 2nd-and-medium
-        weights were too pass-heavy, compounding with situational pushes
-        to extinguish the run game.
+
+        Fitted so the REALIZED pass rate by down and distance lands on NFL 2021-25
+        play-by-play (2026-09-14). The old table lumped 3rd & 1 with 3rd & 3 and 2nd & 1
+        with 2nd & 4, which the NFL calls as different plays (3rd & 1 is 22% pass, 3rd &
+        2-3 is 70%), and ran 3rd & long 12-25% of the time against the NFL's 3-7%.
         """
+        # The table lives in constants (PLAY_CALL_BASE_ROWS) so the run/pass dial and the
+        # depth shape can be tuned separately — see the notes there.
+        #
+        # ⚠️ ROW 3 IS THE LAST DOWN BEFORE THE FINAL ONE, NOT LITERALLY 3RD DOWN.
+        # `downsPerSeries` is a votable rule (3 to 5), and the final down never reaches
+        # here (`_fourthDownCaller` owns it). At five downs, 3rd down still has a down in
+        # hand before the must-convert one and plays like a 2nd; at three downs, 2nd down
+        # IS the must-convert-soon down. At the default four this is exactly 1st / 2nd /
+        # 3rd, as before.
+        from constants import PLAY_CALL_BASE_ROWS
         ytg = self.yardsToFirstDown
-        if self.down == 1:
-            # 1st down: balanced 50/50 base. Most plays happen here, so
-            # this is the biggest lever on overall pass/run ratio.
-            from constants import FIRST_DOWN_RUN_WEIGHT as _FDR
-            return {'run': _FDR, 'short': 22.0, 'medium': 18.0, 'long': 8.0, 'deep': 2.0}
-        elif self.down == 2:
-            if ytg <= 4:
-                # 2nd & short — run preferred (was already).
-                return {'run': 58.0, 'short': 28.0, 'medium': 10.0, 'long': 4.0, 'deep': 0.0}
-            elif ytg <= 9:
-                # 2nd & medium — closer to balanced, was 35/65 too pass-heavy.
-                return {'run': 45.0, 'short': 20.0, 'medium': 25.0, 'long': 9.0, 'deep': 1.0}
-            else:
-                # 2nd & long — obvious passing situation.
-                return {'run': 22.0, 'short': 20.0, 'medium': 28.0, 'long': 26.0, 'deep': 4.0}
+        downs = int(getattr(self.gameRules, 'downsPerSeries', 4) or 4)
+        if self.down <= 1:
+            rowKey = 1
+        elif self.down >= downs - 1:
+            rowKey = 3
         else:
-            if ytg <= 3:
-                # 3rd & short — run is the percentage call.
-                return {'run': 60.0, 'short': 32.0, 'medium': 4.0, 'long': 4.0, 'deep': 0.0}
-            elif ytg <= 5:
-                # 3rd & medium-short — was 20% run, bump to 25%.
-                return {'run': 25.0, 'short': 45.0, 'medium': 21.0, 'long': 9.0, 'deep': 0.0}
-            elif ytg <= 12:
-                # 3rd & medium-long — still mostly pass but a draw is realistic.
-                return {'run': 12.0, 'short': 15.0, 'medium': 48.0, 'long': 23.0, 'deep': 2.0}
-            else:
-                # 3rd & extra long — almost always pass.
-                return {'run': 6.0, 'short': 10.0, 'medium': 15.0, 'long': 61.0, 'deep': 8.0}
+            rowKey = 2
+        rows = PLAY_CALL_BASE_ROWS[rowKey]
+        run, shape = rows[-1][1], rows[-1][2]
+        for maxYtg, rowRun, rowShape in rows:
+            if ytg <= maxYtg:
+                run, shape = rowRun, rowShape
+                break
+        passTotal = max(0.0, 100.0 - float(run))
+        shapeTotal = float(sum(shape)) or 1.0
+        weights = {'run': float(run)}
+        for key, part in zip(('short', 'medium', 'long', 'deep'), shape):
+            weights[key] = passTotal * float(part) / shapeTotal
+        return weights
 
     def _computePlayWeights(self, scoreDiff: int, coach) -> dict:
         """Compute play call probability weights for downs 1–3."""

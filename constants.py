@@ -1280,10 +1280,63 @@ YAC_THROW_MULT = {
     'bad': float(_os.environ.get('FLOOS_YACM_BAD', '0.20')),      # < 40
 }
 # 1st-down run weight -- the single biggest lever on the league pass/run split
-# (most plays happen on 1st down). 50 = the balanced base; raising it cuts pass
+# (most plays happen on 1st down). 55 is fitted to the NFL's 46% 1st & 10 pass rate
+# (2026-09-14; was 50); raising it cuts pass
 # attempts, which is what makes room for longer completions without inflating
 # total yardage.
-FIRST_DOWN_RUN_WEIGHT = float(_os.environ.get('FLOOS_FD_RUN', '50'))
+FIRST_DOWN_RUN_WEIGHT = float(_os.environ.get('FLOOS_FD_RUN', '55'))
+
+# ---- Base play-call table (read by Game._getBasePlayWeights) ----
+# {row: [(maxYardsToGo, runWeight, (short, medium, long, deep)), ...]}, first matching
+# row wins. Row 1 is 1st down, row 3 is the LAST down before the final one (3rd of 4,
+# 2nd of 3, 4th of 5), row 2 is every down in between.
+#
+# ⚠️ TWO DIALS PER ROW, KEPT APART ON PURPOSE. `runWeight` (out of 100) sets run vs pass;
+# the tuple is only the SHAPE of the passing game and is rescaled to fill whatever the
+# run weight leaves. So retuning the run/pass split cannot move the depth mix and
+# vice versa — the depth rows are separately being reworked.
+#
+# ⚠️ THESE ARE WEIGHTS BEFORE EVERY MODIFIER LAYER, NOT TARGET RATES. The situational,
+# matchup, coach, gameplan and audible layers all act after this, so a row's realized
+# pass rate is not 100 - runWeight. Fit them against the REALIZED rate (see the harness
+# notes in the 2026-09-14 play-calling audit) or they will drift off the target.
+PLAY_CALL_BASE_ROWS = {
+    # Fitted 2026-09-14: two passes of run-the-harness / move-each-row-by-the-log-odds-gap,
+    # after audibles learned the situation. Realized pass rate by down & distance now sits
+    # within ~1 point of NFL 2021-25 on average (was 15.5). Trailing comment = NFL target
+    # pass rate for that bucket (one-score games, not the last 2:00 of a half).
+    1: [
+        (1, 68.0, (22.0, 18.0, 8.0, 2.0)),    # 1st & goal from the 1       21%
+        (3, 66.0, (22.0, 18.0, 8.0, 2.0)),    # 1st & goal, 2-3             28%
+        (6, 64.5, (22.0, 18.0, 8.0, 2.0)),    # 1st & goal, 4-6             28%
+        (9, 64.0, (22.0, 18.0, 8.0, 2.0)),    # 1st & goal, 7-9             30%
+        (99, FIRST_DOWN_RUN_WEIGHT, (22.0, 18.0, 8.0, 2.0)),   #            46%
+    ],
+    2: [
+        (1, 78.0, (28.0, 10.0, 4.0, 0.0)),    # 2nd & 1                     22%
+        (2, 67.0, (28.0, 10.0, 4.0, 0.0)),    # 2nd & 2                     30%
+        (3, 64.0, (28.0, 10.0, 4.0, 0.0)),    # 2nd & 3                     36%
+        (6, 50.0, (20.0, 25.0, 9.0, 1.0)),    # 2nd & 4-6                   50%
+        (9, 27.0, (20.0, 25.0, 9.0, 1.0)),    # 2nd & 7-9                   70%
+        # ⚠️ 2nd & 10 runs MORE than 2nd & 7-9 in the NFL (63% vs 70% pass), and that is
+        # not a fitting artifact: it usually follows an incompletion on 1st down, and
+        # offenses balance back. Don't "smooth" it.
+        (10, 35.0, (20.0, 28.0, 26.0, 4.0)),  # 2nd & 10                    63%
+        (99, 15.0, (20.0, 28.0, 26.0, 4.0)),  # 2nd & 11+                   82%
+    ],
+    3: [
+        # ⚠️ 3rd & 1, 2 and 3 are THREE DIFFERENT PLAYS in the NFL (22% / 61% / 79% pass).
+        # The old table lumped them into one 60-run row, which made 3rd & 1 too pass-heavy
+        # and 3rd & 3 badly too run-heavy at the same time.
+        (1, 77.0, (32.0, 4.0, 4.0, 0.0)),     # 3rd & 1                     23%
+        (2, 35.0, (32.0, 4.0, 4.0, 0.0)),     # 3rd & 2                     61%
+        (3, 16.0, (32.0, 4.0, 4.0, 0.0)),     # 3rd & 3                     79%
+        (6, 6.0, (45.0, 21.0, 9.0, 0.0)),     # 3rd & 4-6                   93%
+        (9, 2.0, (15.0, 48.0, 23.0, 2.0)),    # 3rd & 7-9                   97%
+        (15, 3.0, (15.0, 48.0, 23.0, 2.0)),   # 3rd & 10-15                 96%
+        (99, 6.0, (10.0, 15.0, 61.0, 8.0)),   # 3rd & 16+ (too rare to fit) 86%
+    ],
+}
 
 # ---- Run Gate Model (three stages with carrier momentum) ----
 # A carry is three contests: the line, the second level, the open field. What
