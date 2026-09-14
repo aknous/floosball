@@ -281,3 +281,135 @@ each larger than either of them.
    keeps it stable as the economy grows.
 8. **Do picks need to exist for the feature to be good**, or is Treasury enough consideration?
    The measured anti-correlation suggests Treasury alone may carry it.
+
+---
+
+# Addendum 2 — in-season trades, and why the draft should probably stay dead
+
+_2026-09-14. Owner: in-season trades are the part of interest; restore the prospect/rookie
+draft without fan ballots, so teams can trade picks, trade prospects, and backfill a traded
+roster player with a prospect. Owner's reason for killing the draft originally: it blows up
+the FA list with players who never see a roster, and inflates league-wide skill._
+
+## The backfill idea is right, and half of it is already written
+
+`seasonManager._promoteProspectsAutonomously` (`:7690`) already does exactly the described
+backfill, and is **already ballot-free** — it was written *because* the ballot was removed.
+It values the prospect with `decisionValue`, finds an open slot via
+`_findOpenSlotForPosition`, clears `is_prospect` / `drafting_team_id`, assigns the roster
+slot and issues a contract term. The only thing tying it to the offseason is its call site.
+
+⚠️ **But its promotion BAR is wrong for mid-season.** It promotes only when the prospect
+beats `bestReplacementValue(..., pickDepth=)` — the free agent this club could realistically
+land at its own slot in the FA order. **Mid-season there is no free agent to land** (see
+below), so the real alternative to promoting is an empty slot. The bar has to be near zero
+in-season, or the promotion is refused and the hole stays.
+
+**An empty slot rates 50** (`floosball_team:175`) against a league of 73-85. That is
+crippling, and it is a useful natural brake — you cannot strip a roster and stay
+competitive. It also argues for the trade rule being **"a trade is legal only if both
+rosters are complete when it settles"** rather than relying on the engine. The engine does
+guard `None` starters in many places, but trusting that for a novel state is how you find
+the one place it does not, mid-game, in production.
+
+## ⚠️ The owner's objection is correct, and the mechanism is structural
+
+The bloat was not a tuning miss. It is a direct consequence of how the supply floor counts,
+and `playerManager.ensurePositionSupply` says so in its own comment:
+
+> "*prospects / the upcoming rookie class (`is_prospect`) — each is LOCKED to its drafting
+> team ... Counting them overstated availability ... Excluding them makes the floor generate
+> enough genuine free agents (**over-generating slightly when prospects do get promoted,
+> which is harmless — the extra FAs just sit in the pool**)*"
+
+"The extra FAs just sit in the pool" **is** the complaint, written down as an acceptable
+cost. And it is not slight at depth:
+
+**Every prospect parked in a pipeline causes the supply floor to generate one extra free
+agent. When that prospect is later promoted, both remain in the league. Pipeline depth × 32
+teams is permanent population inflation, and the excess lands in the FA pool where it never
+sees a roster.**
+
+The skill inflation follows from the same thing: a deeper pool means every club selects the
+best of more candidates, so rosters rise league-wide.
+
+The current numbers show how tight the closed loop is by comparison — **224 players have
+ever existed**: 192 rostered, 26 free agents, 6 retired. `ensurePositionSupply` generates
+only the per-position deficit, so it produces nothing while the pool is above target.
+
+And the licensed pipeline depth is not modest:
+
+| | |
+|---|---:|
+| `PROSPECT_SLOT_CAP_PER_POSITION` 2 × 5 positions × 32 teams | **320 prospect slots** |
+| roster spots in the whole league | 192 |
+| current FA pool | 26 |
+| ⇒ off-roster players licensed, as a share of a full league | **167%** |
+
+So restoring the pipeline at its configured cap licenses more players held off-roster than
+the league has roster spots. That is the blow-up, and it is arithmetic rather than balance.
+
+## The move: picks are free, prospects are not
+
+The three things the owner wants from the pipeline separate cleanly, and only one of them
+actually needs prospects:
+
+| want | cheapest source | population cost |
+|---|---|---:|
+| something to trade | **draft picks** | **zero** |
+| backfill a traded player | **mid-season FA signing** | **zero** |
+| owned future value | prospects | one body each, permanently |
+
+⚠️ **A pick is a claim with no body attached, so picks cause no population inflation at
+all.** They are the trade asset the owner is asking for, and they are free in exactly the
+dimension that killed the draft.
+
+⚠️ **And backfill does not need a pipeline — it needs a function.** There are 26 unowned
+free agents sitting in the pool right now. The only reason a club cannot sign one mid-season
+is that `_attemptRosterFill` is called from nowhere but the FA draft. Adding a mid-season
+signing path gives backfill with **zero new players**, which is strictly better than a
+pipeline for that purpose, and it is a much smaller change than reverting the draft.
+
+That leaves prospects providing only *owned, tradeable future value* — real, but the one
+thing on the list that costs a permanent body per unit.
+
+## Revised recommendation for the in-season feature
+
+1. **Picks as first-class tradeable entities, over the FA draft order that already exists.**
+   `currentSeason.freeAgencyOrder` is already computed worst-first each season; the change is
+   to persist its positions as ownable objects (season, round, *original* team, current
+   owner) and have the draft consume owned picks instead of walking a derived list. **No
+   rookie class, no prospect pipeline, no new players.**
+   ⚠️ Note the horizon lands immediately rather than later: an in-season trade of "this
+   season's pick" refers to an order derived from *final standings that do not exist yet*.
+   That is a feature — the pick's value is genuinely uncertain while the season runs, which
+   is what makes trading it interesting — but it means a pick must be identified by
+   `(season, round, original team)` and resolved to a slot only when the order is computed.
+2. **A mid-season signing path** off the existing FA pool, for backfill. This is also what
+   makes player-for-picks trades legal in-season at all, since the seller must end the trade
+   with a complete roster.
+3. **In-season trades** closing at week 22: player-for-player at matching positions,
+   player-for-picks, or picks-for-picks. Priced with `decisionValue` on both sides.
+4. **Prospects only if wanted for their own sake** — and then with a hard cap on the TOTAL
+   per team (1, maybe 2), not the per-position cap of 2 that licenses ten. At one per team
+   the inflation is 32 bodies, about 14%, bounded and legible. At the configured cap it is
+   the thing that was removed.
+
+If the pipeline does come back, `PROSPECT_DEVELOPMENT_WINDOW` (3 offseasons then forced
+release) is the pressure valve that makes prospects trade rather than accumulate — a
+use-him-or-lose-him asset is one a GM will move.
+
+## Revised open questions
+
+9. **Do picks alone satisfy the "assets to trade" goal?** They cost nothing in the dimension
+   that killed the draft, and the Treasury (addendum 1) is a second free asset already live.
+   Between them there may be no need for prospects at all.
+10. **If prospects return, what is the total per-team cap** — and is the supply floor
+    adjusted to count them, so the league population stays fixed rather than growing by the
+    pipeline's depth?
+11. ⚠️ **A prospect promoted mid-season has no card.** Templates exclude `is_prospect` /
+    `drafting_team_id` and mint once per season, so a player promoted in week 10 cannot be
+    collected, equipped or scored until the next season's mint. A fan watching their club
+    trade for a player and then being unable to field him is the most visible fantasy-side
+    consequence of in-season roster movement. (A traded *rostered* player is fine — he
+    already has a card; it just carries the old club's `team_id`.)
