@@ -85,6 +85,27 @@ class RuleVoteRepository:
             .first()
         )
 
+    def getStaleOpenWindows(self, season: int, currentDayIndex: int) -> List[RuleVoteWindow]:
+        """Open windows whose GAME DAY has already passed, oldest first.
+
+        ⚠️ `getOpenWindow` orders by `day_index DESC` and takes the first, so the
+        moment a newer day's window opens, any older one still sitting unresolved
+        becomes UNREACHABLE by the resolver — permanently. It is not enough to fix
+        whatever left it open; the resolver needs a way to see past the newest one.
+        Season 6 day 0 hit exactly this: it carried a stale `closes_at` a week in the
+        future, so it never resolved on its own day, and would then have been orphaned
+        by day 1's window even once the timestamp was corrected.
+        """
+        return (
+            self.session.query(RuleVoteWindow)
+            .filter(RuleVoteWindow.season == season,
+                    RuleVoteWindow.fired.is_(True),
+                    RuleVoteWindow.resolved.is_(False),
+                    RuleVoteWindow.day_index < currentDayIndex)
+            .order_by(RuleVoteWindow.day_index.asc())
+            .all()
+        )
+
     def getWindowById(self, windowId: int) -> Optional[RuleVoteWindow]:
         return self.session.get(RuleVoteWindow, windowId)
 
