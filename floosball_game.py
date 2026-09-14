@@ -9326,9 +9326,16 @@ class Game:
             # CHANGES. `offensiveTeam` is assigned in TEN places -- turnovers, kickoffs, the
             # opening drive, and both conversion paths, which swap it and swap it back -- and
             # writing the spot at each is how this file has repeatedly ended up with one site
-            # missed and a silent wrong value. Asking "is the offense the one I saw last play"
-            # is one place that cannot be forgotten, and reading it at the TOP of the play
-            # means a conversion's temporary swap has already been undone.
+            # missed and a silent wrong value. Asking "is the offense the one I saw last
+            # time" is one place that cannot be forgotten.
+            #
+            # ⚠️ THIS LOOP IS PER DRIVE, NOT PER PLAY, and that is easy to misread -- the
+            # comment here said "the top of the play loop" until it was measured: over a
+            # 133-play game this runs **20 times**, once per possession plus the odd quarter
+            # transition, because the plays themselves run in a loop inside it (which is why
+            # `lastPlayFormatted` a few lines up "dies with each drive"). The derivation is
+            # unaffected -- once per possession is exactly when the answer can change -- but
+            # anything that needs to happen per PLAY must not be put here.
             self._noteDriveStart()
             if self.totalPlays > 0 and self.gameClockSeconds <= 0:
                 # Broadcast the last play with the CURRENT quarter before advanceQuarter() changes it.
@@ -12995,7 +13002,13 @@ class Game:
             # Where THIS drive began, same units as `yardsToEndzone` — so a client has both
             # ends of the drive and can draw it rather than just the ball. Null before the
             # opening kickoff has placed anybody. See `_noteDriveStart`.
-            'driveStartYardsToEndzone': getattr(self, 'driveStartYardsToEZ', None),
+            # ⚠️ ONLY WHEN IT BELONGS TO THE TEAM THAT HAS THE BALL. A possession-change
+            # broadcast fires from inside `turnover()`, BEFORE the play loop's next pass has
+            # re-derived the drive, so the spot on it is still the previous offense's --
+            # measured at 15 broadcasts a game-trio. Reporting it then draws somebody else's
+            # drive under this team's ball.
+            'driveStartYardsToEndzone': (self.driveStartYardsToEZ
+                                         if self._driveTeam is self.offensiveTeam else None),
             'isPossessionChange': isPossessionChange,
             'lastPlay': lastPlayData,
             'finalPlay': finalPlayData,

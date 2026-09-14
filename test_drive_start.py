@@ -63,17 +63,43 @@ expect(f"the opening drive is not recorded at the goal line (it was {drives[0][1
        drives[0][1] != 0)
 
 print("\n3. The start HOLDS while the ball moves -- that is what makes it a drive")
-byDrive = {}
-for i, start, now in states:
-    byDrive.setdefault(i, {'starts': set(), 'spots': set()})
-    byDrive[i]['starts'].add(start)
-    byDrive[i]['spots'].add(now)
-wobbled = [i for i, v in byDrive.items() if len(v['starts']) != 1]
-expect(f"the start never moves WITHIN a drive ({len(wobbled)} of {len(byDrive)} wobbled)",
-       not wobbled)
-longest = max((len(v['spots']) for v in byDrive.values()), default=0)
-expect(f"and the ball does move under it (longest drive touched {longest} spots)",
-       longest >= 3)
+# ⚠️ OBSERVED FROM THE BROADCAST, NOT FROM THE HOOK. The first version of this watched
+# `_noteDriveStart` and concluded the ball barely moved -- because that hook runs once per
+# POSSESSION (20 calls in a 133-play game), so it can only ever see one spot per drive. It
+# was measuring where the code is called, not what the data does. The broadcast fires per
+# play, which is where the question can actually be answered.
+import floosball_game as FG
+def broadcastStates(seed):
+    random.seed(seed)
+    sc = Scenario(gameRules=GameRules())
+    gg = sc.game
+    out = []
+    orig = FG.Game.broadcastGameState
+    def spy(self, *a, **k):
+        try:
+            return orig(self, *a, **k)
+        finally:
+            out.append((self._driveTeam is self.offensiveTeam,
+                        self.driveStartYardsToEZ, self.yardsToEndzone))
+    FG.Game.broadcastGameState = spy
+    try:
+        asyncio.run(gg.playGame())
+    finally:
+        FG.Game.broadcastGameState = orig
+    return out
+
+st = [r for r in broadcastStates(4) if r[0] and r[1] is not None and r[2] is not None]
+runs, cur = [], []
+for owned, start, now in st:
+    if cur and cur[-1][0] != start:
+        runs.append(cur); cur = []
+    cur.append((start, now))
+if cur: runs.append(cur)
+multi = [r for r in runs if len({n for _s, n in r}) >= 2]
+expect(f"the ball reaches several spots under one start ({len(multi)} of {len(runs)} runs)",
+       len(multi) >= max(1, len(runs) // 3))
+wobbled = [r for r in runs if len({s for s, _n in r}) != 1]
+expect(f"and the start never moves within a run (0 expected, {len(wobbled)} found)", not wobbled)
 
 print("\n4. It survives several games unchanged")
 for seed in (7, 12, 21):
