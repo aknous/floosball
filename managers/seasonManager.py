@@ -8759,8 +8759,18 @@ class SeasonManager:
             seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
             outDir = os.path.dirname(dbPath)
 
-            # Prune snapshots from prior seasons — only the current season's
-            # checkpoints are useful for resume / rollback.
+            # Prune snapshots from any OTHER season — only the current season's
+            # checkpoints are useful for resume / rollback. Same season, different
+            # phase is kept: rookie_draft / fa_draft / training legitimately coexist.
+            #
+            # ⚠️ THE TEST IS `!=`, NOT `<`, AND `<` STRANDED 76MB ON THE PROD VOLUME.
+            # A fresh start restarts the season counter at 1, so every snapshot written
+            # before the reset carries a HIGHER number than anything written after it —
+            # `17 < 6` is False, so the pre-reset files were immortal and no later
+            # offseason could ever reach them. Found on prod holding season 17
+            # snapshots against a live season 6, on a 974MB volume already at 59%.
+            # Season numbers are not monotonic across the life of a volume; only
+            # "belongs to the season running right now" is a safe thing to keep.
             for old in glob.glob(os.path.join(outDir, 'offseason_s*_*.db')):
                 fname = os.path.basename(old)
                 # parse season number out of 'offseason_s{N}_{phase}.db'
@@ -8768,7 +8778,7 @@ class SeasonManager:
                     snap_season = int(fname.split('_')[1].lstrip('s'))
                 except (ValueError, IndexError):
                     continue
-                if snap_season < seasonNum:
+                if snap_season != seasonNum:
                     try:
                         os.remove(old)
                         logger.info(f"  Pruned stale snapshot: {fname}")
