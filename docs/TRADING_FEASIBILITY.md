@@ -970,3 +970,109 @@ current design a great team with a small fanbase simply goes broke. That is defe
     now sharper: at these numbers the order decides whether Pinecones lose a facility to the
     tax or to the buildings, and the decay counter only advances for one of those.)
 25. **Is the already-insolvent trio a bug or the design?** It fires this offseason regardless.
+
+---
+
+# Addendum 8 — the tax, settled
+
+_2026-09-14. **Owner rulings: drop the rate escalator; the consecutive counter drives the
+forced trade.** Consolidates every settled decision, since the seven addenda above are
+conversation order rather than design order._
+
+## ⚠️ The ruling fixes a hole, it does not just simplify
+
+The counter now tracks **consecutive seasons OVER THE THRESHOLD**, not consecutive seasons
+of facility decay. That distinction is load-bearing:
+
+**Under a decay counter, the one club the tax exists for could never be reached.** Broads
+sit at Σ500 with 7,532F of spare and **1 expiring player, 0 forced walks** — they pay the
+274F every season without blinking and never decay, so a decay counter never advances and no
+forced trade ever fires. Counting seasons *over the line* reaches the solvent club and the
+insolvent one alike.
+
+## The mechanism
+
+At season end, in the facilities waterfall:
+
+1. **Over the line?** `excess = Σ rating − threshold`, charged at
+   `excess × RATE × shareUnit`. Marginal only — the roster up to the threshold is free.
+2. **Can pay** → paid from the Treasury, roster untouched.
+3. **Cannot pay** → a facility decays a level (the existing upkeep-shortfall path, no new
+   penalty code).
+4. **Counter** increments for being over, *whether or not it paid*.
+5. **Counter reaches the cap** → a **forced trade that must clear the threshold**.
+6. **Counter resets** on being back under the line — never on making a trade, so a token
+   swap buys nothing.
+
+| parameter | value | basis |
+|---|---|---|
+| threshold | league **mean + 1 sd** | measured mean 480, sd 15.0 → 495; self-normalizes against compression, rating-curve and draft drift |
+| rate | **0.01** shares / excess point | a solvent club pays ~one level-3 facility's upkeep |
+| counter cap | **2** | at 3 the forced trade slips past the window the forecast cares about |
+
+## How it plays, on the two real cases
+
+**Broads** — long contracts, so the re-sign limit cannot touch them. This is the tax's actual target.
+
+| season | Σ | over | owed | counter | outcome |
+|---:|---:|---:|---:|---:|---|
+| 6 | 500 | 5 | 274F | 1 | pays, roster intact |
+| 7 | 500 | 5 | 274F | 2 | ⚠️ forced trade: WR 78 → Beans for WR 73 |
+| 8+ | 495 | — | 0 | 0 | under the line |
+
+**548F total over five seasons, and one trade that actually moved a roster.** The money was
+never the point.
+
+**Pinecones** — the re-sign limit reaches them first and far harder.
+
+| season | Σ | over | owed | counter | outcome |
+|---:|---:|---:|---:|---|---|
+| 6 | 510 | 15 | 823F | 1 | cannot pay (−183F spare) → facility decays |
+| 7 | **452** | — | 0 | 0 | under the line, counter resets |
+
+⚠️ **Five of their six players are on walk years and the limit is 2 re-signs**, so they are
+forced to lose three, and they pick last in a thin FA pool (backfilling at 63 / 61 / 62).
+**Σ 510 → 452**, which is 43 under the threshold and below the league mean of 480. The tax
+fires exactly once, for money they do not have, and never again.
+
+## ⚠️ The re-sign limit is already the primary soft cap
+
+Measured league-wide: **89 of 192 players (46%) are on walk years**, median 3 expiring per
+club, and **18 of 32 clubs must let someone walk**. That is a heavy annual erosion which
+nobody has been counting as a balance mechanism, and it is doing most of the work.
+
+So the tax's honest job is **narrow and specific: the club that escaped the re-sign limit by
+signing its stars long.** It is not a general parity lever — the re-sign limit already is
+one. Sizing it as though it were the main dial is how it ends up at a threshold like 485,
+which pushes a third of the league into decay at once.
+
+## Everything settled so far
+
+| # | decision |
+|---:|---|
+| 1 | In-season trades are the priority; offseason trades are a separate, larger feature |
+| 2 | Trades close at week 22 — the first week of the final game day, already `GM_ACTIVE_WEEK` |
+| 3 | In-season trades are position-for-position (six locked slots, no bench) |
+| 4 | A trade is legal only if both rosters are complete when it settles |
+| 5 | Prospect/rookie draft returns, **without fan ballots**; 32/season, first season possibly 3 rounds |
+| 6 | Trade assets: picks, prospects, Treasury Floobits |
+| 7 | Culling starts only once the draft is back; hard removal scoped to `seasonsPlayed == 0`; a culled name returns as the **base**, no Jr. |
+| 8 | Tax base is **Σ player rating**, not `cap_hit` (13-20 is too coarse a range) |
+| 9 | Tax is **marginal** — only the excess over the threshold |
+| 10 | **Flat rate, no escalator** (owner, this addendum) |
+| 11 | Unpayable → facility decay, reusing the existing upkeep-shortfall path |
+| 12 | Counter on **consecutive seasons over the line** drives the forced trade (owner, this addendum) |
+| 13 | Counter resets on getting back **under the threshold**, never on trading |
+| 14 | A forced trade must **clear** the threshold; measured, always possible with zero overshoot |
+| 15 | GMs **discount** a signing near the line, never refuse one (`_SOFT_APPEAL_PENALTY`'s shape, not the removed cap's budget gate) |
+
+## Still open
+
+26. **Counter cap of 2 — confirm?** It is the only parameter with no measurement behind it,
+    only the observation that 3 pushes the forced trade past the window that matters.
+27. **Tax charged before or after upkeep** in the waterfall — decides whether an insolvent
+    club loses a facility to the tax or to its buildings.
+28. **Three clubs are already insolvent on upkeep alone** (Pinecones, Jetskis, Phones), with
+    no tax in existence. That fires this offseason and wants deciding on its own merits.
+29. **The 3-round opener** still lands in the one window (seasons 6-8) where retirement
+    outflow is still small.
