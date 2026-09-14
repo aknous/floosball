@@ -685,3 +685,125 @@ played.
     option.
 18. **Is the cull scoped to `seasonsPlayed == 0`** (safe, orphan-free) with retirement
     handling everyone else? Anything broader deletes owned cards and record-book history.
+
+---
+
+# Addendum 5 — intake arithmetic and the decay ladder
+
+_2026-09-14. Owner: culling starts only once the rookie draft is back, since every season
+then adds 32 players — and the first season may want 3 rounds (96) so teams have prospect
+stock. On the tax penalty: facilities decay until they cannot any more and then a trade is
+forced, or a cap on consecutive decay seasons before a trade is forced._
+
+## ⚠️ First, a correction to addendum 2
+
+Addendum 2 said *"every prospect parked in a pipeline causes the supply floor to generate one
+extra free agent."* **That is wrong, and it overstates the effect.** The mechanism is real
+but second-order.
+
+`ensurePositionSupply` generates when `supply < demand`, where supply excludes prospects and
+demand is fixed at `32 × slots + buffer`. A rookie class generated straight into pipelines
+adds **no** supply and changes **no** demand, so it triggers no extra generation at all.
+
+The over-generation happens later, and the code comment describes it exactly: the floor tops
+the pool up *as though prospects could not fill vacancies*, and then some vacancies **are**
+filled by promotion. The surplus therefore equals **the number of vacancies filled by
+promotion each season**, not the number of prospects held. Smaller, and differently shaped —
+it scales with promotion rate, not pipeline depth.
+
+The conclusion survives (prospects do inflate the pool, and a tax cannot fix it), but the
+sizing in addendum 2 should not be used.
+
+## The intake arithmetic
+
+**Replacement demand.** 192 roster spots, median longevity **10** seasons ⇒ roughly
+**19 players per season** to hold the league full.
+
+**Draft intake.** 32 per season ⇒ a **surplus of about 13 per season**. That is the number
+the cull has to remove for the population to be stable, and it is a clean target to build and
+measure against.
+
+**The first-season shock.** 96 against a universe of 224 players is **+43% in one
+offseason**. Three per club sits comfortably inside `PROSPECT_SLOT_CAP_PER_POSITION` (which
+licenses up to ten), so the stock argument holds — but the pool will feel it, and the cull
+should ship **with** the draft rather than after it.
+
+## ✅ The timing is better than it looks: the retirement wave is about to start
+
+This league has only ever retired **6 players in 5 completed seasons**, which reads as a
+broken retirement system and is not. It is a *young* league: every rostered player has 6
+seasons or fewer, and median longevity is 10, so almost nobody has reached the bands yet.
+
+Projected count of rostered players past longevity, holding the current roster:
+
+| season | past longevity |
+|---:|---:|
+| 6 (now) | 12 |
+| 7 | 23 |
+| 8 | 44 |
+| 9 | 71 |
+| 10 | 108 |
+| 12 | 178 of 192 |
+
+**So the draft would return at almost exactly the moment outflow ramps up.** Intake of 32
+looks reckless against today's ~1 retirement a season and much more reasonable against
+season 9-10. The dangerous window is **seasons 6-8**, where 32 (or 96) arrive against 12-44
+merely *eligible* players, only a fraction of whom actually retire — "past longevity" is a
+probability band, not an exit, and the contract gate holds most of them to their walk year.
+
+That argues for the 3-round opener being the thing to reconsider rather than the 32/season
+steady rate: the steady rate meets a rising wave, the opener does not.
+
+## The decay ladder is far too long, and it is regressive
+
+Every club has exactly **5 facilities**; levels sum to between **4 and 13** (median 8.5). So
+"decay until it cannot any more" buys:
+
+| club (over a 495 threshold) | Σ rating | facility levels | treasury | seasons of dodging |
+|---|---:|---:|---:|---:|
+| Pinecones | 510 | 7 | **200F** | **7** |
+| Residents | 502 | 8 | 2,732F | 8 |
+| Broads | 500 | 12 | 8,739F | 12 |
+
+⚠️ **Pinecones could dodge the tax for seven seasons — longer than this league has
+existed.** Decay alone is not a penalty, it is a payment plan with no maturity date.
+
+⚠️ **And it is regressive.** `corr(facility levels, treasury) = +0.642` — the clubs with the
+deepest decay cushion are the richest ones, who were least likely to be taxed in the first
+place. Broads, the borderline club forecast at 14.3 wins, gets **12** seasons of protection;
+Pinecones, the 48%-title-odds problem the tax exists for, gets **7**.
+
+## Why the consecutive-season cap is the right answer
+
+The sharper reason is not the length, it is what decay *does*:
+
+**Decay is interest. A trade is principal.** A club that decays keeps its over-threshold
+roster, so it is taxed again next season, and again. Nothing about decaying reduces Σ rating
+— only moving a player does. So decay can service the debt indefinitely while never
+addressing what created it, which is precisely the failure mode of "decay until it cannot".
+
+A cap on consecutive decay seasons says: *you may service this for a while, then you pay it
+down.* On the measured numbers, **2 consecutive seasons** puts Pinecones into a forced trade
+in season 8 — inside the window where the forecast says they are a problem. At 3 it is
+season 9. Beyond that the tax stops being a parity lever within any horizon a fan cares
+about.
+
+A useful refinement, since decay is not free: facilities drive **Appeal**, and Appeal gates
+free-agent destination preference. A club that decays twice is *already* getting worse at
+signing anyone, so the two penalties compound in the right direction without being stacked
+deliberately.
+
+## Revised open questions
+
+19. **Should the first draft really be 3 rounds?** The steady 32/season meets a rising
+    retirement wave; the 96-player opener does not, landing in the one window (seasons 6-8)
+    where outflow is still small. A 2-round opener, or 3 rounds with the cull running
+    immediately, both close that gap.
+20. **Consecutive-decay cap: 2 or 3?** Measured, 2 forces Pinecones to trade in season 8 and
+    3 in season 9. Anything higher lets the deepest-facility clubs — who are also the richest
+    — sit out the tax entirely.
+21. **Should the decay counter reset on a trade, or on getting back under the threshold?**
+    Resetting on a *trade* rewards the gesture; resetting on being *under the line* rewards
+    the outcome, and is harder to game with a token swap.
+22. **Does the cull ship with the draft or after it?** At a ~13/season surplus, "after"
+    means the pool grows by 13 a season until it arrives.
