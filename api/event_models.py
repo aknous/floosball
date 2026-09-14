@@ -258,6 +258,7 @@ class GameEvent:
             'yardLine': str (e.g., 'BAL 25'),
             'yardsToEndzone': int,
             'yardsToSafety': int,
+            'driveStartYardsToEndzone': int | None (where this drive began),
             'lastPlay': {
                 'playNumber': int,
                 'quarter': int,
