@@ -556,6 +556,12 @@ LEAD_PROTECT_SHIFT_MAX = 5.65
 LEAD_PROTECT_TAU_SECS = 330.0
 LEAD_PROTECT_LEAD_POINTS = [1, 3, 8, 16]
 LEAD_PROTECT_LEAD_SCALE = [0.8, 0.8, 0.95, 1.15]
+# ---- Chasing two scores in Q4 (the mirror) ----
+# Log-odds of passing RISE by TRAIL_SHIFT_MAX * ramp * clock-IQ band (0.7-1.0) when down
+# more than one score in Q4 outside the final 2:00; ramp runs from Q4_START at 15:00 to 1
+# at 0:00. Fitted so the league lands near the NFL's 80% pass rate there (was 63-67%).
+TRAIL_SHIFT_MAX = 1.75
+TRAIL_SHIFT_Q4_START = 0.4
 
 # ── Defensive disguise ────────────────────────────────────────────────────
 # ⚠️ THE PIECE THAT MAKES THE OTHERS A SYSTEM. Without it the QB reads an honest defense

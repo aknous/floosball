@@ -74,5 +74,23 @@ class LeadProtection(unittest.TestCase):
         self.assertIn('self._leadProtectKeep()', body)
 
 
+class ChasingTwoScores(unittest.TestCase):
+    """The mirror: down two scores in Q4 the sim passed 63-67% of the time vs the NFL's
+    80%, because the trailing branches were run-weight multipliers that capped out."""
+
+    def _share(self, offScore, defScore, clock=480):
+        s = Scenario()
+        s.situation(quarter=4, clock=clock, down=1, distance=10, ballOn=65,
+                    offScore=offScore, defScore=defScore)
+        return passShare(s)
+
+    def testTwoScoresDownThrowsMoreThanOneScoreDown(self):
+        self.assertGreater(self._share(7, 21), self._share(14, 21) + 0.15)
+
+    def testOneScoreDownIsNotShifted(self):
+        """One possession still ties it, so the clock is not yet the enemy."""
+        self.assertAlmostEqual(self._share(17, 21), self._share(21, 21), delta=0.08)
+
+
 if __name__ == '__main__':
     unittest.main()

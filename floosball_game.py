@@ -4482,6 +4482,20 @@ class Game:
                 for _k in ('short', 'medium', 'long', 'deep'):
                     weights[_k] = weights.get(_k, 0) * keep
 
+        # ── CHASING TWO SCORES IN Q4 (the mirror of the lead shift) ──
+        # ⚠️ The trailing branches above are run-weight multipliers again, and they cap
+        # the same way the lead ones did: down two scores in Q4 the sim passed 63-67% of
+        # the time against the NFL's 80% (2021-25, excluding the final 2:00, which has
+        # its own branch and already matched). One-score deficits are NOT shifted — the
+        # NFL's pass rate there is barely above neutral, because one possession still
+        # ties it and the clock is not yet the enemy.
+        if q == 4 and secs >= 120 and scoreDiff < -self._oneScore():
+            from constants import TRAIL_SHIFT_MAX, TRAIL_SHIFT_Q4_START
+            ramp = TRAIL_SHIFT_Q4_START + (1.0 - TRAIL_SHIFT_Q4_START) * (900 - min(900, secs)) / 900.0
+            boost = math.exp(TRAIL_SHIFT_MAX * ramp * (0.7 + 0.3 * clockIQ))
+            for _k in ('short', 'medium', 'long', 'deep'):
+                weights[_k] = weights.get(_k, 0) * boost
+
         # Q2 two-minute drill: REGARDLESS of score, push to score before the
         # half. A leading team does NOT sit on the ball in Q2 (clock-milking is
         # a Q4 behavior — the half ends either way, so there's no lead to
