@@ -215,3 +215,102 @@ def test_an_inquiry_is_a_private_approach_not_an_auction():
         "the inquiry pass canvasses other clubs — it is an auction, not a phone call"
     assert 'counterpartiesFor' in head, "the listing pass stopped canvassing"
     print("PASS an inquiry is settled between the two clubs on the call")
+
+
+# -------------------------------------------------- 5. what a club will spend on
+
+def test_position_appetite_scales_WILLINGNESS_and_not_VALUE():
+    """⚠️ `positionWeight` MULTIPLIES THE ASK AND THE BUYER'S WORTH ALIKE, so it divides
+    out of every comparison — position value set a trade's PRICE and had no effect at all
+    on whether it happened. Measured over six seasons, kickers were **17% of all trades
+    against 17% of the league's starters**, i.e. they traded at their headcount while being
+    priced at 0.35 of a quarterback; quarterbacks were 1%. The market traded what was cheap.
+
+    ⚠️ AND THE APPETITE IS A SEPARATE QUANTITY FROM THE WEIGHT ON PURPOSE. A kicker's VALUE
+    is untouched everywhere it matters — cards, draft boards, re-signs, the cut fee —
+    because he is worth what he is worth. Clubs simply do not spend picks there.
+    """
+    import trading
+    teams = _league()
+    for t in teams:
+        _fill(t, STARTERS)
+    market = _market(teams, week=None)
+    k = FakePlayer(790, 88, Position.K, termRemaining=3)
+    wr = FakePlayer(791, 88, Position.WR, termRemaining=3)
+
+    assert market._positionAppetite(k) < market._positionAppetite(wr)
+    # value is NOT touched: the same surplus and term at the same position weight
+    assert (trading.playerValue(88, 3, None, 1.0, market._positionWeight(k))
+            == trading.playerValue(88, 3, None, 1.0, market._positionWeight(k))), \
+        "the appetite leaked into the valuation"
+    assert market._positionWeight(k) == constants.POSITION_VALUE['K'], \
+        "the position WEIGHT moved — the appetite must be a separate quantity"
+    print(f"PASS a club spends {market._positionAppetite(k):.2f} as readily at kicker, "
+          f"while a kicker is still worth {market._positionWeight(k):.2f} of a quarterback")
+
+
+def test_a_club_bids_only_on_its_own_biggest_problems():
+    teams = _league()
+    for t in teams:
+        _fill(t, STARTERS)
+    buyer = teams[-1]
+    buyer.rosterDict['qb'] = FakePlayer(792, 55, Position.QB, termRemaining=3)
+    buyer.rosterDict['rb'] = FakePlayer(793, 58, Position.RB, termRemaining=3)
+    buyer.rosterDict['wr1'] = FakePlayer(794, 60, Position.WR, termRemaining=3)
+    buyer.rosterDict['te'] = FakePlayer(795, 94, Position.TE, termRemaining=3)
+    market = _market(teams, week=None)
+    needs = market.topNeeds(buyer)
+    assert Position.QB.value in needs, needs
+    assert Position.TE.value not in needs, "shopping at tight end behind a 94"
+
+    # ⚠️ AND THE BID HAS TO ACTUALLY CONSULT IT. Asserting only on `topNeeds` leaves the
+    # gate itself untested — removing the call from `bidFor` left all of this green.
+    seller = teams[0]
+    offered = FakePlayer(950, 93, Position.TE, termRemaining=2)
+    seller.rosterDict['te'] = offered
+    listing = tradeManager.Listing(seller, offered, 'expiring_surplus', 1.0, 1.0)
+    assert market.bidFor(listing, buyer) is None, \
+        "the club bid on a tight end while carrying a 94 there and a 55 at quarterback"
+    print("PASS a club shops where it is short, not wherever a listing appears")
+
+
+def test_needs_are_distinct_POSITIONS_not_the_top_slots():
+    """⚠️ `_positionalGaps` IS SLOT-WISE AND WR OWNS TWO OF THE SIX, so taking the first
+    three SLOTS routinely yielded a set of only two positions. Measured, that collapsed
+    running backs from 21% of trades to 7% while leaving kickers untouched at 16% — neither
+    the old distribution nor the intended one."""
+    teams = _league()
+    for t in teams:
+        _fill(t, STARTERS)
+    buyer = teams[-1]
+    # Both receiver slots are the worst on the roster.
+    buyer.rosterDict['wr1'] = FakePlayer(796, 52, Position.WR, termRemaining=3)
+    buyer.rosterDict['wr2'] = FakePlayer(797, 54, Position.WR, termRemaining=3)
+    buyer.rosterDict['qb'] = FakePlayer(798, 60, Position.QB, termRemaining=3)
+    buyer.rosterDict['rb'] = FakePlayer(799, 62, Position.RB, termRemaining=3)
+    market = _market(teams, week=None)
+    needs = market.topNeeds(buyer)
+    assert len(needs) == constants.TRADE_BUYER_NEEDS, \
+        f"two receiver slots ate a need slot: {needs}"
+    print(f"PASS both receiver slots count as ONE need ({len(needs)} distinct positions)")
+
+
+def test_a_kicker_is_never_a_blockbuster():
+    """Owner, 2026-09-15: "I wouldnt really consider trades for kickers blockbusters."
+
+    ⚠️ THE APPETITE ALONE IS NOT ENOUGH — a kicker's ask is small, so a cheap one still
+    cleared the suppressed bid and turned up among the blockbusters twice. The objection is
+    to the KIND of trade rather than its price, so the call is never made at all."""
+    teams = _league()
+    for t in teams:
+        _fill(t, STARTERS)
+    buyer = teams[-1]
+    # A catastrophic kicker and nothing else wrong: the gap IS at kicker.
+    buyer.rosterDict['k'] = FakePlayer(801, 40, Position.K, termRemaining=3)
+    teams[0].rosterDict['k'] = FakePlayer(802, 97, Position.K, termRemaining=3)
+    market = _market(teams, week=None)
+    assert market._positionalGaps(buyer)[0][0] == 'k', "the fixture's biggest hole is not K"
+    assert all(getattr(l.player.position, 'name', None) != 'K'
+               for l in market.inquiriesFor(buyer)), \
+        "a club built a blockbuster around a kicker"
+    print("PASS no club mortgages its future for a kicker")

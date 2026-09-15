@@ -36,7 +36,8 @@ from constants import (TRADING_ENABLED, GM_ACTIVE_WEEK, REPLACEMENT_RATING,
                        TRADE_INQUIRIES_PER_TEAM, TRADE_HUMP_BAND,
                        TRADE_INQUIRY_PREMIUM, TRADE_CORE_PREMIUM,
                        TRADE_INQUIRY_MIN_UPGRADE, TRADE_INQUIRY_MAX_PIECES,
-                       TRADE_HUMP_APPETITE)
+                       TRADE_HUMP_APPETITE, TRADE_BUYER_NEEDS,
+                       TRADE_POSITION_APPETITE)
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,7 @@ class TradeMarket:
         self._needCache = {}
         self._playoffCut = None
         self._posMeanCache = {}
+        self._needsCache = {}
         # Why bundles fail, for the market harness. Three reasons, three different answers.
         self.assembleFail = {}
         # ⚠️ Why an INQUIRY never happened, which "0 trades" cannot distinguish between:
@@ -318,6 +320,36 @@ class TradeMarket:
         mine = self._contention.get(getattr(team, 'id', None), 0.5)
         return (self._playoffCutWinPct() - mine) <= TRADE_HUMP_BAND
 
+    def topNeeds(self, team) -> set:
+        """The positions this club is most short of, as position values.
+
+        ⚠️ THE ONLY THING THAT MAKES POSITION VALUE AFFECT WHETHER A TRADE HAPPENS. It
+        multiplies the ask and the buyer's worth alike, so it cancels out of every
+        comparison — which is why kickers traded at their headcount (17% of trades, 17% of
+        starters) while being worth 0.35 of a quarterback, and quarterbacks traded at 1%.
+        A club spends picks on the problems that cost it most, and ranking the gaps is
+        where that judgment lives.
+        """
+        cached = self._needsCache.get(id(team))
+        if cached is not None:
+            return cached
+        # ⚠️ DISTINCT POSITIONS, NOT THE TOP N SLOTS. `_positionalGaps` is slot-wise and
+        # WR owns two of the six, so taking the first three SLOTS routinely yielded a set
+        # of two positions — measured, that collapsed running backs from 21% of trades to
+        # 7% while leaving kickers untouched at 16%, which is neither the old distribution
+        # nor the intended one.
+        needs, ordered = set(), []
+        for _slot, player in self._positionalGaps(team):
+            posValue = getattr(getattr(player, 'position', None), 'value', None)
+            if posValue in needs:
+                continue        # the club's worse WR slot already put WR on the list
+            needs.add(posValue)
+            ordered.append(posValue)
+            if len(ordered) >= TRADE_BUYER_NEEDS:
+                break
+        self._needsCache[id(team)] = needs
+        return needs
+
     def _positionalGaps(self, team) -> list:
         """Where this club falls furthest behind the LEAGUE, worst first, as (slot, player).
 
@@ -382,6 +414,13 @@ class TradeMarket:
 
         out = []
         for slot, incumbent in self._positionalGaps(buyer)[:TRADE_INQUIRIES_PER_TEAM]:
+            # ⚠️ A CLUB DOES NOT BUILD A BLOCKBUSTER AROUND A POSITION IT WILL NOT SPEND
+            # AT (owner, 2026-09-15: "I wouldnt really consider trades for kickers
+            # blockbusters"). The appetite already suppresses the bid, but a kicker's ask
+            # is small enough that a cheap one still cleared it — and the objection is to
+            # the KIND of trade, not its price, so the call is never made at all.
+            if self._positionAppetite(incumbent) < 1.0:
+                continue
             posValue = getattr(getattr(incumbent, 'position', None), 'value', None)
             mine = self.ratingFor(buyer, incumbent)
             best, bestSeen = None, 0.0
@@ -686,6 +725,38 @@ class TradeMarket:
             self._positionWeight(player))
         return ask, floor
 
+    def _bestAvailableAt(self, team, player):
+        """The best man this club could put in that slot WITHOUT trading — a ready
+        prospect of its own, or the best free agent anybody could sign.
+
+        ⚠️ USED BY BOTH SIDES AND THAT IS THE POINT. For the seller it sets the walk-away
+        (`_backfillRating`); for the buyer it is the alternative to trading at all
+        (`_displacedBy`). Two clubs looking at the same pool is exactly right — it is the
+        same pool.
+        """
+        posValue = getattr(getattr(player, 'position', None), 'value', None)
+        best = None
+        for prospect in getattr(team, 'prospects', None) or []:
+            if getattr(getattr(prospect, 'position', None), 'value', None) != posValue:
+                continue
+            if best is None or (getattr(prospect, 'playerRating', 0) or 0) > (
+                    getattr(best, 'playerRating', 0) or 0):
+                best = prospect
+        for fa in getattr(self.playerManager, 'freeAgents', None) or []:
+            if getattr(fa, 'willRetire', False):
+                continue
+            # ⚠️ Same reason as `_findBackfill`: a rostered player left in the pool would
+            # price against a backfill the club cannot actually sign, and on the sell side
+            # the floor is what decides whether it is a seller at all.
+            if not _isTrulyUnrostered(fa):
+                continue
+            if getattr(getattr(fa, 'position', None), 'value', None) != posValue:
+                continue
+            if best is None or (getattr(fa, 'playerRating', 0) or 0) > (
+                    getattr(best, 'playerRating', 0) or 0):
+                best = fa
+        return best
+
     def _backfillRating(self, team, player) -> float:
         """Who actually replaces him — `max(readyProspect, bestAvailableFreeAgent)`.
 
@@ -693,22 +764,8 @@ class TradeMarket:
         requires `backfill > REPLACEMENT`. With mid-season signing every club can sell, but
         one with a good prospect sells far more readily than one drawing on the pool.
         """
-        posValue = getattr(getattr(player, 'position', None), 'value', None)
-        best = 0.0
-        for prospect in getattr(team, 'prospects', None) or []:
-            if getattr(getattr(prospect, 'position', None), 'value', None) == posValue:
-                best = max(best, float(getattr(prospect, 'playerRating', 0) or 0))
-        for fa in getattr(self.playerManager, 'freeAgents', None) or []:
-            if getattr(fa, 'willRetire', False):
-                continue
-            # ⚠️ Same reason as `_findBackfill`: a rostered player left in the pool would
-            # price the floor against a backfill the club cannot actually sign, and the
-            # floor is what decides whether it is a seller at all.
-            if not _isTrulyUnrostered(fa):
-                continue
-            if getattr(getattr(fa, 'position', None), 'value', None) == posValue:
-                best = max(best, float(getattr(fa, 'playerRating', 0) or 0))
-        return best
+        best = self._bestAvailableAt(team, player)
+        return float(getattr(best, 'playerRating', 0) or 0) if best is not None else 0.0
 
     # -------------------------------------------------------- the auction
 
@@ -737,6 +794,12 @@ class TradeMarket:
         player = listing.player
         coach = getattr(buyer, 'coach', None)
         buyerWeight = self.nowWeight(buyer)
+
+        # ⚠️ A CLUB BIDS ON ITS OWN PROBLEMS, NOT ON WHATEVER IS ON THE BLOCK. See
+        # `topNeeds`: without this, position value cancels out of the decision entirely and
+        # the market trades what is cheap rather than what matters.
+        if getattr(getattr(player, 'position', None), 'value', None) not in self.topNeeds(buyer):
+            return None
 
         # What he is worth TO THE BUYER, on the buyer's own read of him.
         try:
@@ -792,7 +855,11 @@ class TradeMarket:
             return None             # he does not improve this roster
         # ⚠️ The cut fee is part of the price. A club that must pay 4,350F to open the slot
         # is buying something more expensive than the same player into an empty one.
-        worthToBuyer = net * appetite
+        # ⚠️ HOW WILLING THIS CLUB IS TO SPEND ASSETS AT THIS POSITION AT ALL — see
+        # `TRADE_POSITION_APPETITE`. It is the only place position value decides WHETHER a
+        # trade happens rather than only what it costs, because the weight multiplies the
+        # ask and the buyer's worth alike and cancels out of every ratio.
+        worthToBuyer = net * appetite * self._positionAppetite(player)
 
         bar = trading.requiredSurplus(
             listing.ask,
@@ -856,7 +923,19 @@ class TradeMarket:
                                     getattr(weakest, 'termRemaining', 0),
                                     self.week, self.nowWeight(buyer),
                                     self._positionWeight(weakest))
+
         return value, cutFeeFor(weakest)
+
+    @staticmethod
+    def _positionAppetite(player) -> float:
+        """How willing a club is to spend trade assets at this position.
+
+        ⚠️ NOT THE SAME QUANTITY AS `_positionWeight`, and keeping them separate is the
+        point: the weight says what a player is WORTH and is used everywhere, while this
+        says what a front office is prepared to TRADE for and is used here alone.
+        """
+        name = getattr(getattr(player, 'position', None), 'name', None)
+        return float(TRADE_POSITION_APPETITE.get(name, 1.0))
 
     @staticmethod
     def _positionWeight(player) -> float:

@@ -2826,6 +2826,61 @@ TRADE_INQUIRY_MIN_UPGRADE = 5.0     # rating points over the man he would replac
 # refused nearly every call, and lowering the price would have been the wrong fix to a
 # problem the price was not causing.
 TRADE_INQUIRY_MAX_PIECES = 5
+
+# ---- A club addresses its biggest problems, not whatever is on the block ----
+# ⚠️ `positionWeight` MULTIPLIES BOTH THE ASK AND THE BUYER'S WORTH, SO IT DIVIDES OUT OF
+# THE COMPARISON ENTIRELY — position value sets a trade's PRICE and had no effect at all on
+# WHETHER it happened. The same cancellation `nowWeight` had, one level up. Measured over
+# six seasons: kickers were 17% of all trades against 17% of the league's starters, i.e.
+# they traded at their HEADCOUNT while being worth 0.35 of a quarterback, and quarterbacks
+# were 1%. The market traded what was CHEAP rather than what mattered.
+#
+# ⚠️ A FLAT VALUE FLOOR DOES NOT FIX IT — tried and measured. The kicker trades that clear
+# have genuinely large upgrades (a 96 replacing a 70), so a floor removes marginal trades
+# at every position and leaves kickers alone: at a floor of 15 their share ROSE to 16%.
+#
+# ⚠️ NOR DOES GIVING THE BUYER THE FREE-AGENT ALTERNATIVE, which is the principled mirror
+# of `_backfillRating` and was also tried. The supply floor tops every position up equally,
+# so the pool is uniform (best free agent 79-86 at all five positions) and the alternative
+# suppresses every position alike: trades 71 -> 59, kickers 12 -> 12, and it took the
+# blockbuster path to zero.
+#
+# What a front office actually does is spend its attention and its picks on the problems
+# that cost it the most, and a kicker deficit is worth 0.35 of the same deficit at
+# quarterback. So a club bids only on positions among its biggest gaps against the league.
+# Three of five: wide enough that a club is not locked to one hole all season, narrow
+# enough that the least important position has to genuinely matter to make the list.
+TRADE_BUYER_NEEDS = 3
+
+# ---- A club will not spend assets at every position ----
+# ⚠️ THIS IS A FRONT-OFFICE CONVENTION, NOT A VALUATION, AND IT IS DELIBERATELY EXPLICIT.
+# Owner, 2026-09-15: "I dont think teams should be trying to trade for kickers that often
+# in the first place." Three mechanisms were tried first and none of them works, for a
+# reason worth recording:
+#
+#   * `positionWeight` MULTIPLIES THE ASK AND THE BUYER'S WORTH ALIKE, so it divides out of
+#     every comparison — position value sets a trade's PRICE and had no effect at all on
+#     whether it happened. Measured over six seasons, kickers were 17% of trades against
+#     17% of the league's starters, i.e. they traded at their headcount; quarterbacks 1%.
+#   * NEEDS-RANKING does not separate them. `_positionalGaps` weights the deficit linearly,
+#     so a 14-point kicker gap (x0.35 = 4.9) genuinely ties an 8-point tight end gap
+#     (x0.60 = 4.8). At three needs kickers were still 16% of trades, at two needs 14%, and
+#     every blockbuster in both arms was a kicker.
+#   * A MAGNITUDE BAR cannot either, because the sizes really are the same: the measured
+#     blockbusters came out at 21.6 (a 92 TE), 21.0 (a 90 K) and 20.2 (a 94 WR). A bar that
+#     excludes the kicker excludes the other two.
+#
+# ⚠️ AND THE SIM'S OWN NUMBERS SIDE WITH THE MARKET, WHICH IS WHY NOTHING EMERGENT WORKED.
+# `FLOOS_POS_FORCE` measures a better kicker at **+0.87 wins** against a quarterback's
+# +1.70 — about 51%, while `POSITION_VALUE` already prices him at 0.35. Under this
+# simulation a good kicker genuinely is worth trading for. That real football says
+# otherwise is a design call about how the league should FEEL, so it is written here as
+# one rather than disguised as a derivation.
+#
+# ⚠️ IT SCALES THE BUYER'S WILLINGNESS ONLY. A kicker's VALUE is untouched everywhere it
+# matters — cards, draft boards, re-sign decisions, the cut fee — because he is worth what
+# he is worth; clubs simply do not spend picks there.
+TRADE_POSITION_APPETITE = {'QB': 1.0, 'RB': 1.0, 'WR': 1.0, 'TE': 1.0, 'K': 0.35}
 TRADE_MAX_PIECES = 3                # a trade should read as a sentence
 
 # ---- Rookie picks ----
