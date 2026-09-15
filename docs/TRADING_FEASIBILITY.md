@@ -1560,3 +1560,74 @@ only where. But it is a real build, with consequences worth naming up front:
    re-signs, promotions, retirements, coach moves) with trades as one kind?
 5. ⚠️ **Three clubs are insolvent on upkeep alone** (Pinecones 200F vs 383F, Jetskis, Phones)
    with no tax in existence. Independent of all of the above, and it fires **this offseason**.
+
+---
+
+# Addendum 15 — insolvency is fine; the waterfall's spending is not
+
+_2026-09-14. Owner: the insolvent clubs are fine, they just decay their facilities. Agreed on
+the principle. But modelling what actually happens surfaced a defect worth deciding on before
+it fires for the first time this offseason._
+
+## Modelled against the real rows
+
+Running `resolveSeasonEnd` with each club's live facilities, treasury and the real share unit:
+
+| club | treasury | owed | levels lost |
+|---|---:|---:|---:|
+| **Pinecones** | 200F | 383F | **4** |
+| Jetskis | 200F | 273F | 2 |
+| Phones | 295F | 328F | 1 |
+
+⚠️ **Pinecones lose four levels in one offseason, and their 200F saves nothing.**
+
+## Why: the waterfall pays into a facility it cannot save
+
+`resolveSeasonEnd` sorts `key=lambda x: -x['level']` — *"Highest-level facilities are
+protected first (most investment at stake)"* — and pays each facility's full shortfall from
+the pot in turn. With 200F against Pinecones' bill:
+
+| facility | needs | paid | outcome |
+|---|---:|---:|---|
+| locker_room lv3 | 247 | **200** | short → **decays anyway** |
+| training lv2 | 82 | 0 | decays |
+| recovery lv1 | 27 | 0 | decays |
+| scouting lv1 | 27 | 0 | decays |
+
+The whole pot goes into a bill it cannot complete, the facility decays regardless, and the
+three cheaper ones — **136F for all of them, comfortably affordable** — get nothing.
+
+⚠️ **And the partial payment is not banked.** `prepareSeasonStart` resets every facility's
+`upkeep_funded` to 0 at season start, so the 200F is simply gone. It did not protect the
+level-3 facility, and it did not carry forward.
+
+Spending the same 200F cheapest-first instead:
+
+| | levels lost | spent | facilities kept |
+|---|---:|---:|---:|
+| current (highest-level first) | **4** | 200F | 0 |
+| skip what you cannot finish | **1** | 136F | 3 |
+
+## The implementation defeats its own stated intent
+
+The rule exists to *protect* investment. Paying 200 of a 247 bill protects nothing — it is
+strictly worse than every alternative, including doing nothing at all. The ordering is
+defensible (a level-3 facility cost more to build, so trying to save it first is reasonable);
+what is not defensible is **spending into a shortfall it cannot close.**
+
+The minimal fix keeps the ordering and adds one test: pay a facility only if the pot can
+cover its shortfall **in full**; otherwise skip it and move down the list. Highest-level
+facilities are still tried first, so the stated intent survives — a club that can afford its
+crown jewel still saves it, and one that cannot stops burning the treasury on it.
+
+⚠️ This is live for three clubs **this offseason** and will recur for any club whose Treasury
+falls short, which the facilities economy guarantees will happen — upkeep at level 5 is
+2,194F a season against a league median Treasury of 1,896F.
+
+## Open
+
+6. **Change the waterfall to skip what it cannot finish?** It turns Pinecones' first
+   insolvency from −4 levels into −1 and is a handful of lines. The alternative is accepting
+   that a shortfall costs a club its whole facility set rather than its most expensive
+   building — which is a much harsher penalty than "they just decay their facilities"
+   describes.
