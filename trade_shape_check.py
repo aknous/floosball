@@ -117,6 +117,8 @@ async def main(seasons, treasury):
     def spyOpen(team, player):
         return realOpen(team, player)
 
+    pending = {}
+
     def spyCut(seasonManager, buyer, incoming):
         from managers.frontOfficeBrain import cutFeeFor
         posValue = getattr(getattr(incoming, 'position', None), 'value', None)
@@ -126,6 +128,11 @@ async def main(seasons, treasury):
         worst = min(held, key=lambda h: h.playerRating) if held else None
         out = realCut(seasonManager, buyer, incoming)
         if out is not None and worst is not None:
+            pending['cut'] = {'name': worst.name,
+                              'position': getattr(worst.position, 'name', None),
+                              'rating': round(worst.playerRating, 1),
+                              'term': int(getattr(worst, 'termRemaining', 0) or 0),
+                              'fee': cutFeeFor(worst)}
             shape['neededCut'] += 1
             # ⚠️ A RATING DELTA IS THE WRONG LENS ON ITS OWN. A club can take a player of
             # similar rating and gain three years of control, which is the plan's TIME
@@ -145,6 +152,12 @@ async def main(seasons, treasury):
         out = realBackfill(seasonManager, team, player)
         if out is not None:
             shape['backfillKind'][out[0]] += 1
+            kind, person = out
+            pending['backfill'] = {
+                'kind': kind, 'name': getattr(person, 'name', '?'),
+                'position': getattr(getattr(person, 'position', None), 'name', None),
+                'rating': round(getattr(person, 'playerRating', 0) or 0, 1),
+                'prospectSeasons': getattr(person, 'prospect_seasons', None)}
         return out
 
     def scanMismatch(label):
@@ -240,8 +253,14 @@ async def main(seasons, treasury):
                     entry.update(describe(obj))
             record['back'].append(entry)
 
+        pending.clear()
         out = realSettle(seasonManager, listing, winner, season, week)
         if out is not None:
+            # ⚠️ ONLY WHAT THIS SETTLEMENT DID. `pending` is cleared immediately before the
+            # call, so a cut or a promotion from an earlier trade in the same weekly pass
+            # cannot be attributed to this one.
+            record['buyerCut'] = pending.get('cut')
+            record['sellerBackfill'] = pending.get('backfill')
             shape.setdefault('ledger', []).append(record)
         fresh = [m for m in scanMismatch('settle') if m not in preexisting]
         if fresh:

@@ -705,3 +705,127 @@ def test_the_locker_room_trigger_still_reaches_the_core():
     assert id(star) in market._coreOf(club)
     assert [l.trigger for l in market.listingsFor(club)] == ['locker_room']
     print("PASS a toxic franchise player is still movable, for that reason alone")
+
+
+def test_deadline_urgency_raises_the_OFFER_not_just_the_ceiling():
+    """⚠️ BOTH HALVES ARE NEEDED AND RAISING ONLY THE CEILING DOES NOTHING. The bundle is
+    sized to the seller's bar, so a buyer willing to pay more still offers exactly the
+    minimum unless its target rises too — and the sealed round then has every bidder
+    offering the same package, which is a tie rather than an auction.
+
+    Asserted behaviourally: a bar the buyer cannot reach when the market opens becomes
+    reachable on the final day, because it is now bidding above the minimum."""
+    from constants import GM_ACTIVE_WEEK
+    seller, buyer = FakeTeam(1, 'Seller', wins=2, losses=12), FakeTeam(2, 'Buyer', wins=13, losses=1)
+    teams = [seller, buyer]
+
+    def assets(team, valuingTeam=None, swapPosition=None):
+        return [{'kind': 'pick', 'id': 1, 'name': 'a pick', 'detail': {}, 'value': 10.0}]
+
+    reached = {}
+    for week in (15, GM_ACTIVE_WEEK):
+        market = _market(teams, week=week)
+        market._tradeableAssets = assets
+        urgency = __import__('trading').deadlineUrgency(week, market.nowWeight(buyer))
+        # A bar just out of reach of a single 10.0 piece at the open.
+        reached[week] = market._assemble(buyer, seller, 11.0 * 1.0 / max(urgency, 1e-9)
+                                         if False else 11.0,
+                                         gross=9999.0, displaced=0.0) != []
+    assert reached[15] is False, "the fixture's bar was reachable at the open"
+    assert reached[GM_ACTIVE_WEEK] is False, \
+        "_assemble should not know about urgency — the CALLER scales the bar"
+
+    # And the caller does scale it: the same bar, pre-multiplied, is now cleared.
+    market = _market(teams, week=GM_ACTIVE_WEEK)
+    market._tradeableAssets = assets
+    import inspect
+    src = inspect.getsource(TradeMarket.bidFor)
+    assert 'bar * urgency' in src and 'gross * urgency' in src, \
+        "urgency reaches only one of the two, so it cannot change what is offered"
+    print("PASS urgency scales both the offer and the ceiling")
+
+
+# ---------------------------------- clubs trade for what they NEED
+
+class TwoSided(FakePlayer):
+    """A player whose two halves differ, which `playerRating` averages away."""
+
+    def __init__(self, pid, off, dfn, **kw):
+        super().__init__(pid, (off + dfn) / 2, **kw)
+        self.offensiveRating = off
+        self.defensiveRating = dfn
+
+
+def _league(myOff, myDef, leagueOff=80, leagueDef=80):
+    me = FakeTeam(1, 'Me', wins=8, losses=8)
+    me.offenseRating, me.defenseRating = myOff, myDef
+    rivals = []
+    for i in range(2, 6):
+        t = FakeTeam(i, f'R{i}', wins=8, losses=8)
+        t.offenseRating, t.defenseRating = leagueOff, leagueDef
+        rivals.append(t)
+    return me, [me] + rivals
+
+
+def test_a_club_short_of_defense_prefers_the_defensive_player():
+    """⚠️ `playerRating` IS `(offensiveRating + defensiveRating) / 2`, so the two halves
+    are averaged away before the market sees them and every player is the same KIND of
+    asset to every club. A side with weapons and no defense had no reason to prefer a
+    defender over an identically-rated attacker."""
+    defender = TwoSided(10, off=70, dfn=90)      # playerRating 80
+    attacker = TwoSided(11, off=90, dfn=70)      # playerRating 80
+    assert defender.playerRating == attacker.playerRating
+
+    needsD, teams = _league(myOff=90, myDef=70)
+    market = _market(teams)
+    assert market.ratingFor(needsD, defender) > market.ratingFor(needsD, attacker)
+
+    needsO, teams2 = _league(myOff=70, myDef=90)
+    market2 = _market(teams2)
+    assert market2.ratingFor(needsO, attacker) > market2.ratingFor(needsO, defender)
+    print(f"PASS the same 80 is worth {market.ratingFor(needsD, defender):.1f} to a club "
+          f"needing defense and {market.ratingFor(needsD, attacker):.1f} needing offense")
+
+
+def test_a_balanced_club_reads_the_plain_rating():
+    """⚠️ NEUTRAL AT ZERO TILT, which is what keeps this a redistribution between clubs
+    rather than a thumb on the whole market."""
+    balanced, teams = _league(myOff=80, myDef=80)
+    market = _market(teams)
+    assert market.needTilt(balanced) == 0.0
+    for p in (TwoSided(10, 70, 90), TwoSided(11, 90, 70), FakePlayer(12, 80)):
+        assert abs(market.ratingFor(balanced, p) - p.playerRating) < 1e-9
+    print("PASS a balanced club values every player at his plain rating")
+
+
+def test_need_is_RELATIVE_to_the_league():
+    """⚠️ A club that is simply bad at both has no particular NEED — it should take talent
+    wherever it comes, not chase one half of the game.
+
+    ⚠️ AND THE CASE THAT ACTUALLY SEPARATES RELATIVE FROM ABSOLUTE IS A LOPSIDED LEAGUE.
+    A club bad at both reads neutral under EITHER formulation, because the two gaps cancel
+    — so testing only that proves nothing. When the whole league scores more than it stops,
+    a club matching the league exactly has no need at all, while an absolute reading would
+    tell every single club it is short of defense.
+    """
+    bad, teams = _league(myOff=60, myDef=60, leagueOff=80, leagueDef=80)
+    assert abs(_market(teams).needTilt(bad)) < 0.01
+
+    # The whole league is offense-heavy; this club is exactly typical.
+    typical, teams2 = _league(myOff=90, myDef=70, leagueOff=90, leagueDef=70)
+    assert abs(_market(teams2).needTilt(typical)) < 0.01, \
+        "a league-average club was told it needs defense because the LEAGUE is lopsided"
+
+    # Genuinely lopsided AGAINST the league.
+    lopsided, teams3 = _league(myOff=85, myDef=60, leagueOff=80, leagueDef=80)
+    assert _market(teams3).needTilt(lopsided) > 0.2
+    print("PASS need is measured against the league, not against a fixed ideal")
+
+
+def test_a_player_with_no_split_is_unaffected():
+    """Nothing to tilt toward, so the rule must be a no-op rather than an error."""
+    needsD, teams = _league(myOff=90, myDef=70)
+    market = _market(teams)
+    plain = FakePlayer(10, 80)
+    assert market.ratingFor(needsD, plain) == 80
+    print("PASS a player with no offence/defence split reads his plain rating")

@@ -102,6 +102,7 @@ class TradeMarket:
         # Cached per pass: the sweep asks for it once per listing and once per bid.
         self._cannotKeepCache = {}
         self._coreCache = {}
+        self._needCache = {}
         # Why bundles fail, for the market harness. Three reasons, three different answers.
         self.assembleFail = {}
         self._computeContention()
@@ -268,6 +269,62 @@ class TradeMarket:
         # this market exists. He goes first.
         out.sort(key=lambda l: (TRIGGER_URGENCY.get(l.trigger, 99), -l.ask))
         return out[:TRADE_LISTINGS_PER_TEAM]
+
+    def needTilt(self, team) -> float:
+        """How badly this club needs DEFENSE rather than offense. -1 .. +1.
+
+        ⚠️ `playerRating` IS `(offensiveRating + defensiveRating) / 2`, so the market was
+        blind to the distinction entirely: every player was the same kind of asset to every
+        club, and a side with weapons and no defense had no reason to prefer a defender.
+        Positive means defense lags; negative means offense does.
+
+        ⚠️ MEASURED RELATIVE TO THE LEAGUE, not in absolute terms. A club that is simply
+        bad at both has no particular NEED — it should take talent wherever it comes — and
+        an absolute reading would hand every weak club a phantom defensive need.
+
+        ⚠️ AND IT IS ZERO FOR A BALANCED CLUB, which is what keeps this a redistribution
+        between clubs rather than a thumb on the whole market.
+        """
+        from constants import TRADE_NEED_SENSITIVITY, TRADE_NEED_MAX_TILT
+        cached = self._needCache.get(id(team))
+        if cached is not None:
+            return cached
+        teams = list(getattr(self.teamManager, 'teams', None) or [])
+        offs = [float(getattr(t, 'offenseRating', 0) or 0) for t in teams]
+        defs = [float(getattr(t, 'defenseRating', 0) or 0) for t in teams]
+        offs = [o for o in offs if o > 0]
+        defs = [dv for dv in defs if dv > 0]
+        tilt = 0.0
+        if offs and defs:
+            meanOff, meanDef = sum(offs) / len(offs), sum(defs) / len(defs)
+            myOff = float(getattr(team, 'offenseRating', 0) or 0)
+            myDef = float(getattr(team, 'defenseRating', 0) or 0)
+            if meanOff > 0 and meanDef > 0 and myOff > 0 and myDef > 0:
+                offGap = (meanOff - myOff) / meanOff
+                defGap = (meanDef - myDef) / meanDef
+                tilt = max(-TRADE_NEED_MAX_TILT,
+                           min(TRADE_NEED_MAX_TILT,
+                               (defGap - offGap) * TRADE_NEED_SENSITIVITY))
+        self._needCache[id(team)] = tilt
+        return tilt
+
+    def ratingFor(self, team, player, believed: float = None) -> float:
+        """What this player is worth TO THIS CLUB, in rating points.
+
+        A club short of defense values the defensive half of a player more, and vice
+        versa. ⚠️ Centred so a balanced club reads exactly `playerRating` — the tilt
+        redistributes, it does not inflate.
+
+        `believed` lets a caller pass the GM's scouting-gated read of the overall rating;
+        the need adjustment then rides on top of that rather than replacing it.
+        """
+        base = float(believed if believed is not None
+                     else (getattr(player, 'playerRating', 0) or 0))
+        off = float(getattr(player, 'offensiveRating', 0) or 0)
+        dfn = float(getattr(player, 'defensiveRating', 0) or 0)
+        if off <= 0 or dfn <= 0:
+            return base             # nothing to tilt toward
+        return base + self.needTilt(team) * (dfn - off) / 2.0
 
     def _coreOf(self, team) -> set:
         """The players this club is building around. Not trade assets.
@@ -459,7 +516,7 @@ class TradeMarket:
         term = (int(getattr(player, 'termRemaining', 0) or 0)
                 + self.retentionTerm(team, player))
         ask, floor = trading.askAndFloor(
-            getattr(player, 'playerRating', 0),
+            self.ratingFor(team, player),
             self._backfillRating(team, player),
             term,
             self.week,
@@ -527,7 +584,7 @@ class TradeMarket:
         # perceivedValue is position-weighted board currency; the trade scale is raw
         # surplus x time, so price him on the rating the buyer BELIEVES he has.
         posW = self._positionWeight(player)
-        believed = seen / max(0.01, posW)
+        believed = self.ratingFor(buyer, player, seen / max(0.01, posW))
         # ⚠️ AND PUT THE POSITION WEIGHT BACK. Dividing it out recovers the RATING this GM
         # believes he has, which is what the surplus-over-replacement scale needs — but
         # nothing re-applied it, so a kicker priced exactly like a quarterback and a club
@@ -578,7 +635,15 @@ class TradeMarket:
         # different numbers precisely because the two clubs discount the future
         # differently — and that difference is the only reason either of them agrees.
         # Pricing both sides at one club's rate collapses them and there is no trade.
-        pieces = self._assemble(buyer, listing.team, bar, gross, displaced,
+        # ⚠️ A DESPERATE CLUB BIDS ABOVE THE MINIMUM, AND THAT IS THE WHOLE EFFECT. The
+        # round is sealed, so a buyer that really needs him cannot rely on the seller's
+        # floor being enough to win — it pads the offer. That is what "overpaying at the
+        # deadline" IS, and it is also what gives the auction any dispersion at all:
+        # sized to the bar alone every bidder offers the same package and the highest bid
+        # is a tie.
+        urgency = trading.deadlineUrgency(self.week, buyerWeight)
+        pieces = self._assemble(buyer, listing.team, bar * urgency, gross * urgency,
+                                displaced,
                                 swapPosition=getattr(getattr(player, 'position', None),
                                                      'value', None))
         if not pieces:
@@ -599,7 +664,7 @@ class TradeMarket:
             held = roster.get(slot)
             if held is None:
                 return 0.0, 0
-            rating = float(getattr(held, 'playerRating', 0) or 0)
+            rating = self.ratingFor(buyer, held)
             if weakestRating is None or rating < weakestRating:
                 weakest, weakestRating = held, rating
         if weakest is None:
@@ -653,6 +718,11 @@ class TradeMarket:
         giving up, ON ITS OWN SCALE, costs more than the upgrade is worth to it. A
         contender hands over picks cheaply BECAUSE it prices the future low, which is the
         trade working rather than a club being fleeced.
+
+        ⚠️ `bar` AND `gross` ARRIVE ALREADY SCALED BY DEADLINE URGENCY, so a club with a
+        closing window both offers more than it must and tolerates paying above plain
+        value. Both halves are needed: raising only the ceiling changes nothing, because
+        the bundle is sized to the bar.
         """
         sellerValue = {(a['kind'], a['id']): a['value'] for a in self._tradeableAssets(
             buyer, valuingTeam=seller, swapPosition=swapPosition)}
@@ -945,6 +1015,22 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
             return None         # he moved since the bid was priced
 
     # ---- 2. move ----------------------------------------------------------
+    # ⚠️ RESOLVE EVERY OUTGOING PLAYER BEFORE ANY SLOT IS WRITTEN. The move below puts the
+    # incoming player into `buyerSlot`, which in a same-position swap is the slot the swap
+    # player is standing in — so by the time `_handOverPieces` ran its own
+    # `_findRostered(buyer, ...)` the man it was looking for had already been overwritten
+    # out of the roster dict. It found None, did nothing, and returned quietly: the seller
+    # kept the hole from giving up his own starter, the swap player ended up on NEITHER
+    # roster, and `player.team` pointed at a club with no slot holding him. Measured over
+    # two seasons, that was 216 games crashing at kickoff on a None in `rosterDict` —
+    # caught by `_simulateGame`'s except, so the league played on around the wreckage.
+    resolved = {}
+    for piece in winner.pieces:
+        if piece.get('kind') == 'player':
+            held = _findRostered(buyer, piece.get('id'))
+            if held is not None:
+                resolved[piece.get('id')] = held
+
     seller.rosterDict[slot] = None
     player.previousTeam = seller.name
     player.team = buyer
@@ -960,7 +1046,7 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
         pass
 
     given = _handOverPieces(seasonManager, winner.pieces, buyer, seller, season,
-                            sellerSlot=slot)
+                            sellerSlot=slot, resolved=resolved)
 
     # ---- 3. backfill ------------------------------------------------------
     # ⚠️ Only when nobody came back the other way. A swap already filled the slot.
@@ -1190,7 +1276,7 @@ def _installBackfill(seasonManager, team, slot, backfill) -> None:
 
 
 def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0,
-                    sellerSlot=None) -> list:
+                    sellerSlot=None, resolved=None) -> list:
     """Move the bought side of the bundle — picks change owner, prospects change pipeline."""
     from database.connection import get_session
     from database.models import DraftPick
@@ -1209,8 +1295,16 @@ def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0,
                 # ⚠️ STRAIGHT INTO THE SLOT THE LISTED PLAYER JUST LEFT. Same position, so
                 # it is the same slot kind — which is precisely why this shape needs no
                 # backfill and no cut.
-                swapped = _findRostered(fromTeam, piece['id'])
+                # ⚠️ `resolved` is read FIRST and the lookup is only a fallback — see the
+                # note at the resolve site. The caller has already written the incoming
+                # player into this man's slot, so the lookup cannot find him.
+                swapped = (resolved or {}).get(piece['id'])
+                if swapped is None:
+                    swapped = _findRostered(fromTeam, piece['id'])
                 if swapped is not None:
+                    # ⚠️ Only clears a slot he is STILL standing in. In a swap the
+                    # caller has already replaced him, so this finds nothing — and must
+                    # not, or it would blank the slot the incoming player now holds.
                     for sl, held in list((getattr(fromTeam, 'rosterDict', None) or {}).items()):
                         if held is swapped:
                             fromTeam.rosterDict[sl] = None

@@ -2649,6 +2649,51 @@ TRADE_CONTENTION_RAMP_WEEKS = 14
 # the gate moves with `TRADE_CONTENTION_RAMP_WEEKS` instead of drifting away from it.
 TRADE_MIN_CERTAINTY = 1.0
 
+# ---- Deadline desperation: the buyer's clock ----
+# ⚠️ ONLY THE SELLER HAD A CLOCK, AND THE MARKET RAN BACKWARDS BECAUSE OF IT. The ask
+# decays toward the deadline (`reserveDecay`, 0.48 at week 15 down to 0.22 at week 22)
+# while the buyer's `nowWeight` is FLAT from week 15 — the contention ramp completes there
+# and nothing pushes afterwards. Measured over six seasons, the price actually PAID fell
+# as the deadline approached: median bid-to-ask 3.17 in weeks 15-17 against 2.12 in weeks
+# 19-21. A club making a playoff push got its best bargains on the last day, which is the
+# reverse of every real deadline.
+#
+# Both sides are under the same force and it should act on both: the seller's asset is
+# expiring, and so is the BUYER'S OPPORTUNITY. Before the deadline a contender can decline
+# and wait for a better listing; at week 21 this is the last one there will be, so the
+# option it is giving up by refusing is worth less and less. That is what makes a deadline
+# deal expensive in reality, and it is the missing half of the model.
+#
+# How far above a player's plain value a maximally-contending club will go on the final
+# day. At 0.6 a club weighting the present 1.8x the league pays up to ~1.5x — a real
+# premium, not a blank cheque.
+#
+# ⚠️ SCALED BY CONTENTION, so it is DESPERATION rather than a date: a club going nowhere
+# has nothing to push for and pays exactly what the player is worth, on the deadline as on
+# any other day. And ⚠️ NOTHING in the offseason, where there is no closing window at all.
+TRADE_DEADLINE_PREMIUM = 0.6
+
+# ---- Clubs trade for what they NEED, not just for the biggest number ----
+# ⚠️ `playerRating` IS LITERALLY `(offensiveRating + defensiveRating) / 2`, so the two
+# halves are averaged away before the market ever sees them and a club with a defensive
+# hole gets no signal at all. Every player in the league is the same KIND of asset to
+# every club, which is why the market reads as "buy the best number available" rather than
+# as a front office addressing a weakness.
+#
+# The tilt is how far a club's defense lags its offense RELATIVE TO THE LEAGUE, so it says
+# "weak here compared to everyone else" rather than "weak in absolute terms" — a club that
+# is simply bad at both has no particular need and should just take talent.
+#
+# ⚠️ IT MUST BE NEUTRAL FOR A BALANCED CLUB. At tilt 0 a player is worth exactly his
+# `playerRating`, so this only ever redistributes value between clubs with genuine
+# imbalances and never inflates the whole market.
+TRADE_NEED_SENSITIVITY = 2.5
+
+# How far the tilt can move a player's effective rating, at maximum need. Half the gap
+# between his two halves: a player 20 points better defensively than offensively is worth
+# up to 10 points more to a club that badly needs defense, and 10 less to one that does not.
+TRADE_NEED_MAX_TILT = 1.0
+
 # ---- The core a club builds around is NOT a trade asset ----
 # ⚠️ BEING HIGHLY RATED IS NOT THE SAME AS BEING AVAILABLE (owner, 2026-09-15: "teams
 # should also be identifying star players to build around and not consider every highly

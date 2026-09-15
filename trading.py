@@ -198,6 +198,26 @@ def averagePositionWeight() -> float:
     return total / sum(shape.values())
 
 
+def rookieTermForSkill(skill: float) -> int:
+    """The rookie deal a player of this calibre actually signs.
+
+    ⚠️ A FLAT THREE-YEAR TERM OVERSTATES A LATE PICK AND ONLY A LATE PICK.
+    `playerManager._getPlayerTerm`'s first-contract branch gives 3 seasons to a 4- or
+    5-star, 2 to a B/C and 1 to a D — so a pick yielding a 72 was being valued on 50% more
+    contract than he will ever sign, while a top-five pick was priced correctly. Mirrors
+    that branch; the tier bands are `floosball_player.PlayerTier`.
+
+    ⚠️ Keyed on MATURE skill rather than the debut rating, because `_getPlayerTerm` runs at
+    PROMOTION — by which point he has developed toward it — not on draft day.
+    """
+    skill = float(skill or 0)
+    if skill >= 84:         # TierA / TierS
+        return 3
+    if skill >= 68:         # TierB / TierC
+        return 2
+    return 1                # TierD
+
+
 def expectedPickSlot(slot: int, seasonsOut: int = 0, classSize: int = 32) -> float:
     """Where a pick is EXPECTED to land, not where the club sits today.
 
@@ -302,7 +322,7 @@ def futurePickDiscount(slot: int, classSize: int = 32) -> float:
 
 
 def pickValue(slot: int, seasonsOut: int = 0, classSize: int = 32,
-              rookieTerm: int = 3, weight: float = 1.0,
+              rookieTerm: int = None, weight: float = 1.0,
               positionWeight: float = None) -> float:
     """What a rookie pick is worth on the same surplus-times-time scale as a player.
 
@@ -321,11 +341,25 @@ def pickValue(slot: int, seasonsOut: int = 0, classSize: int = 32,
         positionWeight = averagePositionWeight()
     # ⚠️ THE SLOT IS AN EXPECTATION FOR A FUTURE PICK, not today's standing.
     expected = expectedPickSlot(slot, seasonsOut, classSize)
-    surplus = pickSlotSkill(expected, classSize) - REPLACEMENT_RATING
-    if surplus <= 0:
+    # ⚠️ A PICK IS A PROSPECT WHOSE NAME YOU DO NOT KNOW YET, so it is valued as one —
+    # and it was worth MORE than the prospect it produces, at every slot. `prospectValue`
+    # multiplies by `prospectPromotionOdds` (a drafted player still has to WIN A ROSTER
+    # SPOT inside his development window or he walks for nothing) and `pickValue` applied
+    # no such discount, so using the pick was worth more than holding its outcome. Late
+    # picks were the worst affected in relative terms, which is where it showed: a club
+    # traded a mid-90s tight end for a pick in the back half of a ONE-ROUND, 32-player
+    # draft, where the expected player is barely above replacement.
+    #
+    # Delegating removes the inconsistency by construction rather than by keeping two
+    # formulas in step — the same reason `fgMakeProbability` is one function and not four.
+    skill = pickSlotSkill(expected, classSize)
+    if rookieTerm is None:
+        # ⚠️ The deal he will ACTUALLY sign. A flat 3 overstates a late pick by 50%.
+        rookieTerm = rookieTermForSkill(skill)
+    value = prospectValue(skill, 0, rookieTerm=rookieTerm, weight=weight,
+                          positionWeight=positionWeight)
+    if value <= 0:
         return 0.0
-    value = (surplus * max(0.0, float(positionWeight))
-             * max(0, int(rookieTerm)) * max(0.0, float(weight)))
     for _ in range(max(0, int(seasonsOut))):
         value *= futurePickDiscount(expected, classSize)
     return value
@@ -369,6 +403,37 @@ def prospectValue(believedCeiling: float, prospectSeasons: int,
         return 0.0
     return (surplus * max(0.0, float(positionWeight)) * max(0, int(rookieTerm))
             * prospectPromotionOdds(prospectSeasons) * max(0.0, float(weight)))
+
+
+def deadlineUrgency(week=None, now: float = 1.0) -> float:
+    """How far past a player's plain value a club will go, as its window closes.
+
+    ⚠️ THE MISSING HALF OF THE CLOCK. `reserveDecay` expires the seller's asset and nothing
+    expired the buyer's OPPORTUNITY, so the model ran backwards: measured over six seasons,
+    the price actually paid FELL toward the deadline (median bid-to-ask 3.17 in weeks 15-17
+    against 2.12 in weeks 19-21) because the ask kept decaying while the buyer's
+    `nowWeight` sat flat from week 15. A club making a playoff push got its best bargains
+    on the last day.
+
+    Before the deadline a contender can decline and wait for a better listing. At week 21
+    this is the last one there will be, so the option it gives up by refusing is worth less
+    and less — which is exactly what makes a deadline deal expensive.
+
+    ⚠️ SCALED BY CONTENTION, NOT BY THE DATE. A club going nowhere has no window to push
+    for and pays a player's plain value on the final day as on any other; a desperate one
+    pays up. That is what makes this desperation rather than a calendar effect.
+
+    ⚠️ 1.0 IN THE OFFSEASON, where there is no closing window — and the offseason market is
+    already the one that cannot run on contention at all.
+    """
+    if week is None:
+        return 1.0
+    from constants import (GM_ACTIVE_WEEK, TRADE_DEADLINE_PREMIUM,
+                           TRADE_MIN_CERTAINTY, TRADE_CONTENTION_RAMP_WEEKS)
+    opensAt = 1 + TRADE_MIN_CERTAINTY * TRADE_CONTENTION_RAMP_WEEKS
+    span = max(1.0, float(GM_ACTIVE_WEEK) - opensAt)
+    pressure = _clamp((float(week) - opensAt) / span, 0.0, 1.0)
+    return 1.0 + TRADE_DEADLINE_PREMIUM * pressure * max(0.0, float(now or 1.0) - 1.0)
 
 
 # ------------------------------------------------------ ask, floor, price

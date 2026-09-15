@@ -460,3 +460,67 @@ def test_a_spent_pick_cannot_be_traded_again():
     finally:
         session.close()
     print("PASS a used pick leaves the market")
+
+
+# ---------------------- 6. a swap must not swallow the player it swaps -------
+
+def test_a_same_position_swap_leaves_NO_roster_hole():
+    """⚠️ THE HAND-BACK LOOKED THE PLAYER UP AFTER HIS SLOT WAS ALREADY OVERWRITTEN.
+
+    `settleTrade` writes the incoming player into `buyerSlot`, which in a same-position
+    swap is the very slot the outgoing swap player is standing in. `_handOverPieces` then
+    ran its own `_findRostered(buyer, ...)`, found nothing, and returned QUIETLY — so the
+    seller kept the hole from giving up his starter, the swap player ended up on neither
+    roster, and `player.team` pointed at a club with no slot holding him.
+
+    Measured over two seasons: **216 games crashed at kickoff** on a None in `rosterDict`
+    (`player.gameAttributes = copy.deepcopy(player.attributes)`), every one swallowed by
+    `_simulateGame`'s except — so the league played on around the wreckage and the
+    end-of-season integrity check came back clean, because the FA draft refills holes.
+    """
+    class P:
+        def __init__(self, pid, name, pos, team):
+            self.id, self.name = pid, name
+            self.position = type('Pos', (), {'value': pos, 'name': pos})()
+            self.team, self.previousTeam = team, None
+            self.playerRating, self.termRemaining = 80, 2
+            self.teamResignCount, self.willRetire = 0, False
+
+    class T:
+        def __init__(self, tid, name):
+            self.id, self.name = tid, name
+            self.rosterDict, self.prospects = {}, []
+
+        def assignPlayerNumber(self, p):
+            pass
+
+    seller, buyer = T(1, 'Sellers'), T(2, 'Buyers')
+    sold = P(101, 'Sold Man', 'WR', seller)
+    swap = P(102, 'Swap Man', 'WR', buyer)
+    seller.rosterDict = {'qb': P(103, 'S QB', 'QB', seller), 'wr1': sold}
+    buyer.rosterDict = {'qb': P(104, 'B QB', 'QB', buyer), 'wr1': swap}
+
+    class Winner:
+        pieces = [{'kind': 'player', 'id': 102, 'name': 'Swap Man'}]
+        value = 10.0
+        team = buyer
+
+    class SM:
+        currentSeason = type('S', (), {'seasonNumber': 1})()
+
+        def _recordOffseasonEvent(self, *a, **kw):
+            pass
+
+    listing = type('L', (), {'team': seller, 'player': sold, 'trigger': 'x',
+                             'ask': 1.0, 'floor': 1.0})()
+
+    manifest = tradeManager.settleTrade(SM(), listing, Winner(), season=1, week=16)
+    assert manifest is not None, "the swap did not settle at all"
+
+    holes = [f"{t.name}.{sl}" for t in (seller, buyer)
+             for sl, h in t.rosterDict.items() if h is None]
+    assert not holes, f"roster hole(s) left behind: {holes}"
+    assert seller.rosterDict['wr1'] is swap, "the swap player never reached the seller"
+    assert buyer.rosterDict['wr1'] is sold, "the sold player never reached the buyer"
+    assert swap.team is seller and sold.team is buyer
+    print("PASS a same-position swap fills both slots and leaves no hole")

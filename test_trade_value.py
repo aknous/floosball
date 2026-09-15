@@ -170,12 +170,52 @@ def test_a_future_pick_is_worth_less_than_the_same_slot_this_year():
 def test_a_pick_is_priced_on_the_MATURE_player():
     """⚠️ A draftee debuts `PROSPECT_ENTRY_DISCOUNT` below his true skill and grows into
     it, so pricing the pick at the debut rating undervalues every pick in the draft and
-    ranks them by how little they were discounted."""
+    ranks them by how little they were discounted.
+
+    Asserted against the counterfactual rather than in raw rating points, because the
+    value also carries a position weight and promotion odds — comparing it to a bare
+    surplus tests the wrong thing."""
     from constants import PROSPECT_ENTRY_DISCOUNT
-    matureSurplus = trading.pickSlotSkill(1) - REPLACEMENT_RATING
-    debutSurplus = matureSurplus - PROSPECT_ENTRY_DISCOUNT
-    assert trading.pickValue(1, 0, rookieTerm=1) > debutSurplus
-    print("PASS pick 1 prices the 98.6, not the 87.6 he debuts at")
+    mature = trading.pickSlotSkill(1)
+    onMature = trading.pickValue(1, 0)
+    onDebut = trading.prospectValue(mature - PROSPECT_ENTRY_DISCOUNT, 0,
+                                    rookieTerm=trading.rookieTermForSkill(mature),
+                                    positionWeight=trading.averagePositionWeight())
+    assert onMature > onDebut * 1.2, (onMature, onDebut)
+    print(f"PASS pick 1 prices the {mature:.0f} he becomes ({onMature:.1f}), "
+          f"not the {mature - PROSPECT_ENTRY_DISCOUNT:.0f} he debuts at ({onDebut:.1f})")
+
+
+def test_a_pick_is_worth_exactly_the_prospect_it_yields():
+    """⚠️ IT WAS WORTH MORE THAN ITS OWN OUTCOME, AT EVERY SLOT. `prospectValue` multiplies
+    by `prospectPromotionOdds` — a drafted player still has to win a roster spot inside his
+    development window or he walks for nothing — and `pickValue` applied no such discount,
+    so USING the pick beat holding what it produced. Late picks suffered worst in relative
+    terms, which is where it showed: a club traded a mid-90s tight end for a pick in the
+    back half of a one-round, 32-player draft."""
+    for slot in (1, 8, 16, 24, 30):
+        mature = trading.pickSlotSkill(slot)
+        asPick = trading.pickValue(slot, 0)
+        asProspect = trading.prospectValue(
+            mature, 0, rookieTerm=trading.rookieTermForSkill(mature),
+            positionWeight=trading.averagePositionWeight())
+        assert abs(asPick - asProspect) < 0.01, (slot, asPick, asProspect)
+    print("PASS a pick is worth exactly the prospect it becomes")
+
+
+def test_a_late_pick_yields_a_shorter_rookie_deal():
+    """⚠️ A FLAT THREE-YEAR TERM OVERSTATES A LATE PICK AND ONLY A LATE PICK. The
+    first-contract branch gives 3 seasons to a 4- or 5-star, 2 to a B/C and 1 to a D — so
+    a pick yielding a 72 was valued on 50% more contract than he will ever sign, while a
+    top-five pick was priced correctly."""
+    assert trading.rookieTermForSkill(trading.pickSlotSkill(1)) == 3
+    assert trading.rookieTermForSkill(trading.pickSlotSkill(20)) == 2
+    assert trading.rookieTermForSkill(60) == 1
+    assert (trading.pickValue(1, 0) / trading.pickValue(20, 0)
+            > (trading.pickSlotSkill(1) - REPLACEMENT_RATING)
+            / (trading.pickSlotSkill(20) - REPLACEMENT_RATING)), \
+        "the term difference is not widening the gap between an early and a late pick"
+    print("PASS a late pick is valued on the shorter deal it actually signs")
 
 
 # ---------------------------------------------------------- prospects
@@ -421,3 +461,53 @@ def test_a_top_pick_still_dwarfs_a_late_one():
     assert trading.pickValue(2, 1) > 2 * trading.pickValue(30, 1)
     assert trading.pickValue(2, 0) > 5 * trading.pickValue(24, 0)
     print("PASS the pick curve stays steep")
+
+
+# ------------------------------------------- the buyer's clock
+
+def test_a_contender_pays_more_as_the_deadline_closes():
+    """⚠️ ONLY THE SELLER HAD A CLOCK AND THE MARKET RAN BACKWARDS. `reserveDecay` expires
+    the seller's asset while the buyer's `nowWeight` sits FLAT from week 15, so measured
+    over six seasons the price actually PAID fell toward the deadline — median bid-to-ask
+    3.17 in weeks 15-17 against 2.12 in weeks 19-21. A club making a playoff push got its
+    best bargains on the last day, which is the reverse of every real deadline."""
+    from constants import GM_ACTIVE_WEEK
+    contender = 1.8
+    path = [trading.deadlineUrgency(w, contender) for w in (15, 17, 19, 21, GM_ACTIVE_WEEK)]
+    assert path == sorted(path), path
+    assert path[0] == 1.0, "a club is already desperate the day the market opens"
+    assert path[-1] > 1.3, path
+    print(f"PASS a contender goes from {path[0]:.2f}x at the open to {path[-1]:.2f}x "
+          f"at the deadline")
+
+
+def test_desperation_is_CONTENTION_not_a_date():
+    """⚠️ A club going nowhere has no window to push for, so it pays a player's plain value
+    on the final day as on any other. Without this the premium is a calendar effect that
+    inflates every trade late in the season rather than the specific thing a contender
+    does."""
+    from constants import GM_ACTIVE_WEEK
+    assert trading.deadlineUrgency(GM_ACTIVE_WEEK, 0.6) == 1.0
+    assert trading.deadlineUrgency(GM_ACTIVE_WEEK, 1.0) == 1.0
+    assert trading.deadlineUrgency(GM_ACTIVE_WEEK, 2.0) > 1.0
+    strong = trading.deadlineUrgency(GM_ACTIVE_WEEK, 2.0)
+    mild = trading.deadlineUrgency(GM_ACTIVE_WEEK, 1.2)
+    assert strong > mild > 1.0
+    print(f"PASS at the deadline: a rebuilder pays 1.00x, a mild contender {mild:.2f}x, "
+          f"a dominant one {strong:.2f}x")
+
+
+def test_there_is_no_deadline_in_the_offseason():
+    """⚠️ There is no closing window there — and the offseason market is already the one
+    that cannot run on contention at all, because nobody has played a game."""
+    assert trading.deadlineUrgency(None, 2.5) == 1.0
+    print("PASS the offseason has no desperation premium")
+
+
+def test_the_premium_is_bounded():
+    """A closing window is a reason to pay up, not a blank cheque. Even a club weighting
+    the present far above the league stays inside a sane multiple of plain value."""
+    assert trading.deadlineUrgency(22, 5.0) < 4.0
+    assert all(trading.deadlineUrgency(w, n) >= 1.0
+               for w in range(1, 30) for n in (0.2, 1.0, 3.0))
+    print(f"PASS bounded, and never below 1.0")
