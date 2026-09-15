@@ -41,7 +41,7 @@ on day one.
 
 ---
 
-## 2. Valuation — one scale for four asset classes
+## 2. Valuation — one scale for three asset classes
 
 ### Surplus over replacement × seasons of control
 
@@ -381,7 +381,7 @@ Sand Dollars. No extra rule is needed to let a contender into the selling side.
 ### 3.2 Choosing who to approach — public information only
 
 Rank counterparties on what is observable: **standings** (contention), **roster**, **contract
-state**, **Treasury**.
+state**, and **pipeline depth** (can they backfill, and do they have a prospect blocked?).
 
 ⚠️ What a lister **cannot** see is the other GM's `_scoutError` and fan `sentimentTilt` — which
 is precisely why an offer can be declined. Remove that and every trade is pre-agreed and the
@@ -438,7 +438,7 @@ a seller** — the third independent argument for the draft landing first.
 **Each approached club bids** its private de-cursed value. ⚠️ `_deWinnersCurse` is not
 optional: a buyer choosing the best-looking of several listings preferentially finds the one it
 overrates, the exact bias that function exists for. A bid is a **bundle** — picks, prospects,
-Floobits or a player — the cheapest combination clearing the reserve, capped at
+or a player — the cheapest combination clearing the reserve, capped at
 `TRADE_MAX_PIECES` (2-3) so a trade reads as a sentence.
 
 ### 3.4 Settling — the best bid wins
@@ -557,39 +557,51 @@ resume dedupe silently drops half a swap.
 make the page worth visiting outside the trade window. A walk-year list that says *"these 33
 players are leaving for nothing unless someone moves"* is a story every week of the season.
 
-## 6. Settled rulings
+## 6. Settled
 
 | | |
 |---|---|
-| season stats | **stay with the player** — already the behaviour (`team_id` overwritten with the current club on every save) |
-| fan sentiment | **does not follow** — and since the own-club gate is on *writing* only, that means **clearing the rows** on the trade |
-| cards | a traded player gets a **new card minted** at his new club; cards already held of him at his old club are untouched. ⚠️ Templates mint once per season and return early, so this needs its own path — and it creates two scoreable cards of one player in a season |
-| rookie picks | **tradeable** |
-| competitive-balance tax | **not built** — measured at ~one season of earlier correction on one club |
-| attitude | enters `decisionValue`, so it reaches cuts and re-signs as well as trades |
+| **contention exponent** | **1.25** — 2.0 has the best club paying a top-two pick for a six-week rental; linear compresses the market into 6 slots |
+| **Treasury** | **not a trade asset** — a 227x wealth spread made it unsafe without a cap, and dropping it removes the only asset with no natural anchor |
+| **rookie picks** | tradeable, **two seasons** out, with a **slot-scaled** discount on future picks (near-nil in the top 5, steep in the back half) |
+| **reserve floor** | `(player − backfill) × seasonsLeft × nowWeight` — set by the backfill, not a constant |
+| **fan sentiment** | raises **the surplus the trade must clear**, not the seller's valuation — the obvious wiring measurably does nothing |
+| **divisional premium** | derived from the schedule (**4x** the games), scaled by the rival's threat |
+| **season performance** | already wired and live — a deadband moving 14% of players, max +4.5, none at the cap. Needs nothing |
+| **attitude** | enters `decisionValue`, so it reaches **cuts and re-signs** as well as trades |
+| **does a contender sell** | **yes, already** — the locker-room and blocked-prospect triggers are not contention-gated |
+| **season stats on a trade** | **stay with the player** — already the behaviour |
+| **fan sentiment on a trade** | **does not follow** — clear the rows, since the own-club gate is on *writing* only |
+| **cards** | a **new card minted** at the new club; existing cards untouched. ⚠️ Templates mint once per season and return early, so this needs its own path |
+| **competitive-balance tax** | **not built** — measured at ~one season of earlier correction on one club |
+| **transactions page** | the full front-office desk, seven sections; five already have their data |
 
-## 7. Open
+## 7. What to build, in order
 
-Everything raised has been settled except the two that genuinely need a season of data.
+⚠️ **The prospect draft lands first, for three independent reasons** — not as a preference:
 
-1. **Volume caps** — ship with the weekly limits and no per-season cap, then **count**. The
-   market is supply-constrained today (~32 listings, 16 buyers, each listing sells once), so a
-   per-season cap constrains something that is not the binding constraint.
-2. **Attitude term** — starting at **0.20 per point below 80**, but it is a **live
-   front-office change**: it alters how the current league cuts and re-signs the moment it
-   ships. Measure cuts, re-signs and the FA pool's depth over a season on its own, before it
-   rides in with trading.
+1. the **blocked-prospect trigger** cannot fire with an empty pipeline,
+2. a seller needs a **backfill** or the trade is illegal (no mid-season signing path exists),
+3. `floor < ask` requires `backfill > REPLACEMENT`, so **a pipeline is what makes a club a
+   seller at all**.
 
-### Settled since the sketch
+| # | item | state |
+|---:|---|---|
+| **0** | **Prospect draft** — see `docs/PROSPECT_DRAFT_PLAN.md` | mostly exists; class generation, the draft loop, the cull and the scouted view are new |
+| **1** | **Attitude term in `decisionValue`** | ⚠️ **independent of trading, and a live front-office change.** Ship and measure it on its own — cuts, re-signs, FA pool depth — before trading rides in on it |
+| **2** | **Point sentiment at the surplus bar** | small; the term exists and is live, it is aimed at the wrong quantity |
+| **3** | **Listing model** — triggers, reserve, floor, persistence, withdrawal | new |
+| **4** | **Auction** — approach, de-cursed bids, bundles, settle | new; reuses `decisionValue` and `_deWinnersCurse` wholesale |
+| **5** | **Settlement** — asset move, backfill promotion, sentiment clear, card mint, news, `SeasonRecapEvent` with a trade id | ⚠️ the promotion bar must drop to near zero in-season |
+| **6** | **Transactions page** | five of seven sections already have their data |
 
-| | |
-|---|---|
-| Treasury | **not a trade asset** — dropped; a 227x wealth spread made it unsafe without a cap |
-| pick horizon | **two seasons**, with a **slot-scaled** discount on future picks (top 5 near-nil) |
-| does a contender sell | **yes, already** — the locker-room and blocked-prospect triggers are not contention-gated |
-| transactions page | the full front-office desk, seven sections; five already have their data |
-| contention exponent | **1.25** |
-| sentiment | raises the **surplus the trade must clear**, not the seller's valuation |
-| divisional premium | derived from the schedule (**4x** the games), scaled by the rival's threat |
-| season performance | already wired and live — a deadband moving 14% of players, max +4.5, none at the cap |
-| reserve floor | `(player − backfill) × seasonsLeft × nowWeight` — set by the backfill, not a constant |
+### Measure before tuning
+
+Three numbers are guesses until a season has run, and all three are cheap to read off one:
+
+- **trade volume** — ~32 listings against 16 buyers today, but the horizon trigger is not
+  countable from a snapshot,
+- **the attitude term** at 0.20 — watch cuts, re-signs, and whether the FA pool fills with
+  the unsignable,
+- **where trades cluster** — the contention ramp should push them past week 12, and if they
+  fire in week 3 the ramp is too fast.
