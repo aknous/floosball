@@ -23,6 +23,9 @@ class FakeQuery:
     def __init__(self, store): self.store = store; self._f = []
     def filter(self, *criteria): return self
     def update(self, values, synchronize_session=False):
+        # ⚠️ A BULK UPDATE TAKES THE WRITE LOCK WHETHER OR NOT IT MATCHES A ROW, which is
+        # the fact this whole file turns on, so the fake takes it unconditionally too.
+        self.store['session'].open = True
         # Emulate the real filter: pinned champions from earlier seasons only.
         hit = [r for r in self.store['rows']
                if r['event_type'] == 'floosbowl_champion' and r['pinned']
@@ -34,12 +37,14 @@ class FakeQuery:
 
 class FakeSession:
     def __init__(self, rows, season):
-        self.store = {'rows': rows, 'season': season}
+        self.store = {'rows': rows, 'season': season, 'session': self}
         self.commits = 0
         self.rollbacks = 0
+        # True while an executed statement is holding SQLite's single write lock.
+        self.open = False
     def query(self, model): return FakeQuery(self.store)
-    def commit(self): self.commits += 1
-    def rollback(self): self.rollbacks += 1
+    def commit(self): self.commits += 1; self.open = False
+    def rollback(self): self.rollbacks += 1; self.open = False
 
 
 def manager(rows, season):
@@ -80,13 +85,35 @@ class ChampionPinTests(unittest.TestCase):
                         "a champion from the CURRENT season must keep its pin")
 
     def testItIsIdempotent(self):
+        """⚠️ IDEMPOTENT IN THE ROWS, WHICH IS THE PROPERTY THAT MATTERS.
+
+        This used to assert the COMMIT COUNT did not move on a second pass, treating a
+        commit as a proxy for a write — and that proxy encoded a bug. A bulk update takes
+        the write lock whether or not it matches anything, so the second pass MUST still
+        commit; that commit is the RELEASE, not a write. Gating it on `changed` left the
+        shared session holding an open write transaction in exactly the case where there
+        was nothing to do, and a fresh league (which has no champion to unpin, every
+        time) then died with "database is locked" before week 1 existed.
+        """
         rows = self.rows()
         sm = manager(rows, 4)
         sm._unpinStaleChampions(4)
-        first = sm.db_session.commits
+        after = [dict(r) for r in rows]
         sm._unpinStaleChampions(4)
-        self.assertEqual(first, sm.db_session.commits,
-                         "a second pass wrote again with nothing to change")
+        self.assertEqual(after, rows, "a second pass changed a row")
+
+    def testItAlwaysReleasesTheWriteLock(self):
+        """⚠️ THE ZERO-ROW CASE IS THE ONE THAT BROKE, and it is the case a fresh league
+        is always in. See test_champion_unpin_lock.py, which asserts the same thing
+        against a real SQLite connection."""
+        nothingToDo = [{'season': 4, 'event_type': 'floosbowl_champion', 'pinned': True}]
+        for rows, label in ((self.rows(), 'with a stale champion to unpin'),
+                            (nothingToDo, 'with nothing to unpin'),
+                            ([], 'on an empty feed')):
+            sm = manager(rows, 4)
+            sm._unpinStaleChampions(4)
+            self.assertFalse(sm.db_session.open,
+                             f"the write lock was still held {label}")
 
     def testItCommitsWhenItChangesSomething(self):
         """⚠️ A bulk update takes SQLite's single write lock immediately. Leaving it
