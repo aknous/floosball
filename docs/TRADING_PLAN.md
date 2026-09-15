@@ -282,6 +282,76 @@ the block with visible interest — which is the drama, and it is free.
 5. mint his new card at the new club; leave existing cards alone
 6. publish to `league_news`, and write the `SeasonRecapEvent` with a **trade id**
 
+### ⚠️ Divisional reluctance — you do not arm a rival
+
+A club charges a **premium to trade inside its own division**, and the weight is derived from
+the schedule rather than chosen:
+
+| counterparty | games against them per season | premium |
+|---|---:|---|
+| **division rival** | **4** | large |
+| same league, other division | 1 | small |
+| other league | 1 | none |
+
+12 division games across 3 rivals is **4 apiece**; the other 12 league games are spread over
+12 clubs and the 4 interleague games over 4, so **a division rival is faced four times as
+often as anybody else.** That ratio is the premium.
+
+And they are the only clubs that can take a **division title** from you — which at 8
+divisions is what most of the league is actually playing for, since 24 of 32 will never win
+a league championship.
+
+⚠️ **A price, not a veto**, matching the fan-favourite rule and `sentimentTilt`'s stated
+behaviour everywhere else in the front office: *it tips close calls, it never dictates.* A
+division rival can still get the player — it just has to pay over the odds, which is exactly
+what a fan would expect to see.
+
+⚠️ **The premium should scale with the rival's threat, not be flat.** Selling a rental to a
+3-9 division rival costs nothing; selling to the club you are chasing is self-harm. Scale it
+by the buyer's own `nowWeight` so an irrelevant rival is nearly free and a contending one is
+expensive.
+
+⚠️ **And note the seller is by definition NOT contending**, so "why do they care who wins the
+division" is a fair question. Two reasons that both hold: they meet that rival four times
+again next season, and their own fans care now. The second is the real one — a club arming
+its rival is the sort of thing supporters remember, and this league has a sentiment system
+that already models exactly that.
+
+### Shopping an offer — the second round is NEXT WEEK
+
+Can a seller take a good offer back to the other bidders and ask for better? **Deliberately
+no, within a week** — and it needs no rule to prevent, because the structure already answers
+it better.
+
+A single **sealed round** where each buyer bids its private value, and the seller takes the
+best, is already optimal price discovery for that moment. Running a second, *ascending* round
+makes it worse for the seller, not better: in an ascending auction the winner only has to top
+the second-best bid, so the seller captures the runner-up's valuation instead of the
+winner's. "Let me shop this around" feels like leverage and is actually a discount.
+
+**The real second round is the following week.** A listing that does not clear its reserve
+**persists**, so a seller holding out for more simply does not sell and the block is offered
+again — to a league whose standings have moved, which means the bids have moved too.
+
+✅ **And the deadline pressure falls out of the value model with no new term.** A walk-year
+player's reserve decays on its own as `seasonsOfControl` shrinks:
+
+| week | seasons of control | reserve vs week 1 |
+|---:|---:|---:|
+| 1 | 0.96 | 100% |
+| 10 | 0.64 | 67% |
+| 15 | 0.46 | 48% |
+| 20 | 0.29 | **30%** |
+| 22 | 0.21 | **22%** |
+
+So a seller that holds out in week 5 is asking three times what it will accept in week 20 —
+**hold out early, take what you can get late**, which is exactly how a real deadline behaves.
+Nothing had to be written to produce it.
+
+⚠️ The one thing worth adding is a **floor**: a player about to walk for nothing is worth
+*something* rather than nothing, so the reserve should not decay to zero and hand him away
+for a last pick. Anchor it at whatever the club would accept over losing him for free.
+
 ### Cadence and rate limits
 
 Runs **weekly**, in the existing per-week hook block, closing at week 22.
