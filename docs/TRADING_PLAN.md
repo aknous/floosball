@@ -702,6 +702,50 @@ players are leaving for nothing unless someone moves"* is a story every week of 
 | **roster window** | cut / sign / trade all live to **week 22**, then **frozen** until the offseason |
 | **cutting** | allowed, including to make room for an incoming trade — but **cutting a player with term left costs Treasury** (`remainingSeasons × surplus × rate`), which is the safe use of a currency with a 227x spread: a cost constrains the poor rather than empowering the rich |
 
+## 6b. ⚠️ A live bug found on the way: elite contracts are orphaned
+
+Reported by the owner: *"teams don't seem to be signing elite players to long contracts
+anymore — the Pops signed 5-star Frig Lagotis to only 2 seasons."* Confirmed, and the cause is
+a rule that outlived its reason.
+
+**Measured on prod: no player in the league has a contract longer than 3 seasons.**
+
+| tier | n | mean term | max | distribution |
+|---|---:|---:|---:|---|
+| **S** (92+) | 10 | **2.7** | **3** | 2:3, 3:7 |
+| A (84+) | 56 | 2.6 | 3 | 2:25, 3:31 |
+| B | 75 | 2.1 | 3 | 1:17, 2:30, 3:28 |
+
+Frig Lagotis, rating **96**, term **2**. Jomes Roberston, **97**, term 3.
+
+`playerManager._getPlayerTerm` says why, in its own comment:
+
+> *"Star (S/A) deals are SHORT (2-3, **was 4-6 / 3-4**) so a player cycles through their ~2
+> contracts (**re-sign-once retention limit**) in ~4-5 years rather than a decade."*
+
+⚠️ **`RESIGN_ONCE_ENABLED` is `False`** — disabled 2026-08-13, because at a limit of 1 a
+career-long one-club player was impossible. **The mechanism these short deals exist to feed
+was switched off a month ago and the deals were never revisited.** Same class as
+`ROOKIE_DRAFT_ENABLED` and the snapshot prune: a rule surviving the system it served.
+
+### It is not trade-neutral, and the effect runs the right way
+
+| | walk-years per season |
+|---|---:|
+| today (S/A mean 2.6) | **99 of 192 (52%)** |
+| with S 4-6 / A 3-4 restored | **91 of 192 (47%)** |
+
+The market loses ~9 walk-years a season and the seller side survives comfortably, because
+**most congestion is B/C tier and is untouched.**
+
+✅ And it makes elite players dramatically better trade assets, since value scales with
+seasons of control: a 96 is worth **29** units with one season left, **58** with two, and
+**116** with four. Under the current rule the league's best players are permanently near their
+walk year and therefore permanently cheap — which is the opposite of what a star should be.
+
+⚠️ **Fix it independently of trading**, like the attitude term. It changes how the current
+league re-signs the moment it ships.
+
 ## 7. What to build, in order
 
 ⚠️ **The prospect draft was a hard prerequisite and mid-season signing softened it to one
@@ -714,7 +758,8 @@ ship without it:
 
 | # | item | state |
 |---:|---|---|
-| **0** | **Prospect draft** — see `docs/PROSPECT_DRAFT_PLAN.md` | mostly exists; class generation, the draft loop, the cull and the scouted view are new |
+| **0a** | **Restore elite contract lengths** — S 4-6, A 3-4. One constant block; see 6b |
+| **0b** | **Prospect draft** — see `docs/PROSPECT_DRAFT_PLAN.md` | mostly exists; class generation, the draft loop, the cull and the scouted view are new |
 | **1** | **Attitude term in `decisionValue`** | ⚠️ **independent of trading, and a live front-office change.** Ship and measure it on its own — cuts, re-signs, FA pool depth — before trading rides in on it |
 | **2** | **Point sentiment at the surplus bar** | small; the term exists and is live, it is aimed at the wrong quantity |
 | **3** | **Listing model** — triggers, reserve, floor, persistence, withdrawal | new |
