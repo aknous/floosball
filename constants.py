@@ -2352,6 +2352,113 @@ FO_FA_CONTENTION = 0.30
 # would wash out to free agency instead of ever reaching a roster.
 FO_PROSPECT_PROMOTE_EDGE = 0.88
 
+# ---- Attitude: a toxic player damages the room, and the GM could not see it ----
+# ⚠️ THE SIM MODELS THE DAMAGE AND GAVE THE GM NO WAY TO PERCEIVE IT.
+# `seasonManager._propagateAttitudeContagion` runs EVERY WEEK, nudging each starter's
+# confidence and determination toward the room's average attitude — its own docstring
+# says "a toxic veteran genuinely poisons teammates' confidence". `frontOfficeBrain`
+# never read `attitude`. Not once.
+#
+# Points off a player's valuation per attitude point below neutral (80). Anchored on a
+# decision that should flip: Chud Bumpington (TE, rating 85, attitude 45) on a Melons
+# roster whose room averages 62.8 —
+#     0     -> effective 85.0, rank 2 of 6 on his own roster
+#     0.10  -> 81.5, still 2 of 6
+#     0.20  -> 78.0, rank 3 of 6      <- the point the decision actually changes
+#     0.30  -> 74.5, rank 4 of 6      <- overstates it; he drops under a clean 78
+# 0.20 is where a 45-attitude 85 first falls below a clean 79.
+#
+# ⚠️ SOFT, FOR THE REASON THE APPEAL GATE ALREADY TAUGHT. Discount difficult players
+# hard enough and they pool in free agency, never get signed, and the supply floor
+# generates replacements around them — the exact failure that made
+# FLOOS_SOFT_APPEAL_PENALTY a 0.90 multiplier rather than a veto.
+#
+# ✅ Not double-counting rating: corr(rating, attitude) = +0.293 across 192 rostered
+# players — 85+ attitude averages 84.2 rating against 79.3 for sub-55, nowhere near
+# enough that rating already carries it.
+FO_ATTITUDE_ENABLED = True
+FO_ATTITUDE_NEUTRAL = 80.0
+FO_ATTITUDE_PENALTY_PER_POINT = 0.20
+
+# ⚠️ THE TRADE COMES FROM THE ROOM, NOT FROM BLINDNESS. The naive version (seller
+# discounts, buyer does not) would have GMs palming headcases off on each other. But
+# the drift lands in whichever room he is IN, so every club prices it and a difficult
+# player is simply worth less to everybody. What differs is the ROOM: drift works off
+# `(avgAttitude x 3 + coachAttitude) / 4`, so a strong room with a leader coach absorbs
+# one bad apple while an already-toxic room compounds. Exoticos (room 82.8) can take a
+# headcase Grillmeisters (62.7) cannot, and pays less than his rating suggests — change
+# of scenery as arithmetic, and it makes a good locker room a tradeable asset in itself.
+#
+# ⚠️ A NEUTRAL ROOM (80) REPRODUCES THE ANCHOR TABLE ABOVE EXACTLY, and so does a
+# valuation with no team attached — the room only ever scales a penalty that is already
+# correct, it never invents one. Bounded so the room can never dominate the attribute.
+FO_ATTITUDE_ROOM_SENSITIVITY = 0.02     # per point the room sits away from neutral
+FO_ATTITUDE_ROOM_MIN = 0.60             # the best room in the league absorbs this much
+FO_ATTITUDE_ROOM_MAX = 1.40             # the worst compounds it this much
+
+# ---- Fan sentiment on a DEPARTURE clears a bar; on a CHOICE it tips the order ----
+# ⚠️ THESE ARE DIFFERENT QUESTIONS AND ONE TERM CANNOT SERVE BOTH.
+#
+# Where a club is choosing AMONG players — which walk-year men to keep with a scarce
+# re-sign slot, whose name sits where on a draft board — sentiment belongs on the VALUE,
+# because the value is what sets the ORDER and the order is the decision. That is
+# `SENTIMENT_MAX_VALUE_SWING` and it stays exactly where it is.
+#
+# Where a club is choosing WHETHER TO LET ONE GO, the value side measurably does
+# nothing, because the club's own constraint does not bind: measured on a trade, letting
+# a beloved player's tilt raise his club's valuation left every buyer's clearing price
+# IDENTICAL across the full tilt range — the seller was losing him for nothing, so any
+# offer beat keeping him and only the BUYER could refuse. So on a departure, sentiment
+# raises THE SURPLUS THE MOVE MUST CLEAR.
+#
+# Multiplier on that bar at full love and full fanTrust. At +30% a favourite costs a
+# contender about three extra picks of value; at +100% he is only movable to the
+# strongest buyer in the league. A disliked player lowers the bar by the same rule,
+# floored so it can never reach zero and make a departure free.
+# See docs/TRADING_PLAN.md §2 ("it must raise the BAR, not the seller's valuation").
+SENTIMENT_BAR_MAX_RAISE = 1.00
+SENTIMENT_BAR_MIN_SCALE = 0.40
+
+# ⚠️ ON A PROSPECT'S LAST WINDOW THE EDGE ABOVE IS THE WRONG COMPARISON ENTIRELY.
+# It prices the prospect against the free agent this club could sign instead —
+# correct in every earlier window, where declining to promote means "leave him in
+# the pipeline and revisit next year". On the FINAL window there is no next year:
+# `_advanceProspectWindow` releases him for nothing the moment it runs, so the club
+# is choosing between the prospect and NOTHING, not between the prospect and a free
+# agent. That is the third instance of one structural error (a decision written for
+# one context, reused where the alternative changed and the comparison did not) —
+# see docs/TRADING_PLAN.md §9.
+#
+# The consequence lands squarely on the prospect draft's own story: a bottom-feeder
+# drafts the headline prospect, develops him for three seasons and loses him free
+# because its slot at his position happened to be occupied.
+LAST_WINDOW_PROMOTE_ENABLED = True
+
+# ---- Cutting a player with term left costs Treasury ----
+# `cutFee = remainingSeasons x (rating - REPLACEMENT_RATING) x CUT_FEE_RATE` Floobits.
+#
+# ⚠️ THIS IS THE SAFE USE OF A CURRENCY WITH A 227x SPREAD. Treasury was rejected as a
+# trade ASSET precisely because that spread let the richest club fund the entire market;
+# as a COST the same spread constrains the poor instead of empowering the rich. A club
+# cannot buy a player with Treasury, only ROSTER SPACE, and a club that churns talent
+# pays for it — Treasury's other claim is facility upkeep (`resolveSeasonEnd` spends it
+# at season end), so cutting freely costs a facility level later. No extra rule needed.
+#
+# ⚠️ FLOORED AT ZERO, NEVER A DEBT: a club that cannot pay simply cannot cut. Letting the
+# fee go negative hands a broke club unlimited roster churn, the opposite of the intent.
+#
+# At 50 F per surplus-season, measured against the live Treasury spread: a filler with
+# 1 year left is 250F (25 of 32 clubs can pay), a good starter with 2 is 1,700F (16/32),
+# an elite player with 3 is 4,350F (15/32) — the median club affords roughly one cut of
+# a good starter a season. See docs/TRADING_PLAN.md §3.7.
+CUT_FEE_RATE = 50.0
+
+# Replacement level: what a club can always have for free. NOT zero — a roster hole can
+# be filled from the free-agent pool, so an 80 is worth 13 of surplus and not 80. This is
+# the anchor every surplus-over-replacement number in the front office and the trade
+# market prices against, and it is measured off the pool rather than guessed.
+REPLACEMENT_RATING = 67.0
+
 # ---- Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ----
 # A Core-driven, user-voted live rule mutation. Each game day (weeks 1/8/15/22) there's
 # an escalating chance a vote fires: Aris opens a CHANGE vote, Pyre opens a REVERT vote.

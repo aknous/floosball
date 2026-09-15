@@ -997,13 +997,23 @@ class PlayerManager:
             return 2  # B / C
 
         # Veteran: roll by tier, then clamp to expected career runway.
-        # Star (S/A) deals are SHORT (2-3, was 4-6 / 3-4) so a player cycles through
-        # their ~2 contracts (re-sign-once retention limit) in ~4-5 years rather than
-        # a decade — keeps talent circulating for parity. See PARITY_PROSPECT_PLAN.md P5.
+        # ⚠️ STAR DEALS ARE LONG AGAIN (S 4-6 / A 3-4), restored 2026-09-15.
+        # They were cut to 2-3 to feed a retention ratchet — first the salary cap
+        # (built, then SCRATCHED, code removed in c8e1ec7), then the re-sign-once
+        # limit the comment here blamed. `RESIGN_ONCE_ENABLED` has been False since
+        # 2026-08-13, because at a limit of 1 a career-long one-club player was
+        # impossible. So BOTH mechanisms these short deals existed to feed are gone,
+        # and the deals were never revisited: measured on prod, NO player in the
+        # league held a contract longer than 3 seasons, and a 96-rated star sat on a
+        # 2-year deal. Same class as ROOKIE_DRAFT_ENABLED — a rule outliving the
+        # system it served. See docs/TRADING_PLAN.md §8.
+        # ⚠️ The first-contract branch above is deliberately NOT restored: a rookie
+        # deal is a prove-it deal whatever the tier, which is why it was 3 before
+        # this rule ever existed.
         if tier == FloosPlayer.PlayerTier.TierS:
-            base = randint(2, 3)
+            base = randint(4, 6)
         elif tier == FloosPlayer.PlayerTier.TierA:
-            base = randint(2, 3)
+            base = randint(3, 4)
         elif tier == FloosPlayer.PlayerTier.TierD:
             base = 1
         else:
@@ -1022,7 +1032,7 @@ class PlayerManager:
         # the dead-cap risk for hall-of-fame trajectory players); TierA
         # holds at 2 years; lower tiers fall to the runway floor of 1.
         if tier == FloosPlayer.PlayerTier.TierS:
-            floor = 2
+            floor = 3
         elif tier == FloosPlayer.PlayerTier.TierA:
             floor = 2
         else:

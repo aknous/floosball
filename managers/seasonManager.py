@@ -6838,6 +6838,45 @@ class SeasonManager:
         if faOrderForPredraft:
             await self._runPreDraftPass(faOrderForPredraft, gmResults)
 
+        # STEP 3.78: Advance the prospect development window — release washouts.
+        #
+        # ⚠️ ORDER IS THE WHOLE FIX. This used to be step 7.5, after training and
+        # AFTER `_processFreeAgency`, so a prospect washing out in offseason N was
+        # released into the pool once that offseason's FA draft had already run: he
+        # was unsignable until offseason N+1 and sat idle for a whole extra season.
+        #
+        # ⚠️ AND IT COST TWICE. `ensurePositionSupply` runs before the FA draft and
+        # excludes prospects by design, so it generated a fresh free agent for a hole
+        # the washing-out prospect could have filled — the league gained a body it did
+        # not need AND the prospect went unused.
+        #
+        # Running here puts him in the pool for the draft that is about to happen,
+        # lets the supply floor COUNT him instead of replacing him, and — once the
+        # rookie draft ships — means this season's new draftees are not yet in
+        # `team.prospects`, so they correctly start at prospect_seasons 0 rather than
+        # being incremented in the offseason they arrived.
+        #
+        # ⚠️ IT NEEDS ITS OWN GATE. Where it used to sit it was covered by
+        # `training_and_finalize`; here it is not, and it INCREMENTS — an unguarded
+        # re-run on a restart would age every prospect twice and wash out a class
+        # early. The offseason is exactly where this project's restarts land.
+        if not self._isOffseasonStepComplete('prospect_window'):
+            try:
+                windowResult = self.playerManager._advanceProspectWindow()
+                for rel in windowResult.get('released', []):
+                    self._offseasonTransactions.append({
+                        'type': 'prospect_release',
+                        'team': rel.get('fromTeam'), 'teamAbbr': '',
+                        'playerId': rel.get('playerId'),
+                        'player': rel.get('name'), 'position': rel.get('position'),
+                        'rating': rel.get('rating'),
+                    })
+            except Exception as e:
+                logger.error(f"Prospect window advance failed: {e}")
+            self._markOffseasonStepComplete('prospect_window')
+        else:
+            logger.info("Step 3.78 skipped — prospect_window already complete")
+
         # ── End of front-office phase ────────────────────────
         # The rookie draft used to sit here, between the front office and free
         # agency. There is no rookie class to draft any more, so the offseason
@@ -6989,9 +7028,11 @@ class SeasonManager:
                     fundingBonus = teamFundingBonus.get(pid, 0)
                     player.offseasonTraining(coachDevRating=devRating, fundingDevBonus=fundingBonus)
 
-            # STEP 7.5: Advance prospect development window — auto-release washouts
-            logger.info("Step 7.5: Prospect development window advancement")
-            self.playerManager._advanceProspectWindow()
+            # STEP 7.5 (MOVED): the prospect development window used to advance HERE,
+            # after training and 53 lines after the FA draft had already run — so a
+            # washout was released into a pool nobody could draft from until the NEXT
+            # offseason, and he sat idle for a full extra season. It now runs in the
+            # front-office phase, right after the promotions pass; see STEP 3.78.
 
             # STEP 8: (retired) Handling retired players on fantasy rosters is gone in
             # the fantasy/cards fusion — the roster IS the equipped cards, so a retired
@@ -7690,6 +7731,115 @@ class SeasonManager:
         except Exception:
             pass
 
+    @staticmethod
+    def _isFinalProspectWindow(prospect) -> bool:
+        """Is this the last offseason this club can promote him?
+
+        ⚠️ THE OFF-BY-ONE IS THE WHOLE POINT. `_advanceProspectWindow` INCREMENTS
+        first and then releases anyone at or past `PROSPECT_DEVELOPMENT_WINDOW`, and
+        it runs immediately after the promotions pass — so a prospect sitting on
+        WINDOW-1 right now is released the moment this pass ends. Testing `>= WINDOW`
+        here would fire only on a player who has already been let go.
+        """
+        from constants import PROSPECT_DEVELOPMENT_WINDOW, LAST_WINDOW_PROMOTE_ENABLED
+        if not LAST_WINDOW_PROMOTE_ENABLED:
+            return False
+        seasons = int(getattr(prospect, 'prospect_seasons', 0) or 0)
+        return seasons >= max(1, PROSPECT_DEVELOPMENT_WINDOW) - 1
+
+    def _cutToMakeRoomForProspect(self, team, prospect, brain, coach, prospectValue: float):
+        """Cut the weakest incumbent at this prospect's position so he can be
+        promoted on his final window. Returns the freed slot, or None.
+
+        Option 2 of the last chance (docs/TRADING_PLAN.md §4). Three gates, and
+        each one is load-bearing:
+
+          1. ⚠️ THE COMPARISON IS AGAINST THE INCUMBENT, NOT A FREE AGENT. The club
+             is choosing between two players it can actually have. A free agent is
+             irrelevant here — it is not giving up a roster spot to sign one.
+          2. The prospect must genuinely beat him, by the same margin a cut-for-
+             upgrade needs anywhere else (`FO_CUT_UPGRADE_MARGIN`). Losing a prospect
+             is bad; cutting a better player to keep him is worse.
+          3. ⚠️ THE FEE MUST BE AFFORDABLE, AND A CLUB THAT CANNOT PAY CANNOT CUT.
+             Not a debt — see CUT_FEE_RATE. A club that cannot afford it falls back
+             to letting him walk (or, once trading ships, to selling him).
+
+        A walk-year or retiring incumbent is skipped: he vacates on his own, and
+        paying to cut a player who is leaving anyway is pure waste.
+        """
+        from constants import FO_CUT_UPGRADE_MARGIN
+        posSlots = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}
+        slots = posSlots.get(getattr(getattr(prospect, 'position', None), 'value', 0), [])
+        worstSlot, worstPlayer, worstValue = None, None, None
+        for slot in slots:
+            incumbent = team.rosterDict.get(slot)
+            if incumbent is None:
+                return slot                 # already free; nothing to pay for
+            if getattr(incumbent, 'willRetire', False):
+                continue                    # vacates on its own
+            if (getattr(incumbent, 'termRemaining', 0) or 0) <= 1:
+                continue                    # walk-year: he is leaving anyway
+            value = brain.decisionValue(incumbent, coach=coach, team=team)
+            if worstValue is None or value < worstValue:
+                worstSlot, worstPlayer, worstValue = slot, incumbent, value
+        if worstPlayer is None:
+            return None
+        if prospectValue - worstValue < FO_CUT_UPGRADE_MARGIN:
+            return None                     # not enough of an upgrade to pay for
+        from managers.frontOfficeBrain import cutFeeFor
+        fee = cutFeeFor(worstPlayer)
+        if not self._chargeCutFee(team, fee):
+            logger.info(f"{team.name} cannot afford the {fee}F cut fee to keep "
+                        f"{prospect.name} — he walks")
+            return None
+
+        leagueHighlights = []
+        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+            leagueHighlights = self.currentSeason.leagueHighlights
+        self._recordOffseasonEvent('cut', player=worstPlayer, team=team,
+                                   detail=f"released to promote {prospect.name} ({fee}F)")
+        self.playerManager.releasePlayerToFreeAgency(worstPlayer, team, {})
+        worstPlayer.teamResignCount = 0
+        leagueHighlights.insert(0, {'event': {'text':
+            f'{team.name} released {worstPlayer.name} to promote {prospect.name} '
+            f'before his development window closed'}})
+        logger.info(f"Last window: {team.name} cut {worstPlayer.name} ({fee}F) to "
+                    f"promote {prospect.name}")
+        return worstSlot
+
+    def _chargeCutFee(self, team, fee: int) -> bool:
+        """Debit a team's Treasury for a cut. False (and nothing charged) if it
+        cannot cover it — ⚠️ the fee is never allowed to go negative into a debt,
+        because a broke club with a debt line has UNLIMITED roster churn, which is
+        the opposite of what the fee is for."""
+        if fee <= 0:
+            return True
+        try:
+            from database.connection import get_session
+            from managers.facilitiesManager import getTreasury, setTreasury
+        except Exception:
+            return True             # facilities economy unavailable — do not block the sim
+        teamId = getattr(team, 'id', None)
+        if teamId is None:
+            return True
+        session = get_session()
+        try:
+            balance = getTreasury(session, teamId)
+            if balance < fee:
+                return False
+            setTreasury(session, teamId, balance - fee)
+            session.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"Could not charge cut fee to {team.name}: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            return False
+        finally:
+            session.close()
+
     def _promoteProspectsAutonomously(self, team) -> list:
         """Promote this team's prospects when the GM rates them over the market.
 
@@ -7720,18 +7870,35 @@ class SeasonManager:
         while True:
             best, bestSlot, bestValue = None, None, 0.0
             for prospect in prospects:
+                lastChance = self._isFinalProspectWindow(prospect)
                 try:
                     slot = self.playerManager._findOpenSlotForPosition(
                         team, prospect.position.value)
                 except Exception:
                     slot = None
-                if not slot:
-                    continue        # no hole at his position — nothing to win
                 value = brain.decisionValue(prospect, coach=coach)
-                replacement = brain.bestReplacementValue(
-                    prospect, coach=coach, pickDepth=pickDepth)
-                if value < replacement * FO_PROSPECT_PROMOTE_EDGE:
-                    continue        # free agency offers better — leave him down
+                if not slot:
+                    # ⚠️ NO OPEN SLOT USED TO MEAN NO PROMOTION AT ANY QUALITY, which on
+                    # the final window loses a 99-potential quarterback for nothing
+                    # because the club's QB slot happened to be occupied. On his last
+                    # window the club gets to CUT to make room — a real, priced decision
+                    # (the cut fee) rather than watching him walk. Every earlier window
+                    # keeps the old behaviour: there is a next year, so leave him down.
+                    if not lastChance:
+                        continue
+                    slot = self._cutToMakeRoomForProspect(team, prospect, brain, coach, value)
+                    if not slot:
+                        continue
+                elif not lastChance:
+                    replacement = brain.bestReplacementValue(
+                        prospect, coach=coach, pickDepth=pickDepth)
+                    if value < replacement * FO_PROSPECT_PROMOTE_EDGE:
+                        continue    # free agency offers better — leave him down
+                # ⚠️ On the LAST window the bar above is skipped entirely. It prices him
+                # against the free agent this club could sign instead, and that is not
+                # the alternative any more: `_advanceProspectWindow` runs moments from
+                # now and releases him for nothing, so the choice is the prospect or an
+                # empty slot rating 50. Better-than-nothing beats better-than-a-free-agent.
                 if value > bestValue:
                     best, bestSlot, bestValue = prospect, slot, value
             if best is None:

@@ -71,6 +71,10 @@ from constants import (
     FO_PERF_SINGLE_SEASON_TRUST, FO_PERF_HISTORY_SEASONS,
     FA_PREFERENCE_ENABLED, FA_PREF_MAX_DEMAND, FA_PREF_VET_FULL_SEASONS,
     FA_PREF_VET_WEIGHT, FA_PREF_JITTER,
+    CUT_FEE_RATE, REPLACEMENT_RATING,
+    FO_ATTITUDE_ENABLED, FO_ATTITUDE_NEUTRAL, FO_ATTITUDE_PENALTY_PER_POINT,
+    FO_ATTITUDE_ROOM_SENSITIVITY, FO_ATTITUDE_ROOM_MIN, FO_ATTITUDE_ROOM_MAX,
+    SENTIMENT_BAR_MAX_RAISE, SENTIMENT_BAR_MIN_SCALE,
 )
 
 logger = logging.getLogger(__name__)
@@ -111,6 +115,40 @@ def _atLeastOneSurvives(upgrades: int, trials: int, p: float) -> float:
         term *= (trials - k) / (k + 1) * (p / (1.0 - p))
         total += term
     return _clamp(total, 0.0, 1.0)
+
+
+def cutFeeFor(player) -> int:
+    """Floobits a club owes its own Treasury to cut this player.
+
+        cutFee = remainingSeasons x (rating - REPLACEMENT_RATING) x CUT_FEE_RATE
+
+    ⚠️ IT PRICES WHAT IS BEING THROWN AWAY, not the player. Both terms matter and
+    for different reasons. `remainingSeasons` is the control being discarded — a
+    club walking away from four years of an elite player is destroying far more
+    than one walking away from a filler's last season. Surplus over replacement is
+    there because a club cutting a 65 is not cutting anything a free agent cannot
+    replace, so it should cost nothing.
+
+    ⚠️ FLOORED AT ZERO. A player at or below replacement costs nothing to cut, and
+    the fee is never negative — it must not become a way to EARN Treasury.
+
+    ⚠️ `remainingSeasons` IS `termRemaining` WITH NO OFF-BY-ONE. A player in his final
+    season still has a season being thrown away. Checked against the plan's own priced
+    table: a 72 with 1 year left is 1 x 5 x 50 = 250F, an 84 with 2 is 1,700F, a 96
+    with 3 is 4,350F — all three reproduce exactly. (Whether to cut a walk-year player
+    at all is the CALLER's question, not the fee's: the prospect last-chance skips him
+    because he vacates on his own.)
+
+    One definition, shared by the prospect last-chance cut and (once it ships) the
+    in-season roster window, so the two cannot drift. See docs/TRADING_PLAN.md §3.7.
+    """
+    if player is None:
+        return 0
+    seasons = max(0, int(getattr(player, 'termRemaining', 0) or 0))
+    surplus = float(getattr(player, 'playerRating', 0) or 0) - REPLACEMENT_RATING
+    if seasons <= 0 or surplus <= 0:
+        return 0
+    return int(round(seasons * surplus * CUT_FEE_RATE))
 
 
 def positionValue(player, venueBias: float = 0.0) -> float:
@@ -478,10 +516,114 @@ class FrontOfficeBrain:
         adjust = excess * FO_PERF_WEIGHT * trust
         return _clamp(adjust, -FO_PERF_MAX_ADJUST, FO_PERF_MAX_ADJUST)
 
-    def decisionValue(self, player, coach=None, rng=None, team=None) -> float:
-        """perceivedValue plus the sentiment tilt — the number decisions use."""
+    def attitudeAdjustment(self, player, team=None) -> float:
+        """Value points a difficult player costs, because the damage is REAL and the
+        sim already models it.
+
+        `seasonManager._propagateAttitudeContagion` runs every week and drags each
+        starter's confidence and determination toward the room's average attitude. The
+        front office could not see any of that — it never read `attitude` once — so it
+        would happily sign an 85 who was quietly costing his teammates a rating point
+        each. Rostered attitude spans 35-100 (median 72) and team rooms span 20 points,
+        so this is a live spread, not a rounding term.
+
+        ⚠️ ONE-SIDED, PENALTY ONLY. A leader who lifts the room is a real effect too,
+        but only the penalty half has a measured anchor, and a symmetric bonus would
+        inflate the whole league's value scale for no evidence. The comparisons that
+        matter are differences (`replacement - incumbent`), where uniform deflation
+        cancels anyway.
+
+        ⚠️ IT IS NOT POSITION-WEIGHTED, AND THAT IS DELIBERATE — the opposite call to
+        `performanceAdjustment`, which is applied to the rating BEFORE the position
+        multiplier so a divergent kicker is still scaled by what a kicker is worth.
+        Production is position-scoped; LOCKER-ROOM DAMAGE IS NOT. A toxic kicker poisons
+        the room exactly as much as a toxic quarterback, so the hit is a flat number of
+        board points — which correctly looms larger against a low-value position.
+        """
+        if not FO_ATTITUDE_ENABLED or player is None:
+            return 0.0
+        attrs = getattr(player, 'attributes', None)
+        attitude = getattr(attrs, 'attitude', None) if attrs is not None else None
+        if attitude is None:
+            attitude = getattr(player, 'attitude', None)
+        if not attitude:
+            return 0.0              # unknown attitude reads as neutral, never as toxic
+        below = FO_ATTITUDE_NEUTRAL - float(attitude)
+        if below <= 0:
+            return 0.0
+        return -below * FO_ATTITUDE_PENALTY_PER_POINT * self._roomFactor(team)
+
+    @staticmethod
+    def _roomFactor(team) -> float:
+        """How much this locker room amplifies or absorbs a difficult player.
+
+        Mirrors the drift's own blend — `(avgAttitude x 3 + coachAttitude) / 4` — so the
+        pricing and the damage read the same room. ⚠️ A neutral room, or no team at all,
+        returns exactly 1.0, so the penalty's anchor table is reproduced unchanged and
+        the room can only ever scale a penalty that was already correct.
+        """
+        if team is None:
+            return 1.0
+        try:
+            starters = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
+                        if p is not None]
+            if len(starters) < 4:
+                return 1.0
+            total = 0.0
+            for p in starters:
+                attrs = getattr(p, 'attributes', None)
+                total += float(getattr(attrs, 'attitude', 80) or 80)
+            avg = total / len(starters)
+            coach = getattr(team, 'coach', None)
+            coachAttitude = float(getattr(coach, 'attitude', 80) or 80) if coach else 80.0
+            room = (avg * 3 + coachAttitude) / 4
+        except Exception:
+            return 1.0
+        factor = 1.0 + (FO_ATTITUDE_NEUTRAL - room) * FO_ATTITUDE_ROOM_SENSITIVITY
+        return _clamp(factor, FO_ATTITUDE_ROOM_MIN, FO_ATTITUDE_ROOM_MAX)
+
+    def sentimentBarScale(self, player, coach=None) -> float:
+        """Multiplier on THE SURPLUS A DEPARTURE MUST CLEAR.
+
+        ⚠️ THE OBVIOUS WIRING MEASURABLY DOES NOTHING, which is the whole finding.
+        Letting a beloved player's `sentimentTilt` raise his own club's valuation leaves
+        every buyer's clearing price IDENTICAL across the full tilt range, because the
+        selling club's constraint never binds: it is losing him for nothing, so any
+        offer beats keeping him and only the counterparty can refuse. Raising the BAR is
+        the version that bites.
+
+        ⚠️ IT DOES NOT REPLACE `sentimentTilt`, and merging the two would be a
+        regression. Where a club chooses AMONG players — which walk-year men a scarce
+        re-sign slot goes to, whose name sits where on a draft board — the value is what
+        sets the ORDER and the order IS the decision; a bar there is nearly inert,
+        because `FO_RESIGN_SURPLUS_MARGIN` is 0.5 and essentially everything clears it.
+        Two questions, two places. Callers use exactly one.
+
+        Returned as a multiplier so it composes with any bar: a departure the fans hate
+        must clear more, one they want clears less, and it is floored well above zero so
+        an unpopular player is never free to move.
+        """
+        tilt = self.sentimentTilt(player, coach)
+        if not tilt or not SENTIMENT_MAX_VALUE_SWING:
+            return 1.0
+        # Back out the signed strength (sentiment x fanTrust) the tilt encodes, so the
+        # bar and the value scale off ONE sentiment reading rather than two.
+        strength = _clamp(tilt / SENTIMENT_MAX_VALUE_SWING, -1.0, 1.0)
+        return max(SENTIMENT_BAR_MIN_SCALE, 1.0 + strength * SENTIMENT_BAR_MAX_RAISE)
+
+    def decisionValue(self, player, coach=None, rng=None, team=None,
+                      includeSentiment: bool = True) -> float:
+        """perceivedValue, the attitude cost, and the sentiment tilt — the number
+        decisions use.
+
+        ⚠️ `includeSentiment=False` is for a caller that expresses sentiment on ITS BAR
+        instead (see `sentimentBarScale`). Counting it in both places would price one
+        fan opinion twice. Everything that ranks players against each other leaves it on.
+        """
         value = (self.perceivedValue(player, coach, rng=rng, team=team)
-                 + self.sentimentTilt(player, coach))
+                 + self.attitudeAdjustment(player, team))
+        if includeSentiment:
+            value += self.sentimentTilt(player, coach)
         if _SOFT_APPEAL and team is not None and player is not None:
             # Below the player's Appeal demand this club is a worse fit, so it ranks
             # them lower — it does NOT lose the right to sign them. Under the hard
@@ -867,12 +1009,20 @@ class FrontOfficeBrain:
                 continue                      # vacates on its own
             if (getattr(player, 'termRemaining', 0) or 0) <= 1:
                 continue                      # walk-year: retention decides them
-            incumbent = self.decisionValue(player, coach, rng=rng, team=team)
+            # ⚠️ SENTIMENT IS ON THE BAR HERE, NOT IN THE VALUE. A cut is a DEPARTURE,
+            # and on a departure the club's own valuation is the side that does not
+            # bind — so a beloved player raises the upgrade the club must be confident
+            # of before it moves him, rather than pretending he is a better player than
+            # he is. `includeSentiment=False` is what stops one fan opinion being
+            # counted twice. (Re-signs and draft boards keep the value-side tilt: there
+            # the club is choosing AMONG players and the order is the decision.)
+            incumbent = self.decisionValue(player, coach, rng=rng, team=team,
+                                           includeSentiment=False)
             replacement = self.bestReplacementValue(player, coach, pool=pool,
                                                     rng=rng, pickDepth=pickDepth,
                                                     team=team)
             upgrade = replacement - incumbent
-            if upgrade < FO_CUT_UPGRADE_MARGIN:
+            if upgrade < FO_CUT_UPGRADE_MARGIN * self.sentimentBarScale(player, coach):
                 continue
             # ⚠️ AND the club must be CONFIDENT it can actually come away better
             # off. The size of the gap says the move is worth making; this says
