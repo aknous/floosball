@@ -1468,3 +1468,95 @@ than before it, or they ship as blank panels.
 | the cull | build |
 | Stats page prospects chip | build — one line |
 | Team page prospects block | build — frontend only |
+
+---
+
+# Addendum 14 — owner rulings, 2026-09-14
+
+## ✅ Season stats stay with the player — already the behaviour
+
+`playerManager` line ~1952 does `db_season_stats.team_id = playerTeamId` on **every save**,
+and saves run at every week and season boundary. So a season line already follows the player
+to whatever club he is on now. **No work.**
+
+For the record, since the alternatives were unclear: the schema holds **one row per player
+per season with one `team_id`**, so the only real question was which club a split season is
+attributed to — the one he ends with (this, the status quo), the one he started with, or two
+rows (a schema change). The single visible consequence is `/api/stats/leaders`, which prints
+the club beside a leaderboard row, so after a trade it shows the new club next to stats
+partly earned elsewhere.
+
+⚠️ That is already the established convention: `/api/history/records` reports a **career**
+record against the player's CURRENT club, and CLAUDE.md states it is *"deliberately NOT a
+claim about where the record was set"*. Same rule, same reasoning.
+
+## ✅ Fan sentiment does NOT follow a traded player
+
+Ratings are gated to a club's own fans (`_requireOwnClub`), so a traded player would
+otherwise arrive carrying ratings from supporters who are no longer his.
+
+⚠️ Note the gate is on **writing** only — `sentimentTilt` aggregates every rating a player
+holds — so "does not follow" means the rows are **cleared on the trade**, not merely ignored.
+Live impact today is nil (no player has reached even the old quorum), but the rule should
+ship with the trade rather than be retrofitted.
+
+## ✅ Trades are visible: league news + a new transactions page
+
+Two surfaces, and the machinery for both partly exists.
+
+**League news** — `league_news.publish()` is the one publisher, and a trade is exactly the
+shape it takes. ⚠️ It is **keyword-only and camelCase**, and a snake_case typo has already
+caused two incidents, one of them a production outage; `test_publish_kwargs.py` sweeps call
+sites statically, so a new publisher is covered the moment it is written.
+
+**A central transactions page** — new. `SeasonRecapEvent` is already the durable
+per-season transaction log (`rookie_pick | fa_pick | cut | resign | promotion | retirement |
+hof_induction | coach_fire | coach_hire`) and a `trade` type joins it naturally. ⚠️ **Its
+idempotency key is `(season, event_type, player_id|team_id)` — one player, one club — which a
+two-sided trade does not fit.** It needs a trade id, or the resume-safety dedupe silently
+drops half of a swap.
+
+## ✅ Rookie picks are tradeable
+
+Horizon still open. Two seasons out is enough to matter and bounds the mortgage.
+
+## ✅ No tax, for now
+
+Dropped on the measurements in addendum 9 — roughly one season of earlier correction on one
+club, and a relative threshold that does nothing about league-wide level. The re-sign limit
+(89 of 192 players on walk years, 18 of 32 clubs forced to let someone walk) is the primary
+soft cap, and the cull is what holds the level.
+
+## ⚠️ Cards: a mid-season trade mints a NEW card; the old one is untouched
+
+Owner: *new cards can be minted when a player is traded mid-season, but a card someone holds
+of that player from his previous team does not change.*
+
+This is compatible with the start-of-season rule settled a moment earlier — that rule governs
+**who** gets cards (rostered players), and a trade does not change whether he is rostered,
+only where. But it is a real build, with consequences worth naming up front:
+
+- ⚠️ **Templates mint once per season and never re-mint** — `generateSeasonTemplates` returns
+  early on `countBySeason > 0`. A mid-season mint needs its own path; it cannot ride the
+  season-start one.
+- ✅ **It fixes the themed-pack drift.** `card_templates.team_id` is frozen at mint, so today
+  a traded player would linger in his old club's team pack all season. A new card carrying
+  the new `team_id` puts him in the right pack, and the old card keeps the old one — which is
+  correct, because that card depicts him as he was.
+- ⚠️ **Two scoreable cards of one player then exist in a season.** They are position-locked to
+  the same slot, so a holder of both can field at most two of him (slot + FLEX), and only if
+  the two carry **different** effects — the no-duplicate rule is per `effectName`. Bounded,
+  but it is a genuinely new state and should be a deliberate choice rather than a discovery.
+- ⚠️ **`_assignEffects` plans effects per bucket**, dealing least-used first so every effect is
+  covered. A mid-season mint arrives outside that plan and needs to either slot into it or
+  draw fresh, or it quietly skews the season's effect coverage.
+
+## Updated open questions
+
+1. **Pick horizon** — how many seasons out can a rookie pick be traded?
+2. **Cull bar fraction** — what fraction of the league mean, chosen on judgement then measured.
+3. **Mid-season mint effects** — does the new card draw from the bucket plan or fresh?
+4. **Transactions page scope** — trades only, or the full `SeasonRecapEvent` log (cuts,
+   re-signs, promotions, retirements, coach moves) with trades as one kind?
+5. ⚠️ **Three clubs are insolvent on upkeep alone** (Pinecones 200F vs 383F, Jetskis, Phones)
+   with no tax in existence. Independent of all of the above, and it fires **this offseason**.

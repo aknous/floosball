@@ -163,11 +163,16 @@ window.
 
 ## Open questions
 
-1. **Does the class replace the trickle entirely, or does `ensurePositionSupply` still fire
-   as a backstop?** Recommended: keep it as the per-position floor it already is — it only
-   triggers on a genuinely thin position, so it cannot double the faucet in normal operation.
-2. **Where is the cull's rating bar**, as a fraction of the league mean?
-3. **Can rookie picks be traded**, and how many seasons out?
+1. ~~Does the class replace the trickle entirely~~ — **SETTLED** (owner, 2026-09-14):
+   **`ensurePositionSupply` stays as a safety net.** The draft is the intake; the floor
+   remains the per-position emergency it already is, firing only on a genuinely thin
+   position, so it cannot double the faucet in normal operation.
+2. ~~Where is the cull's rating bar~~ — **SETTLED**: **relative to the league mean**, not an
+   absolute number. ⚠️ It cannot be calibrated against current data — none of today's 26 free
+   agents have `seasonsPlayed == 0` — so the fraction has to be chosen on judgement and then
+   measured once a class has actually cycled through.
+3. ~~Can rookie picks be traded~~ — **SETTLED**: **yes.** Horizon (how many seasons out) is
+   still open; two is enough to matter and bounds how far a club can mortgage itself.
 4. ~~What happens to a mid-season promoted prospect's card~~ — **SETTLED** (owner,
    2026-09-14): *cards are only minted for players on rosters at the start of the season.*
    That is already the behaviour — `startNewSeason` calls `_generateCardTemplates` →
