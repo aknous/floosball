@@ -3921,9 +3921,12 @@ class SeasonManager:
         the scheduler depends on. An anchor already ON a Monday is its own day 0, so this is
         exactly what the old code did for the old anchor -- it is a generalisation, not a move.
         """
-        offset = 4 if _isEdt(seasonStart.date()) else 5
-        etDate = (seasonStart - datetime.timedelta(hours=offset)).date()
-        return etDate + datetime.timedelta(days=(0 - etDate.weekday()) % 7)
+        # ⚠️ Delegates to the ONE definition. This math also lives in the shop's cycle
+        # boundary, and when it was duplicated there by hand it was written as the naive
+        # `.date()` read and shipped a seasonal off-by-one-day bug. See
+        # timingManager.firstGameDateFor.
+        from managers.timingManager import firstGameDateFor
+        return firstGameDateFor(seasonStart)
 
     def getWeekStartTime(self, now:datetime.datetime, week:int):
         from managers.timingManager import TimingMode

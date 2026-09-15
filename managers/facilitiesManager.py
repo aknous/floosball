@@ -74,11 +74,33 @@ def resolveSeasonEnd(facilities: list, projects: list, treasury: int,
     # is owed until the following season.
     upgradingKeys = {p['facility_key'] for p in projects} | set(builtThisSeasonKeys or [])
 
-    # 1. UPKEEP WATERFALL — cover each facility's upkeep shortfall from the pot.
-    #    Highest-level facilities are protected first (most investment at stake);
-    #    a fan can pre-protect any specific facility via direct upkeep funding.
+    # 1. UPKEEP — SAVE THE MOST VALUE THE POT CAN ACTUALLY BUY.
+    #
+    # ⚠️ A PARTIAL PAYMENT SAVES NOTHING AND IS NOT BANKED. A facility decays unless its
+    # upkeep is met IN FULL, and `prepareSeasonStart` resets `upkeep_funded` to 0 every
+    # season — so Floobits poured into a shortfall the pot cannot close are simply gone.
+    # This used to pay highest-level-first in full-shortfall order, which in a genuine
+    # shortfall spent the entire pot on the most expensive bill and then let it decay
+    # anyway. Measured on production: Pinecones, 200F against 383F owed, put all 200F into
+    # a 247F locker room, lost it regardless, and lost the three cheaper facilities too —
+    # 136F would have saved all three. Four levels gone and nothing bought.
+    #
+    # So the choice is made over SUBSETS rather than in sequence: pick the affordable set
+    # of facilities that preserves the most value, and pay those in full. Anything not
+    # chosen is paid NOTHING, because part of a bill is worth exactly zero.
+    #
+    # Value of saving a facility = what it would cost to rebuild the level it is about to
+    # lose (`upgradeCostFloobits(level - 1)`), so a level-3 building is worth more than a
+    # level-1 and the trade-off is priced in real Floobits rather than by counting levels.
+    #
+    # ⚠️ EXACT, NOT GREEDY. This is a knapsack, and greedy by value density is not optimal
+    # on one — but a club has at most FACILITY_MAX_LEVEL-ish facilities (5 today), so all
+    # 2**n subsets are enumerable and the answer is exact. Ordering by level is kept only
+    # as the tie-break, so "most investment protected first" still decides between sets of
+    # equal value.
     facState = []
-    for f in sorted(facilities, key=lambda x: -x['level']):
+    candidates = []          # (key, level, cost, funded, shortfall, value)
+    for f in facilities:
         if f['key'] in upgradingKeys:
             facState.append({'key': f['key'], 'level': f['level'], 'upkeepMet': True,
                              'upkeepCost': 0, 'upkeepPaid': 0})
@@ -86,14 +108,40 @@ def resolveSeasonEnd(facilities: list, projects: list, treasury: int,
         cost = upkeepCostFloobits(f['level'], shareUnit)
         funded = int(f.get('upkeep_funded', 0))
         shortfall = max(0, cost - funded)
-        pay = min(shortfall, pot)
-        funded += pay
-        pot -= pay
+        # Rebuild cost of the level at risk. Level 0 cannot decay further, and a bill
+        # already covered by direct fan funding costs the pot nothing.
+        value = upgradeCostFloobits(max(0, f['level'] - 1), shareUnit) if f['level'] > 0 else 0
+        candidates.append((f['key'], f['level'], cost, funded, shortfall, value))
+
+    # Best affordable subset by preserved value; ties broken toward the higher level.
+    bestKeys, bestValue, bestLevel = set(), -1, -1
+    for mask in range(1 << len(candidates)):
+        spend = 0
+        value = 0
+        levelSum = 0
+        keys = set()
+        for i, (key, level, cost, funded, shortfall, val) in enumerate(candidates):
+            if not (mask >> i) & 1:
+                continue
+            spend += shortfall
+            if spend > pot:
+                break
+            value += val
+            levelSum += level
+            keys.add(key)
+        else:
+            if (value, levelSum) > (bestValue, bestLevel):
+                bestKeys, bestValue, bestLevel = keys, value, levelSum
+
+    for key, level, cost, funded, shortfall, value in candidates:
+        if key in bestKeys:
+            pot -= shortfall
+            funded += shortfall
         met = funded >= cost
-        facState.append({'key': f['key'], 'level': f['level'], 'upkeepMet': met,
+        facState.append({'key': key, 'level': level, 'upkeepMet': met,
                          'upkeepCost': cost, 'upkeepPaid': funded})
         if not met:
-            log.append(f"upkeep short on {f['key']} (Lv{f['level']}): {funded}/{cost}")
+            log.append(f"upkeep short on {key} (Lv{level}): {funded}/{cost}")
 
     # 2. REMAINING POT → OLDEST OPEN PROJECT(S) (FIFO by opened_season, then id).
     projState = []
