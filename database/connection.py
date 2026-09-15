@@ -1318,6 +1318,48 @@ def _runPendingMigrations():
         except Exception:
             conn.rollback()
 
+        # ---- Trading: picks, trades, and a trade id on the recap log ----
+        # ⚠️ INLINE, BECAUSE ALEMBIC DOES NOT RUN ON DEPLOY. These are what runs in prod.
+        try:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS draft_picks ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "season INTEGER NOT NULL, "
+                "round_number INTEGER NOT NULL DEFAULT 1, "
+                "original_team_id INTEGER NOT NULL, "
+                "current_owner_id INTEGER NOT NULL, "
+                "used INTEGER NOT NULL DEFAULT 0, "
+                "created_at DATETIME, "
+                "UNIQUE(season, round_number, original_team_id))"
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_draft_picks_owner "
+                              "ON draft_picks(season, current_owner_id)"))
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS trades ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "season INTEGER NOT NULL, "
+                "week INTEGER NOT NULL DEFAULT 0, "
+                "phase VARCHAR(24) NOT NULL DEFAULT 'in_season', "
+                "team_a_id INTEGER NOT NULL, "
+                "team_b_id INTEGER NOT NULL, "
+                "assets_json JSON NOT NULL, "
+                "price FLOAT DEFAULT 0.0, "
+                "reserve FLOAT DEFAULT 0.0, "
+                "created_at DATETIME)"
+            ))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trades_season_week "
+                              "ON trades(season, week)"))
+            cols = [r[1] for r in conn.execute(
+                text("PRAGMA table_info(season_recap_events)")).fetchall()]
+            if cols and 'trade_id' not in cols:
+                conn.execute(text("ALTER TABLE season_recap_events ADD COLUMN trade_id INTEGER"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_recap_trade "
+                                  "ON season_recap_events(trade_id)"))
+            conn.commit()
+            logger.info("  Migration: ensured draft_picks + trades + recap trade_id")
+        except Exception:
+            conn.rollback()
+
         # Clear stale will_retire on already-retired players. The flag is set at
         # week 22 and (historically) never reset, so retirees kept carrying it.
         # Idempotent.

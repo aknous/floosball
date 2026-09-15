@@ -254,6 +254,44 @@ class SentimentRepository:
             # gates no harder than before — never fail closed on a lookup.
             return {}
 
+    def _ownClubRatings(self, byPlayer: Dict[int, list]) -> Dict[int, list]:
+        """Drop ratings cast by fans of a club the player no longer plays for.
+
+        THE one definition of "his own club's fans", shared by the single read and the
+        bulk map so the two cannot drift — and they did drift the first time this was
+        added to the bulk path alone, which `test_sentiment_decay.py` caught.
+
+        Takes `{playerId: [(rating, season, userId), ...]}` and returns
+        `{playerId: [(rating, season), ...]}`.
+
+        ⚠️ FAILS OPEN on either lookup. An unknown club counts rather than silently muting
+        a player — the same call `_teamIdsFor` already makes, for the same reason.
+        """
+        allUsers = [int(u) for rows in byPlayer.values() for _r, _s, u in rows]
+        teamIds = self._teamIdsFor(list(byPlayer.keys()))
+        raterClubs = self._raterClubs(allUsers)
+        out: Dict[int, list] = {}
+        for pid, rows in byPlayer.items():
+            club = teamIds.get(int(pid))
+            kept = [(r, se) for r, se, uid in rows
+                    if club is None or raterClubs.get(int(uid), club) == club]
+            if kept:
+                out[int(pid)] = kept
+        return out
+
+    def _raterClubs(self, userIds=None) -> Dict[int, Optional[int]]:
+        """{userId: favouriteTeamId} for the raters in hand. One query, same reason as
+        `_teamIdsFor`: the GM sweep prices every roster in the league."""
+        from database.models import User
+        try:
+            q = self.session.query(User.id, User.favorite_team_id)
+            if userIds:
+                q = q.filter(User.id.in_(list(set(userIds))))
+            return {int(uid): (int(tid) if tid is not None else None)
+                    for uid, tid in q.all()}
+        except Exception:
+            return {}
+
     def requiredRatersFor(self, playerId: int) -> int:
         """Turnout THIS PLAYER'S CLUB needs before a rating counts."""
         teamId = self._teamIdsFor([playerId]).get(int(playerId))
@@ -266,24 +304,53 @@ class SentimentRepository:
         that mustered its raters cleared the bar whenever they voted — but how hard their
         verdict pushes fades if none of them has been back since.
         """
-        rows = (self.session.query(PlayerSentimentRating.rating, PlayerSentimentRating.season)
+        rows = (self.session.query(PlayerSentimentRating.rating,
+                                   PlayerSentimentRating.season,
+                                   PlayerSentimentRating.user_id)
                 .filter(PlayerSentimentRating.player_id == playerId).all())
+        # ⚠️ SCOPED THROUGH THE SAME FILTER THE BULK MAP USES. `getStandingMap` /
+        # `getSentimentMap` is what GM turnover and the trade market actually read, and
+        # `test_sentiment_decay.py` exists in part to catch the two drifting apart — which
+        # it did, the first time this scoping was added to the bulk path alone.
+        rows = self._ownClubRatings({playerId: rows}).get(playerId, [])
         if len(rows) < self.requiredRatersFor(playerId):
             return 0.0
         return decayedSentiment(rows, currentSeasonNumber(self.session))
 
     def getSentimentMap(self, playerIds=None) -> Dict[int, float]:
         """Bulk normalized sentiment, already rater-gated. Players below their
-        own club's bar are simply absent — callers should default to 0.0."""
+        own club's bar are simply absent — callers should default to 0.0.
+
+        ⚠️ SCOPED TO THE PLAYER'S CURRENT CLUB'S FANS, WHICH IS HOW A TRADE IS HANDLED
+        WITHOUT DESTROYING ANYTHING. Ratings are gated to a club's own fans on the WRITE
+        (`_requireOwnClub`), so a traded player would otherwise arrive carrying the
+        verdicts of supporters who are no longer his. The obvious implementation of "his
+        sentiment does not follow him" is to DELETE the rows on the trade — and those rows
+        are things real users wrote (production holds 153 of them across 107 players), the
+        same rating cannot be recovered if he is traded back, and nothing else in this
+        system deletes a fan's opinion to express a rule.
+
+        Re-scoping the AGGREGATE is the same behaviour with nothing destroyed, and it
+        matches how `_requireOwnClub` already gates WRITING rather than deleting.
+
+        ⚠️ Traded back, his old ratings reactivate — which is correct, because those fans
+        are his fans again.
+
+        ⚠️ It barely moves an UNTRADED player, and that is the point: every rating he
+        holds was cast by an own-club fan in the first place, so the filter is a no-op
+        except where a fan has since switched clubs (or the player has).
+        """
         q = self.session.query(PlayerSentimentRating.player_id,
                                PlayerSentimentRating.rating,
-                               PlayerSentimentRating.season)
+                               PlayerSentimentRating.season,
+                               PlayerSentimentRating.user_id)
         if playerIds:
             q = q.filter(PlayerSentimentRating.player_id.in_(list(playerIds)))
-        byPlayer: Dict[int, list] = {}
-        for pid, rating, voteSeason in q.all():
-            byPlayer.setdefault(int(pid), []).append((rating, voteSeason))
-        teamIds = self._teamIdsFor(list(byPlayer.keys()) or playerIds)
+        raw: Dict[int, list] = {}
+        for pid, rating, voteSeason, userId in q.all():
+            raw.setdefault(int(pid), []).append((rating, voteSeason, userId))
+        byPlayer = self._ownClubRatings(raw)
+        teamIds = self._teamIdsFor(list(raw.keys()) or playerIds)
         needByTeam: Dict[Optional[int], int] = {}
         season = currentSeasonNumber(self.session)
         out = {}

@@ -8311,6 +8311,160 @@ def get_league_markets():
         session.close()
 
 
+@app.get("/api/transactions")
+def get_transactions(response: Response, limit: int = Query(default=60, ge=1, le=200),
+                     user: Optional[_User] = Depends(_getOptionalUser)):
+    """The league's FRONT-OFFICE DESK — useful year-round, not a trade log.
+
+    Seven sections (owner). ⚠️ FIVE OF THEM ALREADY HAD THEIR DATA: `SeasonRecapEvent`
+    holds `rookie_pick | fa_pick | cut | resign | walked | promotion | retirement |
+    hof_induction | coach_fire | coach_hire` and production has five seasons of it, while
+    the draft order and the walk-year list are both derivable today. Only **trades** and
+    **the block** are new.
+
+      upcoming draft order   live, from the standings. ⚠️ MUST RE-RENDER WHEN A PICK IS
+                             TRADED — the order is WHO PICKS, not whose pick it is.
+      upcoming draft class   through the viewing club's own scouted band, so two fans see
+                             different ranges (see /api/draft/class)
+      potential free agents  walk-year players. ⚠️ FLAG WHO THE CLUB CANNOT KEEP — 18 of
+                             32 clubs are over the re-sign limit, and that is the story
+      players on the block   live listings: who is available and what it would take
+      trades                 as they happen
+      signings and cuts      already written every offseason
+      prospect promotions    already written
+
+    ⚠️ THE BLOCK AND THE WALK-YEAR LIST ARE THE SECTIONS WITH EDITORIAL WEIGHT, and the
+    ones that make the page worth visiting outside the trade window. "These 33 players are
+    leaving for nothing unless someone moves" is a story every week of the season.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    from constants import TRADING_ENABLED, RESIGN_LIMIT_PER_OFFSEASON
+    from database.connection import get_session
+    from database.models import Trade, SeasonRecapEvent, DraftPick
+
+    sm = floosball_app.seasonManager
+    tm = floosball_app.teamManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 0) or 0
+    teamsById = {getattr(t, 'id', None): t for t in (getattr(tm, 'teams', None) or [])}
+
+    def teamBlob(teamId):
+        team = teamsById.get(teamId)
+        if team is None:
+            return None
+        return {"id": teamId, "name": team.name,
+                "abbr": getattr(team, 'abbr', team.name[:3].upper()),
+                "color": getattr(team, 'color', None)}
+
+    # ---- draft order: WHO PICKS, resolved off the ORIGINAL club's finish ----
+    order = []
+    session = get_session()
+    try:
+        ranked = sorted((getattr(t, 'id', None) for t in (getattr(tm, 'teams', None) or [])),
+                        key=lambda tid: _teamWinPct(teamsById.get(tid)))
+        ownerByOrigin = {r.original_team_id: r.current_owner_id for r in
+                         session.query(DraftPick).filter_by(season=season, used=False).all()}
+        for slot, originId in enumerate(ranked, start=1):
+            ownerId = ownerByOrigin.get(originId, originId)
+            order.append({
+                "slot": slot,
+                "originalTeam": teamBlob(originId),
+                # ⚠️ The club that PICKS. A club that traded its pick and finished worst
+                # has given away the #1 selection, and this row is where a fan sees it.
+                "owner": teamBlob(ownerId),
+                "traded": ownerId != originId,
+            })
+
+        trades = (session.query(Trade)
+                  .filter(Trade.season == season)
+                  .order_by(Trade.id.desc()).limit(limit).all())
+        tradeRows = [{
+            "id": t.id, "week": t.week, "phase": t.phase,
+            "teamA": teamBlob(t.team_a_id), "teamB": teamBlob(t.team_b_id),
+            "aGave": (t.assets_json or {}).get('aGave', []),
+            "bGave": (t.assets_json or {}).get('bGave', []),
+        } for t in trades]
+
+        moves = (session.query(SeasonRecapEvent)
+                 .filter(SeasonRecapEvent.season == season,
+                         SeasonRecapEvent.event_type.in_(
+                             ('fa_pick', 'cut', 'resign', 'walked', 'promotion',
+                              'rookie_pick', 'retirement')))
+                 .order_by(SeasonRecapEvent.id.desc()).limit(limit).all())
+        moveRows = [{
+            "type": m.event_type, "team": teamBlob(m.team_id) or {"name": m.team_name},
+            "playerId": m.player_id, "player": m.player_name,
+            "position": m.position, "rating": m.rating, "detail": m.detail,
+        } for m in moves]
+    finally:
+        session.close()
+
+    # ---- walk-year players, and who cannot be kept ----
+    expiring = []
+    for team in getattr(tm, 'teams', None) or []:
+        walkers = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
+                   if p is not None and (getattr(p, 'termRemaining', 99) or 99) <= 1
+                   and not getattr(p, 'willRetire', False)]
+        # ⚠️ THE STORY IS WHO THE CLUB CANNOT KEEP. `RESIGN_LIMIT_PER_OFFSEASON` is 2, so
+        # a club with three expiring players is losing one for nothing whatever it wants.
+        overLimit = max(0, len(walkers) - int(RESIGN_LIMIT_PER_OFFSEASON))
+        for p in sorted(walkers, key=lambda x: getattr(x, 'playerRating', 0)):
+            expiring.append({
+                "playerId": getattr(p, 'id', None), "name": p.name,
+                "position": p.position.name,
+                "rating": round(getattr(p, 'playerRating', 0), 1),
+                "team": teamBlob(getattr(team, 'id', None)),
+                # True for the WEAKEST of an over-limit club's walk-years — the ones the
+                # re-sign slots will not stretch to.
+                "cannotKeep": overLimit > 0 and walkers.index(p) < overLimit,
+            })
+
+    # ---- the block ----
+    block = []
+    if TRADING_ENABLED and sm and sm.currentSeason:
+        try:
+            from managers.tradeManager import TradeMarket
+            brain = sm._foBrainForOffseason()
+            brain.season, brain.week = season, week or 1
+            market = TradeMarket(floosball_app.playerManager, tm, brain, season, week or None)
+            for team in getattr(tm, 'teams', None) or []:
+                for listing in market.listingsFor(team):
+                    block.append({
+                        "playerId": getattr(listing.player, 'id', None),
+                        "name": listing.player.name,
+                        "position": listing.player.position.name,
+                        "rating": round(getattr(listing.player, 'playerRating', 0), 1),
+                        "team": teamBlob(getattr(team, 'id', None)),
+                        "reason": listing.trigger,
+                        "ask": round(listing.ask, 1),
+                    })
+        except Exception as e:
+            logger.warning(f"Could not build the block: {e}")
+
+    response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=30")
+    return build_success_response({
+        "season": season,
+        "week": week,
+        "tradingEnabled": bool(TRADING_ENABLED),
+        "draftOrder": order,
+        "expiring": expiring,
+        "block": block,
+        "trades": tradeRows,
+        "moves": moveRows,
+    })
+
+
+def _teamWinPct(team) -> float:
+    """Worst-first ordering key. Missing clubs sort last rather than crashing the page."""
+    if team is None:
+        return 2.0
+    wins = float(getattr(team, 'wins', 0) or 0)
+    losses = float(getattr(team, 'losses', 0) or 0)
+    played = wins + losses
+    return (wins / played) if played else 0.5
+
+
 @app.get("/api/draft/class")
 def get_draft_class(response: Response,
                     user: Optional[_User] = Depends(_getOptionalUser)):

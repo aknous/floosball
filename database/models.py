@@ -1142,6 +1142,12 @@ class SeasonRecapEvent(Base):
     rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     tier: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # coach name, skip reason, seasons, etc.
+    # ⚠️ THE IDEMPOTENCY KEY IS (season, event_type, player_id|team_id) — ONE PLAYER, ONE
+    # CLUB — AND A TWO-SIDED TRADE DOES NOT FIT IT. A swap writes a row per side, both
+    # `event_type='trade'` in the same season, so without something to tell them apart the
+    # resume dedupe silently DROPS HALF OF EVERY TRADE. `trade_id` is that something, and
+    # it joins the key whenever it is set.
+    trade_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)  # stable display order within a season
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -2867,3 +2873,73 @@ class RuleVote(Base):
 
     def __repr__(self):
         return f"<RuleVote(user={self.user_id}, window={self.window_id}, pick='{self.option_key}')>"
+
+
+class DraftPick(Base):
+    """One rookie-draft selection, owned by a club and possibly traded away.
+
+    ⚠️ A PICK IS `(season, round, ORIGINAL team)`, AND THE ORIGINAL TEAM IS WHAT RESOLVES
+    THE SLOT. The draft order is derived from the ORIGINAL club's finish and then handed
+    to whoever currently owns the pick — which is the only shape that makes the dramatic
+    version true: **a club that trades its own pick and then finishes worst has given
+    away the #1 selection.** The plausible wrong implementation resolves the slot from the
+    CURRENT owner's finish, which quietly turns a gamble into a swap of equals and is a
+    different, much duller feature.
+
+    ⚠️ `freeAgencyOrder` is rebuilt from the standings every season and is a list of team
+    OBJECTS, so it cannot carry ownership. That is why picks need a row at all.
+
+    Rows are seeded lazily for the current season and `TRADE_PICK_HORIZON_SEASONS` ahead,
+    so a future pick can be traded before the draft it belongs to exists.
+    """
+    __tablename__ = "draft_picks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    original_team_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_owner_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # Stamped when the draft consumes it, so a spent pick cannot be traded again.
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("season", "round_number", "original_team_id", name="uq_draft_pick"),
+        Index("idx_draft_picks_owner", "season", "current_owner_id"),
+    )
+
+    def __repr__(self):
+        return (f"<DraftPick(s{self.season} r{self.round_number} "
+                f"from={self.original_team_id} owner={self.current_owner_id})>")
+
+
+class Trade(Base):
+    """A settled trade — the durable record both sides and the transactions page read.
+
+    `assets_json` is the full two-sided manifest:
+        {"aGave": [{kind, id, name, detail}, ...], "bGave": [...]}
+    where `kind` is 'player' | 'prospect' | 'pick'. A blob rather than a row per asset
+    because nothing ever aggregates over trade PIECES — the page lists them and the recap
+    prints them — so a join buys nothing and a second table costs more than the JSON.
+    """
+    __tablename__ = "trades"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # 0 for an offseason trade; otherwise the week it settled at.
+    week: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    phase: Mapped[str] = mapped_column(String(24), nullable=False, default='in_season')
+    team_a_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    team_b_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    assets_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # What the winning bid was worth on the seller's own scale, for the market harness.
+    price: Mapped[float] = mapped_column(Float, default=0.0)
+    reserve: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_trades_season_week", "season", "week"),
+    )
+
+    def __repr__(self):
+        return f"<Trade(s{self.season} w{self.week} {self.team_a_id}<->{self.team_b_id})>"

@@ -1124,6 +1124,23 @@ class SeasonManager:
             # this point causes the week to replay rather than be silently skipped.
             await self._onWeekComplete(self.currentSeason.currentWeek, in_playoffs=False)
 
+            # ── The trade market ────────────────────────────────────────────
+            # ⚠️ HERE AND NOWHERE ELSE, and the position is the whole safety argument.
+            # `_onWeekComplete` has just BANKED the week — weekly FP written, card
+            # bonuses settled — so the week's record is closed before a single player
+            # changes clubs.
+            #
+            # `cardEffects` reads a depicted player's club at scoring time
+            # (`rosterPlayerTeamIds` / `teamResults`) and the lineup locks at kickoff, so
+            # a trade executed BETWEEN TWO SLATES moves a player between the lock and the
+            # bank, and a card equipped against club A scores against club B's result.
+            # This project has had FOUR separate incidents in exactly that seam: the
+            # lineup-snapshot drift, `equipped_cards` not being a historical record, the
+            # leaderboard's second door, and Veteran's backfill.
+            #
+            # A trade is therefore a between-weeks event like every other roster change.
+            self._runTradePass(self.currentSeason.currentWeek)
+
             # Add game end highlight
             if hasattr(self.currentSeason, 'leagueHighlights'):
                 self.currentSeason.leagueHighlights.insert(0, {
@@ -6966,6 +6983,13 @@ class SeasonManager:
         else:
             logger.info("Step 3.79 skipped — pool_cull already complete")
 
+        # ── Offseason trade window, pass A ──────────────────
+        # ⚠️ AFTER THE FRONT OFFICE AND BEFORE THE DRAFT, because that gap is the only
+        # moment a club knows who it kept, what the pool holds AND where it picks — and
+        # because THIS YEAR'S PICKS ARE STILL LIVE. They are spent the moment the draft
+        # runs, so pass B can only trade future ones.
+        self._runOffseasonTradePass('pre_draft')
+
         # ── End of front-office phase ────────────────────────
         # The rookie draft sits here, between the front office and free agency. The
         # hold to draft day is load-bearing in its own right: dropping it would pull
@@ -6984,6 +7008,11 @@ class SeasonManager:
         # deploy landing mid-draft would otherwise re-run it and draft the class twice.
         # The offseason is exactly where this project's restarts land.
         await self._runRookieDraftPhase()
+
+        # ── Offseason trade window, pass B ──────────────────
+        # Smaller: a club that just drafted a quarterback may now have a surplus one, and
+        # the pool it is about to fish is known. ⚠️ This year's picks are gone.
+        self._runOffseasonTradePass('pre_fa')
 
         # Pre-FA integrity sweep — the draft pool must not include players
         # who are already on a roster (promotions just moved some prospects up,
@@ -7831,6 +7860,170 @@ class SeasonManager:
                     except Exception as e:
                         logger.warning(f"Could not broadcast promotion for {team.name}: {e}")
 
+    def _runTradePass(self, week: int) -> list:
+        """One weekly pass of the trade market. Best-effort — ⚠️ NOTHING HERE MAY BREAK A
+        WEEK, which is the lesson `_publishGameNews` already taught: its first version
+        read an attribute off the wrong object and the AttributeError raised straight out
+        of `_simulateGame`, failing every game in the slate.
+
+        ⚠️ AND IT REFUSES TO RUN INSIDE A LIVE WEEK. The caller places it after
+        `_onWeekComplete`, which is the correct seam, but a future caller might not — so
+        the guard is here rather than in a comment. `weekIsFullyRecorded` is the predicate
+        the fantasy side already trusts.
+        """
+        from constants import TRADING_ENABLED, GM_ACTIVE_WEEK
+        if not TRADING_ENABLED or not self.currentSeason:
+            return []
+        if int(week or 0) >= int(GM_ACTIVE_WEEK):
+            return []           # rosters freeze at the deadline
+        try:
+            if not self._weekIsBanked(week):
+                logger.warning(f"Trade pass skipped — week {week} is not banked yet")
+                return []
+            from managers import tradeManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            season = self.currentSeason.seasonNumber
+            self._ensureDraftPicks(season)
+            brain = self._foBrainForOffseason()
+            brain.season, brain.week = season, int(week or 1)
+            accepted = tradeManager.runWeeklyPass(
+                self.playerManager, teamManager, brain, season, week)
+            settled = []
+            for entry in accepted:
+                # ⚠️ SEQUENTIAL, RE-VALIDATING AGAINST THE STATE THE LAST ONE LEFT. Within
+                # one pass trades interact: a club may promote a prospect to cover a sale
+                # and that prospect may be the asset another club is buying, and two
+                # accepted trades can target the same roster slot. `settleTrade` re-checks
+                # and returns None rather than executing an illegal move.
+                result = tradeManager.settleTrade(
+                    self, entry['listing'], entry['winner'], season, week)
+                if result is not None:
+                    settled.append(result)
+            if settled:
+                logger.info(f"Trade pass week {week}: {len(settled)} trade(s) settled")
+            return settled
+        except Exception as e:
+            logger.error(f"Trade pass failed in week {week}: {e}", exc_info=True)
+            return []
+
+    def _runOffseasonTradePass(self, passName: str) -> list:
+        """One of the two offseason trade windows.
+
+        ⚠️ THE GAP BETWEEN THE FRONT OFFICE AND THE DRAFT IS THE WINDOW, and it is ~19
+        hours of wall clock. By then every club knows three things it does not know at any
+        other moment: WHO IT KEPT, WHAT THE POOL HOLDS, and WHERE IT PICKS.
+
+            pass A — pre-rookie-draft: the main one. Roster settled, pick known, needs
+                     visible. ⚠️ THIS IS WHERE PICK TRADING LIVES, because this year's
+                     picks are spent the moment the draft runs. That asymmetry is worth
+                     honouring rather than smoothing.
+            pass B — pre-FA-draft: smaller. A club that just drafted a quarterback may now
+                     have a surplus one, and the pool it is about to fish is known.
+
+        ⚠️ THE VALUATION CHANGES HERE, IN THE CLUB'S FAVOUR, AND BOTH HALVES MATTER.
+        `seasonsOfControl` JUMPS — the walk-years are already gone, so everyone remaining
+        has whole seasons of term and the rental market does not exist at all. And
+        `nowWeight` RESETS, because contention is unknown for a season that has not been
+        played — which removes the buyer/seller asymmetry entirely, so the offseason market
+        cannot run on contention. It runs on the other three triggers: blocked prospect
+        (loudest here, right after promotions), locker room, and horizon mismatch. That is
+        a genuinely different market rather than the same one at a different date, which is
+        the argument for having both.
+
+        ⚠️ STEP-GATED AND NON-NEGOTIABLE. Every other offseason phase guards on
+        `_isOffseasonStepComplete` and marks itself done; a deploy landing mid-pass would
+        otherwise re-run it and trade AGAIN from an already-changed roster — and the
+        offseason is exactly where this project's restarts land.
+        """
+        from constants import TRADING_ENABLED
+        step = f'trade_{passName}'
+        if self._isOffseasonStepComplete(step):
+            logger.info(f"Offseason trade pass '{passName}' already complete — skipping")
+            return []
+        if not TRADING_ENABLED or not self.currentSeason:
+            self._markOffseasonStepComplete(step)
+            return []
+        settled = []
+        try:
+            from managers import tradeManager
+            teamManager = self.serviceContainer.getService('team_manager')
+            season = self.currentSeason.seasonNumber
+            self._ensureDraftPicks(season)
+            brain = self._foBrainForOffseason()
+            # `week=None` is what tells the valuation this is the offseason: whole
+            # seasons of control, and contention at parity.
+            for entry in tradeManager.runWeeklyPass(
+                    self.playerManager, teamManager, brain, season, None):
+                result = tradeManager.settleTrade(
+                    self, entry['listing'], entry['winner'], season, None)
+                if result is not None:
+                    settled.append(result)
+                    self._offseasonTransactions.append({
+                        'type': 'trade',
+                        'team': result['teamAName'], 'teamAbbr': '',
+                        'player': ', '.join(p['name'] for p in result['aGave']),
+                        'position': '—', 'rating': 0,
+                    })
+            if settled:
+                logger.info(f"Offseason trade pass '{passName}': {len(settled)} settled")
+        except Exception as e:
+            logger.error(f"Offseason trade pass '{passName}' failed: {e}", exc_info=True)
+        self._markOffseasonStepComplete(step)
+        return settled
+
+    def _weekIsBanked(self, week: int) -> bool:
+        """Has this week's fantasy record been written? The trade seam's gate."""
+        try:
+            from managers.fantasyTracker import weekIsFullyRecorded
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            from database.connection import get_session
+            from database.models import WeeklyPlayerFP
+            session = get_session()
+            try:
+                return session.query(WeeklyPlayerFP).filter_by(
+                    season=season, week=int(week or 0)).first() is not None
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Could not confirm week {week} is banked: {e}")
+            return False        # ⚠️ fail CLOSED — no trade beats a mis-scored week
+
+    def _ensureDraftPicks(self, season: int) -> None:
+        """Seed pick rows for this season and the tradeable horizon.
+
+        Lazy and idempotent: a pick has to EXIST before it can be traded, and a future
+        pick belongs to a draft that has not happened yet. `freeAgencyOrder` is rebuilt
+        from the standings each season and is a list of team OBJECTS, so it cannot carry
+        ownership — which is why these need rows at all.
+        """
+        from constants import TRADE_PICK_HORIZON_SEASONS
+        from database.connection import get_session
+        from database.models import DraftPick
+        teamManager = self.serviceContainer.getService('team_manager')
+        teams = list(getattr(teamManager, 'teams', None) or [])
+        if not teams:
+            return
+        session = get_session()
+        try:
+            for s in range(int(season), int(season) + int(TRADE_PICK_HORIZON_SEASONS) + 1):
+                existing = {r.original_team_id for r in
+                            session.query(DraftPick).filter_by(season=s, round_number=1).all()}
+                for team in teams:
+                    tid = getattr(team, 'id', None)
+                    if tid is None or tid in existing:
+                        continue
+                    session.add(DraftPick(season=s, round_number=1,
+                                          original_team_id=tid, current_owner_id=tid))
+            session.commit()
+        except Exception as e:
+            logger.warning(f"Could not seed draft picks: {e}")
+            try:
+                session.rollback()
+            except Exception:
+                pass
+        finally:
+            session.close()
+
     def _foBrainForOffseason(self):
         """Build (and cache for this offseason) the front-office decider.
 
@@ -8301,7 +8494,8 @@ class SeasonManager:
     def _recordOffseasonEvent(self, eventType, *, player=None, team=None, detail=None,
                               teamId=None, teamAbbr=None, teamName=None,
                               playerId=None, playerName=None, position=None,
-                              rating=None, tier=None, session=None) -> None:
+                              rating=None, tier=None, session=None,
+                              tradeId=None) -> None:
         """Persist one offseason transaction/announcement for the Season Recap.
         Best-effort + idempotent per (season, eventType, playerId|teamId) so an
         offseason resume/restart never duplicates or breaks the offseason.
@@ -8335,12 +8529,18 @@ class SeasonManager:
             try:
                 q = s.query(SeasonRecapEvent).filter_by(season=season, event_type=eventType)
                 q = q.filter_by(player_id=playerId) if playerId is not None else q.filter_by(team_id=teamId)
+                # ⚠️ A TWO-SIDED TRADE DOES NOT FIT (season, event_type, player|team). Both
+                # sides are 'trade' rows in the same season, so without the trade id the
+                # dedupe above silently drops half of every swap.
+                if tradeId is not None:
+                    q = q.filter_by(trade_id=tradeId)
                 if q.first():
                     return  # already recorded (resume/restart safety)
                 s.add(SeasonRecapEvent(
                     season=season, event_type=eventType, team_id=teamId, team_abbr=teamAbbr,
                     team_name=teamName, player_id=playerId, player_name=playerName,
                     position=position, rating=rating, tier=tier, detail=detail,
+                    trade_id=tradeId,
                 ))
                 if ownSession:
                     s.commit()

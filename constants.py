@@ -2557,6 +2557,172 @@ CUT_FEE_RATE = 50.0
 # market prices against, and it is measured off the pool rather than guessed.
 REPLACEMENT_RATING = 67.0
 
+# ============================================================================
+# IN-SEASON AND OFFSEASON TRADING  (docs/TRADING_PLAN.md)
+# ============================================================================
+# ⚠️ OFF UNTIL MEASURED, matching RULE_VOTE_ENABLED / WEATHER_ENABLED /
+# RUNNER_MOVE_ENABLED. Every risky system here shipped behind a flag.
+TRADING_ENABLED = False
+
+# ---- Why trades happen ----
+# ⚠️ THE ENGINE IS CONTRACT CONGESTION, NOT GM DISAGREEMENT. The obvious model — two GMs
+# value a player differently, so they swap — is noise wearing a strategy's clothes: with
+# six position-locked slots there are no holes and no surpluses, every club has exactly
+# one of each, and nothing creates a NEED. `RESIGN_LIMIT_PER_OFFSEASON` is 2, and on the
+# live league 89 of 192 players (46%) are on walk years, 18 of 32 clubs have more than
+# two expiring, and 33 players — 2,420 rating points — walk for ZERO return at season
+# end. A club about to lose a player for nothing should sell him for something.
+
+# ---- Valuation: surplus over replacement x seasons of control ----
+# Value = how much better than freely available, multiplied by how long you keep it.
+# `termRemaining` already carries the time half: a walk-year player traded in week 10 is
+# 0.64 seasons of control against 2.64 for the same player with three years left — a 4x
+# spread on identical talent, which is what makes a contract an asset rather than a
+# detail. Replacement is REPLACEMENT_RATING above, not zero.
+
+# ⚠️ THE CONTENTION WEIGHT IS WHAT MAKES A MARKET EXIST AT ALL. On the raw scale picks
+# dominate rentals ~10x and nothing would ever clear. The missing term is that clubs do
+# not share a discount rate: a contender prices THIS season high and the future low, a
+# club going nowhere does the reverse, BOTH ARE RIGHT, and that gap is the trade.
+#
+#   nowWeight = (contention / leagueMean) ** TRADE_CONTENTION_EXPONENT
+#
+# Swept on a real rental at week 10 — the earliest pick each buyer would part with:
+#
+#   buyer                  e=1.0   e=1.25   e=1.5   e=2.0
+#   Pinecones (25.6W)        20      17       12       2
+#   Curd (21.0W)             24      22       20      15
+#   Waffles (15.8W)          26      26       26      25
+#
+# At 2.0 the best club in the league pays a top-two pick for a six-week rental, which no
+# real club does. Linear compresses the whole market into picks 20-26 — a 6-slot spread
+# with little separating a 25-win club from a 16-win one. 1.25 gives 9 slots and lands a
+# rental mid-round.
+TRADE_CONTENTION_EXPONENT = 1.25
+
+# ⚠️ CONTENTION IS UNCERTAIN EARLY, AND THAT PRODUCES THE DEADLINE FOR FREE. A club does
+# not know in week 2 whether it is a contender, so `nowWeight` reads off a blend of prior
+# expectation and this season's evidence — the same shape
+# `teamManager.applyRegularSeasonPressureBlend` already uses.
+#
+#   week  Pinecones  Bees   gap
+#     1     1.00     1.00   1.00     <- nobody can tell yet
+#     8     1.54     0.84   1.84
+#    12     1.87     0.75   2.50
+#    15+    2.12     0.68   3.12
+#
+# ⚠️ IN WEEK 1 EVERY CLUB SITS AT 1.00, so buyer and seller price the future identically,
+# there is no gap to trade across, and NOTHING FIRES. The market opens as the table
+# separates — a deadline without a deadline rule. Certainty arrives at week 15 and the
+# deadline is week 22, leaving a seven-week window where clubs KNOW and must act.
+TRADE_CONTENTION_RAMP_WEEKS = 14
+
+# ---- The ask decays toward the floor ----
+# Hold out early, take what you can get late. Both ends decay together, so a late seller
+# is never squeezed into a giveaway.
+#   week      1     10     15     20     22
+#   reserve  100%   67%    48%    30%    22%
+TRADE_RESERVE_DECAY_FLOOR = 0.20
+
+# ---- The four modifiers — all a PRICE, never a VETO ----
+# Matching how `sentimentTilt` is described everywhere else in the front office: it tips
+# close calls, it never dictates.
+
+# ⚠️ A DIVISION RIVAL IS FACED FOUR TIMES AS OFTEN AS ANYBODY ELSE, and the ratio is the
+# premium rather than a chosen number: 12 division games across 3 rivals is 4 apiece,
+# while the other 12 league games spread over 12 clubs and the 4 interleague over 4. They
+# are also the only clubs that can take a DIVISION TITLE, which at 8 divisions is what
+# most of the league is playing for.
+#
+# ⚠️ SCALED BY THE RIVAL'S THREAT, NOT FLAT. Selling a rental to a 3-9 rival costs
+# nothing; selling to the club you are chasing is self-harm.
+TRADE_DIVISION_PREMIUM = 0.35       # at a rival of average contention
+TRADE_LEAGUE_PREMIUM = 0.09         # same league, other division: 1 game a season
+# (cross-league is 1 game and no shared title — no premium at all)
+
+# ---- Rate limits ----
+# ⚠️ THE MARKET IS SUPPLY-CONSTRAINED, SO THESE ARE A SAFETY RAIL RATHER THAN A BALANCE
+# LEVER. Counted on the live league the triggers produce ~14 expiring-surplus listings
+# across 8 non-contending clubs and ~18 locker-room listings across 15 clubs, against 16
+# buyers — and each listing sells ONCE. The ceiling is departing players, not appetite.
+# So: ship with the weekly limits and NO per-season cap, then count. A per-season cap
+# constrains something that is not currently the binding constraint, and guessing its
+# value before a season has run is how it ends up wrong.
+TRADE_LISTINGS_PER_TEAM = 1         # else every congested club posts three in week 1
+TRADE_BIDS_PER_TEAM_PER_WEEK = 1    # stops a contender hoovering the block in one pass
+TRADE_CANDIDATES_PER_LISTING = 4    # approach the best few, not all 31
+TRADE_MAX_PIECES = 3                # a trade should read as a sentence
+
+# ---- Rookie picks ----
+# Expected true skill of the player taken at each slot (order statistics of 32 draws from
+# the live generation constants, 4,000 classes):
+#   pick     1     3     8    12    16    24    32
+#   skill  98.6  92.0  85.2  81.6  78.4  71.8  57.2
+# Pick 1 is a future superstar, pick 16 league-average, pick 32 a token. That steepness
+# is what makes an early pick a real asset and gives the market denominations to settle a
+# gap with.
+TRADE_PICK_HORIZON_SEASONS = 2      # how far out a pick may be traded
+
+# ⚠️ A FUTURE PICK IS DISCOUNTED BY SLOT, NOT FLAT, and the measurement says why. Variance
+# by slot over 6,000 simulated classes, as a fraction of the surplus that slot delivers:
+#   pick      1     3     5    16    24     32
+#   sd/surp  0.15  0.13  0.13  0.19  0.49  50.3
+# A top-5 pick's class-to-class variation is a small fraction of what it delivers — the
+# worst class in 6,000 still gave pick 1 an 86. A late pick's variation is comparable to
+# its ENTIRE value. So not knowing the class costs a late pick most and a top pick least.
+#
+# ⚠️ And the discount is for TIME AND RISK, NOT EXPECTATION: every class is drawn from the
+# same distribution, so a future pick's expected class is identical to this year's. What
+# is worse is that it pays later and it pays less predictably.
+TRADE_FUTURE_PICK_DISCOUNT_TOP = 0.95      # near-nil in the top 5
+TRADE_FUTURE_PICK_DISCOUNT_LATE = 0.55     # steep in the back half
+
+# ---- A prospect's control is a DEADLINE, not a term ----
+# `seasonsOfControl` measures seasons of CONTRIBUTION off `termRemaining`. A prospect has
+# neither: he contributes nothing while in the pipeline, and PROSPECT_DEVELOPMENT_WINDOW
+# is the number of offseasons his club has to PROMOTE HIM OR LOSE HIM.
+#
+#   prospect_seasons  window left  p(promoted)  value
+#          0               3          0.83       52.5   fresh, full runway
+#          1               2          0.70       43.9   mid-window
+#          2               1          0.45       28.3   ⚠️ DISTRESSED
+#
+# ⚠️ A PROSPECT AT 2/3 IS A DISTRESSED ASSET — his holder must find him a slot this
+# offseason or lose him for nothing, which is the walk-year squeeze one level down.
+# ✅ AND THE DEADLINE TRAVELS. `prospect_seasons` moves with the player, so a buyer
+# inherits the same clock: a distressed prospect is worth buying only if you have the
+# slot the seller does not, which is exactly the trade that should happen — and it cannot
+# be gamed by passing him around, because each pass burns the same window.
+TRADE_PROSPECT_SLOT_OPENS_CHANCE = 0.45
+
+# ---- Mid-season free-agent signing, and the roster window ----
+# A club may sign a free agent to fill an EMPTY slot mid-season, which is the piece that
+# makes player-for-picks available to everybody rather than only to clubs with a pipeline.
+#
+# ⚠️ SCOPE IS FILLING A HOLE, NOT UPGRADING. A signing is available when a roster slot is
+# empty — after a trade, and nowhere else. Letting clubs sign over a filled slot would be
+# a second, continuous free-agency market and would undo the position-lock logic the rest
+# of the design rests on.
+#
+# ⚠️ THE TERM IS THIS SEASON OR ONE MORE, NEVER A FULL `_getPlayerTerm` DEAL. Anything
+# longer makes hole-filling a cheap way to ACQUIRE TERM: a club could trade a player away
+# in week 15 and sign a three-year replacement, converting a roster hole into an asset.
+#
+# ⚠️ AND THE THIN POOL IS THE REAL DETERRENT, BY DESIGN. Best available today is 68 at QB
+# and 70 at WR against a league median of 79 — so what a trade COSTS depends sharply on
+# position: a kicker is nearly free to move (the pool replaces him at -3) and a
+# quarterback is expensive (-12). The market will move kickers and hoard quarterbacks
+# without a rule saying so. Signing is what a club does when it has no prospect and no
+# better option, not a strategy.
+TRADE_MIDSEASON_SIGNING_TERM = 1
+
+# ⚠️ CUT / SIGN / TRADE ARE ALL LIVE UNTIL WEEK 22, THEN ROSTERS FREEZE until the
+# offseason. One window, one deadline, three verbs: a club can reshape its roster right up
+# to the final game day and then must play what it has through the run-in and the
+# playoffs. That the deadline is GM_ACTIVE_WEEK is convenient rather than coincidental —
+# the Front Office block already opens there, so the freeze and the offseason machinery
+# share a boundary.
+
 # ---- Cores rule-change vote (docs/RULE_CHANGES_PLAN.md) ----
 # A Core-driven, user-voted live rule mutation. Each game day (weeks 1/8/15/22) there's
 # an escalating chance a vote fires: Aris opens a CHANGE vote, Pyre opens a REVERT vote.
