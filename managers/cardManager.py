@@ -135,7 +135,14 @@ def _shopCycleStartDate(session, currentSeason: int, currentWeek: int):
         # The rollover is `firstKickoffOfThatDay - lead`, and the first round of
         # every game day is 12:00 ET. Convert by hand rather than via tzdata, the
         # same way `seasonManager.getWeekStartTime` does.
-        targetDate = (season.start_date + _dt.timedelta(days=shopDay - 1)).date()
+        # ⚠️ DERIVE THE FIRST GAME DAY; DO NOT READ `start_date.date()`. The anchor is a
+        # naive UTC stamp, so its date is the date in LONDON — and at 19:00 ET Sunday that
+        # is SUNDAY in EDT and MONDAY in EST. Reading it naively put every shop cycle a full
+        # day early for half the year: day 1's pack opens still counted on day 2, and the
+        # shop reported "Cycle limit reached (5 of 5)" from the first hour of the second
+        # game day. Correct all winter, wrong March to November.
+        from managers.timingManager import firstGameDateFor
+        targetDate = firstGameDateFor(season.start_date) + _dt.timedelta(days=shopDay - 1)
         utcOffset = 4 if _isEdtDate(targetDate) else 5
         kickoffUtc = _dt.datetime(targetDate.year, targetDate.month, targetDate.day,
                                   12 + utcOffset)
