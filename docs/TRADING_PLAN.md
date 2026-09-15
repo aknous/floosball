@@ -804,10 +804,45 @@ the headline prospect, develops him for three seasons, and loses him for free be
 slot at his position happened to be occupied. That is the exact outcome the draft exists to
 create and this would quietly undo it.
 
+#### ⚠️ And the release currently lands AFTER the draft he should be in
+
+Owner: at the end of his last window the club either signs him, **or he becomes available in
+the upcoming FA draft.** Today he does neither in time.
+
+| step | line | |
+|---|---:|---|
+| supply floor tops up the pool | — | excludes prospects, so it generates a replacement |
+| `_processFreeAgency()` — **the FA draft** | `:6941` | |
+| `_advanceProspectWindow()` — **release** | `:6994` | ⚠️ **53 lines too late** |
+
+So a prospect washing out in offseason N is released into the pool **after** offseason N's
+draft has already run, and is not signable until offseason **N+1**. He sits idle for an entire
+extra season.
+
+⚠️ **And it costs twice.** `ensurePositionSupply` runs before the FA draft and **excludes
+prospects by design**, so it generates a fresh free agent for a hole the washing-out prospect
+could have filled — the league gains a body it did not need *and* the prospect goes unused.
+
+**Fix: move `_advanceProspectWindow` to just after the promotions pass**, before the rookie
+draft and the supply floor:
+
+```
+front office → promotions (last chance) → advanceProspectWindow (release) →
+rookie draft → supply floor → FA draft
+```
+
+✅ Two things fall out for free. The released prospect is in the pool **for the draft that is
+about to happen**, which is what the owner asked for. And the supply floor now **counts him**,
+so it stops generating a replacement he can be — which is the same over-generation documented
+in `ensurePositionSupply`'s own comment (*"the extra FAs just sit in the pool"*).
+
+⚠️ Moving it earlier also fixes the increment: run before the rookie draft, this season's
+new draftees are not yet in `team.prospects`, so they correctly start at `prospect_seasons = 0`
+rather than being incremented in the offseason they arrived.
+
 #### The last chance, in order of preference
 
-On `prospect_seasons == PROSPECT_DEVELOPMENT_WINDOW - 1` (his final offseason), the club
-should get to act rather than watch:
+On his final offseason, at the promotions pass, the club should get to act rather than watch:
 
 1. **Promote into an open slot regardless of the bar** — better than nothing beats better than
    a free agent, and the free agent is not the alternative any more.

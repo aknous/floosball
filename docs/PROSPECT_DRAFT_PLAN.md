@@ -274,6 +274,35 @@ Restore `rookieDraftPickGenerator` and the `rookie_draft` offseason phase, worst
 pick per club. **Leave the fan ballot and its tally out** — `_promoteProspectsAutonomously`
 is the pattern for replacing a ballot-driven decision with a brain-driven one.
 
+### 2b. ⚠️ Move `_advanceProspectWindow` before the FA draft
+
+Currently `_processFreeAgency()` runs at `seasonManager:6941` and
+`_advanceProspectWindow()` at `:6994`, so a prospect who washes out is released into the pool
+**after that offseason's FA draft has already run** — he is unsignable until the *next*
+offseason and sits idle for a full extra season.
+
+⚠️ **It costs twice**: `ensurePositionSupply` runs before the draft and excludes prospects, so
+it generates a fresh free agent for a hole the washing-out prospect could have filled.
+
+Move it to just after the promotions pass:
+
+```
+front office → promotions (last chance) → advanceProspectWindow → rookie draft →
+supply floor → FA draft
+```
+
+✅ The released prospect is then in the pool for the draft about to happen (owner), the supply
+floor counts him instead of replacing him, and this season's new draftees — not yet in
+`team.prospects` — correctly start at `prospect_seasons = 0` instead of being incremented in
+the offseason they arrived.
+
+⚠️ **And the last window needs a real last chance.** `_promoteProspectsAutonomously` only
+promotes into an **open slot** and only when the prospect beats `bestReplacementValue ×
+FO_PROSPECT_PROMOTE_EDGE`. On the final window both tests are wrong: a club whose slot is
+filled loses a 99-potential player at any quality, and the comparison is against a free agent
+when the real alternative is **nothing**. See `docs/TRADING_PLAN.md` §5b for the three-option
+fix (promote regardless of the bar / cut to make room, paying the cut fee / trade him).
+
 ### 3. The cull
 New. Removes players who **never reached a roster** and have sat unsigned past a grace
 window.
