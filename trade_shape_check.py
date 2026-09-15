@@ -147,10 +147,78 @@ async def main(seasons, treasury):
             print(f"  !! mismatch after {label}: {bad[:3]}")
         return bad
 
+    def assetDetail(market, piece, seller, buyer):
+        """⚠️ BOTH SIDES' VALUATIONS OF THE SAME PIECE, which is the only interesting
+        number in a trade and the one nothing persists. They differ because the two clubs
+        discount the future differently — that difference IS the trade."""
+        def valueFor(team):
+            for a in market._tradeableAssets(buyer, valuingTeam=team,
+                                             swapPosition=swapPos):
+                if a['kind'] == piece['kind'] and a['id'] == piece['id']:
+                    return round(a['value'], 1)
+            return None
+        swapPos = None
+        return {'toSeller': valueFor(seller), 'toBuyer': valueFor(buyer)}
+
     def spySettle(seasonManager, listing, winner, season, week=None):
         before = tradeManager._openSlotFor(winner.team, listing.player) is not None
         preexisting = set(scanMismatch('BEFORE'))
+        from managers.tradeManager import TradeMarket
+        brain = sm._foBrainForOffseason()
+        brain.season, brain.week = season, week or 22
+        mkt = TradeMarket(pm, tm, brain, season, week)
+        seller, buyer = listing.team, winner.team
+        swapPos = getattr(getattr(listing.player, 'position', None), 'value', None)
+        sellerVals = {(a['kind'], a['id']): round(a['value'], 1)
+                      for a in mkt._tradeableAssets(buyer, valuingTeam=seller,
+                                                    swapPosition=swapPos)}
+        buyerVals = {(a['kind'], a['id']): round(a['value'], 1)
+                     for a in mkt._tradeableAssets(buyer, valuingTeam=buyer,
+                                                   swapPosition=swapPos)}
+
+        def describe(obj):
+            return {
+                'name': getattr(obj, 'name', '?'),
+                'position': getattr(getattr(obj, 'position', None), 'name', None),
+                'rating': round(getattr(obj, 'playerRating', 0) or 0, 1),
+                'term': int(getattr(obj, 'termRemaining', 0) or 0),
+                'ceiling': (obj.computeCeilingRating()
+                            if hasattr(obj, 'computeCeilingRating') else None),
+                'prospectSeasons': getattr(obj, 'prospect_seasons', None),
+            }
+
+        record = {
+            'season': season, 'week': week,
+            'trigger': listing.trigger,
+            'ask': round(listing.ask, 1), 'floor': round(listing.floor, 1),
+            'bid': round(winner.value, 1),
+            'seller': {'name': seller.name,
+                       'nowWeight': round(mkt.nowWeight(seller), 2),
+                       'record': dict(getattr(seller, 'seasonTeamStats', {}) or {})},
+            'buyer': {'name': buyer.name,
+                      'nowWeight': round(mkt.nowWeight(buyer), 2),
+                      'record': dict(getattr(buyer, 'seasonTeamStats', {}) or {})},
+            'out': [dict(describe(listing.player), kind='player')],
+            'back': [],
+        }
+        for piece in winner.pieces:
+            key = (piece['kind'], piece['id'])
+            entry = {'kind': piece['kind'], 'name': piece['name'],
+                     'toSeller': sellerVals.get(key), 'toBuyer': buyerVals.get(key)}
+            if piece['kind'] == 'pick':
+                d = piece.get('detail') or {}
+                entry.update({'pickSeason': d.get('season'), 'slot': d.get('slot'),
+                              'seasonsOut': (d.get('season') or season) - season})
+            else:
+                obj = (tradeManager._findRostered(buyer, piece['id'])
+                       or tradeManager._findProspect(buyer, piece['id']))
+                if obj is not None:
+                    entry.update(describe(obj))
+            record['back'].append(entry)
+
         out = realSettle(seasonManager, listing, winner, season, week)
+        if out is not None:
+            shape.setdefault('ledger', []).append(record)
         fresh = [m for m in scanMismatch('settle') if m not in preexisting]
         if fresh:
             print(f"     ^ caused by: {listing.team.name} sent {listing.player.name} "
@@ -278,6 +346,28 @@ async def main(seasons, treasury):
     print(f"\n  ── duplicate live names: {len(dupes)} ──")
     for n, ids in list(dupes.items())[:5]:
         print(f"    {n}: ids {ids}")
+
+    holes = [(t.name, sl) for t in tm.teams
+             for sl, p in (t.rosterDict or {}).items() if p is None]
+    onTwo = []
+    for t in tm.teams:
+        for sl, p in (t.rosterDict or {}).items():
+            if p is None:
+                continue
+            owner = getattr(getattr(p, 'team', None), 'name', getattr(p, 'team', None))
+            if owner != t.name:
+                onTwo.append(f"{p.name}@{t.name}.{sl}->{owner!r}")
+    print(f"\n  ── roster integrity: {len(holes)} hole(s), {len(onTwo)} wrong-team ref(s) ──")
+    if holes[:3]:
+        print(f"    {holes[:3]}")
+    if onTwo[:3]:
+        print(f"    {onTwo[:3]}")
+
+    import json
+    with open('/tmp/trade_ledger.json', 'w') as fh:
+        json.dump(shape.get('ledger', []), fh, indent=1)
+    print(f"\n  wrote {len(shape.get('ledger', []))} detailed trade records to "
+          f"/tmp/trade_ledger.json")
 
     print(f"\n  ── who replaced the SOLD player? ──")
     for kind, count in shape['backfillKind'].most_common():

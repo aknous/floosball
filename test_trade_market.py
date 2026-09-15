@@ -263,8 +263,9 @@ def test_a_bundle_reads_as_a_sentence():
     clear a bar by four times is not negotiating."""
     market = _market([FakeTeam(1, 'A'), FakeTeam(2, 'B')])
     seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
-    market._tradeableAssets = lambda team, valuingTeam=None: _assets([2.0, 3.0, 9.0, 12.0])
-    pieces = market._assemble(buyer, seller, bar=4.0, gain=30.0)
+    market._tradeableAssets = (lambda team, valuingTeam=None, swapPosition=None:
+                               _assets([2.0, 3.0, 9.0, 12.0]))
+    pieces = market._assemble(buyer, seller, bar=4.0, gross=30.0, displaced=0.0)
     assert 0 < len(pieces) <= constants.TRADE_MAX_PIECES
     assert sum(p['value'] for p in pieces) >= 4.0
     assert sum(p['value'] for p in pieces) < 9.0, "it overpaid rather than assembling"
@@ -282,12 +283,12 @@ def test_the_bundle_is_valued_on_BOTH_sides():
     seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
 
     # The seller prizes these picks; the buyer barely minds losing them.
-    def assets(team, valuingTeam=None):
+    def assets(team, valuingTeam=None, swapPosition=None):
         high = valuingTeam is seller
         return _assets([10.0, 10.0] if high else [1.0, 1.0])
 
     market._tradeableAssets = assets
-    pieces = market._assemble(buyer, seller, bar=15.0, gain=5.0)
+    pieces = market._assemble(buyer, seller, bar=15.0, gross=5.0, displaced=0.0)
     assert pieces, "a bundle the seller values at 20 did not clear its bar of 15"
     assert sum(p['value'] for p in pieces) >= 15.0, \
         "the bundle was sized on the BUYER's valuation, not the seller's"
@@ -299,9 +300,10 @@ def test_a_buyer_refuses_a_bundle_that_costs_more_than_the_upgrade():
     pieces costs the buyer more than it gains."""
     market = _market([FakeTeam(1, 'A'), FakeTeam(2, 'B')])
     seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
-    market._tradeableAssets = lambda team, valuingTeam=None: _assets([50.0, 50.0])
-    assert market._assemble(buyer, seller, bar=40.0, gain=5.0) == []
-    assert market._assemble(buyer, seller, bar=40.0, gain=500.0) != []
+    market._tradeableAssets = (lambda team, valuingTeam=None, swapPosition=None:
+                               _assets([50.0, 50.0]))
+    assert market._assemble(buyer, seller, bar=40.0, gross=5.0, displaced=0.0) == []
+    assert market._assemble(buyer, seller, bar=40.0, gross=500.0, displaced=0.0) != []
     print("PASS a buyer walks away when the price exceeds the upgrade")
 
 
@@ -388,3 +390,98 @@ def test_the_stamp_is_scoped_to_ITS_season():
     assert tradeManager.wasAcquiredThisSeason(player, 6) is False
     assert tradeManager.wasAcquiredThisSeason(FakePlayer(11, 84), 5) is False
     print("PASS the stamp expires with the season")
+
+
+# --------------------------------------- the same-position swap
+
+def test_a_starter_at_the_listings_position_is_offerable():
+    """⚠️ WITHOUT THIS EVERY TRADE IN THE LEAGUE IS THE SAME SHAPE — one player out, picks
+    and prospects back, measured 35 times in 35. `docs/TRADING_PLAN.md` §5 lists
+    "position-for-position" FIRST in its legality table, because a same-position swap
+    refills both holes by construction: no free agent to sign, no prospect to promote, no
+    cut fee."""
+    buyer = FakeTeam(2, 'Buyer')
+    buyer.rosterDict['qb'] = FakePlayer(30, 82, Position.QB, termRemaining=3)
+    market = _market([FakeTeam(1, 'A'), buyer])
+    market.picksOwnedBy = lambda t: []
+
+    assert market._tradeableAssets(buyer) == [], "a starter leaked in with no swap position"
+    offered = market._tradeableAssets(buyer, swapPosition=Position.QB.value)
+    assert [a['kind'] for a in offered] == ['player']
+    assert offered[0]['id'] == 30
+    print("PASS a starter is offerable only at the listing's own position")
+
+
+def test_only_one_starter_per_bundle():
+    """⚠️ Two would EMPTY the position the incoming player is meant to fill — the hole the
+    whole swap exists to avoid."""
+    buyer = FakeTeam(2, 'Buyer')
+    buyer.rosterDict['wr1'] = FakePlayer(30, 80, Position.WR, termRemaining=3)
+    buyer.rosterDict['wr2'] = FakePlayer(31, 80, Position.WR, termRemaining=3)
+    seller = FakeTeam(1, 'Seller')
+    market = _market([seller, buyer])
+    market.picksOwnedBy = lambda t: []
+
+    # ⚠️ THE BAR HAS TO BE HIGH ENOUGH THAT THE BUNDLE WANTS MORE THAN ONE PIECE. At a low
+    # bar `_assemble` stops after the first piece whatever the cap says, so the test
+    # passes without ever exercising it — which is exactly what happened first time.
+    both = market._tradeableAssets(buyer, valuingTeam=seller,
+                                   swapPosition=Position.WR.value)
+    assert len(both) == 2, both
+    greedyBar = sum(a['value'] for a in both)
+
+    pieces = market._assemble(buyer, seller, bar=greedyBar, gross=9999.0, displaced=0.0,
+                              swapPosition=Position.WR.value)
+    assert sum(1 for p in pieces if p['kind'] == 'player') <= 1, pieces
+    print("PASS at most one starter leaves, even when the bundle wants two")
+
+
+def test_the_displaced_player_is_counted_ONCE_in_a_swap():
+    """⚠️ WHEN THE BUYER PAYS WITH THE MAN IT WOULD OTHERWISE HAVE CUT, the displacement
+    and the payment are THE SAME EVENT. Charging both makes a swap look twice as expensive
+    as it is and refuses nearly every one — while paying in picks really does cost the
+    club both the picks and the displaced player (plus a cut fee)."""
+    seller, buyer = FakeTeam(1, 'Seller'), FakeTeam(2, 'Buyer')
+    market = _market([seller, buyer])
+
+    # The only thing the buyer can offer is the very man it would have to cut, worth 6.
+    def assets(team, valuingTeam=None, swapPosition=None):
+        if swapPosition is None:
+            return []
+        return [{'kind': 'player', 'id': 30, 'name': 'Incumbent',
+                 'detail': {'slot': 'qb'}, 'value': 6.0}]
+
+    market._tradeableAssets = assets
+
+    # Incoming is worth 10; the displaced man is worth 6. Paying WITH him costs 6 once,
+    # so 10 - 6 = +4 and the trade is on.
+    swap = market._assemble(buyer, seller, bar=1.0, gross=10.0, displaced=6.0,
+                            swapPosition=Position.QB.value)
+    assert swap, "a swap was refused by double-charging the displaced player"
+    assert swap[0]['kind'] == 'player'
+
+    # ⚠️ The mirror: paying in PICKS really does cost both the picks and the displaced
+    # man, so an identically-priced picks bundle must be refused at the same numbers.
+    def picksOnly(team, valuingTeam=None, swapPosition=None):
+        return [{'kind': 'pick', 'id': 7, 'name': 'a pick', 'detail': {}, 'value': 6.0}]
+
+    market._tradeableAssets = picksOnly
+    assert market._assemble(buyer, seller, bar=1.0, gross=10.0, displaced=6.0,
+                            swapPosition=Position.QB.value) == [], \
+        "a picks bundle escaped being charged for the displaced player"
+    print("PASS a swap is charged once for the man, a picks bundle twice")
+
+
+def test_a_swap_needs_no_backfill_and_no_cut():
+    """The structural payoff, asserted on the settlement path: with a player coming back
+    the seller's slot is filled by him, so neither `_findBackfill` nor `_cutToMakeRoom`
+    is consulted at all."""
+    import inspect
+    src = inspect.getsource(tradeManager.settleTrade)
+    swapBranch = src[src.index('swap = _swapPieceOf'):]
+    head = swapBranch[:swapBranch.index('# ---- 2. move')]
+    assert 'if swap is None:' in head
+    assert head.index('if swap is None:') < head.index('_findBackfill'), \
+        "the backfill is looked up before checking for a swap"
+    assert 'else:' in head and '_slotOf(buyer, swap)' in head
+    print("PASS a swap skips the backfill and the cut entirely")

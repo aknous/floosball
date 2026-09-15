@@ -383,7 +383,9 @@ class TradeMarket:
         # different numbers precisely because the two clubs discount the future
         # differently — and that difference is the only reason either of them agrees.
         # Pricing both sides at one club's rate collapses them and there is no trade.
-        pieces = self._assemble(buyer, listing.team, bar, worthToBuyer)
+        pieces = self._assemble(buyer, listing.team, bar, gross, displaced,
+                                swapPosition=getattr(getattr(player, 'position', None),
+                                                     'value', None))
         if not pieces:
             return None
         return Bid(buyer, pieces, sum(p['value'] for p in pieces))
@@ -442,7 +444,8 @@ class TradeMarket:
         lb = getattr(lb, 'name', lb)
         return bool(la) and la == lb
 
-    def _assemble(self, buyer, seller, bar: float, gain: float) -> list:
+    def _assemble(self, buyer, seller, bar: float, gross: float, displaced: float,
+                  swapPosition=None) -> list:
         """The CHEAPEST combination of the buyer's assets that clears the SELLER's bar.
 
         ⚠️ CHEAPEST, NOT LARGEST, and capped at `TRADE_MAX_PIECES` so a trade reads as a
@@ -455,36 +458,63 @@ class TradeMarket:
         contender hands over picks cheaply BECAUSE it prices the future low, which is the
         trade working rather than a club being fleeced.
         """
-        sellerValue = {a['id']: a['value']
-                       for a in self._tradeableAssets(buyer, valuingTeam=seller)}
-        buyerAssets = self._tradeableAssets(buyer, valuingTeam=buyer)
+        sellerValue = {(a['kind'], a['id']): a['value'] for a in self._tradeableAssets(
+            buyer, valuingTeam=seller, swapPosition=swapPosition)}
+        buyerAssets = self._tradeableAssets(buyer, valuingTeam=buyer,
+                                            swapPosition=swapPosition)
         # Cheapest FOR THE BUYER first, so it parts with what it minds least.
         buyerAssets.sort(key=lambda a: a['value'])
         pieces, toSeller, toBuyer = [], 0.0, 0.0
+        usedPlayer = False
         for asset in buyerAssets:
             if toSeller >= bar:
                 break
             if len(pieces) >= TRADE_MAX_PIECES:
                 break
-            worthToSeller = sellerValue.get(asset['id'], 0.0)
+            if asset['kind'] == 'player':
+                # ⚠️ AT MOST ONE STARTER, and only at the listing's own position. A second
+                # would empty the position the incoming player is meant to fill.
+                if usedPlayer:
+                    continue
+                usedPlayer = True
+            worthToSeller = sellerValue.get((asset['kind'], asset['id']), 0.0)
             if worthToSeller <= 0:
+                if asset['kind'] == 'player':
+                    usedPlayer = False
                 continue
             pieces.append(dict(asset, value=worthToSeller))
             toSeller += worthToSeller
             toBuyer += asset['value']
         if toSeller < bar:
             return []
-        if toBuyer > gain:
-            return []           # it costs the buyer more than the upgrade is worth
+        # ⚠️ THE DISPLACED PLAYER IS COUNTED ONCE, NOT TWICE. When the buyer pays WITH the
+        # man it would otherwise have had to cut, the displacement and the payment are the
+        # same event — charging both makes a swap look twice as expensive as it is and
+        # refuses almost every one of them. When it pays in picks instead, the displaced
+        # player is a real additional cost (and a cut fee on top).
+        costToBuyer = toBuyer if usedPlayer else toBuyer + displaced
+        if costToBuyer >= gross:
+            return []           # it costs the buyer more than the player is worth to it
         return pieces
 
-    def _tradeableAssets(self, team, valuingTeam=None) -> list:
-        """This club's picks and pipeline prospects, priced on the shared scale.
+    def _tradeableAssets(self, team, valuingTeam=None, swapPosition=None) -> list:
+        """This club's picks, pipeline prospects, and — at `swapPosition` — a starter.
 
-        ⚠️ ROSTER PLAYERS ARE DELIBERATELY NOT HERE. A club paying with a starter opens a
-        hole that has to be legal at settlement, which is a different and much larger
-        operation — the plan's player-for-player case is a LISTING on each side meeting in
-        the middle, not a bundle piece. Picks and prospects are the currencies.
+        ⚠️ A ROSTER PLAYER AT THE LISTING'S OWN POSITION IS THE ONE TRADE THAT NEEDS NO
+        BACKFILL AND NO CUT ON EITHER SIDE, and leaving it out made every trade in the
+        league the same shape: one player out, picks and prospects back, 35 times in 35.
+        A same-position swap refills both holes by construction — the seller gives a
+        quarterback and receives a quarterback — so there is no free agent to sign, no
+        prospect to promote, and no cut fee to pay. `docs/TRADING_PLAN.md` §5 lists
+        "position-for-position" FIRST in its legality table for exactly that reason.
+
+        ⚠️ AND IT IS HOW THE TIME TRADE BECOMES VISIBLE. QB-for-QB is the plan's example of
+        a trade where "rating barely enters and `seasonsOfControl` does" — a rebuilder
+        gives up now for term and a contender term for now. With picks as the only
+        currency that trade cannot be expressed at all.
+
+        ⚠️ ONLY AT THE LISTING'S POSITION, and `_assemble` takes at most ONE. Two would
+        empty the position; a different position would open a hole the seller cannot fill.
         """
         out = []
         # ⚠️ PRICED ON WHOEVER IS BEING ASKED TO VALUE THEM, and for a FUTURE asset that
@@ -516,6 +546,28 @@ class TradeMarket:
                 'value': trading.prospectValue(
                     ceiling, getattr(prospect, 'prospect_seasons', 0), weight=weight),
             })
+        if swapPosition is not None:
+            # ⚠️ PRESENT VALUE, so `nowWeight` rather than `laterWeight` — a starter plays
+            # this season. That is what makes a contender price an incoming rental high
+            # and a rebuilder price the same man low, and it is the whole reason a
+            # same-position swap of two similar players is ever worth making.
+            nowW = self.nowWeight(valuer)
+            roster = getattr(team, 'rosterDict', None) or {}
+            for slot in POSITION_SLOTS.get(swapPosition, []):
+                held = roster.get(slot)
+                if held is None or getattr(held, 'willRetire', False):
+                    continue
+                if wasAcquiredThisSeason(held, self.season):
+                    continue
+                out.append({
+                    'kind': 'player',
+                    'id': getattr(held, 'id', None),
+                    'name': getattr(held, 'name', '?'),
+                    'detail': {'slot': slot},
+                    'value': trading.playerValue(
+                        getattr(held, 'playerRating', 0),
+                        getattr(held, 'termRemaining', 0), self.week, nowW),
+                })
         return out
 
     def _believedCeiling(self, team, prospect) -> float:
@@ -660,22 +712,34 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     slot = _slotOf(seller, player)
     if slot is None:
         return None
-    backfill = _findBackfill(seasonManager, seller, player)
-    if backfill is None:
-        # ⚠️ The seller would be left with a hole. Declining is correct; the listing
-        # simply goes unsold this week and is re-derived next week.
-        logger.info(f"Trade declined: {seller.name} cannot backfill {player.name}")
-        return None
-    buyerSlot = _openSlotFor(buyer, player)
-    if buyerSlot is None:
-        # ⚠️ WITHOUT CUT-TO-MAKE-ROOM THERE IS NO DEMAND SIDE AT ALL. Every roster is
-        # complete by construction — six position-locked slots, no bench — so a buyer
-        # NEVER has an open slot, and a settlement that requires one shuts every
-        # contender out of the market. Measured before this existed: 728 listings and 709
-        # clearing bids across a season, and ZERO trades.
-        buyerSlot = _cutToMakeRoom(seasonManager, buyer, player)
-        if buyerSlot is None:
+
+    # ⚠️ A SAME-POSITION SWAP REFILLS BOTH HOLES BY CONSTRUCTION, so it needs neither a
+    # backfill nor a cut nor a fee — the seller gives a quarterback and receives a
+    # quarterback. Every other shape needs both halves arranged separately.
+    swap = _swapPieceOf(winner.pieces, buyer, player)
+
+    if swap is None:
+        backfill = _findBackfill(seasonManager, seller, player)
+        if backfill is None:
+            # ⚠️ The seller would be left with a hole. Declining is correct; the listing
+            # simply goes unsold this week and is re-derived next week.
+            logger.info(f"Trade declined: {seller.name} cannot backfill {player.name}")
             return None
+        buyerSlot = _openSlotFor(buyer, player)
+        if buyerSlot is None:
+            # ⚠️ WITHOUT CUT-TO-MAKE-ROOM THERE IS NO DEMAND SIDE AT ALL. Every roster is
+            # complete by construction — six position-locked slots, no bench — so a buyer
+            # NEVER has an open slot, and a settlement that requires one shuts every
+            # contender out of the market. Measured before this existed: 728 listings and
+            # 709 clearing bids across a season, and ZERO trades.
+            buyerSlot = _cutToMakeRoom(seasonManager, buyer, player)
+            if buyerSlot is None:
+                return None
+    else:
+        backfill = None
+        buyerSlot = _slotOf(buyer, swap)
+        if buyerSlot is None:
+            return None         # he moved since the bid was priced
 
     # ---- 2. move ----------------------------------------------------------
     seller.rosterDict[slot] = None
@@ -692,10 +756,13 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     except Exception:
         pass
 
-    given = _handOverPieces(seasonManager, winner.pieces, buyer, seller, season)
+    given = _handOverPieces(seasonManager, winner.pieces, buyer, seller, season,
+                            sellerSlot=slot)
 
     # ---- 3. backfill ------------------------------------------------------
-    _installBackfill(seasonManager, seller, slot, backfill)
+    # ⚠️ Only when nobody came back the other way. A swap already filled the slot.
+    if backfill is not None:
+        _installBackfill(seasonManager, seller, slot, backfill)
 
     # ---- 4. sentiment -----------------------------------------------------
     # ⚠️ NOTHING IS DELETED. "His sentiment does not follow him" is expressed by scoping
@@ -919,7 +986,8 @@ def _installBackfill(seasonManager, team, slot, backfill) -> None:
         pass
 
 
-def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0) -> list:
+def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0,
+                    sellerSlot=None) -> list:
     """Move the bought side of the bundle — picks change owner, prospects change pipeline."""
     from database.connection import get_session
     from database.models import DraftPick
@@ -934,6 +1002,25 @@ def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0) ->
                     # SLOT, so rewriting it here would hand the receiver the buyer's own
                     # draft position instead of the seller's — the duller feature.
                     row.current_owner_id = getattr(toTeam, 'id', None)
+            elif piece['kind'] == 'player':
+                # ⚠️ STRAIGHT INTO THE SLOT THE LISTED PLAYER JUST LEFT. Same position, so
+                # it is the same slot kind — which is precisely why this shape needs no
+                # backfill and no cut.
+                swapped = _findRostered(fromTeam, piece['id'])
+                if swapped is not None:
+                    for sl, held in list((getattr(fromTeam, 'rosterDict', None) or {}).items()):
+                        if held is swapped:
+                            fromTeam.rosterDict[sl] = None
+                    swapped.previousTeam = fromTeam.name
+                    swapped.team = toTeam
+                    swapped.teamResignCount = 0
+                    if sellerSlot is not None:
+                        toTeam.rosterDict[sellerSlot] = swapped
+                    _stampAcquired(swapped, season)
+                    try:
+                        toTeam.assignPlayerNumber(swapped)
+                    except Exception:
+                        pass
             elif piece['kind'] == 'prospect':
                 prospect = _findProspect(fromTeam, piece['id'])
                 if prospect is not None:
@@ -963,6 +1050,33 @@ def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0) ->
     finally:
         session.close()
     return given
+
+
+def _swapPieceOf(pieces, buyer, incoming):
+    """The buyer's own starter in this bundle, if it is paying with one.
+
+    ⚠️ MUST BE AT THE INCOMING PLAYER'S POSITION, re-checked here rather than trusted from
+    the bid. A bundle priced a week ago against a different roster is exactly the kind of
+    thing settlement is supposed to re-validate.
+    """
+    wanted = getattr(getattr(incoming, 'position', None), 'value', None)
+    for piece in pieces:
+        if piece.get('kind') != 'player':
+            continue
+        held = _findRostered(buyer, piece.get('id'))
+        if held is None:
+            continue
+        if getattr(getattr(held, 'position', None), 'value', None) != wanted:
+            continue
+        return held
+    return None
+
+
+def _findRostered(team, playerId):
+    for p in (getattr(team, 'rosterDict', None) or {}).values():
+        if p is not None and getattr(p, 'id', None) == playerId:
+            return p
+    return None
 
 
 def _findProspect(team, prospectId):
