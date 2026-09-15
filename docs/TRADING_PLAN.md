@@ -1140,3 +1140,117 @@ What is left is genuinely good:
 dealing least-used first so every effect gets coverage. A mid-season mint arrives outside that
 plan and must either slot into it or draw fresh, or it quietly skews the season's effect
 coverage. That is a minting concern, not a balance one.
+
+---
+
+## 12. Test plan
+
+This repo already has three test styles and they do different jobs; the plan uses all three
+plus a harness. ⚠️ `run_tests.sh`'s own header warns that **detecting the style by grep does
+not work** and that a pytest-style file invoked directly *"exits 0 having run NOTHING,
+reporting a pass it never earned."* New trade tests should be **pytest-style** (`def test_*`)
+so the runner collects them properly.
+
+### ⚠️ 12.0 Every test must be shown to BITE
+
+Two tests written in this session alone passed for the wrong reason — a gate spec called with
+the wrong argument order returned `None` for every effect, and a completeness check read keys
+that did not exist and validated an empty dict. The repo has the same scar elsewhere
+(`test_user_records.py` stripped its own SQL and passed vacuously).
+
+**So every test below ships with a recorded bite-check**: break the thing it guards, confirm
+it fails, restore. A test nobody has seen fail is a test nobody has seen.
+
+### 12.1 Valuation — deterministic, exact
+
+✅ **These can be exact rather than statistical**, because `perceivedValue(player, coach,
+rng=...)` **bypasses the scout-belief cache when an rng is injected** — the existing pattern
+tests already use.
+
+| test | pins |
+|---|---|
+| `test_trade_value_scale.py` | surplus over replacement; the **4x** spread between a walk-year and a 3-year deal; value is zero at or below replacement |
+| `test_prospect_value.py` | a prospect prices on **projection**, not current rating; the three multiplicative terms; **window is a deadline** — value falls as `prospect_seasons` rises; the clock **travels** with him |
+| `test_pick_value.py` | the curve is monotonic in slot; a **future** pick is discounted **slot-scaled**, near-nil in the top 5, steep in the back half; ⚠️ a **flat** discount must FAIL this |
+| `test_trade_reserve.py` | `floor = (player − backfill) × seasonsLeft × nowWeight`; **floor < ask requires backfill > REPLACEMENT**; both decay together and never invert; the floor moves with the backfill |
+| `test_contention_weight.py` | exponent 1.25; ⚠️ **the week-1 gap is exactly 1.00 and NO trade clears** — the property that produces a deadline with no deadline rule |
+
+### 12.2 The four modifiers
+
+| test | pins |
+|---|---|
+| `test_trade_sentiment.py` | ⚠️ sentiment raises **the surplus the trade must clear**, not the seller's valuation. The regression must assert the **old wiring changes nothing** — that is the finding, and a test that only checks the new behaviour would have passed before the fix too |
+| `test_trade_division.py` | a division rival pays a premium; it **scales with the rival's threat**, so a bottom-table rival is nearly free; a cross-league buyer pays none |
+| `test_attitude_value.py` | 0.20/pt below 80; a 45-attitude 85 falls below a clean 79; ⚠️ it reaches **`rankCutCandidates` and `rankResignCandidates`**, not only trades |
+| `test_performance_deadband.py` | already-wired behaviour: inside the band returns **exactly 0.0**; one season is discounted; measured against **that season's** rating |
+
+### 12.3 Mechanics and legality
+
+| test | pins |
+|---|---|
+| `test_trade_triggers.py` | all four fire on the right state; ⚠️ **only expiring-surplus is contention-gated**, so a contender still lists for locker-room and blocked-prospect |
+| `test_trade_legality.py` | both rosters complete at settlement; position-for-position; no trading a player acquired this season; **deadline at week 22**; frozen after |
+| `test_trade_auction.py` | highest bid above reserve wins; ties; ⚠️ **no second round within a week** — and that an ascending round would pay the seller LESS |
+| `test_trade_settlement.py` | the ordered steps; ⚠️ **sequential settlement re-validates** — a trade whose backfill was consumed by an earlier trade in the same pass is dropped, not executed |
+| `test_cut_fee.py` | `remainingSeasons × surplus × rate`; ⚠️ **floored at zero — a club that cannot pay cannot cut**, never a debt |
+| `test_midseason_signing.py` | fills an **empty slot only**, never an upgrade; term is this season or one more; ⚠️ `ensurePositionSupply` refills what is drained |
+
+### 12.4 The seams this project actually breaks in
+
+⚠️ These matter more than the arithmetic. Every one is a repeat of a real incident.
+
+| test | guards |
+|---|---|
+| `test_trade_fantasy_seam.py` | ⚠️ **a trade only lands at the week rollover, never between slates.** Assert via `weekIsClosed` that no settlement can occur inside a live week — the seam that has produced four separate incidents |
+| `test_trade_pick_identity.py` | a pick resolves off the **ORIGINAL** team's finish, not the owner's. ⚠️ **Trade your pick, finish worst, and the receiver gets #1** — assert exactly that, since the plausible wrong implementation gives the receiver its own slot |
+| `test_trade_resume.py` | both offseason passes are **step-gated and idempotent** — running twice trades once |
+| `test_trade_sentiment_rows.py` | a trade **does not delete** `player_sentiment_ratings`; the aggregate re-scopes instead |
+| `test_trade_recap_event.py` | a two-sided trade writes **one** `SeasonRecapEvent` with a trade id; ⚠️ the existing key is `(season, event_type, player_id|team_id)` and would silently drop half a swap |
+
+### 12.5 Static sweeps — catch the class, not the instance
+
+Following `test_publish_kwargs.py` (which sweeps every publish call site against the live
+signature) and `test_leaderboard_lineup.py` (which sweeps for `EquippedCard.week` operands):
+
+| sweep | asserts |
+|---|---|
+| `test_trade_roster_complete_sweep.py` | **every** function that moves a player between clubs ends with both rosters full — by construction, so a fourth settlement path added later is covered |
+| extend `test_publish_kwargs.py` | the new trade publisher is already covered by the existing sweep — verify, do not duplicate |
+
+### 12.6 `trade_market_check.py` — the measurement harness
+
+Regression tests cannot answer *"is this a good market?"* Modelled on `form_oscillation_check.py`
+and `facilities_econ_harness.py`:
+
+```
+trade_market_check.py --db <prod copy> --seasons 10 --arms on,off
+```
+
+Reports per arm: **trades per season**, **week-of-trade distribution**, **who buys and who
+sells** (by forecast wins), **what was paid** (asset mix and slot), **listings that never
+cleared**, and **champion / parity spread**.
+
+⚠️ **Compare arms WITHIN ONE LEAGUE.** Two fresh leagues with provably identical gameplay
+measured **2.8 points a game apart** — a cross-league A/B would report a difference trading
+did not cause. `tools_preseason.py` already runs N seasons from one prod snapshot and is the
+right base.
+
+⚠️ **And do not correlate to infer causation.** The chess-clock work established this:
+correlating coach `clockManagement` with wins put the *control* at 50% and 62% in two runs of
+the same thing, because coach attributes proxy for one another. **Force the variable** — run
+trading on and off over the same snapshot, the `FLOOS_POS_FORCE` pattern.
+
+**Three numbers it exists to produce**: trade volume, where trades cluster (the contention
+ramp should push them past week 12 — firing in week 3 means the ramp is too fast), and whether
+parity moves at all.
+
+### 12.7 Sequencing
+
+The build order ships three things before trading, and each needs its own measurement rather
+than riding in on the trade harness:
+
+| item | measured by |
+|---|---|
+| **0a** elite contract lengths | walk-year count (99 → ~91 expected) and the tier-term distribution |
+| **0c** washout release ordering | a washed-out prospect appears **in that offseason's** FA draft |
+| **attitude term** | cuts, re-signs, and ⚠️ **whether the FA pool fills with the unsignable** — the failure the Appeal gate already taught |
