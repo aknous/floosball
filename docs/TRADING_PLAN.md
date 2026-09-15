@@ -984,3 +984,110 @@ Three numbers are guesses until a season has run, and all three are cheap to rea
   the unsignable,
 - **where trades cluster** — the contention ramp should push them past week 12, and if they
   fire in week 3 the ramp is too fast.
+
+---
+
+## 10. Review — holes and risks
+
+_A deliberate pass over this plan looking for what it does not say. Ordered by how much
+trouble each would cause._
+
+### ⚠️ 10.1 A mid-week trade lands inside a live fantasy week
+
+`cardEffects` reads the depicted player's club at scoring time — `rosterPlayerTeamIds` and
+`teamResults` (`:5644-5645`) — and the lineup locks at kickoff (`lockAllForWeek`). A trade
+executed between two slates moves a player **between the lock and the bank**, so a card
+equipped against club A scores against club B's result.
+
+This project has had four separate incidents in exactly this seam (the lineup-snapshot drift,
+`equipped_cards` not being a historical record, the leaderboard's second door, Veteran's
+backfill). **The plan says nothing about it.**
+
+**Likely answer**: run the trade pass at the **week rollover**, in the same block the plan
+already nominates, and never between slates on a game day. That makes a trade a
+between-weeks event like every other roster change — but it needs stating, and it needs the
+same "is this week banked?" predicate (`weekIsClosed`) the fantasy side already uses.
+
+### ⚠️ 10.2 Settlement is described as if trades were independent — they are not
+
+The plan settles each listing on its own. In one weekly pass they interact:
+
+- **Backfill contention.** A promotes a prospect to cover a sale — but that prospect may
+  himself be listed, or be the asset B is buying. A → B → A dependencies are possible.
+- **Cut-to-make-room ordering.** A buyer with a full roster must cut *before* receiving, and
+  the cut fee may be unaffordable, which invalidates a bid already accepted.
+- **Slot double-booking.** Two accepted trades can target the same roster slot.
+
+**Needs**: resolve a pass as a **batch with a defined order** (settle, then re-validate every
+remaining accepted trade against the new state), or make each trade atomic and re-run the
+pass. Neither is hard; not choosing is.
+
+### ⚠️ 10.3 Picks have no data model, and the draft order is derived
+
+`currentSeason.freeAgencyOrder` is rebuilt from standings each season (`:5719`) and is a list
+of **team objects**. The plan says picks become first-class entities but never says what they
+are.
+
+Sharp consequence the plan misses: **a club that trades its own pick and then finishes worst
+has given away the #1 selection.** That is correct and dramatic — but only if a pick is
+identified by *(season, round, original team)* and resolved to a slot at derivation time. Get
+it wrong and the club that *received* the pick picks in its own slot instead, which is a
+different and much duller feature.
+
+**Also unstated**: what happens to a traded pick if the original club folds, or the league
+resizes. Low probability, permanent damage.
+
+### ⚠️ 10.4 Clearing fan sentiment on a trade destroys user data
+
+The plan says sentiment "does not follow" and therefore the rows are cleared. **Those rows are
+things real users wrote.** Prod holds 153 of them across 107 players.
+
+Deleting them on a trade is silent data loss, and the same rating cannot be recovered if the
+player is traded back. **Alternative**: keep the rows, scope the *aggregate* to the current
+club's fans. Same behaviour, nothing destroyed — and it matches how `_requireOwnClub` already
+gates writing rather than deleting.
+
+### 10.5 Two scoreable cards of one player is flagged but not resolved
+
+A mid-season trade mints a new card, so a season can hold two of the same player. The plan
+notes the holder can field at most two of him (slot + FLEX) and only with different effects —
+then stops.
+
+Unresolved: whether that is **intended**, and what the collection UI shows. It is a genuinely
+new state and the first fan to pull both will notice.
+
+### 10.6 Nothing bounds a whole-roster teardown
+
+Roster completeness prevents empty slots, but a club could legally trade **all six** starters
+over a season, replacing each. The per-week limits slow it; nothing forbids it. Probably fine —
+but it should be a measured outcome, not a discovery.
+
+### 10.7 The offseason pass needs step-gating, or a restart double-trades
+
+Every offseason phase guards on `_isOffseasonStepComplete` and marks itself done. **The plan's
+two offseason passes do not mention it.** A deploy landing mid-pass would re-run it and trade
+again from an already-changed roster — and the offseason is exactly where this project's
+restarts land.
+
+### 10.8 No validation plan
+
+Three numbers are called out for measurement, but nothing says **how to measure before
+shipping**. The tools exist: `tools_preseason.py` already runs N seasons from a prod snapshot.
+A trade-enabled arm against a trade-disabled one over the same snapshot would answer volume,
+clustering and whether parity moves — before any of it reaches users.
+
+⚠️ And a specific trap this project has already paid for: **compare arms within one league**.
+Two fresh leagues with provably identical gameplay measured 2.8 points a game apart.
+
+### 10.9 Smaller gaps
+
+- **Does a contract travel with the player?** Assumed throughout, never stated.
+- **`team_resign_count`** — does a traded player's count reset with the new club? It gates
+  re-signing, and the answer changes his value.
+- **The `previousTeam` / `_leftThisTeamThisOffseason` guard** blocks a club re-signing a player
+  it released this offseason. A trade sets `previousTeam` too — does the guard bite a club
+  trying to re-acquire?
+- **Trade volume when 8 sellers face 16 buyers** is a supply story today, but the horizon and
+  locker-room triggers are not countable from a snapshot and could change that materially.
+- **No rollback path.** Every other risky system here shipped behind a flag
+  (`RULE_VOTE_ENABLED`, `WEATHER_ENABLED`, `RUNNER_MOVE_ENABLED`). Trading should too.
