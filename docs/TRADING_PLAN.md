@@ -59,6 +59,48 @@ same player with three years left. **A 4x spread on identical talent.**
 | **rookie pick** | expected mature surplus at that slot × seasons × risk |
 
 
+#### ✅ Prospects are priced on their FUTURE, and the two clubs disagree by construction
+
+Yes — both sides value a prospect's projection rather than his current rating, and the
+machinery is already there. A prospect debuts `PROSPECT_ENTRY_DISCOUNT` (**11**) below his
+true skill, so pricing him at today's number would undervalue every prospect in the league by
+about that much.
+
+`trueForwardRating` handles it. For a **developing** player:
+
+```
+forward = current + (ceiling − current) × FO_CEILING_CREDIT × devLean
+seen    = current + (forward − current) × scoutingVision          # perceivedValue
+```
+
+⚠️ **Three multiplicative terms sit on the ceiling gap** — the credit (0.45), the GM's
+`playerDevelopment` lean, and scouting vision — so a club prices only the part of the upside
+it can *see* and expects to *realise*. A real headline prospect (debuts 83, true skill 94,
+potential 99):
+
+| GM | devLean | vision | forward | **seen** | vs his 83 |
+|---|---:|---:|---:|---:|---:|
+| poor developer, poor scout | 0.00 | 0.00 | 83.0 | **83.0** | +0.0 |
+| average / average | 0.50 | 0.50 | 86.6 | **84.8** | +1.8 |
+| elite developer, average scout | 1.00 | 0.50 | 90.2 | **86.6** | +3.6 |
+| elite / elite | 1.00 | 1.00 | 90.2 | **90.2** | **+7.2** |
+
+✅ **That spread is the trade.** A weak front office sees a prospect as exactly what he is
+today; an elite one sees seven points of upside on the same player. Two clubs valuing the same
+prospect differently is not noise here — it is a real difference in what each can *do* with
+him, and the code comment says so: *"a strong developer rationally values raw talent higher
+than a weak one does — sharp scout + good developer takes on the project player."*
+
+⚠️ **The asymmetry is the right way round.** A club with a good Scouting Department and a
+developer coach will pay more for prospects and should — it will actually realise more of the
+ceiling. A club with neither should be buying proven players instead, and prices accordingly
+without being told to.
+
+⚠️ **One consequence for the scouted view**: the GM's `ceiling` here is ground truth, while a
+*fan* sees the scouted band. Those must not diverge in the UI — the number a club is shown to
+have paid should be explicable from the band the fan can see, or trades will look irrational
+from the outside.
+
 #### ⚠️ Treasury is NOT a trade asset (owner, 2026-09-15)
 
 Dropped for now. The measurement is why it is no loss: Treasury spans **200F to 45,427F — a
