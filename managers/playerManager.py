@@ -994,6 +994,36 @@ class PlayerManager:
             return False
         return (getattr(player, 'teamResignCount', 0) or 0) >= RESIGN_ONCE_LIMIT
 
+    def expectedPlayerTerm(self, player) -> float:
+        """The MEAN term `_getPlayerTerm` would hand this player, without rolling.
+
+        ⚠️ A VALUATION CANNOT CALL `_getPlayerTerm` — it rolls a `randint`, so pricing the
+        same player twice would give two answers and a club could talk itself into or out
+        of a trade on a dice throw. This is the expectation of that same distribution, and
+        it lives next to it so the two cannot drift apart.
+
+        Used to price a walk-year player the club INTENDS TO RE-SIGN. He is not a rental:
+        the club holds the right to keep him, so what a buyer is really acquiring is the
+        contract that would follow, not the few weeks left on this one.
+        """
+        tier = player.playerTier
+        seasonsPlayed = getattr(player, 'seasonsPlayed', 0) or 0
+        if seasonsPlayed == 0:
+            if tier in (FloosPlayer.PlayerTier.TierS, FloosPlayer.PlayerTier.TierA):
+                return 3.0
+            return 1.0 if tier == FloosPlayer.PlayerTier.TierD else 2.0
+        if tier == FloosPlayer.PlayerTier.TierS:
+            base, floor = 5.0, 3           # randint(4, 6)
+        elif tier == FloosPlayer.PlayerTier.TierA:
+            base, floor = 3.5, 2           # randint(3, 4)
+        elif tier == FloosPlayer.PlayerTier.TierD:
+            base, floor = 1.0, 1
+        else:
+            base, floor = 2.0, 1           # randint(1, 3)
+        longevity = getattr(getattr(player, 'attributes', None), 'longevity', 6) or 6
+        remaining = max(1, longevity - seasonsPlayed + 1)
+        return float(max(floor, min(base, remaining)))
+
     def _getPlayerTerm(self, player) -> int:
         """Decide contract term for a signing / promotion / re-sign.
 

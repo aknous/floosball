@@ -387,3 +387,76 @@ def test_the_offseason_pass_prices_in_OFFSEASON_terms():
     assert trading.nowWeight(0.9, 0.5, None) == 1.0, \
         "contention still separates clubs in the offseason"
     print("PASS the offseason prices whole seasons at parity")
+
+
+# ------------------------------- 7. a traded pick must change who picks
+
+def test_a_traded_pick_actually_changes_the_draft_order():
+    """⚠️ EVERY TRADED PICK WAS COSMETIC. The draft read `freeAgencyOrder` straight
+    through and never consulted `DraftPick` at all, so a club could trade for the first
+    selection, watch the transactions page say so, and then not get it. A quarter of every
+    bundle in the measured ledger was picks — all of it paying for nothing.
+
+    ⚠️ And the slot stays the ORIGINAL club's: trade your pick, finish worst, and the
+    buyer takes number one."""
+    sm = SeasonManager.__new__(SeasonManager)
+
+    class S:
+        seasonNumber = 40
+
+    sm.currentSeason = S()
+
+    class T:
+        def __init__(self, tid):
+            self.id, self.name = tid, f"T{tid}"
+
+    worst, mid, best = T(1), T(2), T(3)
+    session = get_session()
+    try:
+        session.query(DraftPick).filter_by(season=40).delete()
+        for tid in (1, 2, 3):
+            session.add(DraftPick(season=40, round_number=1,
+                                  original_team_id=tid, current_owner_id=tid))
+        # The worst club traded its own pick to the best club.
+        session.commit()
+        row = session.query(DraftPick).filter_by(season=40, original_team_id=1).first()
+        row.current_owner_id = 3
+        session.commit()
+    finally:
+        session.close()
+
+    order = sm._applyPickOwnership([worst, mid, best])
+    assert [t.id for t in order] == [3, 2, 3], [t.id for t in order]
+    print("PASS the club that bought the worst team's pick selects first — and twice")
+
+
+def test_a_spent_pick_cannot_be_traded_again():
+    """Stamped `used` as the draft consumes it, or last year's pick stays on the market."""
+    sm = SeasonManager.__new__(SeasonManager)
+
+    class S:
+        seasonNumber = 41
+
+    sm.currentSeason = S()
+
+    class T:
+        def __init__(self, tid):
+            self.id, self.name = tid, f"T{tid}"
+
+    session = get_session()
+    try:
+        session.query(DraftPick).filter_by(season=41).delete()
+        session.add(DraftPick(season=41, round_number=1,
+                              original_team_id=1, current_owner_id=1))
+        session.commit()
+    finally:
+        session.close()
+
+    sm._applyPickOwnership([T(1)])
+    session = get_session()
+    try:
+        row = session.query(DraftPick).filter_by(season=41, original_team_id=1).first()
+        assert row.used is True, "the pick survived the draft unspent"
+    finally:
+        session.close()
+    print("PASS a used pick leaves the market")

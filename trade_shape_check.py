@@ -92,7 +92,16 @@ async def main(seasons, treasury):
         return out
 
     def spyBid(self, listing, buyer):
+        """⚠️ IS VOLUME LIMITED BY ASSETS, OR BY APPETITE? Those need opposite answers —
+        one is a supply problem to fix, the other is the market correctly declining. The
+        counters live on the market instance and accumulate, so this takes the DELTA per
+        call rather than the running total."""
+        before = dict(getattr(self, 'assembleFail', {}))
         out = realBid(self, listing, buyer)
+        after = getattr(self, 'assembleFail', {})
+        why = shape.setdefault('why', Counter())
+        for k, v in after.items():
+            why[k] += v - before.get(k, 0)
         if out is not None:
             shape.setdefault('bidBy', Counter())[listing.trigger] += 1
         return out
@@ -118,6 +127,13 @@ async def main(seasons, treasury):
         out = realCut(seasonManager, buyer, incoming)
         if out is not None and worst is not None:
             shape['neededCut'] += 1
+            # ⚠️ A RATING DELTA IS THE WRONG LENS ON ITS OWN. A club can take a player of
+            # similar rating and gain three years of control, which is the plan's TIME
+            # trade and a good deal — measured on ratings alone it reads as churn.
+            shape.setdefault('termIn', []).append(
+                int(getattr(incoming, 'termRemaining', 0) or 0))
+            shape.setdefault('termOut', []).append(
+                int(getattr(worst, 'termRemaining', 0) or 0))
             fee = cutFeeFor(worst)
             shape['feeTotal'] += fee
             shape['feePaid'] += 1 if fee > 0 else 0
@@ -254,6 +270,16 @@ async def main(seasons, treasury):
                  for t in tm.teams for slot, p in (t.rosterDict or {}).items()
                  if p is not None and getattr(getattr(p, 'team', None), 'name',
                                               getattr(p, 'team', None)) != t.name]
+        try:
+            from managers.tradeManager import TradeMarket
+            _b = sm._foBrainForOffseason()
+            _b.season, _b.week = season, 20
+            _mkt = TradeMarket(pm, tm, _b, season, 20)
+            shape.setdefault('inventory', []).append(
+                (sum(len(_mkt.picksOwnedBy(t)) for t in tm.teams),
+                 sum(len(getattr(t, 'prospects', None) or []) for t in tm.teams)))
+        except Exception as e:
+            print('   inventory probe failed:', e)
         print(f"  [season {season} start, BEFORE any trade] "
               f"rostered-and-in-pool: {len(both)}, wrong-team-ref: {len(wrong)}")
         if both[:2]:
@@ -282,6 +308,11 @@ async def main(seasons, treasury):
               f"{shape['feeTotal'] / shape['neededCut']:.0f}F")
         pairs = list(zip(shape['inRatings'], shape['cutRatings']))
         gaps = [a - b for a, b in pairs]
+        tin, tout = shape.get('termIn', []), shape.get('termOut', [])
+        if tin:
+            dt = [a - b for a, b in zip(tin, tout)]
+            print(f"    control gained: mean {sum(dt) / len(dt):+.2f} seasons "
+                  f"(in {sum(tin) / len(tin):.1f}yr vs cut {sum(tout) / len(tout):.1f}yr)")
         print(f"    upgrade taken: mean {sum(gaps) / len(gaps):+.1f} rating points "
               f"(in {sum(shape['inRatings']) / len(pairs):.0f} vs "
               f"cut {sum(shape['cutRatings']) / len(pairs):.0f})")
@@ -298,6 +329,20 @@ async def main(seasons, treasury):
         print(f"    detail: {detail}")
     for trigger, count in shape['byTrigger'].most_common():
         print(f"    {trigger:<20} {count:>3} ({count / n:.0%})")
+
+    inv = shape.get('inventory', [])
+    why = shape.get('why', Counter())
+    if inv:
+        print(f"\n  ── is volume limited by ASSETS or by APPETITE? ──")
+        print(f"    league inventory, mean per pass: {sum(p for p,_ in inv)/len(inv):.0f} "
+              f"tradeable picks, {sum(x for _,x in inv)/len(inv):.0f} prospects "
+              f"across {len(tm.teams)} clubs")
+        total = sum(why.values()) or 1
+        for k, label in (('built', 'bundle built (a real bid)'),
+                         ('barNotCleared', "could not reach the seller's price"),
+                         ('noAssets', '  ...of those, held NOTHING to offer'),
+                         ('tooExpensive', 'buyer refused: cost exceeded the gain')):
+            print(f"    {label:<42} {why.get(k,0):>6}  {why.get(k,0)/total:>5.0%}")
 
     print(f"\n  ── the funnel, by trigger ──")
     listed = shape.get('listedBy', Counter())

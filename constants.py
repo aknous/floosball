@@ -2649,6 +2649,30 @@ TRADE_CONTENTION_RAMP_WEEKS = 14
 # the gate moves with `TRADE_CONTENTION_RAMP_WEEKS` instead of drifting away from it.
 TRADE_MIN_CERTAINTY = 1.0
 
+# ---- The core a club builds around is NOT a trade asset ----
+# ⚠️ BEING HIGHLY RATED IS NOT THE SAME AS BEING AVAILABLE (owner, 2026-09-15: "teams
+# should also be identifying star players to build around and not consider every highly
+# rated player as a trade asset"). Every trigger priced a star as an asset with a big
+# number on it, so a club's best man went on the block whenever the arithmetic said the
+# return cleared — which is how a rebuilder ends up selling the one player its rebuild is
+# supposed to be for.
+#
+# How many players a club treats as untouchable. Two, against a six-slot roster: enough to
+# be a core, small enough that the other two thirds of the roster is still a market.
+TRADE_CORE_SIZE = 2
+
+# ⚠️ AND A CORE PLAYER HAS TO ACTUALLY BE A STAR, or "the best two players on a 2-14 club"
+# become untouchable and the worst clubs stop trading altogether — the exact opposite of
+# what a rebuild does. Keyed to the game's own notion of one: 4-star (TierA, 84+) or
+# better.
+TRADE_CORE_MIN_RATING = 84.0
+
+# ⚠️ A DECLINING STAR IS A LEGITIMATE ASSET, AND EXEMPTING HIM WOULD BE THE WORSE ERROR.
+# Selling high on a fading veteran is one of the few genuinely smart things a front office
+# can do, and the arc is already classified (`frontOfficeBrain.classifyArc`). The core is
+# who you build around; a player on the way down is not that, however good he still looks.
+TRADE_CORE_EXCLUDES_DECLINING = True
+
 # ---- The ask decays toward the floor ----
 # Hold out early, take what you can get late. Both ends decay together, so a late seller
 # is never squeezed into a giveaway.

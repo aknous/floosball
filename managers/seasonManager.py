@@ -7577,6 +7577,12 @@ class SeasonManager:
             draftOrder = list(getattr(teamManager, 'teams', None) or [])
             logger.warning("Rookie draft: no worst-first order available — "
                            "falling back to team order")
+        # ⚠️ A TRADED PICK HAS TO ACTUALLY CHANGE WHO PICKS, and until now it did not.
+        # The draft read `freeAgencyOrder` straight through, so every pick the market
+        # moved was COSMETIC: a club could trade for the first selection, watch the
+        # transactions page say so, and then not get it. The whole pick economy —
+        # a quarter of every bundle — was paying for nothing.
+        draftOrder = self._applyPickOwnership(draftOrder)
 
         leagueHighlights = []
         if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
@@ -7670,6 +7676,58 @@ class SeasonManager:
             await asyncio.sleep(3)
 
         self._markOffseasonStepComplete('rookie_draft')
+
+    def _applyPickOwnership(self, worstFirst: list) -> list:
+        """Re-point each draft slot at whoever OWNS that pick, and stamp it spent.
+
+        ⚠️ THE SLOT IS THE ORIGINAL CLUB'S AND THE SELECTION IS THE OWNER'S. The order is
+        "who picks", not "whose pick it is": a club that traded its own first-rounder and
+        then finished worst has handed the buyer the number one selection, which is the
+        whole drama of trading a pick and the only shape that makes it a real gamble.
+
+        ⚠️ A CLUB CAN HOLD TWO SLOTS AND MUST PICK TWICE, so this returns a list that may
+        repeat a club — the draft loop iterates it, and de-duplicating here would silently
+        void the pick somebody paid for.
+
+        Best-effort: an unreadable pick table leaves the standings order untouched, which
+        is the pre-trading behaviour and never worse than not drafting.
+        """
+        from constants import rookieDraftEnabled
+        if not worstFirst:
+            return worstFirst
+        try:
+            from database.connection import get_session
+            from database.models import DraftPick
+            season = self.currentSeason.seasonNumber if self.currentSeason else 0
+            byId = {getattr(t, 'id', None): t for t in worstFirst}
+            session = get_session()
+            try:
+                rows = {r.original_team_id: r for r in session.query(DraftPick).filter(
+                    DraftPick.season == season, DraftPick.round_number == 1,
+                    DraftPick.used == False).all()}                 # noqa: E712
+                if not rows:
+                    return worstFirst
+                out, moved = [], 0
+                for team in worstFirst:
+                    row = rows.get(getattr(team, 'id', None))
+                    if row is None:
+                        out.append(team)
+                        continue
+                    owner = byId.get(row.current_owner_id, team)
+                    if owner is not team:
+                        moved += 1
+                    out.append(owner)
+                    # ⚠️ Spent, so it cannot be traded again next season.
+                    row.used = True
+                session.commit()
+                if moved:
+                    logger.info(f"Rookie draft: {moved} slot(s) belong to another club")
+                return out
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning(f"Could not apply pick ownership: {e}")
+            return worstFirst
 
     async def _runPreDraftPass(self, teamsWorstFirst: list, gmResults: list) -> None:
         """Roll through teams worst→best BEFORE the rookie draft begins.

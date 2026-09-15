@@ -68,9 +68,14 @@ def seasonsOfControl(termRemaining: int, week: int = None) -> float:
     and everyone remaining has WHOLE seasons of term, so offseason trades are about
     ASSETS and the rental market does not exist there at all.
     """
-    term = max(0, int(termRemaining or 0))
+    # ⚠️ FLOAT, NOT INT. A walk-year player the club intends to re-sign is priced on the
+    # contract that would follow, and that expectation is fractional (a TierA averages 3.5
+    # seasons). `int()` truncates toward zero, so rounding here would quietly shave most of
+    # a season off every keeper's valuation — the same class of silent bias `_rnd` exists
+    # to prevent in the game engine.
+    term = max(0.0, float(termRemaining or 0))
     if week is None:
-        return float(term)
+        return term
     if term <= 0:
         return 0.0
     return (term - 1) + seasonRemainingFraction(week)

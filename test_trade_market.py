@@ -104,6 +104,33 @@ class StubBrain:
         return 0.5
 
 
+def _congest(team, ratings=(84, 80, 76), position=Position.WR):
+    """Put more walk-year players on a club than `RESIGN_LIMIT_PER_OFFSEASON` can keep.
+
+    ⚠️ CONTRACT CONGESTION IS THE ENGINE OF THIS MARKET. A club with one expiring player
+    re-signs him and sells nothing, so any fixture testing the expiring trigger has to be
+    over the limit or it is testing the wrong league.
+    """
+    slots = ['wr1', 'wr2', 'te', 'qb', 'rb', 'k']
+    for i, rating in enumerate(ratings):
+        team.rosterDict[slots[i]] = FakePlayer(100 + team.id * 10 + i, rating,
+                                               position, termRemaining=1)
+    return team
+
+
+def _withCore(team):
+    """Give a club two untouchable stars, so the player under test is a real asset.
+
+    ⚠️ WITHOUT THIS, EVERY FIXTURE'S BEST PLAYER IS THE FRANCHISE. A club's top two
+    4-star-or-better players are not trade assets, so a lone 92 on a test roster is
+    exempt from the value triggers and the fixture is testing the core rule by accident
+    instead of the rule it names.
+    """
+    team.rosterDict['qb'] = FakePlayer(900 + team.id, 96, Position.QB, termRemaining=4)
+    team.rosterDict['rb'] = FakePlayer(950 + team.id, 95, Position.RB, termRemaining=4)
+    return team
+
+
 def _market(teams, freeAgents=None, week=15, season=3):
     return TradeMarket(FakePlayerManager(freeAgents), FakeTeamManager(teams),
                        StubBrain(), season, week)
@@ -135,14 +162,16 @@ def test_expiring_surplus_fires_only_for_a_non_contender():
     protect."""
     seller = FakeTeam(1, 'Rebuild', wins=3, losses=11)
     buyer = FakeTeam(2, 'Contend', wins=11, losses=3)
-    walkYear = FakePlayer(10, 84, termRemaining=1)
-    seller.rosterDict['wr1'] = walkYear
-    buyer.rosterDict['wr1'] = FakePlayer(11, 84, termRemaining=1)
+    # ⚠️ CONGESTED ON PURPOSE. The trigger is "walk-year, OVER the re-sign limit, not
+    # contending" — with only one expiring player a club just re-signs him, so a
+    # single-walker fixture tests nothing the market should do.
+    _congest(seller, ratings=(84, 80, 76))
+    _congest(buyer, ratings=(84, 80, 76))
     market = _market([seller, buyer], freeAgents=[FakePlayer(99, 74)])
 
     assert [l.trigger for l in market.listingsFor(seller)] == ['expiring_surplus']
     assert 'expiring_surplus' not in [l.trigger for l in market.listingsFor(buyer)]
-    print("PASS a rebuilder sells its walk-year; a contender rents it")
+    print("PASS a rebuilder sells its walk-year surplus; a contender rents it")
 
 
 def test_a_contender_still_sells_a_locker_room_problem():
@@ -353,13 +382,16 @@ def test_a_player_acquired_this_season_cannot_be_moved_again():
     rule; it was never implemented."""
     seller = FakeTeam(1, 'Rebuild', wins=3, losses=11)
     other = FakeTeam(2, 'Other')
-    justArrived = FakePlayer(10, 84, termRemaining=1)
-    seller.rosterDict['wr1'] = justArrived
+    _congest(seller, ratings=(84, 80, 76))
     market = _market([seller, other], freeAgents=[FakePlayer(99, 74)], week=20)
 
-    assert market.listingsFor(seller), "fixture is wrong — he should be listable"
-    tradeManager._stampAcquired(justArrived, market.season)
-    assert market.listingsFor(seller) == [], "he was re-listed the season he arrived"
+    before = market.listingsFor(seller)
+    assert before, "fixture is wrong — someone should be listable"
+    # Stamp whoever the club actually posted, so the guard is tested on the real listing
+    # rather than on a player the market had already passed over.
+    tradeManager._stampAcquired(before[0].player, market.season)
+    after = [l for l in market.listingsFor(seller) if l.player is before[0].player]
+    assert after == [], "he was re-listed the season he arrived"
     print("PASS a player cannot be flipped in the season he arrived")
 
 
@@ -485,3 +517,191 @@ def test_a_swap_needs_no_backfill_and_no_cut():
         "the backfill is looked up before checking for a swap"
     assert 'else:' in head and '_slotOf(buyer, swap)' in head
     print("PASS a swap skips the backfill and the cut entirely")
+
+
+# --------------------------------- the re-sign cap is what makes a surplus
+
+def test_a_club_does_not_sell_a_walk_year_player_it_can_simply_re_sign():
+    """⚠️ "HE LEAVES FOR NOTHING" IS THE WHOLE PREMISE, AND IT IS FALSE FOR A PLAYER THE
+    CLUB CAN KEEP. The plan's trigger is "walk-year, OVER THE RE-SIGN LIMIT, not
+    contending"; the middle third was never built, so it fired on every expiring player
+    and clubs sold their best men for scraps — a 1-14 club shipped a 93-rated kicker for
+    one prospect at an ask of 0.3.
+
+    ⚠️ The live constraint is the PER-OFFSEASON cap, not a per-player one:
+    `RESIGN_ONCE_ENABLED` has been False since 2026-08-13."""
+    other = FakeTeam(9, 'Other')
+    pool = [FakePlayer(99, 74, Position.WR)]
+
+    # ⚠️ One star on a walk year with a free re-sign slot is NOT surplus. He is still
+    # available — a club can deem a highly rated player expendable if the return is worth
+    # it — but under a different trigger and at a retention price, not a rental's.
+    calm = _withCore(FakeTeam(1, 'Calm', wins=3, losses=11))
+    calm.rosterDict['wr1'] = FakePlayer(10, 93, Position.WR, termRemaining=1)
+    calmListings = _market([calm, other], freeAgents=pool, week=20).listingsFor(calm)
+    assert [l.trigger for l in calmListings] == ['expiring_keeper'], calmListings
+
+    # ⚠️ THREE expiring against a cap of two. Only now is one of them genuinely leaving.
+    congested = _withCore(FakeTeam(2, 'Congested', wins=3, losses=11))
+    _congest(congested, ratings=(93, 80, 76), position=Position.WR)
+    listings = _market([congested, other], freeAgents=pool, week=20).listingsFor(congested)
+    assert [l.trigger for l in listings] == ['expiring_surplus'], listings
+    assert listings[0].player.playerRating != 93, \
+        "the club put its BEST expiring player on the block as SURPLUS, not its spare"
+    print(f"PASS the keepable star is a priced keeper; the surplus "
+          f"({listings[0].player.playerRating:g}) is the one leaving for nothing")
+
+
+def test_a_keeper_costs_far_more_than_a_surplus_walk_year():
+    """⚠️ THE PRICE IS THE WHOLE MECHANISM (owner: a highly rated player can be expendable
+    "as long as the return is worth it"). A club that can re-sign him is not selling a
+    rental — a buyer is acquiring the contract that would follow — so he has to be valued
+    on it. Priced as a rental, a 92 on a walk year is worth a few weeks of football and
+    goes for scraps: measured, a 1-14 club shipped a 93-rated kicker for one prospect at
+    an ask of 0.3."""
+    other = FakeTeam(9, 'Other')
+    pool = [FakePlayer(99, 74, Position.WR)]
+
+    keeper = _withCore(FakeTeam(1, 'Keeper', wins=3, losses=11))
+    keeper.rosterDict['wr1'] = FakePlayer(10, 92, Position.WR, termRemaining=1)
+    keeperAsk = _market([keeper, other], freeAgents=pool,
+                        week=20).listingsFor(keeper)[0].ask
+
+    congested = _withCore(FakeTeam(2, 'Congested', wins=3, losses=11))
+    _congest(congested, ratings=(92, 92, 92), position=Position.WR)
+    surplusAsk = _market([congested, other], freeAgents=pool,
+                         week=20).listingsFor(congested)[0].ask
+
+    assert keeperAsk > surplusAsk * 3, (keeperAsk, surplusAsk)
+    print(f"PASS the same 92 asks {keeperAsk:.1f} as a keeper against "
+          f"{surplusAsk:.1f} as surplus — {keeperAsk / surplusAsk:.0f}x")
+
+
+def test_the_best_expiring_players_are_the_ones_kept():
+    """Ranked on the club's own `decisionValue` — the same number the offseason retention
+    pass uses, so the market and the front office cannot disagree about who is keepable."""
+    from constants import RESIGN_LIMIT_PER_OFFSEASON
+    seller = FakeTeam(1, 'Rebuild', wins=2, losses=12)
+    other = FakeTeam(2, 'Other')
+    _congest(seller, ratings=(92, 88, 84, 80), position=Position.WR)
+    market = _market([seller, other], freeAgents=[FakePlayer(99, 74)], week=20)
+
+    surplus = market._cannotKeep(seller)
+    expiring = [p for p in seller.rosterDict.values()
+                if p is not None and p.termRemaining <= 1]
+    kept = [p for p in expiring if id(p) not in surplus]
+    assert len(kept) == RESIGN_LIMIT_PER_OFFSEASON, (len(kept), RESIGN_LIMIT_PER_OFFSEASON)
+    assert min(p.playerRating for p in kept) > max(
+        p.playerRating for p in expiring if id(p) in surplus)
+    print(f"PASS the top {RESIGN_LIMIT_PER_OFFSEASON} are kept "
+          f"({sorted((p.playerRating for p in kept), reverse=True)}), the rest are surplus")
+
+
+def test_the_buyer_prices_a_walk_year_player_through_ITS_OWN_cap():
+    """⚠️ ONE RULE, BOTH SIDES. The seller was pricing a keepable star on the contract that
+    would follow while the buyer still priced him as a thirteen-week rental — ask 108
+    against a bid of 3.5 — so NOT ONE keeper ever sold: measured, 245 listed and zero
+    clearing bids.
+
+    ⚠️ And whether he is keepable is a property of the CLUB, not the player. A contender
+    with three mediocre walk-years can keep a 92 (he displaces one); a club already holding
+    two better men cannot. That is what makes the same player genuinely expendable to one
+    club and untouchable to another."""
+    star = FakePlayer(10, 92, Position.WR, termRemaining=1)
+
+    roomy = FakeTeam(1, 'Roomy', wins=11, losses=3)
+    roomy.rosterDict['rb'] = FakePlayer(20, 70, Position.RB, termRemaining=1)
+    market = _market([roomy, FakeTeam(9, 'Other')])
+    assert market.retentionTerm(roomy, star, incoming=True) > 0, \
+        "a club with a free re-sign slot valued him as a pure rental"
+
+    crowded = FakeTeam(2, 'Crowded', wins=11, losses=3)
+    for i, slot in enumerate(('qb', 'rb')):
+        crowded.rosterDict[slot] = FakePlayer(30 + i, 97, Position.QB, termRemaining=1)
+    market2 = _market([crowded, FakeTeam(9, 'Other')])
+    assert market2.retentionTerm(crowded, star, incoming=True) == 0.0, \
+        "a club already holding two better walk-years still priced in a re-sign"
+    print("PASS the same 92 is a keeper to one club and a rental to another")
+
+
+def test_surplus_and_keeper_come_from_ONE_rule():
+    """`retentionTerm` returns 0 for a player over the club's cap, so the two triggers are
+    the same rule seen from either side of the limit — not two code paths that could
+    disagree about who is leaving."""
+    other = FakeTeam(9, 'Other')
+    congested = FakeTeam(1, 'Congested', wins=3, losses=11)
+    _congest(congested, ratings=(92, 88, 84), position=Position.WR)
+    market = _market([congested, other], freeAgents=[FakePlayer(99, 74, Position.WR)])
+
+    expiring = sorted((p for p in congested.rosterDict.values()
+                       if p is not None and p.termRemaining <= 1),
+                      key=lambda p: -p.playerRating)
+    assert market.retentionTerm(congested, expiring[0]) > 0      # kept
+    assert market.retentionTerm(congested, expiring[1]) > 0      # kept
+    assert market.retentionTerm(congested, expiring[2]) == 0.0   # surplus
+    print("PASS one rule: the top two carry a re-sign, the third is a rental")
+
+
+# ------------------------------------------- the core is not a trade asset
+
+def test_a_club_does_not_put_its_franchise_player_on_the_block():
+    """⚠️ BEING HIGHLY RATED IS NOT THE SAME AS BEING AVAILABLE (owner: "teams should also
+    be identifying star players to build around and not consider every highly rated player
+    as a trade asset"). Every value trigger priced a star as an asset with a big number on
+    it, so a club's best man went on the block whenever the arithmetic said the return
+    cleared — which is how a rebuilder sells the one player its rebuild is for."""
+    other = FakeTeam(9, 'Other')
+    pool = [FakePlayer(99, 74, Position.WR)]
+
+    club = FakeTeam(1, 'Rebuild', wins=3, losses=11)
+    club.rosterDict['wr1'] = FakePlayer(10, 95, Position.WR, termRemaining=1)
+    market = _market([club, other], freeAgents=pool, week=20)
+    assert market.listingsFor(club) == [], "the franchise player was listed"
+    assert id(club.rosterDict['wr1']) in market._coreOf(club)
+    print("PASS a club's best player is not an asset")
+
+
+def test_the_core_must_actually_be_STARS():
+    """⚠️ "The best two on a 2-14 club" as a rule would make the worst clubs untouchable
+    and stop them trading at all — the opposite of what a rebuild does. It takes the
+    game's own bar, 4-star or better."""
+    from constants import TRADE_CORE_MIN_RATING
+    weak = FakeTeam(1, 'Weak', wins=2, losses=12)
+    weak.rosterDict['wr1'] = FakePlayer(10, TRADE_CORE_MIN_RATING - 5,
+                                        Position.WR, termRemaining=1)
+    market = _market([weak, FakeTeam(9, 'Other')], week=20)
+    assert market._coreOf(weak) == set(), "a sub-star was treated as a franchise player"
+    assert market.listingsFor(weak), "a weak club's best player should still be an asset"
+    print(f"PASS below {TRADE_CORE_MIN_RATING:g} nobody is untouchable")
+
+
+def test_a_declining_star_is_still_an_asset():
+    """⚠️ SELLING HIGH ON A FADING VETERAN IS ONE OF THE FEW GENUINELY SMART THINGS A FRONT
+    OFFICE CAN DO. The core is who you build AROUND, and a player on the way down is not
+    that however good he still looks."""
+    from managers.frontOfficeBrain import ARC_REGRESSING
+    club = FakeTeam(1, 'Aging', wins=3, losses=11)
+    fading = FakePlayer(10, 95, Position.WR, termRemaining=1)
+    club.rosterDict['wr1'] = fading
+    market = _market([club, FakeTeam(9, 'Other')], week=20)
+
+    assert id(fading) in market._coreOf(club)          # prime, so untouchable
+    market._coreCache.clear()
+    market.brain.classifyArc = lambda p: ARC_REGRESSING
+    assert market._coreOf(club) == set(), "a declining star was shielded as a cornerstone"
+    print("PASS a fading star is a legitimate asset again")
+
+
+def test_the_locker_room_trigger_still_reaches_the_core():
+    """⚠️ EXEMPT FROM THE VALUE TRIGGERS, NOT FROM ALL OF THEM. A franchise player
+    poisoning the room is a real decision a club has to make, and shielding him from it
+    would make attitude unable to touch the players it matters most for."""
+    club = FakeTeam(1, 'Toxic', wins=11, losses=3)
+    star = FakePlayer(10, 95, Position.WR, termRemaining=3,
+                      attitude=LOCKER_ROOM_ATTITUDE - 15)
+    club.rosterDict['wr1'] = star
+    market = _market([club, FakeTeam(9, 'Other')], freeAgents=[FakePlayer(99, 74, Position.WR)],
+                     week=20)
+    assert id(star) in market._coreOf(club)
+    assert [l.trigger for l in market.listingsFor(club)] == ['locker_room']
+    print("PASS a toxic franchise player is still movable, for that reason alone")

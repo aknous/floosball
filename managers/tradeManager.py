@@ -51,6 +51,9 @@ TRIGGER_URGENCY = {
     'locker_room': 1,
     'blocked_prospect': 2,
     'horizon_mismatch': 3,
+    # ⚠️ LAST, because the club is happy either way — it would simply re-sign him. He is
+    # on the block at a price, not because anything is forcing the issue.
+    'expiring_keeper': 4,
 }
 
 
@@ -96,6 +99,11 @@ class TradeMarket:
         self.week = week            # None = an offseason pass
         self._contention = {}
         self._leagueMean = 0.0
+        # Cached per pass: the sweep asks for it once per listing and once per bid.
+        self._cannotKeepCache = {}
+        self._coreCache = {}
+        # Why bundles fail, for the market harness. Three reasons, three different answers.
+        self.assembleFail = {}
         self._computeContention()
 
     # ------------------------------------------------------------ context
@@ -188,6 +196,8 @@ class TradeMarket:
         contending = self.isContending(team)
         prospects = list(getattr(team, 'prospects', None) or [])
         blocked = self._blockedPositions(team, prospects)
+        cannotKeep = self._cannotKeep(team)
+        core = self._coreOf(team)
 
         for slot, player in roster.items():
             if player is None or getattr(player, 'willRetire', False):
@@ -198,9 +208,16 @@ class TradeMarket:
             term = int(getattr(player, 'termRemaining', 0) or 0)
             attitude = self._attitudeOf(player)
 
-            if not contending and term <= 1:
-                # ⚠️ THE ENGINE OF THE WHOLE MARKET. He leaves for nothing at season end;
-                # anything at all beats that.
+            keepableWalker = (term <= 1 and id(player) not in cannotKeep
+                              and not getattr(player, 'willRetire', False))
+            if not contending and term <= 1 and id(player) in cannotKeep:
+                # ⚠️ THE ENGINE OF THE WHOLE MARKET — but ONLY FOR A PLAYER THE CLUB
+                # CANNOT KEEP. "He leaves for nothing" is the entire premise, and it is
+                # simply false for a walk-year player the club can just re-sign. Without
+                # the limit this fired on EVERY expiring player, and clubs sold their best
+                # men for scraps: a 1-14 club shipped a 93-rated kicker for one prospect
+                # at an ask of 0.3, and a 7-10 club a 96-rated back. Both would have been
+                # the first name on their own re-sign list.
                 trigger = 'expiring_surplus'
             elif attitude is not None and attitude < LOCKER_ROOM_ATTITUDE:
                 trigger = 'locker_room'
@@ -213,10 +230,27 @@ class TradeMarket:
                 # is a TIME trade, not a talent trade: a rebuilder gives up now for term,
                 # a contender term for now, and both are right. Rating barely enters.
                 trigger = 'horizon_mismatch'
+            elif keepableWalker:
+                # ⚠️ A CLUB DECIDES WHO IS EXPENDABLE, AND A HIGHLY RATED PLAYER CAN BE —
+                # "as long as the return is worth it" (owner, 2026-09-15). The re-sign cap
+                # says who is DEFINITELY leaving; it does not say the rest are untouchable.
+                # What changes is the PRICE, not the availability: this man is not a
+                # rental, because the club holds the right to re-sign him, so what a buyer
+                # is really acquiring is the contract that would follow. Priced that way
+                # he costs several times what a surplus walk-year does, and only a return
+                # that genuinely beats keeping him will clear it.
+                trigger = 'expiring_keeper'
             if trigger is None:
                 continue
+            # ⚠️ THE CORE IS EXEMPT FROM THE VALUE TRIGGERS, NOT FROM ALL OF THEM.
+            # `locker_room` still reaches him, because that is a reason to move a player
+            # which has nothing to do with what he is worth — a franchise player poisoning
+            # the room is a real decision a club has to make, and exempting him from it
+            # would make attitude unable to touch the players it most matters for.
+            if trigger != 'locker_room' and id(player) in core:
+                continue
 
-            ask, floor = self._priceListing(team, player)
+            ask, floor = self._priceListing(team, player, trigger)
             if ask <= 0:
                 continue
             out.append(Listing(team, player, trigger, ask, floor))
@@ -234,6 +268,151 @@ class TradeMarket:
         # this market exists. He goes first.
         out.sort(key=lambda l: (TRIGGER_URGENCY.get(l.trigger, 99), -l.ask))
         return out[:TRADE_LISTINGS_PER_TEAM]
+
+    def _coreOf(self, team) -> set:
+        """The players this club is building around. Not trade assets.
+
+        ⚠️ BEING HIGHLY RATED IS NOT THE SAME AS BEING AVAILABLE. Every value trigger
+        priced a star as an asset with a big number on it, so a club's best man went on the
+        block whenever the arithmetic said the return cleared — which is how a rebuilder
+        ends up selling the one player its rebuild is supposed to be for.
+
+        ⚠️ A CORE PLAYER MUST ACTUALLY BE A STAR. "The best two on a 2-14 club" as a rule
+        would make the worst clubs untouchable and stop them trading at all, which is the
+        opposite of what a rebuild does — so it takes the game's own bar, 4-star or better.
+
+        ⚠️ AND A DECLINING STAR IS A LEGITIMATE ASSET. Selling high on a fading veteran is
+        one of the few genuinely smart things a front office can do; the core is who you
+        build AROUND, and a player on the way down is not that however good he still looks.
+        """
+        from constants import (TRADE_CORE_SIZE, TRADE_CORE_MIN_RATING,
+                               TRADE_CORE_EXCLUDES_DECLINING)
+        cached = self._coreCache.get(id(team))
+        if cached is not None:
+            return cached
+        from managers.frontOfficeBrain import ARC_REGRESSING
+        coach = getattr(team, 'coach', None)
+        roster = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
+                  if p is not None]
+        try:
+            roster.sort(key=lambda p: -self.brain.decisionValue(p, coach=coach, team=team))
+        except Exception:
+            roster.sort(key=lambda p: -(getattr(p, 'playerRating', 0) or 0))
+        core = set()
+        for p in roster[:int(TRADE_CORE_SIZE)]:
+            if (getattr(p, 'playerRating', 0) or 0) < TRADE_CORE_MIN_RATING:
+                continue
+            if TRADE_CORE_EXCLUDES_DECLINING:
+                try:
+                    if self.brain.classifyArc(p) == ARC_REGRESSING:
+                        continue
+                except Exception:
+                    pass
+            core.add(id(p))
+        self._coreCache[id(team)] = core
+        return core
+
+    def retentionTerm(self, team, player, incoming: bool = False) -> float:
+        """Extra seasons of control a walk-year player carries FOR THIS CLUB.
+
+        ⚠️ ONE RULE, BOTH SIDES. The seller was pricing a keepable star on the contract
+        that would follow while the buyer still priced him as a thirteen-week rental, so
+        the ask sat around 108 against a bid of 3.5 and NOT ONE keeper ever sold —
+        measured, 245 listed and zero clearing bids. A club acquiring him inherits the same
+        right to re-sign him, so it has to value the same thing.
+
+        ⚠️ AND WHETHER HE IS KEEPABLE IS A PROPERTY OF THE CLUB, NOT THE PLAYER.
+        `RESIGN_LIMIT_PER_OFFSEASON` is 2, so it depends on who else that club has
+        expiring: a contender with three mediocre walk-years can keep a 92 (he displaces
+        one of them), while a club already holding two better men cannot. That is what
+        makes a highly rated player genuinely expendable to one club and untouchable to
+        another — and it is the whole reason a keeper trade can clear at all.
+
+        `incoming=True` asks the hypothetical: if this club acquired him, would he make its
+        own re-sign cut?
+        """
+        if (getattr(player, 'termRemaining', 99) or 99) > 1:
+            return 0.0          # not a walk-year player; his term speaks for itself
+        if getattr(player, 'willRetire', False):
+            return 0.0
+        if not incoming and id(player) in self._cannotKeep(team):
+            return 0.0          # over this club's cap — he is leaving for nothing
+        if incoming and not self._wouldMakeTheCut(team, player):
+            return 0.0
+        try:
+            return float(self.playerManager.expectedPlayerTerm(player))
+        except Exception:
+            return 1.0
+
+    def _wouldMakeTheCut(self, team, player) -> bool:
+        """If this club acquired him, would he be one of the walk-years it re-signs?"""
+        from constants import RESIGN_LIMIT_PER_OFFSEASON
+        coach = getattr(team, 'coach', None)
+        rivals = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
+                  if p is not None and p is not player
+                  and not getattr(p, 'willRetire', False)
+                  and (getattr(p, 'termRemaining', 99) or 99) <= 1]
+        try:
+            mine = self.brain.decisionValue(player, coach=coach, team=team)
+            better = sum(1 for p in rivals
+                         if self.brain.decisionValue(p, coach=coach, team=team) > mine)
+        except Exception:
+            mine = getattr(player, 'playerRating', 0) or 0
+            better = sum(1 for p in rivals if (getattr(p, 'playerRating', 0) or 0) > mine)
+        return better < int(RESIGN_LIMIT_PER_OFFSEASON)
+
+    def _cannotKeep(self, team) -> set:
+        """Which of this club's walk-year players are genuinely leaving.
+
+        ⚠️ THE ONLY LIVE RETENTION CONSTRAINT IS THE PER-OFFSEASON CAP (owner, 2026-09-15:
+        "theres no longer a re-sign limit for players, only the amount of players that can
+        be re-signed every off season"). `RESIGN_LIMIT_PER_OFFSEASON` is 2 — a club with
+        three expiring players loses one for nothing whatever it wants, and a club with one
+        simply re-signs him, however good he is. There is no per-PLAYER cap:
+        `RESIGN_ONCE_ENABLED` has been False since 2026-08-13, because at a limit of 1 a
+        career-long one-club player was impossible.
+
+        ⚠️ LEAVING THAT CLAUSE OUT TURNED "HE LEAVES FOR NOTHING" FROM A FACT INTO AN
+        ASSUMPTION THAT WAS USUALLY FALSE. The plan states the trigger as "walk-year, OVER
+        THE RE-SIGN LIMIT, not contending" and the middle third was never built, so it
+        fired on EVERY expiring player: measured, a 1-14 club shipped a 93-rated kicker for
+        one prospect at an ask of 0.3, and a 7-10 club a 96-rated back — both of them the
+        first name on their own re-sign list.
+
+        Ranked by the club's OWN `decisionValue`, the same number the offseason retention
+        pass uses, so the market and the front office cannot disagree about who is
+        keepable. The best two are kept; everyone past the cap is the surplus.
+
+        ⚠️ `hasReachedResignLimit` is consulted anyway and is INERT BY DESIGN — it returns
+        False while the per-player rule is off. It is the single source of truth for
+        re-sign eligibility, so the market reads it rather than growing a second opinion
+        that would have to be found and updated if that rule ever came back.
+        """
+        from constants import RESIGN_LIMIT_PER_OFFSEASON
+        cached = self._cannotKeepCache.get(id(team))
+        if cached is not None:
+            return cached
+        coach = getattr(team, 'coach', None)
+        expiring = [p for p in (getattr(team, 'rosterDict', None) or {}).values()
+                    if p is not None and not getattr(p, 'willRetire', False)
+                    and (getattr(p, 'termRemaining', 99) or 99) <= 1]
+        forced, keepable = set(), []
+        pm = self.playerManager
+        for p in expiring:
+            try:
+                if pm is not None and pm.hasReachedResignLimit(p):
+                    forced.add(id(p))
+                    continue
+            except Exception:
+                pass
+            keepable.append(p)
+        try:
+            keepable.sort(key=lambda p: -self.brain.decisionValue(p, coach=coach, team=team))
+        except Exception:
+            keepable.sort(key=lambda p: -(getattr(p, 'playerRating', 0) or 0))
+        result = forced | {id(p) for p in keepable[int(RESIGN_LIMIT_PER_OFFSEASON):]}
+        self._cannotKeepCache[id(team)] = result
+        return result
 
     @staticmethod
     def _attitudeOf(player):
@@ -272,11 +451,17 @@ class TradeMarket:
             return term >= 3        # years it will not be around to use
         return False                # a rebuilder's long deals are exactly what it wants
 
-    def _priceListing(self, team, player):
+    def _priceListing(self, team, player, trigger=None):
+        # ⚠️ NOT A RENTAL IF THE CLUB CAN RE-SIGN HIM. `retentionTerm` is the single rule,
+        # and it returns 0 for a player over the club's cap — so `expiring_surplus` prices
+        # as a rental and `expiring_keeper` on the contract that would follow, without two
+        # code paths that could disagree.
+        term = (int(getattr(player, 'termRemaining', 0) or 0)
+                + self.retentionTerm(team, player))
         ask, floor = trading.askAndFloor(
             getattr(player, 'playerRating', 0),
             self._backfillRating(team, player),
-            getattr(player, 'termRemaining', 0),
+            term,
             self.week,
             self.nowWeight(team),
             self._positionWeight(player))
@@ -347,8 +532,12 @@ class TradeMarket:
         # believes he has, which is what the surplus-over-replacement scale needs — but
         # nothing re-applied it, so a kicker priced exactly like a quarterback and a club
         # paid three first-round picks for a 78-rated K on a walk year.
-        gross = trading.playerValue(
-            believed, getattr(player, 'termRemaining', 0), self.week, buyerWeight, posW)
+        # ⚠️ THE BUYER INHERITS THE RIGHT TO RE-SIGN HIM, so it prices the same quantity —
+        # through ITS OWN cap. A club already holding two better walk-years gets a rental;
+        # one with room gets the contract that follows, and only then can a keeper clear.
+        buyerTerm = (int(getattr(player, 'termRemaining', 0) or 0)
+                     + self.retentionTerm(buyer, player, incoming=True))
+        gross = trading.playerValue(believed, buyerTerm, self.week, buyerWeight, posW)
         if gross <= 0:
             return None
 
@@ -493,6 +682,9 @@ class TradeMarket:
             toSeller += worthToSeller
             toBuyer += asset['value']
         if toSeller < bar:
+            self.assembleFail['barNotCleared'] = self.assembleFail.get('barNotCleared', 0) + 1
+            if not buyerAssets:
+                self.assembleFail['noAssets'] = self.assembleFail.get('noAssets', 0) + 1
             return []
         # ⚠️ THE DISPLACED PLAYER IS COUNTED ONCE, NOT TWICE. When the buyer pays WITH the
         # man it would otherwise have had to cut, the displacement and the payment are the
@@ -501,7 +693,9 @@ class TradeMarket:
         # player is a real additional cost (and a cut fee on top).
         costToBuyer = toBuyer if usedPlayer else toBuyer + displaced
         if costToBuyer >= gross:
+            self.assembleFail['tooExpensive'] = self.assembleFail.get('tooExpensive', 0) + 1
             return []           # it costs the buyer more than the player is worth to it
+        self.assembleFail['built'] = self.assembleFail.get('built', 0) + 1
         return pieces
 
     def _tradeableAssets(self, team, valuingTeam=None, swapPosition=None) -> list:
