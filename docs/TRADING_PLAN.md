@@ -470,6 +470,69 @@ should pull its own player off the block rather than sell into a run it is now p
 withdrawal is the same check as the listing trigger, re-run; it needs no separate rule, only
 that the trigger is evaluated every week rather than latched at listing time.
 
+### ⚠️ Attitude — a toxic player damages the room and the GM cannot currently see it
+
+`seasonManager._applyLockerRoomDrift` runs **every week** and nudges each starter's
+confidence and determination toward the team's average attitude, anchored by the coach at 1/3
+weight. Its own docstring is explicit:
+
+> *"This is what makes attitude a load-bearing attribute ... a toxic veteran genuinely
+> poisons teammates' confidence; a strong leader genuinely lifts them."*
+
+⚠️ **And `frontOfficeBrain` never reads attitude. Not once.** A player is valued on rating ×
+position, plus form and fan sentiment. So the sim models a locker-room problem doing real
+damage and gives the GM no way to perceive it — which is exactly the owner's question, and
+the answer today is no.
+
+The spread is large enough to matter. Rostered attitude runs **35 to 100** (median 72), and
+team locker rooms span **20 points**, from Exoticos at 82.8 to Grillmeisters at 62.7. Real
+cases exist right now:
+
+| player | club | rating | attitude |
+|---|---|---:|---:|
+| Chud Bumpington (TE) | Melons | **85** | **45** |
+| Prima Cutie (WR) | Waffles | 80 | 45 |
+| Rusty Mateo (WR) | Bees | 80 | 46 |
+| Orville Duckey (K) | Grillmeisters | 78 | **35** |
+
+A talented player actively dragging a weak room down is a trade waiting to happen, and it is
+a **fourth listing trigger** independent of contention: a club wants him gone whether it is
+buying or selling.
+
+#### ✅ And it does NOT become a dumping ground, because the damage travels
+
+The naive version — the seller discounts for attitude, the buyer does not — would have GMs
+systematically palming headcases off on each other. That is not the right model and it is not
+what the sim does: **the damage lands in whichever room he is in.** So both clubs price it,
+the seller gains by removal and the buyer loses by addition, and a toxic player is simply
+worth less to everybody.
+
+⚠️ **The trade comes from the room, not from blindness.** `_applyLockerRoomDrift` works off
+`effectiveAvg = (avgAttitude × 3 + coachAttitude) / 4`, so the marginal damage of adding one
+player depends on the room receiving him:
+
+- a **high-attitude room with a leader coach** absorbs one bad apple — the average barely
+  moves and the coach anchors it,
+- an **already-toxic room** compounds.
+
+So Exoticos (82.8, strong coach) can take on a talented headcase that Grillmeisters (62.7)
+cannot, and pay less for him than his rating suggests. **That is "change of scenery" as
+arithmetic rather than as flavour**, and it gives a good locker room a genuine, tradeable
+asset: the capacity to absorb someone.
+
+#### How it enters
+
+Attitude is **not hidden** — unlike potential, it needs no scouting band. Both clubs see it.
+What differs is the marginal effect on each room, which each club computes about **itself**.
+
+Add it as a term on `decisionValue` — the value of a player to *this* club is reduced by the
+drift he would cause in *this* room. That single term produces all of it: the seller's urge to
+move him, the buyer's discount, and the strong room's ability to pay more than a weak one.
+
+⚠️ It should be a **value term, not a veto** — the same rule as fan sentiment and divisional
+reluctance. A club can always decide the talent is worth the trouble, and that decision going
+wrong is a story.
+
 ### Cadence and rate limits
 
 Runs **weekly**, in the existing per-week hook block, closing at week 22.
