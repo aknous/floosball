@@ -939,6 +939,34 @@ league re-signs the moment it ships.
 
 ## 9. What to build, in order
 
+### Branching — two tracks, not one
+
+⚠️ **The build splits across two branches, because half of it is shippable now and half is
+gated on a season boundary.** Putting it all on one branch forces the shippable fixes to wait
+for the feature.
+
+| track | branch | why |
+|---|---|---|
+| **0a** contract lengths, **0c** washout ordering + last chance, **attitude term**, **sentiment re-point** | **`development`** | Each is a bug or balance fix that stands alone, ships on its own, and wants measuring separately. The repo convention is that shippable fixes go to `development` → `main` → deploy, not onto a feature branch |
+| **0b** prospect draft, and all of **trading** | **`feature/trading`** | Long-lived, multi-stage, and behind `TRADING_ENABLED` |
+
+⚠️ **The draft cannot land mid-season and do anything.** The class generates at **season
+start**, so a mid-season deploy produces nothing until the next season begins — and the cull
+changes the league population, which is a season-boundary change by nature. So
+`feature/trading` merges to `development` when ready, but the *deploy* wants to land at a
+season cutover.
+
+Conventions that apply (repo `CLAUDE.md`):
+
+- **Always merge, never rebase**, into `development` and `main`.
+- Keep `feature/trading` **current with `development`** — the fixes on the other track change
+  `decisionValue` and `_getPlayerTerm`, which trading reads. Merge `development` in
+  periodically rather than diverging.
+- ⚠️ **Never run `fly deploy`** — do the git work and hand off.
+- The frontend (transactions page, prospect surfaces) is a **separate repo** at
+  `../floosball-react`, and its `main` **auto-deploys to Vercel**. Use a matching
+  `feature/trading` there and do not promote it without being asked.
+
 ⚠️ **The prospect draft was a hard prerequisite and mid-season signing softened it to one
 reason.** It stays item 0 because it is what makes clubs *willing* sellers, but trading could
 ship without it:
