@@ -1332,3 +1332,79 @@ per-position backstop it already is, not as a second faucet.
     backstop?** Both running is ~51 intake a season against ~19 replacement need.
 37. **Rookie-pick trading**: are the picks in this draft tradeable from day one, or only the
     prospects once drafted? Picks are free; prospects cost a body.
+
+---
+
+# Addendum 12 — draft intake, prospect visibility, development wiring
+
+_2026-09-14. Owner: the draft replaces the trickle; prospects generate at week 22 and appear
+in the player tables behind a prospect filter; and confirm facility level + coach player-dev
+are still wired into prospect growth._
+
+## 1. The draft replaces the supply trickle — settled
+
+`ensurePositionSupply` stays as the **per-position backstop it already is** (it only fires
+when a position is genuinely short), not as a second faucet. Intake is the draft: 32/season
+against ~19 replacement need, with the cull removing the ~13 surplus.
+
+## 2. Week 22 is a good home for class generation
+
+`GM_ACTIVE_WEEK` (22) already hosts the Front Office open block — the retirement roll, FA
+retirements, the supply top-up, the HoF ballot seed — and that block is **already
+once-per-season idempotent**, gated `>= week` plus the persisted
+`front_office_open_season` marker so a restart or deploy at or after week 22 cannot re-run
+it. Class generation drops into an existing restart-safe slot rather than needing its own.
+
+⚠️ It must sit **after** the retirement roll in that block, for the same reason the HoF
+ballot does: the class is sized against the holes retirement is about to open.
+
+## 3. ✅ The backend prospect filter ALREADY EXISTS
+
+`GET /api/players?status=prospects` is live (`api/main.py`, alongside `fa` / `retired` /
+`hof` / `followed`) and filters on `is_prospect`. Like the prospect columns and the promotion
+machinery, it survived `68e5608` — the draft was removed, its scaffolding was not.
+
+⚠️ **The frontend is the gap.** `/players` redirects to `/stats`, and the Stats page is
+position-keyed tables with no status filter, so there is no existing status-filtered player
+list to hang a Prospects tab on. That is real frontend work — and it is the only piece of
+this request that is not already built.
+
+## 4. ✅ Development wiring is intact, verified link by link
+
+| link | where | state |
+|---|---|---|
+| coach dev read | `seasonManager` step 7: `team.coach.playerDevelopment` | ✓ |
+| facility dev read | `team.facilityEffect('dev_bonus')` | ✓ **new facilities system**, not the old market tier |
+| prospects included | explicit second loop over `team.prospects` | ✓ |
+| consumed | `PlayerDevelopment.apply_offseason_training(coachDevRating, fundingDevBonus)` | ✓ |
+| combined | `devBias = (coachDevRating − 60)/10 + facilityBonus` | ✓ |
+| ceiling | `developAttribute(current, trueSkill, potential, ctx)` climbs toward **trueSkill** | ✓ |
+| washout | `_advanceProspectWindow()` releases past `PROSPECT_DEVELOPMENT_WINDOW` | ✓ |
+
+The development docstring states the prospect case outright: devBias *"accelerates a RISING
+player's climb (and **skews prospect booms**) but does NOT slow the aging decline."*
+
+**Magnitudes.** Training Facility `dev_bonus` by level is `[0, 0.4, 0.8, 1.2, 1.6, 2.0]`;
+coach contributes `(playerDevelopment − 60)/10`, so 60→0, 80→+2, 100→+4. Combined devBias
+spans **0 to +6** — a real spread between a max-facility club with an elite developer and a
+neglected one, and it lands hardest on exactly the population that is still rising.
+
+⚠️ One property worth knowing: the fractional facility bonus is **resolved to an integer
+probabilistically** each offseason, so a level-1 Training Facility gives +1 devBias 40% of
+the time rather than a guaranteed fraction. That keeps devBias integral but makes a single
+prospect's growth noisy season to season; it is the AVERAGE over a pipeline that reflects the
+facility.
+
+## Build list for the draft, as it now stands
+
+| item | state |
+|---|---|
+| prospect columns, `team.prospects` load path | ✓ exists |
+| autonomous promotion (`_promoteProspectsAutonomously`) | ✓ exists, already ballot-free |
+| development wiring (coach + facility → trueSkill climb) | ✓ exists, verified |
+| washout window | ✓ exists |
+| `GET /api/players?status=prospects` | ✓ exists |
+| class generation at week 22 | build (revert of `68e5608`, minus the ballot) |
+| the draft itself, worst-first, 1 round | build (same revert) |
+| the cull (~13/season, `seasonsPlayed == 0`, excludes prospects) | build |
+| Prospects view in the frontend | build — no status-filtered player list exists to extend |
