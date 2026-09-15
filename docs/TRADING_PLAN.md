@@ -57,7 +57,30 @@ same player with three years left. **A 4x spread on identical talent.**
 | **roster player** | `(rating − 67) × seasonsOfControl(termRemaining, week)` |
 | **prospect** | projected mature surplus × seasons × wash-out discount, read through the buyer's own `scoutingVision` |
 | **rookie pick** | expected mature surplus at that slot × seasons × risk |
-| **Treasury** | face value ÷ a conversion rate — ⚠️ the one number with no anchor yet |
+| **Treasury** | face value ÷ **~200 F per value unit**, and capped — see below |
+
+#### ⚠️ Treasury: the CAP is the lever, not the rate
+
+Floobits are the only asset with no natural anchor, and sweeping the rate shows why chasing
+one is a dead end — **at every rate the richest club can buy the market**:
+
+| rate | a rental costs | median club buys | Waffles buys |
+|---:|---:|---:|---:|
+| 50 F/unit | 284F | 38u | 909u |
+| **200 F/unit** | **1,136F** | **9u** | 227u |
+| 400 F/unit | 2,272F | 5u | 114u |
+
+Treasury spans **200F to 45,427F — a 227x spread** that no exchange rate fixes. Waffles could
+fund the entire league's trade market at any price.
+
+So: **cap the Floobit share of a trade at ~25% of its value**, and set the rate merely so a
+median Treasury (1,896F) closes a couple of gaps a season — around **200 F per unit**.
+Floobits are the sweetener that closes a gap, never the consideration.
+
+⚠️ A second reason the cap matters: Treasury's alternative use is **facilities**, and
+`resolveSeasonEnd` already spends it on upkeep. A club that empties its Treasury on a rental
+loses a facility level at season end — which is a real trade-off worth preserving, and an
+uncapped market would let a rich club ignore it entirely.
 
 ### The pick curve is steep
 
@@ -238,6 +261,20 @@ measuring on its own.
 positive (85+ attitude averages 84.2 rating against 79.3 for sub-55), nowhere near enough that
 rating already carries it.
 
+**Magnitude: start at 0.20 per attitude point below 80.** Anchored on a decision that should
+flip — Chud Bumpington (TE, rating 85, attitude 45) on a Melons roster whose room averages
+62.8:
+
+| penalty / pt below 80 | effective | rank on his own roster |
+|---:|---:|---:|
+| 0 | 85.0 | 2 of 6 |
+| 0.10 | 81.5 | 2 of 6 |
+| **0.20** | **78.0** | **3 of 6** |
+| 0.30 | 74.5 | 4 of 6 |
+
+0.20 is where a 45-attitude 85 first falls below a clean 79 — the point the decision actually
+changes. Below it he is untouched; at 0.30 he drops under a 78, which overstates it.
+
 ⚠️ **Soft, for the reason the Appeal gate already taught.** Discount toxic players hard enough
 and they pool in free agency, never get signed, and the supply floor generates replacements
 around them — the exact failure that made `FLOOS_SOFT_APPEAL_PENALTY` a 0.90 multiplier rather
@@ -271,6 +308,11 @@ contender term for now, and both are right. Rating barely enters; `seasonsOfCont
 
 ⚠️ **The blocked-prospect trigger is one of three independent reasons the draft lands first.**
 It cannot fire with an empty pipeline.
+
+✅ **Only the first trigger is contention-gated, so a contender already sells** — for a
+locker-room problem or a blocked prospect, whether it is buying or not. Measured: **7
+contending clubs hold a sub-55 attitude player right now**, including Pinecones, Dry Heat and
+Sand Dollars. No extra rule is needed to let a contender into the selling side.
 
 ### 3.2 Choosing who to approach — public information only
 
@@ -389,9 +431,22 @@ the final game day, already `GM_ACTIVE_WEEK`.
 | bids per club per week | 1 | stops a contender hoovering the block in one pass |
 | trades per club per season | 2-3 | GM turnover runs 1-4 exits a season against a "not a carousel" bar |
 
-⚠️ **The volume caps are the part most likely to be wrong on the first try, and the only way to
-know is to run a season and count.** Eight sellers and sixteen buyers is a lot of willing
-counterparties; without limits week 1 would move a third of the league.
+⚠️ **But the market is SUPPLY-constrained, so the caps are a safety rail rather than a balance
+lever.** Counted on the live league, the four triggers produce roughly:
+
+| trigger | listings today |
+|---|---:|
+| expiring surplus | **14** across 8 non-contending clubs |
+| locker room (attitude < 55) | **18** across 15 clubs |
+| blocked prospect | 0 (empty pipeline) → ~1 per club once the draft lands |
+| horizon mismatch | not countable from a snapshot |
+
+16 buyers chase ~32 listings and **each listing sells once**. The ceiling is departing
+players, not appetite.
+
+**So ship with the weekly limits and NO per-season cap**, then count. A per-season cap
+constrains something that is not currently the binding constraint, and guessing its value
+before a season has run is how it ends up wrong.
 
 ---
 
@@ -451,15 +506,25 @@ players are leaving for nothing unless someone moves"* is a story every week of 
 
 ## 7. Open
 
-1. **Treasury → value conversion rate.** The only asset class with no anchor.
-2. **Pick horizon** — recommend **two seasons**: far enough to matter, and a pick that distant
-   is already a distribution of a distribution. Future picks carry a slot-scaled discount (see
-   the pick curve) rather than a flat one.
-3. **Volume caps** — sized by running a season and counting, not by choosing.
-4. **Does a contender ever sell?** The model says no, which is realistic but makes those eight
-   clubs the whole supply. Lever if thin: let a club sell a walk-year player it has *already
-   decided* not to re-sign, contending or not.
-5. ~~Transactions page scope~~ — **SETTLED**: the full front-office desk, seven sections. See
-   Visibility. Five of the seven already have their data.
-6. **Attitude term magnitude** — a live front-office change; wants measuring on its own before
-   it rides in with trading.
+Everything raised has been settled except the two that genuinely need a season of data.
+
+1. **Volume caps** — ship with the weekly limits and no per-season cap, then **count**. The
+   market is supply-constrained today (~32 listings, 16 buyers, each listing sells once), so a
+   per-season cap constrains something that is not the binding constraint.
+2. **Attitude term** — starting at **0.20 per point below 80**, but it is a **live
+   front-office change**: it alters how the current league cuts and re-signs the moment it
+   ships. Measure cuts, re-signs and the FA pool's depth over a season on its own, before it
+   rides in with trading.
+
+### Settled since the sketch
+
+| | |
+|---|---|
+| Treasury rate | ~200 F/unit, and **capped at ~25% of a trade** — the cap is the lever, not the rate |
+| pick horizon | **two seasons**, with a **slot-scaled** discount on future picks (top 5 near-nil) |
+| does a contender sell | **yes, already** — the locker-room and blocked-prospect triggers are not contention-gated |
+| transactions page | the full front-office desk, seven sections; five already have their data |
+| contention exponent | **1.25** |
+| sentiment | raises the **surplus the trade must clear**, not the seller's valuation |
+| divisional premium | derived from the schedule (**4x** the games), scaled by the rival's threat |
+| reserve floor | `(player − backfill) × seasonsLeft × nowWeight` — set by the backfill, not a constant |
