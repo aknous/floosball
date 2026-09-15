@@ -347,7 +347,7 @@ empty, so a difficult player is still signed when nothing else is there.
 
 ---
 
-## 3. Mechanics
+## 3. Mechanics — the in-season market
 
 A **two-sided listing market, resolved as a weekly auction.** Any club may post an asset it
 will move together with what it wants back; every other club prices what is posted; the poster
@@ -637,73 +637,7 @@ before a season has run is how it ends up wrong.
 
 ---
 
-## 4. Legality
-
-| rule | why |
-|---|---|
-| both rosters complete at settlement | an empty slot rates **50**; never rely on the engine tolerating `None` |
-| position-for-position, or player-for-assets **with a backfill** (prospect or free agent) | six locked slots, no bench |
-| closes at week 22 | owner; coincides with `GM_ACTIVE_WEEK` |
-| a club may not trade a player it acquired this season | stops pass-the-parcel |
-| volume capped per club per season | see above — and **measure it** |
-
-## 5. Visibility
-
-- **League news** on every trade via `league_news.publish()`. ⚠️ keyword-only and camelCase; a
-  snake_case typo has caused two incidents, one a production outage. `test_publish_kwargs.py`
-  sweeps call sites statically.
-### The transactions page
-
-New, and **not a trade log** — it is the league's front-office desk, useful year-round. Seven
-sections (owner):
-
-| section | source | notes |
-|---|---|---|
-| **upcoming draft order** | `freeAgencyOrder` / standings, **live** | ⚠️ must re-render when a pick is traded — the order is *who picks*, not *whose pick it is* |
-| **upcoming draft class** | the class generated at season start | shown through the **viewing club's own scouted band**, so two fans see different ranges |
-| **potential free agents** | walk-year players (`termRemaining <= 1`) | ⚠️ flag who the club **cannot keep** — 18 of 32 are over the re-sign limit, and that is the story |
-| **players on the block** | live listings | the analyst layer: who is available, and what it would take |
-| **trades** | `SeasonRecapEvent` | as they happen |
-| **signings and cuts** | `SeasonRecapEvent` (`fa_pick`, `cut`, `resign`, `walked`) | already written every offseason |
-| **prospect promotions** | `SeasonRecapEvent` (`promotion`) | already written |
-
-✅ **Five of the seven already have their data.** `SeasonRecapEvent` holds
-`rookie_pick | fa_pick | cut | resign | walked | promotion | retirement | hof_induction |
-coach_fire | coach_hire`, and prod has 5 seasons of it. The draft order and the walk-year list
-are both derivable today. Only **trades** and **the block** are new.
-
-⚠️ `SeasonRecapEvent`'s idempotency key is `(season, event_type, player_id|team_id)` — one
-player, one club — which a two-sided trade does not fit. It needs a **trade id**, or the
-resume dedupe silently drops half a swap.
-
-⚠️ **The block and the draft class are the sections with editorial weight**, and the ones that
-make the page worth visiting outside the trade window. A walk-year list that says *"these 33
-players are leaving for nothing unless someone moves"* is a story every week of the season.
-
-## 6. Settled
-
-| | |
-|---|---|
-| **contention exponent** | **1.25** — 2.0 has the best club paying a top-two pick for a six-week rental; linear compresses the market into 6 slots |
-| **Treasury** | **not a trade asset** — a 227x wealth spread made it unsafe without a cap, and dropping it removes the only asset with no natural anchor |
-| **rookie picks** | tradeable, **two seasons** out, with a **slot-scaled** discount on future picks (near-nil in the top 5, steep in the back half) |
-| **reserve floor** | `(player − backfill) × seasonsLeft × nowWeight` — set by the backfill, not a constant |
-| **fan sentiment** | raises **the surplus the trade must clear**, not the seller's valuation — the obvious wiring measurably does nothing |
-| **divisional premium** | derived from the schedule (**4x** the games), scaled by the rival's threat |
-| **season performance** | already wired and live — a deadband moving 14% of players, max +4.5, none at the cap. Needs nothing |
-| **attitude** | enters `decisionValue`, so it reaches **cuts and re-signs** as well as trades |
-| **does a contender sell** | **yes, already** — the locker-room and blocked-prospect triggers are not contention-gated |
-| **season stats on a trade** | **stay with the player** — already the behaviour |
-| **fan sentiment on a trade** | **does not follow** — clear the rows, since the own-club gate is on *writing* only |
-| **cards** | a **new card minted** at the new club; existing cards untouched. ⚠️ Templates mint once per season and return early, so this needs its own path |
-| **competitive-balance tax** | **not built** — measured at ~one season of earlier correction on one club |
-| **transactions page** | the full front-office desk, seven sections; five already have their data |
-| **mid-season FA signing** | allowed, **to fill an empty slot only**, for this season or one more — with `ensurePositionSupply` running weekly so the pool is not drained |
-| **roster window** | cut / sign / trade all live to **week 22**, then **frozen** until the offseason |
-| **offseason window** | **two passes — pre-rookie-draft (the main one; picks are live) and pre-FA-draft**. Runs on the blocked-prospect / locker-room / horizon triggers, since `nowWeight` resets and there is no contention asymmetry |
-| **cutting** | allowed, including to make room for an incoming trade — but **cutting a player with term left costs Treasury** (`remainingSeasons × surplus × rate`), which is the safe use of a currency with a 227x spread: a cost constrains the poor rather than empowering the rich |
-
-## 5b. The offseason trade window
+## 4. The offseason trade window
 
 ### The offseason is ~2 days of real time, and it already has the right shape
 
@@ -733,6 +667,24 @@ it kept, what the pool holds, and where it picks.**
 moment the draft runs, so only *future* picks remain. That asymmetry is worth honouring rather
 than smoothing: the pre-draft window is the valuable one precisely because the picks are live
 in it.
+
+### ⚠️ The offseason changes the valuation, in the club's favour
+
+Two of the in-season terms behave differently and both should be read deliberately:
+
+- **`seasonsOfControl` jumps.** In-season a walk-year player is a fraction of a season; in the
+  offseason the walk-years are already gone (the front office resolved them) and everyone
+  remaining has **whole seasons** of term. So offseason trades are about *assets*, not
+  rentals — the rental market does not exist here at all.
+- **`nowWeight` resets.** Contention is unknown for a season that has not been played, so
+  every club is back at ~1.00 — the same state that makes the in-season market quiet in week
+  1. ⚠️ **That removes the buyer/seller asymmetry entirely**, so the offseason market cannot
+  run on contention. It runs on the other three triggers: **blocked prospect** (loudest here,
+  right after promotions), **locker room**, and **horizon mismatch** — which in the offseason
+  is a club with a 2-year veteran wanting a 5-year one, or the reverse.
+
+✅ That is a genuinely different market rather than the same one at a different date, which is
+the argument for having both.
 
 ### ⚠️ A prospect's "seasons of control" is a DEADLINE, not a term
 
@@ -857,24 +809,6 @@ On his final offseason, at the promotions pass, the club should get to act rathe
 against a free agent, and must respect the cut fee's zero-floor: a club that cannot afford the
 fee cannot take that route and falls back to 1 or 3.
 
-### ⚠️ The offseason changes the valuation, in the club's favour
-
-Two of the in-season terms behave differently and both should be read deliberately:
-
-- **`seasonsOfControl` jumps.** In-season a walk-year player is a fraction of a season; in the
-  offseason the walk-years are already gone (the front office resolved them) and everyone
-  remaining has **whole seasons** of term. So offseason trades are about *assets*, not
-  rentals — the rental market does not exist here at all.
-- **`nowWeight` resets.** Contention is unknown for a season that has not been played, so
-  every club is back at ~1.00 — the same state that makes the in-season market quiet in week
-  1. ⚠️ **That removes the buyer/seller asymmetry entirely**, so the offseason market cannot
-  run on contention. It runs on the other three triggers: **blocked prospect** (loudest here,
-  right after promotions), **locker room**, and **horizon mismatch** — which in the offseason
-  is a club with a 2-year veteran wanting a 5-year one, or the reverse.
-
-✅ That is a genuinely different market rather than the same one at a different date, which is
-the argument for having both.
-
 ### What to reuse
 
 `_runPreDraftPass` already walks teams **worst→best** before the draft, broadcasting
@@ -889,7 +823,77 @@ the most complex: it interleaves trade evaluation with pick selection and every 
 re-orders the board mid-draft. **Two discrete passes first**, and revisit once the market has
 run a season and the volume is known.
 
-## 6b. ⚠️ A live bug found on the way: elite contracts are orphaned
+## 5. Legality
+
+| rule | why |
+|---|---|
+| both rosters complete at settlement | an empty slot rates **50**; never rely on the engine tolerating `None` |
+| position-for-position, or player-for-assets **with a backfill** (prospect or free agent) | six locked slots, no bench |
+| closes at week 22 | owner; coincides with `GM_ACTIVE_WEEK` |
+| a club may not trade a player it acquired this season | stops pass-the-parcel |
+| volume capped per club per season | see above — and **measure it** |
+
+## 6. Visibility
+
+- **League news** on every trade via `league_news.publish()`. ⚠️ keyword-only and camelCase; a
+  snake_case typo has caused two incidents, one a production outage. `test_publish_kwargs.py`
+  sweeps call sites statically.
+### The transactions page
+
+New, and **not a trade log** — it is the league's front-office desk, useful year-round. Seven
+sections (owner):
+
+| section | source | notes |
+|---|---|---|
+| **upcoming draft order** | `freeAgencyOrder` / standings, **live** | ⚠️ must re-render when a pick is traded — the order is *who picks*, not *whose pick it is* |
+| **upcoming draft class** | the class generated at season start | shown through the **viewing club's own scouted band**, so two fans see different ranges |
+| **potential free agents** | walk-year players (`termRemaining <= 1`) | ⚠️ flag who the club **cannot keep** — 18 of 32 are over the re-sign limit, and that is the story |
+| **players on the block** | live listings | the analyst layer: who is available, and what it would take |
+| **trades** | `SeasonRecapEvent` | as they happen |
+| **signings and cuts** | `SeasonRecapEvent` (`fa_pick`, `cut`, `resign`, `walked`) | already written every offseason |
+| **prospect promotions** | `SeasonRecapEvent` (`promotion`) | already written |
+
+✅ **Five of the seven already have their data.** `SeasonRecapEvent` holds
+`rookie_pick | fa_pick | cut | resign | walked | promotion | retirement | hof_induction |
+coach_fire | coach_hire`, and prod has 5 seasons of it. The draft order and the walk-year list
+are both derivable today. Only **trades** and **the block** are new.
+
+⚠️ `SeasonRecapEvent`'s idempotency key is `(season, event_type, player_id|team_id)` — one
+player, one club — which a two-sided trade does not fit. It needs a **trade id**, or the
+resume dedupe silently drops half a swap.
+
+⚠️ **The block and the draft class are the sections with editorial weight**, and the ones that
+make the page worth visiting outside the trade window. A walk-year list that says *"these 33
+players are leaving for nothing unless someone moves"* is a story every week of the season.
+
+## 7. Settled
+
+| | |
+|---|---|
+| **contention exponent** | **1.25** — 2.0 has the best club paying a top-two pick for a six-week rental; linear compresses the market into 6 slots |
+| **Treasury** | **not a trade asset** — a 227x wealth spread made it unsafe without a cap, and dropping it removes the only asset with no natural anchor |
+| **rookie picks** | tradeable, **two seasons** out, with a **slot-scaled** discount on future picks (near-nil in the top 5, steep in the back half) |
+| **reserve floor** | `(player − backfill) × seasonsLeft × nowWeight` — set by the backfill, not a constant |
+| **fan sentiment** | raises **the surplus the trade must clear**, not the seller's valuation — the obvious wiring measurably does nothing |
+| **divisional premium** | derived from the schedule (**4x** the games), scaled by the rival's threat |
+| **season performance** | already wired and live — a deadband moving 14% of players, max +4.5, none at the cap. Needs nothing |
+| **attitude** | enters `decisionValue`, so it reaches **cuts and re-signs** as well as trades |
+| **does a contender sell** | **yes, already** — the locker-room and blocked-prospect triggers are not contention-gated |
+| **season stats on a trade** | **stay with the player** — already the behaviour |
+| **fan sentiment on a trade** | **does not follow** — clear the rows, since the own-club gate is on *writing* only |
+| **cards** | a **new card minted** at the new club; existing cards untouched. ⚠️ Templates mint once per season and return early, so this needs its own path |
+| **competitive-balance tax** | **not built** — measured at ~one season of earlier correction on one club |
+| **transactions page** | the full front-office desk, seven sections; five already have their data |
+| **prospect control** | a **deadline, not a term** — `PROSPECT_DEVELOPMENT_WINDOW` is time to find him a slot, and one at 2/3 is a distressed asset whose clock **travels with him** |
+| **a prospect's last window** | the club acts rather than watches: promote regardless of the bar, **cut to make room** (paying the cut fee), or trade him |
+| **washout release** | ⚠️ **move `_advanceProspectWindow` before the FA draft** — today it runs 53 lines after it, so a washout waits a whole extra season and the supply floor generates a replacement he could have been |
+| **elite contract lengths** | ⚠️ **orphaned bug** — restore S 4-6 / A 3-4; the re-sign-once limit they were shortened for is disabled |
+| **mid-season FA signing** | allowed, **to fill an empty slot only**, for this season or one more — with `ensurePositionSupply` running weekly so the pool is not drained |
+| **roster window** | cut / sign / trade all live to **week 22**, then **frozen** until the offseason |
+| **offseason window** | **two passes — pre-rookie-draft (the main one; picks are live) and pre-FA-draft**. Runs on the blocked-prospect / locker-room / horizon triggers, since `nowWeight` resets and there is no contention asymmetry |
+| **cutting** | allowed, including to make room for an incoming trade — but **cutting a player with term left costs Treasury** (`remainingSeasons × surplus × rate`), which is the safe use of a currency with a 227x spread: a cost constrains the poor rather than empowering the rich |
+
+## 8. ⚠️ A live bug found on the way: elite contracts are orphaned
 
 Reported by the owner: *"teams don't seem to be signing elite players to long contracts
 anymore — the Pops signed 5-star Frig Lagotis to only 2 seasons."* Confirmed, and the cause is
@@ -933,7 +937,7 @@ walk year and therefore permanently cheap — which is the opposite of what a st
 ⚠️ **Fix it independently of trading**, like the attitude term. It changes how the current
 league re-signs the moment it ships.
 
-## 7. What to build, in order
+## 9. What to build, in order
 
 ⚠️ **The prospect draft was a hard prerequisite and mid-season signing softened it to one
 reason.** It stays item 0 because it is what makes clubs *willing* sellers, but trading could
@@ -947,12 +951,28 @@ ship without it:
 |---:|---|---|
 | **0a** | **Restore elite contract lengths** — S 4-6, A 3-4. One constant block; see 6b |
 | **0b** | **Prospect draft** — see `docs/PROSPECT_DRAFT_PLAN.md` | mostly exists; class generation, the draft loop, the cull and the scouted view are new |
+| **0c** | **Move `_advanceProspectWindow` before the FA draft**, and give the final window a real last chance | ⚠️ an ordering move plus a changed bar; both are bugs in their own right and neither needs trading |
 | **1** | **Attitude term in `decisionValue`** | ⚠️ **independent of trading, and a live front-office change.** Ship and measure it on its own — cuts, re-signs, FA pool depth — before trading rides in on it |
 | **2** | **Point sentiment at the surplus bar** | small; the term exists and is live, it is aimed at the wrong quantity |
 | **3** | **Listing model** — triggers, reserve, floor, persistence, withdrawal | new |
 | **4** | **Auction** — approach, de-cursed bids, bundles, settle | new; reuses `decisionValue` and `_deWinnersCurse` wholesale |
 | **5** | **Settlement** — asset move, backfill promotion, sentiment clear, card mint, news, `SeasonRecapEvent` with a trade id | ⚠️ the promotion bar must drop to near zero in-season |
 | **6** | **Transactions page** | five of seven sections already have their data |
+
+### ⚠️ One error recurs three times — watch for a fourth
+
+The reserve floor, the mid-season promotion bar and the final-window promotion bar are all the
+same mistake: **a decision written for one context, reused in another where the alternative
+changed and the comparison did not.**
+
+| decision | compares against | but the real alternative is |
+|---|---|---|
+| reserve floor | a generic replacement | **who actually backfills him** |
+| mid-season promotion | a free agent the club could sign | an **empty slot rating 50** — there is no signing path |
+| final-window promotion | a free agent (`FO_PROSPECT_PROMOTE_EDGE`) | **nothing** — he walks either way |
+
+Whenever a front-office rule is reused in a new window, ask what the club is actually choosing
+between there.
 
 ### Measure before tuning
 
