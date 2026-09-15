@@ -55,7 +55,7 @@ same player with three years left. **A 4x spread on identical talent.**
 | asset | value |
 |---|---|
 | **roster player** | `(rating − 67) × seasonsOfControl(termRemaining, week)` |
-| **prospect** | projected mature surplus × seasons × wash-out discount, read through the buyer's own `scoutingVision` |
+| **prospect** | projected mature surplus × post-promotion term × **p(promoted before the window closes)**, read through the buyer's own `scoutingVision`. ⚠️ The pipeline window is a deadline, not a term — see §5b |
 | **rookie pick** | expected mature surplus at that slot × seasons × risk |
 
 
@@ -700,7 +700,7 @@ players are leaving for nothing unless someone moves"* is a story every week of 
 | **transactions page** | the full front-office desk, seven sections; five already have their data |
 | **mid-season FA signing** | allowed, **to fill an empty slot only**, for this season or one more — with `ensurePositionSupply` running weekly so the pool is not drained |
 | **roster window** | cut / sign / trade all live to **week 22**, then **frozen** until the offseason |
-| **offseason window** | **two passes** — pre-draft (the main one; picks are live) and post-draft. Runs on the blocked-prospect / locker-room / horizon triggers, since `nowWeight` resets and there is no contention asymmetry |
+| **offseason window** | **two passes — pre-rookie-draft (the main one; picks are live) and pre-FA-draft**. Runs on the blocked-prospect / locker-room / horizon triggers, since `nowWeight` resets and there is no contention asymmetry |
 | **cutting** | allowed, including to make room for an incoming trade — but **cutting a player with term left costs Treasury** (`remainingSeasons × surplus × rate`), which is the safe use of a currency with a 227x spread: a cost constrains the poor rather than empowering the rich |
 
 ## 5b. The offseason trade window
@@ -726,13 +726,50 @@ it kept, what the pool holds, and where it picks.**
 
 | pass | when | what it is for |
 |---|---|---|
-| **A — pre-draft** | after the front office, before `_runPreDraftPass` | the main window. Roster settled, pick known, needs visible. **This is where pick trading lives** |
-| **B — post-draft** | after the rookie draft, before the FA draft | smaller. A club that just drafted a QB may now have a surplus one |
+| **A — pre-rookie-draft** | after the front office, before `_runPreDraftPass` | the main window. Roster settled, pick known, needs visible. **This is where pick trading lives** |
+| **B — pre-FA-draft** | after the rookie draft, before free agency | smaller. A club that just drafted a QB may now have a surplus one, and the pool it is about to fish is known |
 
 ⚠️ **Pass A is where picks are tradeable and pass B is not** — this year's picks are spent the
 moment the draft runs, so only *future* picks remain. That asymmetry is worth honouring rather
 than smoothing: the pre-draft window is the valuable one precisely because the picks are live
 in it.
+
+### ⚠️ A prospect's "seasons of control" is a DEADLINE, not a term
+
+`seasonsOfControl` as written measures *seasons of contribution* off `termRemaining`. **A
+prospect has neither.** He contributes nothing while in the pipeline, and
+`PROSPECT_DEVELOPMENT_WINDOW` (3) is the number of offseasons his club has to **promote him or
+lose him** — `_advanceProspectWindow` releases him to free agency for nothing once
+`prospect_seasons >= 3`.
+
+So a prospect's value has two parts, and only the second is a term:
+
+| | |
+|---|---|
+| **window remaining** | offseasons left to find him a slot. A **risk**, not a contribution |
+| **contract term** | seasons of actual output — and it only starts once he is promoted |
+
+Modelled with a ~0.45 chance a slot opens at his position in a given offseason:
+
+| `prospect_seasons` | window left | p(promoted) | value | |
+|---:|---:|---:|---:|---|
+| 0 | 3 | 0.83 | **52.5** | fresh, full runway |
+| 1 | 2 | 0.70 | 43.9 | mid-window |
+| 2 | 1 | 0.45 | **28.3** | ⚠️ **distressed** |
+
+⚠️ **A prospect at 2/3 is a distressed asset.** His holder must find him a slot this offseason
+or lose him for nothing — which is the walk-year squeeze again, one level down, and it is
+another trigger with urgency built into it rather than bolted on.
+
+✅ **And the deadline TRAVELS.** `prospect_seasons` moves with the player, so a buyer inherits
+the same clock. That makes a distressed prospect worth buying **only if you have the slot the
+seller does not** — which is exactly the trade that should happen, and it cannot be gamed by
+passing him around, because each pass burns the same window.
+
+⚠️ Two implementation notes: the prospect's **post-promotion term is not yet known** (it comes
+from `_getPlayerTerm` at promotion), so the value model must assume a tier-typical term rather
+than read one; and `PROSPECT_SLOT_CAP_PER_POSITION` (2) means a buyer can be **blocked from
+taking him at all**, which is a legality check, not a pricing one.
 
 ### ⚠️ The offseason changes the valuation, in the club's favour
 
