@@ -1105,7 +1105,7 @@ already in the plan or by how the codebase works.
 | **10.2** settlement interdependence | **Settle sequentially, re-validating each remaining accepted trade against the new state** after every settlement; drop any that no longer has a legal roster or an affordable cut. Cheaper than a batch solver and matches how the FA draft already runs one pick at a time. | implementation |
 | **10.3** pick data model | A pick is **`(season, round, originalTeam, currentOwner)`**. The order is derived from the ORIGINAL team's finish and then handed to the current owner — which is the only shape that makes "traded my pick, finished worst, gave away #1" true. | forced |
 | **10.4** sentiment rows | **Keep the rows; scope the AGGREGATE to the current club's fans.** Same behaviour the owner ruled ("does not follow"), no user data destroyed, and it matches `_requireOwnClub` gating writes rather than deleting. ⚠️ One behavioural difference to note: traded back, his old ratings reactivate — which is correct, since those fans are his fans again. | interpretation |
-| **10.5** two scoreable cards | ⚠️ **OWNER CALL** — see below. |
+| **10.5** two scoreable cards | ✅ **Fine** (owner). The equip handler already enforces **no duplicate PLAYER across slots**, so both can be owned and only one fielded — my review misread the rule. Only `_assignEffects` coverage needs handling. |
 | **10.6** whole-roster teardown | **Measure, do not pre-empt.** The weekly limits already slow it; add a season cap only if a teardown actually happens. Pre-emptive caps constrain something that may never occur. | measured |
 | **10.7** offseason step-gating | **Both passes guard on `_isOffseasonStepComplete` and mark themselves**, exactly like every other phase. Non-negotiable — the offseason is where this project's restarts land. | forced |
 | **10.8** validation | **A/B with `tools_preseason.py`**: trade-enabled vs disabled over the same prod snapshot, ⚠️ **within one league**, reading volume, week-of-trade distribution, and champion/parity spread. | forced |
@@ -1115,23 +1115,28 @@ already in the plan or by how the codebase works.
 | **10.9d** trade volume | Part of 10.8. | measured |
 | **10.9e** rollback | **`TRADING_ENABLED`, default False until measured**, matching `RULE_VOTE_ENABLED` / `WEATHER_ENABLED` / `RUNNER_MOVE_ENABLED`. | forced |
 
-### ⚠️ The one decision: two scoreable cards of one player
+### ✅ SETTLED: two cards of one player is fine (owner, 2026-09-15)
 
-A mid-season trade mints a new card at the new club and leaves existing cards alone (settled).
-So for the rest of that season **two cards of the same player exist** — one in each club's
-colours. Both are current-season, so both are equippable and both score.
+A mid-season trade mints a new card at the new club and leaves existing cards alone, so for
+the rest of that season two cards of the same player exist — one in each club's colours.
 
-Bounded: they compete for the same position slot, so a holder can field at most two of him
-(slot + FLEX), and only if the two carry different effects.
+⚠️ **My review overstated the risk.** I wrote that a holder of both could field him twice
+(slot + FLEX) if the effects differed, reasoning from the no-duplicate-**effect** rule. There
+is a **separate, explicit no-duplicate-PLAYER rule** in the equip handler that I had missed:
 
-**Read it as a feature** — *"his Bees card and his Pinecones card"* is a genuinely collectible
-idea, it is the only way the collection ever records that a trade happened, and the shop's
-team-themed packs would stock him correctly on both sides.
+> *"Fusion: no duplicate PLAYER across slots. Two different cards can depict…"* — rejecting
+> the equip with *"{player} is already in your lineup."*
 
-**Read it as a problem** — one player occupying two lineup slots is a new state, `_assignEffects`
-plans effects per bucket and a mid-season mint arrives outside that plan, and the Showcase and
-set-completion achievements have never seen a duplicate player.
+So two cards of a player can be **owned and collected, but only one can ever be fielded.** The
+concern that made this a decision does not exist.
 
-Alternatives if it is a problem: mint the new card but **retire the old one from scoring**
-(keeps the collectible, kills the double-field), or **do not mint mid-season at all** and let
-the card carry the old club until next season's mint.
+What is left is genuinely good:
+
+- the collection is the only place a trade leaves a permanent mark,
+- team-themed packs stock him correctly on **both** sides,
+- and *"his Bees card and his Pinecones card"* is a collectible idea rather than an exploit.
+
+⚠️ One real implementation detail survives: `_assignEffects` plans effects **per bucket**,
+dealing least-used first so every effect gets coverage. A mid-season mint arrives outside that
+plan and must either slot into it or draw fresh, or it quietly skews the season's effect
+coverage. That is a minting concern, not a balance one.
