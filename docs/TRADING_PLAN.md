@@ -57,30 +57,19 @@ same player with three years left. **A 4x spread on identical talent.**
 | **roster player** | `(rating − 67) × seasonsOfControl(termRemaining, week)` |
 | **prospect** | projected mature surplus × seasons × wash-out discount, read through the buyer's own `scoutingVision` |
 | **rookie pick** | expected mature surplus at that slot × seasons × risk |
-| **Treasury** | face value ÷ **~200 F per value unit**, and capped — see below |
 
-#### ⚠️ Treasury: the CAP is the lever, not the rate
 
-Floobits are the only asset with no natural anchor, and sweeping the rate shows why chasing
-one is a dead end — **at every rate the richest club can buy the market**:
+#### ⚠️ Treasury is NOT a trade asset (owner, 2026-09-15)
 
-| rate | a rental costs | median club buys | Waffles buys |
-|---:|---:|---:|---:|
-| 50 F/unit | 284F | 38u | 909u |
-| **200 F/unit** | **1,136F** | **9u** | 227u |
-| 400 F/unit | 2,272F | 5u | 114u |
+Dropped for now. The measurement is why it is no loss: Treasury spans **200F to 45,427F — a
+227x spread** across the league, and at *every* conversion rate swept (50 / 200 / 400 F per
+value unit) the richest club could fund the entire market. It would have needed a cap on the
+Floobit share of a trade to be safe at all, and a capped sweetener is a lot of machinery for a
+small effect.
 
-Treasury spans **200F to 45,427F — a 227x spread** that no exchange rate fixes. Waffles could
-fund the entire league's trade market at any price.
-
-So: **cap the Floobit share of a trade at ~25% of its value**, and set the rate merely so a
-median Treasury (1,896F) closes a couple of gaps a season — around **200 F per unit**.
-Floobits are the sweetener that closes a gap, never the consideration.
-
-⚠️ A second reason the cap matters: Treasury's alternative use is **facilities**, and
-`resolveSeasonEnd` already spends it on upkeep. A club that empties its Treasury on a rental
-loses a facility level at season end — which is a real trade-off worth preserving, and an
-uncapped market would let a rich club ignore it entirely.
+✅ **Dropping it also removes the only asset class with no natural anchor**, so every remaining
+asset — player, prospect, pick — prices on the same surplus-times-time scale with nothing to
+convert between. Trades are talent for talent, and future value for present.
 
 ### The pick curve is steep
 
@@ -175,7 +164,7 @@ push them one way, and then they act.
 where clubs *know* and must act. If the picture should keep sharpening to the deadline
 itself, widen the ramp to 21 — do not add a second term.
 
-### The three modifiers — all a PRICE, never a VETO
+### The four modifiers — all a PRICE, never a VETO
 
 The same rule governs all three, matching how `sentimentTilt` is described everywhere else in
 the front office: *it tips close calls, it never dictates.*
@@ -202,6 +191,39 @@ the strongest buyer in the league.
 GM has reached even the old floor"* — measured under the old flat league-wide quorum of 3.
 Under the per-club rule prod holds **153 ratings across 107 players**, four clearing quorum
 today, two at a perfect 5.0.
+
+#### ✅ Season performance — already wired, already working
+
+Yes: `frontOfficeBrain.performanceAdjustment` prices *production disagreeing with the sheet*,
+and unlike attitude it is **fully wired** — `seasonManager._buildPerformanceMap` feeds it in
+production and it flows through `perceivedValue` into every front-office decision.
+
+It is a **deadband, not a weight** (`FO_PERF_DEADBAND` 10.0): a 90 playing like an 85 tells
+you nothing and returns exactly 0.0, so ordinary variation cannot move a decision. Only the
+part past the band counts, at `FO_PERF_WEIGHT` 0.5, capped at `±FO_PERF_MAX_ADJUST` (8.0).
+One divergent season is discounted by `FO_PERF_SINGLE_SEASON_TRUST` (0.5) — *one season is an
+outlier, two is a pattern* — and seasons that disagree cancel.
+
+⚠️ And it measures against **the rating the player carried THAT season**, from
+`player_rating_history`, not today's number. Judging a developed player's rookie production
+against his current sheet scores every improver as a chronic underachiever and every declining
+veteran as an overachiever.
+
+Measured on prod (208 players with usable history, `FO_PERF_HISTORY_SEASONS` 3):
+
+| | |
+|---|---:|
+| players the deadband actually moves | **30 of 208 (14%)** |
+| adjustment range | −1.7 to **+4.5** |
+| players at the ±8 cap | **0** |
+
+**So it is live and it is conservative** — it moves one player in seven, never by more than
+about 4 points, and nobody is anywhere near the cap. That is the deadband doing its job:
+evidence only, not noise.
+
+⚠️ **It needs nothing for trading.** It already rides in `decisionValue`, so a player having a
+genuinely divergent season is already priced differently by every club — which is exactly the
+"he's been playing out of his mind this year" trade, for free.
 
 #### Divisional reluctance — you do not arm a rival
 
@@ -520,11 +542,12 @@ Everything raised has been settled except the two that genuinely need a season o
 
 | | |
 |---|---|
-| Treasury rate | ~200 F/unit, and **capped at ~25% of a trade** — the cap is the lever, not the rate |
+| Treasury | **not a trade asset** — dropped; a 227x wealth spread made it unsafe without a cap |
 | pick horizon | **two seasons**, with a **slot-scaled** discount on future picks (top 5 near-nil) |
 | does a contender sell | **yes, already** — the locker-room and blocked-prospect triggers are not contention-gated |
 | transactions page | the full front-office desk, seven sections; five already have their data |
 | contention exponent | **1.25** |
 | sentiment | raises the **surplus the trade must clear**, not the seller's valuation |
 | divisional premium | derived from the schedule (**4x** the games), scaled by the rival's threat |
+| season performance | already wired and live — a deadband moving 14% of players, max +4.5, none at the cap |
 | reserve floor | `(player − backfill) × seasonsLeft × nowWeight` — set by the backfill, not a constant |
