@@ -121,30 +121,93 @@ live team count rather than hardcoding 32; `computeShareUnit` already paid for t
 (its `numTeams` defaulted to 24 and made every facility 33% too expensive after the league
 grew).
 
-### 1b. The scouted view — the uncertainty that makes a pick interesting
+### 1b. The scouted view — REBUILD
 
-A prospect should not show his true numbers. `SCOUTING_BANDS` is the mechanism and it
-survives as a constant:
+A prospect must not show his true numbers. The uncertainty is the feature: it is what makes a
+pick worth arguing about, what gives the Scouting Department a job, and what makes trading a
+pick a real decision rather than an arithmetic one.
+
+**What is known vs scouted.** Current rating is a FACT — he exists and plays at that level.
+**Potential is the scouted quantity**, shown as a band.
 
 | scouting accuracy | potential shown as |
 |---|---|
 | ≥ 95 | the exact value |
-| 80-94 | ± 5 |
-| 65-79 | ± 10 |
+| 80–94 | ± 5 |
+| 65–79 | ± 10 |
 | < 65 | ± 15 |
 
-⚠️ **It has ZERO readers.** `scoutRookie` was removed by `68e5608` (the commit message lists
-it), so the band table is an orphan — the same survival pattern as the columns and the API
-surfaces, but this half genuinely has to be rebuilt.
+`SCOUTING_BANDS` still holds that table. ⚠️ **It has ZERO readers** — `scoutRookie` was
+removed by `68e5608` — so unlike the columns and the API surfaces, this half is a genuine
+rebuild rather than a restore.
 
-⚠️ **And its accuracy source is stale.** The comment says *"coach.scouting + funding tier
-bonus"* and `FUNDING_SCOUTING_BONUS` is the OLD market-tier system, superseded by
-`facilityEffect('scouting_bonus')` (levels `[0, 1, 2, 3, 5, 7]`). Wire the band to
-`frontOfficeBrain.scoutingVision`, which already blends the GM's own `scouting` with the
-Scouting Department and is the one definition the front office uses elsewhere.
+#### ⚠️ Accuracy comes from `scoutingVision`, not the stale constant
 
-✅ This is what finally makes the Scouting Department honest: its UI copy promises *"clearer
+The comment above `SCOUTING_BANDS` says accuracy is *"coach.scouting + funding tier bonus"*,
+and `FUNDING_SCOUTING_BONUS` is the **old market-tier system**, superseded by
+`facilityEffect('scouting_bonus')` (levels `[0, 1, 2, 3, 5, 7]`).
+
+Wire the band to **`frontOfficeBrain.scoutingVision(coach, team)`**, which already blends the
+GM's own `scouting` with the Scouting Department behind `FO_SCOUT_FACILITY_ENABLED`. One
+definition, already used for every other front-office judgement.
+
+✅ This is what finally makes the Scouting Department honest — its UI copy promises *"clearer
 read on draft prospects"* and it currently only sharpens free-agent valuations.
+
+#### ⚠️ The view must be REPRODUCIBLE, not cached
+
+`_scoutError` is the right model and gets two things right that this needs:
+
+- **Drawn once and held.** A GM who overrates a player must overrate him consistently — on
+  the board, at the pick, and in a trade.
+- **Stored as a STANDARD normal**, so the same opinion *rescales* when vision changes. A club
+  that upgrades its Scouting Department mid-season sees its view **tighten around the opinion
+  it already held** rather than jump to a different one. That is exactly the behaviour a fan
+  should see after a facility upgrade.
+
+⚠️ **But its storage will not do here.** `_scoutBeliefs` is an in-memory dict on a brain that
+lives **one offseason** (`_foBrainForOffseason`). A scouted view is fan-facing, season-long,
+and must survive every restart and deploy — a supporter checking the class on Monday and
+again on Thursday cannot be shown different numbers.
+
+So derive it deterministically instead of storing it:
+
+```
+seed  = (gmId or teamId, prospectId, seasonNumber)
+draw  = Random(hash(seed)).gauss(0, 1)      # the club's standing opinion, forever
+shown = truePotential + draw * bandWidth(scoutingVision)
+```
+
+No table, no cache, no migration, and identical before and after a deploy. ⚠️ The season is
+**in the seed on purpose**: a club's read should reset for next year's class, not inherit
+last year's luck.
+
+#### Per club, which means the UI has a viewpoint
+
+The band is per `(club, prospect)`, so **there is no single "the class" view** — a team page
+shows that club's read, and the league-wide prospect list shows the viewing user's favourite
+club's read (falling back to a neutral/median band for a user with no favourite).
+
+⚠️ That is a real UI decision, not an implementation detail: two fans of different clubs
+looking at the same prospect should see different ranges, and that is the feature working.
+
+#### Optional: the band narrows as the season runs
+
+Real scouting improves with exposure. Narrowing the band from week 1 to the draft gives the
+class an arc, and makes a pick traded at the week-22 deadline a better-informed asset than
+one traded in week 3 — which is a genuinely good trading dynamic and costs one term.
+
+Left as an option because it is the only part of this with no precedent in the codebase to
+copy; everything above reuses a pattern that already exists.
+
+#### Surfaces
+
+- `GET /api/teams/{id}/prospects` **already exists** and already batches a rating history —
+  it gains the scouted band for that club.
+- The league-wide prospect list rides `GET /api/players?status=prospects`, also already live.
+- ⚠️ Both currently return raw values; the band has to be applied **server-side**. Sending
+  true potential to the client and hiding it in the UI leaks it to anyone who opens the
+  network tab.
 
 ### 2. The draft itself
 Restore `rookieDraftPickGenerator` and the `rookie_draft` offseason phase, worst-first, one
