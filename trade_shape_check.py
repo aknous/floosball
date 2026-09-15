@@ -30,6 +30,7 @@ tmp = tempfile.mkdtemp(prefix='floos_shape_')
 os.environ['DATABASE_DIR'] = tmp
 os.environ.setdefault('TIMING_MODE', 'fast')
 logging.disable(logging.INFO)
+_TM_LOG = logging.getLogger('managers.tradeManager')
 
 
 async def boot():
@@ -52,6 +53,14 @@ async def main(seasons, treasury):
     enabled = os.environ.get('SHAPE_ARM', 'on') == 'on'
     constants.TRADING_ENABLED = enabled
     tradeManager.TRADING_ENABLED = enabled
+
+    logging.disable(logging.NOTSET)
+    logging.getLogger().setLevel(logging.ERROR)
+    _TM_LOG.setLevel(logging.WARNING)
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(logging.Formatter('    !! %(message)s'))
+    _h.addFilter(lambda r: 'TRADE PIECE MISSING' in r.getMessage())
+    _TM_LOG.addHandler(_h)
 
     container, app = await boot()
     sm, pm = app.seasonManager, app.playerManager
@@ -221,6 +230,54 @@ async def main(seasons, treasury):
         print(f"    {trigger:<20} listed {listed.get(trigger, 0):>4}  "
               f"clearing bids {bid.get(trigger, 0):>4}  "
               f"settled {shape['byTrigger'].get(trigger, 0):>3}")
+
+    # ⚠️ THE FULL LEDGER, read back from the persisted `trades` rows rather than from
+    # anything the harness held in memory — so what is printed is what a fan would be
+    # shown on the transactions page, not what the market thought it was doing.
+    from database.connection import get_session as _gs
+    from database.models import Trade
+    names = {t.id: t.name for t in tm.teams}
+    session = _gs()
+    try:
+        # ⚠️ `week` IS 0 FOR AN OFFSEASON TRADE, so a naive sort puts the offseason
+        # BEFORE the season it follows — which makes a perfectly consistent chain of
+        # custody read as a player being traded by a club that never had him. Sort the
+        # offseason last within its season.
+        rows = sorted(session.query(Trade).all(),
+                      key=lambda r: (r.season, r.week or 99, r.id))
+        print(f"\n  ── every trade ──")
+        kinds = Counter()
+        for r in rows:
+            a = (r.assets_json or {}).get('aGave', [])
+            b = (r.assets_json or {}).get('bGave', [])
+            for piece in b:
+                kinds[piece.get('kind')] += 1
+            for piece in a:
+                kinds[piece.get('kind')] += 1
+            when = f"S{r.season} " + (f"w{r.week}" if r.week else "offseason")
+            def label(pieces):
+                return ', '.join(f"{p['name']}#{p.get('id')}[{p['kind'][:4]}]"
+                                 for p in pieces) or 'nothing'
+            print(f"    {when:<14} {names.get(r.team_a_id, '?'):<12} "
+                  f"send {label(a):<30} to {names.get(r.team_b_id, '?'):<12} "
+                  f"for {label(b)}")
+        print(f"\n    assets by kind: {dict(kinds)}")
+        withPieces = sum(1 for r in rows if (r.assets_json or {}).get('bGave'))
+        print(f"    trades where the buyer gave something back: {withPieces}/{len(rows)}")
+    finally:
+        session.close()
+
+    # ⚠️ DUPLICATE LIVE NAMES ARE A DOCUMENTED INCIDENT CLASS HERE — "at most one form of
+    # a lineage is in circulation at a time". The cull returns a culled player's name to
+    # the pool with NO reuse hold, so if it ever returned a name whose holder is still
+    # alive, two live players would wear it.
+    live = {}
+    for p in pm.activePlayers:
+        live.setdefault(p.name, []).append(getattr(p, 'id', None))
+    dupes = {n: ids for n, ids in live.items() if len(ids) > 1}
+    print(f"\n  ── duplicate live names: {len(dupes)} ──")
+    for n, ids in list(dupes.items())[:5]:
+        print(f"    {n}: ids {ids}")
 
     print(f"\n  ── who replaced the SOLD player? ──")
     for kind, count in shape['backfillKind'].most_common():

@@ -192,6 +192,8 @@ class TradeMarket:
         for slot, player in roster.items():
             if player is None or getattr(player, 'willRetire', False):
                 continue
+            if wasAcquiredThisSeason(player, self.season):
+                continue        # pass-the-parcel: he only just got here
             trigger = None
             term = int(getattr(player, 'termRemaining', 0) or 0)
             attitude = self._attitudeOf(player)
@@ -503,6 +505,8 @@ class TradeMarket:
                     pick['classSize'], weight=weight),
             })
         for prospect in getattr(team, 'prospects', None) or []:
+            if wasAcquiredThisSeason(prospect, self.season):
+                continue        # pass-the-parcel, one asset class down
             ceiling = self._believedCeiling(team, prospect)
             out.append({
                 'kind': 'prospect',
@@ -682,12 +686,13 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     # `RESIGN_ONCE_ENABLED` is False.)
     player.teamResignCount = 0
     buyer.rosterDict[buyerSlot] = player
+    _stampAcquired(player, season)
     try:
         buyer.assignPlayerNumber(player)
     except Exception:
         pass
 
-    given = _handOverPieces(seasonManager, winner.pieces, buyer, seller)
+    given = _handOverPieces(seasonManager, winner.pieces, buyer, seller, season)
 
     # ---- 3. backfill ------------------------------------------------------
     _installBackfill(seasonManager, seller, slot, backfill)
@@ -721,6 +726,35 @@ def settleTrade(seasonManager, listing, winner, season: int, week=None) -> dict:
     _recordTrade(seasonManager, manifest, tradeId)
     _publishTrade(seasonManager, manifest)
     return manifest
+
+
+def _stampAcquired(player, season: int) -> None:
+    """Mark that this club got him in a trade THIS season.
+
+    ⚠️ IN MEMORY ONLY, DELIBERATELY. The rule it feeds is a within-season one and the
+    stamp is worthless the moment the season turns, so persisting it would add a column
+    whose only job is to be ignored. A restart clears it, which fails in the permissive
+    direction: the worst case is one extra legal-looking move, not a lost player.
+    """
+    try:
+        player._tradedInSeason = int(season or 0)
+    except Exception:
+        pass
+
+
+def wasAcquiredThisSeason(player, season: int) -> bool:
+    """⚠️ STOPS PASS-THE-PARCEL, and the ledger showed it happening. A club may not move a
+    player it acquired this season — measured over six seasons, prospects were being
+    flipped twice inside one season (Slippers -> Strangers in week 15 and Strangers ->
+    Cranes in the same offseason), which turns an asset into a token being passed around
+    rather than a player a club decided it wanted.
+
+    ⚠️ It covers BUNDLE PIECES, not just the listed player. Every trade in the measured
+    ledger paid in prospects and picks, so a rule that only guarded the headline player
+    would have guarded the one asset class that was never being flipped.
+    """
+    stamped = getattr(player, '_tradedInSeason', None)
+    return stamped is not None and int(stamped) == int(season or 0)
 
 
 def _slotOf(team, player):
@@ -885,7 +919,7 @@ def _installBackfill(seasonManager, team, slot, backfill) -> None:
         pass
 
 
-def _handOverPieces(seasonManager, pieces, fromTeam, toTeam) -> list:
+def _handOverPieces(seasonManager, pieces, fromTeam, toTeam, season: int = 0) -> list:
     """Move the bought side of the bundle — picks change owner, prospects change pipeline."""
     from database.connection import get_session
     from database.models import DraftPick
@@ -902,6 +936,12 @@ def _handOverPieces(seasonManager, pieces, fromTeam, toTeam) -> list:
                     row.current_owner_id = getattr(toTeam, 'id', None)
             elif piece['kind'] == 'prospect':
                 prospect = _findProspect(fromTeam, piece['id'])
+                if prospect is not None:
+                    _stampAcquired(prospect, season)
+                if prospect is None:
+                    logger.warning(
+                        f"TRADE PIECE MISSING: {fromTeam.name} does not hold prospect "
+                        f"{piece['id']} ({piece.get('name')}) — recorded but not moved")
                 if prospect is not None:
                     fromTeam.prospects.remove(prospect)
                     if not hasattr(toTeam, 'prospects') or toTeam.prospects is None:

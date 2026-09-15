@@ -339,3 +339,52 @@ def test_the_flag_shuts_the_whole_market():
         FakePlayerManager([FakePlayer(99, 74)]), FakeTeamManager([seller, buyer]),
         StubBrain(), 3, week=15) == []
     print("PASS TRADING_ENABLED is False and the pass is a no-op")
+
+
+# ------------------------------------------------ pass-the-parcel
+
+def test_a_player_acquired_this_season_cannot_be_moved_again():
+    """⚠️ THE LEDGER SHOWED THIS HAPPENING. Over six measured seasons, prospects were being
+    flipped twice inside one season — Slippers -> Strangers in week 15 and Strangers ->
+    Cranes in the same offseason — which turns an asset into a token being passed around
+    rather than a player a club decided it wanted. `docs/TRADING_PLAN.md` §5 lists the
+    rule; it was never implemented."""
+    seller = FakeTeam(1, 'Rebuild', wins=3, losses=11)
+    other = FakeTeam(2, 'Other')
+    justArrived = FakePlayer(10, 84, termRemaining=1)
+    seller.rosterDict['wr1'] = justArrived
+    market = _market([seller, other], freeAgents=[FakePlayer(99, 74)], week=20)
+
+    assert market.listingsFor(seller), "fixture is wrong — he should be listable"
+    tradeManager._stampAcquired(justArrived, market.season)
+    assert market.listingsFor(seller) == [], "he was re-listed the season he arrived"
+    print("PASS a player cannot be flipped in the season he arrived")
+
+
+def test_the_rule_covers_BUNDLE_PIECES_too():
+    """⚠️ Every trade in the measured ledger paid in prospects and picks, so a rule that
+    only guarded the headline player would guard the one asset class that was never
+    actually being flipped."""
+    team = FakeTeam(1, 'Deep')
+    other = FakeTeam(2, 'Other')
+    prospect = FakePlayer(20, 80, isProspect=True, prospectSeasons=0)
+    team.prospects.append(prospect)
+    market = _market([team, other], week=20)
+    market.picksOwnedBy = lambda t: []
+
+    assert any(a['id'] == 20 for a in market._tradeableAssets(team)), \
+        "fixture is wrong — he should be offerable"
+    tradeManager._stampAcquired(prospect, market.season)
+    assert not any(a['id'] == 20 for a in market._tradeableAssets(team))
+    print("PASS a just-acquired prospect cannot be re-bundled")
+
+
+def test_the_stamp_is_scoped_to_ITS_season():
+    """Next season he is a normal asset again — the rule is about churn within a season,
+    not a permanent freeze."""
+    player = FakePlayer(10, 84)
+    tradeManager._stampAcquired(player, 5)
+    assert tradeManager.wasAcquiredThisSeason(player, 5) is True
+    assert tradeManager.wasAcquiredThisSeason(player, 6) is False
+    assert tradeManager.wasAcquiredThisSeason(FakePlayer(11, 84), 5) is False
+    print("PASS the stamp expires with the season")
