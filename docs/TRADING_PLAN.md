@@ -1091,3 +1091,47 @@ Two fresh leagues with provably identical gameplay measured 2.8 points a game ap
   locker-room triggers are not countable from a snapshot and could change that materially.
 - **No rollback path.** Every other risky system here shipped behind a flag
   (`RULE_VOTE_ENABLED`, `WEATHER_ENABLED`, `RUNNER_MOVE_ENABLED`). Trading should too.
+
+---
+
+## 11. Resolutions
+
+Each item from §10, with the call. One needs the owner; the rest are forced by constraints
+already in the plan or by how the codebase works.
+
+| # | resolution | kind |
+|---:|---|---|
+| **10.1** mid-week trade vs fantasy | **Run the trade pass at the WEEK ROLLOVER only**, never between slates. A trade becomes a between-weeks event like every other roster change, and it reuses `weekIsClosed` — the predicate the fantasy side already trusts. | forced |
+| **10.2** settlement interdependence | **Settle sequentially, re-validating each remaining accepted trade against the new state** after every settlement; drop any that no longer has a legal roster or an affordable cut. Cheaper than a batch solver and matches how the FA draft already runs one pick at a time. | implementation |
+| **10.3** pick data model | A pick is **`(season, round, originalTeam, currentOwner)`**. The order is derived from the ORIGINAL team's finish and then handed to the current owner — which is the only shape that makes "traded my pick, finished worst, gave away #1" true. | forced |
+| **10.4** sentiment rows | **Keep the rows; scope the AGGREGATE to the current club's fans.** Same behaviour the owner ruled ("does not follow"), no user data destroyed, and it matches `_requireOwnClub` gating writes rather than deleting. ⚠️ One behavioural difference to note: traded back, his old ratings reactivate — which is correct, since those fans are his fans again. | interpretation |
+| **10.5** two scoreable cards | ⚠️ **OWNER CALL** — see below. |
+| **10.6** whole-roster teardown | **Measure, do not pre-empt.** The weekly limits already slow it; add a season cap only if a teardown actually happens. Pre-emptive caps constrain something that may never occur. | measured |
+| **10.7** offseason step-gating | **Both passes guard on `_isOffseasonStepComplete` and mark themselves**, exactly like every other phase. Non-negotiable — the offseason is where this project's restarts land. | forced |
+| **10.8** validation | **A/B with `tools_preseason.py`**: trade-enabled vs disabled over the same prod snapshot, ⚠️ **within one league**, reading volume, week-of-trade distribution, and champion/parity spread. | forced |
+| **10.9a** contract travels | **Yes** — it is his contract, not the club's. | forced |
+| **10.9b** `team_resign_count` | **Resets on a trade** — the limit is about one club re-signing the same player repeatedly, and the new club has re-signed him zero times. ⚠️ Currently inert anyway (`RESIGN_ONCE_ENABLED` is False). | forced |
+| **10.9c** `_leftThisTeamThisOffseason` | **Safe.** It requires `previousTeam == team.name` **AND** `freeAgentYears == 0`, and a traded player goes to a roster, not the pool. A later expiry or cut re-stamps `previousTeam` to the club that actually let him go. Worth one regression, not a design change. | verified |
+| **10.9d** trade volume | Part of 10.8. | measured |
+| **10.9e** rollback | **`TRADING_ENABLED`, default False until measured**, matching `RULE_VOTE_ENABLED` / `WEATHER_ENABLED` / `RUNNER_MOVE_ENABLED`. | forced |
+
+### ⚠️ The one decision: two scoreable cards of one player
+
+A mid-season trade mints a new card at the new club and leaves existing cards alone (settled).
+So for the rest of that season **two cards of the same player exist** — one in each club's
+colours. Both are current-season, so both are equippable and both score.
+
+Bounded: they compete for the same position slot, so a holder can field at most two of him
+(slot + FLEX), and only if the two carry different effects.
+
+**Read it as a feature** — *"his Bees card and his Pinecones card"* is a genuinely collectible
+idea, it is the only way the collection ever records that a trade happened, and the shop's
+team-themed packs would stock him correctly on both sides.
+
+**Read it as a problem** — one player occupying two lineup slots is a new state, `_assignEffects`
+plans effects per bucket and a mid-season mint arrives outside that plan, and the Showcase and
+set-completion achievements have never seen a duplicate player.
+
+Alternatives if it is a problem: mint the new card but **retire the old one from scoring**
+(keeps the collectible, kills the double-field), or **do not mint mid-season at all** and let
+the card carry the old club until next season's mint.
