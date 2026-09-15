@@ -18063,6 +18063,10 @@ class Play():
         Returns: (selectedTarget, willThrowAway)
         """
         aggrBonus = int(round(aggression * MENTAL_AGGR_ROLL_K))
+        # The route at the CALLED depth gets a read bonus below (perception only).
+        from constants import PASS_CALLED_DEPTH_READ_BONUS
+        _called = (getattr(self, 'insights', None) or {}).get('playCall')
+        calledDepth = {'long': PassType.long, 'deep': PassType.deep}.get(_called)
         # Calculate how accurately QB perceives openness
         # High vision (90+): ±5% error, Medium (70-89): ±15% error, Low (<70): ±25% error
         if qbVision >= 90:
@@ -18118,6 +18122,15 @@ class Play():
                 perceivedOpenness = min(100, perceivedOpenness + awakenedBonus)
             if teBonus and teReceiver is not None and target['receiver'] is teReceiver:
                 perceivedOpenness = min(100, perceivedOpenness + teBonus)
+            # ⚠️ THE READ STARTS WITH THE CALLED DEPTH. Openness has no depth term, so the
+            # QB simply took the most open of the play's two or three routes, and on a deep
+            # call half of those are shorter: a called deep ball was thrown deep only ~55%
+            # of the time and the long game shrank to 8% of throws against the NFL's 15%.
+            # The route at the called depth gets a perception bonus, the way a progression
+            # starts with the concept that was called. PERCEPTION ONLY — the throw is still
+            # resolved against how open the receiver really is.
+            if calledDepth is not None and target['route'] is calledDepth:
+                perceivedOpenness = min(100, perceivedOpenness + PASS_CALLED_DEPTH_READ_BONUS)
 
             perceivedTargets.append({
                 'receiver': target['receiver'],
@@ -18197,14 +18210,9 @@ class Play():
         # Combined with the arm-strength weighting above, weak-armed QBs on
         # deep balls land in the bad-throw bucket, but average QBs can still
         # complete intermediate routes at NFL-realistic rates.
-        passTypeDifficulty = {
-            PassType.short:    1.00,
-            PassType.medium:   0.92,
-            PassType.long:     0.80,
-            PassType.deep:     0.65,
-            PassType.hailMary: 0.42,
-        }
-        difficultyMod = passTypeDifficulty.get(passType, 0.85)
+        # Per-tier values live in constants.PASS_TYPE_DIFFICULTY.
+        from constants import PASS_TYPE_DIFFICULTY
+        difficultyMod = PASS_TYPE_DIFFICULTY.get(getattr(passType, 'name', None), 0.85)
 
         # Calculate pressure impact from same rushDifferential used for sacks
         pressureDegradation = self.calculatePressureImpact(rushDifferential)
@@ -18255,14 +18263,9 @@ class Play():
         # window to converge. This is the lever that keeps trailing-team offenses
         # viable — short passes should be reliable even against tight coverage,
         # so teams can sustain drives in catch-up mode.
-        tierDisruptionMult = {
-            PassType.short:    0.40,
-            PassType.medium:   0.75,
-            PassType.long:     1.00,
-            PassType.deep:     1.15,
-            PassType.hailMary: 1.30,
-        } if passType is not None else None
-        tierMult = tierDisruptionMult.get(passType, 1.0) if tierDisruptionMult else 1.0
+        # Per-tier values live in constants.PASS_TIER_DISRUPTION.
+        from constants import PASS_TIER_DISRUPTION
+        tierMult = PASS_TIER_DISRUPTION.get(getattr(passType, 'name', None), 1.0)
         coverageDisruption = max(0, (100 - receiverOpenness) / 100) * (defensePassCoverage / 100) * PASS_COVERAGE_DISRUPTION_K * tierMult
         # Baseline coverage pressure: always applies, scales modestly with
         # defensive rating. Anchored at 70 (league-average) so elite defenses

@@ -1290,6 +1290,25 @@ SACK_CURVE_STEEPNESS = float(_os.environ.get('FLOOS_SACK_STEEPNESS', '0.12'))
 # Air-yard means per pass tier. The old bands were compressed -- "medium" at 6.5
 # air yards is really a short throw -- which held league aDOT at 6.29 against a
 # real-world ~7.8 and made every completion tiny.
+# ---- Pass difficulty by depth (Play.calculateThrowQuality / calculateCatchProbability) ----
+# THROW: multiplier on the QB's throw quality for each tier (a deep ball is harder to
+# place). CATCH: how much tight coverage disrupts the catch for each tier (a deep ball
+# gives defenders longer to converge). Keyed by PassType name.
+# ⚠️ THE DEEP BALL WAS TOO GOOD, NOT JUST TOO RARE (2026-09-14). Against NFL 2021-25 by
+# air yards, sim deep throws completed 58% (NFL 33%) for 15.9 yards an attempt (NFL 11.9)
+# and long throws 66% (NFL 52%) for 12.4 (NFL 10.7), while coaches rarely called them —
+# two errors that cancelled for scoring. Calling deeper alone added 3-4 points a game, so
+# long 0.80 -> 0.65 and deep 0.65 -> 0.43 were fitted so each tier's yards per attempt
+# lands on the NFL's. Completion by tier stays higher than the NFL's and interceptions
+# stay far lower (the catch and pick models have no real depth term yet); that is the
+# physics work on wip/tackle-as-collision. PASS_TIER_DISRUPTION barely moves completion
+# (coverage rarely binds in that formula) and is left as it was.
+PASS_TYPE_DIFFICULTY = {'short': 1.00, 'medium': 0.92, 'long': 0.65, 'deep': 0.43, 'hailMary': 0.42}
+PASS_TIER_DISRUPTION = {'short': 0.40, 'medium': 0.75, 'long': 1.00, 'deep': 1.15, 'hailMary': 1.30}
+# Perception bonus the QB gives the route at the CALLED depth on a long or deep call (the
+# progression starts with the concept that was called). Perception only.
+PASS_CALLED_DEPTH_READ_BONUS = 15.0
+
 PASS_DEPTH_MEANS = {
     'short': float(_os.environ.get('FLOOS_DEPTH_SHORT', '3.35')),
     'medium': float(_os.environ.get('FLOOS_DEPTH_MEDIUM', '8.25')),
@@ -1353,40 +1372,44 @@ FIRST_DOWN_RUN_WEIGHT = float(_os.environ.get('FLOOS_FD_RUN', '55'))
 # pass rate is not 100 - runWeight. Fit them against the REALIZED rate (see the harness
 # notes in the 2026-09-14 play-calling audit) or they will drift off the target.
 PLAY_CALL_BASE_ROWS = {
+    # DEPTH SHAPES (the tuples) were then moved toward the NFL's air-yard mix: every row's
+    # medium x0.75, long x1.6, deep x2.8 (2026-09-14). The long game was 8% of throws
+    # against the NFL's 15% and medium 39% against 23%. Pass totals are untouched, so the
+    # run/pass fit below still holds.
     # Fitted 2026-09-14: two passes of run-the-harness / move-each-row-by-the-log-odds-gap,
     # after audibles learned the situation. Realized pass rate by down & distance now sits
     # within ~1 point of NFL 2021-25 on average (was 15.5). Trailing comment = NFL target
     # pass rate for that bucket (one-score games, not the last 2:00 of a half).
     1: [
-        (1, 68.0, (22.0, 18.0, 8.0, 2.0)),    # 1st & goal from the 1       21%
-        (3, 66.0, (22.0, 18.0, 8.0, 2.0)),    # 1st & goal, 2-3             28%
-        (6, 64.5, (22.0, 18.0, 8.0, 2.0)),    # 1st & goal, 4-6             28%
-        (9, 64.0, (22.0, 18.0, 8.0, 2.0)),    # 1st & goal, 7-9             30%
-        (99, FIRST_DOWN_RUN_WEIGHT, (22.0, 18.0, 8.0, 2.0)),   #            46%
+        (1, 68.0, (22.0, 13.5, 12.8, 5.6)),    # 1st & goal from the 1       21%
+        (3, 66.0, (22.0, 13.5, 12.8, 5.6)),    # 1st & goal, 2-3             28%
+        (6, 64.5, (22.0, 13.5, 12.8, 5.6)),    # 1st & goal, 4-6             28%
+        (9, 64.0, (22.0, 13.5, 12.8, 5.6)),    # 1st & goal, 7-9             30%
+        (99, FIRST_DOWN_RUN_WEIGHT, (22.0, 13.5, 12.8, 5.6)),   #            46%
     ],
     2: [
-        (1, 78.0, (28.0, 10.0, 4.0, 0.0)),    # 2nd & 1                     22%
-        (2, 67.0, (28.0, 10.0, 4.0, 0.0)),    # 2nd & 2                     30%
-        (3, 64.0, (28.0, 10.0, 4.0, 0.0)),    # 2nd & 3                     36%
-        (6, 50.0, (20.0, 25.0, 9.0, 1.0)),    # 2nd & 4-6                   50%
-        (9, 27.0, (20.0, 25.0, 9.0, 1.0)),    # 2nd & 7-9                   70%
+        (1, 78.0, (28.0, 7.5, 6.4, 0.0)),    # 2nd & 1                     22%
+        (2, 67.0, (28.0, 7.5, 6.4, 0.0)),    # 2nd & 2                     30%
+        (3, 64.0, (28.0, 7.5, 6.4, 0.0)),    # 2nd & 3                     36%
+        (6, 50.0, (20.0, 18.8, 14.4, 2.8)),    # 2nd & 4-6                   50%
+        (9, 27.0, (20.0, 18.8, 14.4, 2.8)),    # 2nd & 7-9                   70%
         # ⚠️ 2nd & 10 runs MORE than 2nd & 7-9 in the NFL (63% vs 70% pass), and that is
         # not a fitting artifact: it usually follows an incompletion on 1st down, and
         # offenses balance back. Don't "smooth" it.
-        (10, 35.0, (20.0, 28.0, 26.0, 4.0)),  # 2nd & 10                    63%
-        (99, 15.0, (20.0, 28.0, 26.0, 4.0)),  # 2nd & 11+                   82%
+        (10, 35.0, (20.0, 21.0, 41.6, 11.2)),  # 2nd & 10                    63%
+        (99, 15.0, (20.0, 21.0, 41.6, 11.2)),  # 2nd & 11+                   82%
     ],
     3: [
         # ⚠️ 3rd & 1, 2 and 3 are THREE DIFFERENT PLAYS in the NFL (22% / 61% / 79% pass).
         # The old table lumped them into one 60-run row, which made 3rd & 1 too pass-heavy
         # and 3rd & 3 badly too run-heavy at the same time.
-        (1, 77.0, (32.0, 4.0, 4.0, 0.0)),     # 3rd & 1                     23%
-        (2, 35.0, (32.0, 4.0, 4.0, 0.0)),     # 3rd & 2                     61%
-        (3, 16.0, (32.0, 4.0, 4.0, 0.0)),     # 3rd & 3                     79%
-        (6, 6.0, (45.0, 21.0, 9.0, 0.0)),     # 3rd & 4-6                   93%
-        (9, 2.0, (15.0, 48.0, 23.0, 2.0)),    # 3rd & 7-9                   97%
-        (15, 3.0, (15.0, 48.0, 23.0, 2.0)),   # 3rd & 10-15                 96%
-        (99, 6.0, (10.0, 15.0, 61.0, 8.0)),   # 3rd & 16+ (too rare to fit) 86%
+        (1, 77.0, (32.0, 3.0, 6.4, 0.0)),     # 3rd & 1                     23%
+        (2, 35.0, (32.0, 3.0, 6.4, 0.0)),     # 3rd & 2                     61%
+        (3, 16.0, (32.0, 3.0, 6.4, 0.0)),     # 3rd & 3                     79%
+        (6, 6.0, (45.0, 15.8, 14.4, 0.0)),     # 3rd & 4-6                   93%
+        (9, 2.0, (15.0, 36.0, 36.8, 5.6)),    # 3rd & 7-9                   97%
+        (15, 3.0, (15.0, 36.0, 36.8, 5.6)),   # 3rd & 10-15                 96%
+        (99, 6.0, (10.0, 11.2, 97.6, 22.4)),   # 3rd & 16+ (too rare to fit) 86%
     ],
 }
 
