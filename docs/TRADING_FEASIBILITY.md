@@ -1254,3 +1254,81 @@ tight rather than generous — and a second, independent reason not to open the 
 34. **If the draft does return, is 1 round enough** to add prospects without the inflation?
 35. **How many seasons out can a pick be traded?** Two is enough to matter and bounds how far
     a club can mortgage itself.
+
+---
+
+# Addendum 11 — the prospect draft, at one round
+
+_2026-09-14. Owner: the draft comes back regardless of the trading case — a bottom-feeder
+landing a huge prospect is a dimension fans get excited about. Agreed, and the payload is
+already built. The only question left is the round count._
+
+## ✅ The "huge prospect" is a designed, calibrated feature with no draft to express it
+
+`constants.py` states the intent verbatim:
+
+> *"Rookies/prospects DEBUT this many attribute points below their true skill and develop up
+> into it over their early seasons. **A future 5-star looks like a solid 3-4-star as a
+> rookie.**"*
+
+The three-tier model is live and the columns are populated: `GEN_TRUESKILL_MEAN` 78,
+`GEN_TRUESKILL_STD` 10, `POTENTIAL_HEADROOM` 15, `PROSPECT_ENTRY_DISCOUNT` 11. Measured on
+the current 224 players, potential sits **+6.1 above current skill on average, +25 at the
+top, with 48 players carrying 10 or more points of headroom.**
+
+So this is not a feature to design. It is a feature that has been sitting unused since
+`68e5608` removed the only thing that could show it to anyone. An FA pick cannot do it: a
+free agent is a known quantity with a rating on the card, and there is no story in signing a
+74.
+
+## What a single round actually delivers (2,000 simulated classes)
+
+The class's best prospect:
+
+| | |
+|---|---|
+| debuts at | **83** — a 3-4 star on the day he is drafted |
+| true skill | **94** |
+| potential | **99** |
+| classes containing a true 5-star (trueSkill ≥ 92) | **2.6 per class** |
+
+And the **worst team picks first**, so he is theirs. The story fires every season, and the
+scarcity is right — two or three genuine future stars in a class of 32, not a handful.
+
+## ⚠️ Three rounds does NOT produce a bigger headliner
+
+This is the argument for one round, and it is not a compromise:
+
+| class size | best trueSkill | best potential | true 5-stars in class |
+|---:|---:|---:|---:|
+| **32** | 98.7 | **99.0** | 2.6 |
+| 64 | 101.3 | **99.0** | 5.1 |
+| 96 | 103.0 | **99.0** | 7.8 |
+
+**Potential is capped at 99 in all three**, and true skill above 99 is unreachable anyway. A
+single round already produces the maximum headliner in essentially every class.
+
+So three rounds buys **64 additional also-rans and no extra story** — and those 64 are the
+entire inflation cost (addendum 9: ~50% four-star in one offseason). The thing the opener was
+for is delivered in full by round one.
+
+## The shape
+
+- **1 round, 32 prospects, worst-first.** Every club gets a pick; the bottom feeder gets the
+  headliner.
+- **The cull ships alongside**, removing the ~13/season who never reach a roster — which
+  holds the population flat and the four-star share at 34% indefinitely.
+- **No fan ballots** (owner, settled earlier).
+- Prospects become the second tradeable asset class, alongside FA picks and Treasury.
+
+⚠️ Two implementation notes carried forward: the cull must exclude `is_prospect` /
+`drafting_team_id` or it deletes the class it just drafted, and the draft should **replace**
+the supply trickle rather than run alongside it — `ensurePositionSupply` stays as the
+per-position backstop it already is, not as a second faucet.
+
+## Revised open questions
+
+36. **Does the draft replace `ensurePositionSupply` entirely, or does the floor stay as a
+    backstop?** Both running is ~51 intake a season against ~19 replacement need.
+37. **Rookie-pick trading**: are the picks in this draft tradeable from day one, or only the
+    prospects once drafted? Picks are free; prospects cost a body.
