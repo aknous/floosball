@@ -2752,6 +2752,80 @@ TRADE_LEAGUE_PREMIUM = 0.09         # same league, other division: 1 game a seas
 TRADE_LISTINGS_PER_TEAM = 1         # else every congested club posts three in week 1
 TRADE_BIDS_PER_TEAM_PER_WEEK = 1    # stops a contender hoovering the block in one pass
 TRADE_CANDIDATES_PER_LISTING = 4    # approach the best few, not all 31
+
+# ---- The blockbuster: a buyer kicking the tires, in the offseason only ----
+# ⚠️ EVERY TRIGGER ABOVE IS SELLER-INITIATED, so a star under contract was unreachable
+# from BOTH ends: his club had no reason to post him, and no buyer could ask. Measured
+# over six seasons, all 44 in-season buyers were already contenders (win% .611 to .867,
+# median .733), 37 of their 44 acquisitions had exactly one season left, and not one club
+# below the playoff line bought anything mid-season. A middling club trying to get over
+# the hump had no path at all.
+#
+# ⚠️ OFFSEASON ONLY (owner, 2026-09-15: "it makes sense that these trades would only
+# happen in the offseason. but its definitely buyer initiated. a team would 'kick the
+# tires' on players theyre interested in"). In-season the market stays what it is — a
+# contender buying the present from clubs that cannot keep it.
+TRADE_INQUIRY_ENABLED = True
+TRADE_INQUIRIES_PER_TEAM = 2        # kick a couple of tires, not all 31
+
+# ⚠️ THE BUYER MUST HAVE BEEN CLOSE, or this is not "over the hump" — it is a bad club
+# mortgaging a future it needs. Missed the playoffs, and within this much win% of the
+# worst club that made them.
+#
+# ⚠️ MEASURED AT 0.18 THIS ADMITTED 9-19 CLUBS, because with 16 of 32 qualifying the cut
+# sits near .500 and five games is 0.179 of win% — so the band's whole width was spent on
+# teams nobody would call middling. The blockbusters it produced were all bought by clubs
+# five games adrift. At 0.09 the buyer is within about two and a half games of the field,
+# which is a club one player short rather than one rebuild short.
+TRADE_HUMP_BAND = 0.09              # ~2.5 games over a 28-game season
+
+# ⚠️ AN UNSOLICITED APPROACH COSTS MORE THAN A LISTING, and that is the whole difference
+# between the two paths. A club that posted a player has decided to move him; a club
+# answering the phone has decided nothing and is under no pressure, so it quotes over the
+# odds. ⚠️ THIS MUST LIFT THE FLOOR, NOT ONLY THE ASK — `settle` clears at the floor, so a
+# premium on the ask alone is decoration.
+TRADE_INQUIRY_PREMIUM = 1.35
+
+# ⚠️ A CORE PLAYER CAN BE PRISED AWAY, AND HAS TO BE, OR THERE IS NO BLOCKBUSTER. The core
+# rule stops a club SHOPPING its franchise player; it was never meant to make him
+# non-existent to the rest of the league, and the players worth a blockbuster are exactly
+# the ones it covers. So he has a price, and it is a punishing one — on top of the
+# unsolicited premium, so prising a core player runs ~3x a normal ask.
+TRADE_CORE_PREMIUM = 1.25
+
+# ⚠️ AND THE BUYER HAS TO BE WILLING TO OVERPAY, OR THE TWO RANGES NEVER OVERLAP AND NO
+# INQUIRY CAN CLEAR AT ANY PIECE CAP. `_assemble` refuses once the bundle costs the buyer
+# more than the player is worth TO IT, so the buyer's ceiling is exactly 1.0x linear value
+# while the seller is quoting 1.35x — the premium was unpayable by construction, and the
+# first two attempts at this (retargeting the hole, then raising the piece cap) each moved
+# the measured rate between 0 and 1 trade in six seasons because neither touched the
+# arithmetic.
+#
+# ⚠️ THE OVERPAY BELONGS ON THE BUYER, NOT AS A DISCOUNT ON THE SELLER. A franchise player
+# costs a franchise price and that valuation is correct; what a linear model cannot express
+# is why a club on the cusp wants him MORE than his parts are worth — the marginal win
+# converts a near-miss into a berth, which is what "getting over the hump" actually means.
+# `deadlineUrgency` is this same term in-season and returns parity in the offseason, which
+# is precisely the window this path runs in.
+TRADE_HUMP_APPETITE = 1.70
+
+# So an ordinary star (1.35) clears comfortably, and a CORE player (1.35 x 1.25 = 1.69)
+# sits a whisker under the ceiling — he moves only when the buyer's own scout rates him
+# above the league's read and its incumbent is genuinely poor. A club's franchise player
+# changing hands should need someone to be convinced, not just solvent.
+
+# ⚠️ AND THE BUYER MUST ACTUALLY BE FIXING SOMETHING. Without a real gap over the
+# incumbent every club inquires about every star every offseason, which is a carousel
+# rather than a blockbuster.
+TRADE_INQUIRY_MIN_UPGRADE = 5.0     # rating points over the man he would replace
+
+# ⚠️ A BLOCKBUSTER IS ALLOWED TO BE A PARAGRAPH. `TRADE_MAX_PIECES` is 3 so an ordinary
+# trade reads as a sentence, which is right for a walk-year rental and wrong for the one
+# trade type that is SUPPOSED to be a haul. Measured at three pieces, the typical inquiry
+# bundle reached only **0.78 of the bar** — so the piece cap, not the premium, was what
+# refused nearly every call, and lowering the price would have been the wrong fix to a
+# problem the price was not causing.
+TRADE_INQUIRY_MAX_PIECES = 5
 TRADE_MAX_PIECES = 3                # a trade should read as a sentence
 
 # ---- Rookie picks ----

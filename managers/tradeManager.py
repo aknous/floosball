@@ -32,7 +32,11 @@ from constants import (TRADING_ENABLED, GM_ACTIVE_WEEK, REPLACEMENT_RATING,
                        TRADE_LISTINGS_PER_TEAM, TRADE_BIDS_PER_TEAM_PER_WEEK,
                        TRADE_CANDIDATES_PER_LISTING, TRADE_MAX_PIECES,
                        TRADE_PICK_HORIZON_SEASONS, FO_CUT_UPGRADE_MARGIN,
-                       TRADE_MIN_CERTAINTY)
+                       TRADE_MIN_CERTAINTY, TRADE_INQUIRY_ENABLED,
+                       TRADE_INQUIRIES_PER_TEAM, TRADE_HUMP_BAND,
+                       TRADE_INQUIRY_PREMIUM, TRADE_CORE_PREMIUM,
+                       TRADE_INQUIRY_MIN_UPGRADE, TRADE_INQUIRY_MAX_PIECES,
+                       TRADE_HUMP_APPETITE)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,10 @@ TRIGGER_URGENCY = {
     # ⚠️ LAST, because the club is happy either way — it would simply re-sign him. He is
     # on the block at a price, not because anything is forcing the issue.
     'expiring_keeper': 4,
+    # ⚠️ NOT REALLY ON THIS LADDER. An inquiry is buyer-initiated and never enters
+    # `listingsFor`, so it never competes with a real listing for the per-club cap; the
+    # entry exists only so a sort over a mixed list is total.
+    'inquiry': 9,
 }
 
 
@@ -103,8 +111,14 @@ class TradeMarket:
         self._cannotKeepCache = {}
         self._coreCache = {}
         self._needCache = {}
+        self._playoffCut = None
+        self._posMeanCache = {}
         # Why bundles fail, for the market harness. Three reasons, three different answers.
         self.assembleFail = {}
+        # ⚠️ Why an INQUIRY never happened, which "0 trades" cannot distinguish between:
+        # the club was not close enough, it had no gap worth filling, or nobody in the
+        # league was a big enough upgrade on the man it already has.
+        self.inquiryFail = {}
         self._computeContention()
 
     # ------------------------------------------------------------ context
@@ -269,6 +283,154 @@ class TradeMarket:
         # this market exists. He goes first.
         out.sort(key=lambda l: (TRIGGER_URGENCY.get(l.trigger, 99), -l.ask))
         return out[:TRADE_LISTINGS_PER_TEAM]
+
+    # ------------------------------------------- the blockbuster (offseason)
+
+    def _missedThePlayoffs(self, team) -> bool:
+        stats = getattr(team, 'seasonTeamStats', None) or {}
+        return not bool(stats.get('madePlayoffs', False))
+
+    def _playoffCutWinPct(self) -> float:
+        """The win% of the WORST club that qualified — the hump itself.
+
+        ⚠️ READ OFF WHO ACTUALLY QUALIFIED rather than assumed from the league mean. With
+        4 divisions a winner takes a top-four seed at any record, so the real cut sits
+        BELOW the mean in a season with a weak division and above it in a tight one — the
+        same fact the standings board's `clinchStatus` had to learn the hard way.
+        """
+        if self._playoffCut is not None:
+            return self._playoffCut
+        qualified = [self._contention.get(getattr(t, 'id', None), 0.5)
+                     for t in (getattr(self.teamManager, 'teams', None) or [])
+                     if not self._missedThePlayoffs(t)]
+        self._playoffCut = min(qualified) if qualified else self._leagueMean
+        return self._playoffCut
+
+    def isOverTheHump(self, team) -> bool:
+        """Is this club close enough for a blockbuster to be the right move?
+
+        ⚠️ MISSED THE PLAYOFFS **AND** WAS CLOSE. Either half alone is the wrong club: a
+        qualifier does not need to mortgage anything, and a club five games adrift buying a
+        star is not getting over the hump, it is spending a rebuild on one season.
+        """
+        if not self._missedThePlayoffs(team):
+            return False
+        mine = self._contention.get(getattr(team, 'id', None), 0.5)
+        return (self._playoffCutWinPct() - mine) <= TRADE_HUMP_BAND
+
+    def _positionalGaps(self, team) -> list:
+        """Where this club falls furthest behind the LEAGUE, worst first, as (slot, player).
+
+        ⚠️ NOT "the lowest-valued starter", which is what a `rating x positionWeight` sort
+        gives — and that is always the KICKER, because the position weight runs QB 1.00 to
+        K 0.35 and a 90 kicker scores 31.5 against a 70 quarterback's 70.0. Measured with
+        that sort, all 264 calls in six seasons were about kickers, exactly one bundle ever
+        cleared, and the feature looked like a pricing problem when it was a targeting one.
+
+        A hole is a deficit against what everyone ELSE has at the position — the same
+        relative reading `needTilt` uses, and for the same reason: an absolute one hands
+        every weak club a phantom need at its cheapest position. The deficit is then scaled
+        by the position weight, so being 10 short at quarterback outranks being 10 short at
+        kicker without the weight deciding the ranking on its own.
+        """
+        out = []
+        for slot, player in (getattr(team, 'rosterDict', None) or {}).items():
+            if player is None:
+                continue
+            posValue = getattr(getattr(player, 'position', None), 'value', None)
+            deficit = self._leagueMeanAt(posValue) - self.ratingFor(team, player)
+            out.append((deficit * self._positionWeight(player), slot, player))
+        out.sort(key=lambda x: -x[0])
+        return [(slot, player) for _, slot, player in out]
+
+    def _leagueMeanAt(self, posValue) -> float:
+        """Mean starter rating at this position across the league. Cached per pass."""
+        cached = self._posMeanCache.get(posValue)
+        if cached is not None:
+            return cached
+        ratings = [float(getattr(p, 'playerRating', 0) or 0)
+                   for t in (getattr(self.teamManager, 'teams', None) or [])
+                   for p in (getattr(t, 'rosterDict', None) or {}).values()
+                   if p is not None
+                   and getattr(getattr(p, 'position', None), 'value', None) == posValue]
+        mean = (sum(ratings) / len(ratings)) if ratings else 0.0
+        self._posMeanCache[posValue] = mean
+        return mean
+
+    def inquiriesFor(self, buyer) -> list:
+        """Players this club would phone up about, priced by whoever holds them.
+
+        ⚠️ THE ONLY BUYER-INITIATED PATH IN THE MARKET, and the reason it exists is that
+        every other trigger fires on the SELLER's situation — so a star under contract was
+        unreachable from both ends. Measured over six seasons before this: zero clubs below
+        the playoff line bought anything in-season, and 37 of 44 in-season acquisitions
+        were walk-year rentals.
+
+        ⚠️ OFFSEASON ONLY (owner). In-season the market stays contract congestion; a club
+        that wants to get over the hump does it between seasons, when it can see the table
+        it finished on and a full season of the player it is buying still lies ahead.
+
+        Returned as `Listing` objects so the bid, the auction and settlement are the SAME
+        code — an inquiry differs in who starts it and what it costs, not in what a trade
+        is. The holder is `listing.team`, exactly as for a posted player.
+        """
+        if not TRADE_INQUIRY_ENABLED or self.week is not None:
+            return []
+        if not self.isOverTheHump(buyer):
+            self._noteInquiry('not_close_enough')
+            return []
+
+        out = []
+        for slot, incumbent in self._positionalGaps(buyer)[:TRADE_INQUIRIES_PER_TEAM]:
+            posValue = getattr(getattr(incumbent, 'position', None), 'value', None)
+            mine = self.ratingFor(buyer, incumbent)
+            best, bestSeen = None, 0.0
+            for holder in (getattr(self.teamManager, 'teams', None) or []):
+                if getattr(holder, 'id', None) == getattr(buyer, 'id', None):
+                    continue
+                for held in (getattr(holder, 'rosterDict', None) or {}).values():
+                    if held is None or getattr(held, 'willRetire', False):
+                        continue
+                    if getattr(getattr(held, 'position', None), 'value', None) != posValue:
+                        continue
+                    if wasAcquiredThisSeason(held, self.season):
+                        continue
+                    # ⚠️ Rated on the BUYER's read, because the buyer is the one choosing
+                    # who to call — its own scouting error is what makes two clubs chase
+                    # different men, and reading ground truth here would make every club
+                    # phone the same player.
+                    seen = self.ratingFor(buyer, held)
+                    if seen - mine < TRADE_INQUIRY_MIN_UPGRADE:
+                        continue
+                    if seen > bestSeen:
+                        best, bestSeen = (holder, held), seen
+            if best is None:
+                self._noteInquiry('nobody_enough_better')
+                continue
+            holder, target = best
+            ask, floor = self._priceInquiry(holder, target)
+            if ask <= 0:
+                self._noteInquiry('unpriceable')
+                continue
+            self._noteInquiry('called')
+            out.append(Listing(holder, target, 'inquiry', ask, floor))
+        return out
+
+    def _noteInquiry(self, reason: str) -> None:
+        self.inquiryFail[reason] = self.inquiryFail.get(reason, 0) + 1
+
+    def _priceInquiry(self, holder, player):
+        """What the holder quotes an unsolicited caller.
+
+        ⚠️ BOTH ENDS ARE MULTIPLIED, not just the ask. `settle` takes the best bid ABOVE
+        THE FLOOR, so the floor is the real bar and a premium applied to the ask alone
+        would be a number nobody pays.
+        """
+        ask, floor = self._priceListing(holder, player, trigger='inquiry')
+        premium = TRADE_INQUIRY_PREMIUM
+        if id(player) in self._coreOf(holder):
+            premium *= TRADE_CORE_PREMIUM
+        return ask * premium, floor * premium
 
     def needTilt(self, team) -> float:
         """How badly this club needs DEFENSE rather than offense. -1 .. +1.
@@ -611,13 +773,26 @@ class TradeMarket:
         # Measured with the gross reading: 801 listings, 772 "clearing" bids and ONE
         # settled trade all season, because settlement then refused almost every one of
         # them as not an upgrade. The bids were never real.
+        # ⚠️ THE ONE TERM THAT MAKES A BLOCKBUSTER POSSIBLE, AND IT HAS TO SIT ABOVE THE
+        # GATE BELOW. Everywhere else the buyer's ceiling is the player's linear worth to
+        # it, which is under every premium a holder quotes on an unsolicited call, so the
+        # two ranges never overlap and no inquiry can clear at any piece cap. A club on the
+        # cusp genuinely values him above linear: the win he brings converts a near-miss
+        # into a berth, which is what "getting over the hump" means. `deadlineUrgency` is
+        # this same idea in-season and returns parity in the offseason — the exact window
+        # this path runs in.
+        #
+        # ⚠️ Applied to WILLINGNESS, never to the bundle. The package is still sized to the
+        # seller's bar, so this buys a club the right to say yes, not a bigger haul.
+        appetite = TRADE_HUMP_APPETITE if listing.trigger == 'inquiry' else 1.0
+
         displaced, fee = self._displacedBy(buyer, player)
         net = gross - displaced
         if net <= 0:
             return None             # he does not improve this roster
         # ⚠️ The cut fee is part of the price. A club that must pay 4,350F to open the slot
         # is buying something more expensive than the same player into an empty one.
-        worthToBuyer = net
+        worthToBuyer = net * appetite
 
         bar = trading.requiredSurplus(
             listing.ask,
@@ -642,10 +817,18 @@ class TradeMarket:
         # sized to the bar alone every bidder offers the same package and the highest bid
         # is a tie.
         urgency = trading.deadlineUrgency(self.week, buyerWeight)
-        pieces = self._assemble(buyer, listing.team, bar * urgency, gross * urgency,
+        # ⚠️ A BLOCKBUSTER IS ALLOWED TO BE A PARAGRAPH. The 3-piece cap exists so an
+        # ordinary trade "reads as a sentence", and that is right for a walk-year rental —
+        # but the whole shape being bought here is a haul, and measured at three pieces the
+        # typical bundle reached only 0.78 of the bar, so the cap and not the price was
+        # what refused most calls.
+        pieces = self._assemble(buyer, listing.team, bar * urgency,
+                                gross * urgency * appetite,
                                 displaced,
                                 swapPosition=getattr(getattr(player, 'position', None),
-                                                     'value', None))
+                                                     'value', None),
+                                maxPieces=(TRADE_INQUIRY_MAX_PIECES
+                                           if listing.trigger == 'inquiry' else None))
         if not pieces:
             return None
         return Bid(buyer, pieces, sum(p['value'] for p in pieces))
@@ -706,7 +889,7 @@ class TradeMarket:
         return bool(la) and la == lb
 
     def _assemble(self, buyer, seller, bar: float, gross: float, displaced: float,
-                  swapPosition=None) -> list:
+                  swapPosition=None, maxPieces=None) -> list:
         """The CHEAPEST combination of the buyer's assets that clears the SELLER's bar.
 
         ⚠️ CHEAPEST, NOT LARGEST, and capped at `TRADE_MAX_PIECES` so a trade reads as a
@@ -735,7 +918,7 @@ class TradeMarket:
         for asset in buyerAssets:
             if toSeller >= bar:
                 break
-            if len(pieces) >= TRADE_MAX_PIECES:
+            if len(pieces) >= (maxPieces or TRADE_MAX_PIECES):
                 break
             if asset['kind'] == 'player':
                 # ⚠️ AT MOST ONE STARTER, and only at the listing's own position. A second
@@ -950,6 +1133,32 @@ def runWeeklyPass(playerManager, teamManager, brain, season: int, week=None) -> 
                 'listing': listing,
                 'winner': winner,
             })
+
+    # ── the blockbuster: buyer-initiated, offseason only ─────────────────────
+    # ⚠️ NOT AN AUCTION. A club posting a player wants the best offer in the league, so
+    # `counterpartiesFor` canvasses several. An inquiry is one club phoning another about a
+    # man nobody put on the block, so ONLY THE CALLER BIDS — canvassing here would turn a
+    # private approach into an auction the holder never asked for, and would let a third
+    # club win a player the buyer went and found.
+    for buyer in list(getattr(teamManager, 'teams', None) or []):
+        if bidsUsed.get(getattr(buyer, 'id', None), 0) >= TRADE_BIDS_PER_TEAM_PER_WEEK:
+            continue
+        for inquiry in market.inquiriesFor(buyer):
+            if not _stillListable(inquiry):
+                continue
+            # ⚠️ Re-checked inside the loop, not only above it: a club is allowed one
+            # acquisition a pass, and the first inquiry may already have used it.
+            if bidsUsed.get(getattr(buyer, 'id', None), 0) >= TRADE_BIDS_PER_TEAM_PER_WEEK:
+                break
+            bid = market.bidFor(inquiry, buyer)
+            if bid is None:
+                continue
+            winner = market.settle(inquiry, [bid])
+            if winner is None:
+                continue
+            bidsUsed[getattr(buyer, 'id', None)] = \
+                bidsUsed.get(getattr(buyer, 'id', None), 0) + 1
+            settled.append({'listing': inquiry, 'winner': winner})
     return settled
 
 

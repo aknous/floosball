@@ -106,8 +106,24 @@ async def main(seasons, treasury):
             shape.setdefault('bidBy', Counter())[listing.trigger] += 1
         return out
 
+    realInq = tradeManager.TradeMarket.inquiriesFor
+
+    def spyInquiries(self, buyer):
+        """⚠️ WHY DID NOBODY CALL? "0 blockbusters" has three different causes and they
+        want opposite fixes: no club was close enough to the cut, the club had no gap worth
+        filling, or nobody in the league was enough of an upgrade to be worth the phone
+        call. The counter lives on the market instance, so take the DELTA."""
+        before = dict(getattr(self, 'inquiryFail', {}))
+        out = realInq(self, buyer)
+        after = getattr(self, 'inquiryFail', {})
+        why = shape.setdefault('inqWhy', Counter())
+        for k, v in after.items():
+            why[k] += v - before.get(k, 0)
+        return out
+
     tradeManager.TradeMarket.listingsFor = spyListings
     tradeManager.TradeMarket.bidFor = spyBid
+    tradeManager.TradeMarket.inquiriesFor = spyInquiries
 
     realCut = tradeManager._cutToMakeRoom
     realOpen = tradeManager._openSlotFor
@@ -346,6 +362,17 @@ async def main(seasons, treasury):
               f"  |  offseason {shape['byWeek'].get('offseason', 0)}")
         detail = ', '.join(f"w{w}x{shape['byWeek'][w]}" for w in weeks)
         print(f"    detail: {detail}")
+    inq = shape.get('inqWhy') or Counter()
+    if inq:
+        print("\n  \u2500\u2500 the blockbuster: who picked up the phone? \u2500\u2500")
+        labels = {'called': 'made the call',
+                  'not_close_enough': 'not close enough to the cut',
+                  'nobody_enough_better': 'no upgrade worth calling about',
+                  'unpriceable': 'holder would not put a price on him'}
+        for k in ('called', 'not_close_enough', 'nobody_enough_better', 'unpriceable'):
+            if inq.get(k):
+                print(f"    {labels[k]:<38} {inq[k]:>4}")
+
     for trigger, count in shape['byTrigger'].most_common():
         print(f"    {trigger:<20} {count:>3} ({count / n:.0%})")
 
