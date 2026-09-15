@@ -1290,6 +1290,25 @@ SACK_CURVE_STEEPNESS = float(_os.environ.get('FLOOS_SACK_STEEPNESS', '0.12'))
 # Air-yard means per pass tier. The old bands were compressed -- "medium" at 6.5
 # air yards is really a short throw -- which held league aDOT at 6.29 against a
 # real-world ~7.8 and made every completion tiny.
+# ---- Pass difficulty by depth (Play.calculateThrowQuality / calculateCatchProbability) ----
+# THROW: multiplier on the QB's throw quality for each tier (a deep ball is harder to
+# place). CATCH: how much tight coverage disrupts the catch for each tier (a deep ball
+# gives defenders longer to converge). Keyed by PassType name.
+# ⚠️ THE DEEP BALL WAS TOO GOOD, NOT JUST TOO RARE (2026-09-14). Against NFL 2021-25 by
+# air yards, sim deep throws completed 58% (NFL 33%) for 15.9 yards an attempt (NFL 11.9)
+# and long throws 66% (NFL 52%) for 12.4 (NFL 10.7), while coaches rarely called them —
+# two errors that cancelled for scoring. Calling deeper alone added 3-4 points a game, so
+# long 0.80 -> 0.65 and deep 0.65 -> 0.43 were fitted so each tier's yards per attempt
+# lands on the NFL's. Completion by tier stays higher than the NFL's and interceptions
+# stay far lower (the catch and pick models have no real depth term yet); that is the
+# physics work on wip/tackle-as-collision. PASS_TIER_DISRUPTION barely moves completion
+# (coverage rarely binds in that formula) and is left as it was.
+PASS_TYPE_DIFFICULTY = {'short': 1.00, 'medium': 0.92, 'long': 0.65, 'deep': 0.43, 'hailMary': 0.42}
+PASS_TIER_DISRUPTION = {'short': 0.40, 'medium': 0.75, 'long': 1.00, 'deep': 1.15, 'hailMary': 1.30}
+# Perception bonus the QB gives the route at the CALLED depth on a long or deep call (the
+# progression starts with the concept that was called). Perception only.
+PASS_CALLED_DEPTH_READ_BONUS = 15.0
+
 PASS_DEPTH_MEANS = {
     'short': float(_os.environ.get('FLOOS_DEPTH_SHORT', '3.35')),
     'medium': float(_os.environ.get('FLOOS_DEPTH_MEDIUM', '8.25')),
@@ -1357,12 +1376,6 @@ PLAY_CALL_BASE_ROWS = {
     # medium x0.75, long x1.6, deep x2.8 (2026-09-14). The long game was 8% of throws
     # against the NFL's 15% and medium 39% against 23%. Pass totals are untouched, so the
     # run/pass fit below still holds.
-    # ⚠️ CALLING ONLY — THE DEEP BALL IS STILL TOO EFFICIENT. Sim deep throws complete ~56%
-    # for ~15 yards an attempt against the NFL's 33% / 11.9, so every extra deep call is a
-    # profitable play: these shapes alone moved long/deep to 12.4% / 3.1% of throws (NFL
-    # 15.0 / 9.1) and added ~3 points a game. A matching throw-difficulty change and a
-    # called-depth QB read were built, then deliberately left out (owner, 2026-09-14) until
-    # the passing physics on wip/tackle-as-collision lands.
     # Fitted 2026-09-14: two passes of run-the-harness / move-each-row-by-the-log-odds-gap,
     # after audibles learned the situation. Realized pass rate by down & distance now sits
     # within ~1 point of NFL 2021-25 on average (was 15.5). Trailing comment = NFL target
