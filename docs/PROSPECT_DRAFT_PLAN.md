@@ -26,7 +26,7 @@ card; there is no story in signing a 74. The uncertainty *is* the feature.
 |---:|---|---|
 | 1 | **1 round, 32 prospects**, worst-first | three rounds does not produce a better headliner — see Sizing |
 | 2 | **No fan ballots** | the autonomous front office is the decider everywhere else |
-| 3 | Class generated at **week 22** (`GM_ACTIVE_WEEK`), **after the retirement roll** | the class is sized against the holes retirement is about to open |
+| 3 | Class generated at **SEASON START**, visible and scoutable all season | ⚠️ revised 2026-09-14 — see below. Week 22 was wrong: trades close at week 22, so a pick would be traded entirely blind |
 | 4 | The draft **replaces** the supply trickle | `ensurePositionSupply` stays the per-position backstop it already is, not a second faucet |
 | 5 | **The cull ships with it**, not after | at ~13/season surplus, "after" means the pool grows 13 a season until it arrives |
 | 6 | Prospects become a tradeable asset class | alongside FA draft position and Treasury — see the trading plan |
@@ -94,16 +94,57 @@ spans **0 to +6**, and the docstring says it *"skews prospect booms"*.
 
 ## What to build
 
-### 1. Class generation (week 22)
-Restore `_generateRookieClass` from `68e5608`, called inside the existing Front Office open
-block **after** `_evaluateRetirementCandidates`. That block is already once-per-season
-idempotent behind the `front_office_open_season` marker, so a restart or deploy at/after
-week 22 cannot double-generate.
+### 1. Class generation — AT SEASON START, not week 22
+
+⚠️ **Revised.** The plan first put generation at week 22, reasoning that the class is sized
+against the holes retirement is about to open. **That dependency does not exist**: at one
+round the class size is fixed by the team count, not by how many players retire. And week 22
+is where in-season trades *close*, so a pick would have been traded blind for the entire
+window — which is exactly the owner's objection.
+
+✅ **The original design already did this**, and `constants.py` still says so verbatim:
+
+> *"Rookie class is generated at season start; fans can scout + vote on prospects all
+> season. Scouting accuracy = coach.scouting + funding tier bonus, and determines how wide
+> the potential-attribute range is in the scouted view."*
+
+Generating at season start gives the class a whole season of visibility, which is what makes
+a pick a tradeable asset with a known shape — *"this year has a 99-potential quarterback at
+the top, so pick 1 is precious"* — and it runs the bottom-feeder story all year rather than
+for one afternoon.
+
+Restore `_generateRookieClass` from `68e5608`, called from `startNewSeason` (alongside
+`_generateCardTemplates`, which already mints there).
 
 ⚠️ **`ROOKIE_DRAFT_CLASS_SIZE = 24` is stale** — a 24-team-era constant. Derive it from the
 live team count rather than hardcoding 32; `computeShareUnit` already paid for that lesson
 (its `numTeams` defaulted to 24 and made every facility 33% too expensive after the league
 grew).
+
+### 1b. The scouted view — the uncertainty that makes a pick interesting
+
+A prospect should not show his true numbers. `SCOUTING_BANDS` is the mechanism and it
+survives as a constant:
+
+| scouting accuracy | potential shown as |
+|---|---|
+| ≥ 95 | the exact value |
+| 80-94 | ± 5 |
+| 65-79 | ± 10 |
+| < 65 | ± 15 |
+
+⚠️ **It has ZERO readers.** `scoutRookie` was removed by `68e5608` (the commit message lists
+it), so the band table is an orphan — the same survival pattern as the columns and the API
+surfaces, but this half genuinely has to be rebuilt.
+
+⚠️ **And its accuracy source is stale.** The comment says *"coach.scouting + funding tier
+bonus"* and `FUNDING_SCOUTING_BONUS` is the OLD market-tier system, superseded by
+`facilityEffect('scouting_bonus')` (levels `[0, 1, 2, 3, 5, 7]`). Wire the band to
+`frontOfficeBrain.scoutingVision`, which already blends the GM's own `scouting` with the
+Scouting Department and is the one definition the front office uses elsewhere.
+
+✅ This is what finally makes the Scouting Department honest: its UI copy promises *"clearer
+read on draft prospects"* and it currently only sharpens free-agent valuations.
 
 ### 2. The draft itself
 Restore `rookieDraftPickGenerator` and the `rookie_draft` offseason phase, worst-first, one
