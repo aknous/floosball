@@ -5011,12 +5011,25 @@ class SeasonManager:
                                LeagueNewsItem.pinned == True,          # noqa: E712
                                LeagueNewsItem.season < seasonNumber)
                        .update({'pinned': False}, synchronize_session=False))
+            # ⚠️ COMMIT UNCONDITIONALLY, NOT `if changed`. A bulk update EXECUTES
+            # IMMEDIATELY and takes SQLite's single write lock — and it takes it whether
+            # or not it matches a row. Gating the commit on `changed` therefore left the
+            # shared session sitting on an open write transaction in exactly the case
+            # where there was nothing to do, and every other session's write then waited
+            # out the full 30s busy_timeout and failed.
+            #
+            # ⚠️ IT MADE A FRESH START UNREACHABLE. A brand-new league has no champion
+            # row to unpin, so `changed` is 0 every time; two lines later
+            # `maybeResetRuleOverridesForSeason` opens its own session and dies with
+            # "database is locked" before week 1 exists. Measured: `in_transaction` goes
+            # False -> True across this call on a 0-row update, and the next independent
+            # write fails.
+            #
+            # This is the SAME SHAPE the docstring here already warned about and that
+            # took production down through `_publishChampionNews` — an unpin that has
+            # written and then does not release. It was one `if` away from repeating it.
+            self.db_session.commit()
             if changed:
-                # ⚠️ Commit rather than leaving it on the shared session. A bulk update
-                # executes immediately and takes SQLite's single write lock; leaving it
-                # open here is the shape that took production down once already, when a
-                # publisher raised between an unpin and its commit.
-                self.db_session.commit()
                 logger.info(f"Unpinned {changed} stale champion news item(s) "
                             f"at the start of season {seasonNumber}")
         except Exception as e:
