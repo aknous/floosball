@@ -75,6 +75,86 @@ For each seller × each surplus walk-year player × each buyer:
 Each club reads its own player precisely and a stranger noisily, which is the actual
 asymmetry of trading — a trade happens when the two misreads point in opposite directions.
 
+## Quantifying value — one scale for four asset classes
+
+The owner's expansion (1-for-1 same-position swaps; returns of a player **plus** a prospect,
+or a prospect **plus** a pick) means every asset has to price on a common scale. It is
+buildable, and the shape falls out of two ideas.
+
+### Surplus over replacement, times seasons of control
+
+**Value = how much better than freely-available, multiplied by how long you keep it.**
+
+Replacement is not zero — a club can always sign from the FA pool, whose current level is
+~**67**. So an 80 is worth 13 surplus, not 80. And time is the other half: a walk-year player
+traded in week 10 is **0.64 seasons** of control; the same player with three years left is
+**2.64**. That is a **4x** spread on identical talent, and `termRemaining` already carries it.
+
+| asset | value |
+|---|---|
+| **roster player** | `(rating − 67) × seasonsOfControl(termRemaining, week)` |
+| **prospect** | projected mature surplus × seasons of control × a wash-out discount — ⚠️ read through the buyer's own `scoutingVision`, so trading prospects carries genuine uncertainty about what you got |
+| **rookie pick** | expected mature surplus at that slot × seasons × risk |
+| **Treasury** | face value ÷ a conversion rate (the one number with no anchor yet) |
+
+### The pick curve is steep, and that matters
+
+Expected true skill of the player taken at each slot (order statistics of 32 draws from the
+live generation constants, 4,000 classes):
+
+| pick | 1 | 3 | 8 | 12 | 16 | 24 | 32 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| true skill | **98.6** | 92.0 | 85.2 | 81.6 | 78.4 | 71.8 | **57.2** |
+
+Pick 1 is a future superstar; pick 16 is a league-average player; pick 32 is nearly a token.
+**That steepness is what makes an early pick a real asset** and gives the market a wide range
+of denominations to settle a gap with.
+
+⚠️ **Mid-season a pick is a DISTRIBUTION, not a number** — the order is worst-first by *final*
+record, which is not known while the season runs. A club trading its own pick in week 10 is
+selling something whose value it is still determining by playing.
+
+### ⚠️ The contention weight is what makes a market exist
+
+On the raw scale above, **picks dominate rentals by roughly 10x and nothing would ever
+clear**. The missing term is that clubs do not share a discount rate:
+
+> A contender prices THIS season high and the future low. A club going nowhere prices the
+> future high and this season at almost nothing. **Both are right. They simply want
+> different currencies — and that gap is the trade.**
+
+Modelled as `nowWeight = (forecastWins / leagueMean) ** 2`, and tested on Bees' WR 80 at
+week 10 (a club whose own weight is **0.54**):
+
+| buyer | forecast W | nowWeight | clears at |
+|---|---:|---:|---|
+| Pinecones | 25.6 | 3.33 | **pick 2** and later |
+| Curd | 21.0 | 2.26 | pick 15 |
+| Residents | 20.2 | 2.08 | pick 17 |
+| Dry Heat | 18.2 | 1.68 | pick 22 |
+| Waffles | 15.8 | 1.27 | pick 25 |
+
+Every slot clears for the *seller* — a pick always beats a rental they were losing for
+nothing — so **the buyer's contention sets the price**, and price discovery falls out of the
+standings rather than being scripted.
+
+⚠️ **The exponent is unanchored and 2 is probably too hot.** It has the strongest contender
+parting with a **top-two pick for a six-week rental**, which no real club does. A linear
+weight, or a softer exponent, compresses that; it wants calibrating against how often trades
+should fire, not chosen on taste.
+
+### Bundles and 1-for-1
+
+Once assets price on one scale, both of the owner's shapes are the same operation:
+
+- **1-for-1 same position** clears when each side's valuation of the incoming player exceeds
+  its own outgoing one. ⚠️ Note this already produces a real trade with no sweetener: a
+  walk-year 84 is worth *less* than a controlled 78 on the scale, so the club holding the
+  rental is the one that pays — unless it is contending, where `nowWeight` flips it.
+- **Bundles** are a subset-sum against the gap: find the cheapest combination of pick,
+  prospect and Floobits that closes the difference, capped at some number of pieces so a
+  trade stays legible in the news feed.
+
 ## Legality
 
 | rule | why |
