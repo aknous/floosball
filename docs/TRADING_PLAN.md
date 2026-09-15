@@ -700,7 +700,71 @@ players are leaving for nothing unless someone moves"* is a story every week of 
 | **transactions page** | the full front-office desk, seven sections; five already have their data |
 | **mid-season FA signing** | allowed, **to fill an empty slot only**, for this season or one more — with `ensurePositionSupply` running weekly so the pool is not drained |
 | **roster window** | cut / sign / trade all live to **week 22**, then **frozen** until the offseason |
+| **offseason window** | **two passes** — pre-draft (the main one; picks are live) and post-draft. Runs on the blocked-prospect / locker-room / horizon triggers, since `nowWeight` resets and there is no contention asymmetry |
 | **cutting** | allowed, including to make room for an incoming trade — but **cutting a player with term left costs Treasury** (`remainingSeasons × surplus × rate`), which is the safe use of a currency with a 227x spread: a cost constrains the poor rather than empowering the rich |
+
+## 5b. The offseason trade window
+
+### The offseason is ~2 days of real time, and it already has the right shape
+
+Measured against the live schedule (playoffs Friday, next season anchored Sunday 19:00 ET):
+
+| moment | when | state after it |
+|---|---|---|
+| Floos Bowl ends | **Fri ~16:00 ET** | season over |
+| `post_bowl` wait (1h) → **front office resolves** | **Fri ~17:00 ET** | contracts decremented, retirements done, re-signs and cuts settled, FA pool filled |
+| ⟶ *gap of ~19 hours* | | |
+| `_runPreDraftPass` → **rookie draft** | **Sat noon ET** | this year's picks are spent |
+| **FA draft** | Sat, next top of the hour | rosters full |
+| **new season** | **Sun 19:00 ET** | frozen until week 22 |
+
+✅ **The gap between the front office and the draft is the window**, and it is ~19 hours of
+wall clock. By then every club knows three things it does not know at any other moment: **who
+it kept, what the pool holds, and where it picks.**
+
+### Two passes, not one
+
+| pass | when | what it is for |
+|---|---|---|
+| **A — pre-draft** | after the front office, before `_runPreDraftPass` | the main window. Roster settled, pick known, needs visible. **This is where pick trading lives** |
+| **B — post-draft** | after the rookie draft, before the FA draft | smaller. A club that just drafted a QB may now have a surplus one |
+
+⚠️ **Pass A is where picks are tradeable and pass B is not** — this year's picks are spent the
+moment the draft runs, so only *future* picks remain. That asymmetry is worth honouring rather
+than smoothing: the pre-draft window is the valuable one precisely because the picks are live
+in it.
+
+### ⚠️ The offseason changes the valuation, in the club's favour
+
+Two of the in-season terms behave differently and both should be read deliberately:
+
+- **`seasonsOfControl` jumps.** In-season a walk-year player is a fraction of a season; in the
+  offseason the walk-years are already gone (the front office resolved them) and everyone
+  remaining has **whole seasons** of term. So offseason trades are about *assets*, not
+  rentals — the rental market does not exist here at all.
+- **`nowWeight` resets.** Contention is unknown for a season that has not been played, so
+  every club is back at ~1.00 — the same state that makes the in-season market quiet in week
+  1. ⚠️ **That removes the buyer/seller asymmetry entirely**, so the offseason market cannot
+  run on contention. It runs on the other three triggers: **blocked prospect** (loudest here,
+  right after promotions), **locker room**, and **horizon mismatch** — which in the offseason
+  is a club with a 2-year veteran wanting a 5-year one, or the reverse.
+
+✅ That is a genuinely different market rather than the same one at a different date, which is
+the argument for having both.
+
+### What to reuse
+
+`_runPreDraftPass` already walks teams **worst→best** before the draft, broadcasting
+`offseason_team_setup` per club, and already runs prospect promotions there *"so the prospect
+slot opens up before the rookie draft fills it."* A trade pass immediately before it inherits
+the ordering, the broadcast rhythm and the UI's existing on-the-clock highlight.
+
+### Deliberately NOT doing: live draft-day trades
+
+Trading *between picks* — the trade-up-to-take-him story — is the most dramatic version and
+the most complex: it interleaves trade evaluation with pick selection and every trade
+re-orders the board mid-draft. **Two discrete passes first**, and revisit once the market has
+run a season and the volume is known.
 
 ## 6b. ⚠️ A live bug found on the way: elite contracts are orphaned
 
