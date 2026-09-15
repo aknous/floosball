@@ -432,8 +432,10 @@ converting a departing player into **future value, typically picks**.
 | 70 | 4.4 | can discount |
 | 79 | **0.4** | can go very low if it must |
 
-⚠️ `floor < ask` requires `backfill > REPLACEMENT`. **A pipeline is literally what makes a club
-a seller** — the third independent argument for the draft landing first.
+⚠️ `floor < ask` requires `backfill > REPLACEMENT`, so **the quality of the backfill is what
+makes a club a seller.** With mid-season signing (below) the backfill is
+`max(readyProspect, bestAvailableFreeAgent)`, so every club can sell — but a club with a good
+prospect still sells far more readily than one drawing on the pool.
 
 **Each approached club bids** its private de-cursed value. ⚠️ `_deWinnersCurse` is not
 optional: a buyer choosing the best-looking of several listings preferentially finds the one it
@@ -472,11 +474,73 @@ should pull its own player off the block. Same check as the listing trigger, re-
 no separate rule, only that triggers are evaluated **every week** rather than latched at
 listing time.
 
-### 3.6 Settlement, in order
+### 3.6 Mid-season free-agent signing (owner, 2026-09-15)
 
-1. verify both rosters will be complete (a prospect to promote, or player-for-player)
+A club may **sign a free agent to fill an empty slot mid-season**, so a trade no longer
+requires a prospect to be legal. This is the piece that makes player-for-picks available to
+everybody rather than only to clubs with a pipeline.
+
+**Scope: filling a hole, not upgrading.** A signing is available when a roster slot is
+**empty** — after a trade, and nowhere else. Letting clubs sign over a filled slot would be a
+different feature entirely (a second, continuous free-agency market) and would undo the
+position-lock logic the rest of this plan rests on.
+
+#### What it changes in the valuation
+
+The backfill in the floor becomes `max(readyProspect, bestAvailableFreeAgent)`, and the pool
+is **thin and uneven**, so what a trade costs a club now depends sharply on position:
+
+| position | best available | rating shed for the rest of the season, trading an 80 |
+|---|---:|---:|
+| QB | 68 | **−12** |
+| RB | 68 | −12 |
+| WR | 70 | −10 |
+| TE | 74 | −6 |
+| K | 77 | **−3** |
+
+✅ **That is a good property, not a problem.** A kicker is nearly free to trade because the
+pool replaces him; a quarterback is expensive because it cannot. The market will move kickers
+and hoard quarterbacks without a rule saying so.
+
+#### ⚠️ It softens the draft dependency from THREE reasons to ONE
+
+This is an honest downgrade of an argument made three times above:
+
+| reason the draft had to land first | still true? |
+|---|---|
+| the blocked-prospect trigger cannot fire with an empty pipeline | ✅ yes |
+| a seller needs a prospect or the trade is illegal | ❌ **no — a signing fills the hole** |
+| `floor < ask` requires `backfill > REPLACEMENT` | ⚠️ **weakened** — the pool clears that bar at TE and K but barely at QB |
+
+So the draft is no longer a hard prerequisite for trading. It remains the thing that makes
+clubs *willing* sellers rather than reluctant ones, and it is still item 0 — but trading could
+now ship without it if that ordering ever becomes inconvenient.
+
+#### ⚠️ The pool is sized for ONE annual draw, not continuous withdrawal
+
+26 free agents across five positions, and **TE has three**. Two mid-season signings would
+leave a single tight end for an offseason FA draft that 32 clubs pick through.
+
+The fix is already built: **`ensurePositionSupply` is the per-position backstop** and it
+generates only the deficit, producing nothing while a position is above target. Run it on the
+same weekly cadence as the trade pass rather than only in the offseason, and the pool refills
+exactly as much as it is drained.
+
+⚠️ **Do not instead cap mid-season signings.** A cap would leave a club unable to fill a hole
+it created legally, and an empty slot rates **50** — the failure this whole section exists to
+prevent.
+
+⚠️ And a mid-season signee needs a **contract term**. `_getPlayerTerm` is the existing rule;
+whether a week-15 signing should get a full-length deal or a prorated one is an open question —
+a full deal makes a desperate club's hole-filling a cheap way to acquire term.
+
+### 3.7 Settlement, in order
+
+1. verify both rosters **can** be complete — a prospect to promote, a signable free agent at
+   that position, or player-for-player
 2. move the assets; stamp `previousTeam`
-3. **promote the backfill prospect** — `_promoteProspectsAutonomously` already does this,
+3. **backfill** — promote the prospect if one is ready, else sign the best available free
+   agent. `_promoteProspectsAutonomously` already does the promotion half,
    ⚠️ but its bar compares against a free agent the club could sign, and mid-season there is
    **no signing path at all**. The real alternative is an empty slot rating **50**, so the bar
    must drop to near zero in-season
@@ -484,7 +548,7 @@ listing time.
 5. mint his new card at the new club; leave existing cards alone
 6. publish to `league_news`; write the `SeasonRecapEvent` with a **trade id**
 
-### 3.7 Cadence and rate limits
+### 3.8 Cadence and rate limits
 
 Runs **weekly** in the existing per-week hook block, closing at **week 22** — the first week of
 the final game day, already `GM_ACTIVE_WEEK`.
@@ -519,7 +583,7 @@ before a season has run is how it ends up wrong.
 | rule | why |
 |---|---|
 | both rosters complete at settlement | an empty slot rates **50**; never rely on the engine tolerating `None` |
-| position-for-position, or player-for-assets **with a prospect backfill** | six locked slots, no bench |
+| position-for-position, or player-for-assets **with a backfill** (prospect or free agent) | six locked slots, no bench |
 | closes at week 22 | owner; coincides with `GM_ACTIVE_WEEK` |
 | a club may not trade a player it acquired this season | stops pass-the-parcel |
 | volume capped per club per season | see above — and **measure it** |
@@ -575,15 +639,17 @@ players are leaving for nothing unless someone moves"* is a story every week of 
 | **cards** | a **new card minted** at the new club; existing cards untouched. ⚠️ Templates mint once per season and return early, so this needs its own path |
 | **competitive-balance tax** | **not built** — measured at ~one season of earlier correction on one club |
 | **transactions page** | the full front-office desk, seven sections; five already have their data |
+| **mid-season FA signing** | allowed, **to fill an empty slot only** — with `ensurePositionSupply` running weekly so the pool is not drained |
 
 ## 7. What to build, in order
 
-⚠️ **The prospect draft lands first, for three independent reasons** — not as a preference:
+⚠️ **The prospect draft was a hard prerequisite and mid-season signing softened it to one
+reason.** It stays item 0 because it is what makes clubs *willing* sellers, but trading could
+ship without it:
 
-1. the **blocked-prospect trigger** cannot fire with an empty pipeline,
-2. a seller needs a **backfill** or the trade is illegal (no mid-season signing path exists),
-3. `floor < ask` requires `backfill > REPLACEMENT`, so **a pipeline is what makes a club a
-   seller at all**.
+1. the **blocked-prospect trigger** cannot fire with an empty pipeline — ✅ still binding,
+2. ~~a seller needs a backfill or the trade is illegal~~ — a signing fills the hole,
+3. ~~`floor < ask` requires a pipeline~~ — the pool clears that bar at TE and K, barely at QB.
 
 | # | item | state |
 |---:|---|---|
