@@ -278,7 +278,8 @@ class TradeMarket:
             self._backfillRating(team, player),
             getattr(player, 'termRemaining', 0),
             self.week,
-            self.nowWeight(team))
+            self.nowWeight(team),
+            self._positionWeight(player))
         return ask, floor
 
     def _backfillRating(self, team, player) -> float:
@@ -340,9 +341,14 @@ class TradeMarket:
             seen = float(getattr(player, 'playerRating', 0) or 0)
         # perceivedValue is position-weighted board currency; the trade scale is raw
         # surplus x time, so price him on the rating the buyer BELIEVES he has.
-        believed = seen / max(0.01, self._positionWeight(player))
+        posW = self._positionWeight(player)
+        believed = seen / max(0.01, posW)
+        # ⚠️ AND PUT THE POSITION WEIGHT BACK. Dividing it out recovers the RATING this GM
+        # believes he has, which is what the surplus-over-replacement scale needs — but
+        # nothing re-applied it, so a kicker priced exactly like a quarterback and a club
+        # paid three first-round picks for a 78-rated K on a walk year.
         gross = trading.playerValue(
-            believed, getattr(player, 'termRemaining', 0), self.week, buyerWeight)
+            believed, getattr(player, 'termRemaining', 0), self.week, buyerWeight, posW)
         if gross <= 0:
             return None
 
@@ -411,7 +417,8 @@ class TradeMarket:
             return 0.0, 0
         value = trading.playerValue(weakestRating,
                                     getattr(weakest, 'termRemaining', 0),
-                                    self.week, self.nowWeight(buyer))
+                                    self.week, self.nowWeight(buyer),
+                                    self._positionWeight(weakest))
         return value, cutFeeFor(weakest)
 
     @staticmethod
@@ -544,7 +551,8 @@ class TradeMarket:
                 'name': getattr(prospect, 'name', '?'),
                 'detail': {'prospectSeasons': getattr(prospect, 'prospect_seasons', 0)},
                 'value': trading.prospectValue(
-                    ceiling, getattr(prospect, 'prospect_seasons', 0), weight=weight),
+                    ceiling, getattr(prospect, 'prospect_seasons', 0), weight=weight,
+                    positionWeight=self._positionWeight(prospect)),
             })
         if swapPosition is not None:
             # ⚠️ PRESENT VALUE, so `nowWeight` rather than `laterWeight` — a starter plays
@@ -566,7 +574,8 @@ class TradeMarket:
                     'detail': {'slot': slot},
                     'value': trading.playerValue(
                         getattr(held, 'playerRating', 0),
-                        getattr(held, 'termRemaining', 0), self.week, nowW),
+                        getattr(held, 'termRemaining', 0), self.week, nowW,
+                        self._positionWeight(held)),
                 })
         return out
 

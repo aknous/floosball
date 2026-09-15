@@ -2709,6 +2709,17 @@ TRADE_PICK_HORIZON_SEASONS = 2      # how far out a pick may be traded
 TRADE_FUTURE_PICK_DISCOUNT_TOP = 0.95      # near-nil in the top 5
 TRADE_FUTURE_PICK_DISCOUNT_LATE = 0.55     # steep in the back half
 
+# ⚠️ A FUTURE PICK'S SLOT IS NOT KNOWN, and reading it off TODAY'S table is what made a
+# contender's own picks worthless. The draft order is derived from the current standings;
+# applied to a pick two seasons out it priced an 11-4 club's own first-rounders as slot
+# 30 — below replacement level, therefore worth literally nothing — so it handed over
+# THREE OF THEM for a rental kicker. The plan says it plainly: with a future pick "you know
+# neither your slot NOR the class."
+#
+# Each season out regresses the slot toward the middle of the draft by this factor. This
+# season's pick is untouched: by the time the market opens at week 15 the table is settled.
+TRADE_PICK_SLOT_REGRESSION = 0.45
+
 # ---- A prospect's control is a DEADLINE, not a term ----
 # `seasonsOfControl` measures seasons of CONTRIBUTION off `termRemaining`. A prospect has
 # neither: he contributes nothing while in the pipeline, and PROSPECT_DEVELOPMENT_WINDOW

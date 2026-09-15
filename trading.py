@@ -136,7 +136,7 @@ def laterWeight(now: float) -> float:
 # ---------------------------------------------------------------- assets
 
 def playerValue(rating: float, termRemaining: int, week: int = None,
-                weight: float = 1.0) -> float:
+                weight: float = 1.0, positionWeight: float = 1.0) -> float:
     """Surplus over replacement x seasons of control, each season weighted by WHEN it
     arrives. `weight` is the holder's `nowWeight`.
 
@@ -152,6 +152,13 @@ def playerValue(rating: float, termRemaining: int, week: int = None,
     identically. Split, the same contender reads that as -6.9 and refuses, while a
     rebuilder reads it as +11.9 and takes it — which is the trade the plan describes.
 
+    ⚠️ `positionWeight` IS NOT OPTIONAL POLISH — WITHOUT IT A KICKER PRICES LIKE A
+    QUARTERBACK. `POSITION_VALUE` runs QB 1.00 down to K 0.35, and it exists, in its own
+    words, to stop "best available" handing a team a great kicker while the QB slot rots.
+    The trade scale dropped it entirely: `perceivedValue` applies it, the market then
+    DIVIDED IT BACK OUT to recover a rating, and nothing re-applied it. Measured, a club
+    paid THREE FIRST-ROUND PICKS for a 78-rated kicker on a walk year.
+
     ⚠️ ZERO AT OR BELOW REPLACEMENT, never negative. A player the pool can replace is
     worth nothing in a trade — not a liability — because the alternative to holding him
     is signing his equal for free.
@@ -162,6 +169,7 @@ def playerValue(rating: float, termRemaining: int, week: int = None,
     control = seasonsOfControl(termRemaining, week)
     if control <= 0:
         return 0.0
+    surplus *= max(0.0, float(positionWeight))
     now = max(0.0, float(weight))
     # The part of his control that lands in the season being played right now. In the
     # offseason the first whole season of the contract IS the season about to be played,
@@ -169,6 +177,42 @@ def playerValue(rating: float, termRemaining: int, week: int = None,
     present = min(control, seasonRemainingFraction(week) if week is not None else 1.0)
     future = max(0.0, control - present)
     return surplus * (present * now + future * laterWeight(now))
+
+
+def averagePositionWeight() -> float:
+    """What a draft pick is worth per rating point, in POSITION_VALUE terms.
+
+    ⚠️ A PICK HAS NO POSITION YET, so it cannot be weighted at 1.00 (that silently prices
+    every pick as a quarterback) and it cannot be weighted at a single position either.
+    It yields whichever position the board offers, so the honest figure is the roster-shape
+    average: QB 1, RB 1, WR 2, TE 1, K 1 across six slots.
+    """
+    from constants import POSITION_VALUE
+    shape = {'QB': 1, 'RB': 1, 'WR': 2, 'TE': 1, 'K': 1}
+    total = sum(POSITION_VALUE.get(pos, 1.0) * n for pos, n in shape.items())
+    return total / sum(shape.values())
+
+
+def expectedPickSlot(slot: int, seasonsOut: int = 0, classSize: int = 32) -> float:
+    """Where a pick is EXPECTED to land, not where the club sits today.
+
+    ⚠️ A FUTURE PICK'S SLOT IS NOT KNOWN, AND READING IT OFF TODAY'S TABLE IS THE BUG THAT
+    MADE A CONTENDER'S OWN PICKS WORTHLESS. The plan says it outright — with a future pick
+    "you know neither your slot NOR the class" — but the draft order was derived from the
+    current standings and applied to picks two seasons away. A club sitting 11-4 had its
+    own first-rounders priced as slot 30, which is BELOW replacement level and therefore
+    worth literally nothing, so it cheerfully handed over three of them for a rental.
+
+    Each season out regresses the slot toward the middle of the draft, which is the honest
+    prior for a club whose next two seasons have not happened. This season's pick is left
+    alone: by the time the market opens at week 15 the table is largely settled.
+    """
+    mid = (classSize + 1) / 2.0
+    k = max(0, int(seasonsOut))
+    if k == 0:
+        return float(slot)
+    from constants import TRADE_PICK_SLOT_REGRESSION
+    return mid + (float(slot) - mid) * (TRADE_PICK_SLOT_REGRESSION ** k)
 
 
 def pickSlotSkill(slot: int, classSize: int = 32) -> float:
@@ -185,7 +229,9 @@ def pickSlotSkill(slot: int, classSize: int = 32) -> float:
     market denominations to settle a gap with.
     """
     n = max(1, int(classSize))
-    k = _clamp(int(slot or 1), 1, n)
+    # ⚠️ Fractional, because `expectedPickSlot` regresses a future pick toward the middle
+    # and rounding that to an integer throws away most of the correction at the top.
+    k = _clamp(float(slot or 1), 1.0, float(n))
     # The order statistic of a normal falls off slowly through the middle and collapses
     # at the tail; a shifted log in the quantile reproduces the measured curve closely
     # (max error ~1.5 rating points against the table above).
@@ -251,7 +297,8 @@ def futurePickDiscount(slot: int, classSize: int = 32) -> float:
 
 
 def pickValue(slot: int, seasonsOut: int = 0, classSize: int = 32,
-              rookieTerm: int = 3, weight: float = 1.0) -> float:
+              rookieTerm: int = 3, weight: float = 1.0,
+              positionWeight: float = None) -> float:
     """What a rookie pick is worth on the same surplus-times-time scale as a player.
 
     ⚠️ `weight` HERE IS `laterWeight`, NOT `nowWeight`. A pick pays in a season that has
@@ -265,12 +312,17 @@ def pickValue(slot: int, seasonsOut: int = 0, classSize: int = 32,
 
     `seasonsOut` 0 is this year's pick; 1 and 2 are future drafts.
     """
-    surplus = pickSlotSkill(slot, classSize) - REPLACEMENT_RATING
+    if positionWeight is None:
+        positionWeight = averagePositionWeight()
+    # ⚠️ THE SLOT IS AN EXPECTATION FOR A FUTURE PICK, not today's standing.
+    expected = expectedPickSlot(slot, seasonsOut, classSize)
+    surplus = pickSlotSkill(expected, classSize) - REPLACEMENT_RATING
     if surplus <= 0:
         return 0.0
-    value = surplus * max(0, int(rookieTerm)) * max(0.0, float(weight))
+    value = (surplus * max(0.0, float(positionWeight))
+             * max(0, int(rookieTerm)) * max(0.0, float(weight)))
     for _ in range(max(0, int(seasonsOut))):
-        value *= futurePickDiscount(slot, classSize)
+        value *= futurePickDiscount(expected, classSize)
     return value
 
 
@@ -288,7 +340,8 @@ def prospectPromotionOdds(prospectSeasons: int) -> float:
 
 
 def prospectValue(believedCeiling: float, prospectSeasons: int,
-                  rookieTerm: int = 3, weight: float = 1.0) -> float:
+                  rookieTerm: int = 3, weight: float = 1.0,
+                  positionWeight: float = 1.0) -> float:
     """Projected mature surplus x post-promotion term x p(he ever gets promoted).
 
     ⚠️ `weight` HERE IS `laterWeight` — a prospect contributes NOTHING until he is
@@ -309,8 +362,8 @@ def prospectValue(believedCeiling: float, prospectSeasons: int,
     surplus = float(believedCeiling or 0.0) - REPLACEMENT_RATING
     if surplus <= 0:
         return 0.0
-    return (surplus * max(0, int(rookieTerm)) * prospectPromotionOdds(prospectSeasons)
-            * max(0.0, float(weight)))
+    return (surplus * max(0.0, float(positionWeight)) * max(0, int(rookieTerm))
+            * prospectPromotionOdds(prospectSeasons) * max(0.0, float(weight)))
 
 
 # ------------------------------------------------------ ask, floor, price
@@ -337,7 +390,8 @@ def reserveDecay(week: int = None) -> float:
 
 
 def askAndFloor(rating: float, backfillRating: float, termRemaining: int,
-                week: int = None, weight: float = 1.0) -> tuple:
+                week: int = None, weight: float = 1.0,
+                positionWeight: float = 1.0) -> tuple:
     """(ask, floor) — and ⚠️ CONFLATING THESE IS THE MISTAKE.
 
         ask     what the seller currently demands. Measured against REPLACEMENT.
@@ -360,8 +414,8 @@ def askAndFloor(rating: float, backfillRating: float, termRemaining: int,
 
     ✅ Both ends decay together, so a late seller is never squeezed into a giveaway.
     """
-    ask = playerValue(rating, termRemaining, week, weight)
-    floor = playerValue(rating, termRemaining, week, weight)
+    ask = playerValue(rating, termRemaining, week, weight, positionWeight)
+    floor = ask
     backfill = max(float(backfillRating or 0.0), REPLACEMENT_RATING)
     surplus = float(rating or 0.0) - REPLACEMENT_RATING
     if surplus > 0:

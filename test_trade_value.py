@@ -349,3 +349,75 @@ def test_a_prospect_is_a_FUTURE_asset_too():
     assert (trading.prospectValue(92, 1, weight=rebuilder)
             > trading.prospectValue(92, 1, weight=contender))
     print("PASS a rebuilder outbids a contender for a prospect")
+
+
+# ------------------------------------- position value, and what a pick IS
+
+def test_a_kicker_does_not_price_like_a_quarterback():
+    """⚠️ THE TRADE SCALE DROPPED `POSITION_VALUE` ENTIRELY. `perceivedValue` applies it,
+    the market DIVIDED IT BACK OUT to recover a rating, and nothing re-applied it — so a 78
+    kicker priced exactly like a 78 quarterback. Measured consequence: a club paid THREE
+    FIRST-ROUND PICKS for a 78-rated K on a walk year.
+
+    `POSITION_VALUE` runs QB 1.00 down to K 0.35 and exists, in its own words, to stop
+    "best available" handing a team a great kicker while the QB slot rots."""
+    from constants import POSITION_VALUE
+    qb = trading.playerValue(78, 1, 15, 1.0, POSITION_VALUE['QB'])
+    k = trading.playerValue(78, 1, 15, 1.0, POSITION_VALUE['K'])
+    assert qb > k, (qb, k)
+    assert abs(k / qb - POSITION_VALUE['K']) < 0.01
+    print(f"PASS a 78 kicker is worth {k / qb:.0%} of a 78 quarterback")
+
+
+def test_a_pick_is_weighted_for_an_UNKNOWN_position():
+    """⚠️ A PICK CANNOT BE WEIGHTED AT 1.00 — that silently prices every pick as a
+    quarterback — and it cannot take a single position either, because it has none yet. It
+    yields whatever the board offers, so the honest figure is the roster-shape average."""
+    from constants import POSITION_VALUE
+    avg = trading.averagePositionWeight()
+    assert POSITION_VALUE['K'] < avg < POSITION_VALUE['QB']
+    assert abs(avg - 0.695) < 0.01, avg
+
+    # ⚠️ AND `pickValue` HAS TO USE IT. Asserting the helper alone proves nothing about
+    # the valuation: defaulting a pick to weight 1.00 left this whole file green until
+    # this pair was added.
+    asQuarterback = trading.pickValue(8, 0, positionWeight=1.0)
+    asDefault = trading.pickValue(8, 0)
+    assert asDefault < asQuarterback
+    assert abs(asDefault / asQuarterback - avg) < 0.01, (asDefault, asQuarterback)
+    print(f"PASS a pick is weighted {avg:.3f} and `pickValue` applies it")
+
+
+def test_a_future_picks_slot_regresses_toward_the_middle():
+    """⚠️ READING A FUTURE PICK'S SLOT OFF TODAY'S TABLE IS WHAT MADE A CONTENDER'S OWN
+    PICKS WORTHLESS. An 11-4 club's own first-rounder resolved to slot 30, where the
+    expected player is 57 against a replacement level of 67 — below replacement is worth
+    exactly zero, so the club handed over three of them for a rental.
+
+    The plan says it outright: with a future pick "you know neither your slot NOR the
+    class." This season's is left alone; the table is settled by the week-15 open."""
+    mid = (32 + 1) / 2.0
+    assert trading.expectedPickSlot(30, 0) == 30.0, "this season's pick was regressed"
+    assert 30 > trading.expectedPickSlot(30, 1) > trading.expectedPickSlot(30, 2) > mid
+    assert 2 < trading.expectedPickSlot(2, 1) < trading.expectedPickSlot(2, 2) < mid
+    print(f"PASS slot 30 -> {trading.expectedPickSlot(30, 1):.1f} -> "
+          f"{trading.expectedPickSlot(30, 2):.1f}; slot 2 -> "
+          f"{trading.expectedPickSlot(2, 1):.1f} -> {trading.expectedPickSlot(2, 2):.1f}")
+
+
+def test_a_late_future_pick_is_worth_something():
+    """The number that produced the absurd trade: a contender's own future first-rounder
+    must not be worth ZERO, or it will give them away by the handful."""
+    assert trading.pickValue(30, 0) == 0.0, "this season's slot-30 pick is genuinely thin"
+    assert trading.pickValue(30, 1) > 3.0, "a future late pick is still worth nothing"
+    assert trading.pickValue(30, 2) > 3.0
+    print(f"PASS a contender's own pick: {trading.pickValue(30, 1):.1f} next season, "
+          f"{trading.pickValue(30, 2):.1f} the season after")
+
+
+def test_a_top_pick_still_dwarfs_a_late_one():
+    """⚠️ THE OVER-REACH GUARD. Regressing every pick toward the middle would flatten the
+    curve that makes an early pick worth having at all — the steepness IS the feature."""
+    assert trading.pickValue(2, 1) > 2 * trading.pickValue(30, 1)
+    assert trading.pickValue(2, 0) > 5 * trading.pickValue(24, 0)
+    print("PASS the pick curve stays steep")

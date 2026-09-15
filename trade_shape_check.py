@@ -207,8 +207,16 @@ async def main(seasons, treasury):
                      'toSeller': sellerVals.get(key), 'toBuyer': buyerVals.get(key)}
             if piece['kind'] == 'pick':
                 d = piece.get('detail') or {}
+                out_ = (d.get('season') or season) - season
+                # ⚠️ THE EXPECTED slot, which is what it was actually VALUED on. The raw
+                # standings slot is what a future pick is NOT worth being priced at — a
+                # contender's own late pick regresses toward the middle because nobody
+                # knows where that club finishes two seasons out.
+                import trading as _t
                 entry.update({'pickSeason': d.get('season'), 'slot': d.get('slot'),
-                              'seasonsOut': (d.get('season') or season) - season})
+                              'expectedSlot': round(_t.expectedPickSlot(
+                                  d.get('slot') or 16, out_), 1),
+                              'seasonsOut': out_})
             else:
                 obj = (tradeManager._findRostered(buyer, piece['id'])
                        or tradeManager._findProspect(buyer, piece['id']))
