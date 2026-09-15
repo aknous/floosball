@@ -348,9 +348,56 @@ So a seller that holds out in week 5 is asking three times what it will accept i
 **hold out early, take what you can get late**, which is exactly how a real deadline behaves.
 Nothing had to be written to produce it.
 
-⚠️ The one thing worth adding is a **floor**: a player about to walk for nothing is worth
-*something* rather than nothing, so the reserve should not decay to zero and hand him away
-for a last pick. Anchor it at whatever the club would accept over losing him for free.
+### The reserve floor is the cost of the downgrade
+
+The floor is not a constant to pick — the value model already knows it. Ask what the club
+actually loses by trading, versus not:
+
+> **Not trading:** keep him for the rest of the season, then lose him for nothing.
+> **Trading:** lose him now, promote the backfill, bank the return.
+
+The only real difference is **the on-field cost of the downgrade for the weeks remaining.**
+So:
+
+```
+floor = (player - backfill) x seasonsLeft x nowWeight
+ask   = (player - REPLACEMENT) x seasonsLeft x nowWeight      # the opening reserve
+```
+
+Same shape, same terms; the floor simply measures against **who actually replaces him**
+rather than against a generic free agent. Bees' WR 80 backfilled by a 70:
+
+| week | opening ask | floor | room to fall |
+|---:|---:|---:|---:|
+| 5 | 7.3 | 5.6 | 1.7 |
+| 10 | 5.7 | 4.4 | 1.3 |
+| 15 | 4.1 | 3.2 | 0.9 |
+| 20 | 2.5 | 1.9 | 0.6 |
+| 22 | 1.9 | 1.5 | 0.4 |
+
+✅ **Both ends decay together**, so a late-season seller is not squeezed into a giveaway — the
+gap narrows but never inverts, and the club always holds a real walk-away.
+
+### ⚠️ And the floor moves with the backfill, which is the good part
+
+At week 10, the same player, same club:
+
+| backfill | floor | vs the 5.7 ask |
+|---:|---:|---|
+| 62 | **7.9** | above the ask — **will not sell** |
+| 70 | 4.4 | sells at a discount |
+| 76 | 1.7 | sells cheap |
+| 79 | **0.4** | nearly free |
+
+**A club with a good prospect ready loses little by selling, so it sells cheaply. A club with
+nothing behind him will not sell at any price.** That is the blocked-prospect trigger and the
+reserve floor turning out to be the same idea from two directions, and neither needed a rule
+written for it.
+
+⚠️ `floor < ask` requires `backfill > REPLACEMENT`. A club whose only backfill is a generic
+free agent has a floor at or above its ask and effectively refuses every offer — correct,
+because moving him gains it nothing. **A pipeline is what makes a club a seller**, which is
+the third independent argument that the draft has to land before trading does.
 
 ### Cadence and rate limits
 
