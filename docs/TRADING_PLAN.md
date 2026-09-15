@@ -75,6 +75,35 @@ makes an early pick a real asset and gives the market denominations to settle a 
 record, so a club trading its own pick is selling something it is still determining by
 playing.
 
+#### ⚠️ A NEXT-SEASON pick is worth slightly less — but the top 5 are premium regardless
+
+A pick for a future draft carries two layers of uncertainty rather than one: you know neither
+your slot **nor the class**. It should therefore be discounted — but **not uniformly**, and
+the measurement says why. Variance by slot, over 6,000 simulated classes:
+
+| pick | mean | sd | sd ÷ surplus |
+|---:|---:|---:|---:|
+| 1 | 98.7 | 4.88 | **0.15** |
+| 3 | 92.1 | 3.21 | **0.13** |
+| 5 | 88.8 | 2.73 | **0.13** |
+| 16 | 78.4 | 2.22 | 0.19 |
+| 24 | 71.8 | 2.38 | **0.49** |
+| 32 | 57.2 | 5.03 | **50.3** |
+
+**The ratio is the point.** A top-5 pick's class-to-class variation is a small fraction of what
+it delivers — the worst class in 6,000 still gave pick 1 an **86**. A late pick's variation is
+comparable to its entire value, and by pick 32 the surplus over replacement is ~0 and the
+noise swamps it completely.
+
+So **not knowing the class costs a late pick most and a top pick least**, which is the owner's
+rule arrived at from the data rather than asserted. Implement as a discount that **scales with
+slot** — near-nil in the top 5, steep in the back half — rather than a flat haircut on every
+future pick.
+
+⚠️ And the discount is for **time and risk, not expectation**: every class is drawn from the
+same distribution, so a future pick's *expected* class is identical to this year's. What is
+worse is that it pays later and it pays less predictably.
+
 ### ⚠️ The contention weight is what makes a market exist at all
 
 On the raw scale, **picks dominate rentals ~10x and nothing would ever clear.** The missing
@@ -381,12 +410,33 @@ counterparties; without limits week 1 would move a third of the league.
 - **League news** on every trade via `league_news.publish()`. ⚠️ keyword-only and camelCase; a
   snake_case typo has caused two incidents, one a production outage. `test_publish_kwargs.py`
   sweeps call sites statically.
-- **A central transactions page**, new. `SeasonRecapEvent` is the durable log and `trade` joins
-  its existing kinds. ⚠️ Its idempotency key is `(season, event_type, player_id|team_id)` —
-  one player, one club — which a two-sided trade does not fit; it needs a **trade id** or the
-  resume dedupe silently drops half a swap.
-- **The trade block itself is a surface.** Listings persist with visible interest, which is the
-  live half of the transactions page and costs nothing extra.
+### The transactions page
+
+New, and **not a trade log** — it is the league's front-office desk, useful year-round. Seven
+sections (owner):
+
+| section | source | notes |
+|---|---|---|
+| **upcoming draft order** | `freeAgencyOrder` / standings, **live** | ⚠️ must re-render when a pick is traded — the order is *who picks*, not *whose pick it is* |
+| **upcoming draft class** | the class generated at season start | shown through the **viewing club's own scouted band**, so two fans see different ranges |
+| **potential free agents** | walk-year players (`termRemaining <= 1`) | ⚠️ flag who the club **cannot keep** — 18 of 32 are over the re-sign limit, and that is the story |
+| **players on the block** | live listings | the analyst layer: who is available, and what it would take |
+| **trades** | `SeasonRecapEvent` | as they happen |
+| **signings and cuts** | `SeasonRecapEvent` (`fa_pick`, `cut`, `resign`, `walked`) | already written every offseason |
+| **prospect promotions** | `SeasonRecapEvent` (`promotion`) | already written |
+
+✅ **Five of the seven already have their data.** `SeasonRecapEvent` holds
+`rookie_pick | fa_pick | cut | resign | walked | promotion | retirement | hof_induction |
+coach_fire | coach_hire`, and prod has 5 seasons of it. The draft order and the walk-year list
+are both derivable today. Only **trades** and **the block** are new.
+
+⚠️ `SeasonRecapEvent`'s idempotency key is `(season, event_type, player_id|team_id)` — one
+player, one club — which a two-sided trade does not fit. It needs a **trade id**, or the
+resume dedupe silently drops half a swap.
+
+⚠️ **The block and the draft class are the sections with editorial weight**, and the ones that
+make the page worth visiting outside the trade window. A walk-year list that says *"these 33
+players are leaving for nothing unless someone moves"* is a story every week of the season.
 
 ## 6. Settled rulings
 
@@ -402,12 +452,14 @@ counterparties; without limits week 1 would move a third of the league.
 ## 7. Open
 
 1. **Treasury → value conversion rate.** The only asset class with no anchor.
-2. **Pick horizon** — how many seasons out? Two bounds the mortgage.
+2. **Pick horizon** — recommend **two seasons**: far enough to matter, and a pick that distant
+   is already a distribution of a distribution. Future picks carry a slot-scaled discount (see
+   the pick curve) rather than a flat one.
 3. **Volume caps** — sized by running a season and counting, not by choosing.
 4. **Does a contender ever sell?** The model says no, which is realistic but makes those eight
    clubs the whole supply. Lever if thin: let a club sell a walk-year player it has *already
    decided* not to re-sign, contending or not.
-5. **Transactions page scope** — trades only, or the full `SeasonRecapEvent` log with trades as
-   one kind?
+5. ~~Transactions page scope~~ — **SETTLED**: the full front-office desk, seven sections. See
+   Visibility. Five of the seven already have their data.
 6. **Attitude term magnitude** — a live front-office change; wants measuring on its own before
    it rides in with trading.
