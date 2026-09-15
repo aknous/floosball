@@ -191,14 +191,74 @@ club's read (falling back to a neutral/median band for a user with no favourite)
 ⚠️ That is a real UI decision, not an implementation detail: two fans of different clubs
 looking at the same prospect should see different ranges, and that is the feature working.
 
-#### Optional: the band narrows as the season runs
+#### Belief and range are two different things
 
-Real scouting improves with exposure. Narrowing the band from week 1 to the draft gives the
-class an arc, and makes a pick traded at the week-22 deadline a better-informed asset than
-one traded in week 3 — which is a genuinely good trading dynamic and costs one term.
+⚠️ Worth stating plainly, because conflating them leads to the wrong implementation:
 
-Left as an option because it is the only part of this with no precedent in the codebase to
-copy; everything above reuses a pattern that already exists.
+| | what it is | who uses it |
+|---|---|---|
+| **belief** | a single number — `truePotential + draw × band` | the GM: draft board, trade valuation, promotion |
+| **range** | `belief ± band`, clamped to the rating scale | a human — it is how the uncertainty is shown |
+
+The GM never acts on a range. It acts on its belief, which may be wrong, and the range is the
+honest statement of how wrong it could be. Two clubs with identical scouting and opposite
+opinions of a true-88 prospect believe **94** and **81** and pay accordingly — same player,
+and each range still contains the truth.
+
+#### The band narrows as the season runs
+
+Band width scales with **both** scouting accuracy and how long the club has been watching:
+
+```
+progress = (week - 1) / (REGULAR_SEASON_WEEKS - 1)          # 0.0 at week 1, 1.0 at week 28
+scale    = SCOUT_BAND_EARLY - (SCOUT_BAND_EARLY - SCOUT_BAND_LATE) * progress
+band     = bandFor(scoutingVision) * scale                   # SCOUTING_BANDS gives bandFor
+belief   = truePotential + draw * band                       # draw is the fixed (club, prospect, season) normal
+shown    = clamp(belief - band), clamp(belief + band)
+```
+
+With `SCOUT_BAND_EARLY` 1.4 and `SCOUT_BAND_LATE` 0.4, a club on the ±10 accuracy tier sees:
+
+| week | band | believes | shows |
+|---:|---:|---:|---|
+| 1 | ±14 | 96 | 82–100 |
+| 8 | ±10 | 94 | 84–100 |
+| 15 | ±7 | 92 | 85–99 |
+| 22 | ±4 | **90** | **86–94** |
+
+_(true potential 88, one club's fixed opinion)_
+
+✅ **The belief converges on the truth as well as the range**, because the error scales with
+the band and the club's `draw` is fixed. Early it is confidently wrong-ish and openly unsure;
+late it is close and knows it. Nothing jumps — the same opinion simply sharpens.
+
+✅ **A perfect scout is unaffected.** `SCOUTING_BANDS` gives ±0 at accuracy ≥95, and zero
+times any scale is still zero — so an elite scouting operation sees the exact number in
+week 1 and has nothing to gain from waiting. That is the Scouting Department's ceiling being
+worth something.
+
+**Why it is worth building.** It gives the trade deadline a shape: a pick traded in week 3 is
+speculation on a blurry class, and the same pick at week 22 is a priced asset both clubs can
+see. Without it a pick is exactly as knowable in week 3 as in week 22, and there is no reason
+to trade at one moment rather than another.
+
+#### ⚠️ Clamp at the rating ceiling — and the clamp is informative
+
+Ratings cap at **100** (`floosball_player`: `min(100, ...)`; prod's highest potential is
+exactly 100). A band must be clamped, or the UI prints impossible numbers.
+
+But the clamp is not only a correctness fix. Near the top of the scale the range goes
+**asymmetric**, and that asymmetry is real information — "could be maxed" is exactly the
+signal a scout would have. A true-97 prospect seen by a ±10 club:
+
+| week | believes | shows |
+|---:|---:|---|
+| 1 | 100 | **91–100** |
+| 22 | 99 | **95–100** |
+
+So an elite prospect still *looks* elite through a wide band, which is what makes the
+top of a class legible to a fan in week 1 — and it is why the clamp must sit on the displayed
+range rather than on the underlying draw.
 
 #### Surfaces
 
