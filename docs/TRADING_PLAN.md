@@ -1,103 +1,65 @@
-# In-season trading — design sketch
+# In-season trading — plan
 
-_Owner-directed, 2026-09-14. Feasibility and the decision trail are in
-`docs/TRADING_FEASIBILITY.md` (15 addenda); the prospect draft it depends on is in
-`docs/PROSPECT_DRAFT_PLAN.md`. This is how a trade actually works._
+_Owner-directed, 2026-09-14/15. Feasibility and the full decision trail are in
+`docs/TRADING_FEASIBILITY.md` (15 addenda). The prospect draft this depends on is in
+`docs/PROSPECT_DRAFT_PLAN.md`._
 
-## ⚠️ The engine is the re-sign limit, not GM disagreement
+---
+
+## 1. Why trades happen
+
+### ⚠️ The engine is the re-sign limit, not GM disagreement
 
 The obvious model — two GMs value a player differently, so they swap — is **noise wearing a
 strategy's clothes**. With six position-locked slots there are no holes and no surpluses:
 every club has exactly one of each. Nothing creates a *need*.
 
-What creates a need is **contract congestion**. `RESIGN_LIMIT_PER_OFFSEASON` is 2, and on the
-live league:
+**Contract congestion does.** `RESIGN_LIMIT_PER_OFFSEASON` is 2, and on the live league:
 
 > **89 of 192 players (46%) are on walk years. 18 of 32 clubs have more than two expiring.
 > 33 players — 2,420 rating points — walk for ZERO return at season end.**
 
-A club about to lose a player for nothing should sell him for something. That is a real,
-principled, non-noise reason to trade, it is abundant, and it arrives free with a mechanic
-that already ships.
+A club about to lose a player for nothing should sell him for something. Principled,
+abundant, and free with a mechanic that already ships.
 
-## Sellers and buyers
+### Sellers and buyers
 
 ⚠️ **Congestion alone does not make a seller.** Pinecones are the most congested club in the
-league (5 expiring, 3 forced walks) and are also the best — they *rent* their walk-years for
-the playoff run and lose them at season end, exactly as a real contender does. Selling
-requires congestion **and** no run to protect.
+league (5 expiring, 3 forced walks) *and* the best — they **rent** their walk-years for the
+playoff run and lose them at season end, exactly as a real contender does. Selling needs
+congestion **and** no run to protect.
 
-Against the season-6 forecast, splitting at the median (14.0 wins):
+Against the season-6 forecast, split at the median (14.0 wins):
 
 | | |
 |---|---|
-| **Sellers** — congested, not contending | **8 clubs**: Slippers, Grillmeisters, Bees, Raccoons, Beans, Cranes, Rocks, Phones |
-| **Buyers** — contending | **16 clubs**, headed by Pinecones, Curd, Residents, Dry Heat |
+| **Sellers** — congested, not contending | **8**: Slippers, Grillmeisters, Bees, Raccoons, Beans, Cranes, Rocks, Phones |
+| **Buyers** — contending | **16**, headed by Pinecones, Curd, Residents, Dry Heat |
 
-That is a functioning market on day one: eight sellers holding thirteen players who are
-leaving anyway, and sixteen clubs with a reason to rent.
+Thirteen departing players against sixteen clubs with a reason to rent. A functioning market
+on day one.
 
-## The loop
+---
 
-1. **A seller identifies a walk-year player it cannot keep.** Deterministic — it knows its
-   expiring count and its re-sign limit.
-2. **It requires a backfill before it may sell.** A trade is legal only if both rosters are
-   complete when it settles, and there is **no mid-season signing path**
-   (`_attemptRosterFill` is called only inside the FA draft). So the seller must have a
-   **prospect at that position** to promote into the hole.
-   ⚠️ *This is why the prospect draft is a dependency of trading rather than a companion to
-   it.* Without a pipeline, selling is illegal.
-3. **A buyer pays in future value** — a rookie pick, an FA-draft position, or Treasury
-   Floobits. The seller wants next season; the buyer wants the next six weeks.
-4. **The seller promotes the prospect**, who gets the rest of the season developing — which
-   is what a rebuilding club wanted anyway.
+## 2. Valuation — one scale for four asset classes
 
-Every piece exists or is planned: congestion (live), the contention split (standings),
-`_promoteProspectsAutonomously` (live, already ballot-free), picks and Treasury (planned).
-
-## How the sim finds a trade
-
-Weekly, in the existing per-week hook block (`seasonManager` ~`:760-800`), closing at
-**week 22** — the first week of the final game day, already `GM_ACTIVE_WEEK`.
-
-For each seller × each surplus walk-year player × each buyer:
-
-- **Seller's price** = `decisionValue(player, team=seller)` discounted for the fact that he
-  walks anyway — a player the club cannot keep is worth only what he adds between now and
-  the end of the season, not his standing value.
-- **Buyer's bid** = `decisionValue(player, team=buyer)` **de-cursed**. ⚠️ A buyer picking the
-  best-looking of many available players preferentially finds the one it overrates, which is
-  exactly what `_deWinnersCurse` exists for; reuse it rather than rediscovering it.
-- **Clears** when the bid exceeds the price by `TRADE_MIN_SURPLUS`, paid in the sweetener
-  that closes the gap.
-
-⚠️ **`FO_SCOUT_INCUMBENT_NOISE_SCALE` is doing real work here and should not be flattened.**
-Each club reads its own player precisely and a stranger noisily, which is the actual
-asymmetry of trading — a trade happens when the two misreads point in opposite directions.
-
-## Quantifying value — one scale for four asset classes
-
-The owner's expansion (1-for-1 same-position swaps; returns of a player **plus** a prospect,
-or a prospect **plus** a pick) means every asset has to price on a common scale. It is
-buildable, and the shape falls out of two ideas.
-
-### Surplus over replacement, times seasons of control
+### Surplus over replacement × seasons of control
 
 **Value = how much better than freely-available, multiplied by how long you keep it.**
 
-Replacement is not zero — a club can always sign from the FA pool, whose current level is
-~**67**. So an 80 is worth 13 surplus, not 80. And time is the other half: a walk-year player
-traded in week 10 is **0.64 seasons** of control; the same player with three years left is
-**2.64**. That is a **4x** spread on identical talent, and `termRemaining` already carries it.
+Replacement is not zero: a club can always sign from the FA pool, currently ~**67**. So an 80
+is worth 13 surplus, not 80. Time is the other half, and `termRemaining` already carries it —
+a walk-year player traded in week 10 is **0.64 seasons** of control against **2.64** for the
+same player with three years left. **A 4x spread on identical talent.**
 
 | asset | value |
 |---|---|
 | **roster player** | `(rating − 67) × seasonsOfControl(termRemaining, week)` |
-| **prospect** | projected mature surplus × seasons of control × a wash-out discount — ⚠️ read through the buyer's own `scoutingVision`, so trading prospects carries genuine uncertainty about what you got |
+| **prospect** | projected mature surplus × seasons × wash-out discount, read through the buyer's own `scoutingVision` |
 | **rookie pick** | expected mature surplus at that slot × seasons × risk |
-| **Treasury** | face value ÷ a conversion rate (the one number with no anchor yet) |
+| **Treasury** | face value ÷ a conversion rate — ⚠️ the one number with no anchor yet |
 
-### The pick curve is steep, and that matters
+### The pick curve is steep
 
 Expected true skill of the player taken at each slot (order statistics of 32 draws from the
 live generation constants, 4,000 classes):
@@ -106,518 +68,346 @@ live generation constants, 4,000 classes):
 |---|---:|---:|---:|---:|---:|---:|---:|
 | true skill | **98.6** | 92.0 | 85.2 | 81.6 | 78.4 | 71.8 | **57.2** |
 
-Pick 1 is a future superstar; pick 16 is a league-average player; pick 32 is nearly a token.
-**That steepness is what makes an early pick a real asset** and gives the market a wide range
-of denominations to settle a gap with.
+Pick 1 is a future superstar, pick 16 league-average, pick 32 a token. That steepness is what
+makes an early pick a real asset and gives the market denominations to settle a gap with.
 
 ⚠️ **Mid-season a pick is a DISTRIBUTION, not a number** — the order is worst-first by *final*
-record, which is not known while the season runs. A club trading its own pick in week 10 is
-selling something whose value it is still determining by playing.
+record, so a club trading its own pick is selling something it is still determining by
+playing.
 
-### ⚠️ The contention weight is what makes a market exist
+### ⚠️ The contention weight is what makes a market exist at all
 
-On the raw scale above, **picks dominate rentals by roughly 10x and nothing would ever
-clear**. The missing term is that clubs do not share a discount rate:
+On the raw scale, **picks dominate rentals ~10x and nothing would ever clear.** The missing
+term is that clubs do not share a discount rate:
 
-> A contender prices THIS season high and the future low. A club going nowhere prices the
-> future high and this season at almost nothing. **Both are right. They simply want
-> different currencies — and that gap is the trade.**
+> A contender prices THIS season high and the future low. A club going nowhere does the
+> reverse. **Both are right. They want different currencies, and that gap is the trade.**
 
-Modelled as `nowWeight = (forecastWins / leagueMean) ** 2`, and tested on Bees' WR 80 at
-week 10 (a club whose own weight is **0.54**):
-
-| buyer | forecast W | nowWeight | clears at |
-|---|---:|---:|---|
-| Pinecones | 25.6 | 3.33 | **pick 2** and later |
-| Curd | 21.0 | 2.26 | pick 15 |
-| Residents | 20.2 | 2.08 | pick 17 |
-| Dry Heat | 18.2 | 1.68 | pick 22 |
-| Waffles | 15.8 | 1.27 | pick 25 |
-
-Every slot clears for the *seller* — a pick always beats a rental they were losing for
-nothing — so **the buyer's contention sets the price**, and price discovery falls out of the
-standings rather than being scripted.
-
-**Swept** on Bees' WR 80 at week 10 — the earliest pick each buyer would part with:
+`nowWeight = (contention / leagueMean) ** 1.25`. Swept on Bees' WR 80 at week 10 — the
+earliest pick each buyer would part with:
 
 | buyer | e=1.0 | **e=1.25** | e=1.5 | e=2.0 |
 |---|---:|---:|---:|---:|
 | Pinecones (25.6W) | 20 | **17** | 12 | **2** |
 | Curd (21.0W) | 24 | **22** | 20 | 15 |
-| Dry Heat (18.2W) | 25 | **24** | 24 | 22 |
 | Waffles (15.8W) | 26 | **26** | 26 | 25 |
 
-**e=1.25 is the pick.** At 2.0 the best club pays a top-two pick for a six-week rental, which
-no real club does. Linear compresses the whole market into picks 20-26 — a 6-slot spread with
-little to distinguish a 25-win club from a 16-win one. **1.25 gives a 9-slot spread and lands
-a rental at the middle of the round**, which is where a rental belongs.
+**1.25.** At 2.0 the best club pays a top-two pick for a six-week rental, which no real club
+does. Linear compresses the market into picks 20-26 — a 6-slot spread with little separating
+a 25-win club from a 16-win one. 1.25 gives 9 slots and lands a rental mid-round.
 
-## ⚠️ Fan sentiment: it must raise the BAR, not the seller's valuation
+### ⚠️ Contention is UNCERTAIN early, and that produces the deadline for free
 
-Owner: clubs should try not to trade fan favourites. `sentimentTilt` already feeds
-`decisionValue`, so the obvious wiring is to let a beloved player's tilt raise his club's
-valuation — **and that does exactly nothing.** Measured across the full tilt range (+0 to +5,
-the cap), every buyer's clearing pick was **identical**:
+A club does not know in week 2 whether it is a contender, so `nowWeight` reads off a **blend
+of prior expectation and this season's evidence**.
 
-| tilt | +0 | +1 | +2 | +3 | +5 |
-|---|---|---|---|---|---|
-| Pinecones | pick 17 | pick 17 | pick 17 | pick 17 | pick 17 |
+✅ That blend already exists: `teamManager.applyRegularSeasonPressureBlend`, `progress =
+(week − 1) / 14`. Reuse its shape rather than inventing a second ramp.
 
-The reason is structural: **the seller's constraint never binds.** Bees' rental is worth
-**5.7** to them and even pick 26 is worth **13.5** — every pick in the round already beats a
-player they were losing for nothing. The buyer is the only side that can refuse, so a premium
-on the seller's private valuation is not the binding term and is swallowed whole.
+| week | Pinecones | Bees | gap |
+|---:|---:|---:|---:|
+| 1 | 1.00 | 1.00 | **1.00** |
+| 8 | 1.54 | 0.84 | 1.84 |
+| 12 | 1.87 | 0.75 | 2.50 |
+| 15+ | 2.12 | 0.68 | **3.12** |
 
-For sentiment to bite it has to raise **the surplus the trade must clear**:
+⚠️ **In week 1 every club sits at 1.00, so buyer and seller price the future identically and
+there is no gap to trade across. Nothing fires.** The market opens as the table separates —
+**a deadline without a deadline rule.**
 
-| required surplus | +0% | +15% | +30% | +50% | +100% |
-|---|---:|---:|---:|---:|---:|
-| Pinecones | 17 | 18 | 20 | 21 | **24** |
-| Curd | 22 | 23 | 24 | 25 | **26** |
-| Waffles | 26 | 26 | 27 | 27 | **27** |
+**Bubble clubs fall out of the same number**: near 1.0 they value now and later almost
+equally, so they neither buy nor sell — they stand pat *by arithmetic*. Their next few results
+push them one way, and then they act.
 
-At **+30%** a fan favourite costs a contender roughly three extra picks of value, and at
-**+100%** he is effectively only movable to the strongest buyer in the league. That is "try
-not to trade fan favourites" landing as **a price rather than a veto** — which matches how
-sentiment is described everywhere else in the front office: *it tips close calls, it never
-dictates.*
+⚠️ Certainty arrives at week 15 while the deadline is week 22, leaving a seven-week window
+where clubs *know* and must act. If the picture should keep sharpening to the deadline
+itself, widen the ramp to 21 — do not add a second term.
 
-⚠️ **Sentiment is LIVE now, and CLAUDE.md says otherwise.** It records *"no production player
-or GM has reached even the old floor"* — that was measured under a flat league-wide quorum of
-3. The per-club rule (`max(1, ceil(teamFavoriters × 0.34))`) changed it: prod holds **153
-ratings across 107 players**, and at least four clear their club's quorum today, including two
-at a perfect 5.0. The term has data to work with.
+### The three modifiers — all a PRICE, never a VETO
 
-### Bundles and 1-for-1
+The same rule governs all three, matching how `sentimentTilt` is described everywhere else in
+the front office: *it tips close calls, it never dictates.*
 
-Once assets price on one scale, both of the owner's shapes are the same operation:
+#### Fan sentiment — it must raise the BAR, not the seller's valuation
 
-- **1-for-1 same position** clears when each side's valuation of the incoming player exceeds
-  its own outgoing one. ⚠️ Note this already produces a real trade with no sweetener: a
-  walk-year 84 is worth *less* than a controlled 78 on the scale, so the club holding the
-  rental is the one that pays — unless it is contending, where `nowWeight` flips it.
-- **Bundles** are a subset-sum against the gap: find the cheapest combination of pick,
-  prospect and Floobits that closes the difference, capped at some number of pieces so a
-  trade stays legible in the news feed.
+⚠️ The obvious wiring **does nothing**. Letting a beloved player's `sentimentTilt` raise his
+club's valuation left every buyer's clearing pick **identical** across the full tilt range,
+because **the seller's constraint never binds**: Bees' rental is worth 5.7 to them and even
+pick 26 is worth 13.5 — every pick already beats a player they were losing for nothing. The
+buyer is the only side that can refuse.
 
-## Mechanics — how a trade actually happens
+So sentiment raises **the surplus the trade must clear**:
 
-A **two-sided listing market, resolved as a weekly auction.** Any club may post an asset it
-is willing to move together with what it wants back; every other club prices what is posted;
-the poster takes the best offer clearing its reserve.
+| required surplus | +0% | +30% | +100% |
+|---|---:|---:|---:|
+| Pinecones | 17 | 20 | **24** |
+| Waffles | 26 | 27 | **27** |
 
-Two-sided rather than sellers-only because it unifies both of the owner's shapes without
-special-casing either — a rebuilder posting *"WR 80, want picks"* and a contender posting
-*"QB 78 with 3 years, want a rental"* are the same operation, and the second is exactly the
-1-for-1 QB-for-QB swap.
+At +30% a favourite costs a contender ~3 extra picks of value; at +100% he is only movable to
+the strongest buyer in the league.
 
-### 1. Deciding to list — three triggers
+⚠️ **Sentiment is LIVE, and CLAUDE.md says otherwise.** It records *"no production player or
+GM has reached even the old floor"* — measured under the old flat league-wide quorum of 3.
+Under the per-club rule prod holds **153 ratings across 107 players**, four clearing quorum
+today, two at a perfect 5.0.
 
-A club posts an asset when one of these is true. All three are read off state that already
-exists; none needs a new signal.
+#### Divisional reluctance — you do not arm a rival
 
-| trigger | condition | what gets posted |
-|---|---|---|
-| **expiring surplus** | walk-year player, club is over `RESIGN_LIMIT_PER_OFFSEASON`, and not contending | the player — he leaves for nothing otherwise |
-| **horizon mismatch** | contending, and holding a long contract it would swap for immediate help (or the reverse) | the contract, wanting a rental back |
-| **blocked prospect** | a pipeline prospect the GM rates above the incumbent at his position | the incumbent |
-
-⚠️ **The horizon trigger is what makes a 1-for-1 a real trade rather than a coin flip.** A
-QB-for-QB swap is not a talent trade, it is a **TIME trade**: a rebuilder gives up now for
-term, a contender gives up term for now, and both are right. Rating barely enters it —
-`seasonsOfControl` does.
-
-⚠️ **The blocked-prospect trigger is why the draft has to land first.** It cannot fire with
-an empty pipeline, and it is the trigger that gives a rebuilding club something to do beyond
-selling.
-
-### 2. Choosing who to approach — public information only
-
-A lister ranks counterparties on what it can actually observe: **standings** (contention),
-**roster** (who they field at each position), **contract state**, and **Treasury**. All of
-that is public.
-
-⚠️ **What it cannot see is the other GM's private read** — their `_scoutError` on the player
-and their fan `sentimentTilt`. So a lister's estimate of who will bite is *approximately*
-right and sometimes wrong, which is why an offer can be declined at all. Remove that and
-every trade is pre-agreed and the market is theatre.
-
-Approach the top `TRADE_CANDIDATES_PER_LISTING` (3-5) rather than all 31, so a weekly pass
-stays legible in the news feed.
-
-### 3. Pricing — a reserve and a bid
-
-**The lister sets a reserve**, not an asking price: the minimum it will accept, computed on
-its own scale (surplus over replacement × seasons of control × its own `nowWeight`), raised
-by the fan-favourite premium.
-
-**Each approached club bids** its private value for the asset, de-cursed. ⚠️ `_deWinnersCurse`
-is not optional here: a buyer choosing the best-looking of several listings preferentially
-finds the one it overrates, which is the exact bias that function exists for and the reason
-free agency needed it.
-
-A bid is a **bundle** — picks, prospects, Floobits, or a player — assembled as the cheapest
-combination clearing the reserve, capped at `TRADE_MAX_PIECES` (2-3) so a trade stays
-readable as a sentence.
-
-### 4. Settling — the best bid wins
-
-The lister takes the **highest bid above its reserve**; everything else lapses. An auction
-rather than first-come because sixteen contenders will want the same rental, and the auction
-is what turns that competition into a price instead of a race.
-
-Unsold listings **persist** to the next week rather than being re-posted, so a player sits on
-the block with visible interest — which is the drama, and it is free.
-
-### 5. Settlement, in order
-
-1. verify both rosters will be complete (the seller has a prospect to promote, or the trade
-   is player-for-player)
-2. move the assets; stamp `previousTeam`
-3. **promote the backfill prospect** — `_promoteProspectsAutonomously` already does this,
-   ⚠️ but its bar compares against a free agent the club could sign, and mid-season there is
-   no signing path at all. In-season the alternative is an empty slot rating **50**, so the
-   bar must drop to near zero
-4. clear the traded player's fan sentiment rows
-5. mint his new card at the new club; leave existing cards alone
-6. publish to `league_news`, and write the `SeasonRecapEvent` with a **trade id**
-
-### ⚠️ Divisional reluctance — you do not arm a rival
-
-A club charges a **premium to trade inside its own division**, and the weight is derived from
-the schedule rather than chosen:
-
-| counterparty | games against them per season | premium |
+| counterparty | games against per season | premium |
 |---|---:|---|
 | **division rival** | **4** | large |
 | same league, other division | 1 | small |
 | other league | 1 | none |
 
-12 division games across 3 rivals is **4 apiece**; the other 12 league games are spread over
-12 clubs and the 4 interleague games over 4, so **a division rival is faced four times as
-often as anybody else.** That ratio is the premium.
+12 division games across 3 rivals is **4 apiece**; the other 12 league games spread over 12
+clubs and the 4 interleague over 4. **A division rival is faced four times as often as anybody
+else** — the ratio is the premium, derived from the schedule rather than chosen. They are also
+the only clubs that can take a **division title**, which at 8 divisions is what most of the
+league is playing for.
 
-And they are the only clubs that can take a **division title** from you — which at 8
-divisions is what most of the league is actually playing for, since 24 of 32 will never win
-a league championship.
+⚠️ **Scale it by the rival's threat, not flat.** Selling a rental to a 3-9 rival costs
+nothing; selling to the club you are chasing is self-harm. Scale by the buyer's `nowWeight`.
 
-⚠️ **A price, not a veto**, matching the fan-favourite rule and `sentimentTilt`'s stated
-behaviour everywhere else in the front office: *it tips close calls, it never dictates.* A
-division rival can still get the player — it just has to pay over the odds, which is exactly
-what a fan would expect to see.
+⚠️ The seller is by definition not contending, so "why care who wins the division" is fair.
+Two answers hold: they play that rival four more times next season, and their own fans care
+now — and this league already models exactly that.
 
-⚠️ **The premium should scale with the rival's threat, not be flat.** Selling a rental to a
-3-9 division rival costs nothing; selling to the club you are chasing is self-harm. Scale it
-by the buyer's own `nowWeight` so an irrelevant rival is nearly free and a contending one is
-expensive.
+#### Attitude — a toxic player damages the room, and the GM cannot currently see it
 
-⚠️ **And note the seller is by definition NOT contending**, so "why do they care who wins the
-division" is a fair question. Two reasons that both hold: they meet that rival four times
-again next season, and their own fans care now. The second is the real one — a club arming
-its rival is the sort of thing supporters remember, and this league has a sentiment system
-that already models exactly that.
+`seasonManager._applyLockerRoomDrift` runs **every week**, nudging each starter's confidence
+and determination toward the room's average attitude, coach-anchored at 1/3 weight. Its own
+docstring: *"a toxic veteran genuinely poisons teammates' confidence."*
 
-### Shopping an offer — the second round is NEXT WEEK
+⚠️ **`frontOfficeBrain` never reads attitude. Not once.** The sim models the damage and gives
+the GM no way to perceive it.
 
-Can a seller take a good offer back to the other bidders and ask for better? **Deliberately
-no, within a week** — and it needs no rule to prevent, because the structure already answers
-it better.
+The spread is large: rostered attitude **35-100** (median 72), team rooms span **20 points**
+(Exoticos 82.8, Grillmeisters 62.7). Live cases — Chud Bumpington rates **85 on a 45
+attitude**.
 
-A single **sealed round** where each buyer bids its private value, and the seller takes the
-best, is already optimal price discovery for that moment. Running a second, *ascending* round
-makes it worse for the seller, not better: in an ascending auction the winner only has to top
-the second-best bid, so the seller captures the runner-up's valuation instead of the
-winner's. "Let me shop this around" feels like leverage and is actually a discount.
+✅ **It does not become a dumping ground, because the damage travels.** The naive version
+(seller discounts, buyer does not) would have GMs palming headcases off on each other. But the
+drift lands in whichever room he is in, so both clubs price it and a toxic player is simply
+worth less to everybody.
 
-**The real second round is the following week.** A listing that does not clear its reserve
-**persists**, so a seller holding out for more simply does not sell and the block is offered
-again — to a league whose standings have moved, which means the bids have moved too.
+⚠️ **The trade comes from the ROOM, not from blindness.** Drift works off `(avgAttitude × 3 +
+coachAttitude) / 4`, so a strong room with a leader coach absorbs one bad apple while an
+already-toxic room compounds. **Exoticos can take a headcase Grillmeisters cannot**, and pay
+less than his rating suggests. Change of scenery as arithmetic, and it makes a good locker
+room a tradeable asset in itself.
 
-✅ **And the deadline pressure falls out of the value model with no new term.** A walk-year
-player's reserve decays on its own as `seasonsOfControl` shrinks:
+Attitude needs **no scouting band** — unlike potential it is not hidden.
 
-| week | seasons of control | reserve vs week 1 |
+⚠️ **It belongs in `decisionValue`, which means it reaches CUTS and RE-SIGNS too** (owner).
+That is the one number every front-office decision consumes, so a single term covers
+`rankCutCandidates`, `rankResignCandidates`, `buildDraftBoard`, prospect promotion and the
+trade market alike. **This is therefore a live front-office change, not a trade-only
+feature** — it alters how the current league cuts and re-signs the moment it ships, and wants
+measuring on its own.
+
+✅ Not double-counting: `corr(rating, attitude) = +0.293` across 192 rostered players — weakly
+positive (85+ attitude averages 84.2 rating against 79.3 for sub-55), nowhere near enough that
+rating already carries it.
+
+⚠️ **Soft, for the reason the Appeal gate already taught.** Discount toxic players hard enough
+and they pool in free agency, never get signed, and the supply floor generates replacements
+around them — the exact failure that made `FLOOS_SOFT_APPEAL_PENALTY` a 0.90 multiplier rather
+than a veto. `_attemptRosterFill`'s last tier already drops the board rather than leave a slot
+empty, so a difficult player is still signed when nothing else is there.
+
+---
+
+## 3. Mechanics
+
+A **two-sided listing market, resolved as a weekly auction.** Any club may post an asset it
+will move together with what it wants back; every other club prices what is posted; the poster
+takes the best offer clearing its reserve.
+
+Two-sided rather than sellers-only because it unifies both shapes without special-casing — a
+rebuilder posting *"WR 80, want picks"* and a contender posting *"QB 78 with 3 years, want a
+rental"* are the same operation, and the second **is** the 1-for-1 QB-for-QB swap.
+
+### 3.1 Deciding to list — four triggers
+
+| trigger | condition | what gets posted |
+|---|---|---|
+| **expiring surplus** | walk-year, over the re-sign limit, not contending | the player — he leaves for nothing otherwise |
+| **horizon mismatch** | contending and holding term it would swap for now, or the reverse | the contract |
+| **blocked prospect** | a pipeline prospect the GM rates above the incumbent | the incumbent |
+| **locker room** | attitude dragging the room down | the player, contending or not |
+
+⚠️ **The horizon trigger is what makes a 1-for-1 a real trade rather than a coin flip.**
+QB-for-QB is a **TIME trade**, not a talent trade — a rebuilder gives up now for term, a
+contender term for now, and both are right. Rating barely enters; `seasonsOfControl` does.
+
+⚠️ **The blocked-prospect trigger is one of three independent reasons the draft lands first.**
+It cannot fire with an empty pipeline.
+
+### 3.2 Choosing who to approach — public information only
+
+Rank counterparties on what is observable: **standings** (contention), **roster**, **contract
+state**, **Treasury**.
+
+⚠️ What a lister **cannot** see is the other GM's `_scoutError` and fan `sentimentTilt` — which
+is precisely why an offer can be declined. Remove that and every trade is pre-agreed and the
+market is theatre.
+
+Approach the top `TRADE_CANDIDATES_PER_LISTING` (3-5), not all 31, so a weekly pass stays
+legible in the news feed.
+
+### 3.3 Pricing — ask, floor, and the price actually paid
+
+Three distinct numbers. ⚠️ **Conflating them is the mistake:**
+
+| | what it is |
+|---|---|
+| **ask (reserve)** | what the seller currently demands. Opens at full value, decays toward the floor |
+| **floor** | the walk-away. Below it, keeping him beats trading him. Set by the **backfill** |
+| **price paid** | the **highest bid** clearing the ask — set by the market, never by the floor |
+
+**The floor is the cost of the downgrade**, and the model already knows it:
+
+```
+ask   = (player − REPLACEMENT) × seasonsLeft × nowWeight
+floor = (player − backfill)    × seasonsLeft × nowWeight
+```
+
+Same shape; the floor simply measures against **who actually replaces him**. Bees' WR 80
+backfilled by a 70:
+
+| week | ask | floor |
 |---:|---:|---:|
-| 1 | 0.96 | 100% |
-| 10 | 0.64 | 67% |
-| 15 | 0.46 | 48% |
-| 20 | 0.29 | **30%** |
-| 22 | 0.21 | **22%** |
+| 5 | 7.3 | 5.6 |
+| 10 | 5.7 | 4.4 |
+| 20 | 2.5 | 1.9 |
+| 22 | 1.9 | 1.5 |
 
-So a seller that holds out in week 5 is asking three times what it will accept in week 20 —
-**hold out early, take what you can get late**, which is exactly how a real deadline behaves.
-Nothing had to be written to produce it.
+✅ Both ends decay together, so a late seller is never squeezed into a giveaway.
 
-### The reserve floor is the cost of the downgrade
+⚠️ **A ready prospect makes a club WILLING, not CHEAP.** A low floor buys **room to hold out
+later**, not a discount now — and because settlement is an auction, a seller with three
+interested contenders gets the best of the three whatever its floor is. The club should be
+converting a departing player into **future value, typically picks**.
 
-The floor is not a constant to pick — the value model already knows it. Ask what the club
-actually loses by trading, versus not:
-
-> **Not trading:** keep him for the rest of the season, then lose him for nothing.
-> **Trading:** lose him now, promote the backfill, bank the return.
-
-The only real difference is **the on-field cost of the downgrade for the weeks remaining.**
-So:
-
-```
-floor = (player - backfill) x seasonsLeft x nowWeight
-ask   = (player - REPLACEMENT) x seasonsLeft x nowWeight      # the opening reserve
-```
-
-Same shape, same terms; the floor simply measures against **who actually replaces him**
-rather than against a generic free agent. Bees' WR 80 backfilled by a 70:
-
-| week | opening ask | floor | room to fall |
-|---:|---:|---:|---:|
-| 5 | 7.3 | 5.6 | 1.7 |
-| 10 | 5.7 | 4.4 | 1.3 |
-| 15 | 4.1 | 3.2 | 0.9 |
-| 20 | 2.5 | 1.9 | 0.6 |
-| 22 | 1.9 | 1.5 | 0.4 |
-
-✅ **Both ends decay together**, so a late-season seller is not squeezed into a giveaway — the
-gap narrows but never inverts, and the club always holds a real walk-away.
-
-### ⚠️ And the floor moves with the backfill, which is the good part
-
-At week 10, the same player, same club:
+**The floor moves with the backfill**, at week 10:
 
 | backfill | floor | vs the 5.7 ask |
 |---:|---:|---|
 | 62 | **7.9** | above the ask — **will not sell** |
-| 70 | 4.4 | sells at a discount |
-| 76 | 1.7 | sells cheap |
-| 79 | **0.4** | nearly free |
+| 70 | 4.4 | can discount |
+| 79 | **0.4** | can go very low if it must |
 
-**A club with a good prospect ready loses little by selling, so it sells cheaply. A club with
-nothing behind him will not sell at any price.** That is the blocked-prospect trigger and the
-reserve floor turning out to be the same idea from two directions, and neither needed a rule
-written for it.
+⚠️ `floor < ask` requires `backfill > REPLACEMENT`. **A pipeline is literally what makes a club
+a seller** — the third independent argument for the draft landing first.
 
-⚠️ `floor < ask` requires `backfill > REPLACEMENT`. A club whose only backfill is a generic
-free agent has a floor at or above its ask and effectively refuses every offer — correct,
-because moving him gains it nothing. **A pipeline is what makes a club a seller**, which is
-the third independent argument that the draft has to land before trading does.
+**Each approached club bids** its private de-cursed value. ⚠️ `_deWinnersCurse` is not
+optional: a buyer choosing the best-looking of several listings preferentially finds the one it
+overrates, the exact bias that function exists for. A bid is a **bundle** — picks, prospects,
+Floobits or a player — the cheapest combination clearing the reserve, capped at
+`TRADE_MAX_PIECES` (2-3) so a trade reads as a sentence.
 
-### ⚠️ Correction: a ready prospect makes a club WILLING, not CHEAP
+### 3.4 Settling — the best bid wins
 
-The floor derivation above is right and the framing around it was wrong. **The floor is the
-walk-away, not the ask.** A club with a good prospect behind him does not sell cheaply — it
-sells *willingly*, and still for the best price it can get.
+The lister takes the **highest bid above its reserve**; the rest lapse. An auction rather than
+first-come because sixteen contenders will want the same rental, and the auction turns
+competition into a price instead of a race.
 
-Three distinct numbers, and conflating them is the mistake:
+⚠️ **No second round within a week, and no rule is needed to prevent it.** A sealed round where
+each buyer bids its private value is already optimal discovery. An *ascending* second round is
+**worse for the seller**: the winner only has to top the runner-up, so the seller captures the
+second-best valuation instead of the best. "Let me shop this around" feels like leverage and is
+a discount.
 
-| | what it is |
-|---|---|
-| **ask (reserve)** | what the seller currently demands. Opens at full value and decays toward the floor as the deadline nears |
-| **floor** | the walk-away. Below it, keeping him beats trading him. Set by the backfill |
-| **price paid** | the **highest bid** clearing the ask — set by the market, never by the floor |
+### 3.5 Listings persist, re-priced weekly
 
-So a low floor buys **room to hold out later**, not a discount now. And because settlement is
-an auction, a seller with three interested contenders gets the best of the three whatever its
-floor is. A club should be trying to convert a departing player into **future value —
-typically picks** — not to clear him off the books.
+An unsold listing **stays on the block** and is re-evaluated every week, because three inputs
+have moved: the **ask** has decayed, the lister's **contention** has sharpened, and every
+bidder's has too.
 
-⚠️ The floor only ever binds when **nothing clears the ask**, and then the question is hold or
-drop. A club with no backfill cannot drop at all; a club with a ready prospect can, which is
-why the pipeline decides *whether* a club is a seller rather than *how much* it accepts.
+✅ **Deadline pressure falls out of the value model with no new term:**
 
-### ⚠️ Contention is uncertain early, and that produces the deadline for free
+| week | 1 | 10 | 15 | 20 | 22 |
+|---|---:|---:|---:|---:|---:|
+| reserve vs week 1 | 100% | 67% | 48% | **30%** | **22%** |
 
-A club does not know in week 2 whether it is a contender. `nowWeight` must therefore be read
-off a **blend of prior expectation and this season's evidence**, not off a final forecast.
+Hold out early, take what you can get late — exactly how a real deadline behaves.
 
-✅ **That blend already exists**: `teamManager.applyRegularSeasonPressureBlend` runs at every
-week start with `progress = (week - 1) / 14` — 100% prior at week 1, 100% in-season by week
-15. Reuse its shape rather than inventing a second ramp.
+⚠️ **A club may also WITHDRAW.** A bubble team that wins six straight becomes a buyer and
+should pull its own player off the block. Same check as the listing trigger, re-run — it needs
+no separate rule, only that triggers are evaluated **every week** rather than latched at
+listing time.
 
-The consequence is the important part:
+### 3.6 Settlement, in order
 
-| week | Pinecones `nowWeight` | Bees `nowWeight` | gap |
-|---:|---:|---:|---:|
-| 1 | 1.00 | 1.00 | **1.00** |
-| 4 | 1.23 | 0.93 | 1.32 |
-| 8 | 1.54 | 0.84 | 1.84 |
-| 12 | 1.87 | 0.75 | 2.50 |
-| 15+ | 2.12 | 0.68 | **3.12** |
+1. verify both rosters will be complete (a prospect to promote, or player-for-player)
+2. move the assets; stamp `previousTeam`
+3. **promote the backfill prospect** — `_promoteProspectsAutonomously` already does this,
+   ⚠️ but its bar compares against a free agent the club could sign, and mid-season there is
+   **no signing path at all**. The real alternative is an empty slot rating **50**, so the bar
+   must drop to near zero in-season
+4. clear the traded player's fan sentiment rows
+5. mint his new card at the new club; leave existing cards alone
+6. publish to `league_news`; write the `SeasonRecapEvent` with a **trade id**
 
-⚠️ **In week 1 every club sits at 1.00, so a buyer and a seller price the future identically
-and there is no gap to trade across. Nothing fires.** The market opens as the table
-separates — which produces a deadline **without a deadline rule**. The rush toward week 22 is
-not scripted; it is what happens when clubs stop guessing.
+### 3.7 Cadence and rate limits
 
-⚠️ Certainty arrives at **week 15** on that ramp while the deadline is **week 22**, which
-leaves a seven-week window where clubs *know* and must act. That is the right shape — but if
-the picture should keep sharpening to the deadline itself, widen the ramp to 21 rather than
-adding a second term.
-
-**Bubble clubs are the interesting case and they fall out of the same number.** A club sitting
-near `nowWeight` 1.0 in week 12 values now and later almost equally, so it neither buys nor
-sells — it stands pat by arithmetic, not by a rule. Its next few results push it one way or
-the other, and *then* it acts.
-
-### Do listings persist? Yes — and they are re-priced weekly
-
-A listing that does not clear **stays on the block** and is re-evaluated every week, because
-three of its inputs have moved:
-
-- the **ask** has decayed (`seasonsOfControl` shrinks),
-- the lister's **contention** has sharpened (the blend above),
-- every bidder's contention has too, so the bids differ.
-
-⚠️ **And a club may WITHDRAW.** A bubble team that wins six straight becomes a buyer — it
-should pull its own player off the block rather than sell into a run it is now part of. The
-withdrawal is the same check as the listing trigger, re-run; it needs no separate rule, only
-that the trigger is evaluated every week rather than latched at listing time.
-
-### ⚠️ Attitude — a toxic player damages the room and the GM cannot currently see it
-
-`seasonManager._applyLockerRoomDrift` runs **every week** and nudges each starter's
-confidence and determination toward the team's average attitude, anchored by the coach at 1/3
-weight. Its own docstring is explicit:
-
-> *"This is what makes attitude a load-bearing attribute ... a toxic veteran genuinely
-> poisons teammates' confidence; a strong leader genuinely lifts them."*
-
-⚠️ **And `frontOfficeBrain` never reads attitude. Not once.** A player is valued on rating ×
-position, plus form and fan sentiment. So the sim models a locker-room problem doing real
-damage and gives the GM no way to perceive it — which is exactly the owner's question, and
-the answer today is no.
-
-The spread is large enough to matter. Rostered attitude runs **35 to 100** (median 72), and
-team locker rooms span **20 points**, from Exoticos at 82.8 to Grillmeisters at 62.7. Real
-cases exist right now:
-
-| player | club | rating | attitude |
-|---|---|---:|---:|
-| Chud Bumpington (TE) | Melons | **85** | **45** |
-| Prima Cutie (WR) | Waffles | 80 | 45 |
-| Rusty Mateo (WR) | Bees | 80 | 46 |
-| Orville Duckey (K) | Grillmeisters | 78 | **35** |
-
-A talented player actively dragging a weak room down is a trade waiting to happen, and it is
-a **fourth listing trigger** independent of contention: a club wants him gone whether it is
-buying or selling.
-
-#### ✅ And it does NOT become a dumping ground, because the damage travels
-
-The naive version — the seller discounts for attitude, the buyer does not — would have GMs
-systematically palming headcases off on each other. That is not the right model and it is not
-what the sim does: **the damage lands in whichever room he is in.** So both clubs price it,
-the seller gains by removal and the buyer loses by addition, and a toxic player is simply
-worth less to everybody.
-
-⚠️ **The trade comes from the room, not from blindness.** `_applyLockerRoomDrift` works off
-`effectiveAvg = (avgAttitude × 3 + coachAttitude) / 4`, so the marginal damage of adding one
-player depends on the room receiving him:
-
-- a **high-attitude room with a leader coach** absorbs one bad apple — the average barely
-  moves and the coach anchors it,
-- an **already-toxic room** compounds.
-
-So Exoticos (82.8, strong coach) can take on a talented headcase that Grillmeisters (62.7)
-cannot, and pay less for him than his rating suggests. **That is "change of scenery" as
-arithmetic rather than as flavour**, and it gives a good locker room a genuine, tradeable
-asset: the capacity to absorb someone.
-
-#### How it enters
-
-Attitude is **not hidden** — unlike potential, it needs no scouting band. Both clubs see it.
-What differs is the marginal effect on each room, which each club computes about **itself**.
-
-Add it as a term on `decisionValue` — the value of a player to *this* club is reduced by the
-drift he would cause in *this* room. That single term produces all of it: the seller's urge to
-move him, the buyer's discount, and the strong room's ability to pay more than a weak one.
-
-⚠️ It should be a **value term, not a veto** — the same rule as fan sentiment and divisional
-reluctance. A club can always decide the talent is worth the trouble, and that decision going
-wrong is a story.
-
-#### ⚠️ It belongs in `decisionValue`, which means it reaches CUTS and RE-SIGNS too
-
-Owner: the front office should weigh this when deciding to cut or re-sign, not only when
-trading. That falls out of putting the term in the right place — **`decisionValue` is the one
-number every front-office decision consumes**, so a single term reaches all of them:
-
-| decision | effect |
-|---|---|
-| `rankCutCandidates` | a toxic player becomes a likelier cut |
-| `rankResignCandidates` | a toxic walk-year player is likelier to be let go |
-| `buildDraftBoard` | a toxic free agent drops on everyone's board |
-| `_promoteProspectsAutonomously` | a toxic prospect is a less attractive call-up |
-| trade listings and bids | the four cases above in this section |
-
-**This is therefore a live front-office change, not a trade-only feature** — it alters how the
-current league cuts and re-signs the moment it ships, and wants measuring on its own rather
-than riding in on the trade work.
-
-✅ **And it is orthogonal to rating, so it is not double-counting.** Measured on the 192
-rostered players, `corr(rating, attitude) = +0.293` — weakly positive (a player rated 85+ on
-attitude averages 84.2 against 79.3 for one under 55), but nowhere near enough that the rating
-already carries it. The term prices something the rating genuinely does not contain.
-
-⚠️ **Soft, for the reason the Appeal gate already taught.** If every club discounts toxic
-players hard enough, they pool in free agency, never get signed, and the supply floor
-generates replacements around them — the exact failure that made `FLOOS_SOFT_APPEAL_PENALTY`
-a 0.90 multiplier instead of a veto. The existing safety valve holds: `_attemptRosterFill`'s
-last tier drops the board entirely rather than leave a slot empty, so a difficult player is
-still signed when nothing else is there.
-
-
-
-### Cadence and rate limits
-
-Runs **weekly**, in the existing per-week hook block, closing at week 22.
+Runs **weekly** in the existing per-week hook block, closing at **week 22** — the first week of
+the final game day, already `GM_ACTIVE_WEEK`.
 
 | limit | value | why |
 |---|---|---|
-| listings per club at once | 1 | otherwise every congested club posts three players in week 1 |
-| bids per club per week | 1 | stops a contender hoovering the whole block in one pass |
-| trades per club per season | 2-3 | GM turnover runs 1-4 exits a season against a stated "not a carousel" bar; hold trading to the same and **measure it** |
+| listings per club at once | 1 | else every congested club posts three players in week 1 |
+| bids per club per week | 1 | stops a contender hoovering the block in one pass |
+| trades per club per season | 2-3 | GM turnover runs 1-4 exits a season against a "not a carousel" bar |
 
-⚠️ **The volume caps are the part most likely to be wrong on the first try, and the only way
-to know is to run a season and count.** Eight sellers and sixteen buyers is a lot of willing
-counterparties; without limits the first week of the season would move a third of the league.
+⚠️ **The volume caps are the part most likely to be wrong on the first try, and the only way to
+know is to run a season and count.** Eight sellers and sixteen buyers is a lot of willing
+counterparties; without limits week 1 would move a third of the league.
 
-## Legality
+---
+
+## 4. Legality
 
 | rule | why |
 |---|---|
-| Both rosters complete at settlement | an empty slot rates **50**; never rely on the engine tolerating `None` |
-| In-season trades are **position-for-position**, or player-for-assets **with a prospect backfill** | six locked slots, no bench |
-| Closes at week 22 | owner; coincides with `GM_ACTIVE_WEEK` |
-| A club may not trade a player it acquired this season | stops churn and pass-the-parcel |
-| Volume capped per club per season | GM turnover measures 1-4 exits a season against a stated "not a carousel" bar; hold trading to the same and **measure it** |
+| both rosters complete at settlement | an empty slot rates **50**; never rely on the engine tolerating `None` |
+| position-for-position, or player-for-assets **with a prospect backfill** | six locked slots, no bench |
+| closes at week 22 | owner; coincides with `GM_ACTIVE_WEEK` |
+| a club may not trade a player it acquired this season | stops pass-the-parcel |
+| volume capped per club per season | see above — and **measure it** |
 
-## Visibility
+## 5. Visibility
 
-- **League news** on every trade — `league_news.publish()`. ⚠️ keyword-only and camelCase; a
-  snake_case typo has caused two incidents including a production outage.
-- **A central transactions page**, new. `SeasonRecapEvent` is the durable log and `trade`
-  joins its existing kinds. ⚠️ Its idempotency key is `(season, event_type,
-  player_id|team_id)` — one player, one club — which a two-sided trade does not fit; it needs
-  a trade id or the resume dedupe silently drops half a swap.
+- **League news** on every trade via `league_news.publish()`. ⚠️ keyword-only and camelCase; a
+  snake_case typo has caused two incidents, one a production outage. `test_publish_kwargs.py`
+  sweeps call sites statically.
+- **A central transactions page**, new. `SeasonRecapEvent` is the durable log and `trade` joins
+  its existing kinds. ⚠️ Its idempotency key is `(season, event_type, player_id|team_id)` —
+  one player, one club — which a two-sided trade does not fit; it needs a **trade id** or the
+  resume dedupe silently drops half a swap.
+- **The trade block itself is a surface.** Listings persist with visible interest, which is the
+  live half of the transactions page and costs nothing extra.
 
-## Settled rulings carried in
+## 6. Settled rulings
 
-- Season stats **stay with the player** — already the behaviour (`team_id` is overwritten with
-  the current club on every save).
-- Fan sentiment **does not follow** — and since the own-club gate is on *writing* only, that
-  means clearing the rows on the trade.
-- A traded player gets a **new card minted** with the new club; cards already held of him at
-  his old club are untouched. ⚠️ Templates mint once per season and return early, so this
-  needs its own path — and it creates two scoreable cards of one player in a season.
-- **Rookie picks are tradeable.**
-- **No competitive-balance tax** for now.
+| | |
+|---|---|
+| season stats | **stay with the player** — already the behaviour (`team_id` overwritten with the current club on every save) |
+| fan sentiment | **does not follow** — and since the own-club gate is on *writing* only, that means **clearing the rows** on the trade |
+| cards | a traded player gets a **new card minted** at his new club; cards already held of him at his old club are untouched. ⚠️ Templates mint once per season and return early, so this needs its own path — and it creates two scoreable cards of one player in a season |
+| rookie picks | **tradeable** |
+| competitive-balance tax | **not built** — measured at ~one season of earlier correction on one club |
+| attitude | enters `decisionValue`, so it reaches cuts and re-signs as well as trades |
 
-## Open
+## 7. Open
 
-1. **Pick horizon** — how many seasons out? Two bounds the mortgage.
-2. **Does a contender ever sell?** The model says no, which is realistic but means the eight
-   sellers are the whole supply. If that proves thin, the lever is letting a club sell a
-   walk-year player it has *already decided* not to re-sign, contending or not.
-3. **Rental pricing** — a six-week rental of an 80 is worth what, in picks or Floobits?
-   Nothing in the economy prices a partial season yet.
-4. **Volume cap** per club per season.
-5. **Does the buyer's own congestion matter?** A contender at its re-sign limit is renting
-   too, and should know it — otherwise it overpays for a player it also cannot keep.
+1. **Treasury → value conversion rate.** The only asset class with no anchor.
+2. **Pick horizon** — how many seasons out? Two bounds the mortgage.
+3. **Volume caps** — sized by running a season and counting, not by choosing.
+4. **Does a contender ever sell?** The model says no, which is realistic but makes those eight
+   clubs the whole supply. Lever if thin: let a club sell a walk-year player it has *already
+   decided* not to re-sign, contending or not.
+5. **Transactions page scope** — trades only, or the full `SeasonRecapEvent` log with trades as
+   one kind?
+6. **Attitude term magnitude** — a live front-office change; wants measuring on its own before
+   it rides in with trading.
