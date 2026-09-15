@@ -534,7 +534,66 @@ prevent.
 whether a week-15 signing should get a full-length deal or a prorated one is an open question —
 a full deal makes a desperate club's hole-filling a cheap way to acquire term.
 
-### 3.7 Settlement, in order
+### 3.7 The roster window, cutting, and the cut fee (owner, 2026-09-15)
+
+**Cut, sign and trade are all live until week 22. After that rosters FREEZE until the
+offseason.** One window, one deadline, three verbs — a club can reshape its roster right up to
+the final game day and then must play what it has through the run-in and the playoffs.
+
+✅ That the deadline is `GM_ACTIVE_WEEK` is convenient rather than coincidental: the Front
+Office block already opens there, so the freeze and the offseason machinery share a boundary.
+
+#### A mid-season signing runs to the end of THIS season, or one more
+
+Not a full `_getPlayerTerm` deal. Two options, and the GM picks: **remainder of this season**,
+or **remainder plus one**. ⚠️ Anything longer makes hole-filling a cheap way to acquire term —
+a club could trade a player away in week 15 and sign a three-year replacement, converting a
+roster hole into an asset.
+
+⚠️ **And the thin pool is the real deterrent, by design.** Best available today is 68 at QB
+and 70 at WR against a league median of 79. Signing is the path a club takes when it has no
+prospect and no better option — not a strategy.
+
+#### Cutting to make room for an incoming player
+
+A club may **cut a player to open a slot for one arriving in a trade.** Without it, a club
+whose every slot is filled cannot buy at all, which would shut the contenders — the entire
+demand side — out of the market.
+
+#### ⚠️ Cutting a player with term left costs Treasury
+
+This is where Treasury earns a place in trading after all, and it is the **safe** use: a
+**cost**, not a purchase.
+
+```
+cutFee = remainingSeasons × (rating − REPLACEMENT) × CUT_FEE_RATE   Floobits
+```
+
+At a rate of **50 F per surplus-season**:
+
+| what is being cut | fee | clubs that could pay |
+|---|---:|---:|
+| a filler, 1 year left | 250F | 25 / 32 |
+| a good starter, 2 years left | 1,700F | 16 / 32 |
+| an elite player, 3 years left | **4,350F** | 15 / 32 |
+
+The median club (1,896F) can afford roughly **one** cut of a good starter per season.
+
+✅ **As a cost rather than a purchase, the wealth spread finally works the right way round.**
+Treasury was rejected as a trade *asset* because a 227x spread let the richest club buy the
+market. As a *fee* the same spread constrains the poor instead of empowering the rich — a club
+cannot buy a player with Treasury, only **roster space**, and the club that hoards talent pays
+to keep churning it.
+
+⚠️ It also reconnects the two economies deliberately: Treasury's other claim is facility
+upkeep, and `resolveSeasonEnd` spends it at season end. **A club that cuts freely in-season
+loses a facility level in the offseason** — the trade-off is real and needs no extra rule.
+
+⚠️ And it wants a **floor of zero, not a debt**: a club that cannot pay simply cannot cut.
+Letting the fee go negative would hand a broke club unlimited roster churn, which is the
+opposite of the intent.
+
+### 3.8 Settlement, in order
 
 1. verify both rosters **can** be complete — a prospect to promote, a signable free agent at
    that position, or player-for-player
@@ -548,7 +607,7 @@ a full deal makes a desperate club's hole-filling a cheap way to acquire term.
 5. mint his new card at the new club; leave existing cards alone
 6. publish to `league_news`; write the `SeasonRecapEvent` with a **trade id**
 
-### 3.8 Cadence and rate limits
+### 3.9 Cadence and rate limits
 
 Runs **weekly** in the existing per-week hook block, closing at **week 22** — the first week of
 the final game day, already `GM_ACTIVE_WEEK`.
@@ -639,7 +698,9 @@ players are leaving for nothing unless someone moves"* is a story every week of 
 | **cards** | a **new card minted** at the new club; existing cards untouched. ⚠️ Templates mint once per season and return early, so this needs its own path |
 | **competitive-balance tax** | **not built** — measured at ~one season of earlier correction on one club |
 | **transactions page** | the full front-office desk, seven sections; five already have their data |
-| **mid-season FA signing** | allowed, **to fill an empty slot only** — with `ensurePositionSupply` running weekly so the pool is not drained |
+| **mid-season FA signing** | allowed, **to fill an empty slot only**, for this season or one more — with `ensurePositionSupply` running weekly so the pool is not drained |
+| **roster window** | cut / sign / trade all live to **week 22**, then **frozen** until the offseason |
+| **cutting** | allowed, including to make room for an incoming trade — but **cutting a player with term left costs Treasury** (`remainingSeasons × surplus × rate`), which is the safe use of a currency with a 227x spread: a cost constrains the poor rather than empowering the rich |
 
 ## 7. What to build, in order
 
