@@ -53,12 +53,20 @@ class FakePlayer:
 
 
 class FakeTeam:
+    """⚠️ THE RECORD GOES IN `seasonTeamStats`, WHICH IS WHERE A REAL TEAM KEEPS IT.
+
+    This fake used to set `self.wins` / `self.losses`, mirroring the accessor the market
+    code was using — so the trigger tests below passed while PRODUCTION read zero wins for
+    every club in the league, forever. A fake built on the same mistaken assumption as the
+    code under test certifies the assumption rather than the behaviour. `standings_view`
+    is the reference: `getattr(team, 'seasonTeamStats', {}).get('wins')`.
+    """
+
     def __init__(self, tid, name, wins=7, losses=7, division='North', league='Alpha'):
         self.id = tid
         self.name = name
         self.abbr = name[:3].upper()
-        self.wins = wins
-        self.losses = losses
+        self.seasonTeamStats = {'wins': wins, 'losses': losses, 'ties': 0}
         self.division = division
         self.league = league
         self.coach = None
@@ -102,6 +110,23 @@ def _market(teams, freeAgents=None, week=15, season=3):
 
 
 # ---------------------------------------------------------- the triggers
+
+def test_the_record_is_read_from_seasonTeamStats():
+    """⚠️ THE ROOT CAUSE OF EVERY SYMPTOM THIS MARKET SHOWED. There is no `wins` attribute
+    on a Team, so reading `team.wins` gives 0 for all 32 clubs all season — every club
+    exactly league-average, the contention gradient flat, `expiring_surplus` unable to
+    fire (it needs a non-contender and there were none) and `horizon_mismatch` firing for
+    everybody. Measured before the fix: 0 expiring-surplus listings out of 1,468."""
+    strong = FakeTeam(1, 'Strong', wins=12, losses=2)
+    weak = FakeTeam(2, 'Weak', wins=2, losses=12)
+    market = _market([strong, weak])
+    assert market.isContending(strong) is True
+    assert market.isContending(weak) is False, \
+        "every club reads as league-average — the record is not being found"
+    assert market.nowWeight(strong) > market.nowWeight(weak)
+    print(f"PASS contention separates: {market.nowWeight(strong):.2f} vs "
+          f"{market.nowWeight(weak):.2f}")
+
 
 def test_expiring_surplus_fires_only_for_a_non_contender():
     """⚠️ CONGESTION ALONE DOES NOT MAKE A SELLER. The most congested club in the league
@@ -228,20 +253,56 @@ def test_only_a_few_counterparties_are_approached():
     print(f"PASS {len(approached)} counterparties, strongest first")
 
 
+def _assets(values):
+    return [{'kind': 'pick', 'id': i, 'name': f'p{i}', 'detail': {}, 'value': v}
+            for i, v in enumerate(values)]
+
+
 def test_a_bundle_reads_as_a_sentence():
     """⚠️ CHEAPEST COMBINATION, NOT LARGEST. A buyer that hands over everything it owns to
     clear a bar by four times is not negotiating."""
     market = _market([FakeTeam(1, 'A'), FakeTeam(2, 'B')])
-    buyer = FakeTeam(2, 'B')
-    market._tradeableAssets = lambda team: [
-        {'kind': 'pick', 'id': i, 'name': f'p{i}', 'detail': {}, 'value': v}
-        for i, v in enumerate([2.0, 3.0, 9.0, 12.0])]
-    pieces = market._assemble(buyer, bar=4.0, ceiling=30.0)
+    seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
+    market._tradeableAssets = lambda team, valuingTeam=None: _assets([2.0, 3.0, 9.0, 12.0])
+    pieces = market._assemble(buyer, seller, bar=4.0, gain=30.0)
     assert 0 < len(pieces) <= constants.TRADE_MAX_PIECES
     assert sum(p['value'] for p in pieces) >= 4.0
     assert sum(p['value'] for p in pieces) < 9.0, "it overpaid rather than assembling"
     print(f"PASS cleared a 4.0 bar with {len(pieces)} piece(s) worth "
           f"{sum(p['value'] for p in pieces):.1f}")
+
+
+def test_the_bundle_is_valued_on_BOTH_sides():
+    """⚠️ TWO VALUATIONS OF ONE BUNDLE, AND BOTH ARE LOAD-BEARING. What clears the seller's
+    bar is what the pieces are worth TO THE SELLER; what the buyer is deciding to part
+    with is what the same pieces are worth TO IT. They are different numbers precisely
+    because the two clubs discount the future differently — and pricing both sides at one
+    club's rate collapses the gap that makes either of them agree."""
+    market = _market([FakeTeam(1, 'A'), FakeTeam(2, 'B')])
+    seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
+
+    # The seller prizes these picks; the buyer barely minds losing them.
+    def assets(team, valuingTeam=None):
+        high = valuingTeam is seller
+        return _assets([10.0, 10.0] if high else [1.0, 1.0])
+
+    market._tradeableAssets = assets
+    pieces = market._assemble(buyer, seller, bar=15.0, gain=5.0)
+    assert pieces, "a bundle the seller values at 20 did not clear its bar of 15"
+    assert sum(p['value'] for p in pieces) >= 15.0, \
+        "the bundle was sized on the BUYER's valuation, not the seller's"
+    print("PASS a bundle the buyer prices cheap can still clear a high seller bar")
+
+
+def test_a_buyer_refuses_a_bundle_that_costs_more_than_the_upgrade():
+    """The other half: the seller's bar being cleared is not enough if parting with the
+    pieces costs the buyer more than it gains."""
+    market = _market([FakeTeam(1, 'A'), FakeTeam(2, 'B')])
+    seller, buyer = FakeTeam(1, 'A'), FakeTeam(2, 'B')
+    market._tradeableAssets = lambda team, valuingTeam=None: _assets([50.0, 50.0])
+    assert market._assemble(buyer, seller, bar=40.0, gain=5.0) == []
+    assert market._assemble(buyer, seller, bar=40.0, gain=500.0) != []
+    print("PASS a buyer walks away when the price exceeds the upgrade")
 
 
 # ---------------------------------------------------------- legality

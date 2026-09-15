@@ -297,3 +297,55 @@ def test_every_modifier_is_a_price_never_a_veto():
     assert 0 < worst < float('inf')
     assert worst < 10.0 * 10, "the modifiers stacked into a de facto veto"
     print(f"PASS the harshest bar is {worst:.1f} against a base of 10.0 — steep, not infinite")
+
+
+# --------------------------------- present vs future: the currency gap
+
+def test_a_pick_prices_on_laterWeight_not_nowWeight():
+    """⚠️ THE WHOLE PREMISE CANCELS WITHOUT THIS. The plan's one idea is that clubs do not
+    share a discount rate — "a contender prices THIS season high and the future low, a
+    club going nowhere does the reverse, both are right, and that gap is the trade".
+    Applying `nowWeight` to EVERY asset does not express that: it scales a club's whole
+    valuation uniformly, so it drops out of every comparison and no gap remains.
+
+    Measured with the uniform reading at week 20, a contender priced a mid first-round
+    pick at 98.1 and a rebuilder at 22.9 — the club that wants to win NOW valuing a payoff
+    two seasons out FOUR TIMES higher than the club rebuilding for exactly that moment.
+    """
+    contender = trading.nowWeight(0.80, 0.50, 20)
+    rebuilder = trading.nowWeight(0.25, 0.50, 20)
+    assert contender > 1.0 > rebuilder
+
+    # A pick pays LATER.
+    contenderPick = trading.pickValue(8, 0, weight=trading.laterWeight(contender))
+    rebuilderPick = trading.pickValue(8, 0, weight=trading.laterWeight(rebuilder))
+    assert rebuilderPick > contenderPick, (rebuilderPick, contenderPick)
+
+    # A rental pays NOW.
+    contenderRental = trading.playerValue(84, 1, 20, contender)
+    rebuilderRental = trading.playerValue(84, 1, 20, rebuilder)
+    assert contenderRental > rebuilderRental
+
+    print(f"PASS the rebuilder prices the pick {rebuilderPick / contenderPick:.1f}x the "
+          f"contender's, and the contender prices the rental "
+          f"{contenderRental / rebuilderRental:.1f}x the rebuilder's")
+
+
+def test_laterWeight_is_the_inverse_and_is_neutral_at_parity():
+    """A club with nothing to play for and a club with everything must disagree, but a
+    league-average club prices now and later the same — which is what makes a bubble team
+    stand pat by arithmetic."""
+    assert trading.laterWeight(1.0) == 1.0
+    assert trading.laterWeight(2.0) < 1.0
+    assert trading.laterWeight(0.5) > 1.0
+    assert abs(trading.laterWeight(trading.laterWeight(1.7)) - 1.7) < 1e-9
+    print("PASS laterWeight is the inverse of nowWeight, neutral at 1.0")
+
+
+def test_a_prospect_is_a_FUTURE_asset_too():
+    """He contributes nothing until promoted, so he prices like a pick, not a starter."""
+    contender = trading.laterWeight(trading.nowWeight(0.80, 0.50, 20))
+    rebuilder = trading.laterWeight(trading.nowWeight(0.25, 0.50, 20))
+    assert (trading.prospectValue(92, 1, weight=rebuilder)
+            > trading.prospectValue(92, 1, weight=contender))
+    print("PASS a rebuilder outbids a contender for a prospect")

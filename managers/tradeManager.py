@@ -31,7 +31,8 @@ import trading
 from constants import (TRADING_ENABLED, GM_ACTIVE_WEEK, REPLACEMENT_RATING,
                        TRADE_LISTINGS_PER_TEAM, TRADE_BIDS_PER_TEAM_PER_WEEK,
                        TRADE_CANDIDATES_PER_LISTING, TRADE_MAX_PIECES,
-                       TRADE_PICK_HORIZON_SEASONS, FO_CUT_UPGRADE_MARGIN)
+                       TRADE_PICK_HORIZON_SEASONS, FO_CUT_UPGRADE_MARGIN,
+                       TRADE_MIN_CERTAINTY)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,18 @@ logger = logging.getLogger(__name__)
 POSITION_SLOTS = {1: ['qb'], 2: ['rb'], 3: ['wr1', 'wr2'], 4: ['te'], 5: ['k']}
 
 LOCKER_ROOM_ATTITUDE = 55       # below this he is dragging the room down
+
+# Which listing a club posts when it can only post one. Lower is more urgent.
+# ⚠️ ORDERED BY WHAT IS LOST BY NOT ACTING, which is not the same as what the asset is
+# worth. A walk-year player walks for nothing in a few weeks; a headcase is costing the
+# room every week he stays; a blocked prospect is burning his development window; a
+# horizon mismatch is merely suboptimal and will still be there next week.
+TRIGGER_URGENCY = {
+    'expiring_surplus': 0,
+    'locker_room': 1,
+    'blocked_prospect': 2,
+    'horizon_mismatch': 3,
+}
 
 
 class Listing:
@@ -96,11 +109,28 @@ class TradeMarket:
         uncertainty, not a cleverer statistic here.
         """
         for team in getattr(self.teamManager, 'teams', None) or []:
-            wins = float(getattr(team, 'wins', 0) or 0)
-            losses = float(getattr(team, 'losses', 0) or 0)
-            played = wins + losses
+            # ⚠️ THE RECORD LIVES IN `seasonTeamStats`, NOT ON `team.wins`. There is no
+            # `wins` attribute on a Team, so `getattr(team, 'wins', 0)` reads 0 for every
+            # club in the league, forever — which made every club EXACTLY league-average
+            # all season and flattened the one gradient this entire market runs on.
+            #
+            # It is the root cause of every symptom the market showed: `expiring_surplus`
+            # could NEVER fire (it needs a non-contender and there were none),
+            # `horizon_mismatch` fired for everybody (it needs "contending", and >= mean
+            # is true when every value equals the mean), and trades clustered wherever
+            # the gate happened to open rather than where the table separated. Measured
+            # over six seasons before the fix: 0 expiring-surplus listings out of 1,468.
+            #
+            # Read through the same accessor the standings board uses, so the market and
+            # the table a fan is looking at cannot disagree about who is contending.
+            stats = getattr(team, 'seasonTeamStats', None) or {}
+            wins = float(stats.get('wins', 0) or 0)
+            losses = float(stats.get('losses', 0) or 0)
+            ties = float(stats.get('ties', 0) or 0)
+            played = wins + losses + ties
             # 0.5 with nothing played, so week 1 is parity rather than a divide by zero.
-            self._contention[getattr(team, 'id', None)] = (wins / played) if played else 0.5
+            self._contention[getattr(team, 'id', None)] = (
+                (wins + 0.5 * ties) / played) if played else 0.5
         values = list(self._contention.values())
         self._leagueMean = (sum(values) / len(values)) if values else 0.0
 
@@ -109,7 +139,37 @@ class TradeMarket:
                                  self._leagueMean, self.week)
 
     def isContending(self, team) -> bool:
-        return self.nowWeight(team) >= 1.0
+        """Is this club's season worth protecting?
+
+        ⚠️ READ OFF THE RAW TABLE, NOT OFF `nowWeight`. The weight is blended toward parity
+        by `contentionRamp`, so in week 1 it is EXACTLY 1.00 for all 32 clubs and a
+        `>= 1.0` test answers TRUE LEAGUE-WIDE — which silences the expiring-surplus
+        trigger correctly and fires the horizon trigger for everybody at once. Measured,
+        that made week 1 the busiest week of the market on a confidence nobody had.
+        Whether a club is contending is a question about the STANDINGS; whether it should
+        act on the answer yet is `hasClarity`.
+        """
+        mean = self._leagueMean or 0.0
+        if mean <= 0:
+            return True
+        return self._contention.get(getattr(team, 'id', None), 0.5) >= mean
+
+    def hasClarity(self) -> bool:
+        """Does anyone know their postseason position yet?
+
+        ⚠️ THE MARKET DOES NOT OPEN UNTIL THIS IS TRUE (owner). A club that cannot read its
+        own season should not be selling its walk-years or swapping its horizon — and
+        without this the busiest trading week is week 1, which is precisely the week the
+        table says nothing.
+
+        ⚠️ THE OFFSEASON IS EXEMPT, and not by an oversight: there `contentionRamp` is 0.0
+        by construction, because contention is unknown for a season that has not been
+        played. Gating on it would shut the offseason market entirely, when that market is
+        supposed to run on the other three triggers.
+        """
+        if self.week is None:
+            return True
+        return trading.contentionRamp(self.week) >= TRADE_MIN_CERTAINTY
 
     # ----------------------------------------------------------- triggers
 
@@ -121,6 +181,8 @@ class TradeMarket:
         not. Measured on the live league, seven contending clubs hold a sub-55 attitude
         player right now. No extra rule is needed to let a contender into the selling side.
         """
+        if not self.hasClarity():
+            return []           # nobody knows their season yet; nothing goes on the block
         out = []
         roster = getattr(team, 'rosterDict', None) or {}
         contending = self.isContending(team)
@@ -157,8 +219,18 @@ class TradeMarket:
                 continue
             out.append(Listing(team, player, trigger, ask, floor))
 
-        # The most valuable asset first, so a club with one listing posts its best one.
-        out.sort(key=lambda l: -l.ask)
+        # ⚠️ RANKED BY URGENCY, NOT BY ASK — a club posts the man it most needs to move,
+        # not the one worth most. Sorting by ask looks sensible and is precisely wrong: a
+        # walk-year rental has a TINY ask (a fraction of a season of control) while a
+        # player with three years left has a large one, so the most valuable listing is
+        # always the one the club is under no pressure to move. Measured with the ask
+        # sort, `expiring_surplus` — the trigger the plan calls the engine of the whole
+        # market — produced ZERO trades in three seasons and `horizon_mismatch` produced
+        # 100%, because the urgent listing was never the one posted.
+        #
+        # A walk-year player leaves for NOTHING at season end, which is the whole reason
+        # this market exists. He goes first.
+        out.sort(key=lambda l: (TRIGGER_URGENCY.get(l.trigger, 99), -l.ask))
         return out[:TRADE_LISTINGS_PER_TEAM]
 
     @staticmethod
@@ -221,6 +293,11 @@ class TradeMarket:
                 best = max(best, float(getattr(prospect, 'playerRating', 0) or 0))
         for fa in getattr(self.playerManager, 'freeAgents', None) or []:
             if getattr(fa, 'willRetire', False):
+                continue
+            # ⚠️ Same reason as `_findBackfill`: a rostered player left in the pool would
+            # price the floor against a backfill the club cannot actually sign, and the
+            # floor is what decides whether it is a seller at all.
+            if not _isTrulyUnrostered(fa):
                 continue
             if getattr(getattr(fa, 'position', None), 'value', None) == posValue:
                 best = max(best, float(getattr(fa, 'playerRating', 0) or 0))
@@ -298,7 +375,13 @@ class TradeMarket:
         if worthToBuyer < bar:
             return None             # he is not worth what this would cost
 
-        pieces = self._assemble(buyer, bar, worthToBuyer)
+        # ⚠️ TWO VALUATIONS OF THE SAME BUNDLE, AND BOTH ARE LOAD-BEARING. What must clear
+        # the seller's bar is what the bundle is worth TO THE SELLER; what the buyer is
+        # deciding to part with is what the same bundle is worth TO THE BUYER. Those are
+        # different numbers precisely because the two clubs discount the future
+        # differently — and that difference is the only reason either of them agrees.
+        # Pricing both sides at one club's rate collapses them and there is no trade.
+        pieces = self._assemble(buyer, listing.team, bar, worthToBuyer)
         if not pieces:
             return None
         return Bid(buyer, pieces, sum(p['value'] for p in pieces))
@@ -357,30 +440,43 @@ class TradeMarket:
         lb = getattr(lb, 'name', lb)
         return bool(la) and la == lb
 
-    def _assemble(self, buyer, bar: float, ceiling: float) -> list:
-        """The CHEAPEST combination of this club's assets that clears the bar.
+    def _assemble(self, buyer, seller, bar: float, gain: float) -> list:
+        """The CHEAPEST combination of the buyer's assets that clears the SELLER's bar.
 
         ⚠️ CHEAPEST, NOT LARGEST, and capped at `TRADE_MAX_PIECES` so a trade reads as a
         sentence rather than a spreadsheet. A buyer that hands over everything it owns to
         clear a bar by four times is not negotiating.
+
+        ⚠️ AND THE BUYER STILL HAS TO WANT TO. The bundle is sized against what the SELLER
+        thinks it is worth, because that is the bar; the buyer then refuses if what it is
+        giving up, ON ITS OWN SCALE, costs more than the upgrade is worth to it. A
+        contender hands over picks cheaply BECAUSE it prices the future low, which is the
+        trade working rather than a club being fleeced.
         """
-        available = sorted(self._tradeableAssets(buyer), key=lambda a: a['value'])
-        pieces, total = [], 0.0
-        # Smallest-first, so the bundle lands just over the bar rather than far past it.
-        for asset in available:
-            if total >= bar:
+        sellerValue = {a['id']: a['value']
+                       for a in self._tradeableAssets(buyer, valuingTeam=seller)}
+        buyerAssets = self._tradeableAssets(buyer, valuingTeam=buyer)
+        # Cheapest FOR THE BUYER first, so it parts with what it minds least.
+        buyerAssets.sort(key=lambda a: a['value'])
+        pieces, toSeller, toBuyer = [], 0.0, 0.0
+        for asset in buyerAssets:
+            if toSeller >= bar:
                 break
             if len(pieces) >= TRADE_MAX_PIECES:
                 break
-            if asset['value'] <= 0:
+            worthToSeller = sellerValue.get(asset['id'], 0.0)
+            if worthToSeller <= 0:
                 continue
-            if total + asset['value'] > ceiling * 1.5:
-                continue            # never pay wildly past what he is worth to us
-            pieces.append(asset)
-            total += asset['value']
-        return pieces if total >= bar else []
+            pieces.append(dict(asset, value=worthToSeller))
+            toSeller += worthToSeller
+            toBuyer += asset['value']
+        if toSeller < bar:
+            return []
+        if toBuyer > gain:
+            return []           # it costs the buyer more than the upgrade is worth
+        return pieces
 
-    def _tradeableAssets(self, team) -> list:
+    def _tradeableAssets(self, team, valuingTeam=None) -> list:
         """This club's picks and pipeline prospects, priced on the shared scale.
 
         ⚠️ ROSTER PLAYERS ARE DELIBERATELY NOT HERE. A club paying with a starter opens a
@@ -389,7 +485,13 @@ class TradeMarket:
         the middle, not a bundle piece. Picks and prospects are the currencies.
         """
         out = []
-        weight = self.nowWeight(team)
+        # ⚠️ PRICED ON WHOEVER IS BEING ASKED TO VALUE THEM, and for a FUTURE asset that
+        # is `laterWeight` — the inverse of the now-weight. A contender parting with a
+        # pick gives up something IT prices low; the rebuilder receiving it prices the
+        # same pick high. That gap is the entire reason the two trade, and pricing both
+        # sides at the holder's now-weight cancels it.
+        valuer = valuingTeam if valuingTeam is not None else team
+        weight = trading.laterWeight(self.nowWeight(valuer))
         for pick in self.picksOwnedBy(team):
             out.append({
                 'kind': 'pick',
@@ -688,6 +790,26 @@ def _cutToMakeRoom(seasonManager, buyer, incoming):
     return worstSlot
 
 
+def _isTrulyUnrostered(player) -> bool:
+    """Is this "free agent" actually free?
+
+    ⚠️ `playerManager.freeAgents` IS NOT ALWAYS CLEAN, AND TRUSTING IT PUT PLAYERS ON TWO
+    ROSTERS AT ONCE. On a fresh league every one of the 192 rostered players is ALSO in
+    that list until `_validateRosterIntegrity` runs in the offseason — measured, 192 of
+    192 at season 1 week 1 — so a backfill search would happily sign a man who is somebody
+    else's starter, leaving him in two `rosterDict`s with a `.team` pointing at whichever
+    was written last. Five such players survived into season 2 before this check existed.
+
+    ⚠️ The test is `.team`, NOT membership in the pool, because the pool is the thing that
+    is wrong. Every release path — `releasePlayerToFreeAgency`, contract expiry,
+    `_advanceProspectWindow` — stamps the literal string `'Free Agent'`, while a rostered
+    player carries the Team OBJECT. `_validateRosterIntegrity` exists because this drift
+    is a known hazard; trading must not rely on it having run.
+    """
+    team = getattr(player, 'team', None)
+    return team is None or isinstance(team, str)
+
+
 def _findBackfill(seasonManager, team, player):
     """Who replaces him — a ready prospect, else the best signable free agent.
 
@@ -709,6 +831,8 @@ def _findBackfill(seasonManager, team, player):
     for fa in getattr(pm, 'freeAgents', None) or []:
         if getattr(fa, 'willRetire', False):
             continue
+        if not _isTrulyUnrostered(fa):
+            continue            # somebody's starter, wrongly left in the pool
         if getattr(getattr(fa, 'position', None), 'value', None) != posValue:
             continue
         rating = float(getattr(fa, 'playerRating', 0) or 0)

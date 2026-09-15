@@ -2617,6 +2617,38 @@ TRADE_CONTENTION_EXPONENT = 1.25
 # deadline is week 22, leaving a seven-week window where clubs KNOW and must act.
 TRADE_CONTENTION_RAMP_WEEKS = 14
 
+# ⚠️ AND A CLUB DOES NOT ACT ON A POSITION IT CANNOT YET READ (owner, 2026-09-15:
+# "ideally teams wait until closer to the deadline as thats when they would have more
+# clarity on their postseason position").
+#
+# The plan expected the market to open by itself as the table separated — "a deadline
+# without a deadline rule" — and it did not, for a reason the ramp cannot fix. Measured
+# over three seasons: **80% of trades were `horizon_mismatch` and 60% of in-season trades
+# landed in weeks 1-7.** The cause is that in week 1 `nowWeight` is EXACTLY 1.00 for every
+# club, so `isContending` (>= 1.0) is TRUE LEAGUE-WIDE — which correctly silences the
+# expiring-surplus trigger and simultaneously fires the horizon trigger for all 32 clubs
+# at once, on a confidence none of them has earned. The market's busiest week was the one
+# where nobody knew anything.
+#
+# So listing requires CLARITY, expressed as the same ramp: a club will not put a man on
+# the block until this much of the season's evidence is in. At 0.5 that is week 8, which
+# opens the market halfway to certainty (week 15) and leaves the whole run-in to the
+# week-22 deadline for the contention gradient to do the rest.
+#
+# ⚠️ IN-SEASON ONLY. In the offseason `contentionRamp` is 0.0 BY DEFINITION — contention
+# is unknown for a season that has not been played — so applying this there would shut the
+# offseason market completely, when the plan explicitly wants it running on the
+# blocked-prospect / locker-room / horizon triggers.
+#
+# ⚠️ 1.0, WHICH IS FULL CERTAINTY AT WEEK 15 — and the plan names that window itself:
+# "certainty arrives at week 15 while the deadline is week 22, leaving a SEVEN-WEEK WINDOW
+# WHERE CLUBS KNOW AND MUST ACT." Measured at 0.5 (week 8) the market opened the instant
+# it was allowed and emptied itself there — 5 of 6 in-season trades in weeks 8-10 — which
+# is the week-1 cluster moved rather than removed, because supply is exhausted by the
+# first pass that can see it. Anchoring on certainty rather than on a chosen week means
+# the gate moves with `TRADE_CONTENTION_RAMP_WEEKS` instead of drifting away from it.
+TRADE_MIN_CERTAINTY = 1.0
+
 # ---- The ask decays toward the floor ----
 # Hold out early, take what you can get late. Both ends decay together, so a late seller
 # is never squeezed into a giveaway.

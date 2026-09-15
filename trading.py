@@ -111,11 +111,46 @@ def nowWeight(contention: float, leagueMeanContention: float, week: int = None) 
     return 1.0 + (raw - 1.0) * ramp
 
 
+def laterWeight(now: float) -> float:
+    """How much a club values a payoff that arrives LATER.
+
+    ⚠️ THE INVERSE OF `nowWeight`, AND WITHOUT THIS THE WHOLE PREMISE CANCELS. The plan's
+    one idea is that clubs do not share a discount rate — "a contender prices THIS season
+    high and the future low, a club going nowhere does the reverse, both are right, and
+    that gap is the trade". Applying `nowWeight` to EVERY asset does not express that: it
+    scales a club's entire valuation up or down uniformly, so it drops straight out of
+    every comparison and there is no gap left to trade across.
+
+    Measured with the uniform reading, at week 20: a contender priced a mid first-round
+    pick at **98.1** and a rebuilder at **22.9** — i.e. the club that wants to win NOW
+    valued a payoff two seasons out FOUR TIMES higher than the club rebuilding for exactly
+    that moment. Exactly backwards, and it is why the market produced contenders selling
+    their long contracts to other contenders for picks.
+
+    A player under contract pays now: `nowWeight`. A draft pick and a pipeline prospect pay
+    later: this.
+    """
+    return 1.0 / max(0.05, float(now or 1.0))
+
+
 # ---------------------------------------------------------------- assets
 
 def playerValue(rating: float, termRemaining: int, week: int = None,
                 weight: float = 1.0) -> float:
-    """Surplus over replacement x seasons of control x the holder's now-weight.
+    """Surplus over replacement x seasons of control, each season weighted by WHEN it
+    arrives. `weight` is the holder's `nowWeight`.
+
+    ⚠️ THE SEASONS ARE NOT INTERCHANGEABLE, AND WEIGHTING THEM ALIKE REPRODUCES THE SAME
+    CANCELLATION AS PRICING PICKS ON `nowWeight`. A contender values THIS season's
+    contribution highly and next season's little; a rebuilder the reverse. Multiplying the
+    whole of `seasonsOfControl` by one number says the opposite — that a contender values
+    year three exactly as much as year one — and then the weight cancels out of every
+    comparison, which is the thing that has to NOT happen.
+
+    Measured with the flat reading: a buyer cut a **78 on a walk year to take a 70 with
+    three years left**, because 3 x 2.71 beat 11 x 0.71 and the weight touched both sides
+    identically. Split, the same contender reads that as -6.9 and refuses, while a
+    rebuilder reads it as +11.9 and takes it — which is the trade the plan describes.
 
     ⚠️ ZERO AT OR BELOW REPLACEMENT, never negative. A player the pool can replace is
     worth nothing in a trade — not a liability — because the alternative to holding him
@@ -127,7 +162,13 @@ def playerValue(rating: float, termRemaining: int, week: int = None,
     control = seasonsOfControl(termRemaining, week)
     if control <= 0:
         return 0.0
-    return surplus * control * max(0.0, float(weight))
+    now = max(0.0, float(weight))
+    # The part of his control that lands in the season being played right now. In the
+    # offseason the first whole season of the contract IS the season about to be played,
+    # so it counts as present; everything after it is future.
+    present = min(control, seasonRemainingFraction(week) if week is not None else 1.0)
+    future = max(0.0, control - present)
+    return surplus * (present * now + future * laterWeight(now))
 
 
 def pickSlotSkill(slot: int, classSize: int = 32) -> float:
@@ -213,6 +254,10 @@ def pickValue(slot: int, seasonsOut: int = 0, classSize: int = 32,
               rookieTerm: int = 3, weight: float = 1.0) -> float:
     """What a rookie pick is worth on the same surplus-times-time scale as a player.
 
+    ⚠️ `weight` HERE IS `laterWeight`, NOT `nowWeight`. A pick pays in a season that has
+    not started; a contender should price it DOWN and a rebuilder UP, and that gap is the
+    only reason the two would ever trade.
+
     ⚠️ PRICED ON THE MATURE PLAYER, NOT THE DEBUT ONE. A draftee debuts
     `PROSPECT_ENTRY_DISCOUNT` below his true skill and grows into it, so pricing the pick
     at the debut rating undervalues every pick in the draft by about that much and ranks
@@ -245,6 +290,9 @@ def prospectPromotionOdds(prospectSeasons: int) -> float:
 def prospectValue(believedCeiling: float, prospectSeasons: int,
                   rookieTerm: int = 3, weight: float = 1.0) -> float:
     """Projected mature surplus x post-promotion term x p(he ever gets promoted).
+
+    ⚠️ `weight` HERE IS `laterWeight` — a prospect contributes NOTHING until he is
+    promoted, so he is a future asset and prices like a pick, not like a starter.
 
     ⚠️ `believedCeiling` IS THE BUYER'S OWN READ, not the truth — see
     `prospect_scouting.believedPotential`. Two clubs valuing the same prospect differently
