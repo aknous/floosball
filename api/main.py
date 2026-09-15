@@ -1200,6 +1200,63 @@ async def get_players(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _viewingClubFor(user):
+    """Which club's SCOUTING READ a request is served through.
+
+    ⚠️ A SCOUTED VIEW IS PER (CLUB, PROSPECT), SO THERE IS NO SINGLE "THE CLASS" VIEW.
+    Two fans of different clubs looking at the same prospect must see different ranges —
+    that is the feature working, not an inconsistency. A team page shows that club's
+    read; everywhere else shows the viewing user's favourite club's.
+
+    Returns None for a signed-out or club-less user, which reads as a neutral median
+    band rather than as perfect vision.
+    """
+    if user is None:
+        return None
+    favId = getattr(user, 'favorite_team_id', None)
+    if not favId or floosball_app is None:
+        return None
+    tm = getattr(floosball_app, 'teamManager', None)
+    try:
+        return tm.getTeamById(favId) if tm else None
+    except Exception:
+        return None
+
+
+# A club-less viewer sees the middle of the road: not the truth, and not the worst
+# scout in the league either.
+_NEUTRAL_SCOUT_VISION = 0.5
+
+
+def _scoutedCeiling(player, club):
+    """The potential band this club is shown for this prospect, or None if the player
+    is not a prospect at all.
+
+    ⚠️ THE BAND IS APPLIED SERVER-SIDE. Sending true potential to the client and hiding
+    it in the UI leaks it to anyone who opens the network tab — and potential is the
+    ONE number this whole feature is built on not knowing.
+    """
+    from managers.frontOfficeBrain import isScoutable
+    if not isScoutable(player):
+        return None
+    try:
+        from prospect_scouting import scoutedView
+        from managers.frontOfficeBrain import FrontOfficeBrain
+        sm = getattr(floosball_app, 'seasonManager', None)
+        season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+        week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 1) or 1
+        if club is None:
+            vision, viewerId = _NEUTRAL_SCOUT_VISION, 0
+        else:
+            brain = FrontOfficeBrain(floosball_app.playerManager)
+            vision = brain.scoutingVision(getattr(club, 'coach', None), club)
+            viewerId = getattr(club, 'id', None) or 0
+        return scoutedView(player, viewerId, season, vision, week)
+    except Exception as e:
+        logger.warning(f"Scouted view failed for player {getattr(player, 'id', '?')}: {e}")
+        return None
+
+
 def _isUndraftedProspect(p) -> bool:
     """An upcoming-rookie / prospect that no team has drafted yet. Their projected
     Expected/Ceiling are hidden from the profile so the only signal is the scouting-
@@ -1210,14 +1267,20 @@ def _isUndraftedProspect(p) -> bool:
 
 
 @app.get("/api/players/{player_id}", response_model=Dict[str, Any])
-async def get_player(player_id: int, response: Response):
+async def get_player(player_id: int, response: Response,
+                    user: Optional[_User] = Depends(_getOptionalUser)):
     """
     Get detailed information about a specific player
 
     Returns:
         Full player object with attributes, stats, and history
     """
-    response.headers["Cache-Control"] = "public, max-age=120"
+    # ⚠️ THE BODY NOW CHANGES WHEN A USER IS ATTACHED — a prospect's potential band is
+    # read through the caller's own club, so two fans see different ranges for the same
+    # player. `public, max-age=120` on that is the documented double fault: a shared
+    # cache can hand one user's view to the next caller, and the browser can answer a
+    # refetch out of a body captured for somebody else.
+    response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=120")
     if floosball_app is None:
         raise HTTPException(status_code=503, detail="Application not initialized")
     
@@ -1246,12 +1309,20 @@ async def get_player(player_id: int, response: Response):
         # (overall at potential — perfect development) — drawn as markers on the
         # overall rating gauge. Both >= current when there's headroom. Hidden for
         # undrafted prospects (scouting-blurred range on the ballot is the only signal).
-        if _isUndraftedProspect(player):
+        scouted = _scoutedCeiling(player, _viewingClubFor(user))
+        if scouted is not None:
+            # ⚠️ A BAND, NOT A BLANK. This used to null the projection outright for an
+            # undrafted prospect, which is airtight and tells a fan nothing — and it
+            # LEAKED THE MOMENT HE WAS DRAFTED, because `drafting_team_id` being set
+            # flipped him back onto the exact-number branch. A prospect has still
+            # played nothing after the draft; his ceiling is a scouted opinion either
+            # way, and showing the range is what makes a pick worth arguing about.
             player_dict['expected'] = None
             player_dict['ceiling'] = None
-            # Also blank the per-attribute potential star markers — a coarser reveal
-            # of the same potential the scouting range blurs. (Currently unrendered,
-            # but stripped here so a future consumer can't reopen the fog-of-war leak.)
+            player_dict['ceilingRange'] = scouted
+            # The per-attribute potential star markers are a coarser reveal of the same
+            # number the band blurs. (Currently unrendered, but stripped here so a
+            # future consumer cannot reopen the fog-of-war leak from the side.)
             for _k in ('att1PotStars', 'att2PotStars', 'att3PotStars'):
                 if _k in player_dict:
                     player_dict[_k] = None
@@ -8240,8 +8311,58 @@ def get_league_markets():
         session.close()
 
 
+@app.get("/api/draft/class")
+def get_draft_class(response: Response,
+                    user: Optional[_User] = Depends(_getOptionalUser)):
+    """This season's rookie class, through the viewing club's own scouting.
+
+    The class is generated at SEASON START and drafted in the offseason, so it is
+    visible and scoutable all season long. That visibility is what makes a pick a
+    tradeable asset with a known shape — "this year has a 99-potential quarterback at
+    the top, so pick 1 is precious" — and it runs the bottom-feeder story all year
+    rather than for one afternoon.
+
+    ⚠️ CURRENT RATING IS A FACT AND POTENTIAL IS A BAND. He exists and plays at that
+    level; what he might BECOME is the scouted quantity, and it is the only thing worth
+    arguing about. The band narrows as the season runs, so a pick traded in week 3 is
+    speculation on a blurry class and the same pick at week 22 is a priced asset.
+    """
+    if floosball_app is None:
+        raise HTTPException(503, "Application not initialized")
+    club = _viewingClubFor(user)
+    sm = floosball_app.seasonManager
+    season = sm.currentSeason.seasonNumber if sm and sm.currentSeason else 0
+    week = (sm.currentSeason.currentWeek if sm and sm.currentSeason else 1) or 1
+
+    entries = []
+    for p in floosball_app.playerManager.activePlayers:
+        if not getattr(p, 'is_upcoming_rookie', False):
+            continue
+        entries.append({
+            "playerId": getattr(p, 'id', None),
+            "name": p.name,
+            "position": p.position.name,
+            "rating": round(getattr(p, 'playerRating', 0), 1),
+            "tier": p.playerTier.name if hasattr(p, 'playerTier') else None,
+            "ceilingRange": _scoutedCeiling(p, club),
+        })
+    # ⚠️ ORDERED BY WHAT HE IS TODAY, NOT BY WHAT HE MIGHT BECOME. Sorting on the
+    # believed ceiling would hand every reader a ranked board and quietly undo the
+    # uncertainty — the point is that clubs DISAGREE about that order.
+    entries.sort(key=lambda e: -e["rating"])
+    response.headers["Cache-Control"] = _perUserCacheControl(user, "public, max-age=60")
+    return build_success_response({
+        "season": season,
+        "week": week,
+        "viewingTeamId": getattr(club, 'id', None) if club else None,
+        "classSize": len(entries),
+        "prospects": entries,
+    })
+
+
 @app.get("/api/teams/{team_id}/prospects")
-def get_team_prospects(team_id: int):
+def get_team_prospects(team_id: int, response: Response,
+                       user: Optional[_User] = Depends(_getOptionalUser)):
     """Prospects stashed in this team's pipeline.
 
     Surfaces the full list with development context so the UI can show progress,
@@ -8304,8 +8425,15 @@ def get_team_prospects(team_id: int):
             "draftSeason": draftSeason,
             "isUndrafted": bool(getattr(p, 'is_undrafted', False)),
             "ratingHistory": history,
+            # ⚠️ THE CLUB'S OWN READ, NOT THE TRUTH. A team page shows THAT club's
+            # scouting — which is why the band comes from `team` here and from the
+            # viewer's favourite club everywhere else.
+            "ceilingRange": _scoutedCeiling(p, team),
         })
     prospects.sort(key=lambda x: -x['rating'])
+    # The band is this club's, not the caller's, so it is the same for every reader —
+    # but it still moves week to week as the band narrows, so it cannot be cached long.
+    response.headers["Cache-Control"] = "public, max-age=60"
     return build_success_response({
         "teamId": team_id,
         "prospects": prospects,

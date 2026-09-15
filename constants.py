@@ -1426,7 +1426,84 @@ SCOUTING_BANDS = [
     (65, 10),   # 65-79: ±10
     (0, 15),    # <65: ±15
 ]
+# ⚠️ ACCURACY COMES FROM `frontOfficeBrain.scoutingVision`, NOT FROM THE LINE ABOVE.
+# The comment above this table says accuracy is "coach.scouting + funding tier bonus",
+# and FUNDING_SCOUTING_BONUS is the OLD MARKET-TIER SYSTEM, superseded by
+# facilityEffect('scouting_bonus'). `scoutingVision` already blends the GM's own
+# `scouting` with the Scouting Department behind FO_SCOUT_FACILITY_ENABLED, and is what
+# every other front-office judgement uses — so the band rides it and there is one
+# definition of how well a club sees. ✅ This is also what finally makes the Scouting
+# Department honest: its UI copy promises "clearer read on draft prospects" and until
+# now it only sharpened free-agent valuations.
 FUNDING_SCOUTING_BONUS = {'MEGA_MARKET': 5, 'LARGE_MARKET': 3, 'MID_MARKET': 0, 'SMALL_MARKET': -3}
+
+# ---- The band narrows as the season runs ----
+# Band width scales with BOTH scouting accuracy and how long the club has been
+# watching. A club on the ±10 tier, true potential 88, one fixed opinion:
+#
+#   week 1  band ±14  believes 96  shows  82-100
+#   week 8  band ±10  believes 94  shows  84-100
+#   week 15 band ±7   believes 92  shows  85-99
+#   week 22 band ±4   believes 90  shows  86-94
+#
+# ✅ THE BELIEF CONVERGES ON THE TRUTH AS WELL AS THE RANGE, because the error scales
+# with the band and the club's own draw is FIXED. Early it is confidently wrong-ish and
+# openly unsure; late it is close and knows it. Nothing ever jumps — the same opinion
+# simply sharpens, which is exactly what a fan should see after a facility upgrade too.
+#
+# ✅ A PERFECT SCOUT IS UNAFFECTED: SCOUTING_BANDS gives ±0 at accuracy ≥95, and zero
+# times any scale is still zero. An elite scouting operation sees the exact number in
+# week 1 and has nothing to gain from waiting — the Department's ceiling being worth
+# something.
+#
+# This is what gives the trade deadline a shape. Without it a pick is exactly as
+# knowable in week 3 as in week 22, and there is no reason to trade at one moment
+# rather than another.
+SCOUT_BAND_EARLY = 1.4
+SCOUT_BAND_LATE = 0.4
+
+# ⚠️ THE ERROR IS NARROWER THAN THE RANGE THAT IS SHOWN, and conflating them makes the
+# UI lie. If a club's misjudgement were drawn at the full band width, then `belief ± band`
+# contains the truth exactly when |draw| <= 1 — i.e. ONE CLUB IN THREE is shown a range
+# the real number falls outside. A page that says "82-100" about an 78 is not uncertainty,
+# it is a wrong answer with error bars on it.
+#
+# Drawing the error at half the band makes the stated range a ~2-sigma interval, so it
+# contains the truth ~95% of the time while the belief spread — which is what actually
+# makes two clubs disagree and trade — stays wide.
+SCOUT_ERROR_SIGMA_FRACTION = 0.5
+
+# ---- The cull ----
+# ⚠️ IT SHIPS WITH THE DRAFT, NOT AFTER IT. 192 roster spots are FIXED. Growing the
+# candidate population raises the bar with no change to how players are generated —
+# pure selection pressure. Resampling the current empirical rating distribution:
+#
+#     population   rostered mean   4-star-plus share
+#        224 (today)     80.5            35%
+#        300             83.0            48%
+#        400             85.0            63%
+#
+# Intake of one class a season against ~19 replacement need (192 spots / median
+# longevity 10) leaves a ~13/season surplus. Unchecked that reaches ~63% four-star by
+# season 20 — EVERY TEAM ENDS UP WITH FOUR-STAR PLAYERS, which is the one thing this
+# feature must not do. A cull at the surplus rate holds it flat at 34% indefinitely.
+# "After" means the pool grows 13 a season until it arrives.
+CULL_ENABLED = True
+
+# Seasons a never-rostered player sits in the pool before he is eligible. A grace
+# window, not a probation: one offseason of going unpicked says more about the draft
+# order than about the player.
+CULL_MIN_POOL_SEASONS = 2
+
+# ⚠️ THE BAR IS RELATIVE TO THE LEAGUE'S OWN MEAN, NOT AN ABSOLUTE NUMBER — the same
+# self-normalising argument as the anomaly threshold. An absolute bar written against
+# today's curve silently stops culling the moment the curve moves, which is precisely
+# what this exists to prevent it from doing.
+#
+# ⚠️ IT CANNOT BE CALIBRATED AGAINST CURRENT DATA: none of today's free agents have
+# seasonsPlayed == 0, so there is no population to fit against. The fraction is chosen
+# on judgement and MEASURED once a class has actually cycled through.
+CULL_RATING_FRACTION_OF_MEAN = 0.92
 
 # ============================================================================
 # FACILITIES  (Markets→Facilities system — see docs/MARKETS_FACILITIES_PLAN.md)
@@ -2061,11 +2138,32 @@ COACH_FANTRUST_INDEPENDENT_MAX = 70   # ignores them entirely
 # is the whole intake model — it produces nothing while the pool is above target
 # (so an inflated pool drains), then replaces retirees one-for-one once at
 # target. ROSTER_SUPPLY_BUFFER_PER_POSITION sets the steady-state pool depth.
-# OFF (plan Part F). No rookie class is generated and the draft has nothing to
-# draft: new players enter ONLY as the position-supply deficit fill — a trickle
-# into the FA pool that produces nothing while the pool is above target, so it
-# cannot inflate. Existing prospects drain through and are not replaced.
-ROOKIE_DRAFT_ENABLED = False
+# ⚠️ THIS FLAG HAD ZERO READERS FOR SIX WEEKS. `68e5608` excised the draft itself
+# and left the switch behind describing it in the present tense, so flipping it did
+# nothing at all — the same trap class as AUTONOMOUS_FO_ENABLED documented directly
+# beneath, polarity reversed. It is WIRED again as of the prospect-draft restoration
+# and is the real switch: `playerManager.assignPlayersToTeams` (whether a class is
+# held out of the FA pool or released into it), `seasonManager.startNewSeason`
+# (whether a class is generated) and the offseason draft phase all read it through
+# `rookieDraftEnabled()` below.
+#
+# ON: a class of one prospect per club is generated at SEASON START, visible and
+# scoutable all season, and drafted worst-first in the offseason. New players still
+# also arrive through `ensurePositionSupply`, which stays the per-position EMERGENCY
+# it already is (it generates only a deficit, so it produces nothing while a position
+# is above target and cannot double the faucet).
+#
+# OFF: no class is generated and the draft has nothing to draft. New players enter
+# ONLY as the position-supply deficit fill, and any class left in the database is
+# released into free agency on load rather than being stranded there forever.
+ROOKIE_DRAFT_ENABLED = True
+
+
+def rookieDraftEnabled() -> bool:
+    """THE single reading of whether the draft runs. Two call sites computed this
+    expression independently before, which is how a flag and an env override drift
+    apart. `NO_ROOKIE_DRAFT` is the sim/harness escape hatch."""
+    return bool(ROOKIE_DRAFT_ENABLED) and not _os.environ.get('NO_ROOKIE_DRAFT')
 
 # ---- Autonomous Front Office (docs/AUTONOMOUS_FRONT_OFFICE_PLAN.md) ----
 # The sim's GM brain makes roster decisions; fans express sentiment that tips

@@ -408,10 +408,45 @@ class SeasonManager:
         # they don't show a spurious development arc from the re-map's runway.
         self._maybeFreezeLegacyDevArc()
 
-        # There is no rookie class. New players arrive only as the
-        # position-supply deficit fill — a trickle straight into the FA pool,
-        # sized to what retirement actually took out, so the pool holds steady
-        # instead of inflating by a full class every season.
+        # ── The season's rookie class, generated UP FRONT ───────────────────
+        # ⚠️ AT SEASON START, NOT AT WEEK 22. The class was first planned for week 22,
+        # reasoning that it should be sized against the holes retirement is about to
+        # open. That dependency does not exist: at one round the class size is fixed by
+        # the TEAM COUNT, not by how many players retire. And week 22 is where in-season
+        # trades CLOSE, so a pick would have been traded blind for its entire window.
+        #
+        # Generating here gives the class a whole season of visibility, which is what
+        # makes a pick a tradeable asset with a known shape — "this year has a
+        # 99-potential quarterback at the top, so pick 1 is precious" — and runs the
+        # bottom-feeder story all year rather than for one afternoon in the offseason.
+        #
+        # Idempotent across restarts: a class already flagged for this season is reused,
+        # never topped up. ⚠️ `startNewSeason` is ALSO the mid-season resume path called
+        # on every deploy, so a non-idempotent generator here would mint a fresh class
+        # on every restart and the draft pool would grow without bound.
+        from constants import rookieDraftEnabled
+        if rookieDraftEnabled():
+            existingUpcoming = [p for p in self.playerManager.activePlayers
+                                if getattr(p, 'is_upcoming_rookie', False)]
+            if existingUpcoming:
+                logger.info(f"Rookie class already exists ({len(existingUpcoming)} "
+                            f"players) — reusing")
+            else:
+                rookies = self.playerManager._generateRookieClass(seasonNumber)
+                for r in rookies:
+                    r.is_upcoming_rookie = True
+                    r.team = 'Upcoming Rookie'
+                    if r not in self.playerManager.activePlayers:
+                        self.playerManager.activePlayers.append(r)
+                    self.playerManager.addToPositionList(r)
+                self.playerManager.sortPlayersByPosition()
+                logger.info(f"Generated {len(rookies)} upcoming rookies for "
+                            f"season {seasonNumber}")
+        else:
+            # No class. New players arrive only as the position-supply deficit fill —
+            # a trickle straight into the FA pool, sized to what retirement actually
+            # took out, so the pool holds steady instead of inflating by a class a year.
+            logger.info("Rookie draft off — intake is the position-supply trickle only")
 
         # Persist season record early so startDate survives restarts
         self._saveSeasonToDatabase()
@@ -6397,6 +6432,17 @@ class SeasonManager:
         # Mark the season as in the offseason week.
         self.currentSeason.currentWeek = 0
         self.currentSeason.currentWeekText = 'Offseason'
+        # ⚠️ The draft pool is DERIVED from `is_upcoming_rookie` on load rather than
+        # stashed on the manager, so a resume needs no rebuild step — which is the
+        # whole reason the old `_pendingRookiePool` restore could be dropped. Logged
+        # because "the draft found nothing" and "the draft already ran" are
+        # indistinguishable from the outside otherwise.
+        try:
+            pool = sum(1 for p in self.playerManager.activePlayers
+                       if getattr(p, 'is_upcoming_rookie', False))
+            logger.info(f"restoreForOffseasonResume: {pool} undrafted rookie(s) in the pool")
+        except Exception:
+            pass
 
     def _restoreFreeAgencyOrder(self) -> None:
         """Rebuild `freeAgencyOrder` from the playoff checkpoint.
@@ -6890,19 +6936,54 @@ class SeasonManager:
         else:
             logger.info("Step 3.78 skipped — prospect_window already complete")
 
+        # STEP 3.79: Cull the never-rostered pool.
+        #
+        # ⚠️ IT RUNS AFTER THE WASHOUT RELEASE AND BEFORE THE SUPPLY FLOOR, and both
+        # halves of that matter. After the release, so a prospect who has just washed
+        # out is judged on the same footing as everyone else in the pool rather than
+        # being invisible to it for a season. Before the floor, so the floor tops up the
+        # pool the cull actually left behind — reversed, the league would generate
+        # replacements and then delete them, or delete bodies the floor had just
+        # decided it needed.
+        #
+        # ⚠️ AND IT IS GATED, because removal is not idempotent in any useful sense:
+        # a re-run on a restart culls again against a pool that has already shrunk.
+        if not self._isOffseasonStepComplete('pool_cull'):
+            try:
+                seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
+                cullResult = self.playerManager.cullUnsignedPool(seasonNum)
+                for gone in cullResult.get('removed', []):
+                    self._offseasonTransactions.append({
+                        'type': 'pool_cull',
+                        'team': '', 'teamAbbr': '',
+                        'playerId': gone.get('playerId'),
+                        'player': gone.get('name'), 'position': gone.get('position'),
+                        'rating': gone.get('rating'),
+                    })
+            except Exception as e:
+                logger.error(f"Pool cull failed: {e}")
+            self._markOffseasonStepComplete('pool_cull')
+        else:
+            logger.info("Step 3.79 skipped — pool_cull already complete")
+
         # ── End of front-office phase ────────────────────────
-        # The rookie draft used to sit here, between the front office and free
-        # agency. There is no rookie class to draft any more, so the offseason
-        # goes straight from front-office decisions to the FA draft — but it
-        # still HOLDS for draft day first. Dropping that hold with the phase
-        # would have pulled free agency to the next top of the hour, i.e. an
-        # hour after the Floos Bowl, overnight.
+        # The rookie draft sits here, between the front office and free agency. The
+        # hold to draft day is load-bearing in its own right: dropping it would pull
+        # free agency to the next top of the hour, i.e. an hour after the Floos Bowl,
+        # overnight.
         await self.timingManager.waitForOffseason()
         # ⚠️ The frontoffice phase's persisted target IS draft day, and it is what the
         # countdown has been showing users. Passing it means a restart honors the
         # scheduled moment rather than recomputing "next noon" — which, a minute after
         # the target, lands a full day later.
         await self.timingManager.waitUntilNoonEt(self._offseasonFlowTarget)
+
+        # ── PHASE: rookie_draft ──────────────────────────────
+        # ⚠️ STEP-GATED AND SNAPSHOTTED ON ENTRY like every other offseason phase. The
+        # picks are NOT idempotent — each one moves a rookie into a pipeline — so a
+        # deploy landing mid-draft would otherwise re-run it and draft the class twice.
+        # The offseason is exactly where this project's restarts land.
+        await self._runRookieDraftPhase()
 
         # Pre-FA integrity sweep — the draft pool must not include players
         # who are already on a roster (promotions just moved some prospects up,
@@ -7423,6 +7504,144 @@ class SeasonManager:
         finally:
             session.close()
 
+    async def _runRookieDraftPhase(self) -> None:
+        """The rookie draft phase: worst-first, one pick per club, live per pick.
+
+        ⚠️ THE ORDER IS `freeAgencyOrder`, WHICH IS WORST-FIRST BY FINAL RECORD. That is
+        the entire pitch of this feature — a bottom-feeder drafting a huge prospect —
+        and it is why the class is worth generating at all. A free-agent pick cannot
+        substitute: an FA is a known quantity with a rating on the card, and there is no
+        story in signing a 74. The uncertainty IS the feature.
+
+        ⚠️ THE BRAIN IS BUILT ONCE FOR THE WHOLE DRAFT, not per pick. `_scoutError` is
+        drawn once and held on the brain, so a fresh brain per club would give each pick
+        a new opinion of the same player and a club could pass on a prospect it had
+        rated highly one pick earlier. It is also stamped with the season and the
+        deadline week, which is what lets a prospect's ceiling be read as this club's
+        standing BELIEF rather than as ground truth.
+        """
+        if self._isOffseasonStepComplete('rookie_draft'):
+            logger.info("Rookie draft already complete — skipping")
+            self._offseasonPhase = 'rookie_draft'
+            return
+        from constants import rookieDraftEnabled
+        if not rookieDraftEnabled():
+            return
+
+        rookies = [p for p in self.playerManager.activePlayers
+                   if getattr(p, 'is_upcoming_rookie', False)]
+        if not rookies:
+            # ⚠️ NOT A FAULT AND NOT A REASON TO GENERATE ONE HERE. A league that ran a
+            # season with the draft off has no class, and minting one at draft time
+            # would hand every club a prospect nobody was ever able to scout — the
+            # opposite of the season-long visibility the whole design rests on.
+            logger.info("Rookie draft: no class for this season — nothing to draft")
+            self._markOffseasonStepComplete('rookie_draft')
+            return
+
+        await self._setOffseasonFlow('rookie_draft', None)
+        self._offseasonPhase = 'rookie_draft'
+
+        draftOrder = getattr(self.currentSeason, 'freeAgencyOrder', []) or []
+        if not draftOrder:
+            teamManager = self.serviceContainer.getService('team_manager')
+            draftOrder = list(getattr(teamManager, 'teams', None) or [])
+            logger.warning("Rookie draft: no worst-first order available — "
+                           "falling back to team order")
+
+        leagueHighlights = []
+        if self.currentSeason and hasattr(self.currentSeason, 'leagueHighlights'):
+            leagueHighlights = self.currentSeason.leagueHighlights
+
+        brain = self._foBrainForOffseason()
+        seasonNum = self.currentSeason.seasonNumber if self.currentSeason else 0
+
+        if BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled():
+            try:
+                await broadcaster.broadcast_season_event({
+                    'event': 'rookie_draft_start',
+                    'season': seasonNum,
+                    'totalRookies': len(rookies),
+                    'rookies': [{'id': getattr(r, 'id', 0), 'name': r.name,
+                                 'position': r.position.name,
+                                 'rating': round(getattr(r, 'playerRating', 0), 1),
+                                 'tier': r.playerTier.name}
+                                for r in rookies],
+                })
+            except Exception as e:
+                logger.warning(f"Could not broadcast rookie_draft_start: {e}")
+
+        pickGen = self.playerManager.rookieDraftPickGenerator(
+            rookies, draftOrder, leagueHighlights, brain=brain)
+        try:
+            for entry in pickGen:
+                kind = entry.get('type')
+                if kind == 'on_clock':
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_on_clock',
+                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                        })
+                        await self.timingManager.waitBetweenOffseasonPicks()
+                elif kind == 'pick':
+                    self._offseasonTransactions.append({
+                        'type': 'rookie_pick',
+                        'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
+                        'playerId': entry.get('playerId'),
+                        'player': entry['playerName'], 'position': entry['position'],
+                        'rating': entry['rating'], 'tier': entry['tier'],
+                    })
+                    self._recordOffseasonEvent(
+                        'rookie_pick', teamName=entry['teamName'],
+                        teamAbbr=entry['teamAbbr'], teamId=entry.get('teamId'),
+                        playerId=entry.get('playerId'), playerName=entry['playerName'],
+                        position=entry['position'], rating=entry['rating'],
+                        tier=entry['tier'])
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_pick',
+                            'team': entry['teamName'], 'teamAbbr': entry['teamAbbr'],
+                            'playerId': entry.get('playerId'),
+                            'player': entry['playerName'], 'position': entry['position'],
+                            'rating': entry['rating'], 'tier': entry['tier'],
+                        })
+                elif kind == 'skip':
+                    reason = entry.get('reason')
+                    self._offseasonTransactions.append({
+                        'type': 'rookie_skip',
+                        'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                        'player': ('(pipeline full — forfeited pick)'
+                                   if reason == 'pipeline_full'
+                                   else '(no eligible rookies)'),
+                        'position': '—', 'rating': 0,
+                    })
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_skip',
+                            'team': entry['team'], 'teamAbbr': entry['teamAbbr'],
+                            'reason': reason,
+                        })
+                elif kind == 'complete':
+                    if BROADCASTING_AVAILABLE and broadcaster:
+                        await broadcaster.broadcast_season_event({
+                            'event': 'rookie_draft_complete',
+                            'totalPicks': len(entry.get('picks', [])),
+                            'undraftedCount': len(entry.get('undrafted', [])),
+                        })
+        except Exception as e:
+            logger.warning(f"Rookie draft broadcast error (draining generator): {e}")
+            # ⚠️ DRAIN THE REST. The generator MUTATES as it yields, so abandoning it
+            # mid-draft leaves half a class in limbo — flagged as upcoming rookies with
+            # nothing left that will ever place them.
+            for _ in pickGen:
+                pass
+
+        if (BROADCASTING_AVAILABLE and broadcaster and broadcaster.is_enabled()
+                and not getattr(self.timingManager, '_isFastCatchingUp', False)):
+            await asyncio.sleep(3)
+
+        self._markOffseasonStepComplete('rookie_draft')
+
     async def _runPreDraftPass(self, teamsWorstFirst: list, gmResults: list) -> None:
         """Roll through teams worst→best BEFORE the rookie draft begins.
 
@@ -7641,6 +7860,16 @@ class SeasonManager:
                            f"valuing on attributes alone: {e}")
         brain = FrontOfficeBrain(self.playerManager, sentimentMap=sentimentMap,
                                  performanceMap=performanceMap)
+        # ⚠️ STAMP WHERE IN THE CALENDAR THIS BRAIN IS STANDING, or a prospect's ceiling
+        # is read under the wrong seed and the GM's belief diverges from the band the
+        # FANS ARE SHOWN — the exact divergence `_ceilingRating` reads the belief to
+        # close. The season is part of the scouting seed on purpose (a club's read
+        # resets for next year's class), so leaving it at the default 0 would give every
+        # season the same opinions AND make them disagree with every fan-facing surface.
+        # The week is the deadline: by the offseason the band has fully sharpened.
+        from constants import GM_ACTIVE_WEEK as _DEADLINE_WEEK
+        brain.season = int(season or 0)
+        brain.week = int(_DEADLINE_WEEK)
         self._foBrainCache = (season, brain)
         return brain
 

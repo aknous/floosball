@@ -69,6 +69,7 @@ from constants import (
     FO_SCOUT_INCUMBENT_NOISE_SCALE,
     FO_PERF_ENABLED, FO_PERF_DEADBAND, FO_PERF_WEIGHT, FO_PERF_MAX_ADJUST,
     FO_PERF_SINGLE_SEASON_TRUST, FO_PERF_HISTORY_SEASONS,
+    GM_ACTIVE_WEEK,
     FA_PREFERENCE_ENABLED, FA_PREF_MAX_DEMAND, FA_PREF_VET_FULL_SEASONS,
     FA_PREF_VET_WEIGHT, FA_PREF_JITTER,
     CUT_FEE_RATE, REPLACEMENT_RATING,
@@ -115,6 +116,17 @@ def _atLeastOneSurvives(upgrades: int, trials: int, p: float) -> float:
         term *= (trials - k) / (k + 1) * (p / (1.0 - p))
         total += term
     return _clamp(total, 0.0, 1.0)
+
+
+def isScoutable(player) -> bool:
+    """Is this player a draft prospect — someone every club is GUESSING about?
+
+    An upcoming rookie (this season's draft class) and a pipeline prospect both
+    qualify: neither has played a professional snap for anybody, so his ceiling is a
+    scouted opinion rather than an observation. Everyone else has a record.
+    """
+    return bool(getattr(player, 'is_upcoming_rookie', False)
+                or getattr(player, 'is_prospect', False))
 
 
 def cutFeeFor(player) -> int:
@@ -215,6 +227,14 @@ class FrontOfficeBrain:
         # without it, a player who declined a club is indistinguishable to a reader from a
         # player the club simply did not rate.
         self.preferenceNotes: dict = {}
+        # When in the league's calendar this brain is evaluating. Only the PROSPECT
+        # path reads them — a draft prospect's scouted band narrows as the season runs
+        # (prospect_scouting.bandWidth), so the brain has to know where it is standing.
+        # Defaults keep every existing caller working unchanged: season 0 and the
+        # deadline week, i.e. a fully-sharpened read, which is the right assumption in
+        # the offseason where the brain spends most of its life.
+        self.season: int = 0
+        self.week: int = int(GM_ACTIVE_WEEK)
 
     # ---------------------------------------------------------------- arc
 
@@ -262,19 +282,42 @@ class FrontOfficeBrain:
         except Exception:
             return int(getattr(player, 'playerRating', 0) or 0)
 
-    def _ceilingRating(self, player) -> int:
-        """Rating the player reaches only with good development (potential)."""
+    def _ceilingRating(self, player, team=None) -> int:
+        """Rating the player reaches only with good development (potential).
+
+        Ground truth for a player who has actually played — a club has watched him in
+        practice for years and his ceiling is a projection, not a mystery.
+
+        ⚠️ FOR A DRAFT PROSPECT IT IS A BELIEF, AND IT MUST BE **THE SAME BELIEF THE
+        FANS ARE SHOWN**. A prospect's ceiling is the scouted quantity: the club has
+        seen him play nothing. Left as ground truth here, the GM would price him off
+        the true number while the team page showed a band drawn from a different
+        random seed — so a club would visibly pay for a player its own supporters were
+        told it rated differently, and every draft pick would look irrational from the
+        outside. `prospect_scouting.believedPotential` is the one opinion; the band is
+        just how that opinion is DISPLAYED.
+        """
         fn = getattr(player, 'computeCeilingRating', None)
         if not callable(fn):
             return int(getattr(player, 'playerRating', 0) or 0)
         try:
-            return int(fn())
+            trueCeiling = int(fn())
         except Exception:
             return int(getattr(player, 'playerRating', 0) or 0)
+        if team is None or not isScoutable(player):
+            return trueCeiling
+        try:
+            from prospect_scouting import believedPotential
+            return int(round(believedPotential(
+                trueCeiling, getattr(team, 'id', None) or 0,
+                getattr(player, 'id', 0) or 0, self.season,
+                self.scoutingVision(getattr(team, 'coach', None), team), self.week)))
+        except Exception:
+            return trueCeiling
 
     # ---------------------------------------------------------- projection
 
-    def trueForwardRating(self, player, coach=None) -> float:
+    def trueForwardRating(self, player, coach=None, team=None) -> float:
         """What the player is ACTUALLY worth next season, before the GM's own
         scouting error is applied. This is ground truth — `perceivedValue` is
         what a given GM manages to see of it."""
@@ -290,7 +333,7 @@ class FrontOfficeBrain:
             return current * (1.0 - decline)
 
         if arc == ARC_DEVELOPING:
-            ceiling = float(self._ceilingRating(player))
+            ceiling = float(self._ceilingRating(player, team))
             # How much of the remaining ceiling gap this GM expects to realise.
             # Growth is coach-driven, so a strong developer rationally values
             # raw talent higher than a weak one does — the plan's second-order
@@ -347,7 +390,7 @@ class FrontOfficeBrain:
         if player is None:
             return 0.0
         current = float(getattr(player, 'playerRating', 0) or 0)
-        forward = self.trueForwardRating(player, coach)
+        forward = self.trueForwardRating(player, coach, team)
 
         vision = self.scoutingVision(coach, team)
         seen = current + (forward - current) * vision
@@ -358,9 +401,18 @@ class FrontOfficeBrain:
         # large noise exists to make per-team BOARDS differ, which is about strangers, and
         # applying it to an incumbent is what let clubs release their best walk-year
         # player and re-sign two lesser ones.
-        sigma = self._noiseSigma(vision, forward - current)
-        if self._isIncumbent(player, team):
-            sigma *= FO_SCOUT_INCUMBENT_NOISE_SCALE
+        # ⚠️ A PROSPECT'S ERROR IS ALREADY IN HIS CEILING AND MUST NOT BE CHARGED
+        # TWICE. `_ceilingRating` returned this club's standing BELIEF about him
+        # (prospect_scouting), which is the uncertainty — layering the generic scout
+        # error on top would price him as doubly unknown and, worse, would reintroduce
+        # exactly the divergence between what the GM pays and what the fan is shown
+        # that reading the belief was meant to close.
+        if team is not None and isScoutable(player):
+            sigma = 0.0
+        else:
+            sigma = self._noiseSigma(vision, forward - current)
+            if self._isIncumbent(player, team):
+                sigma *= FO_SCOUT_INCUMBENT_NOISE_SCALE
         seen += self._scoutError(player, coach, sigma, rng)
 
         # ⚠️ Applied to the RATING, before position weighting, so a divergent kicker is
