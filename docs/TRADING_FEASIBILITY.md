@@ -1626,8 +1626,21 @@ falls short, which the facilities economy guarantees will happen — upkeep at l
 
 ## Open
 
-6. **Change the waterfall to skip what it cannot finish?** It turns Pinecones' first
-   insolvency from −4 levels into −1 and is a handful of lines. The alternative is accepting
-   that a shortfall costs a club its whole facility set rather than its most expensive
-   building — which is a much harsher penalty than "they just decay their facilities"
-   describes.
+6. ~~Change the waterfall to skip what it cannot finish?~~ — **SETTLED and BUILT** (owner,
+   2026-09-14: *"that's too hard, lets make that change. ideally it should calculate the most
+   efficient use of funds if there's a shortfall"*).
+
+   Implemented as an **exact subset choice**, not a skip-and-continue: value = the cost to
+   rebuild the level at risk (`upgradeCostFloobits(level - 1)`), so a level-3 building
+   outranks a level-1 in real Floobits rather than by counting levels. ⚠️ **Greedy by value
+   density is not optimal on a knapsack** — but a club holds ~5 facilities, so all `2**n`
+   subsets are enumerable and the answer is exact. Level order survives as the tie-break, so
+   "most investment protected first" still decides between sets of equal value.
+
+   Measured against the live rows: **Pinecones 4 levels → 1** (136F spent, 64F left, where
+   before 200F bought nothing), Jetskis 2 → 1, Phones 1 → 1 but now paying efficiently.
+
+   Regression: `test_facility_shortfall.py` (7 tests), verified by restoring the sequential
+   waterfall and watching 2 fail. The load-bearing assertion is that **no partial payment is
+   ever made at any pot size** — part of a bill is worth exactly zero, because
+   `prepareSeasonStart` resets `upkeep_funded` each season.
