@@ -399,6 +399,77 @@ free agent has a floor at or above its ask and effectively refuses every offer �
 because moving him gains it nothing. **A pipeline is what makes a club a seller**, which is
 the third independent argument that the draft has to land before trading does.
 
+### ⚠️ Correction: a ready prospect makes a club WILLING, not CHEAP
+
+The floor derivation above is right and the framing around it was wrong. **The floor is the
+walk-away, not the ask.** A club with a good prospect behind him does not sell cheaply — it
+sells *willingly*, and still for the best price it can get.
+
+Three distinct numbers, and conflating them is the mistake:
+
+| | what it is |
+|---|---|
+| **ask (reserve)** | what the seller currently demands. Opens at full value and decays toward the floor as the deadline nears |
+| **floor** | the walk-away. Below it, keeping him beats trading him. Set by the backfill |
+| **price paid** | the **highest bid** clearing the ask — set by the market, never by the floor |
+
+So a low floor buys **room to hold out later**, not a discount now. And because settlement is
+an auction, a seller with three interested contenders gets the best of the three whatever its
+floor is. A club should be trying to convert a departing player into **future value —
+typically picks** — not to clear him off the books.
+
+⚠️ The floor only ever binds when **nothing clears the ask**, and then the question is hold or
+drop. A club with no backfill cannot drop at all; a club with a ready prospect can, which is
+why the pipeline decides *whether* a club is a seller rather than *how much* it accepts.
+
+### ⚠️ Contention is uncertain early, and that produces the deadline for free
+
+A club does not know in week 2 whether it is a contender. `nowWeight` must therefore be read
+off a **blend of prior expectation and this season's evidence**, not off a final forecast.
+
+✅ **That blend already exists**: `teamManager.applyRegularSeasonPressureBlend` runs at every
+week start with `progress = (week - 1) / 14` — 100% prior at week 1, 100% in-season by week
+15. Reuse its shape rather than inventing a second ramp.
+
+The consequence is the important part:
+
+| week | Pinecones `nowWeight` | Bees `nowWeight` | gap |
+|---:|---:|---:|---:|
+| 1 | 1.00 | 1.00 | **1.00** |
+| 4 | 1.23 | 0.93 | 1.32 |
+| 8 | 1.54 | 0.84 | 1.84 |
+| 12 | 1.87 | 0.75 | 2.50 |
+| 15+ | 2.12 | 0.68 | **3.12** |
+
+⚠️ **In week 1 every club sits at 1.00, so a buyer and a seller price the future identically
+and there is no gap to trade across. Nothing fires.** The market opens as the table
+separates — which produces a deadline **without a deadline rule**. The rush toward week 22 is
+not scripted; it is what happens when clubs stop guessing.
+
+⚠️ Certainty arrives at **week 15** on that ramp while the deadline is **week 22**, which
+leaves a seven-week window where clubs *know* and must act. That is the right shape — but if
+the picture should keep sharpening to the deadline itself, widen the ramp to 21 rather than
+adding a second term.
+
+**Bubble clubs are the interesting case and they fall out of the same number.** A club sitting
+near `nowWeight` 1.0 in week 12 values now and later almost equally, so it neither buys nor
+sells — it stands pat by arithmetic, not by a rule. Its next few results push it one way or
+the other, and *then* it acts.
+
+### Do listings persist? Yes — and they are re-priced weekly
+
+A listing that does not clear **stays on the block** and is re-evaluated every week, because
+three of its inputs have moved:
+
+- the **ask** has decayed (`seasonsOfControl` shrinks),
+- the lister's **contention** has sharpened (the blend above),
+- every bidder's contention has too, so the bids differ.
+
+⚠️ **And a club may WITHDRAW.** A bubble team that wins six straight becomes a buyer — it
+should pull its own player off the block rather than sell into a run it is now part of. The
+withdrawal is the same check as the listing trigger, re-run; it needs no separate rule, only
+that the trigger is evaluated every week rather than latched at listing time.
+
 ### Cadence and rate limits
 
 Runs **weekly**, in the existing per-week hook block, closing at week 22.
