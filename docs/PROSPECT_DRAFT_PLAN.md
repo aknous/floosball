@@ -168,5 +168,8 @@ window.
    triggers on a genuinely thin position, so it cannot double the faucet in normal operation.
 2. **Where is the cull's rating bar**, as a fraction of the league mean?
 3. **Can rookie picks be traded**, and how many seasons out?
-4. **What happens to a mid-season promoted prospect's card** — nothing until next mint, or a
-   mid-season mint for that player?
+4. ~~What happens to a mid-season promoted prospect's card~~ — **SETTLED** (owner,
+   2026-09-14): *cards are only minted for players on rosters at the start of the season.*
+   That is already the behaviour — `startNewSeason` calls `_generateCardTemplates` →
+   `generateSeasonTemplates`, which requires a real `teamId` — so a prospect promoted in
+   week 10 simply has no card until the next season's mint. **No work.**
