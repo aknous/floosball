@@ -771,6 +771,57 @@ from `_getPlayerTerm` at promotion), so the value model must assume a tier-typic
 than read one; and `PROSPECT_SLOT_CAP_PER_POSITION` (2) means a buyer can be **blocked from
 taking him at all**, which is a legality check, not a pricing one.
 
+### ⚠️ The last window needs a last chance — and today it does not get one
+
+`_runPreDraftPass` (promotions) runs at `seasonManager:6839` and `_advanceProspectWindow`
+(the expiry) at `:6994`, so a club **does** get a promotion attempt every offseason, including
+the final one. But that attempt is narrower than it looks, and on the last window both
+constraints are wrong:
+
+```python
+slot = self.playerManager._findOpenSlotForPosition(team, prospect.position.value)
+if not slot:
+    continue        # no hole at his position — nothing to win
+...
+if value < replacement * FO_PROSPECT_PROMOTE_EDGE:
+    continue        # free agency offers better — leave him down
+```
+
+1. ⚠️ **No open slot means no promotion, at any quality.** A club whose QB slot happens to be
+   filled loses a 99-potential quarterback for nothing.
+2. ⚠️ **The bar compares him against a free agent** (`FO_PROSPECT_PROMOTE_EDGE` 0.88 of
+   `bestReplacementValue`). On the final window that is the **wrong alternative**: the club is
+   not choosing between the prospect and a free agent, it is choosing between the prospect and
+   **nothing**, because he walks either way.
+
+**This is the third instance of the same structural error in this plan** — the reserve floor,
+the mid-season promotion bar, and now this: *the alternative changed and the comparison did
+not.* It is worth naming as a pattern, because it will recur wherever a decision written for
+one context gets reused in another.
+
+⚠️ **And the consequence lands squarely on the feature's own story.** A bottom-feeder drafts
+the headline prospect, develops him for three seasons, and loses him for free because their
+slot at his position happened to be occupied. That is the exact outcome the draft exists to
+create and this would quietly undo it.
+
+#### The last chance, in order of preference
+
+On `prospect_seasons == PROSPECT_DEVELOPMENT_WINDOW - 1` (his final offseason), the club
+should get to act rather than watch:
+
+1. **Promote into an open slot regardless of the bar** — better than nothing beats better than
+   a free agent, and the free agent is not the alternative any more.
+2. **Cut a worse rostered player to make room**, paying the cut fee. ✅ This is where the cut
+   fee earns its second job: a club facing the loss of a good prospect has a real, priced
+   decision — pay to keep him, or let him walk. Nothing extra needs designing; both halves
+   already exist.
+3. **Trade him** — already covered, and this is exactly the distressed asset above. A club
+   without a slot sells to one that has it, which is the trade that *should* happen.
+
+⚠️ Option 2 must compare the **prospect's projected value against the incumbent's**, not
+against a free agent, and must respect the cut fee's zero-floor: a club that cannot afford the
+fee cannot take that route and falls back to 1 or 3.
+
 ### ⚠️ The offseason changes the valuation, in the club's favour
 
 Two of the in-season terms behave differently and both should be read deliberately:
