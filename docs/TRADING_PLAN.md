@@ -533,6 +533,38 @@ move him, the buyer's discount, and the strong room's ability to pay more than a
 reluctance. A club can always decide the talent is worth the trouble, and that decision going
 wrong is a story.
 
+#### ⚠️ It belongs in `decisionValue`, which means it reaches CUTS and RE-SIGNS too
+
+Owner: the front office should weigh this when deciding to cut or re-sign, not only when
+trading. That falls out of putting the term in the right place — **`decisionValue` is the one
+number every front-office decision consumes**, so a single term reaches all of them:
+
+| decision | effect |
+|---|---|
+| `rankCutCandidates` | a toxic player becomes a likelier cut |
+| `rankResignCandidates` | a toxic walk-year player is likelier to be let go |
+| `buildDraftBoard` | a toxic free agent drops on everyone's board |
+| `_promoteProspectsAutonomously` | a toxic prospect is a less attractive call-up |
+| trade listings and bids | the four cases above in this section |
+
+**This is therefore a live front-office change, not a trade-only feature** — it alters how the
+current league cuts and re-signs the moment it ships, and wants measuring on its own rather
+than riding in on the trade work.
+
+✅ **And it is orthogonal to rating, so it is not double-counting.** Measured on the 192
+rostered players, `corr(rating, attitude) = +0.293` — weakly positive (a player rated 85+ on
+attitude averages 84.2 against 79.3 for one under 55), but nowhere near enough that the rating
+already carries it. The term prices something the rating genuinely does not contain.
+
+⚠️ **Soft, for the reason the Appeal gate already taught.** If every club discounts toxic
+players hard enough, they pool in free agency, never get signed, and the supply floor
+generates replacements around them — the exact failure that made `FLOOS_SOFT_APPEAL_PENALTY`
+a 0.90 multiplier instead of a veto. The existing safety valve holds: `_attemptRosterFill`'s
+last tier drops the board entirely rather than leave a slot empty, so a difficult player is
+still signed when nothing else is there.
+
+
+
 ### Cadence and rate limits
 
 Runs **weekly**, in the existing per-week hook block, closing at week 22.
