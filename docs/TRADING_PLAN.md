@@ -200,6 +200,102 @@ Once assets price on one scale, both of the owner's shapes are the same operatio
   prospect and Floobits that closes the difference, capped at some number of pieces so a
   trade stays legible in the news feed.
 
+## Mechanics — how a trade actually happens
+
+A **two-sided listing market, resolved as a weekly auction.** Any club may post an asset it
+is willing to move together with what it wants back; every other club prices what is posted;
+the poster takes the best offer clearing its reserve.
+
+Two-sided rather than sellers-only because it unifies both of the owner's shapes without
+special-casing either — a rebuilder posting *"WR 80, want picks"* and a contender posting
+*"QB 78 with 3 years, want a rental"* are the same operation, and the second is exactly the
+1-for-1 QB-for-QB swap.
+
+### 1. Deciding to list — three triggers
+
+A club posts an asset when one of these is true. All three are read off state that already
+exists; none needs a new signal.
+
+| trigger | condition | what gets posted |
+|---|---|---|
+| **expiring surplus** | walk-year player, club is over `RESIGN_LIMIT_PER_OFFSEASON`, and not contending | the player — he leaves for nothing otherwise |
+| **horizon mismatch** | contending, and holding a long contract it would swap for immediate help (or the reverse) | the contract, wanting a rental back |
+| **blocked prospect** | a pipeline prospect the GM rates above the incumbent at his position | the incumbent |
+
+⚠️ **The horizon trigger is what makes a 1-for-1 a real trade rather than a coin flip.** A
+QB-for-QB swap is not a talent trade, it is a **TIME trade**: a rebuilder gives up now for
+term, a contender gives up term for now, and both are right. Rating barely enters it —
+`seasonsOfControl` does.
+
+⚠️ **The blocked-prospect trigger is why the draft has to land first.** It cannot fire with
+an empty pipeline, and it is the trigger that gives a rebuilding club something to do beyond
+selling.
+
+### 2. Choosing who to approach — public information only
+
+A lister ranks counterparties on what it can actually observe: **standings** (contention),
+**roster** (who they field at each position), **contract state**, and **Treasury**. All of
+that is public.
+
+⚠️ **What it cannot see is the other GM's private read** — their `_scoutError` on the player
+and their fan `sentimentTilt`. So a lister's estimate of who will bite is *approximately*
+right and sometimes wrong, which is why an offer can be declined at all. Remove that and
+every trade is pre-agreed and the market is theatre.
+
+Approach the top `TRADE_CANDIDATES_PER_LISTING` (3-5) rather than all 31, so a weekly pass
+stays legible in the news feed.
+
+### 3. Pricing — a reserve and a bid
+
+**The lister sets a reserve**, not an asking price: the minimum it will accept, computed on
+its own scale (surplus over replacement × seasons of control × its own `nowWeight`), raised
+by the fan-favourite premium.
+
+**Each approached club bids** its private value for the asset, de-cursed. ⚠️ `_deWinnersCurse`
+is not optional here: a buyer choosing the best-looking of several listings preferentially
+finds the one it overrates, which is the exact bias that function exists for and the reason
+free agency needed it.
+
+A bid is a **bundle** — picks, prospects, Floobits, or a player — assembled as the cheapest
+combination clearing the reserve, capped at `TRADE_MAX_PIECES` (2-3) so a trade stays
+readable as a sentence.
+
+### 4. Settling — the best bid wins
+
+The lister takes the **highest bid above its reserve**; everything else lapses. An auction
+rather than first-come because sixteen contenders will want the same rental, and the auction
+is what turns that competition into a price instead of a race.
+
+Unsold listings **persist** to the next week rather than being re-posted, so a player sits on
+the block with visible interest — which is the drama, and it is free.
+
+### 5. Settlement, in order
+
+1. verify both rosters will be complete (the seller has a prospect to promote, or the trade
+   is player-for-player)
+2. move the assets; stamp `previousTeam`
+3. **promote the backfill prospect** — `_promoteProspectsAutonomously` already does this,
+   ⚠️ but its bar compares against a free agent the club could sign, and mid-season there is
+   no signing path at all. In-season the alternative is an empty slot rating **50**, so the
+   bar must drop to near zero
+4. clear the traded player's fan sentiment rows
+5. mint his new card at the new club; leave existing cards alone
+6. publish to `league_news`, and write the `SeasonRecapEvent` with a **trade id**
+
+### Cadence and rate limits
+
+Runs **weekly**, in the existing per-week hook block, closing at week 22.
+
+| limit | value | why |
+|---|---|---|
+| listings per club at once | 1 | otherwise every congested club posts three players in week 1 |
+| bids per club per week | 1 | stops a contender hoovering the whole block in one pass |
+| trades per club per season | 2-3 | GM turnover runs 1-4 exits a season against a stated "not a carousel" bar; hold trading to the same and **measure it** |
+
+⚠️ **The volume caps are the part most likely to be wrong on the first try, and the only way
+to know is to run a season and count.** Eight sellers and sixteen buyers is a lot of willing
+counterparties; without limits the first week of the season would move a third of the league.
+
 ## Legality
 
 | rule | why |
