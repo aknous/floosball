@@ -1408,3 +1408,63 @@ facility.
 | the draft itself, worst-first, 1 round | build (same revert) |
 | the cull (~13/season, `seasonsPlayed == 0`, excludes prospects) | build |
 | Prospects view in the frontend | build — no status-filtered player list exists to extend |
+
+---
+
+# Addendum 13 — prospect surfaces (correcting addendum 12)
+
+_2026-09-14. Owner: team pages need a spot showing that team's prospects._
+
+## ⚠️ Correction to addendum 12
+
+Addendum 12 said *"there is no existing status-filtered player list to hang a Prospects tab
+on. That is real frontend work."* **That is wrong.** The Stats page has exactly such a list,
+and the prospects facet is already typed into its response.
+
+## Both backends are complete, and richer than needed
+
+**`GET /api/players?status=prospects`** — live.
+
+**The Stats players endpoint** — `_PLAYER_STATUSES` already contains `'prospects'`, the facet
+counter already counts it, and the status filter already maps it. Nothing to add.
+
+**`GET /api/teams/{team_id}/prospects`** — live, and built for exactly this UI. Per prospect
+it returns `name`, `position`, `rating`, `tier`, `prospectSeasons`, `seasonsRemaining`,
+`draftSeason`, `isUndrafted`, and a **`ratingHistory` series batched in one query so the UI
+can draw a development sparkline without N fetches**. Plus `slotCapPerPosition`,
+`developmentWindow` and `promotionThreshold` on the envelope.
+
+All three survived `68e5608` along with the columns, the promotion logic and the development
+wiring. The draft was excised; its surfaces were not.
+
+## What is actually left to build
+
+| surface | work |
+|---|---|
+| **Stats page prospects filter** | **one line** — add `{ key: 'prospects', label: 'Prospects' }` to `STATUSES` in `StatsPage.tsx`. The chip renders its count from `facets.prospects`, which is already in `StatsPlayersResponse`. |
+| **Team page prospects block** | a `SectionHead label="Prospects"` block under **Squad**, after the existing Roster block (`TeamPage.tsx:1375`), consuming `/api/teams/{id}/prospects`. Optionally a `railSections` entry beside Overview / Squad / Record / Front office. |
+
+Neither needs a backend change. The team-page block is the only piece with any real design in
+it, and the payload was shaped for it — rating, tier, seasons remaining in the window, and the
+sparkline series.
+
+⚠️ Both surfaces render **empty until the draft ships**, since prospects are the only thing
+that populates them and there are currently zero. Worth building them WITH the draft rather
+than before it, or they ship as blank panels.
+
+## Updated build list
+
+| item | state |
+|---|---|
+| prospect columns, `team.prospects` load path | ✓ exists |
+| autonomous promotion, ballot-free | ✓ exists |
+| development wiring (coach + facility → trueSkill) | ✓ exists, verified |
+| washout window | ✓ exists |
+| `GET /api/players?status=prospects` | ✓ exists |
+| stats endpoint prospects facet + filter | ✓ exists |
+| `GET /api/teams/{id}/prospects` (with sparkline series) | ✓ exists |
+| class generation at week 22 | build |
+| the draft itself, worst-first, 1 round | build |
+| the cull | build |
+| Stats page prospects chip | build — one line |
+| Team page prospects block | build — frontend only |
