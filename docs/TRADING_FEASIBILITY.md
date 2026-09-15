@@ -1182,3 +1182,75 @@ the league rises — that is the only form that does anything about the level.
 31. **If yes: fixed threshold, not relative.** What number, and reviewed how often?
 32. **Is the 3-round opener worth 50% four-star in one offseason?** A 1-round opener with the
     cull running from day one keeps the league flat.
+
+---
+
+# Addendum 10 — trading does not need the draft
+
+_2026-09-14. Owner: the 3-round opener was only ever a means — the point is to give teams a
+stock of assets so TRADING can exist. Reconsidered on that basis._
+
+## The opener is a very expensive way to buy assets
+
+96 players lands the league at **~50% four-star in one offseason** (addendum 9). That is a
+permanent change to what a star means, bought to enable a feature that does not actually
+require it.
+
+## ⚠️ The FA draft order is ALREADY a scarce, per-team, tradeable asset
+
+With the rookie draft off, **the FA pool is the draft** — `ensurePositionSupply` is the only
+intake, so every new player in the league appears there. And it is genuinely scarce:
+
+> **26 players. 32 teams. Worst-first.**
+>
+> An early pick takes a 77. A late pick takes a 61 — or nothing at all, and the draft falls
+> through to `generateLastResortFreeAgent`.
+
+Six teams get no one. That is not a token asset; it is the difference between filling a hole
+with a 74 TE and filling it with a generated replacement.
+
+So the asset stock the owner wants **already exists**, unowned and untradeable, in
+`currentSeason.freeAgencyOrder`. Making those order positions first-class and tradeable
+costs **zero new players, zero prospects, no rookie draft, and no cull**.
+
+## ✅ And an in-season FA pick has exactly the right uncertainty
+
+The order is worst-first **by final record**, which is not known until the season ends. So
+mid-season:
+
+- a contender's own pick is late and cheap — it should be selling it,
+- a struggling club's is early and dear — it should be holding it,
+- and both are *guessing*, because the order firms up as the table does.
+
+That is a real trade market falling out of existing machinery, and it is the buyer/seller
+dynamic this whole document has been looking for. Nothing had to be built to create it.
+
+## Revised sequencing
+
+**1. Ship trading now, with no draft at all.** Assets: players (position-for-position),
+**FA draft position**, and **Treasury Floobits**. Population unchanged, no cull required, no
+inflation risk, nothing to tune.
+
+**2. Add the rookie draft later if it is wanted for its own sake** — at **1 round (32)**, with
+the cull shipping alongside it, adding prospects as a second asset class.
+
+**3. Leave the tax out for now.** Addendum 9 measured it at roughly one season of earlier
+correction on one club; with no draft there is no inflation for it to fight either.
+
+## What is given up
+
+Prospects as tradeable bodies — "I traded for their prospect" has a flavour that a pick does
+not. That is a real want, but it is the one version that costs population, and it can be
+added in step 2 without redoing step 1.
+
+⚠️ And one caveat on the FA pick as an asset: **it is only as valuable as the pool is deep.**
+26 players across 32 teams makes an early pick precious; a pool of 60 would make it routine.
+So pick value and pool size are the same dial, which is a reason to keep the supply trickle
+tight rather than generous — and a second, independent reason not to open the faucet.
+
+## Revised open questions
+
+33. **Does trading ship on FA picks + Treasury alone**, deferring the draft entirely?
+34. **If the draft does return, is 1 round enough** to add prospects without the inflation?
+35. **How many seasons out can a pick be traded?** Two is enough to matter and bounds how far
+    a club can mortgage itself.
