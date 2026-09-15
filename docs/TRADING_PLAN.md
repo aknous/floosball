@@ -138,10 +138,55 @@ Every slot clears for the *seller* — a pick always beats a rental they were lo
 nothing — so **the buyer's contention sets the price**, and price discovery falls out of the
 standings rather than being scripted.
 
-⚠️ **The exponent is unanchored and 2 is probably too hot.** It has the strongest contender
-parting with a **top-two pick for a six-week rental**, which no real club does. A linear
-weight, or a softer exponent, compresses that; it wants calibrating against how often trades
-should fire, not chosen on taste.
+**Swept** on Bees' WR 80 at week 10 — the earliest pick each buyer would part with:
+
+| buyer | e=1.0 | **e=1.25** | e=1.5 | e=2.0 |
+|---|---:|---:|---:|---:|
+| Pinecones (25.6W) | 20 | **17** | 12 | **2** |
+| Curd (21.0W) | 24 | **22** | 20 | 15 |
+| Dry Heat (18.2W) | 25 | **24** | 24 | 22 |
+| Waffles (15.8W) | 26 | **26** | 26 | 25 |
+
+**e=1.25 is the pick.** At 2.0 the best club pays a top-two pick for a six-week rental, which
+no real club does. Linear compresses the whole market into picks 20-26 — a 6-slot spread with
+little to distinguish a 25-win club from a 16-win one. **1.25 gives a 9-slot spread and lands
+a rental at the middle of the round**, which is where a rental belongs.
+
+## ⚠️ Fan sentiment: it must raise the BAR, not the seller's valuation
+
+Owner: clubs should try not to trade fan favourites. `sentimentTilt` already feeds
+`decisionValue`, so the obvious wiring is to let a beloved player's tilt raise his club's
+valuation — **and that does exactly nothing.** Measured across the full tilt range (+0 to +5,
+the cap), every buyer's clearing pick was **identical**:
+
+| tilt | +0 | +1 | +2 | +3 | +5 |
+|---|---|---|---|---|---|
+| Pinecones | pick 17 | pick 17 | pick 17 | pick 17 | pick 17 |
+
+The reason is structural: **the seller's constraint never binds.** Bees' rental is worth
+**5.7** to them and even pick 26 is worth **13.5** — every pick in the round already beats a
+player they were losing for nothing. The buyer is the only side that can refuse, so a premium
+on the seller's private valuation is not the binding term and is swallowed whole.
+
+For sentiment to bite it has to raise **the surplus the trade must clear**:
+
+| required surplus | +0% | +15% | +30% | +50% | +100% |
+|---|---:|---:|---:|---:|---:|
+| Pinecones | 17 | 18 | 20 | 21 | **24** |
+| Curd | 22 | 23 | 24 | 25 | **26** |
+| Waffles | 26 | 26 | 27 | 27 | **27** |
+
+At **+30%** a fan favourite costs a contender roughly three extra picks of value, and at
+**+100%** he is effectively only movable to the strongest buyer in the league. That is "try
+not to trade fan favourites" landing as **a price rather than a veto** — which matches how
+sentiment is described everywhere else in the front office: *it tips close calls, it never
+dictates.*
+
+⚠️ **Sentiment is LIVE now, and CLAUDE.md says otherwise.** It records *"no production player
+or GM has reached even the old floor"* — that was measured under a flat league-wide quorum of
+3. The per-club rule (`max(1, ceil(teamFavoriters × 0.34))`) changed it: prod holds **153
+ratings across 107 players**, and at least four clear their club's quorum today, including two
+at a perfect 5.0. The term has data to work with.
 
 ### Bundles and 1-for-1
 
