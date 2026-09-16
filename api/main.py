@@ -8529,7 +8529,8 @@ def get_team_prospects(team_id: int, response: Response,
     if not team:
         raise HTTPException(404, "Team not found")
 
-    from constants import PROSPECT_DEVELOPMENT_WINDOW, PROSPECT_PROMOTION_RATING_THRESHOLD
+    from constants import (PROSPECT_DEVELOPMENT_WINDOW, PROSPECT_PROMOTION_RATING_THRESHOLD,
+                           PROSPECT_SLOT_CAP_PER_POSITION)
     from database.connection import get_session
     from database.models import PlayerRatingHistory
 
@@ -8591,7 +8592,11 @@ def get_team_prospects(team_id: int, response: Response,
     return build_success_response({
         "teamId": team_id,
         "prospects": prospects,
-        "slotCapPerPosition": 2,  # mirrors constants.PROSPECT_SLOT_CAP_PER_POSITION
+        # ⚠️ READ, NOT MIRRORED. This was the literal `2` with a comment saying it
+        # mirrored the constant, sitting between two lines that import theirs — so the
+        # frontend would have kept drawing two slots the day the cap moved, and the
+        # comment would have kept insisting it was in sync.
+        "slotCapPerPosition": PROSPECT_SLOT_CAP_PER_POSITION,
         "developmentWindow": PROSPECT_DEVELOPMENT_WINDOW,
         "promotionThreshold": PROSPECT_PROMOTION_RATING_THRESHOLD,
     })
