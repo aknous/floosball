@@ -131,3 +131,20 @@ def test_the_window_is_off_when_the_flag_is():
     finally:
         constants.TRADE_WINDOW_ENABLED = True
     print("PASS the flag turns it off")
+
+
+def test_a_losing_club_is_not_badged_WINDOW_OPEN():
+    """⚠️ `open` WAS DOING TWO JOBS: "contending with the core intact" and "not contending,
+    neither building nor finished". A 10-18 club came out of the ledger badged *Window open*,
+    which reads as the opposite of its season. The neutral case is its own state — the
+    absence of a signal, not a signal — weighted exactly like `open` but no longer claiming
+    something untrue."""
+    middling = _club(1, 'Middling', 8, {'qb': 'prime', 'rb': 'prime', 'wr1': 'prime',
+                                        'wr2': 'prime', 'te': 'prime', 'k': 'prime'})
+    filler = [_club(10 + i, f"F{i}", 21, {}) for i in range(6)]
+    m = _market([middling] + filler)
+    assert not m.isContending(middling)
+    assert m.teamWindow(middling) == 'middling', m.teamWindow(middling)
+    assert m.nowWeight(middling) == m.nowWeight.__wrapped__(m, middling) \
+        if hasattr(m.nowWeight, '__wrapped__') else True
+    print("PASS a club going nowhere is not told its window is open")

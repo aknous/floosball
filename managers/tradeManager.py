@@ -258,7 +258,14 @@ class TradeMarket:
         # nowhere is finished and should sell everything. Both looked identical before.
         if decline >= TRADE_WINDOW_DECLINE_HIGH:
             return 'closed'
-        return 'opening' if ascent >= TRADE_WINDOW_ASCENT_HIGH else 'open'
+        if ascent >= TRADE_WINDOW_ASCENT_HIGH:
+            return 'opening'
+        # ⚠️ A FIFTH STATE, BECAUSE 'open' WAS DOING TWO JOBS. It meant both "contending
+        # with the core intact" and "not contending, neither building nor finished", so a
+        # 10-18 club came out badged *Window open*, which reads as the opposite of its
+        # season. Same treatment as 'open' in the weighting — it is the absence of a
+        # signal, not a signal — but it no longer claims something untrue.
+        return 'middling'
 
     def nowWeight(self, team) -> float:
         # ⚠️ THE WINDOW RIDES THE ONE DIAL THE WHOLE MARKET ALREADY TURNS ON. A closing

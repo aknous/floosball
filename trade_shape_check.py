@@ -167,13 +167,61 @@ async def main(seasons, treasury):
 
     realPickSettle = tradeManager.settlePickTrade
 
-    def spyPickSettle(*a, **kw):
-        """⚠️ COUNTED HERE BECAUSE NOTHING ELSE SEES IT. `settlePickTrade` is a separate
-        path, so the ledger spy on `settleTrade` never reaches it — and the harness sets the
-        root logger to ERROR, so its own INFO line is invisible too. Grepping the log for
-        "TRADE UP" therefore reported zero whether or not any happened."""
-        out = realPickSettle(*a, **kw)
+    def spyPickSettle(seasonManager, listing, winner, season, *a, **kw):
+        """⚠️ COUNTED AND RECORDED HERE BECAUSE NOTHING ELSE SEES IT. `settlePickTrade` is a
+        separate path, so the ledger spy on `settleTrade` never reaches it — and the harness
+        sets the root logger to ERROR, so its own INFO line is invisible too. Grepping the
+        log for "TRADE UP" therefore reported zero whether or not any happened, and a
+        trade-up would have been missing from the ledger entirely."""
+        out = realPickSettle(seasonManager, listing, winner, season, *a, **kw)
         shape.setdefault('pickWhy', Counter())['SETTLED' if out else 'settle_refused'] += 1
+        if out is not None:
+            from managers.tradeManager import TradeMarket as _TM
+            brain = sm._foBrainForOffseason()
+            brain.season, brain.week = season, 22
+            mkt = _TM(pm, tm, brain, season, None)
+            seller, buyer = listing.team, winner.team
+            back = []
+            for piece in winner.pieces:
+                entry = {'kind': piece['kind'], 'name': piece['name'],
+                         'toSeller': round(piece.get('value', 0), 1),
+                         'toBuyer': round(piece.get('value', 0), 1)}
+                if piece['kind'] == 'pick':
+                    d = piece.get('detail') or {}
+                    entry.update({'pickSeason': d.get('season'), 'slot': d.get('slot'),
+                                  'expectedSlot': d.get('slot'), 'seasonsOut':
+                                  (d.get('season') or season) - season,
+                                  'originalTeam': next(
+                                      (t.name for t in tm.teams
+                                       if getattr(t, 'id', None) == d.get('originalTeamId')),
+                                      None)})
+                back.append(entry)
+            shape.setdefault('ledger', []).append({
+                'season': season, 'week': None, 'trigger': 'pick_swap',
+                'ask': round(listing.ask, 1), 'floor': round(listing.floor, 1),
+                'bid': round(winner.value, 1),
+                'seller': {'name': seller.name,
+                           'nowWeight': round(mkt.nowWeight(seller), 2),
+                           'window': mkt.teamWindow(seller),
+                           'record': dict(getattr(seller, 'seasonTeamStats', {}) or {})},
+                'buyer': {'name': buyer.name,
+                          'nowWeight': round(mkt.nowWeight(buyer), 2),
+                          'window': mkt.teamWindow(buyer),
+                          'record': dict(getattr(buyer, 'seasonTeamStats', {}) or {})},
+                # ⚠️ THE "OUT" SIDE OF A TRADE-UP IS A SLOT, NOT A PLAYER. The ledger's
+                # renderer keys on `kind`, so it is described as a pick rather than
+                # squeezed into the player shape.
+                'out': [{'kind': 'pick', 'name': listing.pick and
+                         f"S{listing.pick['season']} R{listing.pick['round']} pick",
+                         'position': 'PICK', 'rating': None, 'term': None,
+                         'slot': listing.pick['slot'],
+                         'expectedSlot': listing.pick['slot'],
+                         'originalTeam': next(
+                             (t.name for t in tm.teams
+                              if getattr(t, 'id', None) == listing.pick.get('originalTeamId')),
+                             None)}],
+                'back': back, 'buyerCut': None, 'sellerBackfill': None,
+            })
         return out
 
     tradeManager.settlePickTrade = spyPickSettle
@@ -297,11 +345,16 @@ async def main(seasons, treasury):
             'trigger': listing.trigger,
             'ask': round(listing.ask, 1), 'floor': round(listing.floor, 1),
             'bid': round(winner.value, 1),
+            # ⚠️ THE WINDOW IS THE POINT OF THE LEDGER NOW. Two clubs with the same
+            # record trade for opposite reasons depending on where they are in the cycle,
+            # and the record alone cannot show it (corr with the decline share is +0.000).
             'seller': {'name': seller.name,
                        'nowWeight': round(mkt.nowWeight(seller), 2),
+                       'window': mkt.teamWindow(seller),
                        'record': dict(getattr(seller, 'seasonTeamStats', {}) or {})},
             'buyer': {'name': buyer.name,
                       'nowWeight': round(mkt.nowWeight(buyer), 2),
+                      'window': mkt.teamWindow(buyer),
                       'record': dict(getattr(buyer, 'seasonTeamStats', {}) or {})},
             'out': [dict(describe(listing.player), kind='player')],
             'back': [],
